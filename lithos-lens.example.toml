@@ -1,0 +1,14 @@
+# Lithos Lens configuration.
+# Copy to lithos-lens.toml (cwd), ~/.lithos-lens/lithos-lens.toml, or
+# /etc/lithos-lens/lithos-lens.toml and adjust to taste. Alternatively point
+# LITHOS_LENS_CONFIG at this file.
+
+[lithos-lens]
+environment = "dev"
+greeting = "Hello"
+
+[lithos-lens.storage]
+data_dir = "~/.lithos-lens/data"
+
+[lithos-lens.logging]
+level = "info"   # one of: debug, info, warning, error

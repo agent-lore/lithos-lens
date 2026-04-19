@@ -1,0 +1,16 @@
+# Lithos Lens Docker Compose configuration
+services:
+  lithos-lens:
+    image: ${LITHOS_LENS_IMAGE:-lithos-lens:dev}
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ${LITHOS_LENS_CONTAINER_NAME:-lithos-lens}
+    user: "${LITHOS_LENS_UID:-1000}:${LITHOS_LENS_GID:-1000}"
+    volumes:
+      - ${LITHOS_LENS_DATA_PATH:-./data}:/data
+    environment:
+      - LITHOS_LENS_CONFIG=/data/lithos-lens.toml
+      - LITHOS_LENS_DATA_DIR=/data
+      - LITHOS_LENS_ENVIRONMENT=${LITHOS_LENS_ENVIRONMENT:-dev}
