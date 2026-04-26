@@ -344,6 +344,58 @@ service_name = "lithos-lens"
 export_interval_ms = 30000
 ```
 
+### 4.1 Common Core Startup Contract
+
+At process startup Lens performs the following steps in order:
+
+1. Load TOML config and environment overrides into a typed config object.
+2. Configure structured stdout logging.
+3. Configure OTEL only if `LENS_OTEL_ENABLED=true`; missing optional OTEL packages must not prevent boot when telemetry is disabled.
+4. Create the Lithos MCP client.
+5. Attempt startup auto-registration:
+
+```python
+lithos_agent_register(
+    id=config.lens_agent_id,
+    name="Lithos Lens",
+    type="web-ui",
+)
+```
+
+6. Start the shared Lithos `/events` subscriber if event streaming is enabled.
+7. Start cached health probes for Lithos, events, and LLM.
+8. Mount routers and serve HTTP.
+
+Boot must succeed even when Lithos is unreachable. In that case Lens starts in degraded mode, `/health` reports `lithos="unreachable"`, and UI routes render degraded panels rather than crashing.
+
+### 4.2 LiteLLM Configuration Contract
+
+When `llm.enabled = false`, Lens must not import or initialize LiteLLM eagerly.
+
+When `llm.enabled = true`, Lens validates configuration shape at startup but does not require a paid completion call to pass readiness. Per-feature LLM failures are surfaced as non-blocking UI errors.
+
+Required / optional values:
+
+| Config | Env | Required when enabled | Notes |
+|--------|-----|-----------------------|-------|
+| `llm.model` | `LENS_LLM_MODEL` | Yes | LiteLLM model string, e.g. `openai/gpt-4.1-mini`, `anthropic/claude-...`, `openrouter/...`, `ollama/...` |
+| `llm.provider` | `LENS_LLM_PROVIDER` | No | Human-readable/provider prefix metadata; model string is authoritative |
+| `llm.api_key` | `LENS_LLM_API_KEY` | Provider-dependent | Not required for local Ollama |
+| `llm.base_url` | `LENS_LLM_BASE_URL` | No | LiteLLM `api_base`, useful for OpenRouter gateways, local Ollama, or self-hosted LiteLLM proxy |
+| `llm.extra_headers_json` | `LENS_LLM_EXTRA_HEADERS_JSON` | No | JSON object for provider-specific headers |
+| `llm.max_tokens` | `LENS_LLM_MAX_TOKENS` | No | Default 2048 |
+
+### 4.3 Static Asset Policy
+
+Production Lens serves frontend dependencies from pinned vendored files under `static/vendor/`; it does not depend on public CDNs at runtime.
+
+Required policy:
+- Vendor HTMX, the HTMX SSE extension, Cytoscape.js, and any precompiled CSS bundle into `static/vendor/`
+- Record asset names, versions, source URLs, and checksums in `docs/vendor-assets.md`
+- Keep `lens.css` app-owned and small
+- Do not use Tailwind CDN in production; if utility CSS is desired, check in a precompiled CSS file
+- Development may temporarily use CDN assets during prototyping, but committed default templates should reference vendored assets
+
 ---
 
 # Part B — Tasks View
@@ -530,6 +582,113 @@ Notes whose Lithos metadata records a producing task (for example `metadata.sour
 | `POST /api/tasks/findings/curate` | LLM-curated "most significant findings" endpoint, only when `llm.enabled` |
 
 No `POST` / `PUT` / `DELETE` endpoints touch task state — the read-only contract is enforced at the router level.
+
+### 5.9 MVP Implementation Contract
+
+This section is normative for Milestones 0–2. It exists to keep the Tasks View implementable against current Lithos without adding read APIs.
+
+#### 5.9.1 Initial dashboard query flow
+
+On `GET /tasks`, Lens performs these Lithos calls:
+
+1. `lithos_task_list(status="open")` with no `since`
+2. `lithos_task_list(status="completed", since=<created_range_start>)`
+3. `lithos_task_list(status="cancelled", since=<created_range_start>)`
+4. `lithos_stats()`
+5. `lithos_agent_list()`
+6. `lithos_task_status(task_id)` for open rows up to `tasks.visible_cap`
+
+The completed/cancelled created range defaults to `now - tasks.default_time_range_days`. Open tasks ignore this range by default.
+
+#### 5.9.2 Direct task lookup flow
+
+`GET /tasks/{task_id}` is first-class even though current Lithos has no `lithos_task_get`.
+
+Resolution algorithm:
+
+1. Call `lithos_task_list(status="open")`.
+2. Call `lithos_task_list(status="completed")`.
+3. Call `lithos_task_list(status="cancelled")`.
+4. Merge rows by `id`.
+5. Find the requested `task_id`.
+6. If found, call `lithos_task_status(task_id)` and `lithos_finding_list(task_id)`.
+7. If not found, render a non-500 "Task not found in current Lithos task lists" panel with a link back to `/tasks`.
+
+These three unbounded list calls are acceptable for v1 because the expected total task count is at most a few hundred.
+
+#### 5.9.3 Detail panel query flow
+
+When the user opens a row already present in the task list, Lens uses the row payload as the task record and calls:
+
+1. `lithos_task_status(task_id)` for active claims
+2. `lithos_finding_list(task_id)` for findings
+3. `lithos_read(id=knowledge_id)` once per finding that has a non-null `knowledge_id`, with per-panel caching
+
+If any of these calls fail, the panel renders the sections that succeeded and shows a retry affordance for the failed section.
+
+#### 5.9.4 Claimed-state filter
+
+The claimed-state filter applies only to open tasks.
+
+Supported values:
+
+| Value | Behaviour |
+|-------|-----------|
+| `any` | No claimed-state filtering |
+| `known_claimed` | Show open rows for which claim enrichment found at least one active claim |
+| `known_unclaimed` | Show open rows for which claim enrichment found zero active claims |
+
+Rows beyond `tasks.visible_cap` have unknown claim state. Lens must not silently classify them. If the open task count exceeds the cap and a claimed-state filter is active, show a banner: "Claim filter covers the first 50 open tasks; narrow filters for full accuracy."
+
+#### 5.9.5 Sparse SSE payload rules
+
+Lithos task events are intentionally sparse. Lens optimistically updates visible UI from the payload where possible, then schedules a debounced reconciliation refresh.
+
+Rules:
+
+| Event | Immediate action | Reconciliation |
+|-------|------------------|----------------|
+| `task.created` | Insert skeleton open row with `task_id` and `title`; missing fields render as loading placeholders | Debounced list refresh |
+| `task.claimed` | Add/update claim chip from `task_id`, `agent`, `aspect` | Refresh row status if row is visible or detail is open |
+| `task.released` | Remove matching claim chip by `task_id` + `aspect` | Refresh row status if row is visible or detail is open |
+| `task.completed` | Move visible row out of Open and into Completed if current filters allow; otherwise remove from current list | Debounced list + current situation refresh |
+| `task.cancelled` | Move visible row out of Open and into Cancelled if current filters allow; otherwise remove from current list | Debounced list + current situation refresh |
+| `finding.posted` | Increment row findings badge by one | If detail is open, refetch full `lithos_finding_list(task_id)` |
+
+The reconciliation refresh should be debounced across bursts of events so a batch of task events does not trigger one full refresh per event.
+
+#### 5.9.6 Browser event stream contract
+
+Lens holds one server-side subscription to Lithos `/events`. Browser tabs do not connect directly to Lithos; they connect to `GET /tasks/events`.
+
+`/tasks/events` emits normalized Lens events with this minimum shape:
+
+```json
+{
+  "id": "<lithos-event-id>",
+  "type": "task.claimed",
+  "task_id": "<task-id>",
+  "payload": {},
+  "requires_refresh": true
+}
+```
+
+Rules:
+- Preserve the Lithos event `id` for browser-side dedupe.
+- Include `requires_refresh=true` when the Lithos payload is too sparse for a complete UI update.
+- Browser-side handlers should tolerate duplicate events and out-of-order reconciliation responses.
+
+#### 5.9.7 Common route failure behavior
+
+Task routes must not return HTTP 500 for expected Lithos availability or lookup failures.
+
+| Situation | Route behavior |
+|-----------|----------------|
+| Lithos unreachable | Render degraded banner/panel with retry; preserve last successful render where available |
+| Task ID not found | Render not-found panel with link to `/tasks` |
+| `lithos_task_status` fails | Render task row/detail without claim section and show retry |
+| `lithos_finding_list` fails | Render task metadata and show findings retry |
+| `lithos_read` for finding link fails | Render "View document" fallback label and a warning toast |
 
 ---
 
@@ -1067,6 +1226,14 @@ Lens consumes the Lithos SSE event stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_P
 - [ ] `run.sh`
 - [ ] Structured JSON logging
 
+**M0 acceptance:**
+- App boots with Lithos offline and `/health` reports `lithos="unreachable"` without process failure
+- `/` and `/tasks` render a degraded banner instead of HTTP 500 when Lithos is offline
+- Startup attempts `lithos_agent_register` when Lithos is reachable
+- Static templates reference vendored local assets, not public CDN URLs
+- `docs/vendor-assets.md` records vendored asset versions and checksums
+- With `LENS_LLM_ENABLED=false`, missing LiteLLM dependencies do not prevent boot
+
 ### Milestone 1 — Tasks View MVP (v0.2)
 *Goal: read-only dashboard over Lithos tasks; manual refresh; no SSE yet*
 
@@ -1083,6 +1250,16 @@ Lens consumes the Lithos SSE event stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_P
 - [ ] Tasks-specific OTEL spans (`lens.tasks.list`, `lens.tasks.detail`, `lens.tasks.findings`, `lens.tasks.refresh`)
 - [ ] Set `ui.default_view = "tasks"` so `/` lands here
 
+**M1 acceptance:**
+- With three open tasks where one has an active claim, the current situation panel shows correct open, known claimed, and known unclaimed state
+- Open tasks are shown regardless of age; completed and cancelled groups honor the default created-at range
+- Claimed-state filter supports `any`, `known_claimed`, and `known_unclaimed`
+- If open task count exceeds `tasks.visible_cap`, the claimed-state filter shows an accuracy banner and does not silently classify unknown rows
+- Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks by scanning current Lithos task lists
+- Unknown `/tasks/{task_id}` renders a not-found panel, not HTTP 500
+- A finding with `knowledge_id` renders a title-labelled note link when `lithos_read` succeeds and a fallback label when it fails
+- Findings timeline renders without paging controls
+
 ### Milestone 2 — Tasks SSE Auto-Update (v0.3)
 *Goal: live updates from the Lithos SSE event stream*
 
@@ -1093,6 +1270,14 @@ Lens consumes the Lithos SSE event stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_P
 - [ ] Reconnect with exponential backoff; "Live updates paused" badge during disconnect
 - [ ] Polling fallback at `tasks.auto_refresh_interval_s` while SSE disconnected
 - [ ] OTEL spans `lens.tasks.event`, `lens.events.connect`
+
+**M2 acceptance:**
+- `task.created` inserts an open skeleton row without full-page reload and reconciles on the next debounced refresh
+- `task.claimed` and `task.released` update visible claim chips optimistically
+- `task.completed` and `task.cancelled` move or remove visible rows without full-page reload
+- `finding.posted` increments the row badge and refetches the findings timeline when the detail panel is open
+- `/tasks/events` emits normalized events with Lithos event IDs and `requires_refresh` where appropriate
+- SSE disconnect shows "Live updates paused" and polling fallback refreshes the dashboard
 
 ### Milestone 3 — Optional LLM client + Tasks curation (v0.4)
 *Goal: enable the optional LLM path, starting with the Tasks "most significant findings" curation*
