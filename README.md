@@ -209,7 +209,13 @@ make docker-down-prod
 ```
 
 `LITHOS_LENS_ENVIRONMENT` is passed into the container so application code
-can read it (e.g. for logging or telemetry labels).
+can read it (e.g. for logging or telemetry labels). `LITHOS_LENS_HOST_PORT`
+publishes the web UI port and defaults to `8000`, so the default stack is
+available at `http://localhost:8000`.
+
+The Compose stack also maps `host.docker.internal` to the Linux host gateway.
+Use that hostname in `lithos-lens.toml` when Lens runs in Docker and Lithos is
+published on the host, for example `url = "http://host.docker.internal:8765"`.
 
 `.env.example` is committed; `.env.dev` and `.env.prod` are gitignored.
 
