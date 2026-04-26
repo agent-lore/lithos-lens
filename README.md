@@ -4,9 +4,11 @@ Visual browser for Lithos.
 
 Lithos Lens is a local FastAPI web UI for observing Lithos coordination state
 and, in later milestones, browsing Lithos knowledge. The current implementation
-contains the common-core web scaffold: TOML configuration, structured logging,
-Lithos health probing, startup agent registration, degraded-mode rendering,
-vendored static assets, and a Tasks landing page shell.
+contains the common-core web scaffold plus the Tasks MVP: TOML configuration,
+structured logging, Lithos health probing, startup agent registration,
+degraded-mode rendering, vendored static assets, operational task dashboard,
+claim enrichment, direct task detail pages, findings timelines, and a minimal
+knowledge-note renderer for task finding links.
 
 ## Getting Started
 
@@ -29,6 +31,12 @@ uv run lithos-lens
 python -m lithos_lens
 # same entry point
 ```
+
+The Tasks dashboard is available at `/tasks` and is also the current root view.
+It reads from Lithos using `lithos_task_list`, `lithos_task_status`,
+`lithos_finding_list`, `lithos_read`, `lithos_stats`, and
+`lithos_agent_list`. Lens does not create, claim, mutate, complete, or cancel
+tasks.
 
 ## Configuration
 
@@ -92,6 +100,7 @@ agent_id = "lithos-lens"
 | `auto_refresh_interval_s` | integer | No | `30` | Polling fallback interval used when live events are unavailable. |
 | `visible_cap` | integer | No | `50` | Maximum visible rows enriched with per-task claim status. |
 | `default_time_range_days` | integer | No | `30` | Created-at window for completed/cancelled task context. |
+| `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
 
 #### `[lithos-lens.events]`
 
@@ -163,6 +172,7 @@ First file found wins. Error if none found.
 - `logging.level` must be one of `debug`, `info`, `warning`, `error`
 - Boolean fields accept TOML booleans in config and common boolean strings in env overrides
 - Integer fields such as `tasks.visible_cap` and `llm.max_tokens` must be positive
+- `tasks.default_status_groups` must contain one or more of `open`, `completed`, `cancelled`
 - `LITHOS_LENS_LOG_LEVEL`, if set, must be one of the log-level values above
 
 ## Docker
@@ -234,5 +244,4 @@ make check      # all of the above
 ## Implementation Tracking
 
 Progress is tracked in [docs/IMPLEMENTATION_CHECKLIST.md](docs/IMPLEMENTATION_CHECKLIST.md).
-Milestone 0 common-core items are implemented; Tasks MVP work begins at
-Milestone 1.
+Milestones 0 and 1 are implemented; live browser updates begin at Milestone 2.

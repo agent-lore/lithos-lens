@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Task Detail | Lithos Lens{% endblock %}
+
+{% block content %}
+  <p><a href="/tasks">&larr; Back to tasks</a></p>
+
+  {% if offline %}
+    <section class="banner banner-warning" role="status">
+      <strong>Lithos is offline or degraded.</strong>
+      <span>Task detail is unavailable. Lens is running and will retry on refresh.</span>
+    </section>
+  {% elif detail.not_found %}
+    <section class="panel">
+      <p class="eyebrow">Task not found</p>
+      <h1>Unknown task</h1>
+      <p>Task not found in current Lithos task lists.</p>
+      <a class="button-secondary" href="/tasks">Return to dashboard</a>
+    </section>
+  {% elif detail.task %}
+    <article class="detail-panel">
+      <header>
+        <p class="eyebrow">Task detail</p>
+        <h1>{{ detail.task.title }}</h1>
+        <div class="detail-meta">
+          <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+          {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
+          {% if detail.task.created_at %}<time datetime="{{ detail.task.created_at }}">{{ detail.task.created_at }}</time>{% endif %}
+        </div>
+      </header>
+
+      {% if detail.errors %}
+        <section class="banner banner-warning" role="status">
+          <strong>Some detail sections could not be loaded.</strong>
+          <span>{{ detail.errors | join(" ") }}</span>
+        </section>
+      {% endif %}
+
+      {% if detail.task.tags %}
+        <div class="tag-list">
+          {% for tag in detail.task.tags %}
+            <span>{{ tag | format_tag }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if detail.task.description %}
+        <section>
+          <h2>Description</h2>
+          <p>{{ detail.task.description }}</p>
+        </section>
+      {% endif %}
+
+      {% if detail.task.metadata %}
+        <section>
+          <h2>Metadata</h2>
+          <dl class="metadata-table">
+            {% for key, value in detail.task.metadata.items() %}
+              <dt>{{ key }}</dt>
+              <dd>{{ value }}</dd>
+            {% endfor %}
+          </dl>
+        </section>
+      {% endif %}
+
+      <section>
+        <h2>Active Claims</h2>
+        {% if detail.status_state == "error" %}
+          <p class="warning-text">Claims unavailable. Refresh this task to retry.</p>
+        {% elif detail.task_status and detail.task_status.claims %}
+          <div class="claim-list claim-list-large">
+            {% for claim in detail.task_status.claims %}
+              <span>{{ claim.aspect }} / {{ claim.agent }} / expires {{ claim.expires_at }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="empty">No active claims.</p>
+        {% endif %}
+      </section>
+
+      {% include "tasks/findings.html" %}
+    </article>
+  {% endif %}
+{% endblock %}
