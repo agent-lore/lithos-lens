@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Lithos Lens{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='lens.css') }}">
+    <script src="{{ url_for('static', path='vendor/htmx.min.js') }}" defer></script>
+    <script src="{{ url_for('static', path='vendor/htmx-sse.js') }}" defer></script>
+  </head>
+  <body>
+    <header class="shell-header">
+      <div>
+        <a class="brand" href="/">Lithos Lens</a>
+        <span class="environment">{{ config.environment }}</span>
+      </div>
+      <nav aria-label="Primary">
+        <a class="{{ 'active' if active_view == 'tasks' else '' }}" href="/tasks">Tasks</a>
+        <a aria-disabled="true" href="#">Knowledge</a>
+        <a aria-disabled="true" href="#">Settings</a>
+      </nav>
+    </header>
+    <main class="shell-main">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

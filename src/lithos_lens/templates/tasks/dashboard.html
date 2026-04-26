@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks | Lithos Lens{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <p class="eyebrow">Operational dashboard</p>
+    <h1>Tasks</h1>
+    <p>Current Lithos task activity will appear here.</p>
+  </section>
+
+  {% if health.lithos != "ok" %}
+    <section class="banner banner-warning" role="status">
+      <strong>Lithos is offline or degraded.</strong>
+      <span>Task data is unavailable. Lens is running and will retry on refresh.</span>
+    </section>
+  {% endif %}
+
+  <section class="status-grid" aria-label="Service status">
+    <article>
+      <span>Lens</span>
+      <strong>{{ health.status }}</strong>
+    </article>
+    <article>
+      <span>Lithos</span>
+      <strong>{{ health.lithos }}</strong>
+    </article>
+    <article>
+      <span>Events</span>
+      <strong>{{ health.events }}</strong>
+    </article>
+    <article>
+      <span>LLM</span>
+      <strong>{{ health.llm }}</strong>
+    </article>
+  </section>
+{% endblock %}
