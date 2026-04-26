@@ -7,8 +7,44 @@
 environment = "dev"
 greeting = "Hello"
 
+[lithos-lens.ui]
+default_view = "tasks"
+
 [lithos-lens.storage]
 data_dir = "~/.lithos-lens/data"
 
 [lithos-lens.logging]
 level = "info"   # one of: debug, info, warning, error
+
+[lithos-lens.lithos]
+url = "http://localhost:8765"
+mcp_sse_path = "/sse"
+sse_events_path = "/events"
+agent_id = "lithos-lens"
+
+[lithos-lens.tasks]
+auto_refresh_interval_s = 30
+visible_cap = 50
+default_time_range_days = 30
+
+[lithos-lens.events]
+enabled = true
+reconnect_backoff_ms = [500, 1000, 2000, 5000, 10000]
+
+[lithos-lens.llm]
+enabled = false
+provider = ""
+model = ""
+api_key = ""
+base_url = ""
+extra_headers_json = ""
+max_tokens = 2048
+
+[lithos-lens.telemetry]
+enabled = false
+console_fallback = false
+service_name = "lithos-lens"
+export_interval_ms = 30000
+
+[lithos-lens.health]
+refresh_interval_s = 30

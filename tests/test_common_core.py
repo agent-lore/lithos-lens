@@ -1,0 +1,92 @@
+"""Common-core integration tests for the FastAPI app."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from lithos_lens.config import load_config
+from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.web import create_app
+
+
+class RecordingLithosClient:
+    def __init__(self, health: LithosHealth) -> None:
+        self.health_value: LithosHealth = health
+        self.register_calls = 0
+        self.closed = False
+
+    async def health(self) -> LithosHealth:
+        return self.health_value
+
+    async def register_agent(self) -> bool:
+        self.register_calls += 1
+        return True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_config_loads_common_core_defaults(lithos_lens_config_env: Path) -> None:
+    config = load_config(lithos_lens_config_env)
+
+    assert config.environment == "test"
+    assert config.lithos.url == "http://lithos.test"
+    assert config.lithos.mcp_sse_path == "/sse"
+    assert config.lithos.agent_id == "lithos-lens-test"
+    assert config.tasks.visible_cap == 50
+    assert config.events.enabled is True
+    assert config.llm.enabled is False
+    assert config.telemetry.enabled is False
+    assert config.ui.default_view == "tasks"
+
+
+def test_app_degrades_when_lithos_is_unreachable(lithos_lens_config_env: Path) -> None:
+    config = load_config(lithos_lens_config_env)
+    lithos = RecordingLithosClient("unreachable")
+    app = create_app(config, lithos_client_factory=lambda _: lithos)
+
+    with TestClient(app) as client:
+        health = client.get("/health")
+        tasks = client.get("/tasks")
+
+    assert health.status_code == 200
+    assert health.json()["lithos"] == "unreachable"
+    assert health.json()["status"] == "degraded"
+    assert tasks.status_code == 200
+    assert "Lithos is offline or degraded" in tasks.text
+    assert lithos.register_calls == 0
+    assert lithos.closed is True
+
+
+def test_startup_auto_registers_when_lithos_is_reachable(
+    lithos_lens_config_env: Path,
+) -> None:
+    config = load_config(lithos_lens_config_env)
+    lithos = RecordingLithosClient("ok")
+    app = create_app(config, lithos_client_factory=lambda _: lithos)
+
+    with TestClient(app) as client:
+        health = client.get("/health")
+
+    assert health.status_code == 200
+    assert health.json()["lithos"] == "ok"
+    assert lithos.register_calls == 1
+    assert lithos.closed is True
+
+
+def test_static_assets_are_served(lithos_lens_config_env: Path) -> None:
+    config = load_config(lithos_lens_config_env)
+    app = create_app(
+        config, lithos_client_factory=lambda _: RecordingLithosClient("ok")
+    )
+
+    with TestClient(app) as client:
+        css = client.get("/static/lens.css")
+        htmx = client.get("/static/vendor/htmx.min.js")
+
+    assert css.status_code == 200
+    assert "--accent" in css.text
+    assert htmx.status_code == 200
+    assert "htmx" in htmx.text

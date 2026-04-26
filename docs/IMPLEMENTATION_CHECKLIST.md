@@ -10,41 +10,41 @@ A checkbox is complete only when the code exists, relevant tests or manual verif
 
 ### Scaffold
 
-- [ ] FastAPI app skeleton
-- [ ] Base template and top navigation
-- [ ] Router mounting
-- [ ] Static asset serving
-- [ ] Vendored frontend assets under `static/vendor/`
-- [ ] `docs/vendor-assets.md` with asset versions, source URLs, and checksums
+- [x] FastAPI app skeleton
+- [x] Base template and top navigation
+- [x] Router mounting
+- [x] Static asset serving
+- [x] Vendored frontend assets under `static/vendor/`
+- [x] `docs/vendor-assets.md` with asset versions, source URLs, and checksums
 
 ### Config / Startup
 
-- [ ] Typed config loader
-- [ ] Environment variable overrides
-- [ ] Structured stdout logging
-- [ ] Lithos MCP client
-- [ ] Startup auto-registration via `lithos_agent_register`
-- [ ] Degraded boot when Lithos is offline
-- [ ] LiteLLM is not imported or initialized when `LENS_LLM_ENABLED=false`
+- [x] Typed config loader
+- [x] Environment variable overrides
+- [x] Structured stdout logging
+- [x] Lithos MCP client
+- [x] Startup auto-registration via `lithos_agent_register`
+- [x] Degraded boot when Lithos is offline
+- [x] LiteLLM is not imported or initialized when `LENS_LLM_ENABLED=false`
 
 ### Health / Observability
 
-- [ ] `/health` endpoint
-- [ ] Cached Lithos health probe
-- [ ] Event status reporting
-- [ ] LLM status reporting
-- [ ] OTEL disabled-by-default path
-- [ ] Request span middleware
+- [x] `/health` endpoint
+- [x] Cached Lithos health probe
+- [x] Event status reporting
+- [x] LLM status reporting
+- [x] OTEL disabled-by-default path
+- [x] Request span middleware
 
 ### Acceptance
 
-- [ ] App boots with Lithos offline
-- [ ] `/health` reports `lithos="unreachable"` when Lithos is offline
-- [ ] `/` and `/tasks` render a degraded banner instead of HTTP 500 when Lithos is offline
-- [ ] Startup attempts `lithos_agent_register` when Lithos is reachable
-- [ ] Static templates reference vendored local assets, not public CDN URLs
-- [ ] `docs/vendor-assets.md` exists and records vendored asset versions/checksums
-- [ ] With `LENS_LLM_ENABLED=false`, missing LiteLLM dependencies do not prevent boot
+- [x] App boots with Lithos offline
+- [x] `/health` reports `lithos="unreachable"` when Lithos is offline
+- [x] `/` and `/tasks` render a degraded banner instead of HTTP 500 when Lithos is offline
+- [x] Startup attempts `lithos_agent_register` when Lithos is reachable
+- [x] Static templates reference vendored local assets, not public CDN URLs
+- [x] `docs/vendor-assets.md` exists and records vendored asset versions/checksums
+- [x] With `LENS_LLM_ENABLED=false`, missing LiteLLM dependencies do not prevent boot
 
 ---
 
@@ -167,4 +167,3 @@ A checkbox is complete only when the code exists, relevant tests or manual verif
 - [ ] Anthropic-compatible provider works through LiteLLM config
 - [ ] OpenRouter-compatible provider works through LiteLLM config
 - [ ] Local Ollama-compatible provider works through LiteLLM config
-
