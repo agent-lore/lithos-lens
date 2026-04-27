@@ -16,6 +16,18 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.tasks import (
+    AgentRecord,
+    FindingRecord,
+    NoteRecord,
+    TaskRecord,
+    TaskStatusRecord,
+    normalize_agent,
+    normalize_finding,
+    normalize_note,
+    normalize_task,
+    normalize_task_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +41,27 @@ class LithosClientProtocol(Protocol):
 
     async def register_agent(self) -> bool: ...
 
+    async def list_tasks(
+        self,
+        *,
+        agent: str | None = None,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        since: str | None = None,
+    ) -> list[TaskRecord]: ...
+
+    async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
+
+    async def list_findings(
+        self, task_id: str, *, since: str | None = None
+    ) -> list[FindingRecord]: ...
+
+    async def stats(self) -> dict[str, Any]: ...
+
+    async def list_agents(self) -> list[AgentRecord]: ...
+
+    async def read_note(self, knowledge_id: str) -> NoteRecord | None: ...
+
     async def close(self) -> None: ...
 
 
@@ -36,6 +69,10 @@ class LithosClientProtocol(Protocol):
 class RegistrationResult:
     success: bool
     message: str = ""
+
+
+class LithosToolError(RuntimeError):
+    """Raised when Lithos returns an error envelope from a tool call."""
 
 
 class LithosClient:
@@ -96,6 +133,76 @@ class LithosClient:
             return False
         return True
 
+    async def list_tasks(
+        self,
+        *,
+        agent: str | None = None,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        since: str | None = None,
+    ) -> list[TaskRecord]:
+        arguments: dict[str, Any] = {}
+        if agent:
+            arguments["agent"] = agent
+        if status:
+            arguments["status"] = status
+        if tags:
+            arguments["tags"] = tags
+        if since:
+            arguments["since"] = since
+        payload = await self._call_tool("lithos_task_list", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_task(task)
+            for task in payload.get("tasks", [])
+            if isinstance(task, dict)
+        ]
+
+    async def task_status(self, task_id: str) -> TaskStatusRecord | None:
+        payload = await self._call_tool("lithos_task_status", {"task_id": task_id})
+        _raise_for_error(payload)
+        tasks = payload.get("tasks", [])
+        if not tasks:
+            return None
+        raw = tasks[0]
+        return normalize_task_status(raw) if isinstance(raw, dict) else None
+
+    async def list_findings(
+        self, task_id: str, *, since: str | None = None
+    ) -> list[FindingRecord]:
+        arguments: dict[str, Any] = {"task_id": task_id}
+        if since:
+            arguments["since"] = since
+        payload = await self._call_tool("lithos_finding_list", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_finding(finding, task_id)
+            for finding in payload.get("findings", [])
+            if isinstance(finding, dict)
+        ]
+
+    async def stats(self) -> dict[str, Any]:
+        payload = await self._call_tool("lithos_stats", {})
+        _raise_for_error(payload)
+        return payload
+
+    async def list_agents(self) -> list[AgentRecord]:
+        payload = await self._call_tool("lithos_agent_list", {})
+        _raise_for_error(payload)
+        return [
+            normalize_agent(agent)
+            for agent in payload.get("agents", [])
+            if isinstance(agent, dict)
+        ]
+
+    async def read_note(self, knowledge_id: str) -> NoteRecord | None:
+        payload = await self._call_tool(
+            "lithos_read",
+            {"id": knowledge_id, "agent_id": self._config.agent_id},
+        )
+        _raise_for_error(payload)
+        return normalize_note(payload)
+
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         from mcp import ClientSession
         from mcp.client.sse import sse_client
@@ -121,3 +228,9 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     if blocks and getattr(blocks[0], "text", None):
         return json.loads(blocks[0].text)
     return {}
+
+
+def _raise_for_error(payload: dict[str, Any]) -> None:
+    if payload.get("status") == "error":
+        message = str(payload.get("message") or payload.get("code") or "Lithos error")
+        raise LithosToolError(message)

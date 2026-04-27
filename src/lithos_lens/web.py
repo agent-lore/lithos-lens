@@ -14,6 +14,14 @@ from fastapi.templating import Jinja2Templates
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
 from lithos_lens.state import AppState
+from lithos_lens.tasks import (
+    default_since,
+    find_task,
+    format_tag,
+    load_dashboard,
+    load_task_detail,
+    parse_filters,
+)
 from lithos_lens.telemetry import install_request_middleware
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -33,6 +41,7 @@ def create_app(
     factory = lithos_client_factory or (lambda cfg: LithosClient(cfg.lithos))
     state = AppState(config, factory(config))
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
+    templates.env.filters["format_tag"] = format_tag
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -65,6 +74,96 @@ def create_app(
     async def tasks(request: Request) -> HTMLResponse:
         return await _render_tasks(request, templates, state)
 
+    @app.get("/tasks/{task_id}", response_class=HTMLResponse)
+    async def task_detail(request: Request, task_id: str) -> HTMLResponse:
+        snapshot = await state.refresh_health()
+        if snapshot.lithos != "ok":
+            return templates.TemplateResponse(
+                request,
+                "tasks/detail.html",
+                {
+                    "config": state.config,
+                    "health": snapshot,
+                    "active_view": "tasks",
+                    "detail": None,
+                    "offline": True,
+                },
+            )
+        detail = await load_task_detail(state.lithos_client, task_id)
+        return templates.TemplateResponse(
+            request,
+            "tasks/detail.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "tasks",
+                "detail": detail,
+                "offline": False,
+            },
+        )
+
+    @app.get("/tasks/{task_id}/findings", response_class=HTMLResponse)
+    async def task_findings(request: Request, task_id: str) -> HTMLResponse:
+        snapshot = await state.refresh_health()
+        if snapshot.lithos != "ok":
+            return templates.TemplateResponse(
+                request,
+                "tasks/findings.html",
+                {
+                    "config": state.config,
+                    "health": snapshot,
+                    "active_view": "tasks",
+                    "detail": None,
+                    "offline": True,
+                },
+            )
+        detail = await load_task_detail(state.lithos_client, task_id)
+        return templates.TemplateResponse(
+            request,
+            "tasks/findings.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "tasks",
+                "detail": detail,
+                "offline": False,
+            },
+        )
+
+    @app.get("/note/{knowledge_id}", response_class=HTMLResponse)
+    async def note(request: Request, knowledge_id: str) -> HTMLResponse:
+        snapshot = await state.refresh_health()
+        note_record = None
+        task = None
+        error = ""
+        if snapshot.lithos != "ok":
+            error = "Lithos is offline or degraded. The note cannot be loaded."
+        else:
+            try:
+                note_record = await state.lithos_client.read_note(knowledge_id)
+            except Exception:
+                error = "Could not load this document from Lithos."
+            if note_record is None and not error:
+                error = "Document not found."
+            task_id = request.query_params.get("task", "")
+            if task_id:
+                try:
+                    task = await find_task(state.lithos_client, task_id)
+                except Exception:
+                    task = None
+        return templates.TemplateResponse(
+            request,
+            "note.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "note": note_record,
+                "task": task,
+                "error": error,
+            },
+        )
+
     return app
 
 
@@ -74,6 +173,18 @@ async def _render_tasks(
     state: AppState,
 ) -> HTMLResponse:
     snapshot = await state.refresh_health()
+    dashboard = None
+    if snapshot.lithos == "ok":
+        filters = parse_filters(
+            list(request.query_params.multi_items()),
+            state.config.tasks.default_time_range_days,
+            state.config.tasks.default_status_groups,
+        )
+        dashboard = await load_dashboard(
+            state.lithos_client,
+            filters=filters,
+            visible_cap=state.config.tasks.visible_cap,
+        )
     return templates.TemplateResponse(
         request,
         "tasks/dashboard.html",
@@ -81,5 +192,7 @@ async def _render_tasks(
             "config": state.config,
             "health": snapshot,
             "active_view": "tasks",
+            "dashboard": dashboard,
+            "default_since": default_since(state.config.tasks.default_time_range_days),
         },
     )

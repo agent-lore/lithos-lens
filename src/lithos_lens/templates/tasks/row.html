@@ -1,0 +1,40 @@
+<a class="task-row" href="/tasks/{{ row.task.id }}" title="{{ row.task.title }}">
+  <div>
+    <strong>{{ row.task.title }}</strong>
+    {% if row.task.description %}
+      <p>{{ row.task.description }}</p>
+    {% endif %}
+    {% if row.task.tags %}
+      <div class="tag-list">
+        {% for tag in row.task.tags %}
+          <span>{{ tag | format_tag }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <div class="task-row-meta">
+    <span class="badge badge-{{ row.task.status }}">{{ row.task.status }}</span>
+    {% if row.task.created_by %}
+      <span>{{ row.task.created_by }}</span>
+    {% endif %}
+    {% if row.task.created_at %}
+      <time datetime="{{ row.task.created_at }}">{{ row.task.created_at[:16].replace("T", " ") }}</time>
+    {% endif %}
+    {% if row.claim_state == "known_claimed" %}
+      <span class="claim-chip">{{ row.claims | length }} claim{{ "s" if (row.claims | length) != 1 else "" }}</span>
+    {% elif row.claim_state == "known_unclaimed" %}
+      <span class="claim-chip claim-chip-open">unclaimed</span>
+    {% elif row.claim_state == "unknown" %}
+      <span class="claim-chip claim-chip-unknown">claims unknown</span>
+    {% endif %}
+  </div>
+  {% if row.claims %}
+    <div class="claim-list">
+      {% for claim in row.claims %}
+        <span>{{ claim.aspect }} - {{ claim.agent }}</span>
+      {% endfor %}
+    </div>
+  {% elif row.claim_error %}
+    <small class="warning-text">{{ row.claim_error }}</small>
+  {% endif %}
+</a>

@@ -1,0 +1,30 @@
+<section>
+  <h2>Findings</h2>
+  {% if offline %}
+    <p class="warning-text">Findings unavailable while Lithos is offline.</p>
+  {% elif detail and detail.findings_state == "error" %}
+    <p class="warning-text">Findings unavailable. Refresh this task to retry.</p>
+  {% elif detail and detail.findings %}
+    <ol class="findings-timeline">
+      {% for item in detail.findings %}
+        <li>
+          <header>
+            <strong>{{ item.finding.agent or "unknown agent" }}</strong>
+            {% if item.finding.created_at %}
+              <time datetime="{{ item.finding.created_at }}">{{ item.finding.created_at }}</time>
+            {% endif %}
+          </header>
+          <p>{{ item.finding.summary }}</p>
+          {% if item.finding.knowledge_id %}
+            <a href="/note/{{ item.finding.knowledge_id }}?task={{ item.finding.task_id }}">{{ item.link_label }}</a>
+            {% if item.note_error %}
+              <small class="warning-text">{{ item.note_error }}</small>
+            {% endif %}
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    <p class="empty">No findings have been posted for this task.</p>
+  {% endif %}
+</section>

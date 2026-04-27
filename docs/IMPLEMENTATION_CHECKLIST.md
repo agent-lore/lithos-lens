@@ -52,44 +52,44 @@ A checkbox is complete only when the code exists, relevant tests or manual verif
 
 ### Query Contract
 
-- [ ] Initial dashboard query flow
-- [ ] Direct task lookup flow for `/tasks/{task_id}`
-- [ ] Detail panel query flow
-- [ ] Claim fan-out up to `tasks.visible_cap`
-- [ ] Claimed-state filtering for open tasks
-- [ ] Knowledge title resolution for `finding.knowledge_id`
+- [x] Initial dashboard query flow
+- [x] Direct task lookup flow for `/tasks/{task_id}`
+- [x] Detail panel query flow
+- [x] Claim fan-out up to `tasks.visible_cap`
+- [x] Claimed-state filtering for open tasks
+- [x] Knowledge title resolution for `finding.knowledge_id`
 
 ### UI
 
-- [ ] Current situation panel
-- [ ] Grouped task list: open, completed, cancelled
-- [ ] Filter bar
-- [ ] Claim accuracy banner when open rows exceed `tasks.visible_cap`
-- [ ] Detail panel
-- [ ] Findings timeline without paging controls
-- [ ] Knowledge links from findings
-- [ ] Minimal `/note/{knowledge_id}` renderer for Tasks-only milestones
+- [x] Current situation panel
+- [x] Grouped task list: open, completed, cancelled
+- [x] Filter bar
+- [x] Claim accuracy banner when open rows exceed `tasks.visible_cap`
+- [x] Detail panel
+- [x] Findings timeline without paging controls
+- [x] Knowledge links from findings
+- [x] Minimal `/note/{knowledge_id}` renderer for Tasks-only milestones
 
 ### Route Failure Behavior
 
-- [ ] Lithos unreachable renders degraded panel/banner, not HTTP 500
-- [ ] Unknown `/tasks/{task_id}` renders not-found panel and link to `/tasks`
-- [ ] `lithos_task_status` failure renders task without claim section and shows retry
-- [ ] `lithos_finding_list` failure renders task metadata and shows findings retry
-- [ ] `lithos_read` failure for finding link renders fallback label
+- [x] Lithos unreachable renders degraded panel/banner, not HTTP 500
+- [x] Unknown `/tasks/{task_id}` renders not-found panel and link to `/tasks`
+- [x] `lithos_task_status` failure renders task without claim section and shows retry
+- [x] `lithos_finding_list` failure renders task metadata and shows findings retry
+- [x] `lithos_read` failure for finding link renders fallback label
 
 ### Acceptance
 
-- [ ] With three open tasks where one has an active claim, the current situation panel shows correct open, known claimed, and known unclaimed state
-- [ ] Open tasks are shown regardless of age
-- [ ] Completed and cancelled groups honor the default created-at range
-- [ ] Claimed-state filter supports `any`, `known_claimed`, and `known_unclaimed`
-- [ ] If open task count exceeds `tasks.visible_cap`, claimed-state filtering shows an accuracy banner and does not silently classify unknown rows
-- [ ] Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks
-- [ ] Unknown `/tasks/{task_id}` renders a not-found panel, not HTTP 500
-- [ ] A finding with `knowledge_id` renders a title-labelled note link when `lithos_read` succeeds
-- [ ] A finding with `knowledge_id` renders a fallback label when `lithos_read` fails
-- [ ] Findings timeline renders without paging controls
+- [x] With three open tasks where one has an active claim, the current situation panel shows correct open, known claimed, and known unclaimed state
+- [x] Open tasks are shown regardless of age
+- [x] Completed and cancelled groups honor the default created-at range
+- [x] Claimed-state filter supports `any`, `known_claimed`, and `known_unclaimed`
+- [x] If open task count exceeds `tasks.visible_cap`, claimed-state filtering shows an accuracy banner and does not silently classify unknown rows
+- [x] Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks
+- [x] Unknown `/tasks/{task_id}` renders a not-found panel, not HTTP 500
+- [x] A finding with `knowledge_id` renders a title-labelled note link when `lithos_read` succeeds
+- [x] A finding with `knowledge_id` renders a fallback label when `lithos_read` fails
+- [x] Findings timeline renders without paging controls
 
 ---
 

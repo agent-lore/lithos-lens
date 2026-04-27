@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Note | Lithos Lens{% endblock %}
+
+{% block content %}
+  {% if task %}
+    <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a></p>
+  {% else %}
+    <p><a href="/tasks">&larr; Back to tasks</a></p>
+  {% endif %}
+
+  {% if error %}
+    <section class="banner banner-warning" role="status">
+      <strong>Document unavailable.</strong>
+      <span>{{ error }}</span>
+    </section>
+  {% elif note %}
+    <article class="detail-panel">
+      <header>
+        <p class="eyebrow">Knowledge note</p>
+        <h1>{{ note.title }}</h1>
+      </header>
+      {% if note.tags %}
+        <div class="tag-list">
+          {% for tag in note.tags %}
+            <span>{{ tag | format_tag }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+      <pre class="markdown-body">{{ note.content }}</pre>
+    </article>
+  {% endif %}
+{% endblock %}

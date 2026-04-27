@@ -26,6 +26,7 @@ agent_id = "lithos-lens"
 auto_refresh_interval_s = 30
 visible_cap = 50
 default_time_range_days = 30
+default_status_groups = ["open", "completed", "cancelled"]
 
 [lithos-lens.events]
 enabled = true

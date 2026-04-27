@@ -17,6 +17,7 @@ from typing import Any, Literal, cast
 from dotenv import load_dotenv
 
 from lithos_lens.errors import ConfigError
+from lithos_lens.tasks import TASK_STATUSES, TaskStatusName
 
 __all__ = [
     "DEFAULT_DATA_DIR",
@@ -99,6 +100,7 @@ class TasksConfig:
     auto_refresh_interval_s: int = DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S
     visible_cap: int = DEFAULT_TASKS_VISIBLE_CAP
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
+    default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
 
 
 @dataclass(frozen=True)
@@ -342,6 +344,13 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             "lithos-lens.tasks",
             minimum=1,
         ),
+        default_status_groups=_optional_status_groups(
+            data,
+            "default_status_groups",
+            TASK_STATUSES,
+            config_path,
+            "lithos-lens.tasks",
+        ),
     )
 
 
@@ -498,6 +507,31 @@ def _optional_bool(
     if not isinstance(value, bool):
         raise ConfigError(f"{config_path}: [{section}].{key} must be a boolean")
     return value
+
+
+def _optional_status_groups(
+    data: dict[str, Any],
+    key: str,
+    default: tuple[TaskStatusName, ...],
+    config_path: Path,
+    section: str,
+) -> tuple[TaskStatusName, ...]:
+    if key not in data:
+        return default
+    value = data[key]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{config_path}: [{section}].{key} must be a list of strings")
+    groups: list[TaskStatusName] = []
+    for item in value:
+        if item not in TASK_STATUSES:
+            raise ConfigError(
+                f"{config_path}: [{section}].{key} contains invalid status {item!r}"
+            )
+        if item not in groups:
+            groups.append(cast(TaskStatusName, item))
+    if not groups:
+        raise ConfigError(f"{config_path}: [{section}].{key} must not be empty")
+    return tuple(groups)
 
 
 def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
