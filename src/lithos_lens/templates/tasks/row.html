@@ -1,13 +1,13 @@
-<a class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" href="/tasks/{{ row.task.id }}" title="{{ row.task.title }}">
+<article class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" title="{{ row.task.title }}">
   <div>
-    <strong>{{ row.task.title }}</strong>
+    <a class="task-title" href="{{ task_detail_url(request, row.task.id) }}">{{ row.task.title }}</a>
     {% if row.task.description %}
       <p>{{ row.task.description }}</p>
     {% endif %}
     {% if row.task.tags %}
       <div class="tag-list">
         {% for tag in row.task.tags %}
-          <span>{{ tag | format_tag }}</span>
+          <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag }}</a>
         {% endfor %}
       </div>
     {% endif %}
@@ -39,4 +39,4 @@
   {% if row.claim_error %}
     <small class="warning-text">{{ row.claim_error }}</small>
   {% endif %}
-</a>
+</article>

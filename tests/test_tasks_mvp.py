@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,7 @@ class TaskFakeLithosClient:
                 status="open",
                 created_by="planner",
                 created_at="2026-04-26T10:00:00+00:00",
-                tags=("project:influx",),
+                tags=("project:influx", "area:docs"),
             ),
             TaskRecord(
                 id="open-unclaimed",
@@ -241,6 +242,50 @@ def test_dashboard_accepts_uk_created_since_date(
         call for call in fake.list_calls if call["status"] == "completed"
     )
     assert completed_call["since"] == "2026-04-01"
+
+
+def test_task_list_tag_links_replace_tag_and_preserve_active_filters(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=open&claimed_state=any&agent=planner&since=01/04/2026&tag=project:influx"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert (
+        'href="/tasks?status=open&claimed_state=any&agent=planner&'
+        'since=01%2F04%2F2026&tag=area%3Adocs"'
+    ) in text
+    assert 'class="tag-chip tag-chip-project"' in text
+    assert (
+        'href="/tasks/open-claimed?status=open&claimed_state=any&'
+        'agent=planner&since=01/04/2026&tag=project:influx"'
+    ) in text
+
+
+def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks/open-claimed?status=open&agent=planner&since=01/04/2026&tag=old"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert (
+        'href="/tasks?status=open&agent=planner&since=01%2F04%2F2026&'
+        'tag=project%3Ainflux"'
+    ) in text
+    assert 'class="tag-chip tag-chip-project"' in text
 
 
 def test_claimed_state_filter_does_not_classify_rows_beyond_cap(

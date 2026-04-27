@@ -88,15 +88,14 @@
     const list = document.querySelector('[data-task-list="open"]');
     if (!list) return;
     const title = message.payload && message.payload.title ? message.payload.title : `Task ${taskId}`;
-    const row = document.createElement("a");
+    const row = document.createElement("article");
     row.className = "task-row task-row-skeleton";
     row.id = `task-row-${taskId}`;
     row.dataset.taskRow = "";
     row.dataset.taskId = taskId;
     row.dataset.taskStatus = "open";
-    row.href = `/tasks/${taskId}`;
     row.innerHTML = `
-      <div><strong>${escapeHtml(title)}</strong><p>Loading full task details...</p></div>
+      <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
       <div class="task-row-meta"><span class="badge badge-open">open</span><span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span></div>
       <div class="claim-list" data-claim-list hidden></div>
     `;
