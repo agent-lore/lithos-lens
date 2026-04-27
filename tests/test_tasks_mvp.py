@@ -22,9 +22,16 @@ from lithos_lens.web import create_app
 
 
 class TaskFakeLithosClient:
-    def __init__(self, *, health: LithosHealth = "ok", visible_failures: bool = False):
+    def __init__(
+        self,
+        *,
+        health: LithosHealth = "ok",
+        visible_failures: bool = False,
+        ignore_tags: bool = False,
+    ):
         self.health_value: LithosHealth = health
         self.visible_failures = visible_failures
+        self.ignore_tags = ignore_tags
         self.closed = False
         self.register_calls = 0
         self.status_calls: list[str] = []
@@ -106,7 +113,7 @@ class TaskFakeLithosClient:
         rows = [task for task in self.tasks if status is None or task.status == status]
         if agent:
             rows = [task for task in rows if task.created_by == agent]
-        if tags:
+        if tags and not self.ignore_tags:
             rows = [task for task in rows if all(tag in task.tags for tag in tags)]
         if since:
             rows = [task for task in rows if task.created_at[:10] >= since[:10]]
@@ -202,6 +209,22 @@ def test_dashboard_shows_current_situation_and_default_groups(
     assert "Known claimed" in response.text
     assert "Known unclaimed" in response.text
     assert "implementation - worker-a" in response.text
+
+
+def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient(ignore_tags=True)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=completed&tag=project:influx&agent=worker&since=2026-04-01"
+        )
+
+    assert response.status_code == 200
+    assert "Recently completed task" not in response.text
+    assert "Old completed task" not in response.text
+    assert "No completed tasks match these filters" in response.text
 
 
 def test_claimed_state_filter_does_not_classify_rows_beyond_cap(

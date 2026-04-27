@@ -239,6 +239,11 @@ async def load_dashboard(
             raw_groups[status] = []
         else:
             task_records = cast(list[TaskRecord], result)
+            task_records = [
+                task
+                for task in task_records
+                if _matches_filters(task, filters=filters, status=status)
+            ]
             raw_groups[status] = sorted(
                 task_records, key=lambda task: task.created_at, reverse=True
             )
@@ -512,6 +517,26 @@ def _apply_claim_filter(
     if claimed_state == "any":
         return tasks
     return [task for task in tasks if task.claim_state == claimed_state]
+
+
+def _matches_filters(
+    task: TaskRecord,
+    *,
+    filters: TaskFilters,
+    status: TaskStatusName,
+) -> bool:
+    if task.status != status:
+        return False
+    if filters.agent and task.created_by != filters.agent:
+        return False
+    if filters.tags and not all(tag in task.tags for tag in filters.tags):
+        return False
+    if status in {"completed", "cancelled"} and filters.since:
+        task_date = parse_date(task.created_at)
+        since_date = parse_date(filters.since)
+        if task_date is not None and since_date is not None and task_date < since_date:
+            return False
+    return True
 
 
 def _int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:

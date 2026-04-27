@@ -187,9 +187,13 @@ small {
   align-items: end;
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
   margin-bottom: 1.5rem;
   padding: 1rem;
+}
+
+.filter-bar > * {
+  min-width: 0;
 }
 
 .filter-bar fieldset {
@@ -218,7 +222,9 @@ button,
   border: 1px solid var(--line);
   border-radius: 0.7rem;
   font: inherit;
+  max-width: 100%;
   padding: 0.55rem 0.7rem;
+  width: 100%;
 }
 
 button,
@@ -226,8 +232,11 @@ button,
   background: var(--ink);
   color: var(--panel);
   cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
   text-align: center;
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .button-secondary {
