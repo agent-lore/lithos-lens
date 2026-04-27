@@ -227,6 +227,22 @@ def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
     assert "No completed tasks match these filters" in response.text
 
 
+def test_dashboard_accepts_uk_created_since_date(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=completed&since=01/04/2026")
+
+    assert response.status_code == 200
+    assert 'value="01/04/2026"' in response.text
+    completed_call = next(
+        call for call in fake.list_calls if call["status"] == "completed"
+    )
+    assert completed_call["since"] == "2026-04-01"
+
+
 def test_claimed_state_filter_does_not_classify_rows_beyond_cap(
     lithos_lens_config_env: Path,
     monkeypatch: pytest.MonkeyPatch,

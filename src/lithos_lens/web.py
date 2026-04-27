@@ -19,6 +19,7 @@ from lithos_lens.state import AppState
 from lithos_lens.tasks import (
     default_since,
     find_task,
+    format_display_date,
     format_tag,
     load_dashboard,
     load_task_detail,
@@ -45,6 +46,7 @@ def create_app(
     state = AppState(config, factory(config))
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
+    templates.env.filters["display_date"] = format_display_date
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
