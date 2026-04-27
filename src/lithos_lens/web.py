@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +28,7 @@ from lithos_lens.telemetry import install_request_middleware
 PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
 STATIC_DIR = PACKAGE_ROOT / "static"
+logger = logging.getLogger(__name__)
 
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
@@ -175,15 +177,48 @@ async def _render_tasks(
     snapshot = await state.refresh_health()
     dashboard = None
     if snapshot.lithos == "ok":
+        query_items = list(request.query_params.multi_items())
         filters = parse_filters(
-            list(request.query_params.multi_items()),
+            query_items,
             state.config.tasks.default_time_range_days,
             state.config.tasks.default_status_groups,
+        )
+        logger.debug(
+            "tasks dashboard filters parsed",
+            extra={
+                "lens_route": str(request.url.path),
+                "query_items": query_items,
+                "statuses": list(filters.statuses),
+                "claimed_state": filters.claimed_state,
+                "tags": list(filters.tags),
+                "agent": filters.agent,
+                "since": filters.since,
+                "visible_cap": state.config.tasks.visible_cap,
+            },
         )
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
             visible_cap=state.config.tasks.visible_cap,
+        )
+        logger.debug(
+            "tasks dashboard loaded",
+            extra={
+                "lens_route": str(request.url.path),
+                "statuses": list(filters.statuses),
+                "claimed_state": filters.claimed_state,
+                "tags": list(filters.tags),
+                "agent": filters.agent,
+                "since": filters.since,
+                "visible_cap": dashboard.visible_cap,
+                "open_total": dashboard.open_total,
+                "group_counts": {
+                    status: len(rows) for status, rows in dashboard.groups.items()
+                },
+                "claim_cap_exceeded": dashboard.claim_cap_exceeded,
+                "claim_filter_limited": dashboard.claim_filter_limited,
+                "errors": list(dashboard.errors),
+            },
         )
     return templates.TemplateResponse(
         request,

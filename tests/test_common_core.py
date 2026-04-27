@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.logging import JsonFormatter
 from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
@@ -75,6 +78,26 @@ def test_config_loads_common_core_defaults(lithos_lens_config_env: Path) -> None
     assert config.llm.enabled is False
     assert config.telemetry.enabled is False
     assert config.ui.default_view == "tasks"
+
+
+def test_json_formatter_preserves_structured_extra_fields() -> None:
+    record = logging.LogRecord(
+        name="lithos_lens.web",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg="tasks dashboard filters parsed",
+        args=(),
+        exc_info=None,
+    )
+    record.tags = ["project:influx"]
+    record.group_counts = {"completed": 0}
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert payload["message"] == "tasks dashboard filters parsed"
+    assert payload["tags"] == ["project:influx"]
+    assert payload["group_counts"] == {"completed": 0}
 
 
 def test_app_degrades_when_lithos_is_unreachable(lithos_lens_config_env: Path) -> None:
