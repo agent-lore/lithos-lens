@@ -203,5 +203,43 @@
     return element.innerHTML;
   }
 
+  function setupDatePickers() {
+    document.querySelectorAll(".date-picker-control").forEach(function (control) {
+      const display = control.querySelector("[data-display-date]");
+      const native = control.querySelector("[data-native-date]");
+      const button = control.querySelector("[data-open-date-picker]");
+      if (!display || !native || !button) return;
+      button.addEventListener("click", function () {
+        if (native.showPicker) {
+          native.showPicker();
+        } else {
+          native.focus();
+          native.click();
+        }
+      });
+      native.addEventListener("change", function () {
+        display.value = isoToUkDate(native.value);
+        display.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      display.addEventListener("change", function () {
+        const iso = ukToIsoDate(display.value);
+        if (iso) native.value = iso;
+      });
+    });
+  }
+
+  function isoToUkDate(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+    if (!match) return "";
+    return `${match[3]}/${match[2]}/${match[1]}`;
+  }
+
+  function ukToIsoDate(value) {
+    const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value || "");
+    if (!match) return "";
+    return `${match[3]}-${match[2]}-${match[1]}`;
+  }
+
+  setupDatePickers();
   connect();
 })();

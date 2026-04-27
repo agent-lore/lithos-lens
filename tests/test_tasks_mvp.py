@@ -203,7 +203,7 @@ def test_dashboard_shows_current_situation_and_default_groups(
     assert "Open tasks" in response.text
     assert "Claimed open task" in response.text
     assert "Unclaimed open task" in response.text
-    assert "Old open task" in response.text
+    assert "Old open task" not in response.text
     assert "Recently completed task" in response.text
     assert "Old completed task" not in response.text
     assert "Recently cancelled task" in response.text
@@ -238,9 +238,13 @@ def test_dashboard_accepts_uk_created_since_date(
 
     assert response.status_code == 200
     assert 'value="01/04/2026"' in response.text
+    assert 'data-native-date value="2026-04-01"' in response.text
+    assert 'data-open-date-picker aria-label="Open calendar"' in response.text
+    open_call = next(call for call in fake.list_calls if call["status"] == "open")
     completed_call = next(
         call for call in fake.list_calls if call["status"] == "completed"
     )
+    assert open_call["since"] == "2026-04-01"
     assert completed_call["since"] == "2026-04-01"
 
 

@@ -223,7 +223,7 @@ async def load_dashboard(
     query_agent = filters.agent or None
 
     async def load_group(status: TaskStatusName) -> list[TaskRecord]:
-        since = filters.since if status in {"completed", "cancelled"} else None
+        since = filters.since
         return await lithos.list_tasks(
             agent=query_agent,
             status=status,
