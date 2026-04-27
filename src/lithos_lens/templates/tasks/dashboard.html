@@ -17,128 +17,131 @@
   {% endif %}
 
   {% if dashboard %}
-    <section class="live-status" data-live-status data-live-state="{{ "live" if health.events == "live" else "paused" }}">
-      <span class="live-dot"></span>
-      <strong data-live-status-label>{{ "Live updates connected" if health.events == "live" else "Live updates paused" }}</strong>
-      <small data-live-status-detail>{{ "Listening for Lithos task events" if health.events == "live" else "Reconnecting; polling fallback is active" }}</small>
-    </section>
-
-    {% if dashboard.errors %}
-      <section class="banner banner-warning" role="status">
-        <strong>Some task data could not be loaded.</strong>
-        <span>{{ dashboard.errors | join(" ") }}</span>
+    <div data-refresh-fragment="dashboard-data">
+      <section class="live-status" data-live-status data-live-state="{{ "live" if health.events == "live" else "paused" }}">
+        <span class="live-dot"></span>
+        <strong data-live-status-label>{{ "Live updates connected" if health.events == "live" else "Live updates paused" }}</strong>
+        <small data-live-status-detail>{{ "Listening for Lithos task events" if health.events == "live" else "Reconnecting; polling fallback is active" }}</small>
       </section>
-    {% endif %}
 
-    <section class="situation-grid" aria-label="Current situation" data-refresh-fragment="situation">
-      <a class="metric-card" href="/tasks?status=open">
-        <span>Open tasks</span>
-        <strong>{{ dashboard.summary.open_tasks }}</strong>
-        <small>All open tasks, regardless of age</small>
-      </a>
-      <a class="metric-card" href="/tasks?status=open&claimed_state=known_claimed">
-        <span>Known claimed</span>
-        <strong>{{ dashboard.summary.claimed_open_tasks }}</strong>
-        <small>{{ dashboard.summary.open_claims }} active claims</small>
-      </a>
-      <a class="metric-card" href="/tasks?status=open&claimed_state=known_unclaimed">
-        <span>Known unclaimed</span>
-        <strong>{{ dashboard.summary.unclaimed_open_tasks }}</strong>
-        <small>{{ dashboard.summary.unknown_claim_open_tasks }} unknown beyond cap/failures</small>
-      </a>
-      <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
-        <span>Recently completed</span>
-        <strong>{{ dashboard.summary.recent_completed }}</strong>
-        <small>Created since {{ dashboard.filters.since }}</small>
-      </a>
-      <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
-        <span>Recently cancelled</span>
-        <strong>{{ dashboard.summary.recent_cancelled }}</strong>
-        <small>Created since {{ dashboard.filters.since }}</small>
-      </a>
-      <article class="metric-card">
-        <span>Agents</span>
-        <strong>{{ dashboard.summary.agents }}</strong>
-        <small>Lithos registry count</small>
-      </article>
-    </section>
+      {% if dashboard.errors %}
+        <section class="banner banner-warning" role="status">
+          <strong>Some task data could not be loaded.</strong>
+          <span>{{ dashboard.errors | join(" ") }}</span>
+        </section>
+      {% endif %}
 
-    <form class="filter-bar" action="/tasks" method="get">
-      <fieldset>
-        <legend>Status</legend>
-        {% for status in ("open", "completed", "cancelled") %}
-          <label>
-            <input type="checkbox" name="status" value="{{ status }}" {{ "checked" if status in dashboard.filters.statuses else "" }}>
-            {{ status }}
-          </label>
-        {% endfor %}
-      </fieldset>
-      <label>
-        Claimed state
-        <select name="claimed_state">
-          <option value="any" {{ "selected" if dashboard.filters.claimed_state == "any" else "" }}>Any</option>
-          <option value="known_claimed" {{ "selected" if dashboard.filters.claimed_state == "known_claimed" else "" }}>Known claimed</option>
-          <option value="known_unclaimed" {{ "selected" if dashboard.filters.claimed_state == "known_unclaimed" else "" }}>Known unclaimed</option>
-        </select>
-      </label>
-      <label>
-        Tag
-        <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="project:influx">
-      </label>
-      <label>
-        Creating agent
-        <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
-        <datalist id="agents">
-          {% for agent in dashboard.agents %}
-            <option value="{{ agent.id }}">{{ agent.name or agent.id }}</option>
-          {% endfor %}
-        </datalist>
-      </label>
-      <label>
-        Created since
-        <span class="date-picker-control">
-          <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
-          <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose created since date">
-          <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
-        </span>
-      </label>
-      <button type="submit">Apply filters</button>
-      <a class="button-secondary" href="/tasks">Reset</a>
-    </form>
-
-    {% if dashboard.claim_filter_limited %}
-      <section class="banner banner-warning" role="status">
-        <strong>Claim filter is approximate.</strong>
-        <span>Claim filter covers the first {{ dashboard.visible_cap }} open tasks; narrow filters for full accuracy.</span>
-      </section>
-    {% elif dashboard.claim_cap_exceeded %}
-      <section class="banner" role="status">
-        <strong>Claim detail is capped.</strong>
-        <span>Showing claim detail for the first {{ dashboard.visible_cap }} of {{ dashboard.open_total }} open rows. Click a row to see claims for the rest.</span>
-      </section>
-    {% endif %}
-
-    <section class="task-board" aria-label="Task groups" data-refresh-fragment="tasks">
-      {% for status in dashboard.filters.statuses %}
-        {% set rows = dashboard.groups[status] %}
-        <article class="task-group" id="task-group-{{ status }}" data-task-group="{{ status }}">
-          <header>
-            <h2>{{ status.title() }}</h2>
-            <span>{{ rows | length }}</span>
-          </header>
-          {% if rows %}
-            <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}">
-              {% for row in rows %}
-                {% include "tasks/row.html" %}
-              {% endfor %}
-            </div>
-          {% else %}
-            <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}"></div>
-            <p class="empty">No {{ status }} tasks match these filters.</p>
-          {% endif %}
+      <section class="situation-grid" aria-label="Current situation">
+        <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}">
+          <span>Open tasks</span>
+          <strong>{{ dashboard.summary.open_tasks }}</strong>
+          <small>Matching current filters since {{ dashboard.filters.since }}</small>
+        </a>
+        <a class="metric-card" href="/tasks?status=open&claimed_state=known_claimed&since={{ dashboard.filters.since }}">
+          <span>Known claimed</span>
+          <strong>{{ dashboard.summary.claimed_open_tasks }}</strong>
+          <small>{{ dashboard.summary.open_claims }} active claims</small>
+        </a>
+        <a class="metric-card" href="/tasks?status=open&claimed_state=known_unclaimed&since={{ dashboard.filters.since }}">
+          <span>Known unclaimed</span>
+          <strong>{{ dashboard.summary.unclaimed_open_tasks }}</strong>
+          <small>{{ dashboard.summary.unknown_claim_open_tasks }} unknown beyond cap/failures</small>
+        </a>
+        <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
+          <span>Recently completed</span>
+          <strong>{{ dashboard.summary.recent_completed }}</strong>
+          <small>Created since {{ dashboard.filters.since }}</small>
+        </a>
+        <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
+          <span>Recently cancelled</span>
+          <strong>{{ dashboard.summary.recent_cancelled }}</strong>
+          <small>Created since {{ dashboard.filters.since }}</small>
+        </a>
+        <article class="metric-card">
+          <span>Agents</span>
+          <strong>{{ dashboard.summary.agents }}</strong>
+          <small>Lithos registry count</small>
         </article>
-      {% endfor %}
-    </section>
+      </section>
+
+      {% if dashboard.claim_filter_limited %}
+        <section class="banner banner-warning" role="status">
+          <strong>Claim filter is approximate.</strong>
+          <span>Claim filter covers the first {{ dashboard.visible_cap }} open tasks; narrow filters for full accuracy.</span>
+        </section>
+      {% elif dashboard.claim_cap_exceeded %}
+        <section class="banner" role="status">
+          <strong>Claim detail is capped.</strong>
+          <span>Showing claim detail for the first {{ dashboard.visible_cap }} of {{ dashboard.open_total }} open rows. Click a row to see claims for the rest.</span>
+        </section>
+      {% endif %}
+
+      <form class="filter-bar" action="/tasks" method="get">
+        <fieldset>
+          <legend>Status</legend>
+          {% for status in ("open", "completed", "cancelled") %}
+            <label>
+              <input type="checkbox" name="status" value="{{ status }}" {{ "checked" if status in dashboard.filters.statuses else "" }}>
+              {{ status }}
+            </label>
+          {% endfor %}
+        </fieldset>
+        <label>
+          Claimed state
+          <select name="claimed_state">
+            <option value="any" {{ "selected" if dashboard.filters.claimed_state == "any" else "" }}>Any</option>
+            <option value="known_claimed" {{ "selected" if dashboard.filters.claimed_state == "known_claimed" else "" }}>Known claimed</option>
+            <option value="known_unclaimed" {{ "selected" if dashboard.filters.claimed_state == "known_unclaimed" else "" }}>Known unclaimed</option>
+          </select>
+        </label>
+        <label>
+          Tag
+          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="project:influx">
+        </label>
+        <label>
+          Creating agent
+          <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
+          <datalist id="agents">
+            {% for agent in dashboard.agents %}
+              <option value="{{ agent.id }}">{{ agent.name or agent.id }}</option>
+            {% endfor %}
+          </datalist>
+        </label>
+        <label>
+          Created since
+          <span class="date-picker-control">
+            <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
+            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose created since date">
+            <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
+          </span>
+        </label>
+        <button type="submit">Apply filters</button>
+        <a class="button-secondary" href="/tasks">Reset</a>
+      </form>
+
+      <section class="task-board" aria-label="Task groups">
+        {% for status in dashboard.filters.statuses %}
+          {% set rows = dashboard.groups[status] %}
+          <article class="task-group" id="task-group-{{ status }}" data-task-group="{{ status }}">
+            <header>
+              <h2>{{ status.title() }}</h2>
+              <span>{{ rows | length }}</span>
+            </header>
+            {% if rows %}
+              <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}">
+                {% for row in rows %}
+                  {% include "tasks/row.html" %}
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}"></div>
+              <p class="empty">No {{ status }} tasks match these filters.</p>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </section>
+    </div>
+
   {% else %}
     <section class="status-grid" aria-label="Service status">
       <article>

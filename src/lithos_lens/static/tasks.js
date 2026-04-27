@@ -8,12 +8,16 @@
   let pollTimer = null;
   let reconnectRefreshPending = false;
   let latestRefreshToken = 0;
+  let currentLiveState = "paused";
+  let currentLiveDetail = "Reconnecting; polling fallback is active";
 
   function setLiveStatus(status, detail) {
     const root = document.querySelector("[data-live-status]");
     const label = document.querySelector("[data-live-status-label]");
     const description = document.querySelector("[data-live-status-detail]");
     if (!root || !label || !description) return;
+    currentLiveState = status;
+    currentLiveDetail = detail;
     root.dataset.liveState = status;
     label.textContent = status === "live" ? "Live updates connected" : "Live updates paused";
     description.textContent = detail;
@@ -42,22 +46,17 @@
     if (!response.ok || token !== latestRefreshToken) return;
     const text = await response.text();
     const doc = new DOMParser().parseFromString(text, "text/html");
-    replaceFragment(doc, "situation");
-    replaceFragment(doc, "tasks");
+    replaceFragment(doc, "dashboard-data");
     if (config.detailTaskId) {
-      replaceDetailFindings(doc);
+      replaceFragment(doc, "detail");
     }
+    setupDatePickers();
+    setLiveStatus(currentLiveState, currentLiveDetail);
   }
 
   function replaceFragment(doc, name) {
     const current = document.querySelector(`[data-refresh-fragment="${name}"]`);
     const next = doc.querySelector(`[data-refresh-fragment="${name}"]`);
-    if (current && next) current.replaceWith(next);
-  }
-
-  function replaceDetailFindings(doc) {
-    const current = document.querySelector(".findings-timeline") || document.querySelector(".detail-panel section:last-child");
-    const next = doc.querySelector(".findings-timeline") || doc.querySelector(".detail-panel section:last-child");
     if (current && next) current.replaceWith(next);
   }
 
@@ -205,6 +204,8 @@
 
   function setupDatePickers() {
     document.querySelectorAll(".date-picker-control").forEach(function (control) {
+      if (control.dataset.datePickerBound === "true") return;
+      control.dataset.datePickerBound = "true";
       const display = control.querySelector("[data-display-date]");
       const native = control.querySelector("[data-native-date]");
       const button = control.querySelector("[data-open-date-picker]");
@@ -240,6 +241,10 @@
     return `${match[3]}-${match[2]}-${match[1]}`;
   }
 
+  const liveRoot = document.querySelector("[data-live-status]");
+  if (liveRoot) {
+    currentLiveState = liveRoot.dataset.liveState || currentLiveState;
+  }
   setupDatePickers();
   connect();
 })();

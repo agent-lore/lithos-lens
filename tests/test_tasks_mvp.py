@@ -212,6 +212,21 @@ def test_dashboard_shows_current_situation_and_default_groups(
     assert "implementation - worker-a" in response.text
 
 
+def test_dashboard_renders_filter_bar_before_task_groups(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert 'class="filter-bar"' in response.text
+    assert response.text.index('class="filter-bar"') < response.text.index(
+        'class="task-board"'
+    )
+
+
 def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
     lithos_lens_config_env: Path,
 ) -> None:
