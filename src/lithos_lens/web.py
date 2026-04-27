@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -75,6 +76,30 @@ def create_app(
     @app.get("/tasks", response_class=HTMLResponse)
     async def tasks(request: Request) -> HTMLResponse:
         return await _render_tasks(request, templates, state)
+
+    @app.get("/tasks/events")
+    async def task_events() -> StreamingResponse:
+        queue = state.events.subscribe()
+
+        async def stream():
+            try:
+                yield 'event: lens.status\ndata: {"status":"connected"}\n\n'
+                while True:
+                    event = await queue.get()
+                    yield event.as_sse()
+            except CancelledError:
+                raise
+            finally:
+                state.events.unsubscribe(queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:

@@ -17,6 +17,12 @@
   {% endif %}
 
   {% if dashboard %}
+    <section class="live-status" data-live-status data-live-state="{{ "live" if health.events == "live" else "paused" }}">
+      <span class="live-dot"></span>
+      <strong data-live-status-label>{{ "Live updates connected" if health.events == "live" else "Live updates paused" }}</strong>
+      <small data-live-status-detail>{{ "Listening for Lithos task events" if health.events == "live" else "Reconnecting; polling fallback is active" }}</small>
+    </section>
+
     {% if dashboard.errors %}
       <section class="banner banner-warning" role="status">
         <strong>Some task data could not be loaded.</strong>
@@ -24,7 +30,7 @@
       </section>
     {% endif %}
 
-    <section class="situation-grid" aria-label="Current situation">
+    <section class="situation-grid" aria-label="Current situation" data-refresh-fragment="situation">
       <a class="metric-card" href="/tasks?status=open">
         <span>Open tasks</span>
         <strong>{{ dashboard.summary.open_tasks }}</strong>
@@ -108,21 +114,22 @@
       </section>
     {% endif %}
 
-    <section class="task-board" aria-label="Task groups">
+    <section class="task-board" aria-label="Task groups" data-refresh-fragment="tasks">
       {% for status in dashboard.filters.statuses %}
         {% set rows = dashboard.groups[status] %}
-        <article class="task-group">
+        <article class="task-group" id="task-group-{{ status }}" data-task-group="{{ status }}">
           <header>
             <h2>{{ status.title() }}</h2>
             <span>{{ rows | length }}</span>
           </header>
           {% if rows %}
-            <div class="task-list">
+            <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}">
               {% for row in rows %}
                 {% include "tasks/row.html" %}
               {% endfor %}
             </div>
           {% else %}
+            <div class="task-list" id="task-list-{{ status }}" data-task-list="{{ status }}"></div>
             <p class="empty">No {{ status }} tasks match these filters.</p>
           {% endif %}
         </article>
@@ -147,5 +154,17 @@
         <strong>{{ health.llm }}</strong>
       </article>
     </section>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if dashboard %}
+    <script>
+      window.LithosLensTasks = {
+        autoRefreshIntervalMs: {{ config.tasks.auto_refresh_interval_s * 1000 }},
+        eventsUrl: "/tasks/events"
+      };
+    </script>
+    <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
   {% endif %}
 {% endblock %}

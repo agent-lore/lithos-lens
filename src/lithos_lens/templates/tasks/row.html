@@ -1,4 +1,4 @@
-<a class="task-row" href="/tasks/{{ row.task.id }}" title="{{ row.task.title }}">
+<a class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" href="/tasks/{{ row.task.id }}" title="{{ row.task.title }}">
   <div>
     <strong>{{ row.task.title }}</strong>
     {% if row.task.description %}
@@ -21,20 +21,22 @@
       <time datetime="{{ row.task.created_at }}">{{ row.task.created_at[:16].replace("T", " ") }}</time>
     {% endif %}
     {% if row.claim_state == "known_claimed" %}
-      <span class="claim-chip">{{ row.claims | length }} claim{{ "s" if (row.claims | length) != 1 else "" }}</span>
+      <span class="claim-chip" data-claim-summary>{{ row.claims | length }} claim{{ "s" if (row.claims | length) != 1 else "" }}</span>
     {% elif row.claim_state == "known_unclaimed" %}
-      <span class="claim-chip claim-chip-open">unclaimed</span>
+      <span class="claim-chip claim-chip-open" data-claim-summary>unclaimed</span>
     {% elif row.claim_state == "unknown" %}
-      <span class="claim-chip claim-chip-unknown">claims unknown</span>
+      <span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span>
+    {% endif %}
+    <span class="finding-chip" data-finding-count hidden>0 new findings</span>
+  </div>
+  <div class="claim-list" data-claim-list {{ "" if row.claims else "hidden" }}>
+    {% if row.claims %}
+      {% for claim in row.claims %}
+        <span data-claim-aspect="{{ claim.aspect }}">{{ claim.aspect }} - {{ claim.agent }}</span>
+      {% endfor %}
     {% endif %}
   </div>
-  {% if row.claims %}
-    <div class="claim-list">
-      {% for claim in row.claims %}
-        <span>{{ claim.aspect }} - {{ claim.agent }}</span>
-      {% endfor %}
-    </div>
-  {% elif row.claim_error %}
+  {% if row.claim_error %}
     <small class="warning-text">{{ row.claim_error }}</small>
   {% endif %}
 </a>

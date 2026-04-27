@@ -143,8 +143,11 @@ def test_static_assets_are_served(lithos_lens_config_env: Path) -> None:
     with TestClient(app) as client:
         css = client.get("/static/lens.css")
         htmx = client.get("/static/vendor/htmx.min.js")
+        tasks_js = client.get("/static/tasks.js")
 
     assert css.status_code == 200
     assert "--accent" in css.text
     assert htmx.status_code == 200
     assert "htmx" in htmx.text
+    assert tasks_js.status_code == 200
+    assert "EventSource" in tasks_js.text

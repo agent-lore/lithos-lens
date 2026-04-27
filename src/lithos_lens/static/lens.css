@@ -137,6 +137,35 @@ h1 {
   font-size: 1.4rem;
 }
 
+.live-status {
+  align-items: center;
+  background: rgba(255, 250, 240, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 0.65rem;
+  margin-bottom: 1.25rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.live-dot {
+  background: var(--ok);
+  border-radius: 999px;
+  box-shadow: 0 0 0 0.35rem rgba(53, 106, 77, 0.12);
+  height: 0.65rem;
+  width: 0.65rem;
+}
+
+.live-status[data-live-state="paused"] .live-dot {
+  background: var(--warning-border);
+  box-shadow: 0 0 0 0.35rem rgba(213, 138, 31, 0.14);
+}
+
+.live-status small {
+  border-left: 1px solid var(--line);
+  padding-left: 0.65rem;
+}
+
 .situation-grid {
   display: grid;
   gap: 1rem;
@@ -287,6 +316,10 @@ button,
   background: rgba(255, 246, 227, 0.7);
 }
 
+.task-row-skeleton {
+  animation: row-pulse 1.2s ease-in-out infinite alternate;
+}
+
 .task-row p {
   color: var(--muted);
   margin: 0.35rem 0 0;
@@ -302,6 +335,7 @@ button,
 
 .badge,
 .claim-chip,
+.finding-chip,
 .tag-list span {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -329,6 +363,12 @@ button,
 .claim-chip {
   background: rgba(53, 106, 77, 0.09);
   border-color: rgba(53, 106, 77, 0.35);
+}
+
+.finding-chip {
+  background: rgba(189, 79, 43, 0.09);
+  border-color: rgba(189, 79, 43, 0.35);
+  color: var(--accent);
 }
 
 .claim-chip-open,
@@ -431,5 +471,15 @@ button,
   .task-row-meta {
     align-items: flex-start;
     text-align: left;
+  }
+}
+
+@keyframes row-pulse {
+  from {
+    background: rgba(255, 246, 227, 0.25);
+  }
+
+  to {
+    background: rgba(255, 246, 227, 0.8);
   }
 }

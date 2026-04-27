@@ -18,7 +18,7 @@
       <a class="button-secondary" href="/tasks">Return to dashboard</a>
     </section>
   {% elif detail.task %}
-    <article class="detail-panel">
+    <article class="detail-panel" data-task-detail="{{ detail.task.id }}">
       <header>
         <p class="eyebrow">Task detail</p>
         <h1>{{ detail.task.title }}</h1>
@@ -80,5 +80,18 @@
 
       {% include "tasks/findings.html" %}
     </article>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if detail and detail.task %}
+    <script>
+      window.LithosLensTasks = {
+        autoRefreshIntervalMs: {{ config.tasks.auto_refresh_interval_s * 1000 }},
+        detailTaskId: "{{ detail.task.id }}",
+        eventsUrl: "/tasks/events"
+      };
+    </script>
+    <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
   {% endif %}
 {% endblock %}

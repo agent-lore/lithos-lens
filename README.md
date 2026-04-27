@@ -8,7 +8,10 @@ contains the common-core web scaffold plus the Tasks MVP: TOML configuration,
 structured logging, Lithos health probing, startup agent registration,
 degraded-mode rendering, vendored static assets, operational task dashboard,
 claim enrichment, direct task detail pages, findings timelines, and a minimal
-knowledge-note renderer for task finding links.
+knowledge-note renderer for task finding links. The Tasks view also subscribes
+to Lithos task/finding SSE events, re-broadcasts them to browser tabs, applies
+optimistic row updates, and reconciles visible fragments without a full-page
+reload.
 
 ## Getting Started
 
@@ -36,7 +39,8 @@ The Tasks dashboard is available at `/tasks` and is also the current root view.
 It reads from Lithos using `lithos_task_list`, `lithos_task_status`,
 `lithos_finding_list`, `lithos_read`, `lithos_stats`, and
 `lithos_agent_list`. Lens does not create, claim, mutate, complete, or cancel
-tasks.
+tasks. Browser tabs receive normalized live events from `/tasks/events`; Lens
+itself holds the single server-side subscription to Lithos `/events`.
 
 ## Configuration
 
@@ -244,4 +248,5 @@ make check      # all of the above
 ## Implementation Tracking
 
 Progress is tracked in [docs/IMPLEMENTATION_CHECKLIST.md](docs/IMPLEMENTATION_CHECKLIST.md).
-Milestones 0 and 1 are implemented; live browser updates begin at Milestone 2.
+Milestones 0, 1, and 2 are implemented; optional LLM features begin at
+Milestone 3.
