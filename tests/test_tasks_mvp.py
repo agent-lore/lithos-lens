@@ -222,9 +222,8 @@ def test_dashboard_renders_filter_bar_before_task_groups(
 
     assert response.status_code == 200
     assert 'class="filter-bar"' in response.text
-    assert (
-        response.text.index('class="filter-bar"')
-        < response.text.index('class="task-board"')
+    assert response.text.index('class="filter-bar"') < response.text.index(
+        'class="task-board"'
     )
 
 
