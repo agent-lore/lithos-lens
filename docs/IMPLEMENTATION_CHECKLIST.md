@@ -97,44 +97,44 @@ A checkbox is complete only when the code exists, relevant tests or manual verif
 
 ### Event Pipeline
 
-- [ ] Shared Lithos `/events` subscriber
-- [ ] In-process event pub/sub
-- [ ] `/tasks/events` browser SSE endpoint
-- [ ] Normalized Lens event envelope
-- [ ] Preserve Lithos event IDs for browser-side dedupe
-- [ ] `requires_refresh` flag on sparse events
-- [ ] Debounced reconciliation refresh
+- [x] Shared Lithos `/events` subscriber
+- [x] In-process event pub/sub
+- [x] `/tasks/events` browser SSE endpoint
+- [x] Normalized Lens event envelope
+- [x] Preserve Lithos event IDs for browser-side dedupe
+- [x] `requires_refresh` flag on sparse events
+- [x] Debounced reconciliation refresh
 
 ### UI Updates
 
-- [ ] `task.created` inserts skeleton open row
-- [ ] `task.claimed` updates visible claim chips optimistically
-- [ ] `task.released` removes visible claim chips optimistically
-- [ ] `task.completed` moves or removes visible rows optimistically
-- [ ] `task.cancelled` moves or removes visible rows optimistically
-- [ ] `finding.posted` increments row findings badge
-- [ ] `finding.posted` refetches findings timeline when detail panel is open
+- [x] `task.created` inserts skeleton open row
+- [x] `task.claimed` updates visible claim chips optimistically
+- [x] `task.released` removes visible claim chips optimistically
+- [x] `task.completed` moves or removes visible rows optimistically
+- [x] `task.cancelled` moves or removes visible rows optimistically
+- [x] `finding.posted` increments row findings badge
+- [x] `finding.posted` refetches findings timeline when detail panel is open
 
 ### Resilience
 
-- [ ] Disconnect badge
-- [ ] Reconnect with exponential backoff
-- [ ] Polling fallback while disconnected
-- [ ] Full visible-list refresh after reconnect
-- [ ] Browser handlers tolerate duplicate events
-- [ ] Browser handlers tolerate out-of-order reconciliation responses
+- [x] Disconnect badge
+- [x] Reconnect with exponential backoff
+- [x] Polling fallback while disconnected
+- [x] Full visible-list refresh after reconnect
+- [x] Browser handlers tolerate duplicate events
+- [x] Browser handlers tolerate out-of-order reconciliation responses
 
 ### Acceptance
 
-- [ ] `task.created` inserts an open skeleton row without full-page reload and reconciles on next debounced refresh
-- [ ] `task.claimed` and `task.released` update visible claim chips optimistically
-- [ ] `task.completed` and `task.cancelled` move or remove visible rows without full-page reload
-- [ ] `finding.posted` increments row badge
-- [ ] `finding.posted` refetches the findings timeline when the detail panel is open
-- [ ] `/tasks/events` emits normalized events with Lithos event IDs and `requires_refresh` where appropriate
-- [ ] SSE disconnect shows "Live updates paused"
-- [ ] Polling fallback refreshes the dashboard during disconnect
-- [ ] Reconnect performs a full visible-list refresh
+- [x] `task.created` inserts an open skeleton row without full-page reload and reconciles on next debounced refresh
+- [x] `task.claimed` and `task.released` update visible claim chips optimistically
+- [x] `task.completed` and `task.cancelled` move or remove visible rows without full-page reload
+- [x] `finding.posted` increments row badge
+- [x] `finding.posted` refetches the findings timeline when the detail panel is open
+- [x] `/tasks/events` emits normalized events with Lithos event IDs and `requires_refresh` where appropriate
+- [x] SSE disconnect shows "Live updates paused"
+- [x] Polling fallback refreshes the dashboard during disconnect
+- [x] Reconnect performs a full visible-list refresh
 
 ---
 

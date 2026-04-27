@@ -199,7 +199,10 @@ def parse_filters(
         else "any"
     )  # type: ignore[assignment]
 
-    since = (values.get("since") or [""])[0] or default_since(default_days)
+    since = normalize_since_input(
+        (values.get("since") or [""])[0],
+        default_days=default_days,
+    )
     return TaskFilters(
         statuses=statuses,
         claimed_state=claimed_state,
@@ -220,7 +223,7 @@ async def load_dashboard(
     query_agent = filters.agent or None
 
     async def load_group(status: TaskStatusName) -> list[TaskRecord]:
-        since = filters.since if status in {"completed", "cancelled"} else None
+        since = filters.since
         return await lithos.list_tasks(
             agent=query_agent,
             status=status,
@@ -469,6 +472,19 @@ def default_since(default_days: int) -> str:
     return (datetime.now(UTC) - timedelta(days=default_days)).date().isoformat()
 
 
+def normalize_since_input(value: str, *, default_days: int) -> str:
+    value = value.strip()
+    if not value:
+        return default_since(default_days)
+    parsed = parse_date(value)
+    return parsed.isoformat() if parsed else default_since(default_days)
+
+
+def format_display_date(value: str) -> str:
+    parsed = parse_date(value)
+    return parsed.strftime("%d/%m/%Y") if parsed else value
+
+
 def format_tag(tag: str) -> str:
     if ":" not in tag:
         return tag
@@ -477,6 +493,11 @@ def format_tag(tag: str) -> str:
 
 
 def parse_date(value: str) -> date | None:
+    if "/" in value:
+        try:
+            return datetime.strptime(value, "%d/%m/%Y").date()
+        except ValueError:
+            return None
     try:
         return date.fromisoformat(value[:10])
     except ValueError:

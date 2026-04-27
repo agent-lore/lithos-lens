@@ -33,7 +33,7 @@ class AppState:
     ) -> None:
         self.config = config
         self.lithos_client = lithos_client
-        self.events = EventHub(config.events)
+        self.events = EventHub(config.events, config.lithos)
         self.health = HealthSnapshot(llm="disabled" if not config.llm.enabled else "ok")
         self._last_health_probe_at = 0.0
 

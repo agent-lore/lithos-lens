@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -18,6 +20,7 @@ from lithos_lens.state import AppState
 from lithos_lens.tasks import (
     default_since,
     find_task,
+    format_display_date,
     format_tag,
     load_dashboard,
     load_task_detail,
@@ -44,6 +47,11 @@ def create_app(
     state = AppState(config, factory(config))
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
+    templates.env.filters["display_date"] = format_display_date
+    templates.env.globals["task_tag_url"] = task_tag_url
+    templates.env.globals["task_detail_url"] = task_detail_url
+    templates.env.globals["tasks_url"] = tasks_url
+    templates.env.globals["tag_chip_class"] = tag_chip_class
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -75,6 +83,30 @@ def create_app(
     @app.get("/tasks", response_class=HTMLResponse)
     async def tasks(request: Request) -> HTMLResponse:
         return await _render_tasks(request, templates, state)
+
+    @app.get("/tasks/events")
+    async def task_events() -> StreamingResponse:
+        queue = state.events.subscribe()
+
+        async def stream():
+            try:
+                yield 'event: lens.status\ndata: {"status":"connected"}\n\n'
+                while True:
+                    event = await queue.get()
+                    yield event.as_sse()
+            except CancelledError:
+                raise
+            finally:
+                state.events.unsubscribe(queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
@@ -231,3 +263,32 @@ async def _render_tasks(
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },
     )
+
+
+def task_tag_url(request: Request, tag: str) -> str:
+    preserved_keys = {"status", "claimed_state", "agent", "since"}
+    params: list[tuple[str, str]] = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key in preserved_keys and value
+    ]
+    params.append(("tag", tag))
+    return f"/tasks?{urlencode(params)}"
+
+
+def task_detail_url(request: Request, task_id: str) -> str:
+    query = request.url.query
+    suffix = f"?{query}" if query else ""
+    return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def tasks_url(request: Request) -> str:
+    query = request.url.query
+    return f"/tasks?{query}" if query else "/tasks"
+
+
+def tag_chip_class(tag: str) -> str:
+    classes = ["tag-chip"]
+    if tag.startswith("project:"):
+        classes.append("tag-chip-project")
+    return " ".join(classes)
