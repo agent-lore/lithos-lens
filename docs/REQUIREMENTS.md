@@ -1,7 +1,7 @@
 ---
 title: Lithos Lens — Requirements Document
-version: 0.6.0
-date: 2026-04-26
+version: 0.7.0
+date: 2026-04-29
 status: draft
 tags: [lithos-lens, requirements, design, architecture]
 ---
@@ -21,6 +21,9 @@ tags: [lithos-lens, requirements, design, architecture]
 > [!note] v0.6 changelog
 > v0.6 promotes the document into four parts (Common Core, Tasks View, Knowledge Browser, Reference) and adds the **Tasks View** as a peer of the Knowledge Browser. The implementation order is **Tasks View first, Knowledge Browser second** — both ride on the same FastAPI app, MCP client, and shared SSE event subscription, so the common core (§1–§4) is built once and both views slot in. The Tasks View MVP is intentionally constrained to the current Lithos read surface (`lithos_task_list`, `lithos_task_status`, `lithos_finding_list`, `lithos_agent_list`, `lithos_stats`, and `/events`). Any richer task filtering, direct task lookup, claim metadata, or backend findings query pagination is deferred unless Lithos exposes it later.
 
+> [!note] v0.7 changelog
+> v0.7 splits the Tasks surface into **two routes** — an Operator View at `/tasks` (primary: "are my agents alive and making progress?") and a Planning View at `/tasks/plan` (secondary: "what should happen next?"). The Operator View structure is reshaped around four open-task sections: **Needs attention** (severity-ordered: expired claim → stale open → unclaimed-old) → **In progress** → **Queued** → **Unknown claim state** tail, with **collapsed Completed / Cancelled** below. Project tagging conventions become normative (`project:<slug>`), driving a first-class project filter, per-row project chip, and the Planning View's project breakdown / throughput sections. New milestone **M1.5** ships the Planning View after the Operator View stabilises. New row affordances: latest-finding inline, agent chips with role markers (created / claimed / latest), human-agent visual distinction, OR-across-roles filter. New global affordances: collapsible "Recent findings" drawer fed by a server-side rolling buffer, title-badge notifications (always on), debounced server-side metric recompute. Desktop notifications + LLM "most significant findings" remain in M3.
+
 ---
 
 ## Table of Contents
@@ -32,7 +35,9 @@ tags: [lithos-lens, requirements, design, architecture]
 - [[#4. Configuration]]
 
 ### Part B — Tasks View
-- [[#5. Tasks View]]
+- [[#5. Tasks View — Operator View]]
+- [[#5A. Tasks View — Planning View]]
+- [[#5B. Project Tracking Conventions]]
 
 ### Part C — Knowledge Browser
 - [[#6. Feed View]]
@@ -71,12 +76,18 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 - Minimal stack: FastAPI + HTMX + Cytoscape.js; no heavy JS framework, no build step
 
 #### Tasks View
-- Live, read-only dashboard over Lithos tasks, claims, and findings
-- Flexible filtering (status, tags including `key:value` shorthand, creating agent, date range)
-- Summary panel showing counts supported by current Lithos (open tasks, open claims, completed tasks in the selected created-at window, cancelled tasks in the selected created-at window)
-- Task detail panel exposing available task metadata, active claims, and the findings timeline
-- Findings link out to the Lens Knowledge Browser via explicit `finding.knowledge_id` (no inference, no heuristics)
-- Auto-update via the shared SSE event subscription, with a configurable manual-refresh fallback
+- Two co-equal routes sharing the same data, MCP client, and SSE subscription:
+  - **Operator View (`/tasks`)** — "are my agents alive and making progress?" Live, read-only operator dashboard. Primary surface.
+  - **Planning View (`/tasks/plan`)** — "what should happen next?" Throughput / starvation / bottleneck signals plus a top-level Human-actionable section. Secondary surface, ships in M1.5.
+- Both routes reachable from the shared top-nav alongside future Knowledge Browser routes; navigation between them preserves no view-specific state (filters reset on switch — they answer different questions).
+- **Operator View shape** — open work split into severity-ordered sections: **Needs attention** (expired-claim → stale-open → unclaimed-old) → **In progress** (has active claims) → **Queued** (no active claims) → **Unknown claim state** tail (rows past `tasks.visible_cap`). Collapsed Completed / Cancelled groups below.
+- Project tagging is first-class: every row carries a project chip; project is a top-level filter alongside status, tag, agent, and created-at range.
+- Findings surface in two places: a one-line "latest finding" on each open row, and a collapsible global "Recent findings" drawer fed by a server-side rolling buffer.
+- Detail surface is a right-side panel by default (`/tasks?selected=<task_id>`) with an "Expand" button to the full-page route (`/tasks/{task_id}`).
+- Agent chips on rows collapse roles (`created` / `claimed` / `latest`) into a single chip per agent; human-agents (configured set) render with a person-icon prefix and distinct background. Clicking an agent chip filters across all roles (OR semantics).
+- Auto-update via the shared SSE event subscription, with a configurable polling fallback. Server-side metric recomputation is debounced; pushed to all open tabs via HTMX OOB swaps.
+- Title-badge notifications (`(N) Lithos Lens`) always on for unseen Needs-attention items. Desktop notifications opt-in (M3, lands alongside the LLM milestone).
+- Findings link out to the Knowledge Browser via explicit `finding.knowledge_id` (no inference, no heuristics).
 
 #### Knowledge Browser
 - Feed view: time-ordered cards filterable by profile, date, tag, confidence / parsed profile score, source
@@ -204,10 +215,23 @@ LITHOS_URL=http://host.docker.internal:8765
 LITHOS_SSE_EVENTS_PATH=/events            # default; SSE event stream endpoint
 LENS_AGENT_ID=lithos-lens
 
-# Tasks view
+# Tasks view — operator view
 LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30     # manual fallback when SSE disconnects
 LENS_TASKS_VISIBLE_CAP=50                 # cap on rows that fetch claims inline
 LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # created-at date window for task list defaults
+LENS_TASKS_STALE_OPEN_AGE_DAYS=7          # Needs-attention threshold: stale open
+LENS_TASKS_UNCLAIMED_WARNING_MINUTES=60   # Needs-attention threshold: unclaimed-old
+LENS_TASKS_METRICS_DEBOUNCE_MS=2000       # server-side metric recompute debounce
+LENS_TASKS_PROJECT_TAG_KEY=project        # reserved tag-key for project chips & filter
+LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
+
+# Tasks view — planning view (M1.5)
+LENS_TASKS_BOTTLENECK_MIN_INFLIGHT=3
+LENS_TASKS_BOTTLENECK_CONCENTRATION=0.7
+LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
+LENS_TASKS_THROUGHPUT_WINDOW_DAYS=30
+LENS_TASKS_HUMAN_ACTIONABLE_TAG=human
+# LENS_TASKS_HUMAN_AGENTS=dave,human       # comma-separated agent IDs that represent humans
 
 # Optional LLM client — disabled by default
 LENS_LLM_ENABLED=false
@@ -234,6 +258,17 @@ LENS_AGENT_ID=lithos-lens
 LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30
 LENS_TASKS_VISIBLE_CAP=50
 LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30
+LENS_TASKS_STALE_OPEN_AGE_DAYS=7
+LENS_TASKS_UNCLAIMED_WARNING_MINUTES=60
+LENS_TASKS_METRICS_DEBOUNCE_MS=2000
+LENS_TASKS_PROJECT_TAG_KEY=project
+LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
+LENS_TASKS_BOTTLENECK_MIN_INFLIGHT=3
+LENS_TASKS_BOTTLENECK_CONCENTRATION=0.7
+LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
+LENS_TASKS_THROUGHPUT_WINDOW_DAYS=30
+LENS_TASKS_HUMAN_ACTIONABLE_TAG=human
+# LENS_TASKS_HUMAN_AGENTS=dave,human
 
 LENS_LLM_ENABLED=false
 # LENS_LLM_PROVIDER=anthropic
@@ -317,10 +352,37 @@ default_limit = 20
 namespace_filter = []           # optional; empty = all namespaces
 
 [tasks]
-auto_refresh_interval_s = 30    # manual refresh fallback when SSE disconnects
-visible_cap = 50                # rows for which lithos_task_status is fetched inline
-default_time_range_days = 30    # created-at date window for completed/cancelled groups; open tasks are always shown by default
+auto_refresh_interval_s = 30      # manual refresh fallback when SSE disconnects
+visible_cap = 50                  # rows for which lithos_task_status is fetched inline
+default_time_range_days = 30      # created-at date window for completed/cancelled groups; open tasks are always shown by default
 default_status_groups = ["open", "completed", "cancelled"]  # display order
+metrics_debounce_ms = 2000        # server-side debounce window for metric recompute on SSE bursts
+
+# Project tagging
+project_tag_key = "project"       # tag-key reserved for projects; e.g. project:ganglion
+
+# Needs-attention thresholds
+stale_open_age_days = 7           # open tasks older than this surface in Needs attention
+unclaimed_warning_minutes = 60    # unclaimed open tasks older than this surface in Needs attention
+# expired-claim has no knob (rule: now > expires_at)
+
+# Planning view (M1.5) thresholds
+bottleneck_min_inflight = 3       # below this in-flight depth, bottleneck rule does not fire
+bottleneck_concentration = 0.7    # one-agent share threshold for bottleneck flag
+stalled_no_findings_hours = 24    # in-progress task with no finding.posted in this window flags as stalled
+throughput_window_days = 30       # rolling window for Planning View throughput overview
+
+# Recent findings drawer + buffer
+recent_findings_drawer_size = 50  # rolling buffer size used by drawer + stalled detection
+recent_findings_warmup_window_h = 48  # boot-time warm-up window for finding.posted backfill (≥ stalled threshold)
+
+# Human-actionable (Planning View)
+human_actionable_tag = "human"    # tag identifying tasks needing a human; configurable
+human_agents = []                 # agent IDs that represent humans, e.g. ["dave", "human"]; renders person-icon chip
+
+[tasks.notifications]
+title_badge = true                # update <title> with "(N) Lithos Lens" for unseen Needs-attention items
+desktop_optin = true              # show "Enable notifications" affordance; M3 wiring
 
 [events]
 sse_path = "/events"            # Lithos SSE event stream path (overridden by env)
@@ -400,31 +462,45 @@ Required policy:
 
 # Part B — Tasks View
 
-The Tasks View is the first user-facing view delivered. It is a read-only dashboard over the Lithos coordination layer (tasks, claims, findings). It lives at `/tasks` (and at `/` until the Knowledge Browser ships) and is reachable from the top-nav view switcher. It consumes only the current Lithos MCP tools and the Lithos SSE event stream — requirements that would need new Lithos read APIs are explicitly deferred.
+The Tasks View is the first user-facing view delivered. It is a read-only surface over the Lithos coordination layer (tasks, claims, findings) split across **two co-equal routes** that answer different questions:
+
+- **Operator View (§5)** at `/tasks` — "are my agents alive and making progress?" Live dashboard structured around what's in play *now*.
+- **Planning View (§5A)** at `/tasks/plan` — "what should happen next?" Project breakdown, throughput, human-actionable queue.
+
+Both routes share the FastAPI app, MCP client, and SSE event subscription. Project tagging conventions (§5B) are normative for both. Switching between them via the top-nav resets view-specific filter state — the views answer different questions and shouldn't co-mingle filters.
+
+The Tasks surface consumes only the current Lithos MCP tools and the Lithos SSE event stream. Requirements that would need new Lithos read APIs are explicitly deferred.
 
 ---
 
-## 5. Tasks View
+## 5. Tasks View — Operator View
 
 ### 5.1 Purpose & Scope
 
-The Tasks View gives users and operators a live picture of:
-- What work is in flight across all agents
-- What tasks are completed or cancelled within the selected created-at window
-- What is waiting to be claimed
-- Which findings have been posted against each task, and where to follow them in the Knowledge Browser
+The Operator View is the primary Tasks surface and the default landing route. Its single job is to answer **"are my agents alive and making progress?"** — a glance-able operational dashboard.
+
+It surfaces, in priority order:
+- **Things that need attention right now** — expired claims, stale open tasks, unclaimed-old tasks
+- **What's actively in flight** and which agent is doing what
+- **What's queued and ready to be picked up**
+- **What just happened across all tasks** — a rolling stream of recent findings
+- Recent completions and cancellations as confirmation, not as primary content
 
 > [!warning] Strictly read-only
 > The view does **not** create, mutate, or claim tasks. Any agent that needs to manage tasks does so via the Lithos MCP API directly. This boundary is structural, not just stylistic — Lens does not import any task-mutation tool.
 
+> [!note] Two-route shape
+> "What should happen next?" — project starvation, bottleneck detection, throughput, human-actionable backlog — lives in the Planning View (§5A). Keeping the Operator View focused on "in play now" is deliberate: the two questions justify two layouts.
+
 The view consumes:
 - `lithos_task_list(filter…)` — primary list query
-- `lithos_task_status(task_id)` — fetched per visible row up to `tasks.visible_cap` to render inline claim badges
-- `lithos_finding_list(task_id)` — fetched on demand when the detail panel opens
+- `lithos_task_status(task_id)` — fetched per visible row up to `tasks.visible_cap` to render inline claim badges and drive In-progress/Queued split
+- `lithos_finding_list(task_id, since=...)` — fetched on demand when the detail panel opens; also used during boot-time warm-up of the recent-findings rolling buffer
 - `lithos_read(id)` — used to resolve `finding.knowledge_id` UUIDs to note titles for the link label
-- `lithos_stats()` — feeds the summary panel
+- `lithos_stats()` — supplements the agent-count signal
 - `lithos_agent_list(...)` — sources the "creating agent" filter dropdown
-- Lithos SSE event stream — drives auto-update (see §5.6)
+- `lithos_tags(prefix="project:")` — sources the project filter dropdown and the universe of known projects (Planning View shares this fetch)
+- Lithos SSE event stream — drives live updates (see §5.6) and the server-side metric recompute (see §5.6.4)
 
 Current Lithos constraints the UI must respect:
 - `lithos_task_list` supports `agent`, `status`, `tags`, and `since`, where `since` filters `created_at >= since`
@@ -434,86 +510,169 @@ Current Lithos constraints the UI must respect:
 - There is no `lithos_task_get`; full detail panels are composed from the selected list row plus `lithos_task_status`
 - Expected v1 scale is at most a few hundred total tasks and tens of open tasks, so Lens can scan task lists for direct links and enrich visible/open rows client-side without requiring new Lithos APIs
 
-### 5.2 Current Situation Panel
+### 5.2 Operator View Structure
 
-A compact "current situation" panel sits at the top of the view. It prioritises what is in play now over exact historical counts:
+The Operator View renders, top-to-bottom, with the following sections. Each is rendered server-side at page load and updated in place via HTMX OOB swaps fed by the SSE pipeline (§5.6).
 
-| Signal | Source |
-|--------|--------|
-| Open tasks | `lithos_task_list(status="open")` count |
-| Open claims | `lithos_stats().open_claims` |
-| Claimed open tasks | Client-side count after fetching `lithos_task_status` for open tasks up to `tasks.visible_cap` |
-| Unclaimed open tasks | Client-side count after fetching `lithos_task_status` for open tasks up to `tasks.visible_cap` |
-| Recently completed/cancelled | `lithos_task_list(status="completed", since=<created-at range start>)` and `lithos_task_list(status="cancelled", since=<created-at range start>)` |
-| Agents | `lithos_stats().agents` |
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Top-nav: [Tasks] [Tasks · Plan] [Knowledge ▾]   (N) Lens   │
+│  Filter bar: project | status | tag | agent | created-at    │
+│  Notification affordance | manual refresh | live badge      │
+├─────────────────────────────────────────────────────────────┤
+│  ⚠ Needs attention  (severity-ordered, oldest-first within) │
+│     — expired claim → stale open → unclaimed-old             │
+│     (collapses to "All systems healthy — 0 issues" stripe   │
+│     when empty; toggle to hide section entirely)            │
+├─────────────────────────────────────────────────────────────┤
+│  ▶ In progress  (open, has active claims)                    │
+├─────────────────────────────────────────────────────────────┤
+│  ▶ Queued       (open, no active claims)                     │
+├─────────────────────────────────────────────────────────────┤
+│  ▶ Unknown claim state  (rows past visible_cap; tail)        │
+├─────────────────────────────────────────────────────────────┤
+│  ▶ Completed (12 in last 30 days)        [collapsed]         │
+├─────────────────────────────────────────────────────────────┤
+│  ▶ Cancelled (3 in last 30 days)         [collapsed]         │
+└─────────────────────────────────────────────────────────────┘
+                                                  ┌───────────┐
+                                                  │ Recent    │
+                                                  │ findings  │
+                                                  │ drawer    │
+                                                  │ (toggle)  │
+                                                  └───────────┘
+```
 
-The completed and cancelled signals are intentionally coarse because current Lithos does not expose completion-time or cancellation-time filtering through `lithos_task_list`. The UI should frame these as recent context, not authoritative "completed today" metrics.
+#### 5.2.1 Needs attention
 
-Signals update on page load, on manual refresh, and on every relevant SSE event. Clicking a signal applies the corresponding filter to the task list below where the filter is supported; claimed/unclaimed filters are client-side after claim fan-out.
+A **severity-ordered single list** of open rows that have triggered any of the following rules. Within each severity tier, rows sort by `created_at` ascending — oldest persistent problem first.
 
-### 5.3 Task List
+| Severity | Rule | Configurable? |
+|----------|------|---------------|
+| **Expired claim** | Row has at least one active claim with `now > expires_at` | No knob (rule is intrinsic) |
+| **Stale open** | Open task with `now - created_at > tasks.stale_open_age_days` (default 7d) | `[tasks].stale_open_age_days` |
+| **Unclaimed old** | Open task with zero active claims and `now - created_at > tasks.unclaimed_warning_minutes` (default 60m) | `[tasks].unclaimed_warning_minutes` |
 
-#### 5.3.1 Default ordering and grouping
+Rules:
+- Each row in this section carries one or more **reason chips** showing which rule(s) fired (e.g. `expired-claim`, `stale-open`).
+- A row that triggers any rule appears **only** in Needs attention — it is **de-duplicated** out of In progress / Queued.
+- Rows past `tasks.visible_cap` are excluded from Needs attention because their claim state is unknown; Lens must not silently classify them.
+- When the section is empty, render a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance; do not hide entirely by default).
+- A toggle in the section header lets the operator hide the section for routine review; persisted via cookie + URL param.
 
-Tasks display in three groups, each sorted by `created_at` desc:
-1. **Open** (rows with active claims render with a visible claim indicator when claim data has been loaded)
-2. **Completed**
-3. **Cancelled**
+#### 5.2.2 In progress / Queued / Unknown claim state
 
-Open tasks are always shown by default regardless of age, because the Tasks view is an operational dashboard for what is in play now. The created-at default range applies only to completed and cancelled groups. The `tasks.default_status_groups` config controls which groups are visible and in what order.
+- **In progress** — open rows that have at least one active claim, sorted by `created_at` desc.
+- **Queued** — open rows with zero active claims, sorted by `created_at` desc.
+- **Unknown claim state** — open rows past `tasks.visible_cap`. These rows render without claim chips. A footer banner reads: `Showing claim detail for the first <visible_cap> of <N> open rows — narrow your filters or click a row to load claims for the rest.`
 
-#### 5.3.2 Row content
+The classic "claimed-state filter" (`any` / `known_claimed` / `known_unclaimed`) is **dropped** — these sections express the same intent structurally and avoid the silent-classification footgun.
 
-| Column | Notes |
-|--------|-------|
-| Title | Truncated to one line; full title in tooltip |
-| Status badge | Open / completed / cancelled; open rows may additionally show a "claimed" decoration when active claims exist |
-| Creating agent | Sourced from `task.created_by`; clickable filter |
-| Tags | Chips; `key:value` shorthand renders as `project: influx` |
-| Created at | Relative time with absolute on hover |
-| Claims indicator *(open tasks only)* | Compact list of `aspect → claiming agent`, fetched via `lithos_task_status` per row up to `tasks.visible_cap` |
+#### 5.2.3 Completed / Cancelled (collapsed by default)
 
-Outcome, completion timestamp, cancellation timestamp, and duration are deferred in Lens unless current Lithos starts returning those fields through the read tools. They must not be required for the MVP rendering.
+Both groups render as collapsible section headers:
 
-#### 5.3.3 Filters
+```
+▶ Completed (12 in last 30 days)
+▶ Cancelled (3 in last 30 days)
+```
 
-Filters appear in a sticky filter bar above the list:
+Click expands. Expansion state persisted via cookie + URL param. When expanded, rows inside are flat, `created_at` desc, scoped to the last `tasks.default_time_range_days` days. SSE `task.completed` / `task.cancelled` events animate visible rows transitioning into these sections (and update header counts even when collapsed).
+
+#### 5.2.4 Recent findings drawer
+
+A collapsible side drawer (off by default) renders the last `tasks.recent_findings_drawer_size` `finding.posted` events across all tasks, newest first. Each row shows:
+
+```
+<agent> · <task title> · <relative time>
+<summary, single-line, truncated>
+```
+
+Click → opens the parent task's detail panel (`/tasks?selected=<task_id>`).
+
+The drawer is fed by a **server-side rolling buffer** (§5.6.4). It survives tab refresh and stays consistent across multiple open tabs.
+
+#### 5.2.5 Notifications
+
+- **Title-badge notifications** (always on by default; `[tasks].notifications.title_badge`): the page `<title>` updates from `Lithos Lens` to `(N) Lithos Lens` whenever there are unseen Needs-attention items. Tab focus clears the badge.
+- **Desktop notifications** (opt-in; M3): an "Enable notifications" affordance appears in the header. Once granted, Lens fires a desktop notification only when a row *enters* Needs-attention (transition events, not steady-state); body format is `<task title> — <reason>`. Clicking the notification opens `/tasks?selected=<task_id>`.
+- Notification grant state lives in `localStorage` (per-browser-install). All other persisted preferences live in cookies + URL.
+
+### 5.3 Row Anatomy and Filters
+
+#### 5.3.1 Row anatomy
+
+Every list row renders a compact, scannable line with the following elements (specific layout left to the implementer; the data-shape contract is fixed):
+
+| Element | Notes |
+|---------|-------|
+| **Project chip** | `project:<slug>` value rendered as a dedicated, visually distinct chip in the leftmost slot. Background colour = stable hash of slug. Rows without a `project:*` tag render `(no project)`. Tasks carrying multiple `project:*` tags render each chip and emit a soft warning to telemetry — Lens does not silently pick one. |
+| **Title** | Truncated to one line; full title in tooltip |
+| **Status badge** | `open` / `completed` / `cancelled` |
+| **Reason chips** *(Needs attention only)* | One chip per rule fired: `expired-claim` / `stale-open` / `unclaimed-old`. Stalled (Planning View signal) renders as a row decoration where applicable. |
+| **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp. Sourced from the server-side rolling buffer (§5.6.4); falls back to the most recent entry in the per-task findings list when the buffer has no entry for that task. Updates on `finding.posted` SSE. |
+| **Agent chips (collapsed by role)** | Single chip per agent appearing on the row, with role markers `created` / `claimed` / `latest`. When the same agent fills multiple roles, role markers collapse into one chip (e.g. `agent-zero · created · claimed · latest`). Agents listed in `[tasks].human_agents` render with a person-icon prefix and a distinct chip background. |
+| **Active claims** *(open, in-progress, within visible cap)* | Compact list of `aspect → agent`, fetched via `lithos_task_status`. Each `aspect` rendered as a small chip nested under the claiming agent. |
+| **Tags** | Chips for non-`project:*` tags; `key:value` shorthand renders as `key: value`. Reserved keys (`project:`, `[tasks].human_actionable_tag`) are surfaced via dedicated chips elsewhere on the row, not in the generic strip. |
+| **Created at** | Relative time; absolute on hover |
+
+Outcome, completion timestamp, cancellation timestamp, and duration are rendered opportunistically when Lithos exposes them; they are not required for MVP rendering.
+
+#### 5.3.2 Filters
+
+Filters appear in a sticky filter bar above the section list. All filters compose. Filter state reflects in the URL for shareability.
 
 | Filter | Behaviour |
 |--------|-----------|
-| Status | Multi-select: open / completed / cancelled |
-| Claimed state | Client-side filter for claimed / unclaimed open tasks after claim fan-out |
-| Tag | Free-text input with `key:value` parsing — typing `project:influx` filters tasks tagged `project:influx`; chips for active tag filters |
-| Creating agent | Dropdown sourced from `lithos_agent_list`; free-text fallback if the listing is unavailable |
-| Created-at range | Lower-bound date range using `lithos_task_list(since=...)`; defaults to "last `tasks.default_time_range_days` days" for completed/cancelled groups |
+| **Project** | First-class top-level dropdown sourced from `lithos_tags(prefix="project:")`. Scopes all sections (Needs attention, In progress, Queued, Unknown tail, Completed, Cancelled). Multi-select supported. URL: `?project=ganglion`. |
+| **Status** | Multi-select section-group selector: `open` shows the four open-related sections; `completed` / `cancelled` show those flat groups expanded inline. URL: `?status=open,completed`. |
+| **Tag** | Free-text input with `key:value` parsing. Excludes the reserved `project:*` and `[tasks].human_actionable_tag` keys (those have their own affordances). URL: `?tag=cli&tag=urgent`. |
+| **Agent (with role)** | Dropdown sourced from `lithos_agent_list`; free-text fallback. **OR-across-roles by default**: a row matches if the agent appears as creator OR claimer OR latest-finding-poster. Toggle in the filter bar to narrow to a single role. URL: `?agent=agent-zero&agent_role=any` (default `any`; alternatives `creator`, `claimer`, `poster`). |
+| **Created-at range** | Lower-bound date range using `lithos_task_list(since=...)`; defaults to "last `tasks.default_time_range_days` days" for completed/cancelled groups. Open sections ignore this range by default. |
+| **Hide Needs attention** | Toggle to hide the Needs-attention section entirely. Persists via cookie + URL param. Default off. |
 
-All supported filters compose. Filter state is reflected in the URL (`?status=open&tag=project:influx`) for shareability. Completed-at and cancelled-at filtering are not part of the MVP because current Lithos does not expose those filters.
+Filters preserve section structure even when scoped — a section header with no matching rows renders with a `no rows match current filters` placeholder rather than disappearing. This avoids the filter-hides-the-warning footgun.
 
-#### 5.3.4 Visible cap and degradation
+Completed-at and cancelled-at filters are not in MVP — current Lithos does not expose them through `lithos_task_list`.
 
-The inline claim indicator and claimed/unclaimed filter require one `lithos_task_status` call per row. Lens batches these in parallel and caps the work at `tasks.visible_cap` (default 50), aligned with what can realistically be scanned on an operational dashboard. Beyond the cap:
-- Rows past the cap render without the inline claim indicator and are excluded from the client-side claimed/unclaimed filter until opened
-- A footer banner reads "Showing claim detail for the first 50 of N rows — narrow your filters or click a row to see claims for the rest"
-- Clicking a row past the cap fetches that row's `lithos_task_status` lazily
+#### 5.3.3 Visible cap and degradation
+
+The inline claim indicator, In progress / Queued split, and stalled-detection (Planning View) require one `lithos_task_status` call per open row. Lens batches these in parallel and caps the work at `tasks.visible_cap` (default 50). Beyond the cap:
+
+- Rows past the cap render without the inline claim indicator in the **Unknown claim state** section.
+- The Needs-attention section never includes Unknown-state rows (Lens won't silently classify them).
+- Clicking a row past the cap fetches its `lithos_task_status` lazily (used to populate the side panel).
 
 A future Lithos enhancement to embed active claims in `lithos_task_list` would eliminate this cap; Lens must not depend on that enhancement.
 
-### 5.4 Task Detail Panel
+### 5.4 Task Detail: Side Panel + Full-Page Route
 
-Clicking a row opens a side or bottom panel showing the task detail available from the list row plus `lithos_task_status(task_id)`. Direct `/tasks/{task_id}` links are first-class: Lens resolves them using current Lithos tools by scanning `lithos_task_list` across open, completed, and cancelled statuses (unbounded by date because v1 scale is expected to be at most a few hundred total tasks), then fetching `lithos_task_status(task_id)`. Lens does not require a new Lithos task-get API.
+Clicking a row opens a **right-side panel** by default. The panel and the full-page route render the same content fragments (`detail.html`, `findings.html`) — single template path, two surfaces.
+
+| Surface | URL | Use |
+|---------|-----|-----|
+| Side panel | `/tasks?selected=<task_id>` | Default. Triggered by clicking a row. Preserves list-section state and filter URL. |
+| Full-page | `/tasks/{task_id}` | Triggered by the **Expand** button on the panel header. Shareable URL. Long-findings deep-dive. |
+
+Closing the panel clears the `selected` URL param; the list state and filters are preserved.
+
+#### 5.4.1 Panel content
 
 | Section | Content |
 |---------|---------|
-| Header | Title, status, creating agent, `created_at` |
-| Tags | Full tag list, one chip per tag |
+| Header | Title, status, creating agent, `created_at`, project chip, **Expand** button |
+| **Why this task is here** *(Needs attention only)* | Reason chips with one-line explanation (e.g. `Stale open — 9 days since created`, `Expired claim — agent-zero · ble-recover · expired 2h ago`) |
+| Tags | Full tag list, one chip per tag (excludes `project:*` and `[tasks].human_actionable_tag`, which appear as dedicated chips) |
 | Description | Markdown-rendered |
 | Metadata | `metadata` dict rendered as a key-value table |
 | Active claims | List of `aspect / claiming agent / expires_at / time remaining`; refreshed on SSE claim events |
-| Findings | See §5.5 |
+| Findings | Full timeline (§5.5) |
 
 If future Lithos versions expose `completed_at`, `outcome`, cancellation reason, or `claimed_at` through read tools, Lens may render those fields opportunistically. They are not MVP requirements.
 
-The panel is dismissable; closing it clears the URL fragment so the list state is preserved.
+#### 5.4.2 Direct task lookup
+
+Direct `/tasks/{task_id}` links are first-class. Lens resolves them by scanning `lithos_task_list` across open, completed, and cancelled statuses (unbounded by date because v1 scale is expected to be at most a few hundred total tasks), then fetching `lithos_task_status(task_id)`. See §5.9.2 for the resolution algorithm.
 
 ### 5.5 Findings Timeline
 
@@ -545,19 +704,40 @@ A single SSE connection is held by the shared `app/events.py` utility. The Tasks
 
 | Event | UI effect |
 |-------|-----------|
-| `task.created` matching filters | Optimistically insert row at top of Open group from event payload; reconcile on next refresh if payload is incomplete |
-| `task.claimed` | Optimistically add/update the row's claim indicator from event payload; if detail panel open for that task, refresh Active claims section |
-| `task.released` | Optimistically remove that aspect from the row's claim indicator |
-| `task.completed` | Optimistically move row to Completed group and refresh summary signals opportunistically |
-| `task.cancelled` | Optimistically move row to Cancelled group and refresh summary signals opportunistically |
-| `finding.posted` for an open detail panel | Refetch the findings list for that task and re-render the timeline; current Lithos does not expose direct finding lookup |
-| `finding.posted` not for the open panel | Increment a small "+N findings" badge on the row |
+| `task.created` matching filters | Optimistically insert row at top of Queued (no claim payload yet); reconcile on next debounced refresh |
+| `task.claimed` | Optimistically add/update the row's claim chip and move row from Queued to In progress (or refresh detail panel's Active claims if open). May promote/demote into/out of Needs attention if the resulting row triggers an `expired-claim` rule on next recompute |
+| `task.released` | Optimistically remove that aspect from the row's claim chip; move row from In progress to Queued if the last claim was released |
+| `task.completed` | Optimistically remove row from open sections and update Completed section header count (animate into the collapsed group) |
+| `task.cancelled` | Optimistically remove row from open sections and update Cancelled section header count (animate into the collapsed group) |
+| `finding.posted` for the row | Update the row's latest-finding line (`<agent> — <summary>`) and add a `latest` role marker to the agent chip; insert into the recent-findings rolling buffer; if detail panel is open for that task, re-render the timeline fragment |
+| `finding.posted` not for any visible row | Insert into the recent-findings rolling buffer; surfaces in the drawer; no per-row badge |
 
 Pushed updates are HTMX OOB swaps for the affected fragments — no full-page reload. Adds OTEL spans `lens.tasks.event` (per event handled) and `lens.tasks.refresh` (per manual / fallback refresh).
 
 #### 5.6.3 Reconnection
 
-On SSE disconnect Lens uses the exponential backoff schedule in `events.reconnect_backoff_ms`. While disconnected, the manual-refresh fallback runs every `tasks.auto_refresh_interval_s` seconds and a "Live updates paused — reconnecting" badge is visible in the header. On successful reconnect the badge clears and the tasks list is fully reloaded once.
+On SSE disconnect Lens uses the exponential backoff schedule in `events.reconnect_backoff_ms`. While disconnected:
+- Data **freezes at last-known state**. The dashboard contents do not change between fallback refreshes.
+- A `Live updates paused — reconnecting` badge is visible in the header.
+- The polling fallback runs every `tasks.auto_refresh_interval_s` seconds. Each successful fallback refresh fires a transient 1-second toast: `Refreshed via fallback`.
+
+On successful reconnect the badge clears and the tasks list is fully reloaded once. No per-element staleness markers in MVP.
+
+#### 5.6.4 Server-side metric recompute and rolling buffers
+
+Several derived signals depend on aggregating across the task list (Needs-attention membership; In progress / Queued / Unknown counts; project starvation / bottleneck / stalled flags; throughput counts). SSE events do not carry "queue depth changed by 1," so Lens recomputes server-side.
+
+**Strategy:** SSE events mark metrics dirty; a debounce window (`tasks.metrics_debounce_ms`, default 2000ms) batches bursts; one recompute fires per window. Recompute lives in `app/events.py` alongside the rolling-buffer maintenance — single source of truth. Recomputed fragments push to all open browser tabs via HTMX OOB swap through `/tasks/events`.
+
+Manual refresh, page load, and SSE reconnect bypass the debounce and force an immediate recompute.
+
+**Recent-findings rolling buffer.** A server-side ring buffer of the last `tasks.recent_findings_drawer_size` (default 50) `finding.posted` events powers both the "Recent findings" drawer and the per-row latest-finding line. Each entry stores: `finding_id`, `task_id`, `task_title` (resolved at insert time via list cache), `agent`, `summary`, `timestamp`, `knowledge_id` if present.
+
+**Boot-time warm-up.** On Lens startup, for each currently-open task within `tasks.visible_cap`, fetch `lithos_finding_list(task_id, since=now - tasks.recent_findings_warmup_window_h)` once to seed the buffer. Warm-up window default 48h (≥ stalled threshold of 24h, with margin).
+
+**Stalled detection (Planning View signal).** Open in-progress task with no `finding.posted` in the last `tasks.stalled_no_findings_hours` (default 24h). Computed only for tasks within `visible_cap` using the rolling buffer. Stalled rows get a row decoration on the Operator View but are **not** promoted into Needs attention.
+
+**OTEL spans:** `lens.tasks.metrics_recompute` (attribute `trigger=sse|manual|reconnect|warmup`), `lens.tasks.findings_recent` (warm-up + drawer endpoint).
 
 ### 5.7 Cross-View Linking
 
@@ -575,11 +755,14 @@ Notes whose Lithos metadata records a producing task (for example `metadata.sour
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /tasks` | Server-rendered tasks dashboard (summary + list + filter bar) |
-| `GET /tasks/{task_id}` | Detail panel HTMX fragment |
+| `GET /tasks` | Operator View: server-rendered dashboard with filter bar + section list |
+| `GET /tasks?selected=<task_id>` | Same page with the side panel pre-opened on a task |
+| `GET /tasks/{task_id}` | Full-page detail route (also serves the panel HTMX fragment when requested) |
 | `GET /tasks/{task_id}/findings` | Findings timeline HTMX fragment |
-| `GET /tasks/events` | Server-Sent-Events endpoint Lens exposes to its own browser tab — re-broadcasts events received from Lithos to the open page |
-| `POST /api/tasks/findings/curate` | LLM-curated "most significant findings" endpoint, only when `llm.enabled` |
+| `GET /tasks/findings/recent` | Recent-findings drawer HTMX fragment, sourced from the server-side rolling buffer |
+| `GET /tasks/plan` | Planning View (M1.5; see §5A) |
+| `GET /tasks/events` | Server-Sent-Events endpoint Lens exposes to its own browser tabs — re-broadcasts Lithos events plus pushes recomputed metric fragments |
+| `POST /api/tasks/findings/curate` | LLM-curated "most significant findings" endpoint (M3, when `llm.enabled`) |
 
 No `POST` / `PUT` / `DELETE` endpoints touch task state — the read-only contract is enforced at the router level.
 
@@ -626,19 +809,29 @@ When the user opens a row already present in the task list, Lens uses the row pa
 
 If any of these calls fail, the panel renders the sections that succeeded and shows a retry affordance for the failed section.
 
-#### 5.9.4 Claimed-state filter
+#### 5.9.4 Section membership rules (replaces the legacy claimed-state filter)
 
-The claimed-state filter applies only to open tasks.
+The legacy `any` / `known_claimed` / `known_unclaimed` filter is dropped. Section membership is structural:
 
-Supported values:
+| Open row state | Section |
+|----------------|---------|
+| Within `visible_cap`, ≥1 claim, triggers no Needs-attention rule | In progress |
+| Within `visible_cap`, 0 claims, triggers no Needs-attention rule | Queued |
+| Within `visible_cap`, triggers any Needs-attention rule | Needs attention (single tier; row removed from In progress / Queued) |
+| Beyond `visible_cap` | Unknown claim state tail |
 
-| Value | Behaviour |
+Lens must not silently classify rows beyond the cap. The Unknown-state tail and its accuracy banner replace the legacy "filter covers the first 50" banner.
+
+#### 5.9.4a Empty states
+
+Four empty states must be tested explicitly:
+
+| State | Behaviour |
 |-------|-----------|
-| `any` | No claimed-state filtering |
-| `known_claimed` | Show open rows for which claim enrichment found at least one active claim |
-| `known_unclaimed` | Show open rows for which claim enrichment found zero active claims |
-
-Rows beyond `tasks.visible_cap` have unknown claim state. Lens must not silently classify them. If the open task count exceeds the cap and a claimed-state filter is active, show a banner: "Claim filter covers the first 50 open tasks; narrow filters for full accuracy."
+| **No tasks at all in Lithos** | Dedicated "No tasks yet" panel with a single help line — `Tasks are created via lithos_task_create from any agent. Lens is read-only.` Plus a link to the project-tracking conventions doc. No empty section headers. |
+| **Tasks exist but none open** | Render the Operator View normally. The four open sections show `All clear — no open tasks`. Completed/Cancelled headers (collapsed) still visible below. |
+| **All open healthy (no flagged signals)** | Needs-attention collapses to a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance). In progress / Queued render normally. |
+| **Lithos unreachable** | Degraded banner from §14. Page renders the banner with empty state below it. No stale-cache fallback in MVP. |
 
 #### 5.9.5 Sparse SSE payload rules
 
@@ -651,9 +844,9 @@ Rules:
 | `task.created` | Insert skeleton open row with `task_id` and `title`; missing fields render as loading placeholders | Debounced list refresh |
 | `task.claimed` | Add/update claim chip from `task_id`, `agent`, `aspect` | Refresh row status if row is visible or detail is open |
 | `task.released` | Remove matching claim chip by `task_id` + `aspect` | Refresh row status if row is visible or detail is open |
-| `task.completed` | Move visible row out of Open and into Completed if current filters allow; otherwise remove from current list | Debounced list + current situation refresh |
-| `task.cancelled` | Move visible row out of Open and into Cancelled if current filters allow; otherwise remove from current list | Debounced list + current situation refresh |
-| `finding.posted` | Increment row findings badge by one | If detail is open, refetch full `lithos_finding_list(task_id)` |
+| `task.completed` | Remove visible row from open sections; update Completed section header count | Debounced metric recompute + section refresh |
+| `task.cancelled` | Remove visible row from open sections; update Cancelled section header count | Debounced metric recompute + section refresh |
+| `finding.posted` | Insert into server-side rolling buffer; update row latest-finding line if visible; add `latest` role marker on the row's agent chip | If detail is open, refetch full `lithos_finding_list(task_id)` |
 
 The reconciliation refresh should be debounced across bursts of events so a batch of task events does not trigger one full refresh per event.
 
@@ -689,6 +882,200 @@ Task routes must not return HTTP 500 for expected Lithos availability or lookup 
 | `lithos_task_status` fails | Render task row/detail without claim section and show retry |
 | `lithos_finding_list` fails | Render task metadata and show findings retry |
 | `lithos_read` for finding link fails | Render "View document" fallback label and a warning toast |
+
+---
+
+## 5A. Tasks View — Planning View
+
+The Planning View answers **"what should happen next?"** across the agent fleet. It ships in **M1.5**, after the Operator View stabilises. It lives at `/tasks/plan` and is reachable from the top-nav alongside the Operator View and the Knowledge Browser routes.
+
+### 5A.1 Purpose & Scope
+
+The Planning View is read-only and consumes the same Lithos read surface and SSE event stream as the Operator View. Its three stacked sections answer three sub-questions, top to bottom:
+
+1. **What manual work do I need to pick up?** — Human-actionable section.
+2. **Where is system throughput stuck?** — Project breakdown with starvation, bottleneck, stalled flags.
+3. **What's the overall shape of work across projects?** — Throughput overview with completion / cancellation counts per project over a rolling window.
+
+### 5A.2 Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Top-nav: [Tasks] [Tasks · Plan] [Knowledge ▾]              │
+│  Filter bar: project | created-at range | hide dormant      │
+├─────────────────────────────────────────────────────────────┤
+│  👤 Human-actionable                                         │
+│     open tasks tagged `[tasks].human_actionable_tag`,        │
+│     grouped by project, oldest first; includes tasks         │
+│     already claimed by a human-agent so you can resume       │
+├─────────────────────────────────────────────────────────────┤
+│  📊 Project breakdown                                        │
+│     per project: queue depth, in-flight depth,               │
+│     starvation / bottleneck / stalled flags                  │
+├─────────────────────────────────────────────────────────────┤
+│  📈 Throughput overview                                      │
+│     per project: completed count, cancelled count,           │
+│     completion ratio, over `tasks.throughput_window_days`    │
+│     ordered by completed-count desc, dormant projects shown  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 5A.3 Human-actionable section
+
+- **Membership**: open tasks carrying tag `[tasks].human_actionable_tag` (default `human`). Includes tasks already claimed by an agent listed in `[tasks].human_agents` (so you can resume your own work).
+- **Grouping**: by project (`project:<slug>` chip), oldest first within each project. `(no project)` group renders last.
+- **Row anatomy**: same as Operator View (§5.3.1) — title, project chip, status, tags, agent chips, latest finding line. Reason chips do not apply here (this section is its own selection rule).
+- **Empty state**: `Nothing for you to do right now ✓`.
+
+### 5A.4 Project breakdown
+
+For every project from `lithos_tags(prefix="project:")`, render one row showing:
+
+| Field | Value |
+|-------|-------|
+| Project chip | `project:<slug>` |
+| Queue depth | Count of open rows with zero claims (within `visible_cap`) |
+| In-flight depth | Count of open rows with ≥1 claim (within `visible_cap`) |
+| Flag chips | Any of: `starvation`, `bottleneck`, `stalled` |
+
+**Rules:**
+
+| Flag | Rule |
+|------|------|
+| **Starvation** | Queue depth ≥ 1 AND in-flight depth = 0 |
+| **Bottleneck** | In-flight depth ≥ `tasks.bottleneck_min_inflight` (default 3) AND one agent holds ≥ `tasks.bottleneck_concentration` (default 0.7) of those claims |
+| **Stalled** | At least one in-progress task in the project has had no `finding.posted` in the last `tasks.stalled_no_findings_hours` (default 24h), per the rolling buffer |
+
+Hover on a flag → tooltip with the rule details (which agent dominates the bottleneck; which task is stalled; etc.).
+
+### 5A.5 Throughput overview
+
+For every project (from `lithos_tags(prefix="project:")`), render one row covering the last `tasks.throughput_window_days` (default 30):
+
+| Field | Value |
+|-------|-------|
+| Project chip | `project:<slug>` |
+| Completed count | Tasks with `status=completed` and `created_at >= now - throughput_window_days` |
+| Cancelled count | Tasks with `status=cancelled` and `created_at >= now - throughput_window_days` |
+| Completion ratio | `completed / (completed + cancelled)` (or `—` when both zero) |
+
+**Ordering:** completed count desc, then completion ratio desc, then alphabetical.
+
+**Dormant projects** (zero completed, zero cancelled in window) are shown by default with explicit `0 / 0`. A `Hide dormant` toggle (cookie + URL) suppresses them.
+
+> [!note] No sparklines in MVP
+> A per-project sparkline of daily completions is deferred. MVP is counts only.
+
+### 5A.6 Project discovery and caching
+
+Both the project filter dropdown and the Project breakdown / Throughput sections read from `lithos_tags(prefix="project:")` on dashboard load, cached per request and shared with the Operator View. Cache invalidation: full page load, manual refresh, and `task.created` SSE events that carry a never-seen `project:*` tag.
+
+### 5A.7 API
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /tasks/plan` | Server-rendered Planning View |
+| `GET /tasks/plan/projects` | Project breakdown HTMX fragment (refreshable independently) |
+| `GET /tasks/plan/throughput` | Throughput overview HTMX fragment |
+
+### 5A.8 OTEL spans
+
+| Span | Description |
+|------|-------------|
+| `lens.tasks.plan` | Planning View page render |
+| `lens.tasks.plan.projects` | Project breakdown computation |
+| `lens.tasks.plan.throughput` | Throughput overview computation |
+
+---
+
+## 5B. Project Tracking Conventions
+
+These conventions are **normative for Lens** and assumed across the Tasks views and the future Knowledge Browser. Lens itself is read-only and does not enforce these on writes — they are conventions agents must follow when creating tasks and writing project-related notes.
+
+### 5B.1 Project documents
+
+All project-related knowledge documents are stored under `projects/<project-slug>/`. Every such document must be tagged with `project:<project-slug>` plus any relevant category tags. Documents describing the overall context or purpose of a project also receive the tag `project-context`.
+
+```
+lithos_write(
+  title="Ganglion — Project Context",
+  path="projects/ganglion",
+  tags=["project:ganglion", "project-context"],
+  ...
+)
+```
+
+### 5B.2 Project tasks
+
+Tasks are created via `lithos_task_create` and **must always be tagged** with `project:<project-slug>` at creation time.
+
+```
+lithos_task_create(
+  title="Implement BLE reconnect logic",
+  agent="agent-zero",
+  tags=["project:ganglion", ...]
+)
+```
+
+### 5B.3 Project slug naming
+
+Slugs are derived from the project title (not from a directory or system name):
+
+- Lowercase
+- Spaces replaced with hyphens
+- Special characters removed or replaced
+
+| Title | Slug |
+|-------|------|
+| `Ralph++` | `ralph-plus-plus` |
+| `Kindred Code` | `kindred-code` |
+| `Restore SGI Indy` | `restore-sgi-indy` |
+
+### 5B.4 Known active projects
+
+| Project | Tag |
+|---------|-----|
+| Lithos Core | `project:lithos-core` |
+| Lithos Ecosystem | `project:lithos-ecosystem` |
+| Best Developer Year 2026 | `project:best-developer-year-2026` |
+| Commit To Change | `project:commit-to-change` |
+| Effective Agents | `project:effective-agents` |
+| Financial Planning | `project:financial-planning` |
+| Ganglion | `project:ganglion` |
+| Influx | `project:influx` |
+| Kindred Code | `project:kindred-code` |
+| Ralph++ | `project:ralph-plus-plus` |
+| Restore SGI Indy | `project:restore-sgi-indy` |
+| vajra | `project:vajra` |
+| NAO bridge | `project:nao-bridge` |
+| NAO cross compilation toolchain | `project:nao-cross-compilation-toolchain` |
+| Enterprise USB keyboard | `project:enterprise-usb-keyboard` |
+| Cardinal | `project:cardinal` |
+
+### 5B.5 Ideas
+
+Speculative or early-stage items not yet linked to a project live under `ideas/` with the tag `idea`. Confidence `0.5–0.7`. If softly related to a project, they may carry the `project:<slug>` tag alongside `idea`. When promoted to a project, the document is moved to `projects/<slug>/`.
+
+### 5B.6 Lens reading patterns
+
+| Goal | Method |
+|------|--------|
+| All tasks for a project | `lithos_task_list(tags=["project:<slug>"])` |
+| All docs for a project | `lithos_list(path_prefix="projects/<slug>/")` |
+| Search within a project | `lithos_search(query="...", path_prefix="projects/<slug>/")` |
+| Project context docs | `lithos_list(path_prefix="projects/", tags=["project-context"])` |
+| All ideas | `lithos_list(tags=["idea"])` |
+
+### 5B.7 Lens behaviour with multi-`project:*` tasks
+
+A task carrying multiple `project:*` tags is unusual but supported:
+
+- Operator View renders one project chip per tag and emits a soft warning to telemetry — Lens does not silently pick one.
+- Planning View shows the task once per group it claims to be in (visible duplication is preferred over hidden behaviour).
+
+### 5B.8 Configurability
+
+The `project:` key is a default. `[tasks].project_tag_key` (default `"project"`) makes it configurable per deployment.
 
 ---
 
@@ -1234,62 +1621,87 @@ Lens consumes the Lithos SSE event stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_P
 - `docs/vendor-assets.md` records vendored asset versions and checksums
 - With `LENS_LLM_ENABLED=false`, missing LiteLLM dependencies do not prevent boot
 
-### Milestone 1 — Tasks View MVP (v0.2)
-*Goal: read-only dashboard over Lithos tasks; manual refresh; no SSE yet*
+### Milestone 1 — Operator View MVP (v0.2)
+*Goal: live, read-only Operator View over Lithos tasks with the section structure, project tagging, recent-findings drawer, and title-badge notifications.*
 
 - [ ] `GET /tasks` route + `app/routers/tasks.py`
-- [ ] Current situation panel from `lithos_task_list`, `lithos_task_status`, and `lithos_stats`
-- [ ] Task list with default ordering (open / completed / cancelled), `created_at` desc within each group
-- [ ] Filters: status, claimed state, tag (with `key:value` parsing), creating agent (dropdown sourced from `lithos_agent_list`), created-at range (defaulting to last `tasks.default_time_range_days` days for completed/cancelled groups)
-- [ ] URL-reflected filter state for shareability
-- [ ] Inline claim indicator via per-row `lithos_task_status` up to `tasks.visible_cap`; degradation banner past the cap
-- [ ] Task detail panel: header, tags, description, metadata, active claims, findings timeline; outcome/duration rendered only if exposed by the connected Lithos version
-- [ ] Findings timeline rendered without paging controls after fetching the current `lithos_finding_list` result; per-finding `lithos_read` for non-null `knowledge_id` to render the title-labelled link
+- [ ] Operator View section structure: **Needs attention** (severity-ordered: expired-claim → stale-open → unclaimed-old) → **In progress** → **Queued** → **Unknown claim state** tail → collapsed **Completed** → collapsed **Cancelled**
+- [ ] Reason chips on Needs-attention rows; row de-duplication so flagged rows appear only in Needs attention
+- [ ] Project chip per row (configurable `[tasks].project_tag_key`); rows without a project tag render `(no project)`
+- [ ] Latest finding inline on each open row (`<agent> — <summary>` + relative time), updates on `finding.posted`
+- [ ] Agent chips with role markers (`created` / `claimed` / `latest`) collapsed to one chip per agent
+- [ ] Human-agent visual distinction (person-icon prefix, distinct chip background) for agents listed in `[tasks].human_agents`
+- [ ] Filters: project (first-class), status (multi-select group selector), tag (`key:value` parsing), agent with OR-across-roles + role-narrow toggle (`creator` / `claimer` / `poster` / `any`), created-at range (open sections ignore by default), Hide-Needs-attention toggle
+- [ ] URL-reflected filter and section-collapse state; `?selected=<task_id>` opens side panel
+- [ ] Right-side panel + **Expand** button → `/tasks/{task_id}` full-page route; both surfaces reuse `detail.html` / `findings.html`
+- [ ] Detail panel "Why this task is here" block on Needs-attention rows
+- [ ] Per-row `lithos_task_status` fan-out up to `tasks.visible_cap`; Unknown-state tail with accuracy banner past the cap
+- [ ] Findings timeline rendered without paging controls; per-finding `lithos_read` for non-null `knowledge_id` to render title-labelled links; fallback label on read failure
 - [ ] Click-through from finding link to a minimal `/note/{knowledge_id}` route (full feed-detail arrives in M5)
-- [ ] Manual refresh button + page-load fetch (no SSE yet)
-- [ ] Tasks-specific OTEL spans (`lens.tasks.list`, `lens.tasks.detail`, `lens.tasks.findings`, `lens.tasks.refresh`)
+- [ ] **SSE pipeline**: shared `app/events.py` subscription; tasks router subscribes to task / claim / finding event types; HTMX OOB swaps for optimistic row insert, optimistic row move-between-sections, claim indicator update, latest-finding update, section-count update
+- [ ] **`GET /tasks/events`** browser re-broadcast endpoint
+- [ ] **Server-side metric recompute** debounced at `tasks.metrics_debounce_ms` (default 2000ms); manual refresh / page load / SSE reconnect bypass debounce
+- [ ] **Server-side recent-findings rolling buffer** of size `tasks.recent_findings_drawer_size` (default 50), with boot-time warm-up over `tasks.recent_findings_warmup_window_h` (default 48h)
+- [ ] **`GET /tasks/findings/recent`** drawer endpoint + collapsible drawer UI (off by default)
+- [ ] Reconnect with exponential backoff; `Live updates paused — reconnecting` badge during disconnect; polling fallback at `tasks.auto_refresh_interval_s`; transient `Refreshed via fallback` toast on each fallback success
+- [ ] **Title-badge notifications** (`(N) Lithos Lens`) for unseen Needs-attention items; cleared on tab focus; `[tasks].notifications.title_badge` toggle
+- [ ] Empty states: no tasks at all / tasks but none open / all open healthy / Lithos unreachable — all four explicitly tested
+- [ ] OTEL spans: `lens.tasks.list`, `lens.tasks.detail`, `lens.tasks.findings`, `lens.tasks.findings_recent`, `lens.tasks.refresh`, `lens.tasks.event`, `lens.tasks.metrics_recompute`, `lens.events.connect`
 - [ ] Set `ui.default_view = "tasks"` so `/` lands here
 
 **M1 acceptance:**
-- With three open tasks where one has an active claim, the current situation panel shows correct open, known claimed, and known unclaimed state
-- Open tasks are shown regardless of age; completed and cancelled groups honor the default created-at range
-- Claimed-state filter supports `any`, `known_claimed`, and `known_unclaimed`
-- If open task count exceeds `tasks.visible_cap`, the claimed-state filter shows an accuracy banner and does not silently classify unknown rows
-- Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks by scanning current Lithos task lists
-- Unknown `/tasks/{task_id}` renders a not-found panel, not HTTP 500
-- A finding with `knowledge_id` renders a title-labelled note link when `lithos_read` succeeds and a fallback label when it fails
-- Findings timeline renders without paging controls
+- Section structure renders correctly: a row with an expired claim appears only in Needs attention with an `expired-claim` reason chip; same row does not appear in In progress; section header counts agree with rendered rows
+- A row with no claims appears only in Queued; once claimed via SSE, it animates into In progress without page reload
+- Project chip renders on every row; the project filter (top-level) scopes all sections; multi-`project:*` tasks render multiple chips and emit a telemetry warning
+- Latest-finding line updates within ~1s of a `finding.posted` SSE event; row's agent chip gains a `latest` role marker
+- Side-panel + Expand-to-`/tasks/{task_id}` both render the same content; URL `/tasks?selected=<id>` deep-links to the panel
+- Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks by scanning current Lithos task lists; unknown ID renders a not-found panel (not HTTP 500)
+- Recent findings drawer opens in <200ms from the rolling buffer with no blocking MCP calls; surviving across tab refresh
+- Title badge updates to `(N) Lithos Lens` when N rows enter Needs attention; clears on tab focus
+- `lithos_tags(prefix="project:")` is fetched once per page load and shared across project filter / Operator-view rendering
+- All four empty states render the specified content; Lithos-unreachable banner appears without the page erroring
+- SSE disconnect shows the paused badge; polling fallback fires the `Refreshed via fallback` toast on each successful refresh
+- `LENS_LLM_ENABLED=false` does not break boot or hide any operator-view affordance (LLM features are not in M1)
 
-### Milestone 2 — Tasks SSE Auto-Update (v0.3)
-*Goal: live updates from the Lithos SSE event stream*
+### Milestone 1.5 — Planning View (v0.3)
+*Goal: ship `/tasks/plan` with Human-actionable, Project breakdown, and Throughput overview sections — answers "what should happen next?"*
 
-- [ ] Wire the M0 `app/events.py` skeleton to the live Lithos SSE endpoint
-- [ ] Tasks router subscribes to all task / claim / finding event types
-- [ ] HTMX OOB swaps for optimistic row insert, optimistic row move-between-groups, optimistic claim indicator update, summary signal refresh, findings timeline re-render, "+N findings" badge
-- [ ] `GET /tasks/events` re-broadcast endpoint for the browser tab
-- [ ] Reconnect with exponential backoff; "Live updates paused" badge during disconnect
-- [ ] Polling fallback at `tasks.auto_refresh_interval_s` while SSE disconnected
-- [ ] OTEL spans `lens.tasks.event`, `lens.events.connect`
+- [ ] `GET /tasks/plan` route + `app/routers/tasks_plan.py`
+- [ ] **Human-actionable section**: open tasks tagged `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first; includes tasks claimed by an agent listed in `[tasks].human_agents`
+- [ ] **Project breakdown section**: per-project queue depth, in-flight depth, flag chips (`starvation`, `bottleneck`, `stalled`); flag tooltips show rule details
+- [ ] **Throughput overview section**: per-project completed count, cancelled count, completion ratio over `tasks.throughput_window_days` (default 30d); ordered by completed desc / ratio desc / alphabetical; dormant projects shown by default with `0 / 0`
+- [ ] `Hide dormant` toggle (cookie + URL)
+- [ ] Filter bar: project (multi-select), created-at range (within window), Hide-dormant
+- [ ] **Stalled detection** integrated into the rolling buffer: in-progress task with no `finding.posted` in `tasks.stalled_no_findings_hours` (default 24h); also drives row decoration on the Operator View
+- [ ] **Bottleneck detection**: in-flight depth ≥ `tasks.bottleneck_min_inflight` (default 3) AND one agent holds ≥ `tasks.bottleneck_concentration` (default 0.7) of those claims
+- [ ] **Starvation detection**: queue depth ≥ 1 AND in-flight depth = 0
+- [ ] HTMX fragment endpoints `GET /tasks/plan/projects` and `GET /tasks/plan/throughput`
+- [ ] Top-nav switcher links Operator View ↔ Planning View ↔ (future) Knowledge Browser; switching resets view-specific filter state
+- [ ] OTEL spans: `lens.tasks.plan`, `lens.tasks.plan.projects`, `lens.tasks.plan.throughput`
 
-**M2 acceptance:**
-- `task.created` inserts an open skeleton row without full-page reload and reconciles on the next debounced refresh
-- `task.claimed` and `task.released` update visible claim chips optimistically
-- `task.completed` and `task.cancelled` move or remove visible rows without full-page reload
-- `finding.posted` increments the row badge and refetches the findings timeline when the detail panel is open
-- `/tasks/events` emits normalized events with Lithos event IDs and `requires_refresh` where appropriate
-- SSE disconnect shows "Live updates paused" and polling fallback refreshes the dashboard
+**M1.5 acceptance:**
+- A project with one queued task and no in-flight tasks displays a `starvation` flag
+- A project with 5 in-flight tasks where 4 are claimed by `agent-zero` displays a `bottleneck` flag with hover tooltip naming `agent-zero`
+- A project with one in-progress task that has had no `finding.posted` in 25h displays a `stalled` flag
+- Throughput overview correctly sums completed and cancelled tasks within `tasks.throughput_window_days`
+- Dormant projects (zero activity in window) appear by default with `0 / 0` and are hidden when `Hide dormant` is enabled
+- Human-actionable section renders open tasks tagged `human`, grouped by project; navigation back to Operator View preserves no Planning-View filter state
 
-### Milestone 3 — Optional LLM client + Tasks curation (v0.4)
-*Goal: enable the optional LLM path, starting with the Tasks "most significant findings" curation*
+### Milestone 2 — (renumbered into M1) — REMOVED
+*M1 now bundles SSE auto-update; the previous M1/M2 split is collapsed into a single shippable Operator View MVP. The legacy "M2 acceptance" criteria are folded into M1 acceptance above.*
+
+### Milestone 3 — Optional LLM client + Tasks curation + Desktop notifications (v0.4)
+*Goal: enable the optional LLM path; ship the Tasks "most significant findings" curation; ship opt-in desktop notifications wiring on top of the Operator View.*
 
 - [ ] `app/llm_client.py` — LiteLLM-backed provider-agnostic wrapper
 - [ ] Optional install via `uv sync --extra llm`
 - [ ] `LENS_LLM_*` env wiring; gated UI hidden when disabled
-- [ ] Complexity slider, session-scoped, injected into all LLM prompts (initially used only by Tasks curation, but the wiring is reusable for later milestones)
+- [ ] Complexity slider, session-scoped, injected into all LLM prompts (initially used by Tasks curation; reusable for later milestones)
 - [ ] "Most significant findings" toggle behind `llm.enabled && llm.findings_curation_enabled`
 - [ ] `POST /api/tasks/findings/curate` endpoint
 - [ ] LLM status surfaced in `/health` and settings view
 - [ ] OTEL span `lens.tasks.curate`
+- [ ] **Desktop notifications (opt-in)**: "Enable notifications" affordance in Operator View header; Notification API permission flow; grant state in `localStorage`; notifications fire only on Needs-attention transitions (row entering the section), body `<task title> — <reason>`, click → `/tasks?selected=<task_id>`; `[tasks].notifications.desktop_optin` toggle
 
 ### Milestone 4 — Feed View + Feedback (v0.5)
 *Goal: human-readable feed with feedback mechanism — first Knowledge Browser milestone*
