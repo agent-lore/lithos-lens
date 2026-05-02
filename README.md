@@ -101,7 +101,7 @@ agent_id = "lithos-lens"
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `auto_refresh_interval_s` | integer | No | `30` | Polling fallback interval used when live events are unavailable. |
+| `auto_refresh_interval_s` | integer | No | `120` | Polling fallback interval used when live events are unavailable. |
 | `visible_cap` | integer | No | `50` | Maximum visible rows enriched with per-task claim status. |
 | `default_time_range_days` | integer | No | `30` | Created-at window for completed/cancelled task context. |
 | `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
