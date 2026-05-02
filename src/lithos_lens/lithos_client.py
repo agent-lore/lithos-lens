@@ -8,10 +8,13 @@ the web layer.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 
@@ -29,13 +32,27 @@ from lithos_lens.tasks import (
     normalize_task_status,
 )
 
+if TYPE_CHECKING:
+    from mcp import ClientSession
+
 logger = logging.getLogger(__name__)
 
 LithosHealth = Literal["ok", "degraded", "unreachable"]
 
+# Maximum time _call_tool waits for the worker to (re)establish the MCP
+# session before failing. Tool calls in lens are user-facing and short-lived,
+# so we'd rather fail fast than block a page render.
+_SESSION_WAIT_TIMEOUT_S = 5.0
+
+# Backoff bounds used by the worker when reconnecting after a transport drop.
+_RECONNECT_BACKOFF_INITIAL_S = 1.0
+_RECONNECT_BACKOFF_MAX_S = 30.0
+
 
 class LithosClientProtocol(Protocol):
     """Subset of Lithos operations required by the common core."""
+
+    async def startup(self) -> None: ...
 
     async def health(self) -> LithosHealth: ...
 
@@ -76,7 +93,15 @@ class LithosToolError(RuntimeError):
 
 
 class LithosClient:
-    """Best-effort Lithos client used by the web app."""
+    """Best-effort Lithos client used by the web app.
+
+    Maintains a single, long-lived MCP-over-SSE session that is reused
+    across all tool calls. The session is opened and closed by a dedicated
+    worker task spawned in :meth:`startup` so that anyio's "cancel scope
+    must be exited from the same task that entered it" rule is satisfied.
+    Individual ``call_tool`` invocations are cross-task safe because they
+    only push JSON-RPC messages onto the session's memory streams.
+    """
 
     def __init__(
         self,
@@ -88,6 +113,36 @@ class LithosClient:
         self._config = config
         self._owns_http_client = http_client is None
         self._http = http_client or httpx.AsyncClient(timeout=timeout_s)
+        self._session: ClientSession | None = None
+        self._session_ready = asyncio.Event()
+        self._stop_event = asyncio.Event()
+        self._worker_task: asyncio.Task[None] | None = None
+
+    async def startup(self) -> None:
+        """Spawn the long-lived MCP session worker task.
+
+        Returns once either the first session is established or the
+        configured wait timeout elapses. A failure here does not raise:
+        ``health()`` and the per-call session-not-available paths handle
+        the degraded case.
+        """
+
+        if self._worker_task is not None:
+            return
+        self._stop_event = asyncio.Event()
+        self._session_ready = asyncio.Event()
+        self._worker_task = asyncio.create_task(
+            self._mcp_worker(), name="lithos-mcp-session"
+        )
+        try:
+            await asyncio.wait_for(
+                self._session_ready.wait(), timeout=_SESSION_WAIT_TIMEOUT_S
+            )
+        except TimeoutError:
+            logger.info(
+                "lithos MCP session not yet established at startup; "
+                "will retry in background"
+            )
 
     async def health(self) -> LithosHealth:
         """Probe Lithos's HTTP health endpoint."""
@@ -112,12 +167,7 @@ class LithosClient:
         return "ok" if status == "ok" else "degraded"
 
     async def register_agent(self) -> bool:
-        """Attempt Lens startup registration.
-
-        Full Lithos tool calls use MCP-over-SSE. If the optional MCP client
-        package is not installed yet, this method records a best-effort attempt
-        and degrades without preventing app startup.
-        """
+        """Attempt Lens startup registration via the shared MCP session."""
 
         try:
             await self._call_tool(
@@ -204,12 +254,32 @@ class LithosClient:
         return normalize_note(payload)
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._worker_task is None:
+            # startup() was never called; fall back to a one-shot session so
+            # we don't silently break callers that bypass the lifecycle.
+            return await self._call_tool_oneshot(name, arguments)
+
+        if not self._session_ready.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._session_ready.wait(), timeout=_SESSION_WAIT_TIMEOUT_S
+                )
+            except TimeoutError as exc:
+                raise LithosToolError("Lithos MCP session is not available") from exc
+
+        session = self._session
+        if session is None:
+            raise LithosToolError("Lithos MCP session is not available")
+        result = await session.call_tool(name, arguments)
+        return _decode_tool_result(result)
+
+    async def _call_tool_oneshot(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         from mcp import ClientSession
         from mcp.client.sse import sse_client
 
-        endpoint = (
-            f"{self._config.url.rstrip('/')}/{self._config.mcp_sse_path.strip('/')}"
-        )
+        endpoint = self._mcp_endpoint()
         async with (
             sse_client(endpoint) as (reader, writer),
             ClientSession(reader, writer) as session,
@@ -218,7 +288,65 @@ class LithosClient:
             result = await session.call_tool(name, arguments)
         return _decode_tool_result(result)
 
+    async def _mcp_worker(self) -> None:
+        """Hold a single MCP session open for the lifetime of the client.
+
+        Reconnects with exponential backoff if the session drops. All
+        ``async with`` lifecycle for the session lives inside this task,
+        so anyio's cancel-scope-task-affinity rule is satisfied even
+        though tool calls are awaited from arbitrary request tasks.
+        """
+
+        from mcp import ClientSession
+        from mcp.client.sse import sse_client
+
+        endpoint = self._mcp_endpoint()
+        backoff = _RECONNECT_BACKOFF_INITIAL_S
+        while not self._stop_event.is_set():
+            try:
+                async with AsyncExitStack() as stack:
+                    reader, writer = await stack.enter_async_context(
+                        sse_client(endpoint)
+                    )
+                    session = await stack.enter_async_context(
+                        ClientSession(reader, writer)
+                    )
+                    await session.initialize()
+                    self._session = session
+                    self._session_ready.set()
+                    backoff = _RECONNECT_BACKOFF_INITIAL_S
+                    await self._stop_event.wait()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("lithos MCP session lost; reconnecting", exc_info=True)
+            finally:
+                self._session = None
+                self._session_ready.clear()
+
+            if self._stop_event.is_set():
+                return
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                return
+            except TimeoutError:
+                pass
+            backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX_S)
+
+    def _mcp_endpoint(self) -> str:
+        return f"{self._config.url.rstrip('/')}/{self._config.mcp_sse_path.strip('/')}"
+
     async def close(self) -> None:
+        self._stop_event.set()
+        if self._worker_task is not None:
+            try:
+                await asyncio.wait_for(self._worker_task, timeout=5.0)
+            except TimeoutError:
+                self._worker_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._worker_task
+            self._worker_task = None
         if self._owns_http_client:
             await self._http.aclose()
 

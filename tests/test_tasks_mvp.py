@@ -93,6 +93,9 @@ class TaskFakeLithosClient:
             ),
         ]
 
+    async def startup(self) -> None:
+        return None
+
     async def health(self) -> LithosHealth:
         return self.health_value
 

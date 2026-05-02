@@ -38,6 +38,7 @@ class AppState:
         self._last_health_probe_at = 0.0
 
     async def startup(self) -> None:
+        await self.lithos_client.startup()
         self.health.lithos = await self.lithos_client.health()
         self._last_health_probe_at = monotonic()
         if self.health.lithos == "ok":
