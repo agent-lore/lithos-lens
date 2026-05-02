@@ -25,7 +25,11 @@ class RecordingLithosClient:
     def __init__(self, health: LithosHealth) -> None:
         self.health_value: LithosHealth = health
         self.register_calls = 0
+        self.startup_calls = 0
         self.closed = False
+
+    async def startup(self) -> None:
+        self.startup_calls += 1
 
     async def health(self) -> LithosHealth:
         return self.health_value
