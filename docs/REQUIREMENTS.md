@@ -352,7 +352,7 @@ default_limit = 20
 namespace_filter = []           # optional; empty = all namespaces
 
 [tasks]
-auto_refresh_interval_s = 30      # manual refresh fallback when SSE disconnects
+auto_refresh_interval_s = 120     # manual refresh fallback when SSE disconnects
 visible_cap = 50                  # rows for which lithos_task_status is fetched inline
 default_time_range_days = 30      # created-at date window for completed/cancelled groups; open tasks are always shown by default
 default_status_groups = ["open", "completed", "cancelled"]  # display order

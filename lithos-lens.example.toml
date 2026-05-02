@@ -23,7 +23,7 @@ sse_events_path = "/events"
 agent_id = "lithos-lens"
 
 [lithos-lens.tasks]
-auto_refresh_interval_s = 30
+auto_refresh_interval_s = 120
 visible_cap = 50
 default_time_range_days = 30
 default_status_groups = ["open", "completed", "cancelled"]
