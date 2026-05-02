@@ -65,6 +65,7 @@ class LithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
@@ -190,6 +191,7 @@ class LithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        with_claims: bool = False,
     ) -> list[TaskRecord]:
         arguments: dict[str, Any] = {}
         if agent:
@@ -200,6 +202,8 @@ class LithosClient:
             arguments["tags"] = tags
         if since:
             arguments["since"] = since
+        if with_claims:
+            arguments["with_claims"] = True
         payload = await self._call_tool("lithos_task_list", arguments)
         _raise_for_error(payload)
         return [

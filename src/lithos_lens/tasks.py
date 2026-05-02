@@ -31,6 +31,10 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     outcome: str = ""
     completed_at: str = ""
+    # Inline claims when the upstream lithos_task_list call was made with
+    # with_claims=True (added in lithos #221). ``None`` means "claims were
+    # not requested or not returned"; an empty tuple means "no active claims".
+    claims: tuple[ClaimRecord, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +163,7 @@ class TaskLithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
@@ -224,11 +229,15 @@ async def load_dashboard(
 
     async def load_group(status: TaskStatusName) -> list[TaskRecord]:
         since = filters.since
+        # Only the open group is enriched with per-task claim info downstream,
+        # so we only ask lithos to inline claims for that group. Completed and
+        # cancelled groups stay on the lighter payload.
         return await lithos.list_tasks(
             agent=query_agent,
             status=status,
             tags=query_tags,
             since=since,
+            with_claims=(status == "open"),
         )
 
     group_results = await asyncio.gather(
@@ -404,6 +413,17 @@ async def resolve_finding_notes(
 def normalize_task(raw: dict[str, Any]) -> TaskRecord:
     status_raw = str(raw.get("status") or "open")
     status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
+    claims: tuple[ClaimRecord, ...] | None = None
+    if "claims" in raw and raw["claims"] is not None:
+        claims = tuple(
+            ClaimRecord(
+                agent=str(claim.get("agent") or ""),
+                aspect=str(claim.get("aspect") or ""),
+                expires_at=str(claim.get("expires_at") or ""),
+            )
+            for claim in raw["claims"]
+            if isinstance(claim, dict)
+        )
     return TaskRecord(
         id=str(raw.get("id") or ""),
         title=str(raw.get("title") or "Untitled task"),
@@ -415,6 +435,7 @@ def normalize_task(raw: dict[str, Any]) -> TaskRecord:
         metadata=dict(raw.get("metadata") or {}),
         outcome=str(raw.get("outcome") or ""),
         completed_at=str(raw.get("completed_at") or ""),
+        claims=claims,
     )
 
 
@@ -511,22 +532,48 @@ async def _enrich_open_tasks(
     errors: list[str],
 ) -> list[EnrichedTask]:
     visible = open_tasks[:visible_cap]
-    results = await asyncio.gather(
-        *(lithos.task_status(task.id) for task in visible),
-        return_exceptions=True,
-    )
+
+    # Tasks whose claims were already returned inline by the upstream
+    # lithos_task_list(with_claims=True) call don't need a follow-up
+    # task_status fetch. Anything missing inline claims (older lithos,
+    # call made without with_claims, etc.) falls back to per-task fan-out.
+    needs_fetch = [task for task in visible if task.claims is None]
+    fetch_results: dict[str, TaskStatusRecord | None | BaseException] = {}
+    if needs_fetch:
+        results = await asyncio.gather(
+            *(lithos.task_status(task.id) for task in needs_fetch),
+            return_exceptions=True,
+        )
+        for task, result in zip(needs_fetch, results, strict=True):
+            fetch_results[task.id] = (
+                cast(TaskStatusRecord | None, result)
+                if not isinstance(result, BaseException)
+                else result
+            )
+
     enriched: list[EnrichedTask] = []
-    for task, result in zip(visible, results, strict=True):
+    for task in visible:
+        if task.claims is not None:
+            enriched.append(
+                EnrichedTask(
+                    task=task,
+                    task_status=TaskStatusRecord(
+                        id=task.id,
+                        title=task.title,
+                        status=task.status,
+                        claims=task.claims,
+                        metadata=task.metadata,
+                    ),
+                )
+            )
+            continue
+        result = fetch_results[task.id]
         if isinstance(result, BaseException):
             errors.append(f"Could not load claims for task {task.id}.")
             enriched.append(EnrichedTask(task=task, claim_error="Claims unavailable."))
         else:
-            enriched.append(
-                EnrichedTask(
-                    task=task,
-                    task_status=cast(TaskStatusRecord | None, result),
-                )
-            )
+            enriched.append(EnrichedTask(task=task, task_status=result))
+
     enriched.extend(EnrichedTask(task=task) for task in open_tasks[visible_cap:])
     return enriched
 
