@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -110,9 +111,16 @@ class TaskFakeLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        with_claims: bool = False,
     ) -> list[TaskRecord]:
         self.list_calls.append(
-            {"agent": agent, "status": status, "tags": tags, "since": since}
+            {
+                "agent": agent,
+                "status": status,
+                "tags": tags,
+                "since": since,
+                "with_claims": with_claims,
+            }
         )
         rows = [task for task in self.tasks if status is None or task.status == status]
         if agent:
@@ -121,21 +129,25 @@ class TaskFakeLithosClient:
             rows = [task for task in rows if all(tag in task.tags for tag in tags)]
         if since:
             rows = [task for task in rows if task.created_at[:10] >= since[:10]]
+        if with_claims:
+            rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
         return rows
 
-    async def task_status(self, task_id: str) -> TaskStatusRecord | None:
-        self.status_calls.append(task_id)
-        if self.visible_failures and task_id == "open-claimed":
-            raise RuntimeError("status failed")
-        claims: tuple[ClaimRecord, ...] = ()
+    def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
         if task_id == "open-claimed":
-            claims = (
+            return (
                 ClaimRecord(
                     agent="worker-a",
                     aspect="implementation",
                     expires_at="2026-04-26T11:00:00+00:00",
                 ),
             )
+        return ()
+
+    async def task_status(self, task_id: str) -> TaskStatusRecord | None:
+        self.status_calls.append(task_id)
+        if self.visible_failures and task_id == "open-claimed":
+            raise RuntimeError("status failed")
         task = next((item for item in self.tasks if item.id == task_id), None)
         if task is None:
             return None
@@ -143,7 +155,7 @@ class TaskFakeLithosClient:
             id=task.id,
             title=task.title,
             status=task.status,
-            claims=claims,
+            claims=self._claims_for(task_id),
         )
 
     async def list_findings(
@@ -327,8 +339,13 @@ def test_claimed_state_filter_does_not_classify_rows_beyond_cap(
     assert "Claimed open task" not in response.text
     assert "Unclaimed open task" not in response.text
     assert "Old open task" not in response.text
-    assert fake.status_calls.count("open-claimed") == 1
-    assert "open-unclaimed" not in fake.status_calls
+    # Claims for the visible row arrive inline via lithos_task_list(with_claims=True),
+    # so the per-task lithos_task_status fan-out is not used. Beyond-cap tasks are
+    # not classified either way.
+    assert fake.status_calls == []
+    open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
+    assert open_list_calls, "expected at least one list_tasks call for status=open"
+    assert all(c["with_claims"] is True for c in open_list_calls)
 
 
 def test_direct_task_detail_resolves_findings_and_note_links(
@@ -371,3 +388,76 @@ def test_note_renderer_loads_linked_knowledge(lithos_lens_config_env: Path) -> N
     assert "Resolved Knowledge" in response.text
     assert "project: influx" in response.text
     assert "Back to Claimed open task" in response.text
+
+
+def test_dashboard_uses_inline_claims_and_skips_task_status_fan_out(
+    lithos_lens_config_env: Path,
+) -> None:
+    """When lithos_task_list returns claims inline, no per-task lithos_task_status
+    calls are made for visible open tasks, and the dashboard still classifies
+    rows correctly as claimed/unclaimed."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Claimed open task" in response.text
+    assert "Unclaimed open task" in response.text
+    # Dashboard renders the claim chip from inline claims, no fan-out.
+    assert fake.status_calls == []
+    open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
+    assert open_list_calls
+    assert all(c["with_claims"] is True for c in open_list_calls)
+    # Other status groups don't carry the cost of the join.
+    other_calls = [
+        c for c in fake.list_calls if c["status"] in {"completed", "cancelled"}
+    ]
+    assert other_calls
+    assert all(c["with_claims"] is False for c in other_calls)
+
+
+def test_dashboard_falls_back_to_task_status_when_claims_not_inline(
+    lithos_lens_config_env: Path,
+) -> None:
+    """If the upstream lithos doesn't honour with_claims (older server, etc.),
+    the dashboard still classifies open tasks correctly by falling back to
+    the per-task lithos_task_status fan-out."""
+
+    class StripClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(  # type: ignore[override]
+            self,
+            *,
+            agent: str | None = None,
+            status: str | None = None,
+            tags: list[str] | None = None,
+            since: str | None = None,
+            with_claims: bool = False,
+        ) -> list[TaskRecord]:
+            # Simulate a server that doesn't inline claims regardless of the flag.
+            rows = await super().list_tasks(
+                agent=agent,
+                status=status,
+                tags=tags,
+                since=since,
+                with_claims=False,
+            )
+            # Track the requested flag for assertion below.
+            self.list_calls[-1]["with_claims"] = with_claims
+            return rows
+
+    fake = StripClaimsClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Claimed open task" in response.text
+    # Lens still asked for inline claims …
+    open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
+    assert open_list_calls
+    assert all(c["with_claims"] is True for c in open_list_calls)
+    # … but since the server dropped them, lens fell back to lithos_task_status
+    # for the visible open tasks.
+    assert "open-claimed" in fake.status_calls
+    assert "open-unclaimed" in fake.status_calls
