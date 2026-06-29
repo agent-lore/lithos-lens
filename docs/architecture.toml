@@ -1,0 +1,39 @@
+# Architecture model for the "diagrams as tests" guardrail.
+#
+# Single source of truth for:
+#   - the generated component diagram (tests/guardrail/test_architecture_diagram.py)
+#   - which modules are scanned for the domain class diagram
+#
+# The directional layering contract lives in pyproject.toml
+# ([tool.importlinter]); the tiers below document that intent (dependencies must
+# only point downward, Entrypoints -> Core -> Foundation) and group the diagram.
+#
+# `component_of()` matches a module to a component by LONGEST module-prefix.
+
+[components]
+Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
+Web          = ["lithos_lens.web"]
+State        = ["lithos_lens.state"]
+Events       = ["lithos_lens.events"]
+LithosClient = ["lithos_lens.lithos_client"]
+Config       = ["lithos_lens.config"]
+Tasks        = ["lithos_lens.tasks"]
+Logging      = ["lithos_lens.logging"]
+Telemetry    = ["lithos_lens.telemetry"]
+Errors       = ["lithos_lens.errors"]
+
+[tiers]
+Entrypoints = ["Entrypoint", "Web"]
+Core        = ["State", "Events", "LithosClient"]
+Foundation  = ["Config", "Tasks", "Logging", "Telemetry", "Errors"]
+
+# Domain class diagram: the task/event/health frozen dataclasses. The config
+# (settings) dataclasses are configuration, not domain entities, so excluded.
+[domain]
+include_modules = [
+    "lithos_lens.tasks",
+    "lithos_lens.events",
+    "lithos_lens.state",
+    "lithos_lens.lithos_client",
+]
+exclude_modules = ["lithos_lens.config"]
