@@ -30,6 +30,8 @@ dev = [
     "pytest>=8.0",
     "pyright>=1.1",
     "ruff>=0.4",
+    "grimp>=3.14",
+    "import-linter>=2.12",
 ]
 
 [tool.ruff]
@@ -44,6 +46,46 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
+
+[tool.importlinter]
+# Directional architecture contract: dependencies must only point downward,
+# Entrypoints -> Core -> Foundation. Expressed as `forbidden` contracts (not
+# `layers`) because some core modules legitimately import siblings (e.g. state
+# imports events + lithos_client), which a strict layers contract would reject.
+root_package = "lithos_lens"
+
+[[tool.importlinter.contracts]]
+name = "Foundation must not import Core or Entrypoints"
+type = "forbidden"
+source_modules = [
+    "lithos_lens.errors",
+    "lithos_lens.tasks",
+    "lithos_lens.config",
+    "lithos_lens.logging",
+    "lithos_lens.telemetry",
+]
+forbidden_modules = [
+    "lithos_lens.events",
+    "lithos_lens.lithos_client",
+    "lithos_lens.state",
+    "lithos_lens.web",
+    "lithos_lens.main",
+    "lithos_lens.__main__",
+]
+
+[[tool.importlinter.contracts]]
+name = "Core must not import Entrypoints"
+type = "forbidden"
+source_modules = [
+    "lithos_lens.events",
+    "lithos_lens.lithos_client",
+    "lithos_lens.state",
+]
+forbidden_modules = [
+    "lithos_lens.web",
+    "lithos_lens.main",
+    "lithos_lens.__main__",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
