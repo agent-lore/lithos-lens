@@ -212,5 +212,7 @@ marimo/_lsp/
 __marimo__/
 
 # agents
-.claude
+# ...except shared, checked-in skills under .claude/skills/ (e.g. /regen-manual).
+.claude/*
+!.claude/skills/
 .codex
