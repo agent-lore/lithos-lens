@@ -1,7 +1,7 @@
 ---
 title: Lithos Lens — Requirements Document
-version: 0.7.0
-date: 2026-04-29
+version: 0.8.0
+date: 2026-07-07
 status: draft
 tags: [lithos-lens, requirements, design, architecture]
 ---
@@ -9,20 +9,19 @@ tags: [lithos-lens, requirements, design, architecture]
 # Lithos Lens — Requirements Document
 
 > [!abstract] Project Summary
-> **Lithos Lens** is a local web UI for observing the Lithos coordination layer and for browsing and curating a Lithos knowledge base. It hosts two first-class views inside a single FastAPI app:
-> - **Tasks View** — read-only dashboard over Lithos tasks, claims, and findings, with flexible filters and live updates from the Lithos SSE event stream. **This is the first view delivered.**
-> - **Knowledge Browser** — feed view, interactive graph (Cytoscape.js over LCMA typed edges), cognitive search backed by `lithos_retrieve`, feedback controls (👍 / 👎), note comparison, and curated reading paths.
+> **Lithos Lens** is a local web UI for observing and steering the Lithos coordination layer and for browsing and curating a Lithos knowledge base. It hosts two first-class views inside a single FastAPI app:
+> - **Tasks View** — a **graph-native** dashboard over the Lithos task graph (typed edges, epics, gates, computed ready/blocked frontiers), with a small set of **curated write actions** (approve gates, reopen, cancel, create, add dependencies) gated behind an explicit config flag.
+> - **Knowledge Browser** — real note rendering with wiki-links, search, related/back-link panels, an interactive typed-edge graph (Cytoscape.js), cognitive search backed by `lithos_retrieve`, feedback via frontmatter patches, and conflict resolution.
 >
-> Lens is a pure Lithos MCP client by default — zero runtime dependency on the Influx ingestion container, all data sourced from Lithos. From v0.5 onwards Lens may optionally call an LLM directly **when explicitly enabled** (`LENS_LLM_ENABLED=true`) to provide "most significant findings" curation in the Tasks view, answer synthesis, note comparison, and explanation-depth control; with the flag off Lens remains a pure MCP client.
+> Lens is a pure Lithos MCP client by default — zero runtime dependency on the Influx ingestion container; all data is sourced from Lithos. Lens may optionally call an LLM directly **when explicitly enabled** (`LENS_LLM_ENABLED=true`) for findings curation and synthesis; with the flag off Lens remains a pure MCP client.
+>
+> This document holds **durable product requirements only**. Milestone sequencing, status, and the upstream-Lithos dependency ledger live in [`docs/ROADMAP.md`](./ROADMAP.md); shipped behaviour is described by [`docs/SPECIFICATION.md`](./SPECIFICATION.md); execution detail for in-flight milestones lives in the just-in-time PRDs under [`docs/prd/`](./prd/).
 
-> [!note] v0.5 changelog
-> v0.5 incorporated ideas from a review of the Paperlens prototype (`/paperlens`): answer synthesis with citations, multi-note comparison, an expertise-level slider, curated reading paths, graph centrality overlay, and bidirectional node↔panel selection. Quiz/flashcard generation and embedding storage from Paperlens are explicitly out of scope.
+> [!note] v0.8 changelog
+> v0.8 rewrites the Tasks surface around **Lithos 0.4.0's task graph**: typed task edges (`blocks`, `parent_child`, `discovered_from`, `waits_on_gate`), task types (`task`/`epic`/`gate` — gates: human/timer/ci/pr/external_task), computed ready/blocked frontiers with classified blockers, spawn/reopen lifecycle, `lithos_task_get`, `resolved_since` filtering, and the `task.updated`/`task.reopened` events. The Operator View is restructured (Epic strip → Needs attention → Gates → In progress → Ready → Blocked), the attention model is rebuilt graph-aware (the old `expired-claim` rule was unobservable and is removed), the Planning View is rebased on the frontier, and a new **Curated Write Actions** contract (§5C) replaces every "strictly read-only" statement. Part C is reordered around a real Note View (server-rendered markdown, wiki-links, related panel) followed by search, graph, and later surfaces. The legacy `claimed_state` filter and `visible_cap` claim fan-out are deprecated (§4.4). The old §17 implementation plan is deleted — sequencing now lives exclusively in `docs/ROADMAP.md`. Scale posture is updated to observed production reality: **hundreds of open tasks, thousands of notes**.
 
-> [!note] v0.6 changelog
-> v0.6 promotes the document into four parts (Common Core, Tasks View, Knowledge Browser, Reference) and adds the **Tasks View** as a peer of the Knowledge Browser. The implementation order is **Tasks View first, Knowledge Browser second** — both ride on the same FastAPI app, MCP client, and shared SSE event subscription, so the common core (§1–§4) is built once and both views slot in. The Tasks View MVP is intentionally constrained to the current Lithos read surface (`lithos_task_list`, `lithos_task_status`, `lithos_finding_list`, `lithos_agent_list`, `lithos_stats`, and `/events`). Any richer task filtering, direct task lookup, claim metadata, or backend findings query pagination is deferred unless Lithos exposes it later.
-
-> [!note] v0.7 changelog
-> v0.7 splits the Tasks surface into **two routes** — an Operator View at `/tasks` (primary: "are my agents alive and making progress?") and a Planning View at `/tasks/plan` (secondary: "what should happen next?"). The Operator View structure is reshaped around four open-task sections: **Needs attention** (severity-ordered: expired claim → stale open → unclaimed-old) → **In progress** → **Queued** → **Unknown claim state** tail, with **collapsed Completed / Cancelled** below. Project tagging conventions become normative (`project:<slug>`), driving a first-class project filter, per-row project chip, and the Planning View's project breakdown / throughput sections. New milestone **M1.5** ships the Planning View after the Operator View stabilises. New row affordances: latest-finding inline, agent chips with role markers (created / claimed / latest), human-agent visual distinction, OR-across-roles filter. New global affordances: collapsible "Recent findings" drawer fed by a server-side rolling buffer, title-badge notifications (always on), debounced server-side metric recompute. Desktop notifications + LLM "most significant findings" remain in M3.
+> [!note] Earlier changelogs (condensed)
+> v0.5 incorporated Paperlens-review ideas (synthesis, comparison, reading paths, centrality overlay). v0.6 promoted the document into four parts and added the Tasks View as a peer of the Knowledge Browser. v0.7 split the Tasks surface into Operator (`/tasks`) and Planning (`/tasks/plan`) routes, made project tagging normative, and added the recent-findings drawer, agent role chips, and title-badge notifications — all of which survive in this version.
 
 ---
 
@@ -38,22 +37,22 @@ tags: [lithos-lens, requirements, design, architecture]
 - [[#5. Tasks View — Operator View]]
 - [[#5A. Tasks View — Planning View]]
 - [[#5B. Project Tracking Conventions]]
+- [[#5C. Curated Write Actions]]
 
 ### Part C — Knowledge Browser
-- [[#6. Feed View]]
-- [[#7. Graph View]]
-- [[#8. Cognitive Search]]
-- [[#9. Feedback Mechanism]]
-- [[#10. Note Comparison]]
-- [[#11. Reading Paths]]
-- [[#12. Conflict Resolution UI]]
+- [[#6. Note View]]
+- [[#7. Knowledge Search]]
+- [[#8. Knowledge Graph View]]
+- [[#9. Feed View]]
+- [[#10. Feedback Mechanism]]
+- [[#11. Conflict Resolution UI]]
+- [[#12. Deferred Surfaces — Comparison & Reading Paths]]
 
 ### Part D — Reference
 - [[#13. Settings View]]
 - [[#14. Resilience & Error Handling]]
 - [[#15. Observability]]
 - [[#16. API Reference]]
-- [[#17. Implementation Plan]]
 
 ---
 
@@ -69,47 +68,43 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 
 #### Common
 - Provide a low-latency local browser UI over the Lithos coordination layer and a Lithos knowledge base
-- Two first-class views — **Tasks View** (delivered first) and **Knowledge Browser** — sharing one FastAPI app, one MCP client, and one `base.html` shell with a top-nav view switcher
-- Operate purely as a Lithos MCP client when `LENS_LLM_ENABLED=false` — no dependency on Influx runtime
-- Subscribe to the Lithos SSE event stream once (a shared `app/events.py` utility) and let any view consume the events it cares about
-- Optional LLM-backed features ("most significant findings" curation, answer synthesis, comparison themes, complexity slider) behind a single config flag, gracefully degrading when disabled
-- Minimal stack: FastAPI + HTMX + Cytoscape.js; no heavy JS framework, no build step
+- Two first-class roles — a **task dashboard** (observe the task graph, act on it through a curated write set) and a **knowledge browser** — sharing one FastAPI app, one MCP client, and one `base.html` shell with a top-nav view switcher
+- Operate purely as a Lithos MCP client when `LENS_LLM_ENABLED=false` — no dependency on the Influx runtime
+- Subscribe to the Lithos SSE event stream once (a shared events module) and let any view consume the events it cares about
+- **Curated writes, not CRUD**: Lens exposes a small, deliberate set of operator actions (§5C) behind `[writes] enabled` (default off). With writes disabled, Lens is strictly read-only and registers no mutating routes.
+- Scale posture: the production deployment Lens observes today runs **~330 open tasks (311 `task`, 21 `epic`) across ~20 projects and ~2,900 knowledge notes**. Lens MUST be designed for *hundreds of open tasks and thousands of notes* — not tens — and SHOULD remain usable into the low thousands of open tasks before requiring upstream bulk-fetch support (see the ROADMAP dependency ledger).
+- Optional LLM-backed features ("most significant findings" curation, answer synthesis, complexity slider) behind a single config flag, gracefully degrading when disabled (sequencing: ROADMAP X1)
+- Minimal stack: FastAPI + HTMX + Cytoscape.js + markdown-it-py; no heavy JS framework, no build step. Every graph surface has a **no-JS text baseline**; Cytoscape is progressive enhancement.
 
 #### Tasks View
 - Two co-equal routes sharing the same data, MCP client, and SSE subscription:
-  - **Operator View (`/tasks`)** — "are my agents alive and making progress?" Live, read-only operator dashboard. Primary surface.
-  - **Planning View (`/tasks/plan`)** — "what should happen next?" Throughput / starvation / bottleneck signals plus a top-level Human-actionable section. Secondary surface, ships in M1.5.
-- Both routes reachable from the shared top-nav alongside future Knowledge Browser routes; navigation between them preserves no view-specific state (filters reset on switch — they answer different questions).
-- **Operator View shape** — open work split into severity-ordered sections: **Needs attention** (expired-claim → stale-open → unclaimed-old) → **In progress** (has active claims) → **Queued** (no active claims) → **Unknown claim state** tail (rows past `tasks.visible_cap`). Collapsed Completed / Cancelled groups below.
-- Project tagging is first-class: every row carries a project chip; project is a top-level filter alongside status, tag, agent, and created-at range.
-- Findings surface in two places: a one-line "latest finding" on each open row, and a collapsible global "Recent findings" drawer fed by a server-side rolling buffer.
-- Detail surface is a right-side panel by default (`/tasks?selected=<task_id>`) with an "Expand" button to the full-page route (`/tasks/{task_id}`).
-- Agent chips on rows collapse roles (`created` / `claimed` / `latest`) into a single chip per agent; human-agents (configured set) render with a person-icon prefix and distinct background. Clicking an agent chip filters across all roles (OR semantics).
-- Auto-update via the shared SSE event subscription, with a configurable polling fallback. Server-side metric recomputation is debounced; pushed to all open tabs via HTMX OOB swaps.
-- Title-badge notifications (`(N) Lithos Lens`) always on for unseen Needs-attention items. Desktop notifications opt-in (M3, lands alongside the LLM milestone).
-- Findings link out to the Knowledge Browser via explicit `finding.knowledge_id` (no inference, no heuristics).
+  - **Operator View (`/tasks`)** — "what can actually happen next, and what needs me?" Live dashboard structured by the computed ready/blocked frontier. Primary surface.
+  - **Planning View (`/tasks/plan`)** — "what should happen next?" Human-actionable queue (gates first), starvation/bottleneck/stalled signals, throughput.
+- Section structure is derived from **Lithos-computed graph state** (`lithos_task_ready` / `lithos_task_blocked`), never from Lens-side inference. Lens MUST NOT re-implement the readiness predicate.
+- Gates — the part of the graph that is explicitly the operator's job — get a first-class section, with human gates surfaced above all other gate types.
+- Epics roll up (progress chips) instead of polluting open-task counts.
+- A dependency graph page (`/tasks/graph`) and a task-detail mini-graph make `blocks` chains, gates, and hierarchy visually legible.
+- Curated write actions (§5C): approve/complete human gates, reopen, cancel with consequence preview, create task/epic/gate, add dependency edges — attributed to a named human operator identity distinct from the Lens service agent.
+- Auto-update via the shared SSE event subscription, with `Last-Event-ID` replay on reconnect and a polling fallback.
+- Findings link to the Knowledge Browser via explicit `finding.knowledge_id` (no inference, no heuristics).
 
 #### Knowledge Browser
-- Feed view: time-ordered cards filterable by profile, date, tag, confidence / parsed profile score, source
-- Interactive graph view with Cytoscape.js, rendering LCMA typed edges
-- Cognitive search bar using `lithos_retrieve` (seven-scout PTS retrieval with reranking)
-- Feedback controls — mark items as relevant / not relevant; write back to Lithos
+- A real **Note View**: server-rendered markdown (safe by default), clickable wiki-links via a Lens-side resolver, metadata chips, related/back-links panel, "produced by task" chip
+- Search at `/knowledge`: `lithos_search` first, evolving to `lithos_retrieve` as the default engine with graceful fallback
+- Interactive graph view with Cytoscape.js rendering typed LCMA edges, wiki-links, and provenance — ego-graph (focus) mode first
+- Feedback controls that patch note frontmatter via `lithos_note_update` (never round-tripping the note body)
 - Conflict resolution UI for LCMA `contradicts` edges
-- Multi-note **comparison** view (metadata + content; LLM-driven theme and concept analysis when LLM is enabled)
-- Curated **reading paths** through a node subset — algorithmic by default, LLM-curated when LLM is enabled
-- Graph **centrality overlay** to highlight bridge nodes between clusters
+- Feed, note comparison, and reading paths are preserved as requirements but deferred (see ROADMAP)
 
 ### Non-Goals
 
 - Editing note content inline (that's Obsidian's job — or direct MCP tools)
-- Running its own ingestion — Lens never writes source research notes from scratch. It may write narrow Lens-authored operational/curation notes only where explicitly specified (for example saved reading paths); feedback is written as metadata/tag updates on existing notes.
-- Hosting an external collaboration surface — single-user, local-only
-- Authoring feedback for knowledge items that Influx did not ingest — v1 assumes feedback is Influx-centric; a later version can generalise
-- Deep editing of LCMA edges (users can resolve conflicts; creating/deleting arbitrary edges is out of scope for v1)
+- Running its own ingestion — Lens never writes source research notes from scratch. It may write narrow Lens-authored operational data only where explicitly specified; feedback is written as frontmatter patches on existing notes.
+- Hosting an external collaboration surface — single-operator, trusted local network only (see §5C.1 for the explicit security boundary)
+- **Arbitrary task CRUD or claim management** — Lens's writes are limited to the curated action set in §5C. Lens never claims, renews, or releases task claims on behalf of agents, and never edits task titles/descriptions/tags. Agents doing work talk to the Lithos MCP API directly, not through Lens.
+- Running its own task scheduler, cron, or worker — Lens observes and nudges; it does not orchestrate
 - Quiz / flashcard generation
-- Hosting embeddings or running its own vector index — UMAP-style semantic projections are deferred and depend on Lithos exposing embeddings via a future MCP tool
-- **Task creation, mutation, or claim management** — the Tasks view is strictly read-only; any agent that wants to create, claim, or update tasks does so via the Lithos MCP API directly, not through Lens
-- Running its own task scheduler, cron, or worker — Lens observes; it does not orchestrate
+- Hosting embeddings or running its own vector index — semantic projections are deferred and depend on Lithos exposing embeddings via a future MCP tool
 
 ---
 
@@ -121,16 +116,16 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 │                                                                   │
 │  ┌──────────────┐     ┌──────────────┐     ┌─────────────────┐   │
 │  │    LITHOS    │◀────│    INFLUX    │     │  LITHOS-LENS    │   │
-│  │              │     │  (ingestion) │     │   (web UI)      │   │
-│  │  knowledge   │     │              │     │                 │   │
-│  │  store +     │     │  scheduled   │     │  stateless      │   │
-│  │  tasks       │     │  batch job   │     │  HTTP server    │   │
-│  │  MCP API +   │     │              │     │                 │   │
+│  │              │     │  (optional   │     │   (web UI)      │   │
+│  │  knowledge   │     │  ingestion)  │     │                 │   │
+│  │  store +     │     │              │     │  stateless      │   │
+│  │  task graph  │     │  scheduled   │     │  HTTP server    │   │
+│  │  MCP API +   │     │  batch job   │     │                 │   │
 │  │  SSE events  │     │              │     │                 │   │
 │  └──────────────┘     └──────────────┘     └────────┬────────┘   │
 │          ▲       ▲                                   │            │
 │          │       └─── SSE event stream ──────────────┤            │
-│          └─────────── MCP API ─────────────────────  │            │
+│          └─────────── MCP API (reads + writes) ───── │            │
 │                                                       ▼            │
 │                                                ┌──────────────┐    │
 │                                                │   BROWSER    │    │
@@ -144,44 +139,36 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 ```
 
 > [!important] Lens is Influx-independent
-> **Lithos Lens has zero runtime dependency on the Influx ingestion container.** It is a pure Lithos MCP client. All knowledge and coordination data — paper notes, feedback, graph edges, tasks, claims, and findings — comes from Lithos. The UI and ingestion pipeline can be restarted, updated, or fail independently. Lens may mount the `influx-archive` volume read-only so it can serve archived PDFs/HTMLs directly, but that is a file-system dependency on a shared volume, not a runtime dependency on the Influx process.
+> **Lithos Lens has zero runtime dependency on the Influx ingestion container.** It is a pure Lithos MCP client. All knowledge and coordination data — notes, feedback, graph edges, tasks, claims, and findings — comes from Lithos. Lens MAY optionally mount the `influx-archive` volume read-only to serve archived PDFs/HTMLs and the `influx-config` volume to display Influx settings; **both mounts are optional** and every Lens feature except archive serving and Influx-config display works without them.
 
 > [!note] Optional LLM client
-> When `LENS_LLM_ENABLED=true`, Lens additionally talks to an LLM provider (Anthropic / OpenAI / Ollama) for "most significant findings" curation in the Tasks view, synthesis, comparison, and complexity-tuned output in the Knowledge Browser. With the flag off, all LLM-dependent UI surfaces are hidden and Lens remains a pure MCP client. When Lithos exposes a synthesis tool (`lithos_synthesize` or equivalent) in a later MVP, Lens prefers the MCP path and treats the local LLM as a fallback.
+> When `LENS_LLM_ENABLED=true`, Lens additionally talks to an LLM provider (Anthropic / OpenAI / Ollama via LiteLLM) for "most significant findings" curation in the Tasks view and synthesis in the Knowledge Browser. With the flag off, all LLM-dependent UI surfaces are hidden and Lens remains a pure MCP client. When Lithos exposes a synthesis tool (`lithos_synthesize` or equivalent), Lens prefers the MCP path and treats the local LLM as a fallback. Sequencing: ROADMAP X1.
 
 > [!note] Single SSE subscription
-> Lens opens **one** SSE connection to Lithos at app start (`app/events.py`). Each view registers a callback for the event types it cares about; the connection is shared. The Tasks view subscribes to all task / claim / finding events; the Knowledge Browser may later subscribe to edge / note events for live graph updates.
+> Lens opens **one** SSE connection to Lithos at app start. Each view registers for the event types it cares about; the connection is shared. Browser tabs never connect to Lithos directly — they connect to Lens's own `/tasks/events` re-broadcast endpoint. See §5.8.
 
 ### Key Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Deployment | Single Docker container hosting both views | Independent restartability vs Lithos / Influx; one app, one process, one SSE connection |
-| App structure | Single FastAPI app with view-specific routers (`tasks/*`, `knowledge/*`) sharing a `base.html` shell | Lets views share session state, the MCP client, and the event stream without coordination overhead |
-| Lithos communication | Lithos MCP API (SSE transport for tools) + Lithos SSE event stream (for live updates) | One MCP transport for request/response, one SSE stream for push events; both supplied by Lithos |
-| Graph rendering | Cytoscape.js | Best for knowledge graphs; handles typed LCMA edges; scales to ~10K nodes |
-| Frontend | FastAPI + HTMX + Cytoscape.js | No build step; minimal stack; dynamic HTML without a JS framework; HTMX SSE extension drives live tile updates |
-| Styling/assets | Vendored, pinned static assets (`static/`) with app CSS | Preserves local-first/offline behavior and avoids CDN supply-chain/runtime dependencies while keeping no build step |
-| Config format | TOML (read-only, shared with Influx) | Consistent with Influx and Lithos conventions |
+| App structure | Single FastAPI app with view-specific routers sharing a `base.html` shell | Lets views share session state, the MCP client, and the event stream without coordination overhead |
+| Lithos communication | Lithos MCP API (single shared MCP-over-SSE session for tool calls) + Lithos `GET /events` SSE stream (push) | One MCP transport for request/response, one SSE stream for push events; both supplied by Lithos |
+| Task/knowledge partitioning | Section membership and readiness come from Lithos (`task_ready`/`task_blocked`); Lens joins id-sets, never re-derives | Timer gates and NULL-safe gate handling are evaluated inside Lithos at query time; re-deriving readiness from edges in Lens is a correctness trap |
+| Graph rendering | Cytoscape.js as progressive enhancement over a text baseline | Handles typed edges and DAG layouts; the no-JS baseline keeps every graph surface usable without scripting |
+| Markdown rendering | Server-side `markdown-it-py`, safe by default (§6.2) | No client-side rendering of untrusted note content; no sanitizer dependency needed when raw HTML is never emitted |
+| Writes | Curated action set, route-gated by `[writes] enabled`, form-encoded POSTs, refresh-after-write | Small blast radius, no optimistic state, degrades to read-only cleanly |
+| Frontend | FastAPI + HTMX + Cytoscape.js | No build step; minimal stack; HTMX SSE extension drives live updates |
+| Styling/assets | Vendored, pinned static assets (`static/`) with app CSS | Local-first/offline behaviour; no CDN supply-chain or runtime dependency |
+| Config format | TOML + env overrides | Consistent with Lithos conventions |
 | OTEL | Opt-in, additive, optional packages | Consistent with Lithos conventions |
-| Environments | `.env.dev` / `.env.prod` | Consistent with Lithos conventions |
-| LLM access | Optional, env-gated LiteLLM client (`LENS_LLM_*`) | Lithos MVP 1 does not provide synthesis, comparison, or curation tools; Lens needs LLM access for "most significant findings", Q&A synthesis, comparison themes, and complexity-adjusted output. LiteLLM keeps Lens provider-agnostic across OpenAI, Anthropic, OpenRouter, Ollama, and local/custom providers. When Lithos ships MVP-3 synthesis, Lens prefers the MCP path. |
-| Centrality computation | Client-side in Cytoscape | Lithos exposes edges via `lithos_edge_list` but no centrality scores; computing in the browser avoids a new MCP tool and operates on the already-loaded graph |
-| SSE event handling | Single shared subscription in `app/events.py`, fan-out via per-view in-memory pub/sub | Avoids N independent SSE connections from the same app; lets the Tasks view receive every task/claim/finding event without coupling to the Knowledge Browser |
+| LLM access | Optional, env-gated LiteLLM client (`LENS_LLM_*`) | Provider-agnostic across OpenAI, Anthropic, OpenRouter, Ollama; prefers MCP synthesis when Lithos ships it |
+| Centrality computation | Client-side in Cytoscape | Lithos exposes edges but no centrality scores; computing in the browser operates on the already-loaded graph |
+| SSE event handling | Single shared subscription, fan-out via in-process pub/sub | Avoids N independent SSE connections; scope-aware normalization (§5.8.2) |
 
 ### Shared Application Surface
 
-The following modules are shared by every view and constitute the "common core" that should be implemented before any view-specific work:
-
-| Module | Purpose |
-|--------|---------|
-| `app/main.py` | FastAPI app, view-switcher top-nav, mounts all routers |
-| `app/config.py` | TOML + env loader, exposes a typed config object |
-| `app/lithos_client.py` | Lithos MCP client (SSE transport for tool calls) |
-| `app/events.py` | Single SSE subscription to Lithos's event stream; in-process pub/sub for views |
-| `app/llm_client.py` *(optional)* | LiteLLM-backed provider-agnostic LLM wrapper; only loaded when `LENS_LLM_ENABLED=true` |
-| `app/telemetry.py` | OTEL tracer/meter setup; `@traced` decorator |
-| `app/templates/base.html` | Layout shell with top-nav, view switcher, theme, banners |
+The following concerns are shared by every view and constitute the "common core": the FastAPI app and top-nav shell, the typed TOML+env config loader, the Lithos MCP client (one shared session), the shared events subscription and in-process hub, the optional LiteLLM wrapper, OTEL setup, and the base template. The authoritative module layout is documented in [`docs/SPECIFICATION.md`](./SPECIFICATION.md) and enforced by `docs/architecture.toml` guardrail tests; this document does not duplicate it.
 
 ---
 
@@ -193,14 +180,16 @@ The following modules are shared by every view and constitute the "common core" 
 |-----------|-----------|--------|
 | `lithos-lens` | `python:3.12-slim` | Web UI hosting both Tasks View and Knowledge Browser |
 
-### Shared Volumes
+### Shared Volumes (optional)
 
 | Volume | Lens mount | Purpose |
 |--------|------------|---------|
-| `influx-archive` | `/archive` (ro) | Serve archived PDFs/HTMLs inline (Knowledge Browser) |
-| `influx-config` | `/etc/influx` (ro) | Read the shared Influx TOML config for the settings view |
+| `influx-archive` *(optional)* | `/archive` (ro) | Serve archived PDFs/HTMLs inline (Knowledge Browser). When absent, archive links are hidden. |
+| `influx-config` *(optional)* | `/etc/influx` (ro) | Display the Influx TOML config in the settings view. When absent, that settings section is hidden. |
 
 ### Environment Files
+
+Every TOML knob in §4 has an `LENS_*` environment override following the existing naming convention (`[tasks].frontier_limit` → `LENS_TASKS_FRONTIER_LIMIT`). The env files list the operationally interesting subset:
 
 **`.env.dev`:**
 ```env
@@ -215,69 +204,45 @@ LITHOS_URL=http://host.docker.internal:8765
 LITHOS_SSE_EVENTS_PATH=/events            # default; SSE event stream endpoint
 LENS_AGENT_ID=lithos-lens
 
-# Tasks view — operator view
-LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30     # manual fallback when SSE disconnects
-LENS_TASKS_VISIBLE_CAP=50                 # cap on rows that fetch claims inline
-LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # created-at date window for task list defaults
-LENS_TASKS_STALE_OPEN_AGE_DAYS=7          # Needs-attention threshold: stale open
-LENS_TASKS_UNCLAIMED_WARNING_MINUTES=60   # Needs-attention threshold: unclaimed-old
-LENS_TASKS_METRICS_DEBOUNCE_MS=2000       # server-side metric recompute debounce
-LENS_TASKS_PROJECT_TAG_KEY=project        # reserved tag-key for project chips & filter
+# Tasks view — graph-native dashboard
+LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30     # polling fallback when SSE disconnects
+LENS_TASKS_FRONTIER_LIMIT=500             # limit for task_ready / task_blocked
+LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # resolved_since window for Completed/Cancelled
+LENS_TASKS_GATE_WAITING_ATTENTION_HOURS=24
+LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
+LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
+LENS_TASKS_STALE_OPEN_AGE_DAYS=7
+LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
+LENS_TASKS_METRICS_DEBOUNCE_MS=2000
 LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
+# LENS_TASKS_HUMAN_AGENTS=dave,human      # comma-separated agent IDs that represent humans
 
-# Tasks view — planning view (M1.5)
-LENS_TASKS_BOTTLENECK_MIN_INFLIGHT=3
-LENS_TASKS_BOTTLENECK_CONCENTRATION=0.7
-LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
-LENS_TASKS_THROUGHPUT_WINDOW_DAYS=30
-LENS_TASKS_HUMAN_ACTIONABLE_TAG=human
-# LENS_TASKS_HUMAN_AGENTS=dave,human       # comma-separated agent IDs that represent humans
+# Task graph pages
+LENS_GRAPH_CACHE_TTL_S=30
+LENS_GRAPH_MAX_TASKS=300
+LENS_GRAPH_FETCH_CONCURRENCY=16
+
+# Curated writes — disabled by default; POST routes are not registered when false
+LENS_WRITES_ENABLED=false
+# LENS_WRITES_DEFAULT_OPERATOR=dave
+LENS_WRITES_CONFIRM_CANCEL=true
+
+# Knowledge browser
+LENS_KNOWLEDGE_SEARCH_LIMIT=20
+LENS_KNOWLEDGE_RECENT_LIMIT=20
+LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
 
 # Optional LLM client — disabled by default
 LENS_LLM_ENABLED=false
-# LENS_LLM_PROVIDER=anthropic             # LiteLLM provider prefix: anthropic | openai | openrouter | ollama | ...
-# LENS_LLM_MODEL=anthropic/claude-haiku-4-5-20251001
-# LENS_LLM_API_KEY=                       # provider-dependent; not needed for local ollama
-# LENS_LLM_BASE_URL=                      # optional LiteLLM api_base for OpenRouter/local gateways
-# LENS_LLM_EXTRA_HEADERS_JSON=            # optional provider-specific headers, e.g. OpenRouter metadata
-# LENS_LLM_MAX_TOKENS=2048
-```
-
-**`.env.prod`:**
-```env
-LENS_ENVIRONMENT=production
-LENS_HOST_PORT=7843
-LENS_CONTAINER_NAME=lithos-lens
-LENS_OTEL_ENABLED=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-
-LITHOS_URL=http://lithos:8765
-LITHOS_SSE_EVENTS_PATH=/events
-LENS_AGENT_ID=lithos-lens
-
-LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30
-LENS_TASKS_VISIBLE_CAP=50
-LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30
-LENS_TASKS_STALE_OPEN_AGE_DAYS=7
-LENS_TASKS_UNCLAIMED_WARNING_MINUTES=60
-LENS_TASKS_METRICS_DEBOUNCE_MS=2000
-LENS_TASKS_PROJECT_TAG_KEY=project
-LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
-LENS_TASKS_BOTTLENECK_MIN_INFLIGHT=3
-LENS_TASKS_BOTTLENECK_CONCENTRATION=0.7
-LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
-LENS_TASKS_THROUGHPUT_WINDOW_DAYS=30
-LENS_TASKS_HUMAN_ACTIONABLE_TAG=human
-# LENS_TASKS_HUMAN_AGENTS=dave,human
-
-LENS_LLM_ENABLED=false
-# LENS_LLM_PROVIDER=anthropic
+# LENS_LLM_PROVIDER=anthropic             # LiteLLM provider prefix
 # LENS_LLM_MODEL=anthropic/claude-haiku-4-5-20251001
 # LENS_LLM_API_KEY=
 # LENS_LLM_BASE_URL=
 # LENS_LLM_EXTRA_HEADERS_JSON=
 # LENS_LLM_MAX_TOKENS=2048
 ```
+
+**`.env.prod`:** same keys with production values (`LITHOS_URL=http://lithos:8765`, `LENS_OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LENS_WRITES_ENABLED=true` explicitly and deliberately.
 
 ### `docker-compose.yml`
 
@@ -296,26 +261,11 @@ services:
     ports:
       - "${LENS_HOST_PORT:-7843}:8000"
     volumes:
+      # Both mounts are OPTIONAL — remove them for a pure-Lithos deployment
       - ${INFLUX_ARCHIVE_PATH:-./archive}:/archive:ro
       - ${INFLUX_CONFIG_PATH:-./config}:/etc/influx:ro
-    environment:
-      - LENS_ENVIRONMENT=${LENS_ENVIRONMENT:-dev}
-      - LITHOS_URL=${LITHOS_URL:-http://host.docker.internal:8765}
-      - LITHOS_SSE_EVENTS_PATH=${LITHOS_SSE_EVENTS_PATH:-/events}
-      - LENS_AGENT_ID=${LENS_AGENT_ID:-lithos-lens}
-      - LENS_OTEL_ENABLED=${LENS_OTEL_ENABLED:-false}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
-      - LENS_LOG_LEVEL=${LENS_LOG_LEVEL:-INFO}
-      - LENS_TASKS_AUTO_REFRESH_INTERVAL_S=${LENS_TASKS_AUTO_REFRESH_INTERVAL_S:-30}
-      - LENS_TASKS_VISIBLE_CAP=${LENS_TASKS_VISIBLE_CAP:-50}
-      - LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=${LENS_TASKS_DEFAULT_TIME_RANGE_DAYS:-30}
-      - LENS_LLM_ENABLED=${LENS_LLM_ENABLED:-false}
-      - LENS_LLM_PROVIDER=${LENS_LLM_PROVIDER:-}
-      - LENS_LLM_MODEL=${LENS_LLM_MODEL:-}
-      - LENS_LLM_API_KEY=${LENS_LLM_API_KEY:-}
-      - LENS_LLM_BASE_URL=${LENS_LLM_BASE_URL:-}
-      - LENS_LLM_EXTRA_HEADERS_JSON=${LENS_LLM_EXTRA_HEADERS_JSON:-}
-      - LENS_LLM_MAX_TOKENS=${LENS_LLM_MAX_TOKENS:-2048}
+    env_file:
+      - .env.${LENS_ENVIRONMENT:-dev}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -334,73 +284,76 @@ Identical pattern to Influx with project name `lithos-lens-<env>`. Supports `up 
 
 ## 4. Configuration
 
-Lens has minimal configuration of its own. The main runtime config comes from environment variables (Lithos URL, ports, telemetry, optional LLM, tasks-view tuning). The **Influx TOML config is mounted read-only** so the settings view can display profiles, thresholds, models, and feed lists.
+Lens has minimal configuration of its own. The main runtime config comes from environment variables layered over a TOML file (see `lithos-lens.example.toml` for the shipped shape; tables are namespaced `[lithos-lens.*]`). This section is the **config reference**; prose elsewhere refers to knobs in `[section].key` shorthand.
 
 ```toml
-# /etc/lithos-lens/config.toml  (optional — most settings come from env)
+[lithos-lens.ui]
+default_view = "tasks"            # tasks | knowledge — landing view
 
-[ui]
-default_view = "tasks"          # tasks | knowledge — Tasks ships first so it is the default landing view
-feed_page_size = 50
-graph_max_nodes = 500           # safety cap for graph render
-graph_centrality_overlay = false  # off by default; toggle in graph filter panel
-reading_path_default = "salience" # salience | chronological | edge-traversal | llm
-compare_max_notes = 4           # cap on the multi-select for comparison
+[lithos-lens.lithos]
+url = "http://localhost:8765"
+mcp_sse_path = "/sse"
+sse_events_path = "/events"
+agent_id = "lithos-lens"          # the Lens SERVICE agent; operator identity is separate (§5C.5)
 
-[search]
-default_limit = 20
-namespace_filter = []           # optional; empty = all namespaces
+[lithos-lens.tasks]
+auto_refresh_interval_s = 30      # polling fallback when SSE disconnects
+default_time_range_days = 30      # resolved_since window for Completed/Cancelled sections
+frontier_limit = 500              # limit passed to task_ready / task_blocked
+gate_waiting_attention_hours = 24 # Needs-attention rule 3: human gate waiting
+claim_expiring_soon_minutes = 10  # Needs-attention rule 4: claim expiring soon
+unclaimed_ready_age_minutes = 60  # Needs-attention rule 6: ready-but-unclaimed
+stale_open_age_days = 7           # Needs-attention rule 5: stale open
+project_convention = "both"       # metadata | tag | both — see §5B.1
+project_tag_key = "project"       # tag-key reserved for the tag convention
+metrics_debounce_ms = 2000        # server-side debounce for metric recompute on SSE bursts
+recent_findings_drawer_size = 50  # rolling buffer size for drawer + latest-finding line
+recent_findings_warmup_window_h = 48  # boot-time finding.posted backfill window
+stalled_no_findings_hours = 24    # Planning View stalled rule
+bottleneck_min_inflight = 3       # Planning View agent-overload rule
+bottleneck_concentration = 0.7    # one-agent claim share threshold
+throughput_window_days = 30       # Planning View throughput resolved_since window
+human_actionable_tag = "human"    # tag identifying tasks needing a human
+human_agents = []                 # agent IDs that represent humans, e.g. ["dave"]
 
-[tasks]
-auto_refresh_interval_s = 120     # manual refresh fallback when SSE disconnects
-visible_cap = 50                  # rows for which lithos_task_status is fetched inline
-default_time_range_days = 30      # created-at date window for completed/cancelled groups; open tasks are always shown by default
-default_status_groups = ["open", "completed", "cancelled"]  # display order
-metrics_debounce_ms = 2000        # server-side debounce window for metric recompute on SSE bursts
+[lithos-lens.tasks.notifications]
+title_badge = true                # "(N) Lithos Lens" for unseen Needs-attention items
+desktop_optin = true              # show "Enable notifications" affordance (wiring: ROADMAP X1)
 
-# Project tagging
-project_tag_key = "project"       # tag-key reserved for projects; e.g. project:ganglion
+[lithos-lens.graph]                # task dependency graph pages (§5.7)
+cache_ttl_s = 30                  # in-process snapshot cache TTL; event-invalidated
+max_tasks = 300                   # refuse to render larger scopes; ask to narrow
+fetch_concurrency = 16            # semaphore for the per-task edge_list fan-out
 
-# Needs-attention thresholds
-stale_open_age_days = 7           # open tasks older than this surface in Needs attention
-unclaimed_warning_minutes = 60    # unclaimed open tasks older than this surface in Needs attention
-# expired-claim has no knob (rule: now > expires_at)
+[lithos-lens.writes]               # curated write actions (§5C)
+enabled = false                   # POST routes are NOT REGISTERED when false
+default_operator = ""             # operator identity fallback (§5C.5)
+confirm_cancel = true             # consequence-aware cancel confirmation
 
-# Planning view (M1.5) thresholds
-bottleneck_min_inflight = 3       # below this in-flight depth, bottleneck rule does not fire
-bottleneck_concentration = 0.7    # one-agent share threshold for bottleneck flag
-stalled_no_findings_hours = 24    # in-progress task with no finding.posted in this window flags as stalled
-throughput_window_days = 30       # rolling window for Planning View throughput overview
+[lithos-lens.knowledge]            # knowledge browser (Part C)
+search_limit = 20                 # lithos_search / lithos_retrieve result limit
+recent_limit = 20                 # recently-updated list size on /knowledge
+related_title_fanout_cap = 20     # cap on cached lithos_read title lookups per related panel
+graph_focus_max_nodes = 250       # knowledge graph cap, focus (ego) mode
+graph_global_max_nodes = 500      # knowledge graph cap, global mode
 
-# Recent findings drawer + buffer
-recent_findings_drawer_size = 50  # rolling buffer size used by drawer + stalled detection
-recent_findings_warmup_window_h = 48  # boot-time warm-up window for finding.posted backfill (≥ stalled threshold)
+[lithos-lens.events]
+enabled = true
+reconnect_backoff_ms = [500, 1000, 2000, 5000, 10000]
 
-# Human-actionable (Planning View)
-human_actionable_tag = "human"    # tag identifying tasks needing a human; configurable
-human_agents = []                 # agent IDs that represent humans, e.g. ["dave", "human"]; renders person-icon chip
-
-[tasks.notifications]
-title_badge = true                # update <title> with "(N) Lithos Lens" for unseen Needs-attention items
-desktop_optin = true              # show "Enable notifications" affordance; M3 wiring
-
-[events]
-sse_path = "/events"            # Lithos SSE event stream path (overridden by env)
-reconnect_backoff_ms = [500, 1000, 2000, 5000, 10000]  # exponential backoff schedule
-
-[llm]
-enabled = false                 # overridden by LENS_LLM_ENABLED
-provider = "anthropic"          # LiteLLM provider prefix: anthropic | openai | openrouter | ollama | ...
+[lithos-lens.llm]
+enabled = false                   # overridden by LENS_LLM_ENABLED
+provider = "anthropic"            # LiteLLM provider prefix
 model = "anthropic/claude-haiku-4-5-20251001"
-default_complexity = 3          # 1=beginner … 5=expert; per-session override allowed
+default_complexity = 3            # 1=beginner … 5=expert; per-session override allowed
 max_tokens = 2048
-base_url = ""                   # optional LiteLLM api_base
-extra_headers_json = ""         # optional JSON object for provider-specific headers
-synthesis_prefer_mcp = true     # use lithos_synthesize when available, else local LLM
-findings_curation_enabled = true  # enables "most significant findings" view in tasks
+base_url = ""
+extra_headers_json = ""
+synthesis_prefer_mcp = true       # use lithos_synthesize when available, else local LLM
+findings_curation_enabled = true  # enables "most significant findings" (ROADMAP X1)
 
-[telemetry]
-enabled = false                 # overridden by LENS_OTEL_ENABLED
+[lithos-lens.telemetry]
+enabled = false                   # overridden by LENS_OTEL_ENABLED
 console_fallback = false
 service_name = "lithos-lens"
 export_interval_ms = 30000
@@ -413,20 +366,21 @@ At process startup Lens performs the following steps in order:
 1. Load TOML config and environment overrides into a typed config object.
 2. Configure structured stdout logging.
 3. Configure OTEL only if `LENS_OTEL_ENABLED=true`; missing optional OTEL packages must not prevent boot when telemetry is disabled.
-4. Create the Lithos MCP client.
-5. Attempt startup auto-registration:
+4. Create the Lithos MCP client (one shared MCP-over-SSE session reused across all tool calls).
+5. Attempt startup auto-registration of the **service agent**:
 
 ```python
 lithos_agent_register(
-    id=config.lens_agent_id,
+    id=config.lithos.agent_id,     # "lithos-lens"
     name="Lithos Lens",
     type="web-ui",
 )
 ```
 
-6. Start the shared Lithos `/events` subscriber if event streaming is enabled.
+6. Start the shared Lithos `/events` subscriber if event streaming is enabled, passing a server-side `types=` filter for the consumed event set (§16.1.1).
 7. Start cached health probes for Lithos, events, and LLM.
-8. Mount routers and serve HTTP.
+8. Perform **graph feature detection**: if `lithos_task_ready` is missing from the connected Lithos (tool-not-found), set `graph_available=false` for the process — graph-native sections degrade to the flat list per §14.
+9. Mount routers and serve HTTP. Write routes (§5C) are mounted **only** when `[writes] enabled = true`.
 
 Boot must succeed even when Lithos is unreachable. In that case Lens starts in degraded mode, `/health` reports `lithos="unreachable"`, and UI routes render degraded panels rather than crashing.
 
@@ -436,14 +390,12 @@ When `llm.enabled = false`, Lens must not import or initialize LiteLLM eagerly.
 
 When `llm.enabled = true`, Lens validates configuration shape at startup but does not require a paid completion call to pass readiness. Per-feature LLM failures are surfaced as non-blocking UI errors.
 
-Required / optional values:
-
 | Config | Env | Required when enabled | Notes |
 |--------|-----|-----------------------|-------|
-| `llm.model` | `LENS_LLM_MODEL` | Yes | LiteLLM model string, e.g. `openai/gpt-4.1-mini`, `anthropic/claude-...`, `openrouter/...`, `ollama/...` |
-| `llm.provider` | `LENS_LLM_PROVIDER` | No | Human-readable/provider prefix metadata; model string is authoritative |
+| `llm.model` | `LENS_LLM_MODEL` | Yes | LiteLLM model string, e.g. `openai/gpt-4.1-mini`, `anthropic/claude-...`, `ollama/...` |
+| `llm.provider` | `LENS_LLM_PROVIDER` | No | Metadata; the model string is authoritative |
 | `llm.api_key` | `LENS_LLM_API_KEY` | Provider-dependent | Not required for local Ollama |
-| `llm.base_url` | `LENS_LLM_BASE_URL` | No | LiteLLM `api_base`, useful for OpenRouter gateways, local Ollama, or self-hosted LiteLLM proxy |
+| `llm.base_url` | `LENS_LLM_BASE_URL` | No | LiteLLM `api_base` for OpenRouter/local gateways |
 | `llm.extra_headers_json` | `LENS_LLM_EXTRA_HEADERS_JSON` | No | JSON object for provider-specific headers |
 | `llm.max_tokens` | `LENS_LLM_MAX_TOKENS` | No | Default 2048 |
 
@@ -458,18 +410,27 @@ Required policy:
 - Do not use Tailwind CDN in production; if utility CSS is desired, check in a precompiled CSS file
 - Development may temporarily use CDN assets during prototyping, but committed default templates should reference vendored assets
 
+### 4.4 Deprecated Configuration
+
+The following pre-graph knobs are **deprecated**. For one release Lens MUST parse and ignore them (with a deprecation log line at startup); after that they are removed from the config schema:
+
+| Deprecated | Replacement |
+|------------|-------------|
+| `[tasks].visible_cap` | Nothing — the per-row claim fan-out it capped is gone. Claims arrive inline via `with_claims=true`; there is no "Unknown claim state" tail. |
+| `?claimed_state=` URL parameter (and its `[tasks].default_status_groups` interaction) | Nothing — section membership is structural (§5.3). Legacy URLs containing `claimed_state` are silently ignored so old bookmarks degrade gracefully. |
+
 ---
 
 # Part B — Tasks View
 
-The Tasks View is the first user-facing view delivered. It is a read-only surface over the Lithos coordination layer (tasks, claims, findings) split across **two co-equal routes** that answer different questions:
+The Tasks View is a **graph-native** surface over the Lithos coordination layer — tasks, typed task edges, epics, gates, claims, and findings — split across two co-equal routes that answer different questions:
 
-- **Operator View (§5)** at `/tasks` — "are my agents alive and making progress?" Live dashboard structured around what's in play *now*.
-- **Planning View (§5A)** at `/tasks/plan` — "what should happen next?" Project breakdown, throughput, human-actionable queue.
+- **Operator View (§5)** at `/tasks` — "what can actually happen next, and what needs me?" Live dashboard structured by the computed ready/blocked frontier. Primary surface.
+- **Planning View (§5A)** at `/tasks/plan` — "what should happen next?" Human-actionable queue, project health, throughput.
 
-Both routes share the FastAPI app, MCP client, and SSE event subscription. Project tagging conventions (§5B) are normative for both. Switching between them via the top-nav resets view-specific filter state — the views answer different questions and shouldn't co-mingle filters.
+Project tracking conventions (§5B) are normative for both. The curated write actions (§5C) attach to both surfaces when enabled. Switching routes via the top-nav resets view-specific filter state — the views answer different questions and shouldn't co-mingle filters.
 
-The Tasks surface consumes only the current Lithos MCP tools and the Lithos SSE event stream. Requirements that would need new Lithos read APIs are explicitly deferred.
+**Graph features require Lithos ≥ 0.4** (the task-graph release). Against an older Lithos, Lens MUST degrade to a flat open/completed/cancelled list with a "graph features need Lithos ≥ 0.4" notice (§14) rather than erroring.
 
 ---
 
@@ -477,553 +438,434 @@ The Tasks surface consumes only the current Lithos MCP tools and the Lithos SSE 
 
 ### 5.1 Purpose & Scope
 
-The Operator View is the primary Tasks surface and the default landing route. Its single job is to answer **"are my agents alive and making progress?"** — a glance-able operational dashboard.
+The Operator View is the primary Tasks surface and the default landing route. Its job is to answer **"what can actually happen next, and what needs my attention right now?"** — a glance-able operational dashboard whose structure *is* the task graph.
 
 It surfaces, in priority order:
-- **Things that need attention right now** — expired claims, stale open tasks, unclaimed-old tasks
-- **What's actively in flight** and which agent is doing what
-- **What's queued and ready to be picked up**
-- **What just happened across all tasks** — a rolling stream of recent findings
+- **Structural failures and escalations** — unsatisfiable blockers, dependency cycles, long-waiting human gates, claims about to expire, stale or unpicked ready work
+- **Gates** — the external waits, human ones first, because resolving them is the operator's job
+- **What's actively in flight**, what's **ready to pick up**, and what's **blocked and why**
 - Recent completions and cancellations as confirmation, not as primary content
 
-> [!warning] Strictly read-only
-> The view does **not** create, mutate, or claim tasks. Any agent that needs to manage tasks does so via the Lithos MCP API directly. This boundary is structural, not just stylistic — Lens does not import any task-mutation tool.
+The view consumes (reads):
+- `lithos_task_list(status="open", with_claims=true)` — the master open set, including epics and gates, with claims inline
+- `lithos_task_ready(limit=frontier_limit, with_claims=true)` — the feasible frontier
+- `lithos_task_blocked(limit=frontier_limit)` — blocked tasks with structured blocker reasons (`task` / `gate` / `blocker_unsatisfiable` / `cycle`)
+- `lithos_task_list(status="completed"|"cancelled", resolved_since=…)` — recently resolved work
+- `lithos_task_children(epic_id, recursive=true, include_closed=true)` — epic rollups
+- `lithos_task_get(task_id)` / `lithos_task_status(task_id)` / `lithos_task_edge_list(task_id)` / `lithos_finding_list(task_id)` — detail surfaces
+- `lithos_agent_list()`, `lithos_tags(prefix="project:")`, `lithos_stats()` — filter dropdowns and summary signals
+- `lithos_read(id, max_length=…)` — resolving `finding.knowledge_id` to note titles
+- the Lithos SSE event stream (§5.8)
 
-> [!note] Two-route shape
-> "What should happen next?" — project starvation, bottleneck detection, throughput, human-actionable backlog — lives in the Planning View (§5A). Keeping the Operator View focused on "in play now" is deliberate: the two questions justify two layouts.
-
-The view consumes:
-- `lithos_task_list(filter…)` — primary list query
-- `lithos_task_status(task_id)` — fetched per visible row up to `tasks.visible_cap` to render inline claim badges and drive In-progress/Queued split
-- `lithos_finding_list(task_id, since=...)` — fetched on demand when the detail panel opens; also used during boot-time warm-up of the recent-findings rolling buffer
-- `lithos_read(id)` — used to resolve `finding.knowledge_id` UUIDs to note titles for the link label
-- `lithos_stats()` — supplements the agent-count signal
-- `lithos_agent_list(...)` — sources the "creating agent" filter dropdown
-- `lithos_tags(prefix="project:")` — sources the project filter dropdown and the universe of known projects (Planning View shares this fetch)
-- Lithos SSE event stream — drives live updates (see §5.6) and the server-side metric recompute (see §5.6.4)
-
-Current Lithos constraints the UI must respect:
-- `lithos_task_list` supports `agent`, `status`, `tags`, and `since`, where `since` filters `created_at >= since`
-- `lithos_task_list` does not support `limit`, `offset`, `until`, `completed_since`, `has_claims`, or direct claim embedding
-- `lithos_task_status` returns active claims with `agent`, `aspect`, and `expires_at`; it does not expose `claimed_at`
-- `lithos_finding_list` supports `task_id` and `since`; it does not support `limit`, `offset`, or direct lookup by `finding_id`
-- There is no `lithos_task_get`; full detail panels are composed from the selected list row plus `lithos_task_status`
-- Expected v1 scale is at most a few hundred total tasks and tens of open tasks, so Lens can scan task lists for direct links and enrich visible/open rows client-side without requiring new Lithos APIs
+Constraints the UI must respect (documented as such; the asks live in the ROADMAP dependency ledger):
+- **Expired claims are unobservable.** Lithos filters expired claims out of every read at query time, so a claim past expiry vanishes silently from `task_status` and `with_claims` payloads. Lens MUST NOT render "expired claim" states or infer that a claim was released; the observable substitute is the *claim expiring soon* attention rule (§5.2.2).
+- **Timer-gate resolution emits no event.** A timer gate becomes satisfied by query-time evaluation of `ready_at`; nothing is pushed. Lens self-schedules a refresh (§5.2.3).
+- **`lithos_task_edge_upsert` emits no event** and **no `lithos_task_edge_delete` exists**; there is **no bulk graph fetch**. See §5.7 and §5C for the workarounds.
 
 ### 5.2 Operator View Structure
 
-The Operator View renders, top-to-bottom, with the following sections. Each is rendered server-side at page load and updated in place via HTMX OOB swaps fed by the SSE pipeline (§5.6).
+The Operator View renders, top-to-bottom, the following sections. Each is rendered server-side at page load and updated in place via HTMX OOB swaps fed by the SSE pipeline (§5.8).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Top-nav: [Tasks] [Tasks · Plan] [Knowledge ▾]   (N) Lens   │
-│  Filter bar: project | status | tag | agent | created-at    │
-│  Notification affordance | manual refresh | live badge      │
+│  Filter bar: project | tag | agent | since   ·  live badge  │
 ├─────────────────────────────────────────────────────────────┤
-│  ⚠ Needs attention  (severity-ordered, oldest-first within) │
-│     — expired claim → stale open → unclaimed-old             │
-│     (collapses to "All systems healthy — 0 issues" stripe   │
-│     when empty; toggle to hide section entirely)            │
+│  Epic strip:  auth-rework ▓▓▓░ 5/8   loom-arch ▓░░░ 2/9  …  │
 ├─────────────────────────────────────────────────────────────┤
-│  ▶ In progress  (open, has active claims)                    │
+│  ⚠ Needs attention  (severity-ordered; reason chips)         │
 ├─────────────────────────────────────────────────────────────┤
-│  ▶ Queued       (open, no active claims)                     │
+│  ⏸ Gates            (human first w/ waiter counts;           │
+│                      timer countdowns)                       │
 ├─────────────────────────────────────────────────────────────┤
-│  ▶ Unknown claim state  (rows past visible_cap; tail)        │
+│  ▶ In progress      (open workable, ≥1 active claim)         │
 ├─────────────────────────────────────────────────────────────┤
-│  ▶ Completed (12 in last 30 days)        [collapsed]         │
+│  ● Ready            (the frontier, unclaimed — "next up")    │
 ├─────────────────────────────────────────────────────────────┤
-│  ▶ Cancelled (3 in last 30 days)         [collapsed]         │
+│  ◼ Blocked          (blocker chips per row)                  │
+├─────────────────────────────────────────────────────────────┤
+│  ▸ Not classified   (frontier-limit overflow tail)           │
+├─────────────────────────────────────────────────────────────┤
+│  ▸ Completed (12 in last 30 days)         [collapsed]        │
+│  ▸ Cancelled (3 in last 30 days)          [collapsed]        │
 └─────────────────────────────────────────────────────────────┘
-                                                  ┌───────────┐
-                                                  │ Recent    │
-                                                  │ findings  │
-                                                  │ drawer    │
-                                                  │ (toggle)  │
-                                                  └───────────┘
 ```
 
-#### 5.2.1 Needs attention
+**Single-placement rule.** Every open row appears in **exactly one** section. Epics render only in the strip; gates only in the Gates section; a row promoted into Needs attention is removed from whichever workable section it would otherwise occupy; claimed-but-blocked rows render in In progress with a `blocked` decoration (not in Blocked). Section header counts MUST agree with rendered rows.
 
-A **severity-ordered single list** of open rows that have triggered any of the following rules. Within each severity tier, rows sort by `created_at` ascending — oldest persistent problem first.
+#### 5.2.1 Epic strip
 
-| Severity | Rule | Configurable? |
-|----------|------|---------------|
-| **Expired claim** | Row has at least one active claim with `now > expires_at` | No knob (rule is intrinsic) |
-| **Stale open** | Open task with `now - created_at > tasks.stale_open_age_days` (default 7d) | `[tasks].stale_open_age_days` |
-| **Unclaimed old** | Open task with zero active claims and `now - created_at > tasks.unclaimed_warning_minutes` (default 60m) | `[tasks].unclaimed_warning_minutes` |
+- One chip per **open epic**, showing title and a done/total progress fraction computed from `lithos_task_children(epic_id, recursive=true, include_closed=true)` — completed descendants over all descendants.
+- Clicking an epic chip scopes the entire dashboard to that epic's descendant set (URL: `?epic=<id>`), composing with the other filters.
+- Epics never appear in the workable sections or their counts (Lithos excludes them from both frontiers).
+- The epic count is expected to stay small (tens); the per-epic children calls are gathered concurrently.
 
-Rules:
-- Each row in this section carries one or more **reason chips** showing which rule(s) fired (e.g. `expired-claim`, `stale-open`).
-- A row that triggers any rule appears **only** in Needs attention — it is **de-duplicated** out of In progress / Queued.
-- Rows past `tasks.visible_cap` are excluded from Needs attention because their claim state is unknown; Lens must not silently classify them.
+#### 5.2.2 Needs attention — severity model v2
+
+A **severity-ordered single list** of open rows that trigger any of the following rules, evaluated over the joined dashboard snapshot. Within each severity tier, rows sort oldest-first (most persistent problem first).
+
+| # | Rule | Meaning | Source | Knob (default) |
+|---|------|---------|--------|----------------|
+| 1 | **Unsatisfiable blocker** | A predecessor or gate was **cancelled** — this task can never become ready without intervention | `task_blocked` blockers, `kind="blocker_unsatisfiable"` | — (intrinsic) |
+| 2 | **Dependency cycle** | The blocking chain forms a cycle; the blocker `message` names the members | `task_blocked` blockers, `kind="cycle"` | — (intrinsic) |
+| 3 | **Human gate waiting** | An open `gate_type="human"` gate has waited longer than the threshold | gate rows + `created_at` | `gate_waiting_attention_hours` (24) |
+| 4 | **Claim expiring soon** | An active claim's `expires_at − now` is below the threshold — likely-abandoned work, surfaced *before* the claim silently vanishes | inline claims | `claim_expiring_soon_minutes` (10) |
+| 5 | **Stale open** | A workable open task older than the threshold | master list `created_at` | `stale_open_age_days` (7) |
+| 6 | **Ready but unclaimed** | A task on the ready frontier, with zero claims, older than the threshold — the fleet is not picking up available work | ready join | `unclaimed_ready_age_minutes` (60) |
+
+Deliberate changes from the pre-graph model, both forced by observed Lithos semantics:
+- The old **`expired-claim` rule is removed** — it can never fire (expired claims are unobservable; see §5.1). Rule 4 is the observable replacement. A Lens-side claim ledger was considered and rejected: it dies on Lens restart and lies after Lithos restarts.
+- The old **`unclaimed-old` rule becomes ready-aware** (rule 6). A **blocked** task being unclaimed is *correct behaviour*, not a warning — flagging it was a structural false positive.
+
+Chrome requirements (carried over):
+- Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone.
+- Rows triggering any rule appear **only** here (single-placement rule).
 - When the section is empty, render a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance; do not hide entirely by default).
-- A toggle in the section header lets the operator hide the section for routine review; persisted via cookie + URL param.
+- A header toggle lets the operator hide the section for routine review; persisted via cookie + URL param.
+- The task detail surface for a flagged row includes a **"Why this task is here"** block: reason chips with one-line supporting facts (e.g. `Unsatisfiable — blocker "Design schema" was cancelled`, `Claim expiring — agent-zero · ble-recover · 6m remaining`).
 
-#### 5.2.2 In progress / Queued / Unknown claim state
+#### 5.2.3 Gates
 
-- **In progress** — open rows that have at least one active claim, sorted by `created_at` desc.
-- **Queued** — open rows with zero active claims, sorted by `created_at` desc.
-- **Unknown claim state** — open rows past `tasks.visible_cap`. These rows render without claim chips. A footer banner reads: `Showing claim detail for the first <visible_cap> of <N> open rows — narrow your filters or click a row to load claims for the rest.`
+All open `task_type="gate"` tasks, grouped by gate type with **human gates first**, oldest first within each group.
 
-The classic "claimed-state filter" (`any` / `known_claimed` / `known_unclaimed`) is **dropped** — these sections express the same intent structurally and avoid the silent-classification footgun.
+| Element | Requirement |
+|---------|-------------|
+| Gate type badge | `human` / `timer` / `ci` / `pr` / `external_task` |
+| Waiter count | "blocks N tasks" — from outgoing `waits_on_gate` edges (or the blocked-set blocker entries); clicking expands the waiter list |
+| Timer countdown | For `timer` gates, a live countdown to `ready_at` |
+| Advisory metadata | Type-specific keys (`approval_required_from`, `provider`, `repo`, `pr_number`, `external_id`, `required_state`, …) summarised on the row, full table on the detail page. These are advisory — Lithos does not read them, and Lens renders them verbatim. |
+| Approve action *(writes enabled)* | Human gates carry the approve/complete action from §5C.2 |
 
-#### 5.2.3 Completed / Cancelled (collapsed by default)
+**Timer self-refresh requirement.** Timer-gate resolution is evaluated at query time and emits **no event**. The dashboard MUST embed `min(ready_at)` over visible open timer gates and self-schedule a one-shot refresh at that instant, so timer expiry moves waiters from Blocked to Ready without manual reload.
 
-Both groups render as collapsible section headers:
+A **cancelled** gate is unsatisfiable — its waiters surface under Needs-attention rule 1. "Proceed anyway" is expressed by *completing* the gate (§5C), never by cancelling it.
 
-```
-▶ Completed (12 in last 30 days)
-▶ Cancelled (3 in last 30 days)
-```
+#### 5.2.4 In progress / Ready / Blocked
 
-Click expands. Expansion state persisted via cookie + URL param. When expanded, rows inside are flat, `created_at` desc, scoped to the last `tasks.default_time_range_days` days. SSE `task.completed` / `task.cancelled` events animate visible rows transitioning into these sections (and update header counts even when collapsed).
+- **In progress** — open workable tasks with ≥1 active claim (claims come inline from `with_claims=true`; there is no per-row fan-out). A claimed task that is *also* blocked renders here with a `blocked` decoration — an agent holding a claim on infeasible work is an anomaly that should be legible.
+- **Ready** — the frontier: open workable tasks returned by `lithos_task_ready` with zero claims. This is the "next up" queue.
+- **Blocked** — open workable tasks returned by `lithos_task_blocked` (excluding rows promoted to Needs attention). Each row carries **blocker chips**: the blocking task's title (with live status) or the gate's name and type, one chip per immediate blocker, sourced from the structured `blockers` array.
 
-#### 5.2.4 Recent findings drawer
+#### 5.2.5 Not-classified tail
 
-A collapsible side drawer (off by default) renders the last `tasks.recent_findings_drawer_size` `finding.posted` events across all tasks, newest first. Each row shows:
+Open workable tasks present in the master list but absent from both frontier responses. This is only possible when `frontier_limit` truncates `task_ready`/`task_blocked` results. The tail renders with an accuracy banner: `Frontier truncated at <frontier_limit> — these rows could not be classified. Raise [tasks].frontier_limit or narrow your filters.` Lens MUST NOT silently classify these rows. With the default `frontier_limit=500` against the current production frontier (~310 workable open tasks) truncation should be rare.
 
-```
-<agent> · <task title> · <relative time>
-<summary, single-line, truncated>
-```
+#### 5.2.6 Completed / Cancelled (collapsed by default)
 
-Click → opens the parent task's detail panel (`/tasks?selected=<task_id>`).
+Both groups render as collapsible section headers with counts. Rows are windowed by **`resolved_since`** (`resolved_at >= now − tasks.default_time_range_days`) — *not* by `created_at` — so a task created months ago and finished yesterday shows up as recent work. Click expands; expansion state persists via cookie + URL param. SSE `task.completed` / `task.cancelled` events animate visible rows into these sections and update header counts even while collapsed. Reopened tasks carry a `reopened` marker (§5.5) and move back out live on `task.reopened`.
 
-The drawer is fed by a **server-side rolling buffer** (§5.6.4). It survives tab refresh and stays consistent across multiple open tabs.
+### 5.3 Data Contract
 
-#### 5.2.5 Notifications
+On `GET /tasks`, Lens issues **five parallel fetch groups** (gathered concurrently on the shared MCP session):
 
-- **Title-badge notifications** (always on by default; `[tasks].notifications.title_badge`): the page `<title>` updates from `Lithos Lens` to `(N) Lithos Lens` whenever there are unseen Needs-attention items. Tab focus clears the badge.
-- **Desktop notifications** (opt-in; M3): an "Enable notifications" affordance appears in the header. Once granted, Lens fires a desktop notification only when a row *enters* Needs-attention (transition events, not steady-state); body format is `<task title> — <reason>`. Clicking the notification opens `/tasks?selected=<task_id>`.
-- Notification grant state lives in `localStorage` (per-browser-install). All other persisted preferences live in cookies + URL.
+| # | Data | Call |
+|---|------|------|
+| 1 | Master open set — every open task incl. epics/gates, claims inline | `lithos_task_list(status="open", with_claims=true)` |
+| 2 | Ready partition | `lithos_task_ready(limit=frontier_limit, with_claims=true)` |
+| 3 | Blocked partition + structured blockers | `lithos_task_blocked(limit=frontier_limit)` |
+| 4 | Recently resolved | `lithos_task_list(status="completed", resolved_since=window)` + `lithos_task_list(status="cancelled", resolved_since=window)` |
+| 5 | Agent filter dropdown | `lithos_agent_list()` |
 
-### 5.3 Row Anatomy and Filters
+Plus one `lithos_task_children(epic_id, recursive=true, include_closed=true)` per open epic for the strip.
 
-#### 5.3.1 Row anatomy
+**Partition rules** (the join is pure and testable):
+- `lithos_task_ready` and `lithos_task_blocked` return only **workable** (`task_type="task"`) rows and evaluate gate/timer state at query time — so the master open set partitions cleanly: epics → strip; gates → Gates section; workable tasks → exactly one of In progress (≥1 claim), Ready (in ready set), Blocked (in blocked set), or Not classified (in neither — truncation only).
+- `task_blocked` does not return claims; the master list supplies them (that is what makes the claimed-but-blocked decoration possible).
+- **Lens MUST NEVER re-implement the readiness predicate.** Timer-gate evaluation and the NULL-safe gate handling live inside Lithos; readiness re-derived from edges in Lens will be wrong at the worst moments.
 
-Every list row renders a compact, scannable line with the following elements (specific layout left to the implementer; the data-shape contract is fixed):
+Filtering (project / tag / agent / epic scope) applies **client-side in Lens over the joined snapshot** rather than being pushed upstream: one fetch serves all projections, and no single upstream call can express the metadata-OR-tag project match (§5B.1). This is cheap at hundreds of open tasks; beyond low thousands the remedy is the upstream bulk-fetch ask (ROADMAP ledger), not Lens-side caching heroics.
+
+### 5.4 Row Anatomy and Filters
+
+#### 5.4.1 Row anatomy
+
+Every list row renders a compact, scannable line (specific layout left to the implementer; the data-shape contract is fixed):
 
 | Element | Notes |
 |---------|-------|
-| **Project chip** | `project:<slug>` value rendered as a dedicated, visually distinct chip in the leftmost slot. Background colour = stable hash of slug. Rows without a `project:*` tag render `(no project)`. Tasks carrying multiple `project:*` tags render each chip and emit a soft warning to telemetry — Lens does not silently pick one. |
+| **Project chip** | The task's project per §5B.1, rendered as a dedicated leftmost chip. Background colour = stable hash of slug. Rows without a project render `(no project)`. Conflicting conventions emit a telemetry warning (§5B.1). |
+| **Type badge** | `epic` / `gate:<gate_type>` badges where applicable (workable tasks carry no badge) |
 | **Title** | Truncated to one line; full title in tooltip |
-| **Status badge** | `open` / `completed` / `cancelled` |
-| **Reason chips** *(Needs attention only)* | One chip per rule fired: `expired-claim` / `stale-open` / `unclaimed-old`. Stalled (Planning View signal) renders as a row decoration where applicable. |
-| **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp. Sourced from the server-side rolling buffer (§5.6.4); falls back to the most recent entry in the per-task findings list when the buffer has no entry for that task. Updates on `finding.posted` SSE. |
-| **Agent chips (collapsed by role)** | Single chip per agent appearing on the row, with role markers `created` / `claimed` / `latest`. When the same agent fills multiple roles, role markers collapse into one chip (e.g. `agent-zero · created · claimed · latest`). Agents listed in `[tasks].human_agents` render with a person-icon prefix and a distinct chip background. |
-| **Active claims** *(open, in-progress, within visible cap)* | Compact list of `aspect → agent`, fetched via `lithos_task_status`. Each `aspect` rendered as a small chip nested under the claiming agent. |
-| **Tags** | Chips for non-`project:*` tags; `key:value` shorthand renders as `key: value`. Reserved keys (`project:`, `[tasks].human_actionable_tag`) are surfaced via dedicated chips elsewhere on the row, not in the generic strip. |
+| **Status / section decorations** | `blocked` decoration on claimed-but-blocked rows; `reopened` marker; blocker chips on Blocked rows; reason chips in Needs attention |
+| **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp, from the server-side rolling buffer (§5.8.4). Updates on `finding.posted`. |
+| **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Agents listed in `[tasks].human_agents` render with a person-icon prefix and distinct background. Clicking an agent chip filters across all roles. |
+| **Active claims** | Compact `aspect → agent` list with time-to-expiry, from inline claims |
+| **Tags** | Chips for tags other than the reserved project/human keys |
 | **Created at** | Relative time; absolute on hover |
 
-Outcome, completion timestamp, cancellation timestamp, and duration are rendered opportunistically when Lithos exposes them; they are not required for MVP rendering.
+> [!note] Ergonomics slotting
+> The latest-finding line, recent-findings drawer, agent role chips, side panel, title-badge notifications, and debounced metric recompute are requirements of this document; their delivery is sequenced by ROADMAP (T2, "operator ergonomics" strand). Requirements here do not imply a delivery order.
 
-#### 5.3.2 Filters
+#### 5.4.2 Filters
 
-Filters appear in a sticky filter bar above the section list. All filters compose. Filter state reflects in the URL for shareability.
+Filters appear in a sticky filter bar. All filters compose and reflect in the URL for shareability.
 
 | Filter | Behaviour |
 |--------|-----------|
-| **Project** | First-class top-level dropdown sourced from `lithos_tags(prefix="project:")`. Scopes all sections (Needs attention, In progress, Queued, Unknown tail, Completed, Cancelled). Multi-select supported. URL: `?project=ganglion`. |
-| **Status** | Multi-select section-group selector: `open` shows the four open-related sections; `completed` / `cancelled` show those flat groups expanded inline. URL: `?status=open,completed`. |
-| **Tag** | Free-text input with `key:value` parsing. Excludes the reserved `project:*` and `[tasks].human_actionable_tag` keys (those have their own affordances). URL: `?tag=cli&tag=urgent`. |
-| **Agent (with role)** | Dropdown sourced from `lithos_agent_list`; free-text fallback. **OR-across-roles by default**: a row matches if the agent appears as creator OR claimer OR latest-finding-poster. Toggle in the filter bar to narrow to a single role. URL: `?agent=agent-zero&agent_role=any` (default `any`; alternatives `creator`, `claimer`, `poster`). |
-| **Created-at range** | Lower-bound date range using `lithos_task_list(since=...)`; defaults to "last `tasks.default_time_range_days` days" for completed/cancelled groups. Open sections ignore this range by default. |
-| **Hide Needs attention** | Toggle to hide the Needs-attention section entirely. Persists via cookie + URL param. Default off. |
+| **Project** | Multi-select dropdown. A row matches when its project per §5B.1 (metadata **or** tag convention, per `project_convention`) matches. URL: `?project=lithos-loom&project=ganglion`. |
+| **Tag** | Free-text with `key:value` parsing; excludes the reserved project and human-actionable keys. URL: `?tag=cli`. |
+| **Agent** | Dropdown sourced from `lithos_agent_list`; matches **creator OR claimer** by default (role-narrow toggle: `creator` / `claimer` / `poster` / `any`). URL: `?agent=agent-zero&agent_role=any`. |
+| **Since** | Created-at lower bound (`lithos_task_list(since=…)` semantics); open sections ignore it by default. |
+| **Epic scope** | `?epic=<id>` — set by clicking an epic chip; scopes all sections to the epic's descendants. |
+| **Hide Needs attention** | Toggle; cookie + URL param. |
 
-Filters preserve section structure even when scoped — a section header with no matching rows renders with a `no rows match current filters` placeholder rather than disappearing. This avoids the filter-hides-the-warning footgun.
+Removed: the **status filter** (sections express status structurally; `?status=` is accepted only as a section-collapse hint) and the legacy **`claimed_state`** parameter (parsed and ignored — see §4.4). Filters preserve section structure even when scoped — an empty section renders a `no rows match current filters` placeholder rather than disappearing, so filtering never hides a warning silently.
 
-Completed-at and cancelled-at filters are not in MVP — current Lithos does not expose them through `lithos_task_list`.
+### 5.5 Task Detail: Side Panel + Full-Page Route
 
-#### 5.3.3 Visible cap and degradation
+Clicking a row opens a **right-side panel** by default (`/tasks?selected=<task_id>`); an **Expand** button navigates to the full-page route (`/tasks/{task_id}`). Both render the same content fragments — single template path, two surfaces. Closing the panel clears the `selected` param and preserves list state.
 
-The inline claim indicator, In progress / Queued split, and stalled-detection (Planning View) require one `lithos_task_status` call per open row. Lens batches these in parallel and caps the work at `tasks.visible_cap` (default 50). Beyond the cap:
+Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claims) + `lithos_task_edge_list(task_id, direction="both")` + `lithos_finding_list(task_id)`, gathered concurrently. An unknown ID returns the `task_not_found` envelope and MUST render a not-found panel, not HTTP 500.
 
-- Rows past the cap render without the inline claim indicator in the **Unknown claim state** section.
-- The Needs-attention section never includes Unknown-state rows (Lens won't silently classify them).
-- Clicking a row past the cap fetches its `lithos_task_status` lazily (used to populate the side panel).
-
-A future Lithos enhancement to embed active claims in `lithos_task_list` would eliminate this cap; Lens must not depend on that enhancement.
-
-### 5.4 Task Detail: Side Panel + Full-Page Route
-
-Clicking a row opens a **right-side panel** by default. The panel and the full-page route render the same content fragments (`detail.html`, `findings.html`) — single template path, two surfaces.
-
-| Surface | URL | Use |
-|---------|-----|-----|
-| Side panel | `/tasks?selected=<task_id>` | Default. Triggered by clicking a row. Preserves list-section state and filter URL. |
-| Full-page | `/tasks/{task_id}` | Triggered by the **Expand** button on the panel header. Shareable URL. Long-findings deep-dive. |
-
-Closing the panel clears the `selected` URL param; the list state and filters are preserved.
-
-#### 5.4.1 Panel content
+#### 5.5.1 Panel content
 
 | Section | Content |
 |---------|---------|
-| Header | Title, status, creating agent, `created_at`, project chip, **Expand** button |
-| **Why this task is here** *(Needs attention only)* | Reason chips with one-line explanation (e.g. `Stale open — 9 days since created`, `Expired claim — agent-zero · ble-recover · expired 2h ago`) |
-| Tags | Full tag list, one chip per tag (excludes `project:*` and `[tasks].human_actionable_tag`, which appear as dedicated chips) |
-| Description | Markdown-rendered |
-| Metadata | `metadata` dict rendered as a key-value table |
-| Active claims | List of `aspect / claiming agent / expires_at / time remaining`; refreshed on SSE claim events |
-| Findings | Full timeline (§5.5) |
+| Header | Title, status, **type badge** (task / epic / gate + `gate_type`), creating agent, `created_at`, project chip, `reopened` marker when applicable, **Expand** button |
+| **Why this task is here** *(Needs attention only)* | Reason chips with one-line supporting facts (§5.2.2) |
+| **Why can't this run** *(blocked tasks)* | The blocker chain (§5.5.2) |
+| Hierarchy | Parent breadcrumb + children table (§5.5.3) |
+| Gate context *(gates)* | §5.5.4 |
+| Provenance | `discovered_from` both directions: "Discovered while working on: X" (incoming) and "Spawned follow-ons: …" (outgoing) |
+| Tags / Description / Metadata | Full tag list; markdown-rendered description; `metadata` key-value table |
+| Active claims | `aspect / agent / expires_at / time remaining`; refreshed on SSE claim events. The list shows **active claims only** — expired claims are unobservable and Lens must not imply otherwise. |
+| Resolution | `resolved_at`, `outcome` (completed), cancellation timestamp. The cancel *reason* is event-only in Lithos — Lens MAY show it live from the event but MUST NOT promise it survives a reload. |
+| Findings | Full timeline (§5.6) |
+| Actions *(writes enabled)* | The applicable §5C actions for the task's state |
 
-If future Lithos versions expose `completed_at`, `outcome`, cancellation reason, or `claimed_at` through read tools, Lens may render those fields opportunistically. They are not MVP requirements.
+#### 5.5.2 Blocker chain — text baseline + mini-graph
 
-#### 5.4.2 Direct task lookup
+- **Text chain (no-JS baseline, required):** one line per immediate blocker with live status — e.g. `blocked by "Design schema" (open, claimed by agent-zero)`, `waiting on gate "Human review" (human, waiting 2d)`, `blocker "Old spike" was cancelled — unsatisfiable`, `cycle: A → B → A`. Sourced from the task's `task_blocked` entry when available, else from incoming `blocks`/`waits_on_gate` edges plus per-predecessor `lithos_task_get`.
+- **Lazy per-level expansion:** each unfinished blocker line carries an expander that loads *its* blockers one level deeper (HTMX fragment), bounded at **depth ≤ 5**; cycles render an explicit callout instead of recursing.
+- **Mini-graph (progressive enhancement):** a Cytoscape 1–2-hop dependency neighbourhood rendered above the text chain, using the §5.7 styling vocabulary. The text chain remains the accessible baseline. Sequencing: ROADMAP T2.
 
-Direct `/tasks/{task_id}` links are first-class. Lens resolves them by scanning `lithos_task_list` across open, completed, and cancelled statuses (unbounded by date because v1 scale is expected to be at most a few hundred total tasks), then fetching `lithos_task_status(task_id)`. See §5.9.2 for the resolution algorithm.
+#### 5.5.3 Hierarchy
 
-### 5.5 Findings Timeline
+- **Parent breadcrumb:** the incoming `parent_child` chain recursed to the root epic. Hierarchy is a single-parent forest (enforced upstream via `parent_exists`), so this is a simple chain, not a DAG walk.
+- **Children table:** `lithos_task_children(task_id, recursive=false)` with per-child status and type; a "show full subtree" toggle switches to `recursive=true`.
 
-`lithos_finding_list(task_id)` is called once when the detail panel opens, and again on every relevant SSE event for the open task.
+#### 5.5.4 Gate context
 
-#### 5.5.1 Default rendering
+For `task_type="gate"` tasks: the `gate_type` badge; a live countdown to `ready_at` for timer gates; the advisory metadata rendered as a key-value table (verbatim — Lithos does not interpret these keys and neither does Lens); and the **waiter list** — tasks blocked by this gate, via `lithos_task_edge_list(task_id, direction="outgoing", types=["waits_on_gate"])`, each with live status. The detail page should make it easy to judge what resolving the gate would unblock.
 
-Findings render chronologically (oldest → newest). Each entry shows:
-- Posting agent
-- Timestamp (relative + absolute on hover)
-- Summary text
-- **Knowledge link** *(only when `finding.knowledge_id` is non-null)* — a clickable label that opens the corresponding note in the Knowledge Browser at `/note/{knowledge_id}`. The label is the note title, resolved by a single `lithos_read(id=knowledge_id)` per finding. If the read fails, the label falls back to "View document" with a non-blocking warning toast. *Until the Knowledge Browser ships, the link target falls back to a minimal `/note/{knowledge_id}` route that renders the note's title, content and tags as plain Markdown — enough to dereference the finding without the full browser experience.*
+### 5.6 Findings Timeline
 
-#### 5.5.2 Operational Rendering
+`lithos_finding_list(task_id)` is called when the detail surface opens and refreshed on relevant SSE events for the open task.
 
-Current Lithos returns all findings for a task, optionally filtered by `since`. Lens renders the full findings timeline for the selected task and does not provide paging controls in the MVP; the Tasks view is an operational dashboard, not a long-history browsing surface. For very long timelines, Lens may collapse older findings behind a "Show older findings" disclosure without introducing paginated navigation.
+- Findings render chronologically. Each entry shows posting agent, timestamp (relative + absolute on hover), and summary text.
+- **Knowledge link** *(only when `finding.knowledge_id` is non-null)*: a clickable label opening `/note/{knowledge_id}`. The label is the note title, resolved via `lithos_read(id=knowledge_id, max_length=1)` (truncated reads return complete frontmatter metadata — this is the cheap title fetch), cached per panel. On read failure the label falls back to "View document" with a non-blocking warning.
+- Reopen history: the durable `[Reopened]` findings posted by `lithos_task_reopen` render with a distinct marker and drive the row's `reopened` marker.
+- No paging controls; very long timelines MAY collapse older findings behind a "Show older findings" disclosure.
+- **Most-significant findings** *(LLM, optional; ROADMAP X1)*: when `llm.enabled && llm.findings_curation_enabled`, the timeline header shows an **All findings / Most significant** toggle. "Most significant" passes the findings list to the configured LiteLLM provider and returns the K highest-signal findings (completions, decisions, surprises, contradictions) each with a one-line rationale. Hidden when LLM is disabled.
 
-#### 5.5.3 Most-significant findings *(LLM, optional)*
+### 5.7 Task Graph Page
 
-When `llm.enabled = true` **and** `llm.findings_curation_enabled = true`, the timeline header shows a toggle: **All findings** / **Most significant**. The "Most significant" mode passes the full findings list (summaries + agents + timestamps) to the configured LiteLLM provider with a prompt that returns the K findings with the largest signal (typically completion announcements, decisions, surprises, contradictions), each with a one-line rationale. The complexity slider (§8.5) modulates verbosity. With LLM disabled the toggle is hidden.
+`GET /tasks/graph?project=<slug>` or `GET /tasks/graph?epic=<id>` renders the dependency DAG for exactly one scope (a scope is required; the unscoped route renders a scope picker).
 
-### 5.6 SSE Auto-Update
+**Data assembly**
+- **Node set:** for project scope, the project's tasks per §5B.1 (open tasks always; recently-resolved per the `resolved_since` window, toggleable); for epic scope, `lithos_task_children(epic_id, recursive=true, include_closed=true)` plus the epic itself.
+- **Edge set:** there is **no bulk graph fetch upstream** (ROADMAP ledger ask) — Lens fans out `lithos_task_edge_list(task_id, direction="both")` per node, bounded by a semaphore of `[graph].fetch_concurrency` (16), and **dedupes** edges (each edge is returned from both of its endpoints). Edge records are `{from_task_id, to_task_id, type, direction, metadata, created_by, created_at}`.
+- **Ghost nodes:** edges whose far endpoint lies outside the scope render that endpoint as a dimmed ghost node (fetched via `lithos_task_get` for its title/status) rather than dropping the edge — cross-scope dependencies must be visible.
+- **Snapshot cache:** the assembled `{tasks, edges}` snapshot is cached in-process per scope with TTL `[graph].cache_ttl_s` (30s), invalidated early by any task event touching a node in the snapshot.
+- **Size guard:** scopes larger than `[graph].max_tasks` (300) are refused with a "narrow your scope" panel instead of a degraded render.
 
-#### 5.6.1 Connection model
+**No-JS baseline (required)**
+- **Topological text layers:** Kahn's algorithm over `blocks` + `waits_on_gate` edges; each layer lists its tasks with status. Cycle members cannot be layered — they are excluded from the layering and rendered in an explicit "dependency cycle" callout naming the members.
+- **Hierarchy tree:** an indented `parent_child` tree for the scope.
 
-A single SSE connection is held by the shared `app/events.py` utility. The Tasks-view router subscribes to **all** task-related event types (`task.created`, `task.claimed`, `task.released`, `task.completed`, `task.cancelled`, `finding.posted`, plus any future task-related events). Filtering happens client-side in Lens: events that don't match the current filter state are ignored for list updates but always counted into the summary panel.
+**Cytoscape rendering (progressive enhancement)**
+- Layout: `breadthfirst` (the DAG's natural shape); no physics simulation.
+- Node **colour = status** (open, completed, cancelled; blocked tasks tinted; in-progress tasks with a subtle pulse), node **shape = type** (ellipse `task`, round-rect `epic`, diamond `gate`).
+- Edge style per type: **solid** `blocks`, **dashed** `waits_on_gate`, **dotted** `discovered_from`, **thin light** `parent_child` (toggleable off — hierarchy is noise when reading dependency flow).
+- Click = side panel (task summary, blockers, link to detail); double-click = navigate to `/tasks/{task_id}`.
+- On task events touching the snapshot, show a **"graph changed — refresh"** pill rather than auto-re-layouting under the operator's cursor.
 
-#### 5.6.2 UI behaviour on event
+### 5.8 Live Updates & Event Pipeline
 
-| Event | UI effect |
-|-------|-----------|
-| `task.created` matching filters | Optimistically insert row at top of Queued (no claim payload yet); reconcile on next debounced refresh |
-| `task.claimed` | Optimistically add/update the row's claim chip and move row from Queued to In progress (or refresh detail panel's Active claims if open). May promote/demote into/out of Needs attention if the resulting row triggers an `expired-claim` rule on next recompute |
-| `task.released` | Optimistically remove that aspect from the row's claim chip; move row from In progress to Queued if the last claim was released |
-| `task.completed` | Optimistically remove row from open sections and update Completed section header count (animate into the collapsed group) |
-| `task.cancelled` | Optimistically remove row from open sections and update Cancelled section header count (animate into the collapsed group) |
-| `finding.posted` for the row | Update the row's latest-finding line (`<agent> — <summary>`) and add a `latest` role marker to the agent chip; insert into the recent-findings rolling buffer; if detail panel is open for that task, re-render the timeline fragment |
-| `finding.posted` not for any visible row | Insert into the recent-findings rolling buffer; surfaces in the drawer; no per-row badge |
+#### 5.8.1 Connection model
 
-Pushed updates are HTMX OOB swaps for the affected fragments — no full-page reload. Adds OTEL spans `lens.tasks.event` (per event handled) and `lens.tasks.refresh` (per manual / fallback refresh).
+Lens holds one server-side subscription to Lithos `GET /events`, passing a server-side `types=` filter for the consumed set. Browser tabs connect to Lens's own `GET /tasks/events` re-broadcast endpoint, which emits normalized events plus recomputed metric fragments.
 
-#### 5.6.3 Reconnection
+Consumed upstream event types (tasks surface): `task.created`, `task.claimed`, `task.released`, `task.completed`, `task.cancelled`, `task.updated`, `task.reopened`, `finding.posted`, `agent.registered`. (Knowledge surfaces add `note.*` and `edge.upserted` — §8.5.) Payload gotchas are catalogued in §16.1.1.
 
-On SSE disconnect Lens uses the exponential backoff schedule in `events.reconnect_backoff_ms`. While disconnected:
-- Data **freezes at last-known state**. The dashboard contents do not change between fallback refreshes.
-- A `Live updates paused — reconnecting` badge is visible in the header.
-- The polling fallback runs every `tasks.auto_refresh_interval_s` seconds. Each successful fallback refresh fires a transient 1-second toast: `Refreshed via fallback`.
+#### 5.8.2 Scope-aware normalization
 
-On successful reconnect the badge clears and the tasks list is fully reloaded once. No per-element staleness markers in MVP.
+The legacy drop-if-no-`task_id` rule is replaced by a **scope-aware** rule:
+- **Task-scoped** types (all `task.*`, `finding.posted`) require `task_id`; events without it are dropped with a warning.
+- **System-scoped** types (`agent.registered`) pass through with `task_id=""` and `requires_refresh=false` — they invalidate the agent-dropdown data only and MUST NOT trigger a dashboard refresh.
+- The **`lens.*` namespace is reserved for Lens-internal synthetic events** and MUST never collide with upstream types. Current members: `lens.refresh` (reconnect backstop, §5.8.3) and `lens.edge_upserted` (§5C.3 — emitted after Lens's own edge writes because no upstream task-edge event exists).
 
-#### 5.6.4 Server-side metric recompute and rolling buffers
+Normalized browser events preserve the Lithos event `id` for dedupe and carry `requires_refresh=true` when the upstream payload is too sparse for a complete UI update (`task.updated` carries only `task_id`, so it always forces a refetch). Browser handlers MUST tolerate duplicates and out-of-order reconciliation.
 
-Several derived signals depend on aggregating across the task list (Needs-attention membership; In progress / Queued / Unknown counts; project starvation / bottleneck / stalled flags; throughput counts). SSE events do not carry "queue depth changed by 1," so Lens recomputes server-side.
+#### 5.8.3 Reconnection
 
-**Strategy:** SSE events mark metrics dirty; a debounce window (`tasks.metrics_debounce_ms`, default 2000ms) batches bursts; one recompute fires per window. Recompute lives in `app/events.py` alongside the rolling-buffer maintenance — single source of truth. Recomputed fragments push to all open browser tabs via HTMX OOB swap through `/tasks/events`.
+- On disconnect: exponential backoff per `events.reconnect_backoff_ms`; a `Live updates paused — reconnecting` badge; polling fallback every `tasks.auto_refresh_interval_s` with a transient `Refreshed via fallback` toast per successful poll.
+- On reconnect: Lens sends **`Last-Event-ID`** so Lithos replays its ring buffer from the last received event, **and** broadcasts one synthetic `lens.refresh` to browser subscribers as a correctness backstop (replay beyond the buffer is impossible, so a full refresh is the only guarantee).
 
-Manual refresh, page load, and SSE reconnect bypass the debounce and force an immediate recompute.
+#### 5.8.4 Server-side recompute and rolling buffers
 
-**Recent-findings rolling buffer.** A server-side ring buffer of the last `tasks.recent_findings_drawer_size` (default 50) `finding.posted` events powers both the "Recent findings" drawer and the per-row latest-finding line. Each entry stores: `finding_id`, `task_id`, `task_title` (resolved at insert time via list cache), `agent`, `summary`, `timestamp`, `knowledge_id` if present.
+- SSE events mark derived metrics dirty; a debounce window (`tasks.metrics_debounce_ms`, 2000ms) batches bursts; one recompute per window pushes OOB fragments to all open tabs. Manual refresh, page load, and reconnect bypass the debounce.
+- A **recent-findings rolling buffer** (server-side ring buffer, size `tasks.recent_findings_drawer_size`, warmed at boot over `tasks.recent_findings_warmup_window_h`) powers the collapsible **Recent findings drawer** and the per-row latest-finding line, and feeds the Planning View's stalled detection. It survives tab refresh and stays consistent across tabs.
+- Timer-gate self-refresh (§5.2.3) is scheduled client-side from a server-rendered `min(ready_at)` attribute.
 
-**Boot-time warm-up.** On Lens startup, for each currently-open task within `tasks.visible_cap`, fetch `lithos_finding_list(task_id, since=now - tasks.recent_findings_warmup_window_h)` once to seed the buffer. Warm-up window default 48h (≥ stalled threshold of 24h, with margin).
+### 5.9 Notifications
 
-**Stalled detection (Planning View signal).** Open in-progress task with no `finding.posted` in the last `tasks.stalled_no_findings_hours` (default 24h). Computed only for tasks within `visible_cap` using the rolling buffer. Stalled rows get a row decoration on the Operator View but are **not** promoted into Needs attention.
+- **Title-badge** (always on by default; `[tasks].notifications.title_badge`): the page `<title>` becomes `(N) Lithos Lens` while there are unseen Needs-attention items; tab focus clears it.
+- **Desktop notifications** (opt-in; wiring sequenced at ROADMAP X1): an "Enable notifications" affordance in the header. Once granted, Lens fires notifications on **transition events only** (never steady-state), retargeted at the graph-native triggers:
+  - a row **enters Needs attention** (any rule),
+  - a **human gate** enters the waiting state,
+  - a task becomes **unblocked** (moves Blocked → Ready, including via a completion's `unblocked[]`).
+  Body format: `<task title> — <reason>`; click opens `/tasks?selected=<task_id>`. Grant state lives in `localStorage`; all other preferences live in cookies + URL.
 
-**OTEL spans:** `lens.tasks.metrics_recompute` (attribute `trigger=sse|manual|reconnect|warmup`), `lens.tasks.findings_recent` (warm-up + drawer endpoint).
+### 5.10 Cross-View Linking
 
-### 5.7 Cross-View Linking
+- **Tasks → Knowledge:** findings with non-null `knowledge_id` link to `/note/{knowledge_id}` (§6). Straight UUID passthrough — no inference.
+- **Knowledge → Tasks:** notes whose `metadata.source` records a producing task render a "Produced by task" chip linking to `/tasks/{task_id}` (§6.6).
 
-#### 5.7.1 Tasks → Knowledge (MVP)
-
-Findings with a non-null `knowledge_id` link directly to `/note/{knowledge_id}`. The browser opens with the note pre-selected. Until the Knowledge Browser ships, `/note/{knowledge_id}` renders a minimal Markdown view (title, tags, content) so finding links remain useful from day one. Once the Knowledge Browser is delivered, the same URL renders the full feed-detail panel — finding links require no change.
-
-This is a straight UUID passthrough — no inference, no text matching, no schema change.
-
-#### 5.7.2 Knowledge → Tasks (deferred)
-
-Notes whose Lithos metadata records a producing task (for example `metadata.source` containing a task ID from the `source_task` write parameter) should display a "Produced by task X" badge in the feed view (§6.3) and graph view, linking back to `/tasks/{task_id}`. This is deferred because producers must consistently pass `source_task` when writing task-derived notes.
-
-### 5.8 API
+### 5.11 API (reads)
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /tasks` | Operator View: server-rendered dashboard with filter bar + section list |
-| `GET /tasks?selected=<task_id>` | Same page with the side panel pre-opened on a task |
-| `GET /tasks/{task_id}` | Full-page detail route (also serves the panel HTMX fragment when requested) |
-| `GET /tasks/{task_id}/findings` | Findings timeline HTMX fragment |
-| `GET /tasks/findings/recent` | Recent-findings drawer HTMX fragment, sourced from the server-side rolling buffer |
-| `GET /tasks/plan` | Planning View (M1.5; see §5A) |
-| `GET /tasks/events` | Server-Sent-Events endpoint Lens exposes to its own browser tabs — re-broadcasts Lithos events plus pushes recomputed metric fragments |
-| `POST /api/tasks/findings/curate` | LLM-curated "most significant findings" endpoint (M3, when `llm.enabled`) |
+| `GET /tasks` | Operator View dashboard |
+| `GET /tasks?selected=<task_id>` | Same page with the side panel pre-opened |
+| `GET /tasks/{task_id}` | Full-page detail route (also serves the panel fragment) |
+| `GET /tasks/{task_id}/findings` | Findings timeline fragment |
+| `GET /tasks/{task_id}/blockers?depth=<n>` | Lazy blocker-chain expansion fragment (depth ≤ 5) |
+| `GET /tasks/findings/recent` | Recent-findings drawer fragment (rolling buffer) |
+| `GET /tasks/graph?project=<slug>\|epic=<id>` | Dependency graph page (§5.7) |
+| `GET /tasks/plan` | Planning View (§5A) |
+| `GET /tasks/events` | SSE re-broadcast endpoint for browser tabs |
+| `POST /api/tasks/findings/curate` | LLM findings curation (only when `llm.enabled`; ROADMAP X1) |
 
-No `POST` / `PUT` / `DELETE` endpoints touch task state — the read-only contract is enforced at the router level.
-
-### 5.9 MVP Implementation Contract
-
-This section is normative for Milestones 0–2. It exists to keep the Tasks View implementable against current Lithos without adding read APIs.
-
-#### 5.9.1 Initial dashboard query flow
-
-On `GET /tasks`, Lens performs these Lithos calls:
-
-1. `lithos_task_list(status="open")` with no `since`
-2. `lithos_task_list(status="completed", since=<created_range_start>)`
-3. `lithos_task_list(status="cancelled", since=<created_range_start>)`
-4. `lithos_stats()`
-5. `lithos_agent_list()`
-6. `lithos_task_status(task_id)` for open rows up to `tasks.visible_cap`
-
-The completed/cancelled created range defaults to `now - tasks.default_time_range_days`. Open tasks ignore this range by default.
-
-#### 5.9.2 Direct task lookup flow
-
-`GET /tasks/{task_id}` is first-class even though current Lithos has no `lithos_task_get`.
-
-Resolution algorithm:
-
-1. Call `lithos_task_list(status="open")`.
-2. Call `lithos_task_list(status="completed")`.
-3. Call `lithos_task_list(status="cancelled")`.
-4. Merge rows by `id`.
-5. Find the requested `task_id`.
-6. If found, call `lithos_task_status(task_id)` and `lithos_finding_list(task_id)`.
-7. If not found, render a non-500 "Task not found in current Lithos task lists" panel with a link back to `/tasks`.
-
-These three unbounded list calls are acceptable for v1 because the expected total task count is at most a few hundred.
-
-#### 5.9.3 Detail panel query flow
-
-When the user opens a row already present in the task list, Lens uses the row payload as the task record and calls:
-
-1. `lithos_task_status(task_id)` for active claims
-2. `lithos_finding_list(task_id)` for findings
-3. `lithos_read(id=knowledge_id)` once per finding that has a non-null `knowledge_id`, with per-panel caching
-
-If any of these calls fail, the panel renders the sections that succeeded and shows a retry affordance for the failed section.
-
-#### 5.9.4 Section membership rules (replaces the legacy claimed-state filter)
-
-The legacy `any` / `known_claimed` / `known_unclaimed` filter is dropped. Section membership is structural:
-
-| Open row state | Section |
-|----------------|---------|
-| Within `visible_cap`, ≥1 claim, triggers no Needs-attention rule | In progress |
-| Within `visible_cap`, 0 claims, triggers no Needs-attention rule | Queued |
-| Within `visible_cap`, triggers any Needs-attention rule | Needs attention (single tier; row removed from In progress / Queued) |
-| Beyond `visible_cap` | Unknown claim state tail |
-
-Lens must not silently classify rows beyond the cap. The Unknown-state tail and its accuracy banner replace the legacy "filter covers the first 50" banner.
-
-#### 5.9.4a Empty states
-
-Four empty states must be tested explicitly:
-
-| State | Behaviour |
-|-------|-----------|
-| **No tasks at all in Lithos** | Dedicated "No tasks yet" panel with a single help line — `Tasks are created via lithos_task_create from any agent. Lens is read-only.` Plus a link to the project-tracking conventions doc. No empty section headers. |
-| **Tasks exist but none open** | Render the Operator View normally. The four open sections show `All clear — no open tasks`. Completed/Cancelled headers (collapsed) still visible below. |
-| **All open healthy (no flagged signals)** | Needs-attention collapses to a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance). In progress / Queued render normally. |
-| **Lithos unreachable** | Degraded banner from §14. Page renders the banner with empty state below it. No stale-cache fallback in MVP. |
-
-#### 5.9.5 Sparse SSE payload rules
-
-Lithos task events are intentionally sparse. Lens optimistically updates visible UI from the payload where possible, then schedules a debounced reconciliation refresh.
-
-Rules:
-
-| Event | Immediate action | Reconciliation |
-|-------|------------------|----------------|
-| `task.created` | Insert skeleton open row with `task_id` and `title`; missing fields render as loading placeholders | Debounced list refresh |
-| `task.claimed` | Add/update claim chip from `task_id`, `agent`, `aspect` | Refresh row status if row is visible or detail is open |
-| `task.released` | Remove matching claim chip by `task_id` + `aspect` | Refresh row status if row is visible or detail is open |
-| `task.completed` | Remove visible row from open sections; update Completed section header count | Debounced metric recompute + section refresh |
-| `task.cancelled` | Remove visible row from open sections; update Cancelled section header count | Debounced metric recompute + section refresh |
-| `finding.posted` | Insert into server-side rolling buffer; update row latest-finding line if visible; add `latest` role marker on the row's agent chip | If detail is open, refetch full `lithos_finding_list(task_id)` |
-
-The reconciliation refresh should be debounced across bursts of events so a batch of task events does not trigger one full refresh per event.
-
-#### 5.9.6 Browser event stream contract
-
-Lens holds one server-side subscription to Lithos `/events`. Browser tabs do not connect directly to Lithos; they connect to `GET /tasks/events`.
-
-`/tasks/events` emits normalized Lens events with this minimum shape:
-
-```json
-{
-  "id": "<lithos-event-id>",
-  "type": "task.claimed",
-  "task_id": "<task-id>",
-  "payload": {},
-  "requires_refresh": true
-}
-```
-
-Rules:
-- Preserve the Lithos event `id` for browser-side dedupe.
-- Include `requires_refresh=true` when the Lithos payload is too sparse for a complete UI update.
-- Browser-side handlers should tolerate duplicate events and out-of-order reconciliation responses.
-
-#### 5.9.7 Common route failure behavior
-
-Task routes must not return HTTP 500 for expected Lithos availability or lookup failures.
-
-| Situation | Route behavior |
-|-----------|----------------|
-| Lithos unreachable | Render degraded banner/panel with retry; preserve last successful render where available |
-| Task ID not found | Render not-found panel with link to `/tasks` |
-| `lithos_task_status` fails | Render task row/detail without claim section and show retry |
-| `lithos_finding_list` fails | Render task metadata and show findings retry |
-| `lithos_read` for finding link fails | Render "View document" fallback label and a warning toast |
+Write endpoints are specified in §5C.7 and exist only when `[writes] enabled = true`.
 
 ---
 
 ## 5A. Tasks View — Planning View
 
-The Planning View answers **"what should happen next?"** across the agent fleet. It ships in **M1.5**, after the Operator View stabilises. It lives at `/tasks/plan` and is reachable from the top-nav alongside the Operator View and the Knowledge Browser routes.
+The Planning View answers **"what should happen next?"** across the agent fleet. It lives at `/tasks/plan` and consumes the same data contract and SSE pipeline as the Operator View — it is a different rendering of the same joined snapshot, extended with the dependency-graph machinery from §5.7.
 
 ### 5A.1 Purpose & Scope
 
-The Planning View is read-only and consumes the same Lithos read surface and SSE event stream as the Operator View. Its three stacked sections answer three sub-questions, top to bottom:
+Three stacked sections answer three sub-questions, top to bottom:
 
-1. **What manual work do I need to pick up?** — Human-actionable section.
-2. **Where is system throughput stuck?** — Project breakdown with starvation, bottleneck, stalled flags.
-3. **What's the overall shape of work across projects?** — Throughput overview with completion / cancellation counts per project over a rolling window.
+1. **What do I (a human) need to act on?** — Human-actionable section, now led by the human-gate queue.
+2. **Where is throughput stuck?** — Project breakdown with starvation, bottleneck, and stalled signals.
+3. **What's the overall shape of work?** — Throughput overview on `resolved_since` windows.
 
 ### 5A.2 Layout
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Top-nav: [Tasks] [Tasks · Plan] [Knowledge ▾]              │
-│  Filter bar: project | created-at range | hide dormant      │
+│  Filter bar: project | window | hide dormant                │
 ├─────────────────────────────────────────────────────────────┤
 │  👤 Human-actionable                                         │
-│     open tasks tagged `[tasks].human_actionable_tag`,        │
-│     grouped by project, oldest first; includes tasks         │
-│     already claimed by a human-agent so you can resume       │
+│     1. Human gates awaiting approval (oldest first,          │
+│        each with "unblocks N" waiter count)                  │
+│     2. Open tasks tagged `[tasks].human_actionable_tag`      │
+│     3. Tasks claimed by a human agent (resume your work)     │
 ├─────────────────────────────────────────────────────────────┤
 │  📊 Project breakdown                                        │
-│     per project: queue depth, in-flight depth,               │
-│     starvation / bottleneck / stalled flags                  │
+│     per project: ready / in-flight / blocked depths,         │
+│     starvation · agent-overload · keystone · stalled flags   │
 ├─────────────────────────────────────────────────────────────┤
 │  📈 Throughput overview                                      │
-│     per project: completed count, cancelled count,           │
-│     completion ratio, over `tasks.throughput_window_days`    │
-│     ordered by completed-count desc, dormant projects shown  │
+│     per project over the resolved_since window:              │
+│     completed, cancelled, completion ratio,                  │
+│     median time-to-resolve, median ready-age                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 5A.3 Human-actionable section
 
-- **Membership**: open tasks carrying tag `[tasks].human_actionable_tag` (default `human`). Includes tasks already claimed by an agent listed in `[tasks].human_agents` (so you can resume your own work).
-- **Grouping**: by project (`project:<slug>` chip), oldest first within each project. `(no project)` group renders last.
-- **Row anatomy**: same as Operator View (§5.3.1) — title, project chip, status, tags, agent chips, latest finding line. Reason chips do not apply here (this section is its own selection rule).
-- **Empty state**: `Nothing for you to do right now ✓`.
+- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("approving this unblocks N tasks") and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
+- **Tagged tasks:** open tasks carrying `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first.
+- **Human-claimed tasks:** open tasks claimed by an agent listed in `[tasks].human_agents` — so a human can resume their own work.
+- Empty state: `Nothing for you to do right now ✓`.
 
 ### 5A.4 Project breakdown
 
-For every project from `lithos_tags(prefix="project:")`, render one row showing:
-
-| Field | Value |
-|-------|-------|
-| Project chip | `project:<slug>` |
-| Queue depth | Count of open rows with zero claims (within `visible_cap`) |
-| In-flight depth | Count of open rows with ≥1 claim (within `visible_cap`) |
-| Flag chips | Any of: `starvation`, `bottleneck`, `stalled` |
-
-**Rules:**
+For every known project (§5B.1 universe), one row showing ready / in-flight / blocked depths (from the shared frontier join) and flag chips:
 
 | Flag | Rule |
 |------|------|
-| **Starvation** | Queue depth ≥ 1 AND in-flight depth = 0 |
-| **Bottleneck** | In-flight depth ≥ `tasks.bottleneck_min_inflight` (default 3) AND one agent holds ≥ `tasks.bottleneck_concentration` (default 0.7) of those claims |
-| **Stalled** | At least one in-progress task in the project has had no `finding.posted` in the last `tasks.stalled_no_findings_hours` (default 24h), per the rolling buffer |
+| **Starvation (v2)** | Project has **> 0 open workable tasks but 0 ready-and-unclaimed tasks** — nothing can be picked up. Sub-classified on the chip: `fully-blocked` (nothing is ready) vs `fully-claimed` (ready work exists but every ready task is claimed). The old queue-depth rule is replaced: with a graph, "unclaimed" only matters on the frontier. |
+| **Agent overload** | In-flight depth ≥ `bottleneck_min_inflight` (3) AND one agent holds ≥ `bottleneck_concentration` (0.7) of those claims. Tooltip names the dominant agent. |
+| **Keystone task** | The open task with the most **open transitive dependents** via `blocks`/`waits_on_gate` (computed over the §5.7 graph snapshot). Rendered as `keystone: "<title>" — unblocks N`. Completing keystones is the highest-leverage scheduling move; the chip links to the task detail. |
+| **Stalled** | ≥ 1 in-progress task in the project with no `finding.posted` in the last `stalled_no_findings_hours` (24), per the rolling buffer. Stalled rows also get a row decoration on the Operator View but are never promoted into Needs attention. |
 
-Hover on a flag → tooltip with the rule details (which agent dominates the bottleneck; which task is stalled; etc.).
+Hover on any flag → tooltip with the rule facts (which agent, which task, which chain).
 
 ### 5A.5 Throughput overview
 
-For every project (from `lithos_tags(prefix="project:")`), render one row covering the last `tasks.throughput_window_days` (default 30):
+For every project, over the last `tasks.throughput_window_days` (30) using **`resolved_since`** filtering (not `created_at` — resolution time is the honest window):
 
 | Field | Value |
 |-------|-------|
-| Project chip | `project:<slug>` |
-| Completed count | Tasks with `status=completed` and `created_at >= now - throughput_window_days` |
-| Cancelled count | Tasks with `status=cancelled` and `created_at >= now - throughput_window_days` |
+| Completed / Cancelled counts | Tasks with `resolved_at` in the window, by terminal status |
 | Completion ratio | `completed / (completed + cancelled)` (or `—` when both zero) |
+| Median time-to-resolve | Median `resolved_at − created_at` over tasks resolved in the window |
+| Median ready-age | Median age of the project's currently ready-and-unclaimed tasks (how long available work sits) |
 
-**Ordering:** completed count desc, then completion ratio desc, then alphabetical.
-
-**Dormant projects** (zero completed, zero cancelled in window) are shown by default with explicit `0 / 0`. A `Hide dormant` toggle (cookie + URL) suppresses them.
-
-> [!note] No sparklines in MVP
-> A per-project sparkline of daily completions is deferred. MVP is counts only.
+Ordering: completed desc, then ratio desc, then alphabetical. Dormant projects (zero resolved in window) show `0 / 0` by default; a `Hide dormant` toggle (cookie + URL) suppresses them. Sparklines remain deferred.
 
 ### 5A.6 Project discovery and caching
 
-Both the project filter dropdown and the Project breakdown / Throughput sections read from `lithos_tags(prefix="project:")` on dashboard load, cached per request and shared with the Operator View. Cache invalidation: full page load, manual refresh, and `task.created` SSE events that carry a never-seen `project:*` tag.
+The project universe is the union of `lithos_tags(prefix="project:")` and the distinct `metadata.project` values observed in the loaded snapshot (§5B.1), fetched once per request and shared with the Operator View. Cache invalidation: page load, manual refresh, and `task.created` events introducing a never-seen project.
 
 ### 5A.7 API
 
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /tasks/plan` | Server-rendered Planning View |
-| `GET /tasks/plan/projects` | Project breakdown HTMX fragment (refreshable independently) |
-| `GET /tasks/plan/throughput` | Throughput overview HTMX fragment |
+| `GET /tasks/plan/projects` | Project breakdown fragment (independently refreshable) |
+| `GET /tasks/plan/throughput` | Throughput overview fragment |
 
 ### 5A.8 OTEL spans
 
-| Span | Description |
-|------|-------------|
-| `lens.tasks.plan` | Planning View page render |
-| `lens.tasks.plan.projects` | Project breakdown computation |
-| `lens.tasks.plan.throughput` | Throughput overview computation |
+`lens.tasks.plan`, `lens.tasks.plan.projects`, `lens.tasks.plan.throughput` (see §15).
 
 ---
 
 ## 5B. Project Tracking Conventions
 
-These conventions are **normative for Lens** and assumed across the Tasks views and the future Knowledge Browser. Lens itself is read-only and does not enforce these on writes — they are conventions agents must follow when creating tasks and writing project-related notes.
+These conventions are **normative for Lens** and assumed across the Tasks views and the Knowledge Browser. Except where Lens itself creates tasks (§5C), they are conventions agents must follow.
 
-### 5B.1 Project documents
+### 5B.1 Two live project conventions — reconciliation rules
 
-All project-related knowledge documents are stored under `projects/<project-slug>/`. Every such document must be tagged with `project:<project-slug>` plus any relevant category tags. Documents describing the overall context or purpose of a project also receive the tag `project-context`.
+Two project conventions are in active use in the production corpus, **and their counts disagree** (observed live: lithos-loom has 87 tasks via `metadata.project` and 68 via the `project:lithos-loom` tag):
 
-```
-lithos_write(
-  title="Ganglion — Project Context",
-  path="projects/ganglion",
-  tags=["project:ganglion", "project-context"],
-  ...
-)
-```
+1. **Metadata convention:** `metadata.project = "<slug>"` — what Lithos itself understands (`lithos_task_ready(project=…)` shorthand, `lithos_task_spawn` project inheritance).
+2. **Tag convention:** a `project:<slug>` tag — the original Lens convention, still widespread.
 
-### 5B.2 Project tasks
+Requirements:
+- `[tasks].project_convention` selects the honoured convention: `"metadata"`, `"tag"`, or `"both"` (default `"both"`).
+- Under `"both"`, a task's **project** is `metadata.project` when present, else the `project:<slug>` tag value.
+- When both are present **and disagree**, Lens uses the metadata value and emits a telemetry warning (`lens.tasks.project_convention_conflict`) — never silently drops either.
+- The project **universe** (filter dropdowns, Planning View rows) is the **union** of both conventions' slugs, so no project is invisible to its own view.
+- Tasks created by Lens (§5C.2) MUST write **both** conventions until upstream unifies them (ROADMAP dependency ledger tracks the unification ask).
 
-Tasks are created via `lithos_task_create` and **must always be tagged** with `project:<project-slug>` at creation time.
+### 5B.2 Project documents
+
+All project-related knowledge documents are stored under `projects/<project-slug>/` and tagged `project:<project-slug>` plus relevant category tags. Documents describing a project's overall context also receive the tag `project-context`.
+
+### 5B.3 Project tasks
+
+Tasks must carry their project at creation time — under the `"both"` posture, that means both the tag and the metadata key:
 
 ```
 lithos_task_create(
   title="Implement BLE reconnect logic",
   agent="agent-zero",
-  tags=["project:ganglion", ...]
+  tags=["project:ganglion", ...],
+  metadata={"project": "ganglion"},
 )
 ```
 
-### 5B.3 Project slug naming
+### 5B.4 Project slug naming
 
-Slugs are derived from the project title (not from a directory or system name):
-
-- Lowercase
-- Spaces replaced with hyphens
-- Special characters removed or replaced
+Slugs are derived from the project title: lowercase, spaces → hyphens, special characters removed or replaced.
 
 | Title | Slug |
 |-------|------|
@@ -1031,392 +873,336 @@ Slugs are derived from the project title (not from a directory or system name):
 | `Kindred Code` | `kindred-code` |
 | `Restore SGI Indy` | `restore-sgi-indy` |
 
-### 5B.4 Known active projects
+### 5B.5 Known active projects
 
-| Project | Tag |
-|---------|-----|
-| Lithos Core | `project:lithos-core` |
-| Lithos Ecosystem | `project:lithos-ecosystem` |
-| Best Developer Year 2026 | `project:best-developer-year-2026` |
-| Commit To Change | `project:commit-to-change` |
-| Effective Agents | `project:effective-agents` |
-| Financial Planning | `project:financial-planning` |
-| Ganglion | `project:ganglion` |
-| Influx | `project:influx` |
-| Kindred Code | `project:kindred-code` |
-| Ralph++ | `project:ralph-plus-plus` |
-| Restore SGI Indy | `project:restore-sgi-indy` |
-| vajra | `project:vajra` |
-| NAO bridge | `project:nao-bridge` |
-| NAO cross compilation toolchain | `project:nao-cross-compilation-toolchain` |
-| Enterprise USB keyboard | `project:enterprise-usb-keyboard` |
-| Cardinal | `project:cardinal` |
+Illustrative, not exhaustive — the live universe comes from §5B.1 discovery:
 
-### 5B.5 Ideas
+| Project | Slug |
+|---------|------|
+| Lithos Core | `lithos-core` |
+| Lithos Ecosystem | `lithos-ecosystem` |
+| Lithos Loom | `lithos-loom` |
+| Lithos Lens | `lithos-lens` |
+| Ganglion | `ganglion` |
+| Influx | `influx` |
+| Kindred Code | `kindred-code` |
+| Ralph++ | `ralph-plus-plus` |
+| Restore SGI Indy | `restore-sgi-indy` |
+| NAO bridge | `nao-bridge` |
+| Cardinal | `cardinal` |
+| … | … |
 
-Speculative or early-stage items not yet linked to a project live under `ideas/` with the tag `idea`. Confidence `0.5–0.7`. If softly related to a project, they may carry the `project:<slug>` tag alongside `idea`. When promoted to a project, the document is moved to `projects/<slug>/`.
+### 5B.6 Ideas
 
-### 5B.6 Lens reading patterns
+Speculative items not yet linked to a project live under `ideas/` with the tag `idea`, confidence `0.5–0.7`. If softly related to a project they may carry the `project:<slug>` tag alongside `idea`. When promoted, the document moves to `projects/<slug>/`.
+
+### 5B.7 Lens reading patterns
 
 | Goal | Method |
 |------|--------|
-| All tasks for a project | `lithos_task_list(tags=["project:<slug>"])` |
+| All tasks for a project (tag convention) | `lithos_task_list(tags=["project:<slug>"])` |
+| All tasks for a project (metadata convention) | `lithos_task_list(metadata_match={"project": "<slug>"})` |
+| Ready tasks for a project | `lithos_task_ready(project="<slug>")` *(metadata shorthand)* |
+| Effective project set under `"both"` | Union of the two list queries, deduped by id — or client-side filtering over the dashboard snapshot (§5.3), which is what Lens does |
 | All docs for a project | `lithos_list(path_prefix="projects/<slug>/")` |
 | Search within a project | `lithos_search(query="...", path_prefix="projects/<slug>/")` |
 | Project context docs | `lithos_list(path_prefix="projects/", tags=["project-context"])` |
-| All ideas | `lithos_list(tags=["idea"])` |
 
-### 5B.7 Lens behaviour with multi-`project:*` tasks
+### 5B.8 Multi-project tasks
 
-A task carrying multiple `project:*` tags is unusual but supported:
+A task carrying multiple `project:*` tags (or a tag conflicting with metadata) is unusual but supported: the Operator View renders one chip per distinct project and emits a telemetry warning; the Planning View shows the task once per group it claims membership of (visible duplication beats hidden behaviour).
 
-- Operator View renders one project chip per tag and emits a soft warning to telemetry — Lens does not silently pick one.
-- Planning View shows the task once per group it claims to be in (visible duplication is preferred over hidden behaviour).
+### 5B.9 Configurability
 
-### 5B.8 Configurability
+`[tasks].project_tag_key` (default `"project"`) makes the tag-key configurable per deployment; `[tasks].project_convention` selects the reconciliation posture (§5B.1).
 
-The `project:` key is a default. `[tasks].project_tag_key` (default `"project"`) makes it configurable per deployment.
+---
+
+## 5C. Curated Write Actions
+
+> [!important] This section replaces every previous "strictly read-only" statement
+> Lens is **read-only by default** and becomes an operator console for a **small curated action set** when `[writes] enabled = true`. This is deliberately neither read-only nor CRUD: the actions are the ones an operator needs while looking at the dashboard, and nothing more. Sequencing: ROADMAP T3.
+
+### 5C.1 Posture and security boundary
+
+- **Default off.** With `[writes] enabled = false` (the default), no mutating route is registered — POSTs to write paths return **404**, not 403. Templates render no write affordances.
+- **In scope:** approve/complete human gates, reopen, cancel, create task/epic/gate, add dependency edges.
+- **Out of scope (permanently, absent new requirements):** claim/renew/release (agents manage their own claims), `lithos_task_update` (editing titles/descriptions/tags), deleting tasks (no such tool exists), deleting or re-typing task edges (**no `lithos_task_edge_delete` exists upstream** — see 5C.2), bulk operations.
+- **Security boundary — stated explicitly:** Lens has **no authentication or authorization**. It is designed for a single-operator, trusted local network. Anyone who can reach the Lens port can perform any enabled action. Deployments MUST NOT expose Lens beyond the trusted network, and the settings view MUST state this boundary whenever writes are enabled. The only request-level protections are the Origin/Referer check and operator attribution (5C.6), which are hygiene, not security.
+
+### 5C.2 Actions
+
+| Action | Lithos tool | Surfaces |
+|--------|-------------|----------|
+| Approve / complete gate | `lithos_task_complete(task_id, agent=<operator>)` | Gates section rows, gate detail, Planning human-gate queue |
+| Reopen | `lithos_task_reopen(task_id, agent=<operator>)` | Detail page of completed/cancelled tasks |
+| Cancel | `lithos_task_cancel(task_id, agent=<operator>, reason=…)` | Detail page and row overflow menu of open tasks |
+| Create task / epic / gate | `lithos_task_create(title, agent=<operator>, description?, tags?, metadata?, task_type?, depends_on?, parent_task_id?)` | "New task" affordance on the dashboard; "add child" on epic detail |
+| Add dependency edge | `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent=<operator>)` | Task detail "add dependency" affordance |
+
+Per-action requirements:
+
+- **Approve / complete gate.** The primary write. On success, surface the returned **`unblocked[]`** as a toast — `Unblocked N tasks` with the first few titles — and offer **Undo**, implemented as `lithos_task_reopen` on the gate (which re-blocks the waiters; see reopen semantics below). Lens deliberately offers **no complete action for ordinary tasks** — agents finish their own work; the operator's completion surface is gates only.
+- **Reopen.** On success, surface the returned **`reblocked[]`** — `Re-blocked N dependents` — since reopening a *completed* blocker/gate takes previously-ready dependents back off the frontier. Reopening a *cancelled* blocker instead **un-strands** its dependents (`blocker_unsatisfiable` → waiting) and re-blocks nothing; the UI copy MUST distinguish the two, because reopen-the-cancelled-blocker is the standard remediation for Needs-attention rule 1.
+- **Cancel — consequence-aware.** When `[writes].confirm_cancel = true` (default), the confirm step computes the count of **open transitive dependents** via `blocks`/`waits_on_gate` (from the §5.7 graph machinery) and states the consequence plainly: `Cancelling will strand N dependent tasks (they become permanently blocked until re-routed)`, listing the first few. The confirmation MUST work without JavaScript (a server-rendered confirm page: `GET …/cancel` → confirm form → `POST`). The optional `reason` is sent, but Lithos persists it **only in the event payload** — the UI must not promise it survives a reload.
+- **Create.** A single form for `task_type` ∈ `task` / `epic` / `gate`, with `depends_on[]` (predecessor picker), `parent_task_id` (parent picker), tags, and project (written to **both** conventions per §5B.1). For gates, gate metadata is **validated client-side first** — `gate_type` must be one of `human`/`timer`/`ci`/`pr`/`external_task`; `ready_at` is required for `timer` and must parse as an ISO datetime — then revalidated server-side by Lithos (`invalid_input`). Advisory keys are passed through verbatim.
+- **Add dependency edge.** Edge types offered: `blocks`, `parent_child`, `discovered_from` (a `waits_on_gate` edge additionally requires the *from* task to be a gate and is offered only from gate detail pages). **There is no edge delete** — the UI MUST say so before the write ("dependency edges cannot be removed once created"), and a `parent_exists` rejection is a dead end (re-parenting requires an edge delete that doesn't exist). Both gaps are top asks in the ROADMAP dependency ledger; Lens documents them honestly rather than working around them.
+
+### 5C.3 Write architecture
+
+- **Route gating:** POST routes are registered at startup only when `[writes] enabled = true` (§4.1 step 9).
+- **Form-encoded POSTs** (`application/x-www-form-urlencoded`); no JSON write API.
+- **Dual-mode responses:** an HTMX request receives an updated fragment; a plain form submission receives a **303 See Other** redirect (POST-redirect-GET) to the affected page. Every write path works without JavaScript.
+- **Refresh-after-write, never optimistic:** after any successful write, Lens re-fetches the affected data and renders from fresh reads. Write results (e.g. `unblocked[]`) inform toasts, not state.
+- **Cross-tab convergence:** other open tabs converge via the normal SSE pipeline — upstream events cover complete/cancel/reopen/create. **Edge writes emit no upstream event**, so after a successful `lithos_task_edge_upsert` Lens publishes a synthetic internal **`lens.edge_upserted`** event (carrying `from_task_id`, `to_task_id`, `type`) through its own hub so all tabs refresh. If a `task_edge.upserted` event ever lands upstream (ledger ask), the synthetic path retires.
+
+### 5C.4 Error envelope mapping
+
+Lithos write failures return `{status: "error", code, message}`. Lens MUST map each code to operator-actionable copy — never surface a bare code, and never a 500:
+
+| Code | Operator-facing copy (shape) |
+|------|------------------------------|
+| `cycle` | "This dependency would create a cycle: *\<message members\>*. Nothing was changed." |
+| `parent_exists` | "*\<Task\>* already has a parent. Re-parenting isn't possible — Lithos has no edge delete (see ROADMAP ledger)." |
+| `self_edge` | "A task can't depend on itself." |
+| `not_a_gate` | "*\<Task\>* isn't a gate — `waits_on_gate` edges must start from a gate task." |
+| `task_not_found` | "Task no longer exists (it may have been removed since you loaded the page)." |
+| `invalid_input` | Field-level re-render of the form with the upstream message (e.g. invalid gate metadata) |
+| *(unknown code)* | Show code + message verbatim with a "report this" hint — forward-compatible with new upstream codes |
+
+### 5C.5 Operator identity
+
+Writes are attributed to a **named human operator**, distinct from the Lens service agent:
+
+- Resolution order: **`lens_operator` cookie** → **`[writes].default_operator`** → an inline **"Acting as"** prompt that blocks the first write until an identity is supplied (then sets the cookie).
+- On first use of an identity, Lens registers it: `lithos_agent_register(id=<operator>, type="human")`.
+- Every write passes `agent=<operator>`. The service agent (`lithos-lens`, type `web-ui`) is used for reads and registration only — audit trails MUST be able to distinguish "Lens the process" from "the human driving it".
+- The current identity is displayed near every write affordance, with a "switch" affordance.
+
+### 5C.6 Concurrency, integrity, and audit
+
+- **`expected_status` pre-check:** every write form carries the task status the operator saw. The handler re-fetches `lithos_task_get` and aborts with a conflict page ("this task is now *\<status\>* — reload") when the status differs. Lithos has no compare-and-set on tasks; this pre-check narrows (but cannot close) the race window, and the docs say so.
+- **Origin/Referer check:** all POSTs require a same-host `Origin` (or `Referer`) header; mismatches are rejected with 403. This is CSRF hygiene on a trusted network, not an auth mechanism.
+- **Audit log:** every write attempt emits one structured log line — operator, action, `task_id`, argument summary, and the full result envelope — plus an OTEL span `lens.writes.<action>` (§15).
+
+### 5C.7 API (writes — registered only when enabled)
+
+| Endpoint | Action |
+|----------|--------|
+| `POST /tasks/{task_id}/complete` | Complete task / approve gate |
+| `POST /tasks/{task_id}/reopen` | Reopen |
+| `GET /tasks/{task_id}/cancel` → `POST /tasks/{task_id}/cancel` | Consequence-aware cancel (confirm page + submit) |
+| `GET /tasks/new` → `POST /tasks/new` | Create task / epic / gate |
+| `POST /tasks/{task_id}/edges` | Add dependency edge |
 
 ---
 
 # Part C — Knowledge Browser
 
-The Knowledge Browser is the second view. It provides feed, graph, search, feedback, comparison, reading paths, and conflict resolution over Lithos notes. Every section here assumes the Common Core (§1–§4) and (where indicated) the Tasks View are in place.
+The Knowledge Browser is the second surface. Sections are ordered by delivery track (see ROADMAP K1–K4 and the deferred pool): **Note View** and **Search** first, then the **Graph View**, then Feed / Feedback / Conflict Resolution, with Comparison and Reading Paths preserved in the deferred pool. Every section assumes the Common Core (§1–§4).
 
 ---
 
-## 6. Feed View
+## 6. Note View
 
 ### 6.1 Purpose
 
-Time-ordered list of recently ingested items. The default landing view of the Knowledge Browser.
+`/note/{id}` is the canonical document page — the target of finding links, search results, feed cards, graph nodes, and wiki-links. It must render a real, readable document: this replaces the minimal plaintext renderer from the first Tasks milestones.
 
-### 6.2 Data Source
+Data contract: one `lithos_read(id=…)` for the document, one `lithos_related(id, depth=1)` for the related panel, plus the capped title fan-out (§6.5). Note: the `lithos_read` response has **no top-level `path` field** — when Lens needs the note's path it must take it from metadata or a list query, not assume it on the read payload.
 
-```python
-items = lithos_list(
-    path_prefix="papers/",
-    tags=([f"profile:{profile}"] if profile else []) + (selected_tags or []) or None,
-    since=selected_since or None,
-    limit=config.ui.feed_page_size,
-    offset=page_offset,
-)
-```
+### 6.2 Markdown rendering — XSS posture (requirement)
 
-### 6.3 UI Elements
+- Rendering is **server-side** with `markdown-it-py`, configured `commonmark` preset plus the `table` and `strikethrough` extensions.
+- **Raw HTML in note bodies is escaped, never rendered.** Note content is untrusted input (agents write it); Lens's safety posture is *never emit unescaped note content*, which removes the need for a sanitizer dependency.
+- The link validator (`validateLink`) MUST reject `javascript:` and `data:` URL schemes (and any scheme not in an allow-list of `http`, `https`, `mailto`, and relative paths).
+- If markdown parsing fails for any reason, the fallback is HTML-escaped plaintext — never raw passthrough.
 
-| Element | Behaviour |
-|---------|-----------|
-| Filter bar | Profile dropdown, date range, tag chips, confidence slider |
-| Paper card | Title, source URL/domain, confidence, tags, collapsed excerpt |
-| Expandable excerpt | HTMX swap loads note content from `lithos_read(id=...)`; for Influx notes Lens may parse the `## Abstract` section when present |
-| Archive link | For Influx notes, Lens may parse the `**Local file:** /archive/...` body line and link via `/archive/...`; no frontmatter `local_file` field is required |
-| Source link | Opens `source_url` externally |
-| 👍 / 👎 buttons | Write back via `lithos_write` (see §9) |
-| Multi-select toggle | Enables comparison mode (see §10); shows checkbox on each card and a floating "Compare N notes" action |
-| "Related" teaser | Calls `lithos_related(id=..., include=["edges", "links"], depth=1)` |
-| "Open in graph" link | Jumps to graph view centred on this note's id |
-| "Generate path" action | Opens reading-path picker (see §11) seeded from the current filter set or the selected card |
-| "Produced by" badge *(deferred)* | When a note's Lithos metadata points at a producing task, link back to §5 — see §5.7 |
+### 6.3 Wiki-link handling
 
-Current Influx note constraints:
-- Profile membership is represented by `profile:<name>` tags, not by `papers/{profile}` paths
-- Note-wide relevance is represented by Lithos `confidence` (max profile score / 10), while per-profile scores live in the note body under `## Profile Relevance`
-- Authors, published date, abstract, and local archive path are body conventions, not guaranteed Lithos frontmatter fields
-- The v1 Lens feed must render gracefully when those Influx body conventions are absent
+`lithos_read.links` entries are **unresolved** — each is `{target, display}` with no note id (upstream ask in the ROADMAP ledger). Lens therefore resolves wiki-links per-click through a resolver route:
 
-### 6.4 Pagination
+**`GET /knowledge/resolve?target=<target>&from=<source-note-id>`**
 
-HTMX infinite scroll with `offset` passed as a query param. The `total` field from `lithos_list` is used to display "Showing N of M".
+1. **UUID-shaped target** → redirect to `/note/{target}`.
+2. **Path probe:** `lithos_read(path=target + ".md", max_length=1)` — on success, redirect to `/note/{id}`. (Truncated reads return complete frontmatter metadata, so this probe is cheap.)
+3. **Disambiguation:** gather candidates from the source note's `lithos_related(from, include=["links"])` outgoing set and `lithos_list(title_contains=target)`. Exactly one candidate → redirect; multiple → a disambiguation page listing candidates with paths; zero → an "unresolved link" page offering a search link.
 
----
+**Rendering rule:** wiki-links are spliced at the **token level** — `[[target]]` / `[[target|display]]` patterns are replaced only inside *text* tokens of the parsed token stream. Lens MUST NOT regex over raw markdown (that would rewrite wiki-link-shaped text inside code fences and inline code).
 
-## 7. Graph View
+### 6.4 Metadata chips and lede
 
-### 7.1 Purpose
+| Element | Source |
+|---------|--------|
+| `note_type` chip | frontmatter (`observation` / `agent_finding` / `summary` / `concept` / `task_record` / `hypothesis`) |
+| `status` chip (colour-coded) | `active` / `archived` / `quarantined` |
+| Confidence | `confidence` rendered as a percentage |
+| `access_scope` chip | `shared` / `task` / `agent_private` |
+| `namespace` chip | explicit or path-derived |
+| Tags | one chip per tag, each linking to `/knowledge?tag=<tag>` |
+| Lede | `summaries.short` rendered above the body when present |
+| Supersedes | when `supersedes` is set, a link to the superseded note ("replaces: …") |
+| Authorship | `author`, `contributors`, `created_at` / `updated_at` |
 
-Interactive visualisation of the knowledge base as a typed, weighted graph. Helps surface clusters, contradictions, and lineage at a glance.
+### 6.5 Related panel
 
-### 7.2 Data Sources
+One `lithos_related(id, depth=1)` populates four groups:
 
-```python
-# All edges in the Influx namespace (capped by config.ui.graph_max_nodes)
-edges = lithos_edge_list(namespace="influx")
+- **Outgoing wiki-links** and **back-links** (incoming) — titles are included in the response.
+- **Provenance** — `sources` (derived-from) and `derived` (derives), plus `unresolved_sources` rendered as inert stubs.
+- **Typed LCMA edges** — incoming/outgoing edge records with `type`, `weight`, and `conflict_state`. Edge records carry endpoint ids only, so Lens resolves endpoint titles via a **capped, cached `lithos_read(id, max_length=1)` fan-out** (`[knowledge].related_title_fanout_cap`, default 20; beyond the cap, render id stubs with lazy resolution on demand).
+- Each entry links to its note page; an "open in graph" affordance links to `/knowledge/graph?focus=<id>` (§8).
 
-# Node detail panel
-related = lithos_related(
-    id=note_id,
-    include=["edges", "links", "provenance"],
-    depth=2,
-)
+### 6.6 Produced-by-task chip
 
-# Node salience / usage stats
-stats = lithos_node_stats(node_id=note_id)
-```
+When `metadata.source` contains a task id, Lens calls `lithos_task_get` and renders a "Produced by task: *\<title\>*" chip linking to `/tasks/{task_id}`. A `task_not_found` result (or a non-task `source` value) degrades to no chip — `source` is a free-form provenance field.
 
-### 7.3 Rendering
+### 6.7 Cited-by panel — blocked upstream
 
-- **Nodes**: papers sized by `stats.salience` (or Lithos `confidence` fallback), coloured by profile tag (e.g. `profile:ai-robotics` → one hue, `profile:hema` → another)
-- **Edges**: Cytoscape.js with distinct colours per type:
+**Requirement:** a note page SHOULD show "cited by findings in tasks X, Y" — the reverse of the finding → note link.
 
-| Edge type | Colour | Source |
-|-----------|--------|--------|
-| `related_to` | 🔵 Blue | Semantic similarity (Influx) |
-| `builds_on` | 🟢 Green | LLM extraction (Influx Tier 3) |
-| `contradicts` | 🔴 Red | LCMA contradiction detection |
-| `uses_method` | 🟡 Yellow | LCMA concept formation |
-| `analogous_to` | 🟣 Purple | LCMA analogy scout |
-| `derived_from` | ◻ Grey (dotted) | Frontmatter `derived_from_ids` projected into `edges.db` by Lithos reconcile |
+**Status: blocked upstream.** `lithos_finding_list` requires `task_id` (no `knowledge_id` filter exists), and `finding.posted` events lack `knowledge_id` — so there is no way to answer "which findings cite this note" short of scanning every task's findings. This requirement is **gated on the ROADMAP dependency-ledger ask**; Lens MUST NOT ship the O(all-tasks) scan workaround.
 
-### 7.4 Interactions
+### 6.8 Retrieval-stats panel
 
-- Click a node → side panel with detail, `lithos_related`, `lithos_node_stats`
-- Filter panel: profile, date, tag, confidence / parsed profile score, edge type, namespace
-- "Centre on this" action rebuilds the graph around a single node at depth 2
-- Ctrl/cmd-click adds nodes to the comparison multi-select (see §10)
-- "Path from here" action seeds a reading path (see §11) from the selected node
-- If the raw edge count exceeds `ui.graph_max_nodes`, the view degrades to a paged sample with a warning banner
-
-### 7.5 Performance Notes
-
-- Cytoscape.js comfortably handles ~10K nodes on a modern browser
-- For larger graphs, apply `namespace_filter` or `path_prefix` before fetch
-- Edge fetching happens once per view load; subsequent filter changes operate on the client-side dataset
-
-### 7.6 Centrality Overlay
-
-When `ui.graph_centrality_overlay = true` (or the user toggles "Highlight bridge nodes" in the filter panel), Lens computes betweenness centrality client-side over the currently-loaded edge set using Cytoscape's built-in `cy.elements().bc()`. The top-K nodes (default 5%, configurable via the toggle) render with a halo / outline ring. Centrality is recomputed whenever the visible subgraph changes (e.g. when an edge-type filter is toggled). No new MCP calls are required. Adds OTEL span `lens.graph.centrality`.
-
-### 7.7 Bidirectional Node ↔ Panel Selection
-
-The existing flow is one-way: click node → side panel updates. v0.5 adds the reverse: clicking a related-paper row in the side panel highlights and centres the corresponding node in the graph (without rebuilding the layout). This makes the panel the primary navigation surface as well as a read-only detail view. No new data fetch — pure UI wiring on the already-loaded graph.
+`lithos_node_stats(node_id)` supplies a small stats panel — `salience`, `retrieval_count`, `cited_count`, `misleading_count`, `last_retrieved_at` — explaining why retrieval does or doesn't surface this note. `doc_not_found` renders default values. Arrives with the cognitive-search milestone (ROADMAP K3).
 
 ---
 
-## 8. Cognitive Search
+## 7. Knowledge Search
 
-### 8.1 Search Bar
+### 7.1 `/knowledge` landing
 
-Every Knowledge Browser view has a search bar. Backed by `lithos_retrieve` (LCMA MVP1) rather than plain `lithos_search`, because retrieval runs seven scouts with reranking and gives an audit receipt:
+- A search box lives in the global nav on every Knowledge page; submitting goes to `/knowledge?q=…`.
+- **With a query:** `lithos_search(query, mode="hybrid", limit=[knowledge].search_limit)`. Result cards show title, path, score, `updated_at`, an `is_stale` marker, and the snippet.
+- **Snippets MUST be rendered escaped.** Verified live: `lithos_search` snippets contain raw markdown (headings, wiki-link syntax, code). Lens HTML-escapes snippet text (query-term highlighting, if any, is applied *after* escaping). Snippets are never fed through the markdown renderer.
+- **Without a query:** a recently-updated list via `lithos_list(limit=[knowledge].recent_limit)` ordered by `updated`.
+- Filters: `q` and `tag` only (`?tag=` maps to the `tags=` argument of search/list). Richer filtering belongs to the feed (§9).
 
-```python
-results = lithos_retrieve(
-    query=search_query,
-    limit=config.search.default_limit,
-    agent_id="lithos-lens",
-    tags=[f"profile:{active_profile}"] if active_profile else None,
-)
-```
+### 7.2 Cognitive search evolution
 
-### 8.2 Results Rendering
+Later (ROADMAP K3), `lithos_retrieve` becomes the **default engine** for `/knowledge?q=`:
 
-Each result is rendered as a compact card:
+- On any retrieve error, Lens falls back **silently** to `lithos_search` with a small "fast search" badge; a persistent toggle lets the user force fast search.
+- Result cards gain the LCMA audit fields: **scout chips** (`scouts`), expandable **reasons**, and a **salience bar** — the retrieve result shape is `lithos_search`-compatible plus these additive fields.
+- The response-level `receipt_id`, `temperature`, and `terrace_reached` render as **footer provenance text only** — no click-through, because no MCP read surface for receipts exists (ROADMAP ledger).
 
-- Title + score
-- `snippet` (from Lithos)
-- `reasons` (LCMA-specific audit — which scouts fired)
-- `scouts` list (chips)
-- Click-through to feed-view detail or graph-view node
+> [!warning] Working-memory rule (hard requirement)
+> Lens MUST **never pass `task_id` to `lithos_retrieve`**. When `task_id` is set, Lithos upserts per-`(task_id, node_id)` working-memory rows — human browsing must not pollute any task's working memory. Lens passes only `query`, `limit`, optional `tags`/`path_prefix`/`namespace_filter`, and `agent_id=<lens service agent>` for audit and access-scope gating.
 
-### 8.3 Search Scope
+### 7.3 Answer synthesis and complexity (LLM, optional)
 
-A toggle exposes `namespace_filter` so the user can scope search to a single profile's namespace or leave it broad.
-
-### 8.4 Answer Synthesis (LLM, optional)
-
-When `llm.enabled = true`, the search bar shows a "Synthesise answer" toggle alongside the result list. When toggled on, Lens:
-
-1. Calls `lithos_retrieve` as normal.
-2. Passes the top-N snippets (each with `id`, `path`, `snippet`, `reasons`) to the configured LLM along with the query.
-3. The system prompt **requires** that every claim in the synthesised answer carry an inline citation referencing the snippet `id` (e.g. `[1]`, `[2]`).
-4. Renders the synthesised answer as a single block above the result list, with click-through citations linking to the corresponding feed-detail or graph-node view. The underlying retrieve result list stays visible below for transparency.
-
-If `llm.synthesis_prefer_mcp = true` and Lithos exposes a synthesis MCP tool (e.g. `lithos_synthesize`), Lens calls that tool first and only falls back to the local LLM if it returns `not_supported` or errors.
-
-**Failure modes**: LLM error → hide the synthesised block, keep the result list, show a non-blocking warning badge ("Synthesis unavailable — showing raw results"). Adds OTEL span `lens.llm.synthesize`.
-
-### 8.4.1 LiteLLM Provider Contract
-
-Lens uses LiteLLM for direct LLM calls when `llm.enabled = true`. The app passes the configured model string through to LiteLLM, so provider selection is configuration, not code branching. Supported deployments include hosted providers such as OpenAI and Anthropic, routing providers such as OpenRouter, and local providers such as Ollama. Provider-specific base URLs, API keys, and extra headers are configuration values (`LENS_LLM_BASE_URL`, `LENS_LLM_API_KEY`, `LENS_LLM_EXTRA_HEADERS_JSON`). Lens does not special-case "local" vs "remote" in feature logic; operators choose the provider appropriate for their privacy and cost constraints.
-
-### 8.5 Complexity Slider (LLM, optional)
-
-A session-scoped slider (1 = beginner … 5 = expert), default = `llm.default_complexity`, is exposed in the search bar and in any LLM-augmented panel (synthesis result, comparison themes tab, LLM-curated paths, "most significant findings" in the tasks view). The selected value is persisted via cookie or query param and injected into every LLM prompt as a system instruction modulating verbosity and technicality. The slider has no effect when `llm.enabled = false` and is hidden entirely in that mode.
-
-Rationale: Paperlens demonstrated this is a high-value, low-cost UX lever — the same retrieved evidence yields visibly different explanations for different audiences without changing the underlying data.
+When `llm.enabled = true`, a "Synthesise answer" toggle passes the top-N snippets to the configured LLM with a citation-required prompt and renders the answer above the (still visible) result list; citations click through to note pages. If `llm.synthesis_prefer_mcp = true` and Lithos exposes a synthesis tool, Lens prefers the MCP path. A session-scoped complexity slider (1–5, default `llm.default_complexity`) modulates verbosity in every LLM prompt. LLM failures hide the synthesis block, keep the results, and show a non-blocking badge. Hidden entirely when LLM is disabled. Sequencing: ROADMAP X1+.
 
 ---
 
-## 9. Feedback Mechanism
+## 8. Knowledge Graph View
 
-### 9.1 Overview
+### 8.1 Purpose and modes
 
-Lens is the only place in the system where humans generate feedback. For Influx-authored notes, feedback is profile-scoped and stored as tags on the existing Lithos note: `influx:rejected:<profile>` for rejection and, if positive reinforcement is enabled, `influx:accepted:<profile>` for acceptance. Unscoped `influx:rejected` is not used because Influx consumes profile-specific rejection tags.
+Interactive visualisation of the knowledge base as a typed, weighted graph. Two modes:
 
-### 9.2 Writing Feedback — Critical Contract
+- **Focus (ego-graph) mode — first-class:** `/knowledge/graph?focus=<note-id>` renders the neighbourhood of one note. This is the mode reachable from note pages and the one sized for the real corpus (~2,900 notes).
+- **Global mode — second:** `/knowledge/graph` renders the whole (capped) edge set for cluster/contradiction reconnaissance.
 
-> [!warning] `lithos_write` requires `title` and `content` on every call
-> Even when only updating tags on an existing note, `lithos_write` requires `title`, `content`, and `agent` at the MCP boundary. Lens must first `lithos_read(id=...)` the note and pass the existing title+content back through. Omitted optional fields preserve existing values, but `title`/`content`/`agent` are never optional.
+### 8.2 Data assembly
 
-```python
-existing = lithos_read(id=note_id)
-existing_tags = existing["metadata"].get("tags", [])
-profile_tag = f"profile:{profile}"
-rejected_tag = f"influx:rejected:{profile}"
-accepted_tag = f"influx:accepted:{profile}"
-new_tags = [t for t in existing_tags if t not in {rejected_tag, accepted_tag}]
-if accepted:
-    new_tags.append(accepted_tag)
-else:
-    new_tags = [t for t in new_tags if t != profile_tag]
-    new_tags.append(rejected_tag)
+- **Focus mode:** `lithos_related(focus, depth=1..2)` supplies wiki-links, provenance, and typed edges around the focus; the frontier expands via `lithos_related` on neighbours up to the requested depth, capped by `[knowledge].graph_focus_max_nodes` (250).
+- **Global mode:** `lithos_edge_list(namespace?)` for typed edges, capped by `[knowledge].graph_global_max_nodes` (500).
+- Node detail panel: `lithos_related` + `lithos_node_stats` on demand.
 
-lithos_write(
-    id=note_id,
-    title=existing["title"],
-    content=existing["content"],
-    agent="lithos-lens",
-    tags=new_tags,
-    confidence=existing["metadata"].get("confidence", 1.0),
-    expected_version=existing["metadata"].get("version"),  # optimistic lock
-)
-```
+### 8.3 Rendering
 
-Handle `{status: "error", code: "version_conflict"}` by re-reading and retrying.
+Nodes are sized by `node_stats.salience` (confidence fallback) and coloured by namespace or profile tag. Edge styling:
 
-### 9.3 Feedback Entry Points
+| Edge | Style |
+|------|-------|
+| Wiki-link | thin grey |
+| `derived_from` / provenance | dotted grey |
+| `related_to` | 🔵 blue |
+| `builds_on` | 🟢 green |
+| `contradicts` | 🔴 red — **unresolved** `conflict_state` renders dashed and emphasized, and an unresolved-contradictions counter shows in the toolbar; **resolved** renders muted with its resolution label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
+| `uses_method` | 🟡 yellow |
+| `analogous_to` | 🟣 purple |
+| *(unknown type)* | neutral with a text label — forward-compatible |
+
+### 8.4 Interactions
+
+- Click a node → side panel (summary, related, stats, "open note"); double-click → `/note/{id}`.
+- **Bidirectional selection:** clicking a related-note row in the panel highlights and centres the corresponding node without rebuilding the layout.
+- "Centre on this" rebuilds the ego-graph around the selected node.
+- Filter panel: edge type, namespace, tag, date.
+- **Centrality overlay** (toggle): betweenness centrality computed client-side over the loaded subgraph (`cy.elements().bc()`); top-K nodes get a halo. Recomputed when the visible subgraph changes; no MCP calls.
+- `contradicts` edges expose the conflict-resolution panel (§11).
+
+### 8.5 Freshness
+
+The graph subscribes to `note.created` / `note.updated` / `note.deleted` and `edge.upserted` through the shared pipeline. **Watcher-emitted note events may lack `id`** (they carry only `path`), so per-node patching is best-effort; the fallback is a debounced refetch of the current scope. As on the task graph page, changes show a "graph changed — refresh" pill rather than auto-re-layouting.
+
+### 8.6 Caps and degradation
+
+Exceeding a node cap degrades to a "refine your filters" banner with a truncated sample — never a browser-melting render. Cytoscape comfortably handles the configured caps; the caps exist to keep the *layout* legible, not just performant.
+
+---
+
+## 9. Feed View
+
+*Sequencing: ROADMAP K4. Requirements preserved in condensed form.*
+
+- Time-ordered cards over `lithos_list(path_prefix?, tags?, since?, limit, offset)` — title, updated date, tags, confidence, and a lede (`summaries.short` when present, else a content excerpt via `lithos_read`).
+- Filter bar: tag chips, date range, `note_type`; pagination via `offset` with "Showing N of M" from `total`.
+- Cards click through to `/note/{id}`; feedback buttons per §10; "open in graph" per §8.
+- **Influx integration conventions are optional.** Profile membership as `profile:<name>` tags, per-profile scores in a `## Profile Relevance` body section, `## Abstract` extraction, and `**Local file:** /archive/...` links are Influx conventions, not Lithos guarantees. The feed MUST render gracefully when they are absent, and archive links appear only when the optional `/archive` mount (§3) exists.
+
+---
+
+## 10. Feedback Mechanism
+
+### 10.1 Overview
+
+Lens is where humans generate relevance feedback. For Influx-authored notes, feedback is profile-scoped and stored as tags on the existing note: `influx:rejected:<profile>` / `influx:accepted:<profile>`. The scheme is Influx-centric and optional; the mechanism (tag patches) is general.
+
+### 10.2 Writing feedback — `lithos_note_update` patches
+
+> [!important] The old read-then-rewrite-whole-note contract is obsolete
+> Feedback writes use **`lithos_note_update`**, which patches frontmatter (tags / metadata / title / status) **without resending the body**. Lens never round-trips note content to change a tag.
+
+Flow:
+
+1. `lithos_read(id, max_length=1)` — fetch current tags and `version` (truncated reads return complete metadata).
+2. Compute the new tag list (add/remove the feedback tags).
+3. `lithos_note_update(id, agent=<operator>, tags=<new list>, expected_version=<version>)`.
+4. On `{status: "version_conflict"}` — re-read and retry once; then surface the error.
+
+The `tags` argument replaces the full list (that is why step 1 exists); `metadata` patches, when used, are additive per-key merges. Feedback writes follow the §5C gating and operator-identity contract — they are writes, attributed to the human operator, registered only when writes are enabled.
+
+### 10.3 Entry points and API
 
 | Entry point | Mechanism |
 |-------------|-----------|
-| Feed view | 👍 / 👎 buttons on each paper card |
-| Graph view | 👎 button in node detail panel |
-| Notification link | `[not relevant]` link from Agent Zero digest → `POST /api/feedback` |
-
-### 9.4 Feedback API
+| Feed view | 👍 / 👎 buttons on each card |
+| Note view / graph panel | 👎 button |
 
 ```
 POST /api/feedback
-{
-  "note_id": "<uuid>",
-  "profile": "<profile-name>",
-  "verdict": "accepted" | "rejected",
-  "note": "<optional user comment>"
-}
+{ "note_id": "<uuid>", "profile": "<profile>", "verdict": "accepted" | "rejected" }
 ```
 
-Response: `{"status": "ok"}` on success, `{"status": "error", "message": "..."}` on failure. Errors are shown in the UI — never silently swallowed.
-
-### 9.5 Downstream Effect on Influx
-
-Influx picks up feedback at the start of each run by calling `lithos_list(tags=[f"influx:rejected:{profile_name}"])` — see Influx requirements §12. Lens does not have to notify Influx directly. Profile-scoped Lens views SHOULD exclude notes carrying `influx:rejected:<active-profile>` by default.
+Response: `{"status": "ok"}` or `{"status": "error", "message": "..."}` — errors are shown in the UI, never swallowed. Profile-scoped views SHOULD exclude notes carrying `influx:rejected:<active-profile>` by default.
 
 ---
 
-## 10. Note Comparison
+## 11. Conflict Resolution UI
 
-### 10.1 Purpose
+*The first knowledge write (deferred pool — see ROADMAP); follows the §5C write gating and operator-identity contract.*
 
-Place two or more notes side-by-side to surface what they share and where they diverge. Particularly useful for evaluating papers that look similar in the feed view but differ in method, scope, or claim, and for inspecting both endpoints of a `contradicts` edge before resolving it.
-
-### 10.2 Entry Points
-
-| Entry point | Mechanism |
-|-------------|-----------|
-| Feed view | Multi-select toggle reveals checkboxes on cards; floating "Compare N notes" action opens the comparison view |
-| Graph view | Ctrl/cmd-click on nodes to add to the selection; "Compare selected" button in the side panel |
-| Search results | "Compare with…" action on any result card |
-| Conflict resolution UI | "Compare endpoints" button on a `contradicts` edge auto-loads its `from_id` and `to_id` |
-
-The maximum number of notes that can be compared is configurable via `ui.compare_max_notes` (default 4).
-
-### 10.3 Layout
-
-The comparison view is a horizontally scrollable side-by-side panel with three tabs:
-
-- **Metadata** — titles, source URL/domain, updated date, profile tags, confidence, ids, and any parsed Influx body conventions (authors, published date, profile-specific score) when present. Shared values (e.g. overlapping tags) are highlighted. No LLM required.
-- **Content** — collapsed/expandable abstracts and bodies fetched via `lithos_read`; tunable character limit per pane to avoid runaway panels. No LLM required.
-- **Themes & Concepts** *(only when `llm.enabled = true`)* — Lens passes the selected notes' titles + abstracts (or full content under a per-call token budget) to the LLM with a structured prompt that returns:
-  - A bullet list of dominant themes per note
-  - A shared-concepts table (concept → notes mentioning it → terminology variant in each note)
-  - A unique-concepts list per note
-  - One paragraph summarising similarities, differences, and complementarity
-  When `llm.enabled = false` this tab is hidden.
-
-### 10.4 API
-
-```
-POST /api/compare
-{
-  "note_ids": ["<uuid>", "<uuid>", ...],
-  "include_themes": true        # ignored when llm.enabled = false
-}
-```
-
-Response: `{"status": "ok", "metadata": [...], "content": [...], "themes": {...} | null}`. Comparison is read-only — it does not write notes back to Lithos.
-
-Adds OTEL span `lens.compare`.
-
----
-
-## 11. Reading Paths
-
-### 11.1 Purpose
-
-Surface an ordered traversal through a subset of notes — a "what should I read next, and in what order?" view. Distinct from search (which ranks for relevance) and from the graph (which shows topology without ordering). Inspired by Paperlens's curated learning paths but generalised to any Lithos namespace.
-
-### 11.2 Entry Points
-
-| Entry point | Mechanism |
-|-------------|-----------|
-| Feed view | "Generate path" button in the filter bar uses the active filter set as the candidate pool |
-| Graph view | "Path from here" action on a selected node uses that node as the seed and walks outward |
-| Settings view | "Generate path for profile" link uses the profile namespace as the pool |
-
-### 11.3 Modes
-
-| Mode | Description | LLM required |
-|------|-------------|--------------|
-| `salience` | Order by `lithos_node_stats.salience` desc | No |
-| `chronological` | Order by ingestion date asc (matches a "build-up" reading style) | No |
-| `edge-traversal` | BFS / topological walk over `builds_on` and `derived_from` edges starting from the seed node | No |
-| `llm` | Pass node titles + summaries to the LLM with a "produce a pedagogical reading order with one-line justifications" prompt | Yes |
-
-Default mode is `ui.reading_path_default` (default `salience`). The picker UI lets the user override per-request. The `llm` mode is hidden when `llm.enabled = false`.
-
-### 11.4 Output
-
-Output is a single ordered list rendered as a printable, shareable page at `GET /path/{slug}`. Each step shows position, title, one-line justification (manual for non-LLM modes, LLM-generated otherwise), and a deep link to the note's feed-detail view.
-
-The user can save a path. Saved paths persist as a Lens-authored Lithos note via `lithos_write` with `path="lens/paths"`, `note_type="summary"`, and tags such as `lens:path` and `lens:path-mode:<mode>`. Because current `lithos_write` does not accept arbitrary frontmatter fields, the seed, mode, filter set, and ordered ids are stored in a small structured block in the note body, followed by the human-readable reading path.
-
-### 11.5 API
-
-```
-POST /api/path
-{
-  "seed_id": "<uuid> | null",
-  "filter": { "profile": "...", "tags": [...], "since": "..." },
-  "mode": "salience | chronological | edge-traversal | llm",
-  "limit": 20,
-  "save_as": "<slug> | null"
-}
-```
-
-Response: `{"status": "ok", "slug": "...", "steps": [{"id": "...", "title": "...", "rationale": "..."}, ...]}`.
-
-Adds OTEL span `lens.path.generate`.
-
----
-
-## 12. Conflict Resolution UI
-
-When `contradicts` edges exist, Lens exposes a resolution panel on the relevant nodes.
+When `contradicts` edges exist, Lens exposes a resolution panel on the relevant notes and on the edge in the graph view (§8.4):
 
 ```python
 lithos_conflict_resolve(
     edge_id=edge_id,
     resolution="superseded",   # accepted_dual | superseded | refuted | merged
-    resolver="user",
+    resolver=operator_id,
     winner_id=winning_note_id,  # required when resolution == "superseded"
 )
 ```
@@ -1425,16 +1211,26 @@ UI affordances:
 
 - Resolution dropdown with the four valid values
 - Winner picker (required for `superseded`), choosing between the edge's `from_id` and `to_id`
-- Optional free-form reason field is a UI-only annotation in the MVP and is not persisted, because current `lithos_conflict_resolve` does not accept a reason parameter. Persisted resolution notes are deferred.
-- "Compare endpoints" button (see §10.2) for side-by-side inspection before resolving
+- An optional free-form reason field is a UI-only annotation and is not persisted (`lithos_conflict_resolve` accepts no reason parameter); persisted resolution notes are deferred
+- Side-by-side inspection of the endpoints before resolving (full comparison view is deferred — §12; a two-pane read is sufficient here)
 
-On success, the edge is re-fetched and redrawn with a resolution badge. Unresolved contradictions are surfaced in a "Needs attention" banner on the feed view.
+On success Lithos emits `edge.upserted` carrying the new `conflict_state`, so the graph view redraws the edge with its resolution badge through the normal freshness path (§8.5). Unresolved contradictions surface via the graph toolbar counter and a banner on affected note pages. Error envelope handling per §5C.4 conventions (`invalid_input`, `not_found`, `update_failed`).
+
+---
+
+## 12. Deferred Surfaces — Comparison & Reading Paths
+
+*Deferred pool (see ROADMAP). Requirements preserved in condensed form so they can re-enter the sequence without re-design.*
+
+- **Note comparison:** place 2–N notes side-by-side (cap configurable) with three tabs — metadata (shared values highlighted), content (collapsed excerpts via `lithos_read`), and LLM-generated themes & shared-concepts (hidden when LLM disabled). Entry points: feed multi-select, graph multi-select, and the conflict panel's "compare endpoints". Read-only.
+- **Reading paths:** an ordered traversal over a note subset — modes `salience` (via `lithos_node_stats`), `chronological`, `edge-traversal` (BFS over `builds_on`/`derived_from`), and `llm` (pedagogical ordering; LLM-gated). Output is a shareable ordered page; saved paths persist as a Lens-authored note with a structured block in the body.
+- **Semantic projection** (UMAP/t-SNE layouts) remains blocked on Lithos exposing embeddings via MCP.
 
 ---
 
 # Part D — Reference
 
-Cross-cutting concerns, reference tables, and the implementation plan.
+Cross-cutting concerns and reference tables. Milestone sequencing lives in [`docs/ROADMAP.md`](./ROADMAP.md).
 
 ---
 
@@ -1442,16 +1238,14 @@ Cross-cutting concerns, reference tables, and the implementation plan.
 
 Read-only. Displays:
 
-- Current Influx profiles (names, descriptions, thresholds) — parsed from `/etc/influx/config.toml`
-- Current feed list per profile
-- Current model assignments
-- Current telemetry flags
-- Current LLM flags (`llm.enabled`, provider, model, complexity default, findings curation flag) — values only, no API key disclosure
-- Current Tasks-view tuning (auto-refresh interval, visible cap, default time range)
-- Lithos SSE connection status (live / reconnecting / disabled), last successful event time
-- Recent Influx run/backfill tasks from Lithos (`lithos_task_list(tags=["influx:run"])` and `lithos_task_list(tags=["influx:backfill"])`), limited to fields Lithos currently exposes
+- Lithos connection state: URL, MCP session status, detected capability set (`graph_available` — whether the connected Lithos serves the task-graph tools), SSE subscription state and last successful event time
+- Effective Tasks-view tuning (`frontier_limit`, attention thresholds, `project_convention`, debounce, drawer size) with deprecation notices for any parsed-and-ignored legacy knobs (§4.4)
+- Graph page settings (`[graph]`) and Knowledge settings (`[knowledge]`)
+- **Writes posture:** whether `[writes]` is enabled, the current operator identity, and — when enabled — the explicit trusted-network security-boundary statement from §5C.1
+- LLM flags (enabled, provider, model, complexity default) — values only, never API keys
+- Influx profile/threshold/model display parsed from `/etc/influx/config.toml` — **only when the optional mount exists** (§3); the section is hidden otherwise
 
-Editing happens by changing the TOML file or env vars outside the container. Lens does not write to config.
+Editing happens via TOML/env outside the container. Lens does not write to config.
 
 ---
 
@@ -1459,24 +1253,28 @@ Editing happens by changing the TOML file or env vars outside the container. Len
 
 | Failure | Behaviour |
 |---------|-----------|
-| Lithos unreachable | Show banner "Lithos is offline"; disable all writes; retry transparently on next request |
-| `lithos_write` returns `version_conflict` | Re-read note, merge feedback tags, retry once |
-| `lithos_write` returns `slug_collision` | Not expected on update — surface as error |
-| `lithos_retrieve` errors | Fall back to `lithos_search` with a warning badge |
-| `lithos_node_stats` returns `doc_not_found` | Render with default salience values |
-| Archive file missing on disk | Link still renders; 404 response from `/archive/...` shows a placeholder icon |
-| Feedback write fails | Toast error; do not silently drop; retry button offered |
-| Graph edge count exceeds `ui.graph_max_nodes` | Paged sample + warning banner |
-| `llm.enabled = false` | Synthesis toggle, comparison "Themes" tab, complexity slider, `llm` reading-path mode, and "Most significant findings" toggle are hidden; remaining UI fully functional |
-| LLM provider error (transient) | Per-feature failure: synthesis hides and result list still renders; comparison falls back to metadata + content tabs only; reading path falls back to `salience` mode; tasks findings fall back to "All findings"; non-blocking toast with retry |
-| LLM provider misconfigured at startup | Log error, set effective `llm.enabled = false`, surface warning in settings view |
-| Centrality computation fails | Disable overlay; toast warning; rest of graph unaffected |
-| `lithos_task_list` errors | Tasks view shows error banner with retry; preserves last successful render so the page is not blank |
-| `lithos_task_status` errors for a row | Row renders without inline claim indicator; tooltip explains; rest of list unaffected |
-| `lithos_finding_list` errors | Detail panel shows "Could not load findings — retry"; metadata sections still render |
-| `lithos_read` for a `finding.knowledge_id` errors | Finding link label falls back to "View document"; warning toast once per panel open |
-| SSE event stream disconnects | Show "Live updates paused — reconnecting" badge; manual `tasks.auto_refresh_interval_s` polling takes over; on reconnect, full reload of visible list |
-| SSE event stream not supported by Lithos build | Disable SSE silently after initial connect failure; rely on polling; surface state in settings view |
+| Lithos unreachable | Banner "Lithos is offline"; degraded panels; boot survives (§4.1); write affordances disabled; retry transparently |
+| **Lithos < 0.4 (frontier tools missing)** | Detect via tool-not-found on `lithos_task_ready`; set `graph_available=false`; render the legacy flat open/completed/cancelled list with a **"graph features need Lithos ≥ 0.4"** notice. No graph sections, no graph pages, no write actions that depend on graph context. |
+| `lithos_task_ready` / `lithos_task_blocked` errors (transient) | Dashboard renders the master open list flat with a warning banner; no silent classification |
+| `lithos_task_children` errors | Epic chip renders without a progress fraction; tooltip explains |
+| `lithos_task_get` → `task_not_found` | Not-found panel with a link back to `/tasks` (never HTTP 500) |
+| `lithos_task_edge_list` fan-out partial failure (graph page) | Render the partial graph with a "N tasks could not be fetched" banner |
+| Write tool errors | Mapped per §5C.4; network failure mid-write renders "the action may or may not have applied — refresh to see current state" (writes are not idempotent) |
+| Expired claims | Invisible by design (§5.1) — claim lists are labelled "active claims"; Lens never renders an expired/released inference |
+| `lithos_retrieve` errors | Silent fallback to `lithos_search` with a "fast search" badge (§7.2) |
+| `lithos_node_stats` → `doc_not_found` | Render default salience/count values |
+| Wiki-link resolver finds zero/multiple candidates | Unresolved page / disambiguation page (§6.3) — never a 500 |
+| Markdown rendering failure | HTML-escaped plaintext fallback (§6.2) |
+| `lithos_read` for a finding link fails | "View document" fallback label; one warning per panel |
+| `lithos_finding_list` fails | Detail renders metadata sections + findings retry affordance |
+| Watcher note events without `id` | Debounced refetch fallback (§8.5) |
+| Graph caps exceeded | "Refine your filters" banner + truncated sample (task graph: refuse render over `[graph].max_tasks`) |
+| `lithos_note_update` → `version_conflict` | Re-read, retry once, then surface (§10.2) |
+| Feedback / conflict write fails | Toast error with retry; never silently dropped |
+| LLM disabled / provider error | LLM-gated surfaces hidden / per-feature fallback with non-blocking toast; misconfiguration at startup logs and effectively disables LLM |
+| SSE disconnect | Paused badge; polling fallback; on reconnect: `Last-Event-ID` replay + one full refresh (§5.8.3) |
+| SSE unsupported by Lithos build | Disable SSE after initial failure; polling only; state surfaced in settings |
+| Archive file missing (optional mount) | Link renders; `/archive/...` 404 shows a placeholder |
 
 ---
 
@@ -1484,38 +1282,37 @@ Editing happens by changing the TOML file or env vars outside the container. Len
 
 ### OTEL — Opt-In, Additive
 
-Same pattern as Lithos and Influx:
-
-- `LENS_OTEL_ENABLED=true` enables it
-- Optional packages installed via `uv sync --extra otel`
-- `LENS_OTEL_CONSOLE_FALLBACK=true` prints spans to stdout
+Same pattern as Lithos and Influx: `LENS_OTEL_ENABLED=true` enables it; optional packages via `uv sync --extra otel`; `LENS_OTEL_CONSOLE_FALLBACK=true` prints spans to stdout.
 
 **Key spans:**
 
 | Span | Description |
 |------|-------------|
 | `lens.request` | Each HTTP request |
-| `lens.tasks.list` | Tasks list fetch (`lithos_task_list` + per-row `lithos_task_status` fan-out) |
-| `lens.tasks.detail` | Task detail panel fetch (`lithos_task_status` + current `lithos_finding_list` result) |
-| `lens.tasks.findings` | Findings page fetch |
-| `lens.tasks.event` | Single SSE event handled (one span per event, attribute `event.type`) |
+| `lens.tasks.list` | Dashboard assembly (five-call fan-out); attributes: per-section counts, truncation flag |
+| `lens.tasks.frontier_join` | The pure join/classification pass; attributes: join duration, unclassified count |
+| `lens.tasks.detail` | Task detail fetch; attributes: blocker/children counts |
+| `lens.tasks.blockers` | Lazy blocker-chain expansion fragment |
+| `lens.tasks.graph` | Task graph page assembly; attributes: scope, node/edge counts, cache hit |
+| `lens.tasks.findings` / `lens.tasks.findings_recent` | Findings timeline / drawer + warm-up |
+| `lens.tasks.event` | Single SSE event handled (attribute `event.type`) |
 | `lens.tasks.refresh` | Manual / polling-fallback refresh |
-| `lens.tasks.curate` | LLM "most significant findings" call |
-| `lens.events.connect` | SSE connection lifecycle (connect / reconnect / disconnect) |
-| `lens.feed.list` | Feed-view data fetch |
-| `lens.graph.edges` | Graph-view edge fetch |
-| `lens.graph.centrality` | Centrality overlay computation |
+| `lens.tasks.metrics_recompute` | Debounced recompute (attribute `trigger=sse\|manual\|reconnect\|warmup`) |
+| `lens.tasks.plan` / `.projects` / `.throughput` | Planning View computations |
+| `lens.tasks.project_convention_conflict` | Metadata-vs-tag disagreement warning (§5B.1) |
+| `lens.writes.<action>` | One span per write attempt (`complete`, `reopen`, `cancel`, `create`, `edge_upsert`); attributes: operator, result code |
+| `lens.events.connect` | SSE connection lifecycle |
+| `lens.knowledge.note` / `.resolve` / `.search` / `.related` | Note page render / wiki-link resolution / search / related panel |
+| `lens.graph.knowledge` / `lens.graph.centrality` | Knowledge graph assembly / centrality overlay |
 | `lens.retrieve` | Cognitive search call |
-| `lens.llm.synthesize` | Answer synthesis (MCP or local LLM) |
-| `lens.compare` | Multi-note comparison |
-| `lens.path.generate` | Reading-path generation |
-| `lens.feedback.write` | Feedback write to Lithos |
-| `lens.archive.serve` | Archive file serve |
+| `lens.llm.*` | LLM calls (curation, synthesis) |
+| `lens.feedback.write` | Feedback write |
+| `lens.archive.serve` | Archive file serve (optional mount) |
 
 ### Logging
 
-- stdout only; structured JSON via `python-json-logger`
-- `LENS_LOG_LEVEL` controls verbosity
+- stdout only; structured JSON via `python-json-logger`; `LENS_LOG_LEVEL` controls verbosity
+- Every write attempt additionally emits the structured audit line from §5C.6
 
 ### Health Endpoint
 
@@ -1528,7 +1325,7 @@ GET /health → {
 }
 ```
 
-The `lithos` status is derived from a single `lithos_stats()` call on start-up plus a cached result refreshed every 30 seconds. The `events` status reports the SSE subscription state. The `llm` status reports the configured provider's reachability when `llm.enabled = true`, else `"disabled"`.
+The `lithos` status derives from a cached `lithos_stats()` probe refreshed every 30 seconds; `events` reports the SSE subscription state; `llm` reports provider reachability when enabled.
 
 ---
 
@@ -1536,310 +1333,119 @@ The `lithos` status is derived from a single `lithos_stats()` call on start-up p
 
 ### 16.1 Lithos MCP API — Lens Usage
 
-| Tool | Required args | Purpose |
-|------|---------------|---------|
-| `lithos_task_list(status?, tags?, agent?, since?)` | none | Tasks view primary list query; `since` is a created-at lower bound |
-| `lithos_task_status(task_id)` | `task_id` | Active claims for a task; called per visible row up to `tasks.visible_cap`, and on demand for the detail panel |
-| `lithos_finding_list(task_id, since?)` | `task_id` | Findings timeline in the task detail panel; Lens renders the current task timeline without paging controls |
-| `lithos_stats()` | none | Health endpoint status probe; tasks-summary tile counts |
-| `lithos_agent_register(id, name?, type?)` | `id` | Startup auto-registration for Lens |
-| `lithos_agent_list(type?, active_since?)` | none | Drives the Tasks-view "creating agent" filter dropdown |
-| `lithos_list(path_prefix?, tags?, since?, limit?, offset?)` | none | Feed view paper listing |
-| `lithos_read(id)` | `id` | Paper detail; feedback writes; resolving `finding.knowledge_id` to a title |
-| `lithos_retrieve(query, limit?, agent_id?, tags?)` | `query` | Cognitive search bar |
-| `lithos_search(query, mode?, tags?, ...)` | `query` | Fallback search when `retrieve` errors |
-| `lithos_edge_list(namespace?, type?)` | none | Graph edge data; client-side centrality |
-| `lithos_related(id, include?, depth?, namespace?)` | `id` | Node detail panel; seed for `edge-traversal` reading paths |
-| `lithos_node_stats(node_id)` | `node_id` | Node salience and retrieval stats; `salience` reading-path mode |
-| `lithos_conflict_resolve(edge_id, resolution, resolver, winner_id?)` | first three | Contradiction resolution UI |
-| `lithos_write(title, content, agent, id?, tags?, confidence?, expected_version?, path?, note_type?)` | `title`, `content`, `agent` | Feedback writes; persisted reading paths under `path="lens/paths"` |
-| `lithos_tags(prefix?)` | none | Tag cloud / filter panel |
-| `lithos_synthesize(query, snippet_ids, agent_id?)` *(future, MVP 3+)* | `query`, `snippet_ids` | Preferred over local LLM for answer synthesis when present; Lens falls back to local LLM otherwise |
+**Reads:**
 
-#### 16.1.1 SSE event stream
+| Tool | Key args used by Lens | Purpose |
+|------|----------------------|---------|
+| `lithos_task_list` | `status`, `tags`, `agent`, `since`, `resolved_since`, `with_claims`, `metadata_match` | Master open set (with inline claims); resolved windows |
+| `lithos_task_get(task_id)` | — | Single-task fetch with explicit `task_not_found` envelope (detail pages, ghost nodes, pre-write checks) |
+| `lithos_task_status(task_id)` | — | Full record **with active claims** (detail refresh on claim events) |
+| `lithos_task_ready` | `limit`, `with_claims`, (`project`, `tags`) | The feasible frontier — Ready section; never re-derived in Lens |
+| `lithos_task_blocked` | `limit`, (`project`, `tags`) | Blocked tasks with structured `blockers[]` (`kind`: `task` / `gate` / `blocker_unsatisfiable` / `cycle`) |
+| `lithos_task_children(task_id)` | `recursive`, `include_closed` | Epic rollups; children tables; epic-scope node sets |
+| `lithos_task_edge_list(task_id)` | `direction`, `types` | Edges touching a task: `{from_task_id, to_task_id, type, direction, metadata, created_by, created_at}`; graph assembly, gate waiters, provenance |
+| `lithos_finding_list(task_id, since?)` | — | Findings timeline; rolling-buffer warm-up. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
+| `lithos_stats()` | — | Health probe; summary signals |
+| `lithos_agent_list` | `type`, `active_since` | Agent filter dropdown |
+| `lithos_tags(prefix?)` | — | Project universe (tag convention); tag filters |
+| `lithos_read` | `id` \| `path`, `max_length`, `agent_id` | Note pages; cheap title/metadata fetches (`max_length=1` still returns complete frontmatter metadata); wiki-link path probe. Response carries **no top-level `path`**; `links` entries are unresolved `{target, display}`. |
+| `lithos_search(query)` | `mode="hybrid"`, `limit`, `tags`, `path_prefix` | `/knowledge` search; retrieve fallback. **Snippets contain raw markdown — render escaped** (§7.1) |
+| `lithos_list` | `path_prefix`, `tags`, `since`, `limit`, `offset`, `title_contains` | Recently-updated lists; feed; wiki-link disambiguation |
+| `lithos_related(id)` | `include`, `depth`, `namespace` | Related panel; knowledge ego-graphs |
+| `lithos_retrieve(query)` | `limit`, `tags`, `path_prefix`, `namespace_filter`, `agent_id` — **never `task_id`** (§7.2) | Cognitive search |
+| `lithos_edge_list` | `from_id`, `to_id`, `type`, `namespace` | Knowledge graph edges; conflict listing |
+| `lithos_node_stats(node_id)` | — | Salience/retrieval stats panel; node sizing |
 
-Lens consumes the Lithos SSE event stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_PATH}`. Event types Lens handles today:
+**Writes (curated set — §5C):**
 
-| Event | Consumer |
-|-------|----------|
-| `task.created` / `task.claimed` / `task.released` / `task.completed` / `task.cancelled` | Tasks view list and summary |
-| `finding.posted` | Tasks view findings timeline and "+N findings" badge |
-| `note.created` / `edge.upserted` *(future)* | Knowledge Browser live graph updates |
+| Tool | Key args | Lens action |
+|------|----------|-------------|
+| `lithos_task_complete(task_id, agent)` | `outcome?` | Approve gate / complete task; surfaces returned `unblocked[]` |
+| `lithos_task_cancel(task_id, agent)` | `reason?` *(event-only, not persisted)* | Consequence-aware cancel |
+| `lithos_task_reopen(task_id, agent)` | — | Reopen; surfaces returned `reblocked[]` |
+| `lithos_task_create(title, agent)` | `description?`, `tags?`, `metadata?`, `task_type?`, `depends_on?`, `parent_task_id?` | Create task / epic / gate |
+| `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent)` | `metadata?` | Add dependency edge; **emits no upstream event**; **no delete counterpart exists** |
+| `lithos_agent_register(id)` | `name?`, `type?` | Service-agent registration at boot (`type="web-ui"`); operator registration on first write (`type="human"`) |
+
+**Later-milestone writes (Part C):**
+
+| Tool | Purpose |
+|------|---------|
+| `lithos_note_update(id, agent, title?, tags?, status?, metadata?, expected_version?)` | Feedback tag patches (§10) — never round-trips the note body |
+| `lithos_conflict_resolve(edge_id, resolution, resolver, winner_id?)` | Conflict resolution (§11); `winner_id` required for `superseded` |
+
+#### 16.1.1 SSE event reference
+
+Lens consumes the Lithos SSE stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_PATH}` with a server-side `types=` filter, and replays via `Last-Event-ID` on reconnect (bounded by Lithos's in-memory ring buffer — hence the full-refresh backstop, §5.8.3).
+
+| Event | Payload | Consumer / gotchas |
+|-------|---------|--------------------|
+| `task.created` | `task_id`, `title` | Insert skeleton row; reconcile on debounced refresh |
+| `task.claimed` / `task.released` | `task_id`, `agent`, `aspect` | Claim chips; In-progress membership |
+| `task.completed` | `task_id`, `agent`, `outcome`, `cited_nodes`, `misleading_nodes`, `receipt_id` | Section moves; **`cited_nodes` / `misleading_nodes` / `receipt_id` arrive as JSON-encoded strings** (e.g. `"[\"node-1\"]"`, `"null"`) — decode defensively; `outcome` is a plain string or null |
+| `task.cancelled` | `task_id`, `agent`, `reason` | Section moves; **`reason` exists only here — it is not persisted** and will not survive a reload |
+| `task.updated` | `task_id` **only** | Always `requires_refresh=true` — the payload cannot drive a UI patch |
+| `task.reopened` | `task_id`, `agent`, `prior_status`, `prior_outcome` | Moves rows back out of Completed/Cancelled; `reopened` marker |
+| `finding.posted` | `finding_id`, `task_id`, `agent` | Rolling buffer; latest-finding line; open-timeline refresh. **No `knowledge_id`** — gates §6.7 |
+| `agent.registered` | `agent_id`, `name` | System-scoped (§5.8.2): forwarded with `task_id=""`, `requires_refresh=false`; refreshes agent dropdown data only |
+| `note.created` / `note.updated` / `note.deleted` | `id`, `title`, `path` (tool paths); **watcher-emitted events may carry only `path`, no `id`** | Knowledge graph/search freshness; debounced-refetch fallback for id-less events |
+| `note.renamed` | `id`, `src_path`, `dest_path` | Knowledge freshness |
+| `edge.upserted` | `edge_id`, `from_id`, `to_id`, `type`, (`namespace` \| `conflict_state`) | **Knowledge-graph event only** — note UUIDs, not task ids. There is **no task-edge event**; do not route this to task surfaces |
+
+Additional payload notes: task events carry empty `tags`, so upstream `?tags=` filtering cannot scope task streams by project — project scoping is client-side in Lens.
+
+**Synthetic internal events (`lens.*` — reserved namespace, never sent upstream):**
+
+| Event | Emitted when |
+|-------|--------------|
+| `lens.refresh` | On every SSE reconnect, as the correctness backstop |
+| `lens.edge_upserted` | After Lens's own successful `lithos_task_edge_upsert` (no upstream event exists) so all tabs converge |
 
 ### 16.2 Lens Internal HTTP Endpoints
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /` | Default view (`ui.default_view`, defaults to `tasks` until the Knowledge Browser ships) |
-| `GET /tasks` | Tasks dashboard |
-| `GET /tasks/{task_id}` | Task detail HTMX fragment |
-| `GET /tasks/{task_id}/findings` | Findings page HTMX fragment |
-| `GET /tasks/events` | Server-Sent-Events stream re-broadcast to the browser tab |
-| `POST /api/tasks/findings/curate` | LLM "most significant findings" (only when `llm.enabled`) |
-| `GET /note/{id}` | Note detail panel (minimal during Tasks-only milestones; full feed-detail once the Knowledge Browser ships) |
-| `GET /knowledge` | Knowledge Browser feed view |
-| `GET /graph` | Graph view |
-| `GET /search?q=...` | Search results |
-| `POST /api/feedback` | Feedback write endpoint |
-| `POST /api/conflict/resolve` | Conflict resolution submission |
-| `POST /api/synthesize` | Answer synthesis (only when `llm.enabled` or `lithos_synthesize` is available) |
-| `POST /api/compare` | Multi-note comparison |
-| `POST /api/path` | Reading-path generation |
-| `GET /path/{slug}` | Render a saved reading path |
+| `GET /` | Default view (`ui.default_view`, defaults to `tasks`) |
+| `GET /tasks` | Operator View dashboard (`?selected=` opens the side panel; `?epic=` scopes) |
+| `GET /tasks/{task_id}` | Full-page task detail |
+| `GET /tasks/{task_id}/findings` | Findings timeline fragment |
+| `GET /tasks/{task_id}/blockers` | Lazy blocker-chain expansion fragment |
+| `GET /tasks/findings/recent` | Recent-findings drawer fragment |
+| `GET /tasks/graph` | Task dependency graph page (`?project=` \| `?epic=`) |
+| `GET /tasks/plan` (+ `/projects`, `/throughput` fragments) | Planning View |
+| `GET /tasks/events` | SSE re-broadcast to browser tabs |
+| `POST /tasks/{task_id}/complete` \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `POST /tasks/{task_id}/edges` | Curated writes (§5C.7) — **registered only when `[writes] enabled = true`** |
+| `GET /note/{id}` | Note View (§6) |
+| `GET /knowledge` | Search / recently-updated landing (`?q=`, `?tag=`) |
+| `GET /knowledge/resolve` | Wiki-link resolver (`?target=`, `?from=`) |
+| `GET /knowledge/graph` | Knowledge graph (`?focus=` for ego mode) |
+| `POST /api/feedback` | Feedback write (§10; write-gated) |
+| `POST /api/conflict/resolve` | Conflict resolution (§11; write-gated) |
+| `POST /api/tasks/findings/curate` | LLM findings curation (`llm.enabled` only) |
 | `GET /settings` | Read-only settings view |
-| `GET /archive/{path}` | Stream archived files from the mounted volume |
+| `GET /archive/{path}` | Stream archived files (optional mount only) |
 | `GET /health` | Health probe |
 
 ---
 
-## 17. Implementation Plan
-
-> [!note] Tasks View ships first
-> Milestones 0–3 deliver the common core, the Tasks View MVP, observability, and Tasks SSE auto-update. Only after that does the Knowledge Browser begin (Milestones 4–9). The post-Tasks priority is the **knowledge cockpit** — feed, search, graph, comparison, reading paths, and curation — rather than a deeper operator triage product. Milestone 10 (semantic projection) is deferred and depends on Lithos exposing embeddings.
-
-### Milestone 0 — Common Core (v0.1)
-*Goal: shared scaffolding both views build on*
-
-- [ ] Project scaffold: `pyproject.toml`, `Dockerfile`, FastAPI app skeleton
-- [ ] `app/main.py` with view-switcher top-nav and `base.html`
-- [ ] `app/config.py` — TOML + env loader, typed config object
-- [ ] `app/lithos_client.py` — Lithos MCP client (SSE transport for tools)
-- [ ] Startup auto-registration via `lithos_agent_register(id=LENS_AGENT_ID, name="Lithos Lens", type="web-ui")`
-- [ ] `app/events.py` — single SSE subscription to Lithos's event stream + in-process pub/sub (skeleton; consumers wired in M2)
-- [ ] `app/telemetry.py` skeleton with OTEL setup and `@traced` decorator; `lens.request` span on every route
-- [ ] `/health` endpoint reporting `lithos`, `events`, `llm` statuses
-- [ ] Read-only Settings view skeleton
-- [ ] `docker-compose.yml` with `influx-archive` and `influx-config` mounts
-- [ ] `run.sh`
-- [ ] Structured JSON logging
-
-**M0 acceptance:**
-- App boots with Lithos offline and `/health` reports `lithos="unreachable"` without process failure
-- `/` and `/tasks` render a degraded banner instead of HTTP 500 when Lithos is offline
-- Startup attempts `lithos_agent_register` when Lithos is reachable
-- Static templates reference vendored local assets, not public CDN URLs
-- `docs/vendor-assets.md` records vendored asset versions and checksums
-- With `LENS_LLM_ENABLED=false`, missing LiteLLM dependencies do not prevent boot
-
-### Milestone 1 — Operator View MVP (v0.2)
-*Goal: live, read-only Operator View over Lithos tasks with the section structure, project tagging, recent-findings drawer, and title-badge notifications.*
-
-- [ ] `GET /tasks` route + `app/routers/tasks.py`
-- [ ] Operator View section structure: **Needs attention** (severity-ordered: expired-claim → stale-open → unclaimed-old) → **In progress** → **Queued** → **Unknown claim state** tail → collapsed **Completed** → collapsed **Cancelled**
-- [ ] Reason chips on Needs-attention rows; row de-duplication so flagged rows appear only in Needs attention
-- [ ] Project chip per row (configurable `[tasks].project_tag_key`); rows without a project tag render `(no project)`
-- [ ] Latest finding inline on each open row (`<agent> — <summary>` + relative time), updates on `finding.posted`
-- [ ] Agent chips with role markers (`created` / `claimed` / `latest`) collapsed to one chip per agent
-- [ ] Human-agent visual distinction (person-icon prefix, distinct chip background) for agents listed in `[tasks].human_agents`
-- [ ] Filters: project (first-class), status (multi-select group selector), tag (`key:value` parsing), agent with OR-across-roles + role-narrow toggle (`creator` / `claimer` / `poster` / `any`), created-at range (open sections ignore by default), Hide-Needs-attention toggle
-- [ ] URL-reflected filter and section-collapse state; `?selected=<task_id>` opens side panel
-- [ ] Right-side panel + **Expand** button → `/tasks/{task_id}` full-page route; both surfaces reuse `detail.html` / `findings.html`
-- [ ] Detail panel "Why this task is here" block on Needs-attention rows
-- [ ] Per-row `lithos_task_status` fan-out up to `tasks.visible_cap`; Unknown-state tail with accuracy banner past the cap
-- [ ] Findings timeline rendered without paging controls; per-finding `lithos_read` for non-null `knowledge_id` to render title-labelled links; fallback label on read failure
-- [ ] Click-through from finding link to a minimal `/note/{knowledge_id}` route (full feed-detail arrives in M5)
-- [ ] **SSE pipeline**: shared `app/events.py` subscription; tasks router subscribes to task / claim / finding event types; HTMX OOB swaps for optimistic row insert, optimistic row move-between-sections, claim indicator update, latest-finding update, section-count update
-- [ ] **`GET /tasks/events`** browser re-broadcast endpoint
-- [ ] **Server-side metric recompute** debounced at `tasks.metrics_debounce_ms` (default 2000ms); manual refresh / page load / SSE reconnect bypass debounce
-- [ ] **Server-side recent-findings rolling buffer** of size `tasks.recent_findings_drawer_size` (default 50), with boot-time warm-up over `tasks.recent_findings_warmup_window_h` (default 48h)
-- [ ] **`GET /tasks/findings/recent`** drawer endpoint + collapsible drawer UI (off by default)
-- [ ] Reconnect with exponential backoff; `Live updates paused — reconnecting` badge during disconnect; polling fallback at `tasks.auto_refresh_interval_s`; transient `Refreshed via fallback` toast on each fallback success
-- [ ] **Title-badge notifications** (`(N) Lithos Lens`) for unseen Needs-attention items; cleared on tab focus; `[tasks].notifications.title_badge` toggle
-- [ ] Empty states: no tasks at all / tasks but none open / all open healthy / Lithos unreachable — all four explicitly tested
-- [ ] OTEL spans: `lens.tasks.list`, `lens.tasks.detail`, `lens.tasks.findings`, `lens.tasks.findings_recent`, `lens.tasks.refresh`, `lens.tasks.event`, `lens.tasks.metrics_recompute`, `lens.events.connect`
-- [ ] Set `ui.default_view = "tasks"` so `/` lands here
-
-**M1 acceptance:**
-- Section structure renders correctly: a row with an expired claim appears only in Needs attention with an `expired-claim` reason chip; same row does not appear in In progress; section header counts agree with rendered rows
-- A row with no claims appears only in Queued; once claimed via SSE, it animates into In progress without page reload
-- Project chip renders on every row; the project filter (top-level) scopes all sections; multi-`project:*` tasks render multiple chips and emit a telemetry warning
-- Latest-finding line updates within ~1s of a `finding.posted` SSE event; row's agent chip gains a `latest` role marker
-- Side-panel + Expand-to-`/tasks/{task_id}` both render the same content; URL `/tasks?selected=<id>` deep-links to the panel
-- Direct `/tasks/{task_id}` works for open, completed, and cancelled tasks by scanning current Lithos task lists; unknown ID renders a not-found panel (not HTTP 500)
-- Recent findings drawer opens in <200ms from the rolling buffer with no blocking MCP calls; surviving across tab refresh
-- Title badge updates to `(N) Lithos Lens` when N rows enter Needs attention; clears on tab focus
-- `lithos_tags(prefix="project:")` is fetched once per page load and shared across project filter / Operator-view rendering
-- All four empty states render the specified content; Lithos-unreachable banner appears without the page erroring
-- SSE disconnect shows the paused badge; polling fallback fires the `Refreshed via fallback` toast on each successful refresh
-- `LENS_LLM_ENABLED=false` does not break boot or hide any operator-view affordance (LLM features are not in M1)
-
-### Milestone 1.5 — Planning View (v0.3)
-*Goal: ship `/tasks/plan` with Human-actionable, Project breakdown, and Throughput overview sections — answers "what should happen next?"*
-
-- [ ] `GET /tasks/plan` route + `app/routers/tasks_plan.py`
-- [ ] **Human-actionable section**: open tasks tagged `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first; includes tasks claimed by an agent listed in `[tasks].human_agents`
-- [ ] **Project breakdown section**: per-project queue depth, in-flight depth, flag chips (`starvation`, `bottleneck`, `stalled`); flag tooltips show rule details
-- [ ] **Throughput overview section**: per-project completed count, cancelled count, completion ratio over `tasks.throughput_window_days` (default 30d); ordered by completed desc / ratio desc / alphabetical; dormant projects shown by default with `0 / 0`
-- [ ] `Hide dormant` toggle (cookie + URL)
-- [ ] Filter bar: project (multi-select), created-at range (within window), Hide-dormant
-- [ ] **Stalled detection** integrated into the rolling buffer: in-progress task with no `finding.posted` in `tasks.stalled_no_findings_hours` (default 24h); also drives row decoration on the Operator View
-- [ ] **Bottleneck detection**: in-flight depth ≥ `tasks.bottleneck_min_inflight` (default 3) AND one agent holds ≥ `tasks.bottleneck_concentration` (default 0.7) of those claims
-- [ ] **Starvation detection**: queue depth ≥ 1 AND in-flight depth = 0
-- [ ] HTMX fragment endpoints `GET /tasks/plan/projects` and `GET /tasks/plan/throughput`
-- [ ] Top-nav switcher links Operator View ↔ Planning View ↔ (future) Knowledge Browser; switching resets view-specific filter state
-- [ ] OTEL spans: `lens.tasks.plan`, `lens.tasks.plan.projects`, `lens.tasks.plan.throughput`
-
-**M1.5 acceptance:**
-- A project with one queued task and no in-flight tasks displays a `starvation` flag
-- A project with 5 in-flight tasks where 4 are claimed by `agent-zero` displays a `bottleneck` flag with hover tooltip naming `agent-zero`
-- A project with one in-progress task that has had no `finding.posted` in 25h displays a `stalled` flag
-- Throughput overview correctly sums completed and cancelled tasks within `tasks.throughput_window_days`
-- Dormant projects (zero activity in window) appear by default with `0 / 0` and are hidden when `Hide dormant` is enabled
-- Human-actionable section renders open tasks tagged `human`, grouped by project; navigation back to Operator View preserves no Planning-View filter state
-
-### Milestone 2 — (renumbered into M1) — REMOVED
-*M1 now bundles SSE auto-update; the previous M1/M2 split is collapsed into a single shippable Operator View MVP. The legacy "M2 acceptance" criteria are folded into M1 acceptance above.*
-
-### Milestone 3 — Optional LLM client + Tasks curation + Desktop notifications (v0.4)
-*Goal: enable the optional LLM path; ship the Tasks "most significant findings" curation; ship opt-in desktop notifications wiring on top of the Operator View.*
-
-- [ ] `app/llm_client.py` — LiteLLM-backed provider-agnostic wrapper
-- [ ] Optional install via `uv sync --extra llm`
-- [ ] `LENS_LLM_*` env wiring; gated UI hidden when disabled
-- [ ] Complexity slider, session-scoped, injected into all LLM prompts (initially used by Tasks curation; reusable for later milestones)
-- [ ] "Most significant findings" toggle behind `llm.enabled && llm.findings_curation_enabled`
-- [ ] `POST /api/tasks/findings/curate` endpoint
-- [ ] LLM status surfaced in `/health` and settings view
-- [ ] OTEL span `lens.tasks.curate`
-- [ ] **Desktop notifications (opt-in)**: "Enable notifications" affordance in Operator View header; Notification API permission flow; grant state in `localStorage`; notifications fire only on Needs-attention transitions (row entering the section), body `<task title> — <reason>`, click → `/tasks?selected=<task_id>`; `[tasks].notifications.desktop_optin` toggle
-
-### Milestone 4 — Feed View + Feedback (v0.5)
-*Goal: human-readable feed with feedback mechanism — first Knowledge Browser milestone*
-
-- [ ] Feed view: paper list from `lithos_list`, filterable by profile/date/tag/confidence
-- [ ] Expandable abstract via HTMX + `lithos_read`
-- [ ] Archive file streaming via `/archive/...`
-- [ ] 👍 / 👎 feedback buttons → read-then-write pattern with `lithos_write`
-- [ ] `POST /api/feedback` with version-conflict retry
-- [ ] Promote `/note/{id}` from the M1 minimal renderer to the full feed-detail panel
-- [ ] Settings view content (Influx config display)
-
-### Milestone 5 — Cognitive Search (v0.6)
-- [ ] Search bar wired to `lithos_retrieve`
-- [ ] Fallback to `lithos_search` on retrieval errors
-- [ ] Namespace/profile scope toggle
-- [ ] Result cards with scout chips and reasons
-- [ ] Tag cloud from `lithos_tags`
-
-### Milestone 6 — Graph View (v0.7)
-- [ ] Cytoscape.js graph
-- [ ] Nodes sized by `lithos_node_stats.salience`, coloured by profile
-- [ ] Edges from `lithos_edge_list` — typed and colour-coded
-- [ ] Click node → side panel with `lithos_related`
-- [ ] Filter panel (profile, date, tag, confidence / parsed profile score, edge type)
-- [ ] Safety cap via `ui.graph_max_nodes`
-
-### Milestone 7 — Conflict Resolution (v0.8)
-- [ ] "Needs attention" banner for unresolved `contradicts` edges
-- [ ] Node-detail resolution panel calling `lithos_conflict_resolve`
-- [ ] Winner picker for `superseded` resolution
-- [ ] Resolution badges in graph
-
-### Milestone 8 — Reading Paths & Centrality (v0.9)
-- [ ] Bidirectional node ↔ side-panel selection
-- [ ] Centrality overlay toggle in graph filter panel
-- [ ] `POST /api/path` with `salience`, `chronological`, `edge-traversal` modes
-- [ ] Reading-path picker UI in feed and graph views
-- [ ] Persisted path notes under `path="lens/paths"` with structured path metadata in the note body
-- [ ] `GET /path/{slug}`
-
-### Milestone 9 — LLM Knowledge-Browser features (v1.0)
-*Goal: extend the M3 LLM client to the Knowledge Browser*
-
-- [ ] Answer synthesis: routed through `lithos_synthesize` when present, else local LLM
-- [ ] Multi-note comparison "Themes & Concepts" tab
-- [ ] LLM-curated reading-path mode
-
-### Milestone 10 — Semantic Projection (deferred)
-> Blocked on Lithos exposing a `lithos_embeddings` MCP tool.
-
-- [ ] `lithos_embeddings` MCP tool available in Lithos
-- [ ] 2D UMAP / t-SNE projection of nodes
-- [ ] Toggle between force-directed and semantic-projection layouts
-- [ ] Cluster overlay derived from projection density
-
-### Milestone 11 — Knowledge → Tasks back-link (deferred)
-*Depends on producers passing `source_task` so Lithos stores the producing task ID in note metadata.*
-
-- [ ] "Produced by task X" badge in feed and graph node detail
-- [ ] Click-through to `/tasks/{task_id}`
-
----
-
-## Appendix A — Directory Structure
-
-```
-lithos-lens/
-├── Dockerfile
-├── docker-compose.yml
-├── .env.dev
-├── .env.prod
-├── pyproject.toml
-├── README.md
-├── run.sh
-├── app/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── config.py
-│   ├── lithos_client.py
-│   ├── events.py                 # shared SSE subscription + pub/sub
-│   ├── llm_client.py             # optional, gated by LENS_LLM_ENABLED
-│   ├── telemetry.py
-│   ├── routers/
-│   │   ├── tasks.py              # tasks dashboard, list, detail, findings
-│   │   ├── tasks_events.py       # SSE re-broadcast endpoint
-│   │   ├── feed.py
-│   │   ├── graph.py
-│   │   ├── search.py
-│   │   ├── feedback.py
-│   │   ├── conflict.py
-│   │   ├── compare.py
-│   │   ├── path.py
-│   │   └── settings.py
-│   └── templates/
-│       ├── base.html
-│       ├── tasks/
-│       │   ├── dashboard.html
-│       │   ├── list.html         # HTMX fragment
-│       │   ├── row.html          # HTMX fragment
-│       │   ├── summary.html      # HTMX fragment
-│       │   ├── detail.html
-│       │   └── findings.html
-│       ├── feed.html
-│       ├── graph.html
-│       ├── search.html
-│       ├── compare.html
-│       ├── path.html
-│       └── settings.html
-└── static/
-    ├── cytoscape.min.js
-    ├── htmx.min.js
-    ├── htmx-sse.js
-    ├── vendor.css
-    └── lens.css
-```
-
----
-
-## Appendix B — Key Dependencies
+## Appendix A — Key Dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `fastapi` | Web framework |
-| `uvicorn` | ASGI server |
-| `httpx` | Lithos MCP transport (SSE for tools); also LLM HTTP client |
-| `httpx-sse` (or equivalent) | SSE consumption for Lithos's event stream |
+| `fastapi` / `uvicorn` | Web framework / ASGI server |
+| `httpx` + `httpx-sse` (or equivalent) | Lithos MCP transport and SSE event consumption |
 | `jinja2` | HTML templating |
 | `pydantic` | Request/response validation |
+| `markdown-it-py` | Server-side markdown rendering, safe-by-default (§6.2) |
 | `python-json-logger` | Structured JSON logging |
 | `opentelemetry-*` | OTEL (optional extra: `uv sync --extra otel`) |
 | `litellm` | Provider-agnostic LLM calls (optional extra: `uv sync --extra llm`) |
-| Cytoscape.js (vendored static asset) | Graph visualisation; client-side centrality via `cy.elements().bc()` |
-| HTMX + SSE extension (vendored static assets) | Dynamic HTML; SSE extension drives live tile and row updates |
-| App CSS / optional precompiled utility CSS (vendored static asset) | Styling without a frontend build step or CDN dependency |
+| Cytoscape.js *(vendored static asset)* | Graph visualisation (task DAG, knowledge graph, mini-graphs); client-side centrality |
+| HTMX + SSE extension *(vendored static assets)* | Dynamic HTML; live tile/row updates |
+| App CSS *(vendored)* | Styling without a build step or CDN dependency |
 
-> [!note] LLM provider neutrality
-> The LLM client is wrapped in `app/llm_client.py` so the rest of the app calls a small `synthesize()` / `compare_themes()` / `order_path()` / `curate_findings()` interface. LiteLLM handles provider-specific API differences; swapping providers is an env/config change, not a code change.
+> [!note] Module layout
+> The authoritative module/package layout lives in [`docs/SPECIFICATION.md`](./SPECIFICATION.md) and is enforced by the `docs/architecture.toml` guardrail tests; this document intentionally does not duplicate it.
 
 > [!note] Frontend asset recommendation
-> For a local-first operational tool, production builds should serve pinned, vendored JS/CSS from `static/` rather than CDNs. This keeps the app usable offline, avoids runtime dependency on third-party CDNs, and gives reproducible upgrades. Tailwind's CDN mode is useful for prototypes but is not recommended as the default production path; use explicit app CSS or a checked-in precompiled CSS bundle instead.
+> For a local-first operational tool, production builds serve pinned, vendored JS/CSS from `static/` rather than CDNs — usable offline, no third-party runtime dependency, reproducible upgrades. Tailwind's CDN mode is prototype-only; use explicit app CSS or a checked-in precompiled bundle.
