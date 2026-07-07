@@ -188,8 +188,12 @@ related_title_fanout_cap = 20
 
 New client methods (+ protocol + fakes): `search_notes` (`lithos_search`),
 `related` (`lithos_related`), `list_notes` (`lithos_list`). Already wired:
-`lithos_read`, `lithos_task_get` (from T1). No SSE changes — the note page
-is request/response in K1 (knowledge event wiring is K2).
+`lithos_read`. The produced-by-task chip also needs the `lithos_task_get`
+client method (a trivial one-call wrapper first introduced by T1); K1 does
+**not** depend on T1 landing first — if `lithos_task_get` is not yet present,
+K1 adds it, and the chip degrades to hidden when the method is unavailable
+(see slice 5). No SSE changes — the note page is request/response in K1
+(knowledge event wiring is K2).
 
 ### Telemetry
 
@@ -237,8 +241,10 @@ Coverage ≥ 80% on `knowledge.py` and the wiki-link tokenizer.
    resolution with cap. Acceptance: back-links section lists incoming link
    titles; 25 edges with cap 20 renders "+5 more".
 5. **Produced-by-task chip.** `metadata.source` → `lithos_task_get`
-   validation. Acceptance: chip links to the task; invalid source renders no
-   chip.
+   validation (adding the `lithos_task_get` client method if T1 has not
+   already landed it). Acceptance: chip links to the task; invalid source
+   renders no chip; the chip is omitted entirely if `lithos_task_get` is
+   unavailable.
 6. **`/knowledge` search + recent.** Nav box, result cards with escaped
    snippets, recent list, `tag` filter. Acceptance: query renders cards;
    no query renders recent; snippet markup is escaped.
@@ -277,5 +283,11 @@ Slice 1 is foundational; 2–5 depend on it; 6–7 are independent.
 - **`lithos_retrieve` and working memory**: even in K3, Lens must never pass
   `task_id` to retrieve — it writes agent working-memory rows. Stated here
   because K1's search plumbing is what K3 extends.
+- **Relationship to T1**: K1 and T1 are on independent tracks and touch
+  disjoint modules (`knowledge.py` vs `frontier.py`); `depends_on: []` is
+  therefore accurate. The only shared primitive is the `lithos_task_get`
+  client method (produced-by-task chip), added by whichever milestone lands
+  first. The ROADMAP sequences T1 before K1 for focus, not because of a hard
+  dependency.
 - **Spec drift**: when K1 ships, `docs/SPECIFICATION.md` §5.7 (note view)
   must be rewritten and the user manual regenerated.

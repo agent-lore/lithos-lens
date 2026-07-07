@@ -13,7 +13,7 @@ tags: [lithos-lens, requirements, design, architecture]
 > - **Tasks View** — a **graph-native** dashboard over the Lithos task graph (typed edges, epics, gates, computed ready/blocked frontiers), with a small set of **curated write actions** (approve gates, reopen, cancel, create, add dependencies) gated behind an explicit config flag.
 > - **Knowledge Browser** — real note rendering with wiki-links, search, related/back-link panels, an interactive typed-edge graph (Cytoscape.js), cognitive search backed by `lithos_retrieve`, feedback via frontmatter patches, and conflict resolution.
 >
-> Lens is a pure Lithos MCP client by default — zero runtime dependency on the Influx ingestion container; all data is sourced from Lithos. Lens may optionally call an LLM directly **when explicitly enabled** (`LENS_LLM_ENABLED=true`) for findings curation and synthesis; with the flag off Lens remains a pure MCP client.
+> Lens is a pure Lithos MCP client by default — zero runtime dependency on the Influx ingestion container; all data is sourced from Lithos. Lens may optionally call an LLM directly **when explicitly enabled** (`LITHOS_LENS_LLM_ENABLED=true`) for findings curation and synthesis; with the flag off Lens remains a pure MCP client.
 >
 > This document holds **durable product requirements only**. Milestone sequencing, status, and the upstream-Lithos dependency ledger live in [`docs/ROADMAP.md`](./ROADMAP.md); shipped behaviour is described by [`docs/SPECIFICATION.md`](./SPECIFICATION.md); execution detail for in-flight milestones lives in the just-in-time PRDs under [`docs/prd/`](./prd/).
 
@@ -69,7 +69,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 #### Common
 - Provide a low-latency local browser UI over the Lithos coordination layer and a Lithos knowledge base
 - Two first-class roles — a **task dashboard** (observe the task graph, act on it through a curated write set) and a **knowledge browser** — sharing one FastAPI app, one MCP client, and one `base.html` shell with a top-nav view switcher
-- Operate purely as a Lithos MCP client when `LENS_LLM_ENABLED=false` — no dependency on the Influx runtime
+- Operate purely as a Lithos MCP client when `LITHOS_LENS_LLM_ENABLED=false` — no dependency on the Influx runtime
 - Subscribe to the Lithos SSE event stream once (a shared events module) and let any view consume the events it cares about
 - **Curated writes, not CRUD**: Lens exposes a small, deliberate set of operator actions (§5C) behind `[writes] enabled` (default off). With writes disabled, Lens is strictly read-only and registers no mutating routes.
 - Scale posture: the production deployment Lens observes today runs **~330 open tasks (311 `task`, 21 `epic`) across ~20 projects and ~2,900 knowledge notes**. Lens MUST be designed for *hundreds of open tasks and thousands of notes* — not tens — and SHOULD remain usable into the low thousands of open tasks before requiring upstream bulk-fetch support (see the ROADMAP dependency ledger).
@@ -142,7 +142,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 > **Lithos Lens has zero runtime dependency on the Influx ingestion container.** It is a pure Lithos MCP client. All knowledge and coordination data — notes, feedback, graph edges, tasks, claims, and findings — comes from Lithos. Lens MAY optionally mount the `influx-archive` volume read-only to serve archived PDFs/HTMLs and the `influx-config` volume to display Influx settings; **both mounts are optional** and every Lens feature except archive serving and Influx-config display works without them.
 
 > [!note] Optional LLM client
-> When `LENS_LLM_ENABLED=true`, Lens additionally talks to an LLM provider (Anthropic / OpenAI / Ollama via LiteLLM) for "most significant findings" curation in the Tasks view and synthesis in the Knowledge Browser. With the flag off, all LLM-dependent UI surfaces are hidden and Lens remains a pure MCP client. When Lithos exposes a synthesis tool (`lithos_synthesize` or equivalent), Lens prefers the MCP path and treats the local LLM as a fallback. Sequencing: ROADMAP X1.
+> When `LITHOS_LENS_LLM_ENABLED=true`, Lens additionally talks to an LLM provider (Anthropic / OpenAI / Ollama via LiteLLM) for "most significant findings" curation in the Tasks view and synthesis in the Knowledge Browser. With the flag off, all LLM-dependent UI surfaces are hidden and Lens remains a pure MCP client. When Lithos exposes a synthesis tool (`lithos_synthesize` or equivalent), Lens prefers the MCP path and treats the local LLM as a fallback. Sequencing: ROADMAP X1.
 
 > [!note] Single SSE subscription
 > Lens opens **one** SSE connection to Lithos at app start. Each view registers for the event types it cares about; the connection is shared. Browser tabs never connect to Lithos directly — they connect to Lens's own `/tasks/events` re-broadcast endpoint. See §5.8.
@@ -162,7 +162,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 | Styling/assets | Vendored, pinned static assets (`static/`) with app CSS | Local-first/offline behaviour; no CDN supply-chain or runtime dependency |
 | Config format | TOML + env overrides | Consistent with Lithos conventions |
 | OTEL | Opt-in, additive, optional packages | Consistent with Lithos conventions |
-| LLM access | Optional, env-gated LiteLLM client (`LENS_LLM_*`) | Provider-agnostic across OpenAI, Anthropic, OpenRouter, Ollama; prefers MCP synthesis when Lithos ships it |
+| LLM access | Optional, env-gated LiteLLM client (`LITHOS_LENS_LLM_*`) | Provider-agnostic across OpenAI, Anthropic, OpenRouter, Ollama; prefers MCP synthesis when Lithos ships it |
 | Centrality computation | Client-side in Cytoscape | Lithos exposes edges but no centrality scores; computing in the browser operates on the already-loaded graph |
 | SSE event handling | Single shared subscription, fan-out via in-process pub/sub | Avoids N independent SSE connections; scope-aware normalization (§5.8.2) |
 
@@ -180,105 +180,114 @@ The following concerns are shared by every view and constitute the "common core"
 |-----------|-----------|--------|
 | `lithos-lens` | `python:3.12-slim` | Web UI hosting both Tasks View and Knowledge Browser |
 
-### Shared Volumes (optional)
+### Volumes
 
 | Volume | Lens mount | Purpose |
 |--------|------------|---------|
-| `influx-archive` *(optional)* | `/archive` (ro) | Serve archived PDFs/HTMLs inline (Knowledge Browser). When absent, archive links are hidden. |
-| `influx-config` *(optional)* | `/etc/influx` (ro) | Display the Influx TOML config in the settings view. When absent, that settings section is hidden. |
+| config/data | `/data` | Holds `lithos-lens.toml` (`LITHOS_LENS_CONFIG=/data/lithos-lens.toml`) and the Lens data dir (`LITHOS_LENS_DATA_DIR=/data`). This is the mount the shipped `docker/docker-compose.yml` uses. |
+| `influx-archive` *(optional, future)* | `/archive` (ro) | Serve archived PDFs/HTMLs inline (Knowledge Browser). When absent, archive links are hidden. |
+| `influx-config` *(optional, future)* | `/etc/influx` (ro) | Display the Influx TOML config in the settings view. When absent, that settings section is hidden. |
 
 ### Environment Files
 
-Every TOML knob in §4 has an `LENS_*` environment override following the existing naming convention (`[tasks].frontier_limit` → `LENS_TASKS_FRONTIER_LIMIT`). The env files list the operationally interesting subset:
+Every TOML knob in §4 has a `LITHOS_LENS_*` environment override following the shipped naming convention (`[tasks].frontier_limit` → `LITHOS_LENS_TASKS_FRONTIER_LIMIT`; verify names against `config.py`, which is authoritative). Overrides for knobs whose milestone has not shipped yet (all `[tasks]` graph knobs, `[graph]`, `[writes]`, `[knowledge]`) land with that milestone's code — the convention below is the contract, not a promise that every name is wired today. The env files list the operationally interesting subset:
 
 **`.env.dev`:**
 ```env
-LENS_ENVIRONMENT=dev
-LENS_HOST_PORT=7843
-LENS_CONTAINER_NAME=lithos-lens
-LENS_OTEL_ENABLED=false
+LITHOS_LENS_ENVIRONMENT=dev
+LITHOS_LENS_HOST_PORT=7843
+LITHOS_LENS_CONTAINER_NAME=lithos-lens
+LITHOS_LENS_OTEL_ENABLED=false
 OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318
 
 # Lithos transport
-LITHOS_URL=http://host.docker.internal:8765
-LITHOS_SSE_EVENTS_PATH=/events            # default; SSE event stream endpoint
-LENS_AGENT_ID=lithos-lens
+LITHOS_LENS_LITHOS_URL=http://host.docker.internal:8765
+LITHOS_LENS_SSE_EVENTS_PATH=/events            # default; SSE event stream endpoint
+LITHOS_LENS_AGENT_ID=lithos-lens
 
 # Tasks view — graph-native dashboard
-LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30     # polling fallback when SSE disconnects
-LENS_TASKS_FRONTIER_LIMIT=500             # limit for task_ready / task_blocked
-LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # resolved_since window for Completed/Cancelled
-LENS_TASKS_GATE_WAITING_ATTENTION_HOURS=24
-LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
-LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
-LENS_TASKS_STALE_OPEN_AGE_DAYS=7
-LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
-LENS_TASKS_METRICS_DEBOUNCE_MS=2000
-LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
-# LENS_TASKS_HUMAN_AGENTS=dave,human      # comma-separated agent IDs that represent humans
+LITHOS_LENS_TASKS_AUTO_REFRESH_INTERVAL_S=30     # polling fallback when SSE disconnects
+LITHOS_LENS_TASKS_FRONTIER_LIMIT=500             # limit for task_ready / task_blocked
+LITHOS_LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # resolved_since window for Completed/Cancelled
+LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS=24
+LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
+LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
+LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS=7
+LITHOS_LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
+LITHOS_LENS_TASKS_METRICS_DEBOUNCE_MS=2000
+LITHOS_LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
+# LITHOS_LENS_TASKS_HUMAN_AGENTS=dave,human      # comma-separated agent IDs that represent humans
 
 # Task graph pages
-LENS_GRAPH_CACHE_TTL_S=30
-LENS_GRAPH_MAX_TASKS=300
-LENS_GRAPH_FETCH_CONCURRENCY=16
+LITHOS_LENS_GRAPH_CACHE_TTL_S=30
+LITHOS_LENS_GRAPH_MAX_TASKS=300
+LITHOS_LENS_GRAPH_FETCH_CONCURRENCY=16
 
 # Curated writes — disabled by default; POST routes are not registered when false
-LENS_WRITES_ENABLED=false
-# LENS_WRITES_DEFAULT_OPERATOR=dave
-LENS_WRITES_CONFIRM_CANCEL=true
+LITHOS_LENS_WRITES_ENABLED=false
+# LITHOS_LENS_WRITES_DEFAULT_OPERATOR=dave
+LITHOS_LENS_WRITES_CONFIRM_CANCEL=true
 
 # Knowledge browser
-LENS_KNOWLEDGE_SEARCH_LIMIT=20
-LENS_KNOWLEDGE_RECENT_LIMIT=20
-LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
+LITHOS_LENS_KNOWLEDGE_SEARCH_LIMIT=20
+LITHOS_LENS_KNOWLEDGE_RECENT_LIMIT=20
+LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
 
 # Optional LLM client — disabled by default
-LENS_LLM_ENABLED=false
-# LENS_LLM_PROVIDER=anthropic             # LiteLLM provider prefix
-# LENS_LLM_MODEL=anthropic/claude-haiku-4-5-20251001
-# LENS_LLM_API_KEY=
-# LENS_LLM_BASE_URL=
-# LENS_LLM_EXTRA_HEADERS_JSON=
-# LENS_LLM_MAX_TOKENS=2048
+LITHOS_LENS_LLM_ENABLED=false
+# LITHOS_LENS_LLM_PROVIDER=anthropic             # LiteLLM provider prefix
+# LITHOS_LENS_LLM_MODEL=anthropic/claude-haiku-4-5-20251001
+# LITHOS_LENS_LLM_API_KEY=
+# LITHOS_LENS_LLM_BASE_URL=
+# LITHOS_LENS_LLM_EXTRA_HEADERS_JSON=
+# LITHOS_LENS_LLM_MAX_TOKENS=2048
 ```
 
-**`.env.prod`:** same keys with production values (`LITHOS_URL=http://lithos:8765`, `LENS_OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LENS_WRITES_ENABLED=true` explicitly and deliberately.
+**`.env.prod`:** same keys with production values (`LITHOS_LENS_LITHOS_URL=http://lithos:8765`, `LITHOS_LENS_OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LITHOS_LENS_WRITES_ENABLED=true` explicitly and deliberately.
 
 ### `docker-compose.yml`
 
+The authoritative Compose file is the checked-in `docker/docker-compose.yml`
+(built from `docker/Dockerfile`); this section states the requirements it must
+satisfy rather than duplicating it. The shipped shape:
+
 ```yaml
-# lithos-lens — tasks view + knowledge browser UI
+# docker/docker-compose.yml — the checked-in file is authoritative
 services:
   lithos-lens:
-    image: ${LENS_IMAGE:-lithos-lens:local}
+    image: ${LITHOS_LENS_IMAGE:-lithos-lens:dev}
     pull_policy: never
     build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ${LENS_CONTAINER_NAME:-lithos-lens}
-    user: "${LENS_UID:-1000}:${LENS_GID:-1000}"
-    restart: unless-stopped
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ${LITHOS_LENS_CONTAINER_NAME:-lithos-lens}
+    user: "${LITHOS_LENS_UID:-1000}:${LITHOS_LENS_GID:-1000}"
     ports:
-      - "${LENS_HOST_PORT:-7843}:8000"
-    volumes:
-      # Both mounts are OPTIONAL — remove them for a pure-Lithos deployment
-      - ${INFLUX_ARCHIVE_PATH:-./archive}:/archive:ro
-      - ${INFLUX_CONFIG_PATH:-./config}:/etc/influx:ro
-    env_file:
-      - .env.${LENS_ENVIRONMENT:-dev}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+      - "${LITHOS_LENS_HOST_PORT:-8000}:8000"
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:host-gateway"   # reach a host-run Lithos in dev
+    volumes:
+      - ${LITHOS_LENS_DATA_PATH:-./data}:/data
+      # optional, future — Knowledge Browser archive/config serving:
+      # - ${INFLUX_ARCHIVE_PATH:-./archive}:/archive:ro
+      # - ${INFLUX_CONFIG_PATH:-./config}:/etc/influx:ro
+    environment:
+      - LITHOS_LENS_CONFIG=/data/lithos-lens.toml
+      - LITHOS_LENS_DATA_DIR=/data
+      - LITHOS_LENS_ENVIRONMENT=${LITHOS_LENS_ENVIRONMENT:-dev}
 ```
+
+Requirements: a single service on `python:3.12-slim`; a `/health` container
+health check; reachability of Lithos over the network (dev via
+`host.docker.internal`); config supplied through `LITHOS_LENS_*` env plus the
+`/data`-mounted TOML; optional read-only archive/config mounts for the
+Knowledge Browser (future). Per-environment values come from
+`docker/.env.<env>` (see `docker/.env.example`), applied by `run.sh`.
 
 ### `run.sh`
 
-Identical pattern to Influx with project name `lithos-lens-<env>`. Supports `up | down | restart | logs | status`.
+`docker/run.sh <env> <cmd>` wraps Compose with project name `lithos-lens-<env>`
+and applies `docker/.env.<env>`. Supports `up | down | restart | logs | status`.
 
 ---
 
@@ -342,7 +351,7 @@ enabled = true
 reconnect_backoff_ms = [500, 1000, 2000, 5000, 10000]
 
 [lithos-lens.llm]
-enabled = false                   # overridden by LENS_LLM_ENABLED
+enabled = false                   # overridden by LITHOS_LENS_LLM_ENABLED
 provider = "anthropic"            # LiteLLM provider prefix
 model = "anthropic/claude-haiku-4-5-20251001"
 default_complexity = 3            # 1=beginner … 5=expert; per-session override allowed
@@ -353,7 +362,7 @@ synthesis_prefer_mcp = true       # use lithos_synthesize when available, else l
 findings_curation_enabled = true  # enables "most significant findings" (ROADMAP X1)
 
 [lithos-lens.telemetry]
-enabled = false                   # overridden by LENS_OTEL_ENABLED
+enabled = false                   # overridden by LITHOS_LENS_OTEL_ENABLED
 console_fallback = false
 service_name = "lithos-lens"
 export_interval_ms = 30000
@@ -365,7 +374,7 @@ At process startup Lens performs the following steps in order:
 
 1. Load TOML config and environment overrides into a typed config object.
 2. Configure structured stdout logging.
-3. Configure OTEL only if `LENS_OTEL_ENABLED=true`; missing optional OTEL packages must not prevent boot when telemetry is disabled.
+3. Configure OTEL only if `LITHOS_LENS_OTEL_ENABLED=true`; missing optional OTEL packages must not prevent boot when telemetry is disabled.
 4. Create the Lithos MCP client (one shared MCP-over-SSE session reused across all tool calls).
 5. Attempt startup auto-registration of the **service agent**:
 
@@ -392,12 +401,12 @@ When `llm.enabled = true`, Lens validates configuration shape at startup but doe
 
 | Config | Env | Required when enabled | Notes |
 |--------|-----|-----------------------|-------|
-| `llm.model` | `LENS_LLM_MODEL` | Yes | LiteLLM model string, e.g. `openai/gpt-4.1-mini`, `anthropic/claude-...`, `ollama/...` |
-| `llm.provider` | `LENS_LLM_PROVIDER` | No | Metadata; the model string is authoritative |
-| `llm.api_key` | `LENS_LLM_API_KEY` | Provider-dependent | Not required for local Ollama |
-| `llm.base_url` | `LENS_LLM_BASE_URL` | No | LiteLLM `api_base` for OpenRouter/local gateways |
-| `llm.extra_headers_json` | `LENS_LLM_EXTRA_HEADERS_JSON` | No | JSON object for provider-specific headers |
-| `llm.max_tokens` | `LENS_LLM_MAX_TOKENS` | No | Default 2048 |
+| `llm.model` | `LITHOS_LENS_LLM_MODEL` | Yes | LiteLLM model string, e.g. `openai/gpt-4.1-mini`, `anthropic/claude-...`, `ollama/...` |
+| `llm.provider` | `LITHOS_LENS_LLM_PROVIDER` | No | Metadata; the model string is authoritative |
+| `llm.api_key` | `LITHOS_LENS_LLM_API_KEY` | Provider-dependent | Not required for local Ollama |
+| `llm.base_url` | `LITHOS_LENS_LLM_BASE_URL` | No | LiteLLM `api_base` for OpenRouter/local gateways |
+| `llm.extra_headers_json` | `LITHOS_LENS_LLM_EXTRA_HEADERS_JSON` | No | JSON object for provider-specific headers |
+| `llm.max_tokens` | `LITHOS_LENS_LLM_MAX_TOKENS` | No | Default 2048 |
 
 ### 4.3 Static Asset Policy
 
@@ -989,7 +998,7 @@ Writes are attributed to a **named human operator**, distinct from the Lens serv
 
 | Endpoint | Action |
 |----------|--------|
-| `POST /tasks/{task_id}/complete` | Complete task / approve gate |
+| `POST /tasks/{task_id}/approve` | Approve human gate — calls `lithos_task_complete` on the gate. The handler **rejects a non-gate task** (409); there is deliberately no generic task-complete route (§5C.2) |
 | `POST /tasks/{task_id}/reopen` | Reopen |
 | `GET /tasks/{task_id}/cancel` → `POST /tasks/{task_id}/cancel` | Consequence-aware cancel (confirm page + submit) |
 | `GET /tasks/new` → `POST /tasks/new` | Create task / epic / gate |
@@ -1282,7 +1291,7 @@ Editing happens via TOML/env outside the container. Lens does not write to confi
 
 ### OTEL — Opt-In, Additive
 
-Same pattern as Lithos and Influx: `LENS_OTEL_ENABLED=true` enables it; optional packages via `uv sync --extra otel`; `LENS_OTEL_CONSOLE_FALLBACK=true` prints spans to stdout.
+Same pattern as Lithos and Influx: `LITHOS_LENS_OTEL_ENABLED=true` enables it; optional packages via `uv sync --extra otel`; `LITHOS_LENS_OTEL_CONSOLE_FALLBACK=true` prints spans to stdout.
 
 **Key spans:**
 
@@ -1311,7 +1320,7 @@ Same pattern as Lithos and Influx: `LENS_OTEL_ENABLED=true` enables it; optional
 
 ### Logging
 
-- stdout only; structured JSON via `python-json-logger`; `LENS_LOG_LEVEL` controls verbosity
+- stdout only; structured JSON via `python-json-logger`; `LITHOS_LENS_LOG_LEVEL` controls verbosity
 - Every write attempt additionally emits the structured audit line from §5C.6
 
 ### Health Endpoint
@@ -1360,7 +1369,7 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 
 | Tool | Key args | Lens action |
 |------|----------|-------------|
-| `lithos_task_complete(task_id, agent)` | `outcome?` | Approve gate / complete task; surfaces returned `unblocked[]` |
+| `lithos_task_complete(task_id, agent)` | `outcome?` | Used by Lens **only to approve human gates** (the `/approve` route rejects non-gates, §5C.7); surfaces returned `unblocked[]` |
 | `lithos_task_cancel(task_id, agent)` | `reason?` *(event-only, not persisted)* | Consequence-aware cancel |
 | `lithos_task_reopen(task_id, agent)` | — | Reopen; surfaces returned `reblocked[]` |
 | `lithos_task_create(title, agent)` | `description?`, `tags?`, `metadata?`, `task_type?`, `depends_on?`, `parent_task_id?` | Create task / epic / gate |
@@ -1376,7 +1385,7 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 
 #### 16.1.1 SSE event reference
 
-Lens consumes the Lithos SSE stream at `${LITHOS_URL}${LITHOS_SSE_EVENTS_PATH}` with a server-side `types=` filter, and replays via `Last-Event-ID` on reconnect (bounded by Lithos's in-memory ring buffer — hence the full-refresh backstop, §5.8.3).
+Lens consumes the Lithos SSE stream at `${LITHOS_LENS_LITHOS_URL}${LITHOS_LENS_SSE_EVENTS_PATH}` with a server-side `types=` filter, and replays via `Last-Event-ID` on reconnect (bounded by Lithos's in-memory ring buffer — hence the full-refresh backstop, §5.8.3).
 
 | Event | Payload | Consumer / gotchas |
 |-------|---------|--------------------|
@@ -1414,7 +1423,7 @@ Additional payload notes: task events carry empty `tags`, so upstream `?tags=` f
 | `GET /tasks/graph` | Task dependency graph page (`?project=` \| `?epic=`) |
 | `GET /tasks/plan` (+ `/projects`, `/throughput` fragments) | Planning View |
 | `GET /tasks/events` | SSE re-broadcast to browser tabs |
-| `POST /tasks/{task_id}/complete` \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `POST /tasks/{task_id}/edges` | Curated writes (§5C.7) — **registered only when `[writes] enabled = true`** |
+| `POST /tasks/{task_id}/approve` (gate-only) \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `POST /tasks/{task_id}/edges` | Curated writes (§5C.7) — **registered only when `[writes] enabled = true`** |
 | `GET /note/{id}` | Note View (§6) |
 | `GET /knowledge` | Search / recently-updated landing (`?q=`, `?tag=`) |
 | `GET /knowledge/resolve` | Wiki-link resolver (`?target=`, `?from=`) |
