@@ -1,0 +1,293 @@
+{
+  "complexity": {
+    "components": {
+      "Config": {
+        "functions_over_10": 1,
+        "max_complexity": 23,
+        "max_function": "lithos_lens.config._apply_env_overrides"
+      },
+      "Entrypoint": {
+        "functions_over_10": 0,
+        "max_complexity": 2,
+        "max_function": "lithos_lens.main.main"
+      },
+      "Errors": {
+        "functions_over_10": 0,
+        "max_complexity": 0,
+        "max_function": ""
+      },
+      "Events": {
+        "functions_over_10": 0,
+        "max_complexity": 10,
+        "max_function": "lithos_lens.events.parse_lithos_sse_frame"
+      },
+      "LithosClient": {
+        "functions_over_10": 0,
+        "max_complexity": 8,
+        "max_function": "lithos_lens.lithos_client.LithosClient.list_tasks"
+      },
+      "Logging": {
+        "functions_over_10": 0,
+        "max_complexity": 5,
+        "max_function": "lithos_lens.logging.JsonFormatter.format"
+      },
+      "State": {
+        "functions_over_10": 0,
+        "max_complexity": 3,
+        "max_function": "lithos_lens.state.AppState.refresh_health"
+      },
+      "Tasks": {
+        "functions_over_10": 5,
+        "max_complexity": 21,
+        "max_function": "lithos_lens.tasks.normalize_task"
+      },
+      "Telemetry": {
+        "functions_over_10": 0,
+        "max_complexity": 2,
+        "max_function": "lithos_lens.telemetry.install_request_middleware.lens_request"
+      },
+      "Web": {
+        "functions_over_10": 0,
+        "max_complexity": 7,
+        "max_function": "lithos_lens.web.create_app.note"
+      }
+    },
+    "functions_over_10": 6,
+    "top_functions": [
+      {
+        "complexity": 23,
+        "qualname": "lithos_lens.config._apply_env_overrides"
+      },
+      {
+        "complexity": 21,
+        "qualname": "lithos_lens.tasks.normalize_task"
+      },
+      {
+        "complexity": 20,
+        "qualname": "lithos_lens.tasks.load_dashboard"
+      },
+      {
+        "complexity": 12,
+        "qualname": "lithos_lens.tasks._matches_filters"
+      },
+      {
+        "complexity": 11,
+        "qualname": "lithos_lens.tasks._enrich_open_tasks"
+      },
+      {
+        "complexity": 11,
+        "qualname": "lithos_lens.tasks.normalize_task_status"
+      },
+      {
+        "complexity": 10,
+        "qualname": "lithos_lens.events.parse_lithos_sse_frame"
+      },
+      {
+        "complexity": 10,
+        "qualname": "lithos_lens.tasks.parse_filters"
+      },
+      {
+        "complexity": 9,
+        "qualname": "lithos_lens.config._optional_status_groups"
+      },
+      {
+        "complexity": 8,
+        "qualname": "lithos_lens.lithos_client.LithosClient.list_tasks"
+      }
+    ],
+    "total_functions": 117
+  },
+  "domain": {
+    "associations": 12,
+    "models": 16,
+    "models_without_docstrings": 16
+  },
+  "graph": {
+    "component_cycles": [],
+    "components": {
+      "Config": {
+        "fan_in": 7,
+        "fan_out": 2,
+        "instability": 0.22
+      },
+      "Entrypoint": {
+        "fan_in": 0,
+        "fan_out": 4,
+        "instability": 1.0
+      },
+      "Errors": {
+        "fan_in": 2,
+        "fan_out": 0,
+        "instability": 0.0
+      },
+      "Events": {
+        "fan_in": 1,
+        "fan_out": 1,
+        "instability": 0.5
+      },
+      "LithosClient": {
+        "fan_in": 2,
+        "fan_out": 2,
+        "instability": 0.5
+      },
+      "Logging": {
+        "fan_in": 1,
+        "fan_out": 1,
+        "instability": 0.5
+      },
+      "State": {
+        "fan_in": 1,
+        "fan_out": 3,
+        "instability": 0.75
+      },
+      "Tasks": {
+        "fan_in": 3,
+        "fan_out": 0,
+        "instability": 0.0
+      },
+      "Telemetry": {
+        "fan_in": 1,
+        "fan_out": 1,
+        "instability": 0.5
+      },
+      "Web": {
+        "fan_in": 1,
+        "fan_out": 5,
+        "instability": 0.83
+      }
+    },
+    "cross_component_edges": 19,
+    "longest_component_chain": 5,
+    "module_cycle_count": 0,
+    "module_cycles": [],
+    "tier_skipping": [
+      "Entrypoint -> Config",
+      "Entrypoint -> Errors",
+      "Entrypoint -> Logging",
+      "Web -> Config",
+      "Web -> Tasks",
+      "Web -> Telemetry"
+    ],
+    "tier_skipping_edges": 6
+  },
+  "mcp": {
+    "tools": 0,
+    "tools_without_docstrings": 0
+  },
+  "schema": 1,
+  "size": {
+    "components": {
+      "Config": {
+        "classes": 10,
+        "functions": 21,
+        "largest_module": "lithos_lens.config",
+        "largest_module_lines": 671,
+        "lines": 671,
+        "modules": 1,
+        "public_symbols": 13,
+        "sloc": 575
+      },
+      "Entrypoint": {
+        "classes": 0,
+        "functions": 2,
+        "largest_module": "lithos_lens.main",
+        "largest_module_lines": 41,
+        "lines": 47,
+        "modules": 2,
+        "public_symbols": 2,
+        "sloc": 32
+      },
+      "Errors": {
+        "classes": 2,
+        "functions": 0,
+        "largest_module": "lithos_lens.errors",
+        "largest_module_lines": 15,
+        "lines": 15,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 9
+      },
+      "Events": {
+        "classes": 2,
+        "functions": 12,
+        "largest_module": "lithos_lens.events",
+        "largest_module_lines": 208,
+        "lines": 208,
+        "modules": 1,
+        "public_symbols": 4,
+        "sloc": 180
+      },
+      "LithosClient": {
+        "classes": 4,
+        "functions": 27,
+        "largest_module": "lithos_lens.lithos_client",
+        "largest_module_lines": 368,
+        "lines": 368,
+        "modules": 1,
+        "public_symbols": 4,
+        "sloc": 300
+      },
+      "Logging": {
+        "classes": 1,
+        "functions": 3,
+        "largest_module": "lithos_lens.logging",
+        "largest_module_lines": 60,
+        "lines": 60,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 48
+      },
+      "State": {
+        "classes": 2,
+        "functions": 5,
+        "largest_module": "lithos_lens.state",
+        "largest_module_lines": 63,
+        "lines": 63,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 50
+      },
+      "Tasks": {
+        "classes": 14,
+        "functions": 30,
+        "largest_module": "lithos_lens.tasks",
+        "largest_module_lines": 616,
+        "lines": 616,
+        "modules": 1,
+        "public_symbols": 29,
+        "sloc": 510
+      },
+      "Telemetry": {
+        "classes": 0,
+        "functions": 2,
+        "largest_module": "lithos_lens.telemetry",
+        "largest_module_lines": 29,
+        "lines": 29,
+        "modules": 1,
+        "public_symbols": 1,
+        "sloc": 20
+      },
+      "Web": {
+        "classes": 0,
+        "functions": 15,
+        "largest_module": "lithos_lens.web",
+        "largest_module_lines": 294,
+        "lines": 294,
+        "modules": 1,
+        "public_symbols": 5,
+        "sloc": 263
+      }
+    },
+    "max_module": "lithos_lens.config",
+    "max_module_lines": 671,
+    "modules_over_800": [],
+    "total_lines": 2374,
+    "total_modules": 12,
+    "total_sloc": 1989
+  },
+  "tests": {
+    "ratio": 1.14,
+    "src_lines": 2374,
+    "test_lines": 2713
+  }
+}

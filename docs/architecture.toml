@@ -1,14 +1,40 @@
 # Architecture model for the "diagrams as tests" guardrail.
 #
 # Single source of truth for:
-#   - the generated component diagram (tests/guardrail/test_architecture_diagram.py)
+#   - the generated component diagram + per-component pages
 #   - which modules are scanned for the domain class diagram
+#   - the architecture metrics snapshot and its hard budgets
 #
 # The directional layering contract lives in pyproject.toml
 # ([tool.importlinter]); the tiers below document that intent (dependencies must
 # only point downward, Entrypoints -> Core -> Foundation) and group the diagram.
 #
 # `component_of()` matches a module to a component by LONGEST module-prefix.
+#
+# This project uses the portable guardrail kit (tests/guardrail/ + scripts/) with
+# only the core views enabled. The kit's two optional adapters — [tool_catalog]
+# (a decorator-registered MCP tool surface) and [containers] (on-disk data
+# stores) — are omitted: lithos-lens is an MCP client with no server tool surface
+# and holds no stores of its own (state lives in the remote Lithos server).
+
+[project]
+root_package = "lithos_lens"
+src_layout   = "src"
+
+# One-line description per component, shown at the top of its drill-down page
+# (docs/generated/components/<Component>.md). test_component_pages requires one
+# for every component in [components].
+[component_docs]
+Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`)."
+Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets)."
+State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
+Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
+LithosClient = "MCP-over-SSE client to the Lithos server — health probing, agent registration, and tool calls."
+Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
+Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
+Logging      = "Structured JSON logging setup (JsonFormatter)."
+Telemetry    = "Optional OpenTelemetry hooks and request middleware."
+Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
@@ -27,8 +53,22 @@ Entrypoints = ["Entrypoint", "Web"]
 Core        = ["State", "Events", "LithosClient"]
 Foundation  = ["Config", "Tasks", "Logging", "Telemetry", "Errors"]
 
+# Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
+# against the metrics snapshot (docs/generated/metrics.md explains each one).
+# CI fails if a measured value exceeds its budget. Raising a budget is allowed
+# but must be an explicit, reviewed edit to this file; lower a budget after
+# improving the code to lock in the gain.
+[budgets]
+cross_component_edges  = 19   # measured 2026-07; direction: down
+component_cycles       = 0    # no component-level cycles today; keep it that way
+module_cycles          = 0    # no module-level cycles today; keep it that way
+modules_over_800_lines = 0    # no god modules today; keep it that way
+max_module_lines       = 800  # stop-loss at the god-module threshold; largest today is config (671)
+
 # Domain class diagram: the task/event/health frozen dataclasses. The config
 # (settings) dataclasses are configuration, not domain entities, so excluded.
+# test_domain_model_diagram asserts EVERY public model's module is in include or
+# exclude — a new model in an unlisted module fails until it is classified.
 [domain]
 include_modules = [
     "lithos_lens.tasks",
@@ -36,4 +76,4 @@ include_modules = [
     "lithos_lens.state",
     "lithos_lens.lithos_client",
 ]
-exclude_modules = ["lithos_lens.config"]
+exclude_modules = ["lithos_lens.config", "lithos_lens.errors"]

@@ -32,6 +32,7 @@ dev = [
     "ruff>=0.4",
     "grimp>=3.14",
     "import-linter>=2.12",
+    "networkx>=3.0",
 ]
 
 [tool.ruff]

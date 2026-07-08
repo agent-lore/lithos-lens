@@ -3,6 +3,47 @@
 
 # Domain model
 
+## Events
+
+```mermaid
+classDiagram
+  class EventHub {
+    +config EventsConfig
+    +lithos LithosConfig
+    +status EventStatus
+  }
+  class LensEvent {
+    +id str
+    +type str
+    +task_id str
+    +payload dict[str, Any]
+    +requires_refresh bool
+  }
+```
+
+## LithosClient
+
+```mermaid
+classDiagram
+  class RegistrationResult {
+    +success bool
+    +message str
+  }
+```
+
+## State
+
+```mermaid
+classDiagram
+  class HealthSnapshot {
+    +lithos LithosHealth
+    +events EventStatus
+    +llm LLMHealth
+  }
+```
+
+## Tasks
+
 ```mermaid
 classDiagram
   class AgentRecord {
@@ -26,11 +67,6 @@ classDiagram
   class EnrichedTask {
     +claim_error str
   }
-  class EventHub {
-    +config EventsConfig
-    +lithos LithosConfig
-    +status EventStatus
-  }
   class FindingRecord {
     +id str
     +task_id str
@@ -43,28 +79,12 @@ classDiagram
     +note_title str
     +note_error str
   }
-  class HealthSnapshot {
-    +lithos LithosHealth
-    +events EventStatus
-    +llm LLMHealth
-  }
-  class LensEvent {
-    +id str
-    +type str
-    +task_id str
-    +payload dict[str, Any]
-    +requires_refresh bool
-  }
   class NoteRecord {
     +id str
     +title str
     +content str
     +tags tuple[str, ...]
     +metadata dict[str, Any]
-  }
-  class RegistrationResult {
-    +success bool
-    +message str
   }
   class TaskDetailData {
     +status_state SectionState
