@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `agent-lore/lithos-lens`. See `docs/agents/issue-tracker.md`.
+Planned work is tracked as Lithos tasks (tags `project:lithos-lens`, `milestone:<id>`); PRDs live in `docs/prd/` and the milestone sequence in `docs/ROADMAP.md`. GitHub Issues are used only for inbound external reports. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

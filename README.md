@@ -245,8 +245,9 @@ make test       # pytest
 make check      # all of the above
 ```
 
-## Implementation Tracking
+## Roadmap and Tracking
 
-Progress is tracked in [docs/IMPLEMENTATION_CHECKLIST.md](docs/IMPLEMENTATION_CHECKLIST.md).
-Milestones 0, 1, and 2 are implemented; optional LLM features begin at
-Milestone 3.
+The milestone sequence and status live in [docs/ROADMAP.md](docs/ROADMAP.md);
+shipped behavior is described in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+Execution work for in-flight milestones is tracked as Lithos tasks — see
+[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).

@@ -1,8 +1,8 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's tracker: **Lithos task tags** for planned work (see `issue-tracker.md`), GitHub labels for inbound external issues. The same strings are used in both places.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
+| Label in mattpocock/skills | Tag/label in our tracker | Meaning                              |
 | -------------------------- | -------------------- | ---------------------------------------- |
 | `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
 | `needs-info`               | `needs-info`         | Waiting on reporter for more information |
