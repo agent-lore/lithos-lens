@@ -68,8 +68,7 @@ Top 10 most complex functions:
 | 9 | `lithos_lens.config._optional_status_groups` |
 | 8 | `lithos_lens.lithos_client.LithosClient.list_tasks` |
 
-## Domain, tools & tests
+## Domain & tests
 
 - Domain models: **16** (12 associations, 16 without docstrings)
-- MCP tools: **0** (0 without docstrings)
-- Test-to-source line ratio: **1.14** (2713 test lines / 2374 source lines)
+- Test-to-source line ratio: **1.18** (2796 test lines / 2374 source lines)
