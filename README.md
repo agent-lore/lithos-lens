@@ -245,6 +245,19 @@ make test       # pytest
 make check      # all of the above
 ```
 
+Regenerate the architecture docs (component diagram, domain model, metrics, and
+per-component pages under [docs/generated/](docs/generated/README.md)) after
+changing code or models:
+
+```bash
+make diagrams   # = pytest tests/guardrail/ -q; commit the result
+```
+
+`make test` runs the guardrail tests too, so a normal test run also rewrites
+`docs/generated/`. CI's `diagrams` job fails if the committed views drift from the
+code. See `docs/architecture.toml` (the model) and `tests/guardrail/AGENTS.md`
+(the generator contracts).
+
 ## Roadmap and Tracking
 
 The milestone sequence and status live in [docs/ROADMAP.md](docs/ROADMAP.md);

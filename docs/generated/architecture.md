@@ -21,6 +21,16 @@ graph TD
     Tasks
     Telemetry
   end
+  click Config "components/Config.md"
+  click Entrypoint "components/Entrypoint.md"
+  click Errors "components/Errors.md"
+  click Events "components/Events.md"
+  click LithosClient "components/LithosClient.md"
+  click Logging "components/Logging.md"
+  click State "components/State.md"
+  click Tasks "components/Tasks.md"
+  click Telemetry "components/Telemetry.md"
+  click Web "components/Web.md"
   Config --> Errors
   Config --> Tasks
   Entrypoint --> Config
@@ -40,4 +50,18 @@ graph TD
   Web --> State
   Web --> Tasks
   Web --> Telemetry
+  linkStyle 0 stroke:#bbb
+  linkStyle 1 stroke:#bbb
+  linkStyle 2 stroke:#999,stroke-dasharray:4
+  linkStyle 3 stroke:#999,stroke-dasharray:4
+  linkStyle 4 stroke:#999,stroke-dasharray:4
+  linkStyle 6 stroke:#bbb
+  linkStyle 7 stroke:#bbb
+  linkStyle 8 stroke:#bbb
+  linkStyle 9 stroke:#bbb
+  linkStyle 10 stroke:#bbb
+  linkStyle 13 stroke:#bbb
+  linkStyle 14 stroke:#999,stroke-dasharray:4
+  linkStyle 17 stroke:#999,stroke-dasharray:4
+  linkStyle 18 stroke:#999,stroke-dasharray:4
 ```
