@@ -13,9 +13,11 @@ lower a budget after improving the code to lock in the gain.
 |---|---:|---:|---:|
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 19 | 19 | 0 |
+| `cross_module_private_refs` | 0 | 0 | 0 |
 | `max_module_lines` | 671 | 800 | 129 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 0 | 0 | 0 |
+| `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
@@ -68,7 +70,15 @@ Top 10 most complex functions:
 | 9 | `lithos_lens.config._optional_status_groups` |
 | 8 | `lithos_lens.lithos_client.LithosClient.list_tasks` |
 
+## Seams
+
+Private-name reaches across module seams. Both counts can be pinned as
+`[budgets]` ratchets (`cross_module_private_refs`, `tests_private_imports`).
+
+- Cross-module private refs (src): **0**
+- Tests importing src privates: **0**
+
 ## Domain & tests
 
 - Domain models: **16** (12 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.34** (3192 test lines / 2374 source lines)
+- Test-to-source line ratio: **1.47** (3501 test lines / 2374 source lines)
