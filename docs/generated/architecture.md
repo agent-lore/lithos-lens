@@ -5,14 +5,14 @@
 
 ```mermaid
 graph TD
+  subgraph tier_Entrypoints["Entrypoints"]
+    Entrypoint
+    Web
+  end
   subgraph tier_Core["Core"]
     Events
     LithosClient
     State
-  end
-  subgraph tier_Entrypoints["Entrypoints"]
-    Entrypoint
-    Web
   end
   subgraph tier_Foundation["Foundation"]
     Config

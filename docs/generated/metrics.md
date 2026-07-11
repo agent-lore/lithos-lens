@@ -19,7 +19,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **19**
+- Cross-component edges: **19** (19 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 6 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Web -> Config, Web -> Tasks, Web -> Telemetry)
@@ -71,4 +71,4 @@ Top 10 most complex functions:
 ## Domain & tests
 
 - Domain models: **16** (12 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.21** (2869 test lines / 2374 source lines)
+- Test-to-source line ratio: **1.34** (3192 test lines / 2374 source lines)
