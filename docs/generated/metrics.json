@@ -157,6 +157,7 @@
       }
     },
     "cross_component_edges": 19,
+    "cross_component_module_edges": 19,
     "longest_component_chain": 5,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -286,8 +287,8 @@
     "total_sloc": 1989
   },
   "tests": {
-    "ratio": 1.21,
+    "ratio": 1.34,
     "src_lines": 2374,
-    "test_lines": 2869
+    "test_lines": 3192
   }
 }
