@@ -26,8 +26,15 @@ README = REPO_ROOT / "README.md"
 # Shared prefix for every env override (root package "lithos_lens", uppercased).
 EXPECTED_PREFIX = "LITHOS_LENS_"
 
-# Rows in the README "Environment variable overrides" table start with the env
-# var name in backticks, e.g. ``| `LITHOS_LENS_CONFIG` | ... |``.
+# The overrides live in exactly one README section; scanning only its rows keeps
+# unrelated env-var tables (e.g. the Docker `LITHOS_LENS_HOST_PORT` row) from
+# being mistaken for config overrides.
+_OVERRIDES_HEADING = "### Environment variable overrides"
+
+# Rows in that table start with the env var name in backticks, e.g.
+# ``| `LITHOS_LENS_CONFIG` | ... |``. Match any uppercase name (not just the
+# expected prefix) so a malformed non-prefixed doc row is still surfaced rather
+# than silently dropped before the prefix check runs.
 _README_ROW = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|")
 
 
@@ -56,12 +63,22 @@ def _config_env_vars() -> set[str]:
 
 
 def _documented_env_vars() -> set[str]:
-    """Env vars listed in the README env-var-overrides table."""
+    """Every env-var row in the README overrides table (prefix unfiltered).
+
+    Scanning is bounded to the overrides section (between its heading and the
+    next heading) and returns names regardless of prefix, so both the prefix
+    guardrail and the exact code<->docs comparison see the full documented set.
+    """
     documented: set[str] = set()
+    in_section = False
     for line in README.read_text(encoding="utf-8").splitlines():
-        match = _README_ROW.match(line)
-        if match and match.group(1).startswith(EXPECTED_PREFIX):
-            documented.add(match.group(1))
+        if line.startswith("#"):
+            in_section = line.strip() == _OVERRIDES_HEADING
+            continue
+        if in_section:
+            match = _README_ROW.match(line)
+            if match:
+                documented.add(match.group(1))
     return documented
 
 
@@ -73,6 +90,17 @@ def test_config_env_vars_use_expected_prefix() -> None:
     assert not offenders, (
         f"config.py reads env vars without the {EXPECTED_PREFIX!r} prefix: "
         f"{sorted(offenders)}"
+    )
+
+
+def test_documented_env_vars_use_expected_prefix() -> None:
+    documented = _documented_env_vars()
+    # Guard against a mislocated/empty table vacuously passing.
+    assert documented, "no env-var rows found in the README overrides table"
+    offenders = {n for n in documented if not n.startswith(EXPECTED_PREFIX)}
+    assert not offenders, (
+        f"README overrides table documents env vars without the "
+        f"{EXPECTED_PREFIX!r} prefix: {sorted(offenders)}"
     )
 
 
