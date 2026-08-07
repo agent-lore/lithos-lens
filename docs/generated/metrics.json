@@ -293,8 +293,8 @@
     "total_sloc": 1989
   },
   "tests": {
-    "ratio": 1.47,
+    "ratio": 1.52,
     "src_lines": 2374,
-    "test_lines": 3501
+    "test_lines": 3619
   }
 }
