@@ -86,6 +86,5 @@ def test_readme_documents_exactly_config_env_vars() -> None:
         f"{sorted(undocumented)}"
     )
     assert not dead, (
-        "README documents env vars that config.py never reads: "
-        f"{sorted(dead)}"
+        f"README documents env vars that config.py never reads: {sorted(dead)}"
     )
