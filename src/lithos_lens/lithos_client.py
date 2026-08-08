@@ -268,11 +268,18 @@ class LithosClient:
         project: str | None = None,
         tags: list[str] | None = None,
     ) -> list[TaskRecord]:
-        arguments: dict[str, Any] = {}
+        """List the ready frontier via ``lithos_task_ready``.
+
+        ``with_claims`` defaults to False here — a deliberate divergence from
+        upstream Lithos, whose ``lithos_task_ready`` defaults it to True: Lens
+        is a read-only UI with no claims consumer on this path, so the heavier
+        claims payload is cost without a use. Because the upstream default is
+        True, the flag is ALWAYS sent explicitly; omitting it when False would
+        silently invert the Lens default.
+        """
+        arguments: dict[str, Any] = {"with_claims": with_claims}
         if limit is not None:
             arguments["limit"] = limit
-        if with_claims:
-            arguments["with_claims"] = True
         if project:
             arguments["project"] = project
         if tags:

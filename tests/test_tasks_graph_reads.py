@@ -1,9 +1,11 @@
 """T1 slice 1 — Lithos client graph reads + data model.
 
-Covers the new normalizers (BlockerRecord, EdgeRecord, TaskRecord graph
-fields) and the five new LithosClient graph-read tool methods. The headline
-acceptance criterion is that the normalizers round-trip all four blocker kinds
-and all four edge types.
+Covers the graph normalizers (BlockerRecord, EdgeRecord, TaskRecord graph
+fields) and the five LithosClient graph-read tool methods. The headline
+acceptance criterion is that the normalizers round-trip the real Lithos
+payloads: the blocker fixtures below mirror, branch for branch, the dicts
+emitted by ``_compute_blockers`` in lithos ``coordination.py`` — every branch
+emits exactly ``{kind, task_id, type, status, message}``.
 """
 
 from __future__ import annotations
@@ -26,71 +28,87 @@ from lithos_lens.tasks import (
 )
 
 # --- Normalizers: blocker kinds -------------------------------------------
+#
+# One fixture per branch of lithos ``_compute_blockers``. Field shapes (and
+# message wording) are copied from the Lithos source, not invented.
+
+BLOCKER_TASK = {
+    "kind": "task",
+    "task_id": "pred-1",
+    "type": "blocks",
+    "status": "open",
+    "message": "Waiting on predecessor pred-1 to complete.",
+}
+
+BLOCKER_GATE = {
+    "kind": "gate",
+    "task_id": "gate-7",
+    "type": "waits_on_gate",
+    "status": "open",
+    "message": "Waiting on pr gate gate-7.",
+}
+
+BLOCKER_GATE_TIMER = {
+    "kind": "gate",
+    "task_id": "gate-9",
+    "type": "waits_on_gate",
+    "status": "open",
+    "message": "Waiting on timer gate gate-9 (ready_at=2026-05-01T00:00:00+00:00).",
+}
+
+BLOCKER_UNSATISFIABLE = {
+    "kind": "blocker_unsatisfiable",
+    "task_id": "old-spike",
+    "type": "blocks",
+    "status": "cancelled",
+    "message": (
+        "Blocking predecessor old-spike was cancelled; this task can never "
+        "become ready without intervention (complete/re-open the predecessor, "
+        "re-route, or cancel this subtree)."
+    ),
+}
+
+BLOCKER_CYCLE = {
+    "kind": "cycle",
+    "task_id": "pred-2",
+    "type": "blocks",
+    "status": "open",
+    "message": "dependency cycle: t-1 -> pred-2 -> pred-2",
+}
+
+REAL_BLOCKER_FIXTURES = [
+    BLOCKER_TASK,
+    BLOCKER_GATE,
+    BLOCKER_GATE_TIMER,
+    BLOCKER_UNSATISFIABLE,
+    BLOCKER_CYCLE,
+]
 
 
-def test_normalize_blocker_task_kind_round_trips() -> None:
-    blocker = normalize_blocker(
-        {
-            "kind": "task",
-            "task_id": "dep-1",
-            "title": "Design schema",
-            "status": "open",
-        }
-    )
+@pytest.mark.parametrize("raw", REAL_BLOCKER_FIXTURES, ids=lambda raw: str(raw["kind"]))
+def test_normalize_blocker_round_trips_every_compute_blockers_branch(
+    raw: dict[str, Any],
+) -> None:
+    blocker = normalize_blocker(raw)
     assert blocker == BlockerRecord(
-        kind="task", task_id="dep-1", title="Design schema", status="open"
+        kind=raw["kind"],
+        task_id=raw["task_id"],
+        type=raw["type"],
+        status=raw["status"],
+        message=raw["message"],
     )
 
 
-def test_normalize_blocker_gate_kind_round_trips() -> None:
-    blocker = normalize_blocker(
-        {
-            "kind": "gate",
-            "task_id": "gate-7",
-            "title": "Human review",
-            "status": "open",
-            "gate_type": "human",
-        }
-    )
-    assert blocker == BlockerRecord(
-        kind="gate",
-        task_id="gate-7",
-        title="Human review",
-        status="open",
-        gate_type="human",
-    )
-
-
-def test_normalize_blocker_unsatisfiable_kind_round_trips() -> None:
-    blocker = normalize_blocker(
-        {
-            "kind": "blocker_unsatisfiable",
-            "task_id": "old-spike",
-            "title": "Old spike",
-            "status": "cancelled",
-        }
-    )
-    assert blocker.kind == "blocker_unsatisfiable"
-    assert blocker.title == "Old spike"
+def test_normalize_blocker_preserves_type_and_message() -> None:
+    blocker = normalize_blocker(BLOCKER_UNSATISFIABLE)
+    assert blocker.type == "blocks"
     assert blocker.status == "cancelled"
+    assert "can never become ready" in blocker.message
 
 
-def test_normalize_blocker_cycle_kind_round_trips() -> None:
-    blocker = normalize_blocker(
-        {
-            "kind": "cycle",
-            "message": "cycle: A → B → A",
-            "members": ["A", "B"],
-        }
-    )
-    assert blocker.kind == "cycle"
-    assert blocker.message == "cycle: A → B → A"
-    assert blocker.members == ("A", "B")
-
-
-def test_normalize_blocker_unknown_kind_defaults_to_task() -> None:
-    assert normalize_blocker({"kind": "surprise"}).kind == "task"
-    assert normalize_blocker({}).kind == "task"
+def test_normalize_blocker_unknown_kind_survives_round_trip() -> None:
+    assert normalize_blocker({"kind": "surprise"}).kind == "surprise"
+    assert normalize_blocker({}).kind == ""
 
 
 # --- Normalizers: edge types ----------------------------------------------
@@ -114,7 +132,7 @@ def test_normalize_edge_round_trips_every_type(edge_type: str) -> None:
     assert edge == EdgeRecord(
         from_task_id="a",
         to_task_id="b",
-        type=edge_type,  # type: ignore[arg-type]
+        type=edge_type,
         direction="incoming",
         metadata={"note": "x"},
         created_by="planner",
@@ -122,8 +140,15 @@ def test_normalize_edge_round_trips_every_type(edge_type: str) -> None:
     )
 
 
-def test_normalize_edge_unknown_type_defaults_to_blocks() -> None:
-    assert normalize_edge({"from_task_id": "a", "to_task_id": "b"}).type == "blocks"
+def test_normalize_edge_unknown_type_survives_round_trip() -> None:
+    edge = normalize_edge(
+        {"from_task_id": "a", "to_task_id": "b", "type": "brand_new_edge"}
+    )
+    assert edge.type == "brand_new_edge"
+
+
+def test_normalize_edge_missing_type_is_empty() -> None:
+    assert normalize_edge({"from_task_id": "a", "to_task_id": "b"}).type == ""
 
 
 # --- Normalizers: TaskRecord graph fields ---------------------------------
@@ -149,8 +174,8 @@ def test_normalize_task_defaults_graph_fields_for_older_payloads() -> None:
     assert task.resolved_at == ""
 
 
-def test_normalize_task_unknown_task_type_falls_back_to_task() -> None:
-    assert normalize_task({"id": "t-1", "task_type": "bogus"}).task_type == "task"
+def test_normalize_task_unknown_task_type_survives_round_trip() -> None:
+    assert normalize_task({"id": "t-1", "task_type": "bogus"}).task_type == "bogus"
 
 
 def test_normalize_blocked_task_pairs_task_with_its_blockers() -> None:
@@ -159,15 +184,13 @@ def test_normalize_blocked_task_pairs_task_with_its_blockers() -> None:
             "id": "t-blocked",
             "title": "Blocked work",
             "task_type": "task",
-            "blockers": [
-                {"kind": "task", "task_id": "dep-1", "title": "Predecessor"},
-                {"kind": "gate", "task_id": "gate-1", "gate_type": "human"},
-                "not-a-dict",
-            ],
+            "blockers": [BLOCKER_TASK, BLOCKER_GATE, "not-a-dict"],
         }
     )
     assert record.task.id == "t-blocked"
     assert [blocker.kind for blocker in record.blockers] == ["task", "gate"]
+    assert record.blockers[0].task_id == "pred-1"
+    assert record.blockers[1].type == "waits_on_gate"
 
 
 # --- Client graph-read methods --------------------------------------------
@@ -215,6 +238,35 @@ def test_task_ready_sends_limit_and_claims_and_normalizes() -> None:
     assert arguments == {"limit": 500, "with_claims": True}
 
 
+def test_task_ready_always_sends_with_claims_so_default_false_is_honored() -> None:
+    """Upstream lithos_task_ready defaults with_claims=True; Lens must send
+    its deliberate False default explicitly or it would be silently ignored."""
+    client = _StubClient({"lithos_task_ready": {"tasks": []}})
+    _run(client, client.task_ready())
+
+    assert client.calls[0] == ("lithos_task_ready", {"with_claims": False})
+
+
+def test_task_ready_sends_explicit_false_with_claims() -> None:
+    client = _StubClient({"lithos_task_ready": {"tasks": []}})
+    _run(client, client.task_ready(limit=10, with_claims=False))
+
+    assert client.calls[0] == (
+        "lithos_task_ready",
+        {"limit": 10, "with_claims": False},
+    )
+
+
+def test_task_ready_propagates_project_and_tags() -> None:
+    client = _StubClient({"lithos_task_ready": {"tasks": []}})
+    _run(client, client.task_ready(project="influx", tags=["area:docs"]))
+
+    assert client.calls[0] == (
+        "lithos_task_ready",
+        {"with_claims": False, "project": "influx", "tags": ["area:docs"]},
+    )
+
+
 def test_task_blocked_returns_blocked_records_with_structured_blockers() -> None:
     client = _StubClient(
         {
@@ -223,7 +275,7 @@ def test_task_blocked_returns_blocked_records_with_structured_blockers() -> None
                     {
                         "id": "b-1",
                         "title": "Blocked one",
-                        "blockers": [{"kind": "task", "task_id": "dep-1"}],
+                        "blockers": [BLOCKER_TASK],
                     }
                 ]
             }
@@ -234,7 +286,18 @@ def test_task_blocked_returns_blocked_records_with_structured_blockers() -> None
     assert isinstance(blocked[0], BlockedTaskRecord)
     assert blocked[0].task.id == "b-1"
     assert blocked[0].blockers[0].kind == "task"
+    assert blocked[0].blockers[0].message == BLOCKER_TASK["message"]
     assert client.calls[0] == ("lithos_task_blocked", {"limit": 500})
+
+
+def test_task_blocked_propagates_project_and_tags() -> None:
+    client = _StubClient({"lithos_task_blocked": {"tasks": []}})
+    _run(client, client.task_blocked(project="influx", tags=["area:docs"]))
+
+    assert client.calls[0] == (
+        "lithos_task_blocked",
+        {"project": "influx", "tags": ["area:docs"]},
+    )
 
 
 def test_task_get_returns_task_and_supports_task_envelope() -> None:

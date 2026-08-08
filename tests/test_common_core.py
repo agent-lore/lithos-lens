@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.tasks import (
     AgentRecord,
@@ -70,8 +70,9 @@ class RecordingLithosClient:
     ) -> list[BlockedTaskRecord]:
         return []
 
-    async def task_get(self, task_id: str) -> TaskRecord | None:
-        return None
+    async def task_get(self, task_id: str) -> TaskRecord:
+        # Same not-found contract as the concrete client: coded error, not None.
+        raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
 
     async def task_children(
         self,

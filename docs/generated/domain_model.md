@@ -54,13 +54,11 @@ classDiagram
   }
   class BlockedTaskRecord
   class BlockerRecord {
-    +kind BlockerKind
+    +kind str
     +task_id str
-    +title str
+    +type str
     +status str
-    +gate_type str
     +message str
-    +members tuple[str, ...]
   }
   class ClaimRecord {
     +agent str
@@ -77,7 +75,7 @@ classDiagram
   class EdgeRecord {
     +from_task_id str
     +to_task_id str
-    +type EdgeType
+    +type str
     +direction str
     +metadata dict[str, Any]
     +created_by str
@@ -129,7 +127,7 @@ classDiagram
     +metadata dict[str, Any]
     +outcome str
     +completed_at str
-    +task_type TaskType
+    +task_type str
     +resolved_at str
   }
   class TaskStatusRecord {

@@ -10,15 +10,11 @@ from typing import Any, Literal, Protocol, cast
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 ClaimedState = Literal["any", "known_claimed", "known_unclaimed"]
-# Task types from the Lithos 0.4 task graph. Workable tasks are "task"; "epic"
-# and "gate" rows never enter the workable frontier sections.
-TaskType = Literal["task", "epic", "gate"]
-# Structured blocker kinds returned in a lithos_task_blocked row's `blockers`
-# array: a blocking open task, a gate, a cancelled (unsatisfiable) predecessor,
-# or a dependency cycle.
-BlockerKind = Literal["task", "gate", "blocker_unsatisfiable", "cycle"]
-# The four task-graph edge types.
-EdgeType = Literal["blocks", "parent_child", "discovered_from", "waits_on_gate"]
+# Known task types from the Lithos 0.4 task graph: "task" (workable), "epic",
+# "gate". Transport records carry the raw server string so an unknown future
+# type survives round-trip; only a MISSING task_type defaults to "task" (legacy
+# payloads predate the field).
+KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
@@ -40,8 +36,10 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     outcome: str = ""
     completed_at: str = ""
-    # Task-graph type (lithos 0.4). Older payloads omit it; default "task".
-    task_type: TaskType = "task"
+    # Task-graph type (lithos 0.4); see KNOWN_TASK_TYPES. Raw server value —
+    # an unknown type survives round-trip. Older payloads omit it; default
+    # "task".
+    task_type: str = "task"
     # Timestamp a task reached a terminal state. Completed/cancelled rows are
     # windowed by this (not created_at). Empty for open tasks or older payloads.
     resolved_at: str = ""
@@ -62,37 +60,46 @@ class ClaimRecord:
 class BlockerRecord:
     """One structured reason a task is blocked, from a lithos_task_blocked row.
 
-    Field population depends on ``kind``:
+    Transport-faithful mirror of a lithos ``_compute_blockers`` entry: every
+    branch emits exactly ``{kind, task_id, type, status, message}``.
 
-    - ``task`` / ``gate`` / ``blocker_unsatisfiable`` — the blocking predecessor
-      is named by ``task_id`` / ``title`` / ``status`` (a ``gate`` also carries
-      ``gate_type``; ``blocker_unsatisfiable`` is a predecessor that was
-      cancelled).
-    - ``cycle`` — ``message`` describes the cycle and ``members`` lists the
-      participating task ids; no single predecessor applies.
+    - ``kind`` — known values: ``task`` (open blocking predecessor), ``gate``
+      (waiting on a gate), ``blocker_unsatisfiable`` (cancelled predecessor),
+      ``cycle`` (dependency cycle). Raw server string; unknown kinds survive.
+    - ``task_id`` — the blocking predecessor (for ``cycle`` the predecessor the
+      cycle was detected through).
+    - ``type`` — the unsatisfied edge's type (e.g. ``blocks``,
+      ``waits_on_gate``). Raw server string.
+    - ``status`` — the predecessor's status (``open``; ``cancelled`` for
+      ``blocker_unsatisfiable``).
+    - ``message`` — human-readable explanation (carries the gate type / cycle
+      path detail).
+
+    Presentation enrichment (predecessor titles, gate display names) is a
+    view-model concern for a later slice, not part of the transport record.
     """
 
-    kind: BlockerKind
+    kind: str
     task_id: str = ""
-    title: str = ""
+    type: str = ""
     status: str = ""
-    gate_type: str = ""
     message: str = ""
-    members: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class EdgeRecord:
     """A task-graph edge as returned by lithos_task_edge_list.
 
-    ``direction`` is relative to the task the edge list was fetched for
-    (``incoming`` / ``outgoing``); it is empty when the source does not report
-    one.
+    ``type`` is the raw server string (known values: ``blocks``,
+    ``parent_child``, ``discovered_from``, ``waits_on_gate``); an unknown
+    future type survives round-trip. ``direction`` is relative to the task the
+    edge list was fetched for (``incoming`` / ``outgoing``); it is empty when
+    the source does not report one.
     """
 
     from_task_id: str
     to_task_id: str
-    type: EdgeType
+    type: str
     direction: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_by: str = ""
@@ -515,10 +522,9 @@ async def resolve_finding_notes(
 def normalize_task(raw: dict[str, Any]) -> TaskRecord:
     status_raw = str(raw.get("status") or "open")
     status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
-    task_type_raw = str(raw.get("task_type") or "task")
-    task_type: TaskType = (
-        task_type_raw if task_type_raw in {"task", "epic", "gate"} else "task"
-    )  # type: ignore[assignment]
+    # Raw passthrough: only a MISSING/empty task_type defaults to "task"
+    # (legacy payloads); an unknown explicit value survives round-trip.
+    task_type = str(raw.get("task_type") or "task")
     claims: tuple[ClaimRecord, ...] | None = None
     if "claims" in raw and raw["claims"] is not None:
         claims = tuple(
@@ -548,20 +554,14 @@ def normalize_task(raw: dict[str, Any]) -> TaskRecord:
 
 
 def normalize_blocker(raw: dict[str, Any]) -> BlockerRecord:
-    kind_raw = str(raw.get("kind") or "")
-    kind: BlockerKind = (
-        kind_raw
-        if kind_raw in {"task", "gate", "blocker_unsatisfiable", "cycle"}
-        else "task"
-    )  # type: ignore[assignment]
+    # Transport-faithful passthrough of the lithos _compute_blockers shape;
+    # unknown kinds/types survive round-trip.
     return BlockerRecord(
-        kind=kind,
-        task_id=str(raw.get("task_id") or raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
+        kind=str(raw.get("kind") or ""),
+        task_id=str(raw.get("task_id") or ""),
+        type=str(raw.get("type") or ""),
         status=str(raw.get("status") or ""),
-        gate_type=str(raw.get("gate_type") or ""),
         message=str(raw.get("message") or ""),
-        members=tuple(str(member) for member in raw.get("members") or []),
     )
 
 
@@ -577,16 +577,11 @@ def normalize_blocked_task(raw: dict[str, Any]) -> BlockedTaskRecord:
 
 
 def normalize_edge(raw: dict[str, Any]) -> EdgeRecord:
-    type_raw = str(raw.get("type") or "")
-    edge_type: EdgeType = (
-        type_raw
-        if type_raw in {"blocks", "parent_child", "discovered_from", "waits_on_gate"}
-        else "blocks"
-    )  # type: ignore[assignment]
     return EdgeRecord(
         from_task_id=str(raw.get("from_task_id") or ""),
         to_task_id=str(raw.get("to_task_id") or ""),
-        type=edge_type,
+        # Raw passthrough: an unknown edge type survives round-trip.
+        type=str(raw.get("type") or ""),
         direction=str(raw.get("direction") or ""),
         metadata=dict(raw.get("metadata") or {}),
         created_by=str(raw.get("created_by") or ""),

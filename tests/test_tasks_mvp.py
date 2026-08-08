@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.tasks import (
     AgentRecord,
     BlockedTaskRecord,
@@ -179,9 +179,16 @@ class TaskFakeLithosClient:
         ]
         return rows[:limit] if limit is not None else rows
 
-    async def task_get(self, task_id: str) -> TaskRecord | None:
+    async def task_get(self, task_id: str) -> TaskRecord:
         self.get_calls.append(task_id)
-        return self._by_id(task_id)
+        task = self._by_id(task_id)
+        if task is None:
+            # Mirror the concrete client: Lithos answers a missing task with an
+            # error envelope (code=task_not_found), which LithosClient raises as
+            # a coded LithosToolError. Callers must be able to rely on the same
+            # contract against the fake.
+            raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
+        return task
 
     async def task_children(
         self,
@@ -549,3 +556,19 @@ def test_dashboard_falls_back_to_task_status_when_claims_not_inline(
     # for the visible open tasks.
     assert "open-claimed" in fake.status_calls
     assert "open-unclaimed" in fake.status_calls
+
+
+def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
+    """The shared fake and the concrete client agree on the not-found contract:
+    a coded LithosToolError, never None (the PRD requires callers to be able to
+    distinguish task_not_found)."""
+    import asyncio
+
+    fake = TaskFakeLithosClient()
+
+    with pytest.raises(LithosToolError) as excinfo:
+        asyncio.run(fake.task_get("no-such-task"))
+    assert excinfo.value.code == "task_not_found"
+
+    found = asyncio.run(fake.task_get("open-claimed"))
+    assert found.id == "open-claimed"
