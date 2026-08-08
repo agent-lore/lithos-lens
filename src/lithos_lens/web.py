@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.fake_lithos import FakeLithosClient, fake_lithos_enabled
 from lithos_lens.knowledge import load_related_panel, render_markdown
 from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
 from lithos_lens.state import AppState
@@ -37,6 +38,19 @@ logger = logging.getLogger(__name__)
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
 
+def _default_lithos_client(config: LithosLensConfig) -> LithosClientProtocol:
+    """Pick the real client, or the in-memory fake when fake-Lithos mode is on.
+
+    ``LITHOS_LENS_FAKE_LITHOS=1`` boots the app against
+    :class:`~lithos_lens.fake_lithos.FakeLithosClient` so the whole UI is
+    browsable with no Lithos server behind it (used by the ``e2e/`` Playwright
+    smoke suite and for offline demos).
+    """
+    if fake_lithos_enabled():
+        return FakeLithosClient(config.lithos)
+    return LithosClient(config.lithos)
+
+
 def create_app(
     config: LithosLensConfig,
     *,
@@ -44,7 +58,7 @@ def create_app(
 ) -> FastAPI:
     """Create the Lithos Lens ASGI app."""
 
-    factory = lithos_client_factory or (lambda cfg: LithosClient(cfg.lithos))
+    factory = lithos_client_factory or _default_lithos_client
     state = AppState(config, factory(config))
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag

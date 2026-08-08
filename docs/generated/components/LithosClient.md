@@ -3,7 +3,7 @@
 
 # LithosClient
 
-MCP-over-SSE client to the Lithos server — health probing, agent registration, and tool calls.
+Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode.
 
 **Tier:** Core
 
@@ -11,9 +11,14 @@ MCP-over-SSE client to the Lithos server — health probing, agent registration,
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.fake_lithos` | M | 1 | 1 |
 | `lithos_lens.lithos_client` | M | 4 | 0 |
 
 ## Public API
+
+### `lithos_lens.fake_lithos`
+- def `fake_lithos_enabled` — Return whether the fake-Lithos app mode is switched on via the environment.
+- class `FakeLithosClient` — A protocol-complete Lithos client backed by static in-memory fixtures.
 
 ### `lithos_lens.lithos_client`
 - class `LithosClientProtocol` — Subset of Lithos operations required by the common core.
