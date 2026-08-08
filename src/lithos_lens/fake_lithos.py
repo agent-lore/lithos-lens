@@ -42,6 +42,19 @@ __all__ = ["FakeLithosClient", "fake_lithos_enabled"]
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
+def _in_scope(task: TaskRecord, project: str | None, tags: list[str] | None) -> bool:
+    """Whether ``task`` satisfies a scoped frontier read's project/tag filters.
+
+    Mirrors how the real Lithos scopes ``lithos_task_ready`` /
+    ``lithos_task_blocked``: ``project`` matches the app-wide ``project:<name>``
+    tag convention, and every entry in ``tags`` must be present. ``None``/empty
+    filters match everything.
+    """
+    if project and f"project:{project}" not in task.tags:
+        return False
+    return not tags or all(tag in task.tags for tag in tags)
+
+
 def fake_lithos_enabled() -> bool:
     """Return whether the fake-Lithos app mode is switched on via the environment.
 
@@ -162,8 +175,14 @@ class FakeLithosClient:
 
         # Graph oracle: Lens never re-derives readiness, so the fixtures are the
         # source of truth. `influx-ingest-cutover` is the ready, claimed, in-flight
-        # task; `influx-backfill` is blocked on it.
-        self.ready_ids: set[str] = {"influx-dashboards", "lens-graph-view"}
+        # task (the only one carrying claims), so it must sit on the ready frontier
+        # too; `influx-dashboards` / `lens-graph-view` are ready and unclaimed;
+        # `influx-backfill` is blocked on the cutover.
+        self.ready_ids: set[str] = {
+            "influx-ingest-cutover",
+            "influx-dashboards",
+            "lens-graph-view",
+        }
         self.blocked: dict[str, tuple[BlockerRecord, ...]] = {
             "influx-backfill": (
                 BlockerRecord(
@@ -242,7 +261,9 @@ class FakeLithosClient:
         rows = [
             task
             for task in self.tasks
-            if task.id in self.ready_ids and task.status == "open"
+            if task.id in self.ready_ids
+            and task.status == "open"
+            and _in_scope(task, project, tags)
         ]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
@@ -258,7 +279,9 @@ class FakeLithosClient:
         rows = [
             BlockedTaskRecord(task=task, blockers=self.blocked[task.id])
             for task in self.tasks
-            if task.id in self.blocked and task.status == "open"
+            if task.id in self.blocked
+            and task.status == "open"
+            and _in_scope(task, project, tags)
         ]
         return rows[:limit] if limit is not None else rows
 

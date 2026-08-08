@@ -95,3 +95,11 @@ forbidden_modules = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.bandit]
+# B101 (assert_used) fires on every pytest assertion, and the whole test tree —
+# including the tests/guardrail "diagrams as tests" kit — is built on `assert`.
+# Exclude the test/e2e trees rather than pepper hundreds of test asserts with
+# per-line `# nosec`; application code under src/ is still scanned (see the
+# inline `# nosec B104` in main.py). Run with `bandit -c pyproject.toml -r .`.
+exclude_dirs = ["tests", "e2e", ".venv"]

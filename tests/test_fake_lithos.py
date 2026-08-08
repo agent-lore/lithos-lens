@@ -140,3 +140,70 @@ async def test_fake_client_task_get_missing_raises_coded_error() -> None:
     with pytest.raises(LithosToolError) as excinfo:
         await client.task_get("does-not-exist")
     assert excinfo.value.code == "task_not_found"
+
+
+@pytest.mark.anyio
+async def test_fake_client_ready_frontier_includes_the_claimed_task() -> None:
+    """The advertised 'ready, claimed, in-flight' fixture must be on the frontier."""
+    client = FakeLithosClient()
+    ready = await client.task_ready(with_claims=True)
+    by_id = {task.id: task for task in ready}
+    assert "influx-ingest-cutover" in by_id
+    # It is the one carrying claims, so with_claims must surface them.
+    claimed = by_id["influx-ingest-cutover"]
+    assert claimed.claims is not None and len(claimed.claims) == 1
+    assert claimed.claims[0].agent == "worker-a"
+
+
+@pytest.mark.anyio
+async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
+    client = FakeLithosClient()
+
+    all_ids = {t.id for t in await client.task_ready()}
+    assert all_ids == {"influx-ingest-cutover", "influx-dashboards", "lens-graph-view"}
+
+    influx = {t.id for t in await client.task_ready(project="influx")}
+    assert influx == {"influx-ingest-cutover", "influx-dashboards"}
+
+    observability = {t.id for t in await client.task_ready(tags=["area:observability"])}
+    assert observability == {"influx-dashboards"}
+
+    assert await client.task_ready(project="missing") == []
+
+
+@pytest.mark.anyio
+async def test_fake_client_task_blocked_scoped_by_project_and_tags() -> None:
+    client = FakeLithosClient()
+
+    assert [b.task.id for b in await client.task_blocked()] == ["influx-backfill"]
+    assert [b.task.id for b in await client.task_blocked(tags=["area:data"])] == [
+        "influx-backfill"
+    ]
+    # influx-backfill lacks these, so a scoped read must exclude it.
+    assert await client.task_blocked(tags=["area:observability"]) == []
+    assert await client.task_blocked(project="lithos-lens") == []
+
+
+def test_fake_mode_logs_loud_warning_when_engaged(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    with caplog.at_level("WARNING", logger="lithos_lens.web"):
+        create_app(load_config(lithos_lens_config_env))
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("fake-Lithos app mode is ENABLED" in r.message for r in warnings)
+
+
+def test_no_warning_when_fake_mode_off(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("LITHOS_LENS_FAKE_LITHOS", raising=False)
+    with caplog.at_level("WARNING", logger="lithos_lens.web"):
+        create_app(load_config(lithos_lens_config_env))
+    assert not [
+        r for r in caplog.records if "fake-Lithos app mode is ENABLED" in r.getMessage()
+    ]

@@ -47,6 +47,15 @@ def _default_lithos_client(config: LithosLensConfig) -> LithosClientProtocol:
     smoke suite and for offline demos).
     """
     if fake_lithos_enabled():
+        # Loud on purpose: fake mode fabricates task/note data and pins /health
+        # to "ok", so a real Lithos outage would report healthy. Never enable it
+        # against a real deployment; the warning makes an accidental/leaked flag
+        # visible in the logs rather than silently masking a backend.
+        logger.warning(
+            "fake-Lithos app mode is ENABLED (LITHOS_LENS_FAKE_LITHOS): serving "
+            "in-memory demo fixtures and reporting health as ok — do NOT use "
+            "against a real Lithos deployment; it masks backend outages."
+        )
         return FakeLithosClient(config.lithos)
     return LithosClient(config.lithos)
 
