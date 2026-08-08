@@ -324,19 +324,24 @@ class LithosClient:
         Never returns None: Lithos answers a missing task with an error
         envelope (code ``task_not_found``), surfaced by ``_raise_for_error``
         as a coded :class:`LithosToolError`. A success payload that carries
-        neither a valid task nor a supported legacy ``tasks`` envelope is a
-        broken response and raises ``code="invalid_response"`` rather than
-        returning a None that callers can't tell apart from "absent".
+        neither a valid task (a dict with a non-empty string ``id``) nor a
+        supported legacy ``tasks`` list envelope is a broken response and
+        raises ``code="invalid_response"`` rather than returning a None that
+        callers can't tell apart from "absent".
         """
         payload = await self._call_tool("lithos_task_get", {"task_id": task_id})
         _raise_for_error(payload)
         raw = payload.get("task")
         if raw is None:
-            tasks = payload.get("tasks") or []
-            raw = tasks[0] if tasks else None
-        if not isinstance(raw, dict):
+            # Supported legacy envelope is strictly {"tasks": [<task>, ...]};
+            # any other container shape falls through to invalid_response
+            # rather than leaking a KeyError/TypeError from indexing.
+            legacy = payload.get("tasks")
+            if isinstance(legacy, list) and legacy:
+                raw = legacy[0]
+        if not isinstance(raw, dict) or not _is_nonempty_str(raw.get("id")):
             raise LithosToolError(
-                f"lithos_task_get returned no task payload for '{task_id}'",
+                f"lithos_task_get returned no valid task payload for '{task_id}'",
                 code="invalid_response",
             )
         return normalize_task(raw)
@@ -520,6 +525,10 @@ class LithosClient:
             self._worker_task = None
         if self._owns_http_client:
             await self._http.aclose()
+
+
+def _is_nonempty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
 
 
 def _decode_tool_result(result: Any) -> dict[str, Any]:
