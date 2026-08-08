@@ -13,6 +13,8 @@ from lithos_lens.lithos_client import LithosHealth
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.tasks import (
     AgentRecord,
+    BlockedTaskRecord,
+    EdgeRecord,
     FindingRecord,
     NoteRecord,
     TaskRecord,
@@ -47,6 +49,48 @@ class RecordingLithosClient:
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
+        return []
+
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        agent: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        agent: str | None = None,
+    ) -> list[BlockedTaskRecord]:
+        return []
+
+    async def task_get(self, task_id: str) -> TaskRecord | None:
+        return None
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
         return []
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
