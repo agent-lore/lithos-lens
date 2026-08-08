@@ -518,6 +518,14 @@ button,
   border-radius: 1rem;
   overflow: auto;
   padding: 1rem;
+}
+
+/* Rendered markdown must use normal HTML whitespace (soft breaks collapse to
+   spaces); only code blocks and the escaped-plaintext fallback preserve
+   newlines. pre-wrap (not pre) so long lines wrap instead of forcing the
+   container to scroll. */
+.markdown-body pre {
+  overflow-x: auto;
   white-space: pre-wrap;
 }
 

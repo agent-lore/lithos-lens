@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,15 @@ def test_render_markdown_allows_allowlisted_schemes(scheme: str) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["ftp://example.com", "vbscript:msgbox", "file:///etc/passwd", "tel:+15551234"],
+    [
+        "ftp://example.com",
+        "vbscript:msgbox",
+        "file:///etc/passwd",
+        "tel:+15551234",
+        "data:text/html;base64,PHNjcmlwdD4=",
+        "JaVaScRiPt:alert(1)",
+        "  javascript:alert(1)",
+    ],
 )
 def test_render_markdown_rejects_non_allowlisted_schemes(url: str) -> None:
     # REQUIREMENTS §6.2: only http/https/mailto/relative may become anchors.
@@ -77,14 +86,62 @@ def test_render_markdown_falls_back_to_escaped_plaintext_on_error(
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
-def test_render_markdown_caps_oversized_input() -> None:
-    extra = 5_000
-    oversized = "a" * (knowledge.MAX_RENDER_CHARS + extra)
-    html = render_markdown(oversized)
-    # The body is truncated to the cap (the ~200k 'a's survive; the excess does
-    # not), and a visible truncation note is shown.
-    assert html.count("a") < knowledge.MAX_RENDER_CHARS + extra
-    assert "truncated" in html
+def test_render_markdown_renders_large_notes_in_full() -> None:
+    """/note/{id} is the canonical document page: no silent truncation. A
+    render-cost bound, if ever needed, is an explicit product decision — not a
+    hidden cap (PR #22 review)."""
+    paragraphs = [f"paragraph {i} " + "word " * 200 for i in range(300)]
+    html = render_markdown("\n\n".join(paragraphs))
+    assert "paragraph 0" in html
+    assert "paragraph 299" in html
+    assert "truncated" not in html
+
+
+def test_render_markdown_rejects_unsafe_image_destinations() -> None:
+    html = render_markdown("![x](javascript:alert(1))")
+    assert "<img" not in html
+
+
+def test_render_markdown_keeps_safe_image_destinations() -> None:
+    html = render_markdown("![alt text](https://example.com/pic.png)")
+    assert '<img src="https://example.com/pic.png" alt="alt text"' in html
+
+
+def test_render_markdown_covers_corpus_inline_and_block_elements() -> None:
+    html = render_markdown(
+        "- item one\n- item two\n\n"
+        "```python\nprint('hi')\n```\n\n"
+        "some `inline code` and ~~struck~~ text"
+    )
+    assert "<ul>" in html and "<li>item one</li>" in html
+    assert '<pre><code class="language-python">' in html
+    assert "<code>inline code</code>" in html
+    assert "<s>struck</s>" in html
+
+
+def test_render_markdown_soft_break_stays_inside_one_paragraph() -> None:
+    """CommonMark: a single newline is a soft break inside one paragraph. The
+    browser must show it as a space — which requires the stylesheet NOT to
+    apply ``pre-wrap`` to rendered output (see the stylesheet test below)."""
+    html = render_markdown("first line\nsecond line")
+    assert html.count("<p>") == 1
+
+
+def test_markdown_body_stylesheet_does_not_preserve_newlines() -> None:
+    """Regression pin for the review finding: ``.markdown-body`` once carried
+    ``white-space: pre-wrap`` (from its plaintext ``<pre>`` days), which turns
+    CommonMark soft breaks into visual line breaks in the browser. Whitespace
+    preservation belongs only to ``pre`` descendants (code blocks and the
+    escaped-plaintext fallback)."""
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    body_rule = re.search(r"\.markdown-body \{([^}]*)\}", css)
+    assert body_rule is not None
+    assert "white-space" not in body_rule.group(1)
+    pre_rule = re.search(r"\.markdown-body pre[^{]*\{([^}]*)\}", css)
+    assert pre_rule is not None
+    assert "pre-wrap" in pre_rule.group(1)
 
 
 def test_render_markdown_does_not_autolink_bare_urls() -> None:
