@@ -10,6 +10,11 @@ from typing import Any, Literal, Protocol, cast
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 ClaimedState = Literal["any", "known_claimed", "known_unclaimed"]
+# Known task types from the Lithos 0.4 task graph: "task" (workable), "epic",
+# "gate". Transport records carry the raw server string so an unknown future
+# type survives round-trip; only a MISSING task_type defaults to "task" (legacy
+# payloads predate the field).
+KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
@@ -31,6 +36,13 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     outcome: str = ""
     completed_at: str = ""
+    # Task-graph type (lithos 0.4); see KNOWN_TASK_TYPES. Raw server value —
+    # an unknown type survives round-trip. Older payloads omit it; default
+    # "task".
+    task_type: str = "task"
+    # Timestamp a task reached a terminal state. Completed/cancelled rows are
+    # windowed by this (not created_at). Empty for open tasks or older payloads.
+    resolved_at: str = ""
     # Inline claims when the upstream lithos_task_list call was made with
     # with_claims=True (added in lithos #221). ``None`` means "claims were
     # not requested or not returned"; an empty tuple means "no active claims".
@@ -156,6 +168,13 @@ class TaskDetailData:
 
 
 class TaskLithosClientProtocol(Protocol):
+    """The subset of the Lithos client this module's loaders consume.
+
+    The full client surface (including the task-graph reads) lives on
+    ``lithos_lens.lithos_client.LithosClientProtocol``; graph view models
+    belong to ``lithos_lens.task_graph``.
+    """
+
     async def list_tasks(
         self,
         *,
@@ -413,6 +432,9 @@ async def resolve_finding_notes(
 def normalize_task(raw: dict[str, Any]) -> TaskRecord:
     status_raw = str(raw.get("status") or "open")
     status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
+    # Raw passthrough: only a MISSING/empty task_type defaults to "task"
+    # (legacy payloads); an unknown explicit value survives round-trip.
+    task_type = str(raw.get("task_type") or "task")
     claims: tuple[ClaimRecord, ...] | None = None
     if "claims" in raw and raw["claims"] is not None:
         claims = tuple(
@@ -435,6 +457,8 @@ def normalize_task(raw: dict[str, Any]) -> TaskRecord:
         metadata=dict(raw.get("metadata") or {}),
         outcome=str(raw.get("outcome") or ""),
         completed_at=str(raw.get("completed_at") or ""),
+        task_type=task_type,
+        resolved_at=str(raw.get("resolved_at") or ""),
         claims=claims,
     )
 

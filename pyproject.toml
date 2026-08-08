@@ -62,6 +62,7 @@ type = "forbidden"
 source_modules = [
     "lithos_lens.errors",
     "lithos_lens.tasks",
+    "lithos_lens.task_graph",
     "lithos_lens.knowledge",
     "lithos_lens.config",
     "lithos_lens.logging",

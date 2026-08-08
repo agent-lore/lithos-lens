@@ -11,7 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.lithos_client import LithosHealth, LithosToolError
+from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
     AgentRecord,
     ClaimRecord,
@@ -38,6 +39,15 @@ class TaskFakeLithosClient:
         self.register_calls = 0
         self.status_calls: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
+        # Task-graph oracle state (lithos 0.4). Lens never re-derives readiness,
+        # so the fake is the source of truth: ready_ids / blocked drive the
+        # frontier, edges/children drive the detail surfaces. All default empty.
+        self.ready_ids: set[str] = set()
+        self.blocked: dict[str, tuple[BlockerRecord, ...]] = {}
+        self.edges: dict[str, list[EdgeRecord]] = {}
+        self.children: dict[str, list[str]] = {}
+        self.get_calls: list[str] = []
+        self.edge_list_calls: list[dict[str, Any]] = []
         self.notes: dict[str, NoteRecord] = {
             "note-1": NoteRecord(
                 id="note-1",
@@ -131,6 +141,89 @@ class TaskFakeLithosClient:
             rows = [task for task in rows if task.created_at[:10] >= since[:10]]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
+        return rows
+
+    def _by_id(self, task_id: str) -> TaskRecord | None:
+        return next((task for task in self.tasks if task.id == task_id), None)
+
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[TaskRecord]:
+        rows = [
+            task
+            for task in self.tasks
+            if task.id in self.ready_ids and task.status == "open"
+        ]
+        if with_claims:
+            rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
+        return rows[:limit] if limit is not None else rows
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[BlockedTaskRecord]:
+        rows = [
+            BlockedTaskRecord(task=task, blockers=self.blocked[task.id])
+            for task in self.tasks
+            if task.id in self.blocked and task.status == "open"
+        ]
+        return rows[:limit] if limit is not None else rows
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        self.get_calls.append(task_id)
+        task = self._by_id(task_id)
+        if task is None:
+            # Mirror the concrete client: Lithos answers a missing task with an
+            # error envelope (code=task_not_found), which LithosClient raises as
+            # a coded LithosToolError. Callers must be able to rely on the same
+            # contract against the fake.
+            raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
+        return task
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        child_ids = list(self.children.get(task_id, []))
+        if recursive:
+            queue = list(child_ids)
+            while queue:
+                grandchildren = self.children.get(queue.pop(), [])
+                for cid in grandchildren:
+                    if cid not in child_ids:
+                        child_ids.append(cid)
+                        queue.append(cid)
+        rows = [task for cid in child_ids if (task := self._by_id(cid)) is not None]
+        if not include_closed:
+            rows = [task for task in rows if task.status == "open"]
+        return rows
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
+        self.edge_list_calls.append(
+            {"task_id": task_id, "direction": direction, "types": types}
+        )
+        rows = list(self.edges.get(task_id, []))
+        if direction != "both":
+            rows = [edge for edge in rows if edge.direction == direction]
+        if types:
+            rows = [edge for edge in rows if edge.type in types]
         return rows
 
     def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
@@ -461,3 +554,19 @@ def test_dashboard_falls_back_to_task_status_when_claims_not_inline(
     # for the visible open tasks.
     assert "open-claimed" in fake.status_calls
     assert "open-unclaimed" in fake.status_calls
+
+
+def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
+    """The shared fake and the concrete client agree on the not-found contract:
+    a coded LithosToolError, never None (the PRD requires callers to be able to
+    distinguish task_not_found)."""
+    import asyncio
+
+    fake = TaskFakeLithosClient()
+
+    with pytest.raises(LithosToolError) as excinfo:
+        asyncio.run(fake.task_get("no-such-task"))
+    assert excinfo.value.code == "task_not_found"
+
+    found = asyncio.run(fake.task_get("open-claimed"))
+    assert found.id == "open-claimed"

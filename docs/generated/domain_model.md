@@ -42,6 +42,33 @@ classDiagram
   }
 ```
 
+## TaskGraph
+
+```mermaid
+classDiagram
+  class BlockedTaskRecord
+  class BlockerRecord {
+    +kind str
+    +task_id str
+    +type str
+    +status str
+    +message str
+  }
+  class EdgeRecord {
+    +from_task_id str
+    +to_task_id str
+    +type str
+    +direction str
+    +metadata dict[str, Any]
+    +created_by str
+    +created_at str
+  }
+  class TaskRecord
+  <<Tasks>> TaskRecord
+  BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
+  BlockedTaskRecord "1" --> "1" TaskRecord : task
+```
+
 ## Tasks
 
 ```mermaid
@@ -110,6 +137,8 @@ classDiagram
     +metadata dict[str, Any]
     +outcome str
     +completed_at str
+    +task_type str
+    +resolved_at str
   }
   class TaskStatusRecord {
     +id str

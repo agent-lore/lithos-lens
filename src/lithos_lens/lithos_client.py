@@ -19,6 +19,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.task_graph import (
+    BlockedTaskRecord,
+    EdgeRecord,
+    normalize_blocked_task,
+    normalize_edge,
+)
 from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
@@ -68,6 +74,41 @@ class LithosClientProtocol(Protocol):
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[TaskRecord]: ...
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[BlockedTaskRecord]: ...
+
+    async def task_get(self, task_id: str) -> TaskRecord | None: ...
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]: ...
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]: ...
+
     async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
 
     async def list_findings(
@@ -90,7 +131,16 @@ class RegistrationResult:
 
 
 class LithosToolError(RuntimeError):
-    """Raised when Lithos returns an error envelope from a tool call."""
+    """Raised when Lithos returns an error envelope from a tool call.
+
+    ``code`` carries the Lithos 0.4 error code (e.g. ``task_not_found``) when
+    the envelope supplies one, so callers can distinguish a missing task from a
+    missing tool without matching on message text.
+    """
+
+    def __init__(self, message: str, *, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class LithosClient:
@@ -210,6 +260,107 @@ class LithosClient:
             normalize_task(task)
             for task in payload.get("tasks", [])
             if isinstance(task, dict)
+        ]
+
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[TaskRecord]:
+        """List the ready frontier via ``lithos_task_ready``.
+
+        ``with_claims`` defaults to False here — a deliberate divergence from
+        upstream Lithos, whose ``lithos_task_ready`` defaults it to True: Lens
+        is a read-only UI with no claims consumer on this path, so the heavier
+        claims payload is cost without a use. Because the upstream default is
+        True, the flag is ALWAYS sent explicitly; omitting it when False would
+        silently invert the Lens default.
+        """
+        arguments: dict[str, Any] = {"with_claims": with_claims}
+        if limit is not None:
+            arguments["limit"] = limit
+        if project:
+            arguments["project"] = project
+        if tags:
+            arguments["tags"] = tags
+        payload = await self._call_tool("lithos_task_ready", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_task(task)
+            for task in payload.get("tasks", [])
+            if isinstance(task, dict)
+        ]
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[BlockedTaskRecord]:
+        arguments: dict[str, Any] = {}
+        if limit is not None:
+            arguments["limit"] = limit
+        if project:
+            arguments["project"] = project
+        if tags:
+            arguments["tags"] = tags
+        payload = await self._call_tool("lithos_task_blocked", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_blocked_task(task)
+            for task in payload.get("tasks", [])
+            if isinstance(task, dict)
+        ]
+
+    async def task_get(self, task_id: str) -> TaskRecord | None:
+        payload = await self._call_tool("lithos_task_get", {"task_id": task_id})
+        _raise_for_error(payload)
+        raw = payload.get("task")
+        if raw is None:
+            tasks = payload.get("tasks") or []
+            raw = tasks[0] if tasks else None
+        return normalize_task(raw) if isinstance(raw, dict) else None
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        arguments: dict[str, Any] = {"task_id": task_id}
+        if recursive:
+            arguments["recursive"] = True
+        if include_closed:
+            arguments["include_closed"] = True
+        payload = await self._call_tool("lithos_task_children", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_task(task)
+            for task in payload.get("tasks", [])
+            if isinstance(task, dict)
+        ]
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
+        arguments: dict[str, Any] = {"task_id": task_id, "direction": direction}
+        if types:
+            arguments["types"] = types
+        payload = await self._call_tool("lithos_task_edge_list", arguments)
+        _raise_for_error(payload)
+        return [
+            normalize_edge(edge)
+            for edge in payload.get("edges", [])
+            if isinstance(edge, dict)
         ]
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
@@ -364,5 +515,6 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
 
 def _raise_for_error(payload: dict[str, Any]) -> None:
     if payload.get("status") == "error":
-        message = str(payload.get("message") or payload.get("code") or "Lithos error")
-        raise LithosToolError(message)
+        code = str(payload.get("code") or "")
+        message = str(payload.get("message") or code or "Lithos error")
+        raise LithosToolError(message, code=code)

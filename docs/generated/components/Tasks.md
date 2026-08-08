@@ -29,7 +29,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `DashboardData`
 - class `FindingView`
 - class `TaskDetailData`
-- class `TaskLithosClientProtocol`
+- class `TaskLithosClientProtocol` — The subset of the Lithos client this module's loaders consume.
 - def `parse_filters`
 - def `load_dashboard`
 - def `load_task_detail`
@@ -49,6 +49,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 ## Dependencies
 
 - Depends on: —
-- Used by: [Config](Config.md), [LithosClient](LithosClient.md), [Web](Web.md)
+- Used by: [Config](Config.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

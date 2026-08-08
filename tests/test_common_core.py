@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
+from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
@@ -47,6 +48,47 @@ class RecordingLithosClient:
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
+        return []
+
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[BlockedTaskRecord]:
+        return []
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        # Same not-found contract as the concrete client: coded error, not None.
+        raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
         return []
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
