@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -597,6 +598,50 @@ def test_env_override_related_title_fanout_cap_enforces_bounds(
         ConfigError, match="LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP"
     ):
         load_config(lithos_lens_config_env)
+
+
+def test_related_failure_logs_note_id_and_error_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = KnowledgeFakeLithosClient(related_error=True)
+
+    with caplog.at_level(logging.WARNING, logger="lithos_lens.knowledge"):
+        panel = _run(load_related_panel(fake, "note-xyz", title_fanout_cap=20))
+
+    assert panel.state == SectionState.ERROR
+    records = [r for r in caplog.records if "related panel" in r.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "note-xyz" in message
+    assert "RuntimeError" in message
+
+
+def test_title_lookup_failures_log_one_aggregate_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Per-item logs would let a hub note spam the log; failures aggregate to
+    one count line."""
+
+    class FailingReadsClient(KnowledgeFakeLithosClient):
+        async def read_note(
+            self, knowledge_id: str, *, max_length: int | None = None
+        ) -> NoteRecord | None:
+            self.read_calls.append((knowledge_id, max_length))
+            raise RuntimeError("read unavailable")
+
+    links = tuple(RelatedRef(id=f"n-{i}") for i in range(4))
+    fake = FailingReadsClient(neighborhood=RelatedNeighborhood(links=links))
+
+    with caplog.at_level(logging.WARNING, logger="lithos_lens.knowledge"):
+        panel = _run(load_related_panel(fake, "note-xyz", title_fanout_cap=20))
+
+    # Unresolvable titles degrade to bare-id items; the panel still renders.
+    assert panel.state == SectionState.OK
+    records = [r for r in caplog.records if "title lookup" in r.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "4 of 4" in message
+    assert "note-xyz" in message
 
 
 # ── concrete client (transport contract) ───────────────────────────────

@@ -203,10 +203,19 @@ async def load_related_panel(
 
     try:
         neighborhood = await lithos.related(knowledge_id)
-    except Exception:
+    except Exception as exc:
+        # Note id + error type give the operator a scent trail; the full
+        # timing/fan-out telemetry the PRD sketches is deferred.
+        logger.warning(
+            "related panel load failed for note %s: %s",
+            knowledge_id,
+            type(exc).__name__,
+        )
         return RelatedPanel(state=SectionState.ERROR)
 
-    titles = await _resolve_titles(lithos, neighborhood, cap=title_fanout_cap)
+    titles = await _resolve_titles(
+        lithos, neighborhood, knowledge_id=knowledge_id, cap=title_fanout_cap
+    )
     return RelatedPanel(
         links=_build_section(neighborhood.links, titles, render_cap=render_cap),
         backlinks=_build_section(neighborhood.backlinks, titles, render_cap=render_cap),
@@ -280,21 +289,32 @@ async def _resolve_titles(
     lithos: KnowledgeLithosClientProtocol,
     neighborhood: RelatedNeighborhood,
     *,
+    knowledge_id: str,
     cap: int,
 ) -> dict[str, str]:
     ids = _ordered_ids(neighborhood)[: max(cap, 0)]
     if not ids:
         return {}
 
-    async def fetch(note_id: str) -> str:
+    async def fetch(note_id: str) -> tuple[str, bool]:
         try:
             note = await lithos.read_note(note_id, max_length=1)
         except Exception:
-            return ""
-        return note.title if note else ""
+            return "", True
+        return (note.title if note else ""), False
 
     results = await asyncio.gather(*(fetch(note_id) for note_id in ids))
-    return dict(zip(ids, results, strict=True))
+    failures = sum(1 for _, failed in results if failed)
+    if failures:
+        # One aggregate line, not one per id — a hub note with a flaky backend
+        # must not be able to spam the log.
+        logger.warning(
+            "related panel title lookup failed for %d of %d ids (note %s)",
+            failures,
+            len(ids),
+            knowledge_id,
+        )
+    return dict(zip(ids, (title for title, _ in results), strict=True))
 
 
 def _build_section(
