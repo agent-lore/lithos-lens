@@ -43,6 +43,8 @@ classDiagram
     +title str
     +edge_type str
     +weight float | None
+    +direction str
+    +conflict_state str
   }
   class RelatedSection {
     +overflow int

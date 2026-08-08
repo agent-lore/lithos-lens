@@ -81,15 +81,21 @@ def render_markdown(text: str) -> str:
 class RelatedRef:
     """A raw neighbor reference from ``lithos_related``, before title lookup.
 
-    Outgoing/back-link entries carry a ``title`` inline in the response; typed
+    Link/provenance entries carry a ``title`` inline in the response; typed
     edges carry endpoint ids only, so their titles are filled in by a separate
-    capped ``lithos_read`` fan-out.
+    capped ``lithos_read`` fan-out. For an edge ref, ``id`` is the OPPOSITE
+    endpoint of the edge (``to_id`` for an outgoing edge, ``from_id`` for an
+    incoming one) and ``direction`` / ``edge_type`` / ``weight`` /
+    ``conflict_state`` are carried through from the raw edge row per
+    REQUIREMENTS.md §6.5.
     """
 
     id: str
     title: str = ""
     edge_type: str = ""
     weight: float | None = None
+    direction: str = ""
+    conflict_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -205,18 +211,42 @@ async def load_related_panel(
 
 
 def normalize_related(raw: dict[str, Any]) -> RelatedNeighborhood:
-    """Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``."""
-    unresolved = _provenance(raw, "unresolved")
-    if unresolved is None:
-        unresolved = _provenance(raw, "unresolved_sources")
+    """Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
+
+    Parses the real nested response shape (see the lithos ``lithos_related``
+    tool)::
+
+        {
+          "id": ..., "included": [...],
+          "links": {"outgoing": [{"id", "title"}], "incoming": [...]},
+          "provenance": {"sources": [{"id", "title"}], "derived": [...],
+                         "unresolved_sources": [str, ...]},
+          "edges": {"outgoing": [<edge row>], "incoming": [<edge row>]},
+          "related_ids": [...],
+        }
+
+    Sections omitted from the response (not requested via ``include``)
+    normalize to empty. Edge rows come straight from edges.db; the ref keeps
+    the OPPOSITE endpoint by direction (``to_id`` outgoing, ``from_id``
+    incoming) plus ``type`` / ``weight`` / ``conflict_state``.
+    """
+    links = _section(raw, "links")
+    provenance = _section(raw, "provenance")
+    edges = _section(raw, "edges")
     return RelatedNeighborhood(
-        links=_normalize_refs(raw.get("links")),
-        backlinks=_normalize_refs(raw.get("backlinks") or raw.get("back_links")),
-        sources=_normalize_refs(_provenance(raw, "sources")),
-        derived=_normalize_refs(_provenance(raw, "derived")),
-        unresolved=_normalize_unresolved(unresolved),
-        edges=_normalize_edges(raw.get("edges")),
+        links=_normalize_refs(links.get("outgoing")),
+        backlinks=_normalize_refs(links.get("incoming")),
+        sources=_normalize_refs(provenance.get("sources")),
+        derived=_normalize_refs(provenance.get("derived")),
+        unresolved=_normalize_unresolved(provenance.get("unresolved_sources")),
+        edges=_normalize_edges(edges.get("outgoing"), direction="outgoing")
+        + _normalize_edges(edges.get("incoming"), direction="incoming"),
     )
+
+
+def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    value = raw.get(key)
+    return value if isinstance(value, dict) else {}
 
 
 def _ordered_ids(neighborhood: RelatedNeighborhood) -> list[str]:
@@ -293,83 +323,52 @@ def _build_section(
     return RelatedSection(items=tuple(items), overflow=overflow)
 
 
-def _ref_id(raw: Any) -> str:
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, dict):
-        return str(
-            raw.get("id")
-            or raw.get("target")
-            or raw.get("to")
-            or raw.get("knowledge_id")
-            or ""
-        )
-    return ""
-
-
-def _ref_title(raw: Any) -> str:
-    if isinstance(raw, dict):
-        return str(raw.get("title") or raw.get("display") or "")
-    return ""
-
-
 def _normalize_refs(items: Any) -> tuple[RelatedRef, ...]:
+    """Link/provenance entries: ``{"id": ..., "title": ...}`` dicts."""
     if not isinstance(items, list):
         return ()
     refs: list[RelatedRef] = []
     for item in items:
-        ref_id = _ref_id(item)
+        if not isinstance(item, dict):
+            continue
+        ref_id = str(item.get("id") or "")
         if ref_id:
-            refs.append(RelatedRef(id=ref_id, title=_ref_title(item)))
+            refs.append(RelatedRef(id=ref_id, title=str(item.get("title") or "")))
     return tuple(refs)
 
 
-def _normalize_edges(items: Any) -> tuple[RelatedRef, ...]:
+def _normalize_edges(items: Any, *, direction: str) -> tuple[RelatedRef, ...]:
+    """Edge rows from edges.db; keep the endpoint OPPOSITE the focus note."""
     if not isinstance(items, list):
         return ()
+    endpoint_key = "to_id" if direction == "outgoing" else "from_id"
     refs: list[RelatedRef] = []
     for item in items:
-        ref_id = _ref_id(item)
+        if not isinstance(item, dict):
+            continue
+        ref_id = str(item.get(endpoint_key) or "")
         if not ref_id:
             continue
-        edge_type = ""
-        weight: float | None = None
-        if isinstance(item, dict):
-            edge_type = str(item.get("type") or item.get("edge_type") or "")
-            raw_weight = item.get("weight")
-            if isinstance(raw_weight, (int, float)) and not isinstance(
-                raw_weight, bool
-            ):
-                weight = float(raw_weight)
+        raw_weight = item.get("weight")
+        weight = (
+            float(raw_weight)
+            if isinstance(raw_weight, (int, float)) and not isinstance(raw_weight, bool)
+            else None
+        )
         refs.append(
             RelatedRef(
                 id=ref_id,
-                title=_ref_title(item),
-                edge_type=edge_type,
+                edge_type=str(item.get("type") or ""),
                 weight=weight,
+                direction=direction,
+                conflict_state=str(item.get("conflict_state") or ""),
             )
         )
     return tuple(refs)
 
 
 def _normalize_unresolved(items: Any) -> tuple[str, ...]:
+    """``provenance.unresolved_sources`` is a plain list of target strings."""
     if not isinstance(items, list):
         return ()
-    values: list[str] = []
-    for item in items:
-        if isinstance(item, str):
-            text = item
-        elif isinstance(item, dict):
-            text = str(item.get("target") or item.get("display") or "")
-        else:
-            text = ""
-        if text:
-            values.append(text)
-    return tuple(values)
-
-
-def _provenance(raw: dict[str, Any], key: str) -> Any:
-    provenance = raw.get("provenance")
-    if isinstance(provenance, dict) and key in provenance:
-        return provenance.get(key)
-    return raw.get(key)
+    return tuple(item for item in items if isinstance(item, str) and item)

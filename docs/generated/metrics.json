@@ -22,8 +22,8 @@
         "max_function": "lithos_lens.events.parse_lithos_sse_frame"
       },
       "Knowledge": {
-        "functions_over_10": 0,
-        "max_complexity": 9,
+        "functions_over_10": 1,
+        "max_complexity": 11,
         "max_function": "lithos_lens.knowledge._normalize_edges"
       },
       "LithosClient": {
@@ -62,7 +62,7 @@
         "max_function": "lithos_lens.web.create_app.note"
       }
     },
-    "functions_over_10": 6,
+    "functions_over_10": 7,
     "top_functions": [
       {
         "complexity": 23,
@@ -79,6 +79,10 @@
       {
         "complexity": 12,
         "qualname": "lithos_lens.tasks._matches_filters"
+      },
+      {
+        "complexity": 11,
+        "qualname": "lithos_lens.knowledge._normalize_edges"
       },
       {
         "complexity": 11,
@@ -99,13 +103,9 @@
       {
         "complexity": 9,
         "qualname": "lithos_lens.config._optional_status_groups"
-      },
-      {
-        "complexity": 9,
-        "qualname": "lithos_lens.knowledge._normalize_edges"
       }
     ],
-    "total_functions": 154
+    "total_functions": 152
   },
   "domain": {
     "associations": 25,
@@ -247,10 +247,10 @@
       },
       "Knowledge": {
         "classes": 6,
-        "functions": 19,
+        "functions": 17,
         "largest_module": "lithos_lens.knowledge",
-        "largest_module_lines": 375,
-        "lines": 375,
+        "largest_module_lines": 374,
+        "lines": 374,
         "modules": 1,
         "public_symbols": 9,
         "sloc": 298
@@ -259,11 +259,11 @@
         "classes": 4,
         "functions": 41,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 563,
-        "lines": 563,
+        "largest_module_lines": 569,
+        "lines": 569,
         "modules": 1,
         "public_symbols": 4,
-        "sloc": 470
+        "sloc": 475
       },
       "Logging": {
         "classes": 1,
@@ -329,13 +329,13 @@
     "max_module": "lithos_lens.config",
     "max_module_lines": 719,
     "modules_over_800": [],
-    "total_lines": 3149,
+    "total_lines": 3154,
     "total_modules": 14,
-    "total_sloc": 2605
+    "total_sloc": 2610
   },
   "tests": {
-    "ratio": 1.54,
-    "src_lines": 3149,
-    "test_lines": 4858
+    "ratio": 1.63,
+    "src_lines": 3154,
+    "test_lines": 5130
   }
 }

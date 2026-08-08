@@ -38,8 +38,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 50 | 32 | 0 | 4 | 1.00 | 2 (`lithos_lens.main.main`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 1 | 1 | 0.50 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
-| Knowledge | 1 | 375 | 298 | 2 | 1 | 0.33 | 9 (`lithos_lens.knowledge._normalize_edges`) | 0 |
-| LithosClient | 1 | 563 | 470 | 2 | 4 | 0.67 | 7 (`lithos_lens.lithos_client.LithosClient.list_tasks`) | 0 |
+| Knowledge | 1 | 374 | 298 | 2 | 1 | 0.33 | 11 (`lithos_lens.knowledge._normalize_edges`) | 1 |
+| LithosClient | 1 | 569 | 475 | 2 | 4 | 0.67 | 7 (`lithos_lens.lithos_client.LithosClient.list_tasks`) | 0 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 63 | 50 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.refresh_health`) | 0 |
 | TaskGraph | 1 | 119 | 88 | 1 | 1 | 0.50 | 8 (`lithos_lens.task_graph.normalize_edge`) | 0 |
@@ -49,13 +49,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **14**, lines: **3149**, SLOC: **2605**
+- Modules: **14**, lines: **3154**, SLOC: **2610**
 - Largest module: `lithos_lens.config` (719 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **154**, cyclomatic > 10: **6**
+- Functions: **152**, cyclomatic > 10: **7**
 
 Top 10 most complex functions:
 
@@ -65,12 +65,12 @@ Top 10 most complex functions:
 | 23 | `lithos_lens.tasks.normalize_task` |
 | 20 | `lithos_lens.tasks.load_dashboard` |
 | 12 | `lithos_lens.tasks._matches_filters` |
+| 11 | `lithos_lens.knowledge._normalize_edges` |
 | 11 | `lithos_lens.tasks._enrich_open_tasks` |
 | 11 | `lithos_lens.tasks.normalize_task_status` |
 | 10 | `lithos_lens.events.parse_lithos_sse_frame` |
 | 10 | `lithos_lens.tasks.parse_filters` |
 | 9 | `lithos_lens.config._optional_status_groups` |
-| 9 | `lithos_lens.knowledge._normalize_edges` |
 
 ## Seams
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **24** (25 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.54** (4858 test lines / 3149 source lines)
+- Test-to-source line ratio: **1.63** (5130 test lines / 3154 source lines)

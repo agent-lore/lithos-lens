@@ -440,9 +440,15 @@ class LithosClient:
         return normalize_note(payload)
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        """Fetch a note's related neighborhood via ``lithos_related``.
+
+        The tool accepts only ``id`` / ``include`` / ``depth`` / ``namespace``
+        (FastMCP rejects unexpected arguments outright), so exactly
+        ``{"id", "depth"}`` is sent — §6.5 pins the panel to ``depth=1``.
+        """
         payload = await self._call_tool(
             "lithos_related",
-            {"id": knowledge_id, "depth": 1, "agent_id": self._config.agent_id},
+            {"id": knowledge_id, "depth": 1},
         )
         _raise_for_error(payload)
         return normalize_related(payload)

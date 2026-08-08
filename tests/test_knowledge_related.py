@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import ConfigError, load_config
+from lithos_lens.config import ConfigError, LithosConfig, load_config
 from lithos_lens.knowledge import (
     RelatedNeighborhood,
     RelatedRef,
     load_related_panel,
     normalize_related,
 )
-from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.lithos_client import LithosClient, LithosHealth, LithosToolError
+from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
@@ -90,6 +92,47 @@ class KnowledgeFakeLithosClient:
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
         return None
 
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[BlockedTaskRecord]:
+        return []
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        # Same not-found contract as the concrete client: coded error, not None.
+        raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
+        return []
+
     async def list_findings(
         self, task_id: str, *, since: str | None = None
     ) -> list[FindingRecord]:
@@ -110,61 +153,172 @@ def _run(coro):
 
 
 # ── normalizer ─────────────────────────────────────────────────────────
+#
+# REAL_RELATED_PAYLOAD mirrors, key for key, the response built by the lithos
+# ``lithos_related`` tool (src/lithos/tools/read_search.py): nested
+# ``links``/``edges`` with ``outgoing``/``incoming`` arrays, a ``provenance``
+# object with ``sources``/``derived``/``unresolved_sources``, and full edge
+# rows straight from edges.db (endpoints as ``from_id``/``to_id``). It is NOT
+# an invented flat shape.
 
 
-def test_normalize_related_extracts_all_sections() -> None:
-    payload = {
-        "status": "ok",
-        "links": [{"id": "out-1"}, {"target": "out-2"}],
-        "backlinks": [{"id": "in-1"}],
-        "provenance": {
-            "sources": [{"id": "src-1"}],
-            "derived": [{"id": "der-1"}],
-            "unresolved": ["draft/missing", {"target": "other/missing"}],
-        },
-        "edges": [
-            {"target": "edge-1", "type": "supports", "weight": 0.75},
-            {"id": "edge-2", "edge_type": "refutes"},
-        ],
+def _edge_row(**overrides: Any) -> dict[str, Any]:
+    """A full edges.db row as lithos_related returns it (all 12 columns)."""
+    row: dict[str, Any] = {
+        "edge_id": "edge-row",
+        "from_id": "root",
+        "to_id": "other",
+        "type": "supports",
+        "weight": 0.75,
+        "namespace": "default",
+        "created_at": "2026-05-01T00:00:00+00:00",
+        "updated_at": "2026-05-01T00:00:00+00:00",
+        "provenance_actor": "agent-x",
+        "provenance_type": "asserted",
+        "evidence": "",
+        "conflict_state": "",
     }
+    row.update(overrides)
+    return row
 
-    neighborhood = normalize_related(payload)
 
-    assert [ref.id for ref in neighborhood.links] == ["out-1", "out-2"]
-    assert [ref.id for ref in neighborhood.backlinks] == ["in-1"]
-    assert [ref.id for ref in neighborhood.sources] == ["src-1"]
-    assert [ref.id for ref in neighborhood.derived] == ["der-1"]
-    assert neighborhood.unresolved == ("draft/missing", "other/missing")
-    assert neighborhood.edges[0] == RelatedRef(
-        id="edge-1", edge_type="supports", weight=0.75
+REAL_RELATED_PAYLOAD: dict[str, Any] = {
+    "id": "root",
+    "included": ["links", "provenance", "edges"],
+    "links": {
+        "outgoing": [{"id": "out-1", "title": "Outgoing Note"}],
+        "incoming": [{"id": "in-1", "title": "Incoming Note"}],
+    },
+    "provenance": {
+        "sources": [{"id": "src-1", "title": "Source Note"}],
+        "derived": [{"id": "der-1", "title": "Derived Note"}],
+        "unresolved_sources": ["drafts/missing.md"],
+    },
+    "edges": {
+        "outgoing": [
+            _edge_row(
+                edge_id="e-1",
+                from_id="root",
+                to_id="edge-out",
+                type="supports",
+                weight=0.75,
+            )
+        ],
+        "incoming": [
+            _edge_row(
+                edge_id="e-2",
+                from_id="edge-in",
+                to_id="root",
+                type="contradicts",
+                weight=0.9,
+                conflict_state="unresolved",
+            )
+        ],
+    },
+    "related_ids": ["der-1", "edge-in", "edge-out", "in-1", "out-1", "src-1"],
+}
+
+
+def test_normalize_related_parses_the_real_nested_payload() -> None:
+    neighborhood = normalize_related(REAL_RELATED_PAYLOAD)
+
+    assert neighborhood.links == (RelatedRef(id="out-1", title="Outgoing Note"),)
+    assert neighborhood.backlinks == (RelatedRef(id="in-1", title="Incoming Note"),)
+    assert neighborhood.sources == (RelatedRef(id="src-1", title="Source Note"),)
+    assert neighborhood.derived == (RelatedRef(id="der-1", title="Derived Note"),)
+    assert neighborhood.unresolved == ("drafts/missing.md",)
+
+
+def test_normalize_related_outgoing_edge_selects_to_id_endpoint() -> None:
+    neighborhood = normalize_related(
+        {"edges": {"outgoing": [_edge_row(from_id="root", to_id="edge-out")]}}
     )
-    assert neighborhood.edges[1] == RelatedRef(id="edge-2", edge_type="refutes")
+
+    assert neighborhood.edges == (
+        RelatedRef(
+            id="edge-out",
+            edge_type="supports",
+            weight=0.75,
+            direction="outgoing",
+            conflict_state="",
+        ),
+    )
+
+
+def test_normalize_related_incoming_edge_selects_from_id_endpoint() -> None:
+    neighborhood = normalize_related(
+        {
+            "edges": {
+                "incoming": [
+                    _edge_row(
+                        from_id="edge-in",
+                        to_id="root",
+                        type="contradicts",
+                        weight=0.9,
+                        conflict_state="unresolved",
+                    )
+                ]
+            }
+        }
+    )
+
+    assert neighborhood.edges == (
+        RelatedRef(
+            id="edge-in",
+            edge_type="contradicts",
+            weight=0.9,
+            direction="incoming",
+            conflict_state="unresolved",
+        ),
+    )
+
+
+def test_normalize_related_preserves_direction_type_weight_conflict_state() -> None:
+    """REQUIREMENTS.md §6.5: edge records carry type, weight and conflict_state;
+    direction distinguishes the two fan-out halves. All survive normalization."""
+    neighborhood = normalize_related(REAL_RELATED_PAYLOAD)
+
+    outgoing, incoming = neighborhood.edges
+    assert (outgoing.direction, outgoing.edge_type, outgoing.weight) == (
+        "outgoing",
+        "supports",
+        0.75,
+    )
+    assert incoming.conflict_state == "unresolved"
+    assert incoming.direction == "incoming"
+
+
+def test_normalize_related_omitted_sections_normalize_empty() -> None:
+    """Sections not in ``include`` are omitted from the response entirely."""
+    neighborhood = normalize_related(
+        {
+            "id": "root",
+            "included": ["links"],
+            "links": {"outgoing": [], "incoming": []},
+        }
+    )
+
+    assert neighborhood.links == ()
+    assert neighborhood.backlinks == ()
+    assert neighborhood.sources == ()
+    assert neighborhood.derived == ()
+    assert neighborhood.unresolved == ()
+    assert neighborhood.edges == ()
 
 
 def test_normalize_related_tolerates_missing_and_malformed_fields() -> None:
-    neighborhood = normalize_related({"links": "nope", "edges": [42, {}]})
+    neighborhood = normalize_related(
+        {
+            "links": "nope",
+            "provenance": [],
+            "edges": {"outgoing": [42, {}], "incoming": "bad"},
+        }
+    )
 
     assert neighborhood.links == ()
+    assert neighborhood.backlinks == ()
     assert neighborhood.edges == ()
     assert neighborhood.unresolved == ()
-
-
-def test_normalize_related_keeps_inline_titles_and_unresolved_sources() -> None:
-    """Regression for f-001: titles arrive inline and unresolved provenance may
-    use the `unresolved_sources` key."""
-    payload = {
-        "links": [{"id": "n1", "title": "Readable title"}],
-        "backlinks": [{"id": "n2", "display": "Back title"}],
-        "edges": [{"id": "e1", "type": "supports", "title": "Edge title"}],
-        "provenance": {"unresolved_sources": ["missing.md"]},
-    }
-
-    neighborhood = normalize_related(payload)
-
-    assert neighborhood.links[0].title == "Readable title"
-    assert neighborhood.backlinks[0].title == "Back title"
-    assert neighborhood.edges[0].title == "Edge title"
-    assert neighborhood.unresolved == ("missing.md",)
 
 
 # ── load_related_panel ─────────────────────────────────────────────────
@@ -437,3 +591,121 @@ def test_note_page_render_cap_bounds_inline_titled_items(tmp_path: Path) -> None
     assert response.status_code == 200
     assert response.text.count("Hub Link ") == 3
     assert "+7 more" in response.text
+
+
+# ── concrete client (transport contract) ───────────────────────────────
+
+
+class _StubLithosClient(LithosClient):
+    """LithosClient with the MCP transport stubbed out.
+
+    Records each ``(tool, arguments)`` pair; ``lithos_related`` returns the
+    production-shaped payload, ``lithos_read`` answers from a per-id note map.
+    The lifecycle methods are neutralized so the stub can also back a full
+    ``create_app`` page render (raw payload -> client -> loader -> HTML).
+    """
+
+    def __init__(
+        self,
+        *,
+        related_payload: dict[str, Any] | None = None,
+        notes: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(LithosConfig())
+        self.related_payload = related_payload or {"id": "root", "included": []}
+        self.notes = notes or {}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def startup(self) -> None:
+        return None
+
+    async def health(self) -> LithosHealth:
+        return "ok"
+
+    async def register_agent(self) -> bool:
+        return True
+
+    async def _call_tool(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append((name, arguments))
+        if name == "lithos_related":
+            return self.related_payload
+        if name == "lithos_read":
+            note = self.notes.get(str(arguments.get("id")))
+            if note is None:
+                return {"status": "error", "code": "not_found", "message": "missing"}
+            return note
+        return {}
+
+    def read_ids(self) -> list[str]:
+        return [
+            str(arguments.get("id"))
+            for name, arguments in self.calls
+            if name == "lithos_read"
+        ]
+
+
+def _run_client(client: LithosClient, coro: Any) -> Any:
+    async def _driver() -> Any:
+        try:
+            return await coro
+        finally:
+            await client.close()
+
+    return asyncio.run(_driver())
+
+
+def test_client_related_sends_only_the_real_tool_arguments() -> None:
+    """lithos_related accepts only id/include/depth/namespace — FastMCP rejects
+    unexpected arguments, so an invented one (agent_id) would fail every call."""
+    client = _StubLithosClient(related_payload=REAL_RELATED_PAYLOAD)
+
+    neighborhood = _run_client(client, client.related("root"))
+
+    assert client.calls == [("lithos_related", {"id": "root", "depth": 1})]
+    assert neighborhood.links == (RelatedRef(id="out-1", title="Outgoing Note"),)
+
+
+def test_note_page_flows_raw_related_payload_to_html(
+    lithos_lens_config_env: Path,
+) -> None:
+    """End-to-end: raw lithos_related payload -> concrete client -> loader ->
+    rendered HTML. Exactly one lithos_related call per page; edge endpoints
+    that appear in several edge rows are title-resolved once."""
+    payload = dict(REAL_RELATED_PAYLOAD)
+    payload["edges"] = {
+        "outgoing": [
+            _edge_row(edge_id="e-1", from_id="root", to_id="dup-1", type="supports"),
+            _edge_row(edge_id="e-2", from_id="root", to_id="dup-1", type="contradicts"),
+        ],
+        "incoming": [],
+    }
+    stub = _StubLithosClient(
+        related_payload=payload,
+        notes={
+            "root": {"id": "root", "title": "Root Note", "content": "Body text."},
+            "dup-1": {"id": "dup-1", "title": "Dup Note", "content": ""},
+        },
+    )
+
+    config = load_config(lithos_lens_config_env)
+    app = create_app(config, lithos_client_factory=lambda _: stub)
+    with TestClient(app) as client:
+        response = client.get("/note/root")
+
+    assert response.status_code == 200
+    # Inline-titled links and provenance flow through untouched.
+    assert "Outgoing Note" in response.text
+    assert "Incoming Note" in response.text
+    assert "Source Note" in response.text
+    assert "Derived Note" in response.text
+    assert "drafts/missing.md" in response.text
+    # Edge endpoints resolve to titles via the capped lithos_read fan-out.
+    assert "Dup Note" in response.text
+    assert "supports" in response.text
+    # Exactly one related call per page render.
+    related_calls = [c for c in stub.calls if c[0] == "lithos_related"]
+    assert related_calls == [("lithos_related", {"id": "root", "depth": 1})]
+    # The duplicated edge endpoint is looked up once, not per edge row.
+    assert stub.read_ids().count("dup-1") == 1
