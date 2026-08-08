@@ -27,7 +27,7 @@ Do not edit these files by hand.
 
 ## Components
 
-Per-component drill-down pages: [Config](components/Config.md) · [Entrypoint](components/Entrypoint.md) · [Errors](components/Errors.md) · [Events](components/Events.md) · [LithosClient](components/LithosClient.md) · [Logging](components/Logging.md) · [State](components/State.md) · [Tasks](components/Tasks.md) · [Telemetry](components/Telemetry.md) · [Web](components/Web.md)
+Per-component drill-down pages: [Config](components/Config.md) · [Entrypoint](components/Entrypoint.md) · [Errors](components/Errors.md) · [Events](components/Events.md) · [Knowledge](components/Knowledge.md) · [LithosClient](components/LithosClient.md) · [Logging](components/Logging.md) · [State](components/State.md) · [Tasks](components/Tasks.md) · [Telemetry](components/Telemetry.md) · [Web](components/Web.md)
 
 ## Legend
 
