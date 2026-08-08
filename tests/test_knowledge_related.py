@@ -9,8 +9,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import ConfigError, LithosConfig, load_config
+from lithos_lens.config import (
+    ConfigError,
+    KnowledgeConfig,
+    LithosConfig,
+    load_config,
+)
 from lithos_lens.knowledge import (
+    RELATED_RENDER_CAP,
     RelatedNeighborhood,
     RelatedRef,
     load_related_panel,
@@ -552,45 +558,45 @@ def test_config_rejects_oversized_related_fanout_cap(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-def test_config_rejects_oversized_related_render_cap(tmp_path: Path) -> None:
-    """Regression for security/f-003: the render cap is bounded above too, so its
-    own size bound cannot be misconfigured away."""
-    config_path = tmp_path / "lithos-lens.toml"
-    config_path.write_text(
-        "[lithos-lens]\n"
-        'environment = "test"\n'
-        "[lithos-lens.knowledge]\n"
-        "related_render_cap = 100000\n"
-    )
+def test_related_panel_uses_internal_render_cap_by_default() -> None:
+    """related_render_cap is an internal constant, not public config (the PRD
+    only specifies related_title_fanout_cap): the loader bounds each section at
+    RELATED_RENDER_CAP when no explicit cap is passed."""
+    links = tuple(RelatedRef(id=f"n-{i}", title=f"Title {i}") for i in range(60))
+    fake = KnowledgeFakeLithosClient(neighborhood=RelatedNeighborhood(links=links))
 
-    with pytest.raises(ConfigError, match="related_render_cap"):
-        load_config(config_path)
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+
+    assert len(panel.links.items) == RELATED_RENDER_CAP
+    assert panel.links.overflow == 60 - RELATED_RENDER_CAP
 
 
-def test_note_page_render_cap_bounds_inline_titled_items(tmp_path: Path) -> None:
-    """Regression for security/f-002: the configured render cap bounds how many
-    inline-titled hub neighbors reach the page, collapsing the rest to +N more."""
-    config_path = tmp_path / "lithos-lens.toml"
-    config_path.write_text(
-        "[lithos-lens]\n"
-        'environment = "test"\n'
-        "[lithos-lens.knowledge]\n"
-        "related_render_cap = 3\n"
-    )
-    note = NoteRecord(id="root", title="Root Note", content="Body.")
-    links = tuple(RelatedRef(id=f"n-{i}", title=f"Hub Link {i}") for i in range(10))
-    fake = KnowledgeFakeLithosClient(
-        neighborhood=RelatedNeighborhood(links=links), note=note
-    )
+def test_config_has_no_public_related_render_cap() -> None:
+    assert not hasattr(KnowledgeConfig(), "related_render_cap")
 
-    config = load_config(config_path)
-    app = create_app(config, lithos_client_factory=lambda _: fake)
-    with TestClient(app) as client:
-        response = client.get("/note/root")
 
-    assert response.status_code == 200
-    assert response.text.count("Hub Link ") == 3
-    assert "+7 more" in response.text
+def test_env_override_sets_related_title_fanout_cap(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", "5")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.knowledge.related_title_fanout_cap == 5
+
+
+@pytest.mark.parametrize("value", ["1000", "0", "-3", "nope"])
+def test_env_override_related_title_fanout_cap_enforces_bounds(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """The env override honors the same 1..MAX bounds as the TOML key, so a
+    misconfigured environment can't amplify the per-request read fan-out."""
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", value)
+
+    with pytest.raises(
+        ConfigError, match="LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP"
+    ):
+        load_config(lithos_lens_config_env)
 
 
 # ── concrete client (transport contract) ───────────────────────────────

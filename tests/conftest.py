@@ -44,6 +44,7 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_MCP_SSE_PATH", "")
     monkeypatch.setenv("LITHOS_LENS_AGENT_ID", "")
     monkeypatch.setenv("LITHOS_LENS_TASKS_VISIBLE_CAP", "")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_ENABLED", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_MODEL", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_PROVIDER", "")

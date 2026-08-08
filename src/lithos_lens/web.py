@@ -187,7 +187,6 @@ def create_app(
                     state.lithos_client,
                     knowledge_id,
                     title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
-                    render_cap=state.config.knowledge.related_render_cap,
                 )
             task_id = request.query_params.get("task", "")
             if task_id:

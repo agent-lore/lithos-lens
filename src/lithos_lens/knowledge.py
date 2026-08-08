@@ -25,6 +25,12 @@ from lithos_lens.tasks import NoteRecord, SectionState
 
 logger = logging.getLogger(__name__)
 
+# Lens-side ceiling on how many items each related-panel section emits.
+# Internal constant, deliberately NOT public config: the PRD only specifies
+# ``[knowledge].related_title_fanout_cap`` (the backend-call bound); the render
+# bound is a page-size safety net, not an operator dial.
+RELATED_RENDER_CAP = 50
+
 # Schemes an agent-authored link may use (REQUIREMENTS.md §6.2). Anything else —
 # including ``javascript:``, ``data:``, ``file:``, ``vbscript:``, ``ftp:`` — is
 # rejected; relative links (no scheme) are always allowed.
@@ -180,15 +186,16 @@ async def load_related_panel(
     knowledge_id: str,
     *,
     title_fanout_cap: int,
-    render_cap: int,
+    render_cap: int = RELATED_RENDER_CAP,
 ) -> RelatedPanel:
     """Load and resolve a note's related panel from one ``lithos_related`` call.
 
     Two independent bounds apply. ``title_fanout_cap`` limits the ``lithos_read``
     fan-out — at most that many distinct ids are looked up to resolve titles,
-    bounding backend *call* count. ``render_cap`` limits how many items each
-    section *emits*, bounding response *size* even for a hub note whose
-    neighbors arrive with inline titles (which need no fan-out). Anything past
+    bounding backend *call* count. ``render_cap`` (internal constant
+    ``RELATED_RENDER_CAP``; parameterized only for tests) limits how many
+    items each section *emits*, bounding response *size* even for a hub note
+    whose neighbors arrive with inline titles (which need no fan-out). Anything past
     either bound collapses into the section's ``overflow`` count. A failed
     ``lithos_related`` call degrades to ``SectionState.ERROR`` so the note body
     still renders.
