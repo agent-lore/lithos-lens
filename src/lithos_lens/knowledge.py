@@ -1,17 +1,27 @@
 """Knowledge note rendering and normalization.
 
-Foundation module for the knowledge browser surface (mirrors ``tasks.py``).
-K1 slice 1 introduces server-side markdown rendering; later slices add the
-wiki-link tokenizer, metadata chips, related panel, and search view models.
+Foundation module for the knowledge browser surface (mirrors ``tasks.py``):
+frozen dataclasses, pure normalizers, a narrow client protocol, and ``load_*``
+orchestrators with per-section state. K1 slice 1 introduced server-side
+markdown rendering; K1-S4 adds the *related panel* — one ``lithos_related``
+call turned into four scannable sections (outgoing links, back-links,
+provenance, typed edges) with link/edge endpoints shown by title rather than
+bare id. Later slices add the wiki-link tokenizer, metadata chips, and search
+view models.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass, field
 from html import escape
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from markdown_it import MarkdownIt
+
+from lithos_lens.tasks import NoteRecord, SectionState
 
 logger = logging.getLogger(__name__)
 
@@ -62,3 +72,261 @@ def render_markdown(text: str) -> str:
             exc_info=True,
         )
         return f'<pre class="markdown-fallback">{escape(body)}</pre>'
+
+
+# ── Related panel (K1-S4) ──────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RelatedRef:
+    """A raw neighbor reference from ``lithos_related``, before title lookup.
+
+    ``lithos_related`` returns resolved note *ids* (with typed-edge metadata)
+    but no titles; the titles are filled in by a separate capped fan-out.
+    """
+
+    id: str
+    edge_type: str = ""
+    weight: float | None = None
+
+
+@dataclass(frozen=True)
+class RelatedNeighborhood:
+    """One ``lithos_related`` call's worth of a note's neighborhood (raw ids)."""
+
+    links: tuple[RelatedRef, ...] = ()
+    backlinks: tuple[RelatedRef, ...] = ()
+    sources: tuple[RelatedRef, ...] = ()
+    derived: tuple[RelatedRef, ...] = ()
+    unresolved: tuple[str, ...] = ()
+    edges: tuple[RelatedRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class RelatedItem:
+    """A neighbor rendered in the panel — by title when it could be resolved."""
+
+    id: str
+    title: str = ""
+    edge_type: str = ""
+    weight: float | None = None
+
+    @property
+    def label(self) -> str:
+        """Human label: the resolved title, falling back to the bare id."""
+        return self.title or self.id
+
+
+@dataclass(frozen=True)
+class RelatedSection:
+    """One panel section: resolved items plus a count collapsed past the cap."""
+
+    items: tuple[RelatedItem, ...] = ()
+    overflow: int = 0
+
+
+@dataclass(frozen=True)
+class RelatedPanel:
+    """The four related-panel sections plus loose provenance and load state."""
+
+    links: RelatedSection = field(default_factory=RelatedSection)
+    backlinks: RelatedSection = field(default_factory=RelatedSection)
+    sources: RelatedSection = field(default_factory=RelatedSection)
+    derived: RelatedSection = field(default_factory=RelatedSection)
+    unresolved: tuple[str, ...] = ()
+    edges: RelatedSection = field(default_factory=RelatedSection)
+    state: SectionState = SectionState.OK
+
+    @property
+    def has_provenance(self) -> bool:
+        return bool(self.sources.items or self.derived.items or self.unresolved)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.links.items
+            or self.backlinks.items
+            or self.has_provenance
+            or self.edges.items
+        )
+
+
+class KnowledgeLithosClientProtocol(Protocol):
+    """Subset of Lithos operations required by the knowledge note view."""
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood: ...
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None: ...
+
+
+async def load_related_panel(
+    lithos: KnowledgeLithosClientProtocol,
+    knowledge_id: str,
+    *,
+    title_fanout_cap: int,
+) -> RelatedPanel:
+    """Load and resolve a note's related panel from one ``lithos_related`` call.
+
+    Endpoint titles are resolved with a per-request-capped ``lithos_read``
+    fan-out: at most ``title_fanout_cap`` distinct ids are looked up; neighbors
+    beyond the cap are collapsed into each section's ``overflow`` count. A
+    failed ``lithos_related`` call degrades to ``SectionState.ERROR`` so the
+    note body still renders.
+    """
+
+    try:
+        neighborhood = await lithos.related(knowledge_id)
+    except Exception:
+        return RelatedPanel(state=SectionState.ERROR)
+
+    titles = await _resolve_titles(lithos, neighborhood, cap=title_fanout_cap)
+    return RelatedPanel(
+        links=_build_section(neighborhood.links, titles),
+        backlinks=_build_section(neighborhood.backlinks, titles),
+        sources=_build_section(neighborhood.sources, titles),
+        derived=_build_section(neighborhood.derived, titles),
+        unresolved=neighborhood.unresolved,
+        edges=_build_section(neighborhood.edges, titles),
+    )
+
+
+def normalize_related(raw: dict[str, Any]) -> RelatedNeighborhood:
+    """Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``."""
+    return RelatedNeighborhood(
+        links=_normalize_refs(raw.get("links")),
+        backlinks=_normalize_refs(raw.get("backlinks") or raw.get("back_links")),
+        sources=_normalize_refs(_provenance(raw, "sources")),
+        derived=_normalize_refs(_provenance(raw, "derived")),
+        unresolved=_normalize_unresolved(_provenance(raw, "unresolved")),
+        edges=_normalize_edges(raw.get("edges")),
+    )
+
+
+def _ordered_ids(neighborhood: RelatedNeighborhood) -> list[str]:
+    """Distinct neighbor ids in section order (dict preserves insertion order)."""
+    seen: dict[str, None] = {}
+    for refs in (
+        neighborhood.links,
+        neighborhood.backlinks,
+        neighborhood.sources,
+        neighborhood.derived,
+        neighborhood.edges,
+    ):
+        for ref in refs:
+            if ref.id:
+                seen.setdefault(ref.id, None)
+    return list(seen)
+
+
+async def _resolve_titles(
+    lithos: KnowledgeLithosClientProtocol,
+    neighborhood: RelatedNeighborhood,
+    *,
+    cap: int,
+) -> dict[str, str]:
+    ids = _ordered_ids(neighborhood)[: max(cap, 0)]
+    if not ids:
+        return {}
+
+    async def fetch(note_id: str) -> str:
+        try:
+            note = await lithos.read_note(note_id, max_length=1)
+        except Exception:
+            return ""
+        return note.title if note else ""
+
+    results = await asyncio.gather(*(fetch(note_id) for note_id in ids))
+    return dict(zip(ids, results, strict=True))
+
+
+def _build_section(
+    refs: tuple[RelatedRef, ...],
+    titles: dict[str, str],
+) -> RelatedSection:
+    """Render refs whose id was resolved; collapse the rest into ``overflow``."""
+    items: list[RelatedItem] = []
+    overflow = 0
+    for ref in refs:
+        if ref.id in titles:
+            items.append(
+                RelatedItem(
+                    id=ref.id,
+                    title=titles[ref.id],
+                    edge_type=ref.edge_type,
+                    weight=ref.weight,
+                )
+            )
+        else:
+            overflow += 1
+    return RelatedSection(items=tuple(items), overflow=overflow)
+
+
+def _ref_id(raw: Any) -> str:
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict):
+        return str(
+            raw.get("id")
+            or raw.get("target")
+            or raw.get("to")
+            or raw.get("knowledge_id")
+            or ""
+        )
+    return ""
+
+
+def _normalize_refs(items: Any) -> tuple[RelatedRef, ...]:
+    if not isinstance(items, list):
+        return ()
+    refs: list[RelatedRef] = []
+    for item in items:
+        ref_id = _ref_id(item)
+        if ref_id:
+            refs.append(RelatedRef(id=ref_id))
+    return tuple(refs)
+
+
+def _normalize_edges(items: Any) -> tuple[RelatedRef, ...]:
+    if not isinstance(items, list):
+        return ()
+    refs: list[RelatedRef] = []
+    for item in items:
+        ref_id = _ref_id(item)
+        if not ref_id:
+            continue
+        edge_type = ""
+        weight: float | None = None
+        if isinstance(item, dict):
+            edge_type = str(item.get("type") or item.get("edge_type") or "")
+            raw_weight = item.get("weight")
+            if isinstance(raw_weight, (int, float)) and not isinstance(
+                raw_weight, bool
+            ):
+                weight = float(raw_weight)
+        refs.append(RelatedRef(id=ref_id, edge_type=edge_type, weight=weight))
+    return tuple(refs)
+
+
+def _normalize_unresolved(items: Any) -> tuple[str, ...]:
+    if not isinstance(items, list):
+        return ()
+    values: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = str(item.get("target") or item.get("display") or "")
+        else:
+            text = ""
+        if text:
+            values.append(text)
+    return tuple(values)
+
+
+def _provenance(raw: dict[str, Any], key: str) -> Any:
+    provenance = raw.get("provenance")
+    if isinstance(provenance, dict) and key in provenance:
+        return provenance.get(key)
+    return raw.get(key)

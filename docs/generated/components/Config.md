@@ -11,7 +11,7 @@ Configuration and environment loading from lithos-lens.toml with env overrides.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | M | 10 | 3 |
+| `lithos_lens.config` | M | 11 | 3 |
 
 ## Public API
 
@@ -26,6 +26,7 @@ Configuration and environment loading from lithos-lens.toml with env overrides.
 - class `TelemetryConfig`
 - class `UIConfig`
 - class `HealthConfig`
+- class `KnowledgeConfig`
 - class `LithosLensConfig`
 - def `find_config_path` — Return the first existing ``lithos-lens.toml`` in the discovery order.
 - def `load_config` — Load, validate, and return a ``LithosLensConfig``.

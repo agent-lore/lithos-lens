@@ -23,8 +23,8 @@
       },
       "Knowledge": {
         "functions_over_10": 0,
-        "max_complexity": 3,
-        "max_function": "lithos_lens.knowledge.render_markdown"
+        "max_complexity": 9,
+        "max_function": "lithos_lens.knowledge._normalize_edges"
       },
       "LithosClient": {
         "functions_over_10": 0,
@@ -58,7 +58,7 @@
       },
       "Web": {
         "functions_over_10": 0,
-        "max_complexity": 7,
+        "max_complexity": 8,
         "max_function": "lithos_lens.web.create_app.note"
       }
     },
@@ -101,15 +101,15 @@
         "qualname": "lithos_lens.config._optional_status_groups"
       },
       {
-        "complexity": 8,
-        "qualname": "lithos_lens.task_graph.normalize_edge"
+        "complexity": 9,
+        "qualname": "lithos_lens.knowledge._normalize_edges"
       }
     ],
-    "total_functions": 134
+    "total_functions": 153
   },
   "domain": {
-    "associations": 14,
-    "models": 19,
+    "associations": 25,
+    "models": 24,
     "models_without_docstrings": 16
   },
   "graph": {
@@ -136,14 +136,14 @@
         "instability": 0.5
       },
       "Knowledge": {
-        "fan_in": 1,
-        "fan_out": 0,
-        "instability": 0.0
+        "fan_in": 2,
+        "fan_out": 1,
+        "instability": 0.33
       },
       "LithosClient": {
         "fan_in": 2,
-        "fan_out": 3,
-        "instability": 0.6
+        "fan_out": 4,
+        "instability": 0.67
       },
       "Logging": {
         "fan_in": 1,
@@ -161,7 +161,7 @@
         "instability": 0.5
       },
       "Tasks": {
-        "fan_in": 4,
+        "fan_in": 5,
         "fan_out": 0,
         "instability": 0.0
       },
@@ -176,8 +176,8 @@
         "instability": 0.86
       }
     },
-    "cross_component_edges": 22,
-    "cross_component_module_edges": 22,
+    "cross_component_edges": 24,
+    "cross_component_module_edges": 24,
     "longest_component_chain": 5,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -206,14 +206,14 @@
   "size": {
     "components": {
       "Config": {
-        "classes": 10,
-        "functions": 21,
+        "classes": 11,
+        "functions": 22,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 671,
-        "lines": 671,
+        "largest_module_lines": 696,
+        "lines": 696,
         "modules": 1,
-        "public_symbols": 13,
-        "sloc": 575
+        "public_symbols": 14,
+        "sloc": 596
       },
       "Entrypoint": {
         "classes": 0,
@@ -246,24 +246,24 @@
         "sloc": 180
       },
       "Knowledge": {
-        "classes": 0,
-        "functions": 2,
+        "classes": 6,
+        "functions": 18,
         "largest_module": "lithos_lens.knowledge",
-        "largest_module_lines": 64,
-        "lines": 64,
+        "largest_module_lines": 332,
+        "lines": 332,
         "modules": 1,
-        "public_symbols": 1,
-        "sloc": 43
+        "public_symbols": 9,
+        "sloc": 259
       },
       "LithosClient": {
         "classes": 4,
-        "functions": 39,
+        "functions": 41,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 545,
-        "lines": 545,
+        "largest_module_lines": 563,
+        "lines": 563,
         "modules": 1,
         "public_symbols": 4,
-        "sloc": 454
+        "sloc": 470
       },
       "Logging": {
         "classes": 1,
@@ -319,23 +319,23 @@
         "classes": 0,
         "functions": 15,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 296,
-        "lines": 296,
+        "largest_module_lines": 304,
+        "lines": 304,
         "modules": 1,
         "public_symbols": 5,
-        "sloc": 265
+        "sloc": 273
       }
     },
     "max_module": "lithos_lens.config",
-    "max_module_lines": 671,
+    "max_module_lines": 696,
     "modules_over_800": [],
-    "total_lines": 2763,
+    "total_lines": 3082,
     "total_modules": 14,
-    "total_sloc": 2287
+    "total_sloc": 2548
   },
   "tests": {
-    "ratio": 1.6,
-    "src_lines": 2763,
-    "test_lines": 4407
+    "ratio": 1.51,
+    "src_lines": 3082,
+    "test_lines": 4664
   }
 }

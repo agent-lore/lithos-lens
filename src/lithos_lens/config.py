@@ -27,6 +27,7 @@ __all__ = [
     "EventsConfig",
     "ConfigError",
     "HealthConfig",
+    "KnowledgeConfig",
     "LithosLensConfig",
     "LithosConfig",
     "LLMConfig",
@@ -63,6 +64,7 @@ DEFAULT_TASKS_VISIBLE_CAP = 50
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
+DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -139,6 +141,11 @@ class HealthConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeConfig:
+    related_title_fanout_cap: int = DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP
+
+
+@dataclass(frozen=True)
 class LithosLensConfig:
     environment: str
     greeting: str
@@ -151,6 +158,7 @@ class LithosLensConfig:
     telemetry: TelemetryConfig
     ui: UIConfig
     health: HealthConfig
+    knowledge: KnowledgeConfig
 
 
 # ── Discovery and loading ──────────────────────────────────────────────
@@ -245,6 +253,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
     telemetry = _parse_telemetry(lithos_lens_section.get("telemetry", {}), config_path)
     ui = _parse_ui(lithos_lens_section.get("ui", {}), config_path)
     health = _parse_health(lithos_lens_section.get("health", {}), config_path)
+    knowledge = _parse_knowledge(lithos_lens_section.get("knowledge", {}), config_path)
 
     cfg = LithosLensConfig(
         environment=environment,
@@ -258,6 +267,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
         telemetry=telemetry,
         ui=ui,
         health=health,
+        knowledge=knowledge,
     )
     return _apply_env_overrides(cfg)
 
@@ -440,6 +450,21 @@ def _parse_health(data: Any, config_path: Path) -> HealthConfig:
             DEFAULT_HEALTH_REFRESH_INTERVAL_S,
             config_path,
             "lithos-lens.health",
+            minimum=1,
+        )
+    )
+
+
+def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{config_path}: [lithos-lens.knowledge] must be a table")
+    return KnowledgeConfig(
+        related_title_fanout_cap=_optional_int(
+            data,
+            "related_title_fanout_cap",
+            DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
+            config_path,
+            "lithos-lens.knowledge",
             minimum=1,
         )
     )

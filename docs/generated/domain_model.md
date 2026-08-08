@@ -21,6 +21,44 @@ classDiagram
   }
 ```
 
+## Knowledge
+
+```mermaid
+classDiagram
+  class RelatedItem {
+    +id str
+    +title str
+    +edge_type str
+    +weight float | None
+  }
+  class RelatedNeighborhood {
+    +unresolved tuple[str, ...]
+  }
+  class RelatedPanel {
+    +unresolved tuple[str, ...]
+    +state SectionState
+  }
+  class RelatedRef {
+    +id str
+    +edge_type str
+    +weight float | None
+  }
+  class RelatedSection {
+    +overflow int
+  }
+  RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
+  RelatedNeighborhood "1" --> "0..*" RelatedRef : derived
+  RelatedNeighborhood "1" --> "0..*" RelatedRef : edges
+  RelatedNeighborhood "1" --> "0..*" RelatedRef : links
+  RelatedNeighborhood "1" --> "0..*" RelatedRef : sources
+  RelatedPanel "1" --> "1" RelatedSection : backlinks
+  RelatedPanel "1" --> "1" RelatedSection : derived
+  RelatedPanel "1" --> "1" RelatedSection : edges
+  RelatedPanel "1" --> "1" RelatedSection : links
+  RelatedPanel "1" --> "1" RelatedSection : sources
+  RelatedSection "1" --> "0..*" RelatedItem : items
+```
+
 ## LithosClient
 
 ```mermaid

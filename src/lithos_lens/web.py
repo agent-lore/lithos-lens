@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
-from lithos_lens.knowledge import render_markdown
+from lithos_lens.knowledge import load_related_panel, render_markdown
 from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
 from lithos_lens.state import AppState
 from lithos_lens.tasks import (
@@ -171,6 +171,7 @@ def create_app(
         snapshot = await state.refresh_health()
         note_record = None
         task = None
+        related = None
         error = ""
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. The note cannot be loaded."
@@ -181,6 +182,12 @@ def create_app(
                 error = "Could not load this document from Lithos."
             if note_record is None and not error:
                 error = "Document not found."
+            if note_record is not None:
+                related = await load_related_panel(
+                    state.lithos_client,
+                    knowledge_id,
+                    title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
+                )
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:
@@ -196,6 +203,7 @@ def create_app(
                 "active_view": "knowledge",
                 "note": note_record,
                 "task": task,
+                "related": related,
                 "error": error,
             },
         )
