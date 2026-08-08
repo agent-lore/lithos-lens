@@ -398,6 +398,21 @@ def test_config_rejects_oversized_related_fanout_cap(tmp_path: Path) -> None:
         load_config(config_path)
 
 
+def test_config_rejects_oversized_related_render_cap(tmp_path: Path) -> None:
+    """Regression for security/f-003: the render cap is bounded above too, so its
+    own size bound cannot be misconfigured away."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        "[lithos-lens]\n"
+        'environment = "test"\n'
+        "[lithos-lens.knowledge]\n"
+        "related_render_cap = 100000\n"
+    )
+
+    with pytest.raises(ConfigError, match="related_render_cap"):
+        load_config(config_path)
+
+
 def test_note_page_render_cap_bounds_inline_titled_items(tmp_path: Path) -> None:
     """Regression for security/f-002: the configured render cap bounds how many
     inline-titled hub neighbors reach the page, collapsing the rest to +N more."""

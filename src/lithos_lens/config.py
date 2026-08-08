@@ -67,6 +67,7 @@ DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
 DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
 MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
 DEFAULT_KNOWLEDGE_RELATED_RENDER_CAP = 50
+MAX_KNOWLEDGE_RELATED_RENDER_CAP = 200
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -481,6 +482,10 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             config_path,
             "lithos-lens.knowledge",
             minimum=1,
+            # Ceiling the render cap too, so its own size bound can't be
+            # misconfigured away (mirrors related_title_fanout_cap): a huge cap
+            # would re-open the hub-note render amplification the cap closes.
+            maximum=MAX_KNOWLEDGE_RELATED_RENDER_CAP,
         ),
     )
 

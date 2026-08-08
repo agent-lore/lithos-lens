@@ -209,11 +209,11 @@
         "classes": 11,
         "functions": 22,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 714,
-        "lines": 714,
+        "largest_module_lines": 719,
+        "lines": 719,
         "modules": 1,
         "public_symbols": 14,
-        "sloc": 611
+        "sloc": 613
       },
       "Entrypoint": {
         "classes": 0,
@@ -327,15 +327,15 @@
       }
     },
     "max_module": "lithos_lens.config",
-    "max_module_lines": 714,
+    "max_module_lines": 719,
     "modules_over_800": [],
-    "total_lines": 3144,
+    "total_lines": 3149,
     "total_modules": 14,
-    "total_sloc": 2603
+    "total_sloc": 2605
   },
   "tests": {
     "ratio": 1.54,
-    "src_lines": 3144,
-    "test_lines": 4843
+    "src_lines": 3149,
+    "test_lines": 4858
   }
 }
