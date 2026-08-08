@@ -79,7 +79,6 @@ class LithosClientProtocol(Protocol):
         with_claims: bool = False,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[TaskRecord]: ...
 
     async def task_blocked(
@@ -88,7 +87,6 @@ class LithosClientProtocol(Protocol):
         limit: int | None = None,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[BlockedTaskRecord]: ...
 
     async def task_get(self, task_id: str) -> TaskRecord | None: ...
@@ -269,7 +267,6 @@ class LithosClient:
         with_claims: bool = False,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[TaskRecord]:
         arguments: dict[str, Any] = {}
         if limit is not None:
@@ -280,8 +277,6 @@ class LithosClient:
             arguments["project"] = project
         if tags:
             arguments["tags"] = tags
-        if agent:
-            arguments["agent"] = agent
         payload = await self._call_tool("lithos_task_ready", arguments)
         _raise_for_error(payload)
         return [
@@ -296,7 +291,6 @@ class LithosClient:
         limit: int | None = None,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[BlockedTaskRecord]:
         arguments: dict[str, Any] = {}
         if limit is not None:
@@ -305,8 +299,6 @@ class LithosClient:
             arguments["project"] = project
         if tags:
             arguments["tags"] = tags
-        if agent:
-            arguments["agent"] = agent
         payload = await self._call_tool("lithos_task_blocked", arguments)
         _raise_for_error(payload)
         return [

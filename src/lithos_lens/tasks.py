@@ -240,7 +240,6 @@ class TaskLithosClientProtocol(Protocol):
         with_claims: bool = False,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[TaskRecord]: ...
 
     async def task_blocked(
@@ -249,7 +248,6 @@ class TaskLithosClientProtocol(Protocol):
         limit: int | None = None,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[BlockedTaskRecord]: ...
 
     async def task_get(self, task_id: str) -> TaskRecord | None: ...

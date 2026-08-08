@@ -155,7 +155,6 @@ class TaskFakeLithosClient:
         with_claims: bool = False,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[TaskRecord]:
         rows = [
             task
@@ -172,7 +171,6 @@ class TaskFakeLithosClient:
         limit: int | None = None,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[BlockedTaskRecord]:
         rows = [
             BlockedTaskRecord(task=task, blockers=self.blocked[task.id])

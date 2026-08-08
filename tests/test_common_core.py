@@ -58,7 +58,6 @@ class RecordingLithosClient:
         with_claims: bool = False,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[TaskRecord]:
         return []
 
@@ -68,7 +67,6 @@ class RecordingLithosClient:
         limit: int | None = None,
         project: str | None = None,
         tags: list[str] | None = None,
-        agent: str | None = None,
     ) -> list[BlockedTaskRecord]:
         return []
 
