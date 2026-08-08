@@ -10,6 +10,15 @@ from typing import Any, Literal, Protocol, cast
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 ClaimedState = Literal["any", "known_claimed", "known_unclaimed"]
+# Task types from the Lithos 0.4 task graph. Workable tasks are "task"; "epic"
+# and "gate" rows never enter the workable frontier sections.
+TaskType = Literal["task", "epic", "gate"]
+# Structured blocker kinds returned in a lithos_task_blocked row's `blockers`
+# array: a blocking open task, a gate, a cancelled (unsatisfiable) predecessor,
+# or a dependency cycle.
+BlockerKind = Literal["task", "gate", "blocker_unsatisfiable", "cycle"]
+# The four task-graph edge types.
+EdgeType = Literal["blocks", "parent_child", "discovered_from", "waits_on_gate"]
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
@@ -31,6 +40,11 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     outcome: str = ""
     completed_at: str = ""
+    # Task-graph type (lithos 0.4). Older payloads omit it; default "task".
+    task_type: TaskType = "task"
+    # Timestamp a task reached a terminal state. Completed/cancelled rows are
+    # windowed by this (not created_at). Empty for open tasks or older payloads.
+    resolved_at: str = ""
     # Inline claims when the upstream lithos_task_list call was made with
     # with_claims=True (added in lithos #221). ``None`` means "claims were
     # not requested or not returned"; an empty tuple means "no active claims".
@@ -42,6 +56,59 @@ class ClaimRecord:
     agent: str
     aspect: str
     expires_at: str = ""
+
+
+@dataclass(frozen=True)
+class BlockerRecord:
+    """One structured reason a task is blocked, from a lithos_task_blocked row.
+
+    Field population depends on ``kind``:
+
+    - ``task`` / ``gate`` / ``blocker_unsatisfiable`` — the blocking predecessor
+      is named by ``task_id`` / ``title`` / ``status`` (a ``gate`` also carries
+      ``gate_type``; ``blocker_unsatisfiable`` is a predecessor that was
+      cancelled).
+    - ``cycle`` — ``message`` describes the cycle and ``members`` lists the
+      participating task ids; no single predecessor applies.
+    """
+
+    kind: BlockerKind
+    task_id: str = ""
+    title: str = ""
+    status: str = ""
+    gate_type: str = ""
+    message: str = ""
+    members: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EdgeRecord:
+    """A task-graph edge as returned by lithos_task_edge_list.
+
+    ``direction`` is relative to the task the edge list was fetched for
+    (``incoming`` / ``outgoing``); it is empty when the source does not report
+    one.
+    """
+
+    from_task_id: str
+    to_task_id: str
+    type: EdgeType
+    direction: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_by: str = ""
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class BlockedTaskRecord:
+    """A row from lithos_task_blocked: the task plus its structured blockers.
+
+    lithos_task_blocked does not return claims — the master open list supplies
+    those — so this pairs the task identity with just its blocker reasons.
+    """
+
+    task: TaskRecord
+    blockers: tuple[BlockerRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +232,43 @@ class TaskLithosClientProtocol(Protocol):
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
+
+    async def task_ready(
+        self,
+        *,
+        limit: int | None = None,
+        with_claims: bool = False,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        agent: str | None = None,
+    ) -> list[TaskRecord]: ...
+
+    async def task_blocked(
+        self,
+        *,
+        limit: int | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        agent: str | None = None,
+    ) -> list[BlockedTaskRecord]: ...
+
+    async def task_get(self, task_id: str) -> TaskRecord | None: ...
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]: ...
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]: ...
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
 
@@ -413,6 +517,10 @@ async def resolve_finding_notes(
 def normalize_task(raw: dict[str, Any]) -> TaskRecord:
     status_raw = str(raw.get("status") or "open")
     status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
+    task_type_raw = str(raw.get("task_type") or "task")
+    task_type: TaskType = (
+        task_type_raw if task_type_raw in {"task", "epic", "gate"} else "task"
+    )  # type: ignore[assignment]
     claims: tuple[ClaimRecord, ...] | None = None
     if "claims" in raw and raw["claims"] is not None:
         claims = tuple(
@@ -435,7 +543,56 @@ def normalize_task(raw: dict[str, Any]) -> TaskRecord:
         metadata=dict(raw.get("metadata") or {}),
         outcome=str(raw.get("outcome") or ""),
         completed_at=str(raw.get("completed_at") or ""),
+        task_type=task_type,
+        resolved_at=str(raw.get("resolved_at") or ""),
         claims=claims,
+    )
+
+
+def normalize_blocker(raw: dict[str, Any]) -> BlockerRecord:
+    kind_raw = str(raw.get("kind") or "")
+    kind: BlockerKind = (
+        kind_raw
+        if kind_raw in {"task", "gate", "blocker_unsatisfiable", "cycle"}
+        else "task"
+    )  # type: ignore[assignment]
+    return BlockerRecord(
+        kind=kind,
+        task_id=str(raw.get("task_id") or raw.get("id") or ""),
+        title=str(raw.get("title") or ""),
+        status=str(raw.get("status") or ""),
+        gate_type=str(raw.get("gate_type") or ""),
+        message=str(raw.get("message") or ""),
+        members=tuple(str(member) for member in raw.get("members") or []),
+    )
+
+
+def normalize_blocked_task(raw: dict[str, Any]) -> BlockedTaskRecord:
+    return BlockedTaskRecord(
+        task=normalize_task(raw),
+        blockers=tuple(
+            normalize_blocker(blocker)
+            for blocker in raw.get("blockers") or []
+            if isinstance(blocker, dict)
+        ),
+    )
+
+
+def normalize_edge(raw: dict[str, Any]) -> EdgeRecord:
+    type_raw = str(raw.get("type") or "")
+    edge_type: EdgeType = (
+        type_raw
+        if type_raw in {"blocks", "parent_child", "discovered_from", "waits_on_gate"}
+        else "blocks"
+    )  # type: ignore[assignment]
+    return EdgeRecord(
+        from_task_id=str(raw.get("from_task_id") or ""),
+        to_task_id=str(raw.get("to_task_id") or ""),
+        type=edge_type,
+        direction=str(raw.get("direction") or ""),
+        metadata=dict(raw.get("metadata") or {}),
+        created_by=str(raw.get("created_by") or ""),
+        created_at=str(raw.get("created_at") or ""),
     )
 
 

@@ -52,6 +52,16 @@ classDiagram
     +type str
     +last_seen_at str
   }
+  class BlockedTaskRecord
+  class BlockerRecord {
+    +kind BlockerKind
+    +task_id str
+    +title str
+    +status str
+    +gate_type str
+    +message str
+    +members tuple[str, ...]
+  }
   class ClaimRecord {
     +agent str
     +aspect str
@@ -63,6 +73,15 @@ classDiagram
     +claim_cap_exceeded bool
     +claim_filter_limited bool
     +errors tuple[str, ...]
+  }
+  class EdgeRecord {
+    +from_task_id str
+    +to_task_id str
+    +type EdgeType
+    +direction str
+    +metadata dict[str, Any]
+    +created_by str
+    +created_at str
   }
   class EnrichedTask {
     +claim_error str
@@ -110,6 +129,8 @@ classDiagram
     +metadata dict[str, Any]
     +outcome str
     +completed_at str
+    +task_type TaskType
+    +resolved_at str
   }
   class TaskStatusRecord {
     +id str
@@ -127,6 +148,8 @@ classDiagram
     +recent_cancelled int
     +agents int
   }
+  BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
+  BlockedTaskRecord "1" --> "1" TaskRecord : task
   DashboardData "1" --> "0..*" AgentRecord : agents
   DashboardData "1" --> "0..*" EnrichedTask : groups
   DashboardData "1" --> "1" TaskFilters : filters
