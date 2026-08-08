@@ -226,6 +226,36 @@ def _run(client: _StubClient, coro: Any) -> Any:
     return asyncio.run(_driver())
 
 
+def test_list_tasks_always_sends_with_claims_so_default_false_is_pinned() -> None:
+    """Upstream lithos_task_list currently defaults with_claims=False, but the
+    flag is sent explicitly so an upstream default flip can't silently invert
+    the Lens default (the bug shape task_ready had)."""
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(client, client.list_tasks())
+
+    assert client.calls[0] == ("lithos_task_list", {"with_claims": False})
+
+
+def test_list_tasks_sends_explicit_true_with_claims() -> None:
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(client, client.list_tasks(status="open", with_claims=True))
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {"status": "open", "with_claims": True},
+    )
+
+
+def test_list_tasks_sends_explicit_false_with_claims() -> None:
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(client, client.list_tasks(status="open", with_claims=False))
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {"status": "open", "with_claims": False},
+    )
+
+
 def test_task_ready_sends_limit_and_claims_and_normalizes() -> None:
     client = _StubClient(
         {"lithos_task_ready": {"tasks": [{"id": "r-1", "title": "Ready one"}]}}
@@ -310,10 +340,18 @@ def test_task_get_returns_task_and_supports_task_envelope() -> None:
     )
     task = _run(client, client.task_get("t-1"))
 
-    assert task is not None
     assert task.id == "t-1"
     assert task.task_type == "gate"
     assert client.calls[0] == ("lithos_task_get", {"task_id": "t-1"})
+
+
+def test_task_get_supports_legacy_tasks_list_envelope() -> None:
+    client = _StubClient(
+        {"lithos_task_get": {"tasks": [{"id": "t-2", "title": "Two"}]}}
+    )
+    task = _run(client, client.task_get("t-2"))
+
+    assert task.id == "t-2"
 
 
 def test_task_get_raises_with_code_on_not_found_envelope() -> None:
@@ -329,6 +367,28 @@ def test_task_get_raises_with_code_on_not_found_envelope() -> None:
     with pytest.raises(LithosToolError) as excinfo:
         _run(client, client.task_get("missing"))
     assert excinfo.value.code == "task_not_found"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"task": None},
+        {"task": "not-a-dict"},
+        {"tasks": []},
+        {"tasks": ["not-a-dict"]},
+    ],
+    ids=["empty", "task-none", "task-not-dict", "tasks-empty", "tasks-not-dict"],
+)
+def test_task_get_raises_invalid_response_instead_of_returning_none(
+    payload: dict[str, Any],
+) -> None:
+    """A success payload with no decodable task is a broken response, not an
+    absent task — task_get must raise a coded error, never return None."""
+    client = _StubClient({"lithos_task_get": payload})
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.task_get("t-1"))
+    assert excinfo.value.code == "invalid_response"
 
 
 def test_task_children_sends_recursive_and_include_closed() -> None:

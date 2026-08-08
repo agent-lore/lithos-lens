@@ -91,7 +91,7 @@ class LithosClientProtocol(Protocol):
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]: ...
 
-    async def task_get(self, task_id: str) -> TaskRecord | None: ...
+    async def task_get(self, task_id: str) -> TaskRecord: ...
 
     async def task_children(
         self,
@@ -243,7 +243,11 @@ class LithosClient:
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
-        arguments: dict[str, Any] = {}
+        # Upstream lithos_task_list currently defaults with_claims to False,
+        # matching the Lens default — but the flag is ALWAYS sent explicitly so
+        # an upstream default flip can't silently invert it (the exact bug
+        # shape task_ready had; see its docstring).
+        arguments: dict[str, Any] = {"with_claims": with_claims}
         if agent:
             arguments["agent"] = agent
         if status:
@@ -252,8 +256,6 @@ class LithosClient:
             arguments["tags"] = tags
         if since:
             arguments["since"] = since
-        if with_claims:
-            arguments["with_claims"] = True
         payload = await self._call_tool("lithos_task_list", arguments)
         _raise_for_error(payload)
         return [
@@ -316,14 +318,28 @@ class LithosClient:
             if isinstance(task, dict)
         ]
 
-    async def task_get(self, task_id: str) -> TaskRecord | None:
+    async def task_get(self, task_id: str) -> TaskRecord:
+        """Fetch a single task via ``lithos_task_get``.
+
+        Never returns None: Lithos answers a missing task with an error
+        envelope (code ``task_not_found``), surfaced by ``_raise_for_error``
+        as a coded :class:`LithosToolError`. A success payload that carries
+        neither a valid task nor a supported legacy ``tasks`` envelope is a
+        broken response and raises ``code="invalid_response"`` rather than
+        returning a None that callers can't tell apart from "absent".
+        """
         payload = await self._call_tool("lithos_task_get", {"task_id": task_id})
         _raise_for_error(payload)
         raw = payload.get("task")
         if raw is None:
             tasks = payload.get("tasks") or []
             raw = tasks[0] if tasks else None
-        return normalize_task(raw) if isinstance(raw, dict) else None
+        if not isinstance(raw, dict):
+            raise LithosToolError(
+                f"lithos_task_get returned no task payload for '{task_id}'",
+                code="invalid_response",
+            )
+        return normalize_task(raw)
 
     async def task_children(
         self,
