@@ -19,17 +19,19 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.tasks import (
-    AgentRecord,
+from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
+    normalize_blocked_task,
+    normalize_edge,
+)
+from lithos_lens.tasks import (
+    AgentRecord,
     FindingRecord,
     NoteRecord,
     TaskRecord,
     TaskStatusRecord,
     normalize_agent,
-    normalize_blocked_task,
-    normalize_edge,
     normalize_finding,
     normalize_note,
     normalize_task,

@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | L | 17 | 18 |
+| `lithos_lens.tasks` | M | 14 | 15 |
 
 ## Public API
 
@@ -19,9 +19,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `SectionState`
 - class `TaskRecord`
 - class `ClaimRecord`
-- class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.
-- class `EdgeRecord` — A task-graph edge as returned by lithos_task_edge_list.
-- class `BlockedTaskRecord` — A row from lithos_task_blocked: the task plus its structured blockers.
 - class `TaskStatusRecord`
 - class `FindingRecord`
 - class `AgentRecord`
@@ -32,16 +29,13 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `DashboardData`
 - class `FindingView`
 - class `TaskDetailData`
-- class `TaskLithosClientProtocol`
+- class `TaskLithosClientProtocol` — The subset of the Lithos client this module's loaders consume.
 - def `parse_filters`
 - def `load_dashboard`
 - def `load_task_detail`
 - def `find_task`
 - def `resolve_finding_notes`
 - def `normalize_task`
-- def `normalize_blocker`
-- def `normalize_blocked_task`
-- def `normalize_edge`
 - def `normalize_task_status`
 - def `normalize_finding`
 - def `normalize_agent`
@@ -55,6 +49,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 ## Dependencies
 
 - Depends on: —
-- Used by: [Config](Config.md), [LithosClient](LithosClient.md), [Web](Web.md)
+- Used by: [Config](Config.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

@@ -42,6 +42,33 @@ classDiagram
   }
 ```
 
+## TaskGraph
+
+```mermaid
+classDiagram
+  class BlockedTaskRecord
+  class BlockerRecord {
+    +kind str
+    +task_id str
+    +type str
+    +status str
+    +message str
+  }
+  class EdgeRecord {
+    +from_task_id str
+    +to_task_id str
+    +type str
+    +direction str
+    +metadata dict[str, Any]
+    +created_by str
+    +created_at str
+  }
+  class TaskRecord
+  <<Tasks>> TaskRecord
+  BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
+  BlockedTaskRecord "1" --> "1" TaskRecord : task
+```
+
 ## Tasks
 
 ```mermaid
@@ -51,14 +78,6 @@ classDiagram
     +name str
     +type str
     +last_seen_at str
-  }
-  class BlockedTaskRecord
-  class BlockerRecord {
-    +kind str
-    +task_id str
-    +type str
-    +status str
-    +message str
   }
   class ClaimRecord {
     +agent str
@@ -71,15 +90,6 @@ classDiagram
     +claim_cap_exceeded bool
     +claim_filter_limited bool
     +errors tuple[str, ...]
-  }
-  class EdgeRecord {
-    +from_task_id str
-    +to_task_id str
-    +type str
-    +direction str
-    +metadata dict[str, Any]
-    +created_by str
-    +created_at str
   }
   class EnrichedTask {
     +claim_error str
@@ -146,8 +156,6 @@ classDiagram
     +recent_cancelled int
     +agents int
   }
-  BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
-  BlockedTaskRecord "1" --> "1" TaskRecord : task
   DashboardData "1" --> "0..*" AgentRecord : agents
   DashboardData "1" --> "0..*" EnrichedTask : groups
   DashboardData "1" --> "1" TaskFilters : filters

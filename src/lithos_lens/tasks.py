@@ -57,68 +57,6 @@ class ClaimRecord:
 
 
 @dataclass(frozen=True)
-class BlockerRecord:
-    """One structured reason a task is blocked, from a lithos_task_blocked row.
-
-    Transport-faithful mirror of a lithos ``_compute_blockers`` entry: every
-    branch emits exactly ``{kind, task_id, type, status, message}``.
-
-    - ``kind`` — known values: ``task`` (open blocking predecessor), ``gate``
-      (waiting on a gate), ``blocker_unsatisfiable`` (cancelled predecessor),
-      ``cycle`` (dependency cycle). Raw server string; unknown kinds survive.
-    - ``task_id`` — the blocking predecessor (for ``cycle`` the predecessor the
-      cycle was detected through).
-    - ``type`` — the unsatisfied edge's type (e.g. ``blocks``,
-      ``waits_on_gate``). Raw server string.
-    - ``status`` — the predecessor's status (``open``; ``cancelled`` for
-      ``blocker_unsatisfiable``).
-    - ``message`` — human-readable explanation (carries the gate type / cycle
-      path detail).
-
-    Presentation enrichment (predecessor titles, gate display names) is a
-    view-model concern for a later slice, not part of the transport record.
-    """
-
-    kind: str
-    task_id: str = ""
-    type: str = ""
-    status: str = ""
-    message: str = ""
-
-
-@dataclass(frozen=True)
-class EdgeRecord:
-    """A task-graph edge as returned by lithos_task_edge_list.
-
-    ``type`` is the raw server string (known values: ``blocks``,
-    ``parent_child``, ``discovered_from``, ``waits_on_gate``); an unknown
-    future type survives round-trip. ``direction`` is relative to the task the
-    edge list was fetched for (``incoming`` / ``outgoing``); it is empty when
-    the source does not report one.
-    """
-
-    from_task_id: str
-    to_task_id: str
-    type: str
-    direction: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_by: str = ""
-    created_at: str = ""
-
-
-@dataclass(frozen=True)
-class BlockedTaskRecord:
-    """A row from lithos_task_blocked: the task plus its structured blockers.
-
-    lithos_task_blocked does not return claims — the master open list supplies
-    those — so this pairs the task identity with just its blocker reasons.
-    """
-
-    task: TaskRecord
-    blockers: tuple[BlockerRecord, ...] = ()
-
-
-@dataclass(frozen=True)
 class TaskStatusRecord:
     id: str
     title: str
@@ -230,6 +168,13 @@ class TaskDetailData:
 
 
 class TaskLithosClientProtocol(Protocol):
+    """The subset of the Lithos client this module's loaders consume.
+
+    The full client surface (including the task-graph reads) lives on
+    ``lithos_lens.lithos_client.LithosClientProtocol``; graph view models
+    belong to ``lithos_lens.task_graph``.
+    """
+
     async def list_tasks(
         self,
         *,
@@ -239,41 +184,6 @@ class TaskLithosClientProtocol(Protocol):
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
-
-    async def task_ready(
-        self,
-        *,
-        limit: int | None = None,
-        with_claims: bool = False,
-        project: str | None = None,
-        tags: list[str] | None = None,
-    ) -> list[TaskRecord]: ...
-
-    async def task_blocked(
-        self,
-        *,
-        limit: int | None = None,
-        project: str | None = None,
-        tags: list[str] | None = None,
-    ) -> list[BlockedTaskRecord]: ...
-
-    async def task_get(self, task_id: str) -> TaskRecord | None: ...
-
-    async def task_children(
-        self,
-        task_id: str,
-        *,
-        recursive: bool = False,
-        include_closed: bool = False,
-    ) -> list[TaskRecord]: ...
-
-    async def task_edge_list(
-        self,
-        task_id: str,
-        *,
-        direction: str = "both",
-        types: list[str] | None = None,
-    ) -> list[EdgeRecord]: ...
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
 
@@ -550,42 +460,6 @@ def normalize_task(raw: dict[str, Any]) -> TaskRecord:
         task_type=task_type,
         resolved_at=str(raw.get("resolved_at") or ""),
         claims=claims,
-    )
-
-
-def normalize_blocker(raw: dict[str, Any]) -> BlockerRecord:
-    # Transport-faithful passthrough of the lithos _compute_blockers shape;
-    # unknown kinds/types survive round-trip.
-    return BlockerRecord(
-        kind=str(raw.get("kind") or ""),
-        task_id=str(raw.get("task_id") or ""),
-        type=str(raw.get("type") or ""),
-        status=str(raw.get("status") or ""),
-        message=str(raw.get("message") or ""),
-    )
-
-
-def normalize_blocked_task(raw: dict[str, Any]) -> BlockedTaskRecord:
-    return BlockedTaskRecord(
-        task=normalize_task(raw),
-        blockers=tuple(
-            normalize_blocker(blocker)
-            for blocker in raw.get("blockers") or []
-            if isinstance(blocker, dict)
-        ),
-    )
-
-
-def normalize_edge(raw: dict[str, Any]) -> EdgeRecord:
-    return EdgeRecord(
-        from_task_id=str(raw.get("from_task_id") or ""),
-        to_task_id=str(raw.get("to_task_id") or ""),
-        # Raw passthrough: an unknown edge type survives round-trip.
-        type=str(raw.get("type") or ""),
-        direction=str(raw.get("direction") or ""),
-        metadata=dict(raw.get("metadata") or {}),
-        created_by=str(raw.get("created_by") or ""),
-        created_at=str(raw.get("created_at") or ""),
     )
 
 

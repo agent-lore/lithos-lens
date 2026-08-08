@@ -12,12 +12,10 @@ from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
+from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
     AgentRecord,
-    BlockedTaskRecord,
-    BlockerRecord,
     ClaimRecord,
-    EdgeRecord,
     FindingRecord,
     NoteRecord,
     TaskRecord,

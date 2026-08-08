@@ -17,15 +17,15 @@ import pytest
 
 from lithos_lens.config import LithosConfig
 from lithos_lens.lithos_client import LithosClient, LithosToolError
-from lithos_lens.tasks import (
+from lithos_lens.task_graph import (
     BlockedTaskRecord,
     BlockerRecord,
     EdgeRecord,
     normalize_blocked_task,
     normalize_blocker,
     normalize_edge,
-    normalize_task,
 )
+from lithos_lens.tasks import normalize_task
 
 # --- Normalizers: blocker kinds -------------------------------------------
 #
