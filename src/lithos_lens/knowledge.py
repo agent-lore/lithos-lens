@@ -15,9 +15,7 @@ from markdown_it import MarkdownIt
 # ``validateLink`` still rejects ``javascript:``/``vbscript:``/``file:``/``data:``
 # hrefs. Tables and strikethrough are enabled to match the corpus's markdown.
 _MARKDOWN = (
-    MarkdownIt("commonmark", {"html": False})
-    .enable("table")
-    .enable("strikethrough")
+    MarkdownIt("commonmark", {"html": False}).enable("table").enable("strikethrough")
 )
 
 
