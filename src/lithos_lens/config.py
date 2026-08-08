@@ -65,6 +65,7 @@ DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
 DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
+MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -466,6 +467,10 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             config_path,
             "lithos-lens.knowledge",
             minimum=1,
+            # Bound the per-request title fan-out so a misconfigured cap can't
+            # amplify one /note/{id} request into an unbounded concurrent
+            # lithos_read burst against the shared MCP session.
+            maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
         )
     )
 
@@ -508,6 +513,7 @@ def _optional_int(
     section: str,
     *,
     minimum: int | None = None,
+    maximum: int | None = None,
 ) -> int:
     if key not in data:
         return default
@@ -516,6 +522,8 @@ def _optional_int(
         raise ConfigError(f"{config_path}: [{section}].{key} must be an integer")
     if minimum is not None and value < minimum:
         raise ConfigError(f"{config_path}: [{section}].{key} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{config_path}: [{section}].{key} must be <= {maximum}")
     return value
 
 

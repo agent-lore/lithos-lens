@@ -5,16 +5,25 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import load_config
+from lithos_lens.config import ConfigError, load_config
 from lithos_lens.knowledge import (
     RelatedNeighborhood,
     RelatedRef,
     load_related_panel,
     normalize_related,
 )
-from lithos_lens.tasks import NoteRecord, SectionState
+from lithos_lens.lithos_client import LithosHealth
+from lithos_lens.tasks import (
+    AgentRecord,
+    FindingRecord,
+    NoteRecord,
+    SectionState,
+    TaskRecord,
+    TaskStatusRecord,
+)
 from lithos_lens.web import create_app
 
 
@@ -28,13 +37,13 @@ class KnowledgeFakeLithosClient:
         titles: dict[str, str] | None = None,
         note: NoteRecord | None = None,
         related_error: bool = False,
-        health: str = "ok",
+        health: LithosHealth = "ok",
     ) -> None:
         self.neighborhood = neighborhood or RelatedNeighborhood()
         self.titles = titles or {}
         self.note = note
         self.related_error = related_error
-        self.health_value = health
+        self.health_value: LithosHealth = health
         self.read_calls: list[tuple[str, int | None]] = []
         self.related_calls: list[str] = []
         self.closed = False
@@ -42,7 +51,7 @@ class KnowledgeFakeLithosClient:
     async def startup(self) -> None:
         return None
 
-    async def health(self) -> str:
+    async def health(self) -> LithosHealth:
         return self.health_value
 
     async def register_agent(self) -> bool:
@@ -64,6 +73,33 @@ class KnowledgeFakeLithosClient:
         if self.related_error:
             raise RuntimeError("related unavailable")
         return self.neighborhood
+
+    # ── unused task surface (present only to satisfy LithosClientProtocol) ──
+
+    async def list_tasks(
+        self,
+        *,
+        agent: str | None = None,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        since: str | None = None,
+        with_claims: bool = False,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def task_status(self, task_id: str) -> TaskStatusRecord | None:
+        return None
+
+    async def list_findings(
+        self, task_id: str, *, since: str | None = None
+    ) -> list[FindingRecord]:
+        return []
+
+    async def stats(self) -> dict[str, object]:
+        return {}
+
+    async def list_agents(self) -> list[AgentRecord]:
+        return []
 
     async def close(self) -> None:
         self.closed = True
@@ -111,6 +147,24 @@ def test_normalize_related_tolerates_missing_and_malformed_fields() -> None:
     assert neighborhood.links == ()
     assert neighborhood.edges == ()
     assert neighborhood.unresolved == ()
+
+
+def test_normalize_related_keeps_inline_titles_and_unresolved_sources() -> None:
+    """Regression for f-001: titles arrive inline and unresolved provenance may
+    use the `unresolved_sources` key."""
+    payload = {
+        "links": [{"id": "n1", "title": "Readable title"}],
+        "backlinks": [{"id": "n2", "display": "Back title"}],
+        "edges": [{"id": "e1", "type": "supports", "title": "Edge title"}],
+        "provenance": {"unresolved_sources": ["missing.md"]},
+    }
+
+    neighborhood = normalize_related(payload)
+
+    assert neighborhood.links[0].title == "Readable title"
+    assert neighborhood.backlinks[0].title == "Back title"
+    assert neighborhood.edges[0].title == "Edge title"
+    assert neighborhood.unresolved == ("missing.md",)
 
 
 # ── load_related_panel ─────────────────────────────────────────────────
@@ -184,6 +238,39 @@ def test_related_panel_degrades_when_related_call_fails() -> None:
     assert panel.is_empty
 
 
+def test_related_panel_uses_inline_title_beyond_fanout_cap() -> None:
+    """Regression for f-001: an inline title renders even past the cap and does
+    not spend fan-out budget."""
+    links = tuple(RelatedRef(id=f"n-{i}", title=f"Title {i}") for i in range(25))
+    fake = KnowledgeFakeLithosClient(neighborhood=RelatedNeighborhood(links=links))
+
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+
+    assert len(panel.links.items) == 25
+    assert panel.links.overflow == 0
+    assert panel.links.items[24].label == "Title 24"
+    # Inline titles need no lookup, so nothing is fanned out.
+    assert fake.read_calls == []
+
+
+def test_related_panel_provenance_overflow_is_reported() -> None:
+    """Regression for f-002: sources collapsed past the cap still surface as
+    provenance overflow rather than vanishing."""
+    links = tuple(RelatedRef(id=f"link-{i}") for i in range(20))
+    sources = tuple(RelatedRef(id=f"src-{i}") for i in range(5))
+    titles = {f"link-{i}": f"Link {i}" for i in range(20)}
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=RelatedNeighborhood(links=links, sources=sources),
+        titles=titles,
+    )
+
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+
+    assert panel.sources.items == ()
+    assert panel.sources.overflow == 5
+    assert panel.has_provenance
+
+
 # ── note page integration ──────────────────────────────────────────────
 
 
@@ -255,3 +342,42 @@ def test_note_page_survives_related_panel_failure(
     assert "Root Note" in response.text
     assert "Still here." in response.text
     assert "The related panel could not be loaded." in response.text
+
+
+def test_note_page_renders_provenance_overflow(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression for f-002: provenance sources collapsed past the fan-out cap
+    still render the Provenance section with a "+N more" indicator."""
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    links = tuple(RelatedRef(id=f"link-{i}") for i in range(20))
+    sources = tuple(RelatedRef(id=f"src-{i}") for i in range(5))
+    titles = {f"link-{i}": f"Link {i}" for i in range(20)}
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=RelatedNeighborhood(links=links, sources=sources),
+        titles=titles,
+        note=note,
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/root")
+
+    assert response.status_code == 200
+    assert "Provenance" in response.text
+    assert "Sources" in response.text
+    assert "+5 more" in response.text
+
+
+def test_config_rejects_oversized_related_fanout_cap(tmp_path: Path) -> None:
+    """The title fan-out cap is bounded above so a misconfiguration can't
+    amplify one request into an unbounded concurrent read burst."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        "[lithos-lens]\n"
+        'environment = "test"\n'
+        "[lithos-lens.knowledge]\n"
+        "related_title_fanout_cap = 1000\n"
+    )
+
+    with pytest.raises(ConfigError, match="related_title_fanout_cap"):
+        load_config(config_path)

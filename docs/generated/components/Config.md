@@ -11,7 +11,7 @@ Configuration and environment loading from lithos-lens.toml with env overrides.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | M | 11 | 3 |
+| `lithos_lens.config` | L | 11 | 3 |
 
 ## Public API
 

@@ -81,11 +81,13 @@ def render_markdown(text: str) -> str:
 class RelatedRef:
     """A raw neighbor reference from ``lithos_related``, before title lookup.
 
-    ``lithos_related`` returns resolved note *ids* (with typed-edge metadata)
-    but no titles; the titles are filled in by a separate capped fan-out.
+    Outgoing/back-link entries carry a ``title`` inline in the response; typed
+    edges carry endpoint ids only, so their titles are filled in by a separate
+    capped ``lithos_read`` fan-out.
     """
 
     id: str
+    title: str = ""
     edge_type: str = ""
     weight: float | None = None
 
@@ -139,7 +141,13 @@ class RelatedPanel:
 
     @property
     def has_provenance(self) -> bool:
-        return bool(self.sources.items or self.derived.items or self.unresolved)
+        return bool(
+            self.sources.items
+            or self.sources.overflow
+            or self.derived.items
+            or self.derived.overflow
+            or self.unresolved
+        )
 
     @property
     def is_empty(self) -> bool:
@@ -194,18 +202,25 @@ async def load_related_panel(
 
 def normalize_related(raw: dict[str, Any]) -> RelatedNeighborhood:
     """Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``."""
+    unresolved = _provenance(raw, "unresolved")
+    if unresolved is None:
+        unresolved = _provenance(raw, "unresolved_sources")
     return RelatedNeighborhood(
         links=_normalize_refs(raw.get("links")),
         backlinks=_normalize_refs(raw.get("backlinks") or raw.get("back_links")),
         sources=_normalize_refs(_provenance(raw, "sources")),
         derived=_normalize_refs(_provenance(raw, "derived")),
-        unresolved=_normalize_unresolved(_provenance(raw, "unresolved")),
+        unresolved=_normalize_unresolved(unresolved),
         edges=_normalize_edges(raw.get("edges")),
     )
 
 
 def _ordered_ids(neighborhood: RelatedNeighborhood) -> list[str]:
-    """Distinct neighbor ids in section order (dict preserves insertion order)."""
+    """Distinct ids needing a title lookup, in section order.
+
+    Refs whose title arrived inline in the ``lithos_related`` response are
+    skipped — they already render by title and never spend fan-out budget.
+    """
     seen: dict[str, None] = {}
     for refs in (
         neighborhood.links,
@@ -215,7 +230,7 @@ def _ordered_ids(neighborhood: RelatedNeighborhood) -> list[str]:
         neighborhood.edges,
     ):
         for ref in refs:
-            if ref.id:
+            if ref.id and not ref.title:
                 seen.setdefault(ref.id, None)
     return list(seen)
 
@@ -245,15 +260,20 @@ def _build_section(
     refs: tuple[RelatedRef, ...],
     titles: dict[str, str],
 ) -> RelatedSection:
-    """Render refs whose id was resolved; collapse the rest into ``overflow``."""
+    """Render refs with a known title; collapse the rest into ``overflow``.
+
+    A title is known when it arrived inline in the response (``ref.title``) or
+    when the capped fan-out resolved it (``titles``). Refs beyond the cap have
+    neither and are collapsed.
+    """
     items: list[RelatedItem] = []
     overflow = 0
     for ref in refs:
-        if ref.id in titles:
+        if ref.title or ref.id in titles:
             items.append(
                 RelatedItem(
                     id=ref.id,
-                    title=titles[ref.id],
+                    title=ref.title or titles[ref.id],
                     edge_type=ref.edge_type,
                     weight=ref.weight,
                 )
@@ -277,6 +297,12 @@ def _ref_id(raw: Any) -> str:
     return ""
 
 
+def _ref_title(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("title") or raw.get("display") or "")
+    return ""
+
+
 def _normalize_refs(items: Any) -> tuple[RelatedRef, ...]:
     if not isinstance(items, list):
         return ()
@@ -284,7 +310,7 @@ def _normalize_refs(items: Any) -> tuple[RelatedRef, ...]:
     for item in items:
         ref_id = _ref_id(item)
         if ref_id:
-            refs.append(RelatedRef(id=ref_id))
+            refs.append(RelatedRef(id=ref_id, title=_ref_title(item)))
     return tuple(refs)
 
 
@@ -305,7 +331,14 @@ def _normalize_edges(items: Any) -> tuple[RelatedRef, ...]:
                 raw_weight, bool
             ):
                 weight = float(raw_weight)
-        refs.append(RelatedRef(id=ref_id, edge_type=edge_type, weight=weight))
+        refs.append(
+            RelatedRef(
+                id=ref_id,
+                title=_ref_title(item),
+                edge_type=edge_type,
+                weight=weight,
+            )
+        )
     return tuple(refs)
 
 

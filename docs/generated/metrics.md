@@ -14,7 +14,7 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 24 | 24 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 696 | 800 | 104 |
+| `max_module_lines` | 704 | 800 | 96 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 0 | 0 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
@@ -34,11 +34,11 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 1 | 696 | 596 | 7 | 2 | 0.22 | 23 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 1 | 704 | 601 | 7 | 2 | 0.22 | 23 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 50 | 32 | 0 | 4 | 1.00 | 2 (`lithos_lens.main.main`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 1 | 1 | 0.50 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
-| Knowledge | 1 | 332 | 259 | 2 | 1 | 0.33 | 9 (`lithos_lens.knowledge._normalize_edges`) | 0 |
+| Knowledge | 1 | 365 | 288 | 2 | 1 | 0.33 | 9 (`lithos_lens.knowledge._normalize_edges`) | 0 |
 | LithosClient | 1 | 563 | 470 | 2 | 4 | 0.67 | 7 (`lithos_lens.lithos_client.LithosClient.list_tasks`) | 0 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 63 | 50 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.refresh_health`) | 0 |
@@ -49,13 +49,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **14**, lines: **3082**, SLOC: **2548**
-- Largest module: `lithos_lens.config` (696 lines)
+- Modules: **14**, lines: **3123**, SLOC: **2582**
+- Largest module: `lithos_lens.config` (704 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **153**, cyclomatic > 10: **6**
+- Functions: **154**, cyclomatic > 10: **6**
 
 Top 10 most complex functions:
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **24** (25 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.51** (4664 test lines / 3082 source lines)
+- Test-to-source line ratio: **1.54** (4802 test lines / 3123 source lines)

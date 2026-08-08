@@ -40,6 +40,7 @@ classDiagram
   }
   class RelatedRef {
     +id str
+    +title str
     +edge_type str
     +weight float | None
   }
