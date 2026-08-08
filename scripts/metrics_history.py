@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import subprocess  # nosec B404 — dev-only tooling; runs fixed local git commands
 import sys
 from typing import Any
 
@@ -36,7 +36,7 @@ DEFAULT_KEYS = [
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(
+    return subprocess.run(  # nosec B603 B607 — fixed `git` args, no shell, no untrusted input
         ["git", *args], capture_output=True, text=True, check=True
     ).stdout
 

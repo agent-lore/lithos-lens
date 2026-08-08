@@ -21,10 +21,13 @@ def main() -> None:
         sys.exit(1)
 
     configure_logging(config.logging.level)
+    # Bind all interfaces intentionally: Lens ships as a container and is reached
+    # across the trusted-network boundary (REQUIREMENTS.md — no auth beyond that
+    # boundary). Not a listen-address vulnerability here.
     uvicorn.run(
         "lithos_lens.main:create_app_from_config",
         factory=True,
-        host="0.0.0.0",
+        host="0.0.0.0",  # nosec B104
         port=8000,
         log_config=None,
     )

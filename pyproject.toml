@@ -36,6 +36,13 @@ dev = [
     "networkx>=3.0",
 ]
 
+[tool.bandit]
+# Scan only shipped application code. The test suite and guardrail generators
+# use `assert` idiomatically (B101), which is not a runtime-security concern in
+# non-shipped code; intentional exposures in shipped code carry inline `# nosec`
+# with justification.
+exclude_dirs = ["tests", "scripts"]
+
 [tool.ruff]
 target-version = "py312"
 src = ["src", "tests"]
