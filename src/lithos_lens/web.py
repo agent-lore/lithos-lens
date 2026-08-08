@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.knowledge import render_markdown
 from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
 from lithos_lens.state import AppState
 from lithos_lens.tasks import (
@@ -48,6 +49,7 @@ def create_app(
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
     templates.env.filters["display_date"] = format_display_date
+    templates.env.filters["render_markdown"] = render_markdown
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url

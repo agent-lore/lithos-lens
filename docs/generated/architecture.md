@@ -17,6 +17,7 @@ graph TD
   subgraph tier_Foundation["Foundation"]
     Config
     Errors
+    Knowledge
     Logging
     Tasks
     Telemetry
@@ -25,6 +26,7 @@ graph TD
   click Entrypoint "components/Entrypoint.md"
   click Errors "components/Errors.md"
   click Events "components/Events.md"
+  click Knowledge "components/Knowledge.md"
   click LithosClient "components/LithosClient.md"
   click Logging "components/Logging.md"
   click State "components/State.md"
@@ -46,6 +48,7 @@ graph TD
   State --> LithosClient
   Telemetry --> Config
   Web --> Config
+  Web --> Knowledge
   Web --> LithosClient
   Web --> State
   Web --> Tasks
@@ -62,6 +65,7 @@ graph TD
   linkStyle 10 stroke:#bbb
   linkStyle 13 stroke:#bbb
   linkStyle 14 stroke:#999,stroke-dasharray:4
-  linkStyle 17 stroke:#999,stroke-dasharray:4
+  linkStyle 15 stroke:#999,stroke-dasharray:4
   linkStyle 18 stroke:#999,stroke-dasharray:4
+  linkStyle 19 stroke:#999,stroke-dasharray:4
 ```

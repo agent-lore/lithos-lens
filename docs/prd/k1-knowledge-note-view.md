@@ -111,10 +111,12 @@ All read-only; no new JS beyond existing HTMX patterns.
 
 `markdown-it-py` (new dependency, `markdown-it-py>=3`), configured
 `MarkdownIt("commonmark").enable("table").enable("strikethrough")`. Chosen
-over `mistune` and `python-markdown` because it is safe by default for
-agent-authored content: the commonmark preset escapes raw HTML, and the
-built-in `validateLink` rejects `javascript:`/`vbscript:`/`file:`/`data:`
-hrefs — no sanitizer dependency (`bleach` is EOL; `nh3` adds a Rust wheel).
+over `mistune` and `python-markdown` for its safety controls — note the
+commonmark preset is spec-compliant and therefore passes raw HTML through by
+default: Lens explicitly disables it (`html=False`) so raw HTML is escaped,
+and replaces the default `validateLink` (which only blocks a handful of
+dangerous schemes) with a §6.2 allow-list (`http`/`https`/`mailto`/relative)
+— no sanitizer dependency (`bleach` is EOL; `nh3` adds a Rust wheel).
 Rendering is server-side; output drops into the existing Jinja template —
 the no-build-step identity is untouched.
 

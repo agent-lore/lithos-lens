@@ -32,6 +32,7 @@ Events       = "Shared Lithos event subscription and browser fan-out over SSE (L
 LithosClient = "MCP-over-SSE client to the Lithos server — health probing, agent registration, and tool calls."
 Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
+Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown; wiki-links + view models to follow)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "Optional OpenTelemetry hooks and request middleware."
 Errors       = "Exception hierarchy rooted at LithosLensError."
@@ -44,6 +45,7 @@ Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client"]
 Config       = ["lithos_lens.config"]
 Tasks        = ["lithos_lens.tasks"]
+Knowledge    = ["lithos_lens.knowledge"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry"]
 Errors       = ["lithos_lens.errors"]
@@ -51,7 +53,7 @@ Errors       = ["lithos_lens.errors"]
 [tiers]
 Entrypoints = ["Entrypoint", "Web"]
 Core        = ["State", "Events", "LithosClient"]
-Foundation  = ["Config", "Tasks", "Logging", "Telemetry", "Errors"]
+Foundation  = ["Config", "Tasks", "Knowledge", "Logging", "Telemetry", "Errors"]
 
 # Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
 # against the metrics snapshot (docs/generated/metrics.md explains each one).
@@ -65,7 +67,7 @@ Foundation  = ["Config", "Tasks", "Logging", "Telemetry", "Errors"]
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 19   # measured 2026-07; direction: down
+cross_component_edges  = 20   # +1 for Web -> Knowledge (K1 note markdown rendering); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way
