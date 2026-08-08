@@ -186,7 +186,7 @@ def test_related_panel_resolves_titles_and_lists_backlinks() -> None:
     }
     fake = KnowledgeFakeLithosClient(neighborhood=neighborhood, titles=titles)
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     assert panel.state == SectionState.OK
     assert [item.label for item in panel.backlinks.items] == [
@@ -208,7 +208,7 @@ def test_related_panel_caps_title_fanout_and_reports_overflow() -> None:
         neighborhood=RelatedNeighborhood(edges=edges), titles=titles
     )
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     assert len(panel.edges.items) == 20
     assert panel.edges.overflow == 5
@@ -222,7 +222,7 @@ def test_related_panel_renders_bare_id_when_title_unresolved() -> None:
         titles={},
     )
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     # Within the cap but unresolvable -> rendered as a bare id, not overflow.
     assert panel.links.items[0].label == "ghost"
@@ -232,7 +232,7 @@ def test_related_panel_renders_bare_id_when_title_unresolved() -> None:
 def test_related_panel_degrades_when_related_call_fails() -> None:
     fake = KnowledgeFakeLithosClient(related_error=True)
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     assert panel.state == SectionState.ERROR
     assert panel.is_empty
@@ -244,12 +244,27 @@ def test_related_panel_uses_inline_title_beyond_fanout_cap() -> None:
     links = tuple(RelatedRef(id=f"n-{i}", title=f"Title {i}") for i in range(25))
     fake = KnowledgeFakeLithosClient(neighborhood=RelatedNeighborhood(links=links))
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     assert len(panel.links.items) == 25
     assert panel.links.overflow == 0
     assert panel.links.items[24].label == "Title 24"
     # Inline titles need no lookup, so nothing is fanned out.
+    assert fake.read_calls == []
+
+
+def test_related_panel_render_cap_collapses_excess_inline_titles() -> None:
+    """Regression for security/f-002: inline titles no longer bypass a lens-side
+    render bound — excess collapses into overflow (+N more), re-bounding page
+    size for a highly connected hub note."""
+    links = tuple(RelatedRef(id=f"n-{i}", title=f"Title {i}") for i in range(30))
+    fake = KnowledgeFakeLithosClient(neighborhood=RelatedNeighborhood(links=links))
+
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=10))
+
+    assert len(panel.links.items) == 10
+    assert panel.links.overflow == 20
+    # Still no fan-out — the render cap is independent of backend calls.
     assert fake.read_calls == []
 
 
@@ -264,7 +279,7 @@ def test_related_panel_provenance_overflow_is_reported() -> None:
         titles=titles,
     )
 
-    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20))
+    panel = _run(load_related_panel(fake, "root", title_fanout_cap=20, render_cap=50))
 
     assert panel.sources.items == ()
     assert panel.sources.overflow == 5
@@ -381,3 +396,29 @@ def test_config_rejects_oversized_related_fanout_cap(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="related_title_fanout_cap"):
         load_config(config_path)
+
+
+def test_note_page_render_cap_bounds_inline_titled_items(tmp_path: Path) -> None:
+    """Regression for security/f-002: the configured render cap bounds how many
+    inline-titled hub neighbors reach the page, collapsing the rest to +N more."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        "[lithos-lens]\n"
+        'environment = "test"\n'
+        "[lithos-lens.knowledge]\n"
+        "related_render_cap = 3\n"
+    )
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    links = tuple(RelatedRef(id=f"n-{i}", title=f"Hub Link {i}") for i in range(10))
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=RelatedNeighborhood(links=links), note=note
+    )
+
+    config = load_config(config_path)
+    app = create_app(config, lithos_client_factory=lambda _: fake)
+    with TestClient(app) as client:
+        response = client.get("/note/root")
+
+    assert response.status_code == 200
+    assert response.text.count("Hub Link ") == 3
+    assert "+7 more" in response.text

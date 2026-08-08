@@ -66,6 +66,7 @@ DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
 DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
 MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
+DEFAULT_KNOWLEDGE_RELATED_RENDER_CAP = 50
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -144,6 +145,7 @@ class HealthConfig:
 @dataclass(frozen=True)
 class KnowledgeConfig:
     related_title_fanout_cap: int = DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP
+    related_render_cap: int = DEFAULT_KNOWLEDGE_RELATED_RENDER_CAP
 
 
 @dataclass(frozen=True)
@@ -471,7 +473,15 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             # amplify one /note/{id} request into an unbounded concurrent
             # lithos_read burst against the shared MCP session.
             maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
-        )
+        ),
+        related_render_cap=_optional_int(
+            data,
+            "related_render_cap",
+            DEFAULT_KNOWLEDGE_RELATED_RENDER_CAP,
+            config_path,
+            "lithos-lens.knowledge",
+            minimum=1,
+        ),
     )
 
 

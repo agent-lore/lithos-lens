@@ -174,14 +174,18 @@ async def load_related_panel(
     knowledge_id: str,
     *,
     title_fanout_cap: int,
+    render_cap: int,
 ) -> RelatedPanel:
     """Load and resolve a note's related panel from one ``lithos_related`` call.
 
-    Endpoint titles are resolved with a per-request-capped ``lithos_read``
-    fan-out: at most ``title_fanout_cap`` distinct ids are looked up; neighbors
-    beyond the cap are collapsed into each section's ``overflow`` count. A
-    failed ``lithos_related`` call degrades to ``SectionState.ERROR`` so the
-    note body still renders.
+    Two independent bounds apply. ``title_fanout_cap`` limits the ``lithos_read``
+    fan-out — at most that many distinct ids are looked up to resolve titles,
+    bounding backend *call* count. ``render_cap`` limits how many items each
+    section *emits*, bounding response *size* even for a hub note whose
+    neighbors arrive with inline titles (which need no fan-out). Anything past
+    either bound collapses into the section's ``overflow`` count. A failed
+    ``lithos_related`` call degrades to ``SectionState.ERROR`` so the note body
+    still renders.
     """
 
     try:
@@ -191,12 +195,12 @@ async def load_related_panel(
 
     titles = await _resolve_titles(lithos, neighborhood, cap=title_fanout_cap)
     return RelatedPanel(
-        links=_build_section(neighborhood.links, titles),
-        backlinks=_build_section(neighborhood.backlinks, titles),
-        sources=_build_section(neighborhood.sources, titles),
-        derived=_build_section(neighborhood.derived, titles),
+        links=_build_section(neighborhood.links, titles, render_cap=render_cap),
+        backlinks=_build_section(neighborhood.backlinks, titles, render_cap=render_cap),
+        sources=_build_section(neighborhood.sources, titles, render_cap=render_cap),
+        derived=_build_section(neighborhood.derived, titles, render_cap=render_cap),
         unresolved=neighborhood.unresolved,
-        edges=_build_section(neighborhood.edges, titles),
+        edges=_build_section(neighborhood.edges, titles, render_cap=render_cap),
     )
 
 
@@ -259,17 +263,23 @@ async def _resolve_titles(
 def _build_section(
     refs: tuple[RelatedRef, ...],
     titles: dict[str, str],
+    *,
+    render_cap: int,
 ) -> RelatedSection:
     """Render refs with a known title; collapse the rest into ``overflow``.
 
     A title is known when it arrived inline in the response (``ref.title``) or
-    when the capped fan-out resolved it (``titles``). Refs beyond the cap have
-    neither and are collapsed.
+    when the capped fan-out resolved it (``titles``). Two things collapse into
+    ``overflow``: refs with no known title (past the fan-out cap), and
+    renderable refs past ``render_cap`` — a separate ceiling on how many items a
+    section emits, so a hub note with many *inline* titles cannot inflate the
+    rendered page beyond a lens-side bound.
     """
     items: list[RelatedItem] = []
     overflow = 0
     for ref in refs:
-        if ref.title or ref.id in titles:
+        renderable = bool(ref.title or ref.id in titles)
+        if renderable and len(items) < render_cap:
             items.append(
                 RelatedItem(
                     id=ref.id,
