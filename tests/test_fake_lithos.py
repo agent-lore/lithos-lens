@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.events import LensEvent
+from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_lithos import (
     FakeEventHub,
     FakeLithosClient,
@@ -25,6 +26,7 @@ from lithos_lens.fake_lithos import (
 )
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
+from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
 
 
@@ -332,6 +334,112 @@ async def test_fake_client_task_blocked_scoped_by_project_and_tags() -> None:
     # influx-backfill lacks these, so a scoped read must exclude it.
     assert await client.task_blocked(tags=["area:observability"]) == []
     assert await client.task_blocked(project="lithos-lens") == []
+
+
+def test_fake_client_defaults_to_the_demo_dataset() -> None:
+    """The app-factory path (FakeLithosClient(config)) must keep serving the
+    shipped demo set — the fixture/behavior split may not change fake mode."""
+    assert FakeLithosClient().dataset == demo_dataset()
+
+
+def test_demo_dataset_is_deterministic() -> None:
+    assert demo_dataset() == demo_dataset()
+
+
+@pytest.mark.anyio
+async def test_fake_client_serves_a_composed_dataset() -> None:
+    """The point of the fixture/behavior split: a test can hand the client its
+    own minimal dataset instead of inheriting (and filtering around) the demo
+    set, while the behavior half keeps the coded error contracts."""
+    task = TaskRecord(
+        id="only-task",
+        title="The only task",
+        status="open",
+        created_by="composer",
+        created_at="2026-08-01T00:00:00+00:00",
+        tags=("project:compose",),
+    )
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(tasks=(task,), ready_ids=frozenset({"only-task"}))
+    )
+
+    assert [t.id for t in await client.list_tasks()] == ["only-task"]
+    assert [t.id for t in await client.task_ready()] == ["only-task"]
+    assert await client.task_blocked() == []
+    assert (await client.task_get("only-task")).title == "The only task"
+    # Claims were not composed, so with_claims surfaces an empty tuple.
+    (ready,) = await client.task_ready(with_claims=True)
+    assert ready.claims == ()
+    # The behavior half still speaks the coded contracts over any dataset.
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.read_note("not-composed")
+    assert excinfo.value.code == "doc_not_found"
+
+
+@pytest.mark.anyio
+async def test_fake_list_findings_since_uses_full_timestamp_strict_greater() -> None:
+    """Parity with upstream lithos_finding_list: `since` is parsed as a full
+    ISO datetime (naive == UTC, offsets normalized) and filters strictly
+    created_at > since — not an inclusive calendar-date compare."""
+    client = FakeLithosClient()
+    task = "influx-ingest-cutover"  # demo findings at 11:30Z and 12:15Z
+
+    async def ids(since: str) -> list[str]:
+        return [f.id for f in await client.list_findings(task, since=since)]
+
+    # Same-day, between the two findings: only the later one passes.
+    assert await ids("2026-08-06T12:00:00+00:00") == ["finding-orphan"]
+    # Exactly equal to the earlier finding: strict >, so it is excluded.
+    assert await ids("2026-08-06T11:30:00+00:00") == ["finding-orphan"]
+    # Before both: both pass.
+    assert await ids("2026-08-06T10:00:00+00:00") == ["finding-plan", "finding-orphan"]
+    # Offset-aware: 13:15+02:00 is 11:15Z, before both.
+    assert await ids("2026-08-06T13:15:00+02:00") == ["finding-plan", "finding-orphan"]
+    # Naive values are treated as already-UTC (upstream normalize_datetime).
+    assert await ids("2026-08-06T12:00:00") == ["finding-orphan"]
+    # After both: nothing.
+    assert await ids("2026-08-07T00:00:00+00:00") == []
+
+
+@pytest.mark.anyio
+async def test_fake_list_findings_malformed_since_raises_invalid_input() -> None:
+    """Upstream parses `since` with datetime.fromisoformat and answers a
+    ValueError with the invalid_input envelope; the fake must match."""
+    client = FakeLithosClient()
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.list_findings("influx-ingest-cutover", since="not-a-timestamp")
+    assert excinfo.value.code == "invalid_input"
+
+
+@pytest.mark.anyio
+async def test_fake_list_tasks_since_compares_full_strings_inclusive() -> None:
+    """Upstream lithos_task_list filters `created_at >= since` on the raw ISO
+    strings (inclusive, full precision — deliberately unlike findings' strict
+    parsed >). A same-day-but-earlier task must therefore be excluded."""
+    client = FakeLithosClient()
+    # influx-dashboards was created 2026-08-04T09:00:00+00:00.
+    after = {t.id for t in await client.list_tasks(since="2026-08-04T10:00:00+00:00")}
+    assert "influx-dashboards" not in after
+    boundary = {
+        t.id for t in await client.list_tasks(since="2026-08-04T09:00:00+00:00")
+    }
+    assert "influx-dashboards" in boundary
+
+
+def test_dataset_mappings_are_read_only_views() -> None:
+    """FakeLithosDataset promises an immutable bundle: its mapping fields are
+    read-only at runtime, not just unassignable dataclass attributes."""
+    dataset = FakeLithosDataset()
+    with pytest.raises(TypeError):
+        dataset.stats["mutated"] = 1  # type: ignore[index]
+
+
+def test_dataset_copies_constructor_mappings() -> None:
+    """A caller-held dict must not remain an alias into the dataset."""
+    source = {"open_claims": 2}
+    dataset = FakeLithosDataset(stats=source)
+    source["open_claims"] = 99
+    assert dataset.stats["open_claims"] == 2
 
 
 def test_fake_mode_logs_loud_warning_when_engaged(

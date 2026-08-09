@@ -11,6 +11,7 @@ emits exactly ``{kind, task_id, type, status, message}``.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -216,7 +217,7 @@ class _StubClient(LithosClient):
         return self._payloads.get(name, {})
 
 
-def _run(client: _StubClient, coro: Any) -> Any:
+def _run(client: LithosClient, coro: Any) -> Any:
     async def _driver() -> Any:
         try:
             return await coro
@@ -224,6 +225,69 @@ def _run(client: _StubClient, coro: Any) -> Any:
             await client.close()
 
     return asyncio.run(_driver())
+
+
+# --- MCP result decoding ---------------------------------------------------
+
+
+class _CannedResultClient(LithosClient):
+    """LithosClient that feeds a canned raw MCP result through the REAL
+    decode path (via the no-startup one-shot branch of ``_call_tool``)."""
+
+    def __init__(self, result: Any) -> None:
+        super().__init__(LithosConfig())
+        self._result = result
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        return self._result
+
+
+def _tool_result(text: str | None, *, is_error: bool = False) -> Any:
+    content = [SimpleNamespace(text=text)] if text is not None else []
+    return SimpleNamespace(content=content, isError=is_error)
+
+
+def test_mcp_error_result_raises_coded_tool_error() -> None:
+    """An MCP-level tool error (isError=true — e.g. the live server's FastMCP
+    output-schema validation rejecting its own error envelope) carries plain
+    text, not a Lithos envelope. It must surface as a coded LithosToolError,
+    never a leaked JSONDecodeError."""
+    client = _CannedResultClient(
+        _tool_result(
+            "Output validation error: 'error' is not of type 'array'",
+            is_error=True,
+        )
+    )
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+    assert excinfo.value.code == "tool_error"
+    assert "Output validation error" in str(excinfo.value)
+
+
+def test_non_json_success_result_raises_invalid_response() -> None:
+    client = _CannedResultClient(_tool_result("<html>bad gateway</html>"))
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+    assert excinfo.value.code == "invalid_response"
+
+
+def test_non_dict_json_result_raises_invalid_response() -> None:
+    client = _CannedResultClient(_tool_result("[1, 2]"))
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+    assert excinfo.value.code == "invalid_response"
+
+
+def test_empty_content_result_decodes_to_empty_payload() -> None:
+    client = _CannedResultClient(_tool_result(None))
+    assert _run(client, client.stats()) == {}
+
+
+def test_json_dict_result_decodes_to_payload() -> None:
+    client = _CannedResultClient(_tool_result('{"open_claims": 3}'))
+    assert _run(client, client.stats()) == {"open_claims": 3}
 
 
 def test_list_tasks_always_sends_with_claims_so_default_false_is_pinned() -> None:
