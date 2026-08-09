@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
+from lithos_lens.knowledge import (
+    RelatedNeighborhood,
+    SearchResult,
+    normalize_related,
+    normalize_search_result,
+)
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -137,6 +142,14 @@ class LithosClientProtocol(Protocol):
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]: ...
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]: ...
 
     async def close(self) -> None: ...
 
@@ -517,6 +530,33 @@ class LithosClient:
         # existed — "results" is lithos_search's key).
         rows: Any = payload.get("items") or []
         return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
+        """Hybrid-search notes via ``lithos_search`` (the /knowledge query path).
+
+        ``mode="hybrid"`` is always sent (§7.1); only the arguments an active
+        filter needs ride along. ``lithos_search`` answers
+        ``{"results": [...]}`` — "results" is its container key (distinct from
+        ``lithos_list``'s "items"). Snippets carry raw markdown and are rendered
+        escaped by the template, never through the markdown renderer.
+        """
+        arguments: dict[str, Any] = {"query": query, "mode": "hybrid"}
+        if tags:
+            arguments["tags"] = tags
+        if limit is not None:
+            arguments["limit"] = limit
+        payload = await self._call_tool("lithos_search", arguments)
+        _raise_for_error(payload)
+        rows: Any = payload.get("results") or []
+        return [
+            normalize_search_result(item) for item in rows if isinstance(item, dict)
+        ]
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._worker_task is None:

@@ -509,6 +509,55 @@ def _normalize_unresolved(items: Any) -> tuple[str, ...]:
     return tuple(item for item in items if isinstance(item, str) and item)
 
 
+# ── Search results (K1-S6) ─────────────────────────────────────────────
+#
+# ``/knowledge?q=…`` renders hybrid-search result cards from ``lithos_search``.
+# The snippet arrives as raw markdown (verified live, §7.1) and is rendered
+# ESCAPED by the template — never fed through the markdown renderer — so markup
+# in a snippet cannot break the results page.
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """One ``lithos_search`` hit rendered as a result card (§7.1)."""
+
+    id: str
+    title: str = ""
+    path: str = ""
+    snippet: str = ""
+    updated: str = ""
+    score: float | None = None
+
+    @property
+    def label(self) -> str:
+        """Human label: title, then path, falling back to the bare id."""
+        return self.title or self.path or self.id
+
+
+def normalize_search_result(raw: dict[str, Any]) -> SearchResult:
+    """Normalize one ``lithos_search`` result row into a ``SearchResult``.
+
+    ``lithos_search`` answers ``{"results": [{"id", "title", "path",
+    "snippet", "updated_at", "score", ...}]}``. ``updated`` / ``updated_at``
+    are both accepted for the timestamp (parity with
+    :func:`~lithos_lens.tasks.normalize_note_summary`).
+    """
+    raw_score = raw.get("score")
+    score = (
+        float(raw_score)
+        if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
+        else None
+    )
+    return SearchResult(
+        id=str(raw.get("id") or ""),
+        title=str(raw.get("title") or ""),
+        path=str(raw.get("path") or ""),
+        snippet=str(raw.get("snippet") or ""),
+        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
+        score=score,
+    )
+
+
 # ── Wiki-link resolver (K1-S2) ─────────────────────────────────────────
 #
 # No MCP response maps an inline ``[[target]]`` to a note id, so resolution is

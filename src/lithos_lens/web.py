@@ -55,11 +55,6 @@ TEMPLATE_DIR = PACKAGE_ROOT / "templates"
 STATIC_DIR = PACKAGE_ROOT / "static"
 logger = logging.getLogger(__name__)
 
-# Cap on the recently-updated list shown by /knowledge with no query. A local
-# constant, not config: K1-S6 introduces the [knowledge].recent_limit dial when
-# it builds out the full landing page.
-_KNOWLEDGE_RECENT_LIMIT = 20
-
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
 
@@ -241,37 +236,39 @@ def create_app(
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
-        """Knowledge landing: a title search and a recently-updated browse list.
+        """Knowledge landing: hybrid search, tag browse, and recently-updated.
 
-        K1-S2 needs this so the resolver's "unresolved link" page can offer a
-        working ``/knowledge?q=…`` search instead of a dead 404. It is the
-        minimal functional surface — a ``lithos_list`` title/tag search plus a
-        recent list; hybrid ``lithos_search`` cards, snippets, and the nav search
-        box are K1-S6.
+        Three branches (§7.1): a ``?q=`` query runs ``lithos_search`` and
+        renders hybrid-search result cards (title, escaped snippet, updated);
+        a ``?tag=`` filter and the bare landing both run ``lithos_list`` for a
+        lightweight note list (tagged, or recently updated). Every branch is
+        capped from config so a broad ``?q=a`` / ``?tag=`` cannot materialize
+        an unbounded result set (the resolver caps candidates for the same
+        reason).
         """
         query = request.query_params.get("q", "").strip()
         tag = request.query_params.get("tag", "").strip()
         snapshot = await state.refresh_health()
+        search_results = None
         results = None
         error = ""
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. Knowledge search is unavailable."
         else:
             try:
-                # Every branch is capped: a broad ``?q=a`` / ``?tag=`` must not
-                # be able to materialize and render an unbounded result set (the
-                # resolver caps candidates for the same reason).
                 if query:
-                    results = await state.lithos_client.list_notes(
-                        title_contains=query, limit=_KNOWLEDGE_RECENT_LIMIT
+                    search_results = await state.lithos_client.search_notes(
+                        query,
+                        tags=[tag] if tag else None,
+                        limit=state.config.knowledge.search_limit,
                     )
                 elif tag:
                     results = await state.lithos_client.list_notes(
-                        tags=[tag], limit=_KNOWLEDGE_RECENT_LIMIT
+                        tags=[tag], limit=state.config.knowledge.recent_limit
                     )
                 else:
                     results = await state.lithos_client.list_notes(
-                        limit=_KNOWLEDGE_RECENT_LIMIT
+                        limit=state.config.knowledge.recent_limit
                     )
             except Exception:
                 error = "Knowledge search is currently unavailable."
@@ -284,6 +281,7 @@ def create_app(
                 "active_view": "knowledge",
                 "query": query,
                 "tag": tag,
+                "search_results": search_results,
                 "results": results,
                 "error": error,
             },
