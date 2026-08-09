@@ -231,6 +231,7 @@ classDiagram
     +in_progress int
     +ready int
     +blocked int
+    +claims_unknown int
     +unclassified int
     +open_total int
     +open_claims int

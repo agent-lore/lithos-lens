@@ -123,18 +123,21 @@
       {#
         Section order derives from the ready/blocked frontier, not claim-state
         inference. The three workable sections show when the "open" status is
-        selected; "Not classified" only appears under frontier truncation.
+        selected; "Claims unknown" (degraded data: claims not returned, so the
+        rows can't honestly count as Ready/Blocked/In progress) and
+        "Not classified" (frontier truncation) appear only when they have rows.
       #}
       {% set section_labels = {
         "in_progress": "In progress",
         "ready": "Ready",
         "blocked": "Blocked",
+        "claims_unknown": "Claims unknown",
         "unclassified": "Not classified",
         "completed": "Completed",
         "cancelled": "Cancelled",
       } %}
       {% set workable = ("in_progress", "ready", "blocked") %}
-      {% set section_order = workable + ("unclassified", "completed", "cancelled") %}
+      {% set section_order = workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
       <section class="task-board" aria-label="Task sections">
         {# Skeleton strip for just-created tasks: a task.created event lands
            here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
@@ -145,7 +148,7 @@
           {% set rows = dashboard.sections[section] %}
           {% if section in ("completed", "cancelled") %}
             {% set active = section in dashboard.filters.statuses %}
-          {% elif section == "unclassified" %}
+          {% elif section in ("claims_unknown", "unclassified") %}
             {% set active = "open" in dashboard.filters.statuses and rows %}
           {% else %}
             {% set active = "open" in dashboard.filters.statuses %}

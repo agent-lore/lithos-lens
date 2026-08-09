@@ -789,6 +789,14 @@ def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
     assert response.status_code == 200
     assert "claims unknown" in response.text
     assert 'class="claim-chip claim-chip-open"' not in response.text
+    # The rows render in the dedicated degraded-data group, and the workable
+    # counts exclude them: unknown-claims tasks are not "Ready" or "Blocked".
+    assert 'data-task-group="claims_unknown"' in response.text
+    text = response.text
+    ready_card = text.split("#task-group-ready")[1].split("</a>")[0]
+    blocked_card = text.split("#task-group-blocked")[1].split("</a>")[0]
+    assert "<strong>0</strong>" in ready_card
+    assert "<strong>0</strong>" in blocked_card
 
 
 def test_terminal_card_labels_match_the_created_windowing(

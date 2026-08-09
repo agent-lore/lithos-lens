@@ -52,12 +52,12 @@ def _section_ids(
     return [row.task.id for row in sections[key]]
 
 
-def test_claims_none_is_unknown_not_unclaimed() -> None:
+def test_claims_none_rows_leave_ready_and_blocked_counts() -> None:
     """TaskRecord.claims contract: ``None`` means claims were NOT returned even
-    though requested — distinct from ``()`` no-active-claims. A claims-unknown
-    row still classifies by frontier membership (Lithos owns that answer), but
-    must carry the unknown state instead of silently reading as unclaimed —
-    the same inline-anomaly surface as ``claimed_but_blocked``."""
+    though requested — the row might belong in In progress, so it must not sit
+    in the Ready ("unclaimed and workable now") or Blocked counts either. It
+    stays VISIBLE in the dedicated claims-unknown group with the degraded-data
+    treatment, mirroring the read-skew surface."""
     unknown_ready = _task("r", claims=None)
     unknown_blocked = _task("b", claims=None)
     known_ready = _task("k", claims=())
@@ -67,24 +67,26 @@ def test_claims_none_is_unknown_not_unclaimed() -> None:
         blocked=[_blocked(unknown_blocked, BlockerRecord(kind="task", task_id="x"))],
     )
 
-    # Frontier membership still places the rows…
-    assert _section_ids(sections, "ready") == ["r", "k"]
-    assert _section_ids(sections, "blocked") == ["b"]
+    # Only the KNOWN-unclaimed row counts as Ready…
+    assert _section_ids(sections, "ready") == ["k"]
+    assert _section_ids(sections, "blocked") == []
     assert _section_ids(sections, "in_progress") == []
-    # …but None surfaces as claims-unknown, not as a confident "unclaimed".
-    assert sections["ready"][0].claims_unknown is True
-    assert sections["ready"][0].claim_state == "unknown"
-    assert sections["ready"][1].claims_unknown is False
-    assert sections["ready"][1].claim_state == "known_unclaimed"
-    assert sections["blocked"][0].claims_unknown is True
+    # …and the unknown rows are visible, flagged, never silently dropped.
+    assert _section_ids(sections, "claims_unknown") == ["r", "b"]
+    assert all(row.claims_unknown for row in sections["claims_unknown"])
+    assert sections["claims_unknown"][0].claim_state == "unknown"
+    # A blocked-listed unknown row keeps its blocker chips for context.
+    assert sections["claims_unknown"][1].blockers
 
 
-def test_claims_none_in_neither_frontier_is_unclassified_and_unknown() -> None:
+def test_claims_none_in_neither_frontier_is_still_claims_unknown() -> None:
+    """A claims-unknown row's bucket does not depend on frontier membership,
+    so it never pollutes the truncation/skew tail either."""
     sections = classify_open_tasks(
         [_task("u", claims=None)], ready_ids=set(), blocked=[]
     )
-    assert _section_ids(sections, "unclassified") == ["u"]
-    assert sections["unclassified"][0].claims_unknown is True
+    assert _section_ids(sections, "claims_unknown") == ["u"]
+    assert _section_ids(sections, "unclassified") == []
 
 
 def test_claim_makes_in_progress_beating_ready_and_blocked() -> None:
@@ -181,19 +183,20 @@ class _FrontierFake:
     def __init__(
         self,
         *,
-        open_tasks: list[TaskRecord],
+        open_tasks: list[TaskRecord] | list[list[TaskRecord]],
         ready: list[TaskRecord] | list[list[TaskRecord]],
         blocked: list[BlockedTaskRecord] | list[list[BlockedTaskRecord]],
         completed: list[TaskRecord] | None = None,
         cancelled: list[TaskRecord] | None = None,
         fail_ready: bool = False,
     ) -> None:
-        self._open = open_tasks
+        self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
         self._blocked_seq = self._as_sequence(blocked)
         self._completed = completed or []
         self._cancelled = cancelled or []
         self._fail_ready = fail_ready
+        self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
 
@@ -213,11 +216,15 @@ class _FrontierFake:
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         # Mirror the real server: agent/tag are filtered upstream when passed.
-        rows = {
-            "open": self._open,
-            "completed": self._completed,
-            "cancelled": self._cancelled,
-        }[status or "open"]
+        if (status or "open") == "open":
+            index = min(self.open_calls, len(self._open_seq) - 1)
+            self.open_calls += 1
+            rows = self._open_seq[index]
+        else:
+            rows = {
+                "completed": self._completed,
+                "cancelled": self._cancelled,
+            }[status or "open"]
         if agent:
             rows = [task for task in rows if task.created_by == agent]
         if tags:
@@ -397,3 +404,148 @@ def test_load_dashboard_ready_and_blocked_overlap_goes_conservative_blocked() ->
     assert row.reconciliation_pending is True
     assert data.reconciliation_pending is True
     assert data.truncated is False
+
+
+def test_retry_refreshes_master_open_and_completed_task_renders_once() -> None:
+    """Reviewer repro (finding 1): a task that completed between the stale
+    open read and the closed read must not render TWICE (Blocked from the
+    stale open + Completed). On skew the master-open read retries with the
+    frontier pair, the later snapshot takes precedence, and the row renders
+    exactly once, in its terminal section."""
+    done = _task("x", claims=())
+    ready = _task("r", claims=())
+    done_completed = TaskRecord(
+        id="x", title="Title x", status="completed", task_type="task"
+    )
+    fake = _FrontierFake(
+        # Stale first open read still contains x; the retried snapshot doesn't.
+        open_tasks=[[done, ready], [ready]],
+        ready=[ready],
+        blocked=[],
+        completed=[done_completed],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    assert fake.ready_calls == 2
+    # x appears in NO open section…
+    for section in (
+        "in_progress",
+        "ready",
+        "blocked",
+        "claims_unknown",
+        "unclassified",
+    ):
+        assert "x" not in _section_ids(data.sections, section)
+    # …and exactly once, in Completed.
+    assert _section_ids(data.sections, "completed") == ["x"]
+    # The skew healed with the refreshed snapshot: no warning, no truncation.
+    assert data.reconciliation_pending is False
+    assert data.truncated is False
+
+
+def test_closed_dedup_prefers_the_open_snapshot_when_task_is_in_both() -> None:
+    """A task in the final open snapshot AND a closed list renders once, in its
+    open section — the master-open snapshot is the authority on openness."""
+    both = _task("x", claims=())
+    stale_completed = TaskRecord(
+        id="x", title="Title x", status="completed", task_type="task"
+    )
+    fake = _FrontierFake(
+        open_tasks=[both], ready=[both], blocked=[], completed=[stale_completed]
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert _section_ids(data.sections, "ready") == ["x"]
+    assert _section_ids(data.sections, "completed") == []
+    assert data.summary.recent_completed == 0
+
+
+def test_overlap_is_skew_even_at_the_frontier_limit() -> None:
+    """Reviewer repro (finding 2): frontier_limit=1 with the SAME task in both
+    responses. at_limit must not mask the contradiction — retry, then
+    conservative Blocked with the warning."""
+    both = _task("x", claims=())
+    blocked_record = _blocked(both, BlockerRecord(kind="task", task_id="p"))
+    fake = _FrontierFake(open_tasks=[both], ready=[both], blocked=[blocked_record])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert fake.ready_calls == 2
+    assert _section_ids(data.sections, "ready") == []
+    assert _section_ids(data.sections, "blocked") == ["x"]
+    assert data.reconciliation_pending is True
+
+
+def test_overlap_on_a_filtered_out_task_is_a_no_op() -> None:
+    """An overlap whose task the agent/tag filter hides changes nothing that
+    renders: no retry, no banner."""
+    hidden = _task("h", claims=(), tags=("project:other",))
+    visible = _task("v", claims=(), tags=("project:mine",))
+    fake = _FrontierFake(
+        open_tasks=[hidden, visible],
+        ready=[hidden, visible],
+        blocked=[_blocked(hidden, BlockerRecord(kind="task", task_id="p"))],
+    )
+    filters = TaskFilters(
+        statuses=("open",), tags=("project:mine",), agent="", since=""
+    )
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert fake.ready_calls == 1
+    assert _section_ids(data.sections, "ready") == ["v"]
+    assert data.reconciliation_pending is False
+
+
+def test_overlap_on_a_claimed_task_is_a_no_op() -> None:
+    """A claimed task stays In progress whatever the frontiers say; its overlap
+    must not trigger the rows-moved-to-Blocked banner."""
+    claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
+    fake = _FrontierFake(
+        open_tasks=[claimed],
+        ready=[claimed],
+        blocked=[_blocked(claimed, BlockerRecord(kind="task", task_id="p"))],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 1
+    assert _section_ids(data.sections, "in_progress") == ["c"]
+    assert data.reconciliation_pending is False
+
+
+def test_summary_counts_exclude_claims_unknown_rows() -> None:
+    unknown = _task("u", claims=None)
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[unknown, ready], ready=[unknown, ready], blocked=[]
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.summary.ready == 1
+    assert data.summary.blocked == 0
+    assert data.summary.claims_unknown == 1
+    # Visible, never hidden: the row is in the board and the open total.
+    assert _section_ids(data.sections, "claims_unknown") == ["u"]
+    assert data.summary.open_total == 2
+    # An unknown row on the ready frontier is not skew — its bucket does not
+    # depend on the frontier answer.
+    assert fake.ready_calls == 1
+    assert data.reconciliation_pending is False
+
+
+def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
+    """Combined case: same task in both frontier responses AND claims=None.
+    The claims-unknown bucket wins (its rendering could not change), so no
+    retry and no reconciliation banner — just the degraded-data group."""
+    both = _task("x", claims=None)
+    fake = _FrontierFake(
+        open_tasks=[both],
+        ready=[both],
+        blocked=[_blocked(both, BlockerRecord(kind="task", task_id="p"))],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 1
+    assert _section_ids(data.sections, "claims_unknown") == ["x"]
+    assert _section_ids(data.sections, "ready") == []
+    assert _section_ids(data.sections, "blocked") == []
+    assert data.reconciliation_pending is False

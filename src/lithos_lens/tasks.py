@@ -14,7 +14,13 @@ TaskStatusName = Literal["open", "completed", "cancelled"]
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
 SectionName = Literal[
-    "in_progress", "ready", "blocked", "unclassified", "completed", "cancelled"
+    "in_progress",
+    "ready",
+    "blocked",
+    "claims_unknown",
+    "unclassified",
+    "completed",
+    "cancelled",
 ]
 # Known task types from the Lithos 0.4 task graph: "task" (workable), "epic",
 # "gate". Transport records carry the raw server string so an unknown future
@@ -178,6 +184,9 @@ class TaskSummary:
     in_progress: int = 0
     ready: int = 0
     blocked: int = 0
+    # Rows whose claims came back None (unknown): visible in their own group,
+    # deliberately NOT counted as workable Ready/Blocked.
+    claims_unknown: int = 0
     unclassified: int = 0
     open_total: int = 0
     open_claims: int = 0

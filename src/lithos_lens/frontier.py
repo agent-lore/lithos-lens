@@ -125,16 +125,12 @@ def classify_open_tasks(
         "in_progress": [],
         "ready": [],
         "blocked": [],
+        "claims_unknown": [],
         "unclassified": [],
     }
     for task in open_tasks:
         if task.task_type != WORKABLE_TASK_TYPE:
             continue
-        # TaskRecord.claims: None means claims were NOT returned even though
-        # requested — claims-unknown, NOT unclaimed. Such a row still sections
-        # by frontier membership (Lithos owns that answer) but carries the
-        # inline claims_unknown flag, the same surface as claimed_but_blocked.
-        claims_unknown = task.claims is None
         claims: tuple[ClaimRecord, ...] = task.claims or ()
         chips = _blocker_chips(blocked_map.get(task.id, ()), resolve)
         if claims:
@@ -148,21 +144,27 @@ def classify_open_tasks(
                     claimed_but_blocked=task.id in blocked_map,
                 )
             )
+        elif task.claims is None:
+            # TaskRecord.claims: None means claims were NOT returned even
+            # though requested — the task might belong in In progress, so it
+            # must not sit in the Ready ("unclaimed and workable now") or
+            # Blocked counts. It renders in the dedicated claims-unknown group
+            # (visible, flagged, blocker chips kept for context) — the same
+            # degraded-data treatment as the read-skew rows. The bucket does
+            # not depend on frontier membership, so these rows never feed the
+            # truncation or skew signals either.
+            buckets["claims_unknown"].append(
+                SectionRow(task=task, blockers=chips, claims_unknown=True)
+            )
         elif task.id in ready_ids:
-            buckets["ready"].append(
-                SectionRow(task=task, claims_unknown=claims_unknown)
-            )
+            buckets["ready"].append(SectionRow(task=task))
         elif task.id in blocked_map:
-            buckets["blocked"].append(
-                SectionRow(task=task, blockers=chips, claims_unknown=claims_unknown)
-            )
+            buckets["blocked"].append(SectionRow(task=task, blockers=chips))
         else:
             # A workable open task in neither frontier set. With healthy reads
             # this only happens under frontier-limit truncation; ``load_dashboard``
             # decides whether to label it truncation (vs. a failed frontier read).
-            buckets["unclassified"].append(
-                SectionRow(task=task, claims_unknown=claims_unknown)
-            )
+            buckets["unclassified"].append(SectionRow(task=task))
     return {section: tuple(rows) for section, rows in buckets.items()}
 
 
@@ -240,12 +242,6 @@ async def load_dashboard(
     open_snapshot = _sorted_or_error(
         "open", cast("list[TaskRecord] | BaseException", open_result), errors
     )
-    open_index = {task.id: task for task in open_snapshot}
-    visible_open = [
-        task
-        for task in open_snapshot
-        if matches_filters(task, filters=filters, status="open")
-    ]
 
     ready_list: list[TaskRecord] = []
     frontier_ok = True
@@ -262,13 +258,17 @@ async def load_dashboard(
     else:
         blocked_records = cast(list[BlockedTaskRecord], blocked_result)
 
-    closed: dict[str, list[TaskRecord]] = {}
-    for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
-        closed[status] = _rows_for(status, result, filters, errors)
-
     def _partition_state(
-        ready_rows: list[TaskRecord], blocked_rows: list[BlockedTaskRecord]
-    ) -> tuple[dict[SectionName, tuple[SectionRow, ...]], set[str], bool, bool]:
+        snapshot: list[TaskRecord],
+        ready_rows: list[TaskRecord],
+        blocked_rows: list[BlockedTaskRecord],
+    ) -> _FrontierState:
+        index = {task.id: task for task in snapshot}
+        visible = [
+            task
+            for task in snapshot
+            if matches_filters(task, filters=filters, status="open")
+        ]
         ready_ids = {task.id for task in ready_rows}
         overlap = ready_ids & {record.task.id for record in blocked_rows}
         # Truncation is a fact about the response size, not an inference from
@@ -277,42 +277,75 @@ async def load_dashboard(
             len(ready_rows) >= frontier_limit or len(blocked_rows) >= frontier_limit
         )
         parts = classify_open_tasks(
-            visible_open,
+            visible,
             ready_ids=ready_ids,
             blocked=blocked_rows,
-            index=open_index,
+            index=index,
         )
-        skewed = not at_limit and (bool(overlap) or bool(parts["unclassified"]))
-        return parts, overlap, at_limit, skewed
+        # Only an overlap that changes what RENDERS is a contradiction worth
+        # the warning: a filtered-out task is in no section, a claimed task
+        # stays In progress, and a claims-unknown row stays in its degraded
+        # group whatever the frontiers say. A would-be-Ready overlap is skew
+        # REGARDLESS of the limit — the same id in both responses is
+        # contradictory even at the cap.
+        effective_overlap = overlap & {row.task.id for row in parts["ready"]}
+        skewed = bool(effective_overlap) or (
+            not at_limit and bool(parts["unclassified"])
+        )
+        return _FrontierState(
+            snapshot, index, parts, effective_overlap, at_limit, skewed
+        )
 
-    partition, overlap, at_limit, skewed = _partition_state(ready_list, blocked_records)
+    state = _partition_state(open_snapshot, ready_list, blocked_records)
 
-    if frontier_ok and skewed:
-        # Below-limit inconsistency (a workable open task in neither frontier
-        # response, or in both) is read-skew between independent reads. Retry
-        # the pair once; a persisting disagreement is handled conservatively
-        # below rather than trusted.
-        retry_ready, retry_blocked = await asyncio.gather(
+    if frontier_ok and state.skewed:
+        # Read-skew between independent reads (a would-be-Ready task also in
+        # the blocked response, or a below-limit frontier gap). Retry ALL
+        # THREE reads together — the master open list too, or a task that
+        # closed after the stale open read would keep rendering in an open
+        # section alongside its terminal row. Adopt the retried generation
+        # only when every read succeeds (no mixed generations); a persisting
+        # disagreement is handled conservatively below rather than trusted.
+        retry_open, retry_ready, retry_blocked = await asyncio.gather(
+            lithos.list_tasks(status="open", with_claims=True),
             lithos.task_ready(limit=frontier_limit, with_claims=False),
             lithos.task_blocked(limit=frontier_limit),
             return_exceptions=True,
         )
-        if not isinstance(retry_ready, BaseException) and not isinstance(
-            retry_blocked, BaseException
+        if not (
+            isinstance(retry_open, BaseException)
+            or isinstance(retry_ready, BaseException)
+            or isinstance(retry_blocked, BaseException)
         ):
+            open_snapshot = sorted(
+                cast(list[TaskRecord], retry_open),
+                key=lambda task: task.created_at,
+                reverse=True,
+            )
             ready_list = cast(list[TaskRecord], retry_ready)
             blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
-            partition, overlap, at_limit, skewed = _partition_state(
-                ready_list, blocked_records
-            )
+            state = _partition_state(open_snapshot, ready_list, blocked_records)
 
-    reconciliation_pending = frontier_ok and skewed
+    partition = state.partition
+    at_limit = state.at_limit
+    open_index = state.index
+    reconciliation_pending = frontier_ok and state.skewed
     if reconciliation_pending:
-        partition = _reclassify_conservative(partition, overlap)
+        partition = _reclassify_conservative(partition, state.effective_overlap)
+
+    closed: dict[str, list[TaskRecord]] = {}
+    for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
+        rows = _rows_for(status, result, filters, errors)
+        # Exactly-one-row dedup: the (retried) master-open snapshot is the
+        # authority on openness. A task still in the final open snapshot
+        # renders in its open section only; a task absent from it renders in
+        # its terminal section only (that direction is structural — the open
+        # sections derive from the snapshot).
+        closed[status] = [task for task in rows if task.id not in open_index]
 
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
-    for section in WORKABLE_SECTIONS + ("unclassified",):
+    for section in WORKABLE_SECTIONS + ("claims_unknown", "unclassified"):
         sections[section] = partition[section] if show_open else ()
     for status in ("completed", "cancelled"):
         sections[status] = (
@@ -333,13 +366,16 @@ async def load_dashboard(
     else:
         agents = tuple(cast(list[AgentRecord], agents_result))
 
-    open_total = sum(len(partition[section]) for section in WORKABLE_SECTIONS) + len(
-        partition["unclassified"]
+    open_total = (
+        sum(len(partition[section]) for section in WORKABLE_SECTIONS)
+        + len(partition["claims_unknown"])
+        + len(partition["unclassified"])
     )
     summary = TaskSummary(
         in_progress=len(partition["in_progress"]),
         ready=len(partition["ready"]),
         blocked=len(partition["blocked"]),
+        claims_unknown=len(partition["claims_unknown"]),
         unclassified=len(partition["unclassified"]),
         open_total=open_total,
         open_claims=int_stat(stats, "open_claims"),
@@ -363,6 +399,35 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         errors=tuple(errors),
     )
+
+
+class _FrontierState:
+    """One generation of the joined reads: snapshot views + skew verdict."""
+
+    __slots__ = (
+        "snapshot",
+        "index",
+        "partition",
+        "effective_overlap",
+        "at_limit",
+        "skewed",
+    )
+
+    def __init__(
+        self,
+        snapshot: list[TaskRecord],
+        index: Mapping[str, TaskRecord],
+        partition: dict[SectionName, tuple[SectionRow, ...]],
+        effective_overlap: set[str],
+        at_limit: bool,
+        skewed: bool,
+    ) -> None:
+        self.snapshot = snapshot
+        self.index = index
+        self.partition = partition
+        self.effective_overlap = effective_overlap
+        self.at_limit = at_limit
+        self.skewed = skewed
 
 
 def _reclassify_conservative(
