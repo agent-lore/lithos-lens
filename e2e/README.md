@@ -39,6 +39,34 @@ LITHOS_LENS_FAKE_LITHOS=1 LITHOS_LENS_CONFIG=lithos-lens.example.toml \
 
 so you do not need to start a server yourself.
 
+## Screenshot artifacts — the visual-review contract
+
+Alongside the smoke assertions, `screenshots.spec.ts` captures every covered
+page full-page at the four standard viewport widths and writes them to a
+deterministic layout:
+
+```
+e2e/artifacts/<page>-<width>.png
+```
+
+with `<page>` one of `dashboard`, `task-detail`, `note`, `note-missing` and
+`<width>` one of `320`, `768`, `1024`, `1440` — 16 files per run:
+
+```
+e2e/artifacts/dashboard-320.png
+e2e/artifacts/dashboard-768.png
+...
+e2e/artifacts/note-missing-1440.png
+```
+
+**This path layout is a downstream contract**: loom's visual-review flow
+([agent-lore/lithos-loom#283](https://github.com/agent-lore/lithos-loom/issues/283))
+collects the images from `e2e/artifacts/` by exactly this naming scheme —
+change either the directory or the `<page>-<width>.png` pattern only in
+lockstep with that consumer. The directory is gitignored; files are
+overwritten on every run, and each capture test asserts its file exists and is
+non-empty so a silently broken capture fails the suite.
+
 ## Fake-Lithos app mode
 
 Set `LITHOS_LENS_FAKE_LITHOS=1` (any of `1/true/yes/on`) and the application
