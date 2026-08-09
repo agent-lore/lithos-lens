@@ -534,16 +534,17 @@ class ProducedByTask:
 
     @property
     def url(self) -> str:
-        """Task detail URL with the id quoted as a path segment.
+        """Task detail URL with the id quoted as a single path segment.
 
         ``normalize_task`` keeps task ids as arbitrary non-empty strings —
-        nothing excludes URL-reserved characters — so an id like ``task?42`` or
-        ``a#b`` must be percent-encoded or the browser truncates the path at the
-        ``?``/``#`` and routes to the wrong (or no) task. Mirrors
-        ``web.task_detail_url``'s path quoting (minus its query passthrough,
-        which the chip does not want).
+        nothing excludes URL-reserved characters — so an id like ``task?42``,
+        ``a#b`` or ``parent/child`` must be percent-encoded (``safe=""`` so even
+        ``/`` is escaped) or the browser routes to the wrong (or no) task: ``?``
+        and ``#`` truncate the path, and a bare ``/`` would be read as a segment
+        boundary instead of part of the id. ``safe=""`` keeps the whole
+        validated id inside one ``/tasks/{task_id}`` segment.
         """
-        return f"/tasks/{quote(self.task_id)}"
+        return f"/tasks/{quote(self.task_id, safe='')}"
 
 
 @runtime_checkable

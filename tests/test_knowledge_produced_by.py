@@ -119,7 +119,15 @@ def test_produced_by_url_quotes_reserved_characters() -> None:
     href targets the whole validated id, not a truncated prefix."""
     chip = ProducedByTask(task_id="task?42#x", title="X")
     assert chip.url == "/tasks/task%3F42%23x"
-    assert chip.url == f"/tasks/{quote('task?42#x')}"
+    assert chip.url == f"/tasks/{quote('task?42#x', safe='')}"
+
+
+def test_produced_by_url_quotes_slash_as_single_segment() -> None:
+    """A ``/`` in a validated id must be escaped (``safe=''``) so the whole id
+    stays one ``/tasks/{task_id}`` segment rather than splitting into a subpath."""
+    chip = ProducedByTask(task_id="parent/child", title="X")
+    assert chip.url == "/tasks/parent%2Fchild"
+    assert "/tasks/parent/child" not in chip.url
 
 
 # ── /note/{id} rendering ───────────────────────────────────────────────
