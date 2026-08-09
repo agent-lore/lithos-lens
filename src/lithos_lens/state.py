@@ -29,11 +29,19 @@ class HealthSnapshot:
 
 class AppState:
     def __init__(
-        self, config: LithosLensConfig, lithos_client: LithosClientProtocol
+        self,
+        config: LithosLensConfig,
+        lithos_client: LithosClientProtocol,
+        *,
+        events: EventHub | None = None,
     ) -> None:
         self.config = config
         self.lithos_client = lithos_client
-        self.events = EventHub(config.events, config.lithos)
+        # An injected hub (fake-Lithos app mode passes its hermetic
+        # FakeEventHub) replaces the real upstream-dialing one.
+        self.events = (
+            events if events is not None else EventHub(config.events, config.lithos)
+        )
         self.health = HealthSnapshot(llm="disabled" if not config.llm.enabled else "ok")
         self._last_health_probe_at = 0.0
 

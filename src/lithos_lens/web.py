@@ -15,8 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.fake_lithos import (
+    FakeEventHub,
+    FakeLithosClient,
+    fake_lithos_enabled,
+)
 from lithos_lens.knowledge import load_related_panel, render_markdown
-from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
+from lithos_lens.lithos_client import (
+    LithosClient,
+    LithosClientProtocol,
+    LithosToolError,
+)
 from lithos_lens.state import AppState
 from lithos_lens.tasks import (
     default_since,
@@ -37,6 +46,28 @@ logger = logging.getLogger(__name__)
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
 
+def _default_lithos_client(config: LithosLensConfig) -> LithosClientProtocol:
+    """Pick the real client, or the in-memory fake when fake-Lithos mode is on.
+
+    ``LITHOS_LENS_FAKE_LITHOS=1`` boots the app against
+    :class:`~lithos_lens.fake_lithos.FakeLithosClient` so the whole UI is
+    browsable with no Lithos server behind it (used by the ``e2e/`` Playwright
+    smoke suite and for offline demos).
+    """
+    if fake_lithos_enabled():
+        # Loud on purpose: fake mode fabricates task/note data and pins /health
+        # to "ok", so a real Lithos outage would report healthy. Never enable it
+        # against a real deployment; the warning makes an accidental/leaked flag
+        # visible in the logs rather than silently masking a backend.
+        logger.warning(
+            "fake-Lithos app mode is ENABLED (LITHOS_LENS_FAKE_LITHOS): serving "
+            "in-memory demo fixtures and reporting health as ok — do NOT use "
+            "against a real Lithos deployment; it masks backend outages."
+        )
+        return FakeLithosClient(config.lithos)
+    return LithosClient(config.lithos)
+
+
 def create_app(
     config: LithosLensConfig,
     *,
@@ -44,8 +75,14 @@ def create_app(
 ) -> FastAPI:
     """Create the Lithos Lens ASGI app."""
 
-    factory = lithos_client_factory or (lambda cfg: LithosClient(cfg.lithos))
-    state = AppState(config, factory(config))
+    factory = lithos_client_factory or _default_lithos_client
+    # Fake mode must be hermetic: swapping only the client would still leave
+    # the real EventHub dialing the configured Lithos /events URL, so the
+    # in-process hub is injected alongside the fake client.
+    events = (
+        FakeEventHub(config.events, config.lithos) if fake_lithos_enabled() else None
+    )
+    state = AppState(config, factory(config), events=events)
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
     templates.env.filters["display_date"] = format_display_date
@@ -176,11 +213,20 @@ def create_app(
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. The note cannot be loaded."
         else:
+            not_found = False
             try:
                 note_record = await state.lithos_client.read_note(knowledge_id)
+            except LithosToolError as exc:
+                # Lithos answers a missing document with a coded error envelope
+                # (doc_not_found) rather than an empty success, so this — not
+                # the None fallback below — is the production not-found path.
+                if exc.code == "doc_not_found":
+                    not_found = True
+                else:
+                    error = "Could not load this document from Lithos."
             except Exception:
                 error = "Could not load this document from Lithos."
-            if note_record is None and not error:
+            if not_found or (note_record is None and not error):
                 error = "Document not found."
             if note_record is not None:
                 related = await load_related_panel(

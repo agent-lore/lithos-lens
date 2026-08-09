@@ -24,6 +24,6 @@ Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventH
 ## Dependencies
 
 - Depends on: [Config](Config.md)
-- Used by: [State](State.md)
+- Used by: [LithosClient](LithosClient.md), [State](State.md)
 
 [← all generated docs](../README.md)

@@ -1,4 +1,5 @@
-.PHONY: install fmt lint typecheck test check diagrams metrics-history metrics-diff docker-build \
+.PHONY: install fmt lint typecheck test check diagrams metrics-history metrics-diff \
+	run-fake e2e docker-build \
 	docker-up-dev docker-up-prod docker-down-dev docker-down-prod
 
 install:
@@ -36,6 +37,18 @@ metrics-diff:
 	@set -e; tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
 	git show $(or $(BASE),origin/main):docs/generated/metrics.json > $$tmp 2>/dev/null || echo '{}' > $$tmp; \
 	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json
+
+# Run the app in fake-Lithos app mode: the real UI served against in-memory
+# fixtures, no Lithos server required. Open http://127.0.0.1:8000/tasks
+# (override the port with LENS_PORT).
+run-fake:
+	LITHOS_LENS_FAKE_LITHOS=1 LITHOS_LENS_CONFIG=lithos-lens.example.toml uv run lithos-lens
+
+# Playwright end-to-end smoke suite (see e2e/). Installs Node deps + Chromium,
+# then drives the app in fake-Lithos mode. Not part of `make test`/CI's pytest
+# gate — it needs Node and a browser.
+e2e:
+	cd e2e && npm ci && npm run install-browsers && npm test
 
 docker-build:
 	docker build -t lithos-lens:dev -f docker/Dockerfile .

@@ -470,6 +470,18 @@ button,
   padding: 1.5rem;
 }
 
+/* Grid items default to min-width: auto, so one unbreakable token (a full ISO
+   timestamp in the findings timeline / claim chips) sizes the panel's implicit
+   column wider than a 320px viewport. Let detail content shrink to the panel
+   and wrap long meta rows instead of overflowing the page. */
+.detail-panel > * {
+  min-width: 0;
+}
+
+.findings-timeline header {
+  flex-wrap: wrap;
+}
+
 .detail-meta {
   display: flex;
   flex-wrap: wrap;

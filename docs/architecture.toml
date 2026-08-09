@@ -29,7 +29,7 @@ Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m
 Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets)."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
-LithosClient = "MCP-over-SSE client to the Lithos server — health probing, agent registration, and tool calls."
+LithosClient = "Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode."
 Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges from the Lithos 0.4 graph reads)."
@@ -43,7 +43,7 @@ Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
 Web          = ["lithos_lens.web"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
-LithosClient = ["lithos_lens.lithos_client"]
+LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos"]
 Config       = ["lithos_lens.config"]
 Tasks        = ["lithos_lens.tasks"]
 TaskGraph    = ["lithos_lens.task_graph"]
@@ -69,7 +69,7 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 24   # +2 for the K1-S4 Knowledge related-panel seams (LithosClient -> Knowledge, Knowledge -> Tasks); direction: down
+cross_component_edges  = 25   # +1 for the hermetic fake-mode event hub (fake_lithos -> events, inside LithosClient -> Events); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way
@@ -90,4 +90,6 @@ include_modules = [
     "lithos_lens.state",
     "lithos_lens.lithos_client",
 ]
-exclude_modules = ["lithos_lens.config", "lithos_lens.errors"]
+# fake_lithos holds fixture plumbing (FakeEventHub/FakeLithosClient), not
+# domain entities.
+exclude_modules = ["lithos_lens.config", "lithos_lens.errors", "lithos_lens.fake_lithos"]
