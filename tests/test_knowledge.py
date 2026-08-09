@@ -493,3 +493,74 @@ def test_note_page_renders_markdown_body_as_html(
     assert "<script>alert(1)</script>" not in response.text
     assert "&lt;script&gt;" in response.text
     assert 'href="javascript:' not in response.text
+
+
+# --- K1 slice 7: nav enablement + degraded states ---------------------------
+
+
+def test_knowledge_nav_item_is_enabled_link(lithos_lens_config_env: Path) -> None:
+    """The Knowledge nav item is a live link to /knowledge, no longer the
+    disabled placeholder it was since 0.1.0 (user story 17)."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    assert response.status_code == 200
+    assert 'href="/knowledge">Knowledge</a>' in response.text
+    # The old disabled placeholder is gone.
+    assert 'aria-disabled="true" href="#">Knowledge' not in response.text
+
+
+def test_knowledge_nav_active_on_knowledge_landing(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    assert response.status_code == 200
+    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+
+
+def test_knowledge_nav_active_on_note_page(lithos_lens_config_env: Path) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["nav-note"] = NoteRecord(id="nav-note", title="Nav Note", content="Hi.")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/nav-note")
+
+    assert response.status_code == 200
+    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+
+
+def test_tasks_nav_active_leaves_knowledge_inactive(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Active-state is per-view: on /tasks, Tasks is active and Knowledge is
+    an ordinary (inactive) link — the two never light up together."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    assert response.status_code == 200
+    assert '<a class="active" href="/tasks">Tasks</a>' in response.text
+    assert '<a class="" href="/knowledge">Knowledge</a>' in response.text
+
+
+def test_knowledge_nav_stays_live_when_lithos_offline(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Degraded state: a Lithos outage blanks the note body behind a banner,
+    but the chrome (enabled, active Knowledge nav) still renders so the surface
+    stays navigable (user story 18, Lithos-unreachable banner)."""
+    fake = TaskFakeLithosClient(health="degraded")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/whatever")
+
+    assert response.status_code == 200
+    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+    assert "Lithos is offline or degraded" in response.text

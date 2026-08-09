@@ -16,7 +16,7 @@
       </div>
       <nav aria-label="Primary">
         <a class="{{ 'active' if active_view == 'tasks' else '' }}" href="/tasks">Tasks</a>
-        <a aria-disabled="true" href="#">Knowledge</a>
+        <a class="{{ 'active' if active_view == 'knowledge' else '' }}" href="/knowledge">Knowledge</a>
         <a aria-disabled="true" href="#">Settings</a>
       </nav>
     </header>
