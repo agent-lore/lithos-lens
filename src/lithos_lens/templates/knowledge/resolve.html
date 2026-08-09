@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Resolve link | Lithos Lens{% endblock %}
+
+{% block content %}
+  <p><a href="/tasks">&larr; Back to tasks</a></p>
+
+  {% if outcome.kind == "disambiguation" %}
+    <section class="resolve-panel resolve-disambiguation">
+      <header>
+        <p class="eyebrow">Wiki-link</p>
+        <h1>Which &ldquo;{{ outcome.target }}&rdquo;?</h1>
+      </header>
+      <p>This link matches several notes. Pick the one you meant:</p>
+      <ul class="resolve-candidates">
+        {% for candidate in outcome.candidates %}
+          <li>
+            <a href="/note/{{ candidate.id }}">{{ candidate.label }}</a>
+            {% if candidate.path %}
+              <span class="resolve-candidate-path">{{ candidate.path }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <section class="resolve-panel resolve-unresolved">
+      <header>
+        <p class="eyebrow">Wiki-link</p>
+        <h1>Unresolved link</h1>
+      </header>
+      {% if offline %}
+        <p>
+          Lithos is offline or degraded, so
+          <strong>{{ outcome.target }}</strong> can&rsquo;t be resolved right now.
+        </p>
+      {% else %}
+        <p>Nothing resolves <strong>{{ outcome.target }}</strong>.</p>
+      {% endif %}
+      <p>
+        <a href="/knowledge?q={{ outcome.search_query | urlencode }}">
+          Search knowledge for &ldquo;{{ outcome.search_query }}&rdquo;
+        </a>
+      </p>
+    </section>
+  {% endif %}
+{% endblock %}

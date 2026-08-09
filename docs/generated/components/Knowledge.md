@@ -11,12 +11,13 @@ Knowledge-note rendering and normalization (safe server-side markdown + the rela
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | M | 6 | 3 |
+| `lithos_lens.knowledge` | L | 9 | 5 |
 
 ## Public API
 
 ### `lithos_lens.knowledge`
 - def `render_markdown` — Render a note's markdown body to safe HTML.
+- def `wiki_link_href` — URL for a wiki-link's per-click resolver route (§6.3).
 - class `RelatedRef` — A raw neighbor reference from ``lithos_related``, before title lookup.
 - class `RelatedNeighborhood` — One ``lithos_related`` call's worth of a note's neighborhood (raw ids).
 - class `RelatedItem` — A neighbor rendered in the panel — by title when it could be resolved.
@@ -25,6 +26,10 @@ Knowledge-note rendering and normalization (safe server-side markdown + the rela
 - class `KnowledgeLithosClientProtocol` — Subset of Lithos operations required by the knowledge note view.
 - def `load_related_panel` — Load and resolve a note's related panel from one ``lithos_related`` call.
 - def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
+- class `ResolveCandidate` — One plausible target for a wiki-link, shown on the disambiguation page.
+- class `ResolveOutcome` — The result of resolving one wiki-link click.
+- class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
+- def `resolve_wiki_link` — Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3).
 
 ## Dependencies
 

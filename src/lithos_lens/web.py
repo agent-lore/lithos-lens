@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -20,7 +20,12 @@ from lithos_lens.fake_lithos import (
     FakeLithosClient,
     fake_lithos_enabled,
 )
-from lithos_lens.knowledge import load_related_panel, render_markdown
+from lithos_lens.knowledge import (
+    ResolveOutcome,
+    load_related_panel,
+    render_markdown,
+    resolve_wiki_link,
+)
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -42,6 +47,11 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
 STATIC_DIR = PACKAGE_ROOT / "static"
 logger = logging.getLogger(__name__)
+
+# Cap on the recently-updated list shown by /knowledge with no query. A local
+# constant, not config: K1-S6 introduces the [knowledge].recent_limit dial when
+# it builds out the full landing page.
+_KNOWLEDGE_RECENT_LIMIT = 20
 
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
@@ -200,6 +210,91 @@ def create_app(
                 "active_view": "tasks",
                 "detail": detail,
                 "offline": False,
+            },
+        )
+
+    @app.get("/knowledge", response_class=HTMLResponse)
+    async def knowledge(request: Request) -> HTMLResponse:
+        """Knowledge landing: a title search and a recently-updated browse list.
+
+        K1-S2 needs this so the resolver's "unresolved link" page can offer a
+        working ``/knowledge?q=…`` search instead of a dead 404. It is the
+        minimal functional surface — a ``lithos_list`` title/tag search plus a
+        recent list; hybrid ``lithos_search`` cards, snippets, and the nav search
+        box are K1-S6.
+        """
+        query = request.query_params.get("q", "").strip()
+        tag = request.query_params.get("tag", "").strip()
+        snapshot = await state.refresh_health()
+        results = None
+        error = ""
+        if snapshot.lithos != "ok":
+            error = "Lithos is offline or degraded. Knowledge search is unavailable."
+        else:
+            try:
+                # Every branch is capped: a broad ``?q=a`` / ``?tag=`` must not
+                # be able to materialize and render an unbounded result set (the
+                # resolver caps candidates for the same reason).
+                if query:
+                    results = await state.lithos_client.list_notes(
+                        title_contains=query, limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
+                elif tag:
+                    results = await state.lithos_client.list_notes(
+                        tags=[tag], limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
+                else:
+                    results = await state.lithos_client.list_notes(
+                        limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
+            except Exception:
+                error = "Knowledge search is currently unavailable."
+        return templates.TemplateResponse(
+            request,
+            "knowledge/landing.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "query": query,
+                "tag": tag,
+                "results": results,
+                "error": error,
+            },
+        )
+
+    @app.get("/knowledge/resolve")
+    async def knowledge_resolve(request: Request):
+        """Resolve a clicked ``[[wiki-link]]`` per §6.3 and redirect or explain.
+
+        A confident resolution 302-redirects to the note page; an ambiguous one
+        renders a disambiguation page listing candidates; an unresolvable one
+        renders an unresolved page offering a search. When Lithos is offline the
+        link can't be resolved, so the unresolved page is shown directly.
+        """
+        target = request.query_params.get("target", "").strip()
+        from_id = request.query_params.get("from", "").strip()
+        snapshot = await state.refresh_health()
+        offline = snapshot.lithos != "ok"
+        if offline:
+            outcome = ResolveOutcome(
+                kind="unresolved", target=target, search_query=target
+            )
+        else:
+            outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
+            if outcome.kind == "redirect":
+                return RedirectResponse(
+                    f"/note/{quote(outcome.target_id)}", status_code=302
+                )
+        return templates.TemplateResponse(
+            request,
+            "knowledge/resolve.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "outcome": outcome,
+                "offline": offline,
             },
         )
 

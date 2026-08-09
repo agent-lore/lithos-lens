@@ -19,6 +19,7 @@ from lithos_lens.tasks import (
     ClaimRecord,
     FindingRecord,
     NoteRecord,
+    NoteSummary,
     TaskRecord,
     TaskStatusRecord,
 )
@@ -292,8 +293,20 @@ class TaskFakeLithosClient:
             raise RuntimeError("missing note")
         return self.notes[knowledge_id]
 
+    async def read_note_by_path(self, path: str) -> NoteRecord | None:
+        return None
+
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         return RelatedNeighborhood()
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
 
     async def close(self) -> None:
         self.closed = True

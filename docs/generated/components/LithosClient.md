@@ -11,7 +11,7 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.fake_dataset` | S | 1 | 1 |
+| `lithos_lens.fake_dataset` | M | 1 | 1 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | M | 4 | 0 |
 

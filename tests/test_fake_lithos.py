@@ -267,6 +267,43 @@ async def test_fake_client_related_returns_neighborhood_for_fixture_note() -> No
     assert excinfo.value.code == "doc_not_found"
 
 
+@pytest.mark.anyio
+async def test_fake_read_note_by_path_maps_distinct_path_to_note_id() -> None:
+    """The fake dataset carries EXPLICIT note paths distinct from note ids, so
+    the dominant path->UUID wiki workflow is testable realistically (a fake
+    that equates path stem with id makes every path-probe test tautological)."""
+    client = FakeLithosClient()
+
+    note = await client.read_note_by_path("runbooks/influx-rollback.md")
+
+    assert note is not None
+    assert note.id == "note-influx-rollback"
+    # The mapping is genuinely path->id, not an identity: the path stem is NOT
+    # the note id.
+    assert note.id != "runbooks/influx-rollback"
+
+
+@pytest.mark.anyio
+async def test_fake_read_note_by_path_miss_returns_none() -> None:
+    """Probe-miss parity with the concrete client, which maps the
+    doc_not_found envelope to None on this path-probe read."""
+    client = FakeLithosClient()
+
+    assert await client.read_note_by_path("no/such/path.md") is None
+    # A note ID is not a path: the old stem==id shortcut must be gone.
+    assert await client.read_note_by_path("note-influx-rollback.md") is None
+
+
+@pytest.mark.anyio
+async def test_fake_list_notes_rows_carry_their_explicit_paths() -> None:
+    client = FakeLithosClient()
+
+    rows = {row.id: row.path for row in await client.list_notes()}
+
+    assert rows["note-influx-plan"] == "plans/influx-migration.md"
+    assert rows["note-influx-rollback"] == "runbooks/influx-rollback.md"
+
+
 def test_resolve_port_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LENS_PORT", raising=False)
     assert resolve_port() == DEFAULT_PORT

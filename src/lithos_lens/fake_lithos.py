@@ -44,6 +44,7 @@ from lithos_lens.tasks import (
     ClaimRecord,
     FindingRecord,
     NoteRecord,
+    NoteSummary,
     TaskRecord,
     TaskStatusRecord,
 )
@@ -324,6 +325,46 @@ class FakeLithosClient:
             # fan-out's cheap max_length=1 reads) without mutating the fixture.
             note = replace(note, content=note.content[:max_length])
         return note
+
+    async def read_note_by_path(self, path: str) -> NoteRecord | None:
+        """Resolve a note by path for the wiki-link resolver's existence probe.
+
+        Looks the exact path up in the dataset's explicit ``note_paths``
+        mapping (path -> note id — deliberately DISTINCT values, so the
+        path->UUID workflow is exercised for real). A miss returns ``None``
+        (parity with the concrete client, which maps ``doc_not_found`` to
+        ``None`` on this probe), never a raised error.
+        """
+        note_id = self.dataset.note_paths.get(path)
+        if note_id is None:
+            return None
+        return self.dataset.notes.get(note_id)
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        paths_by_id = {
+            note_id: path for path, note_id in self.dataset.note_paths.items()
+        }
+        rows = [
+            NoteSummary(
+                id=note.id,
+                title=note.title,
+                path=paths_by_id.get(note.id, ""),
+                tags=note.tags,
+            )
+            for note in self.dataset.notes.values()
+        ]
+        if title_contains:
+            needle = title_contains.lower()
+            rows = [row for row in rows if needle in row.title.lower()]
+        if tags:
+            rows = [row for row in rows if all(tag in row.tags for tag in tags)]
+        return rows[:limit] if limit is not None else rows
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         """Neighborhood lookup so the K1-S4 related panel lights up.

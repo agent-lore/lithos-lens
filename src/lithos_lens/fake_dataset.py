@@ -54,6 +54,11 @@ class FakeLithosDataset:
 
     tasks: tuple[TaskRecord, ...] = ()
     notes: Mapping[str, NoteRecord] = field(default_factory=dict)
+    # Explicit path -> note-id mapping for path-addressed reads (the wiki
+    # resolver's [[folder/note]] probe). Paths are DISTINCT from note ids on
+    # purpose: a fake that equates path stem with id would make every
+    # path->UUID workflow test tautological.
+    note_paths: Mapping[str, str] = field(default_factory=dict)
     related_neighborhoods: Mapping[str, RelatedNeighborhood] = field(
         default_factory=dict
     )
@@ -89,7 +94,8 @@ def demo_dataset() -> FakeLithosDataset:
             content=(
                 "# Influx migration plan\n\n"
                 "Cut over the ingest path first, then backfill. See "
-                "[[note-influx-rollback]] for the abort route.\n\n"
+                "[[runbooks/influx-rollback|Influx rollback route]] for "
+                "the abort route.\n\n"
                 "- Stage 1: dual-write\n"
                 "- Stage 2: read swap\n"
                 "- Stage 3: decommission\n"
@@ -217,6 +223,10 @@ def demo_dataset() -> FakeLithosDataset:
     return FakeLithosDataset(
         tasks=tasks,
         notes=notes,
+        note_paths={
+            "plans/influx-migration.md": "note-influx-plan",
+            "runbooks/influx-rollback.md": "note-influx-rollback",
+        },
         related_neighborhoods=related_neighborhoods,
         # Graph oracle: `influx-ingest-cutover` is the ready, claimed,
         # in-flight task (the only one carrying claims), so it must sit on the

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Knowledge | Lithos Lens{% endblock %}
+
+{% block content %}
+  <section class="knowledge-landing">
+    <header>
+      <p class="eyebrow">Knowledge</p>
+      <h1>Search notes</h1>
+    </header>
+
+    <form class="knowledge-search" method="get" action="/knowledge" role="search">
+      <input
+        type="search"
+        name="q"
+        value="{{ query }}"
+        placeholder="Search notes by title"
+        aria-label="Search knowledge"
+      >
+      <button type="submit">Search</button>
+    </form>
+
+    {% if error %}
+      <section class="banner banner-warning" role="status">
+        <span>{{ error }}</span>
+      </section>
+    {% elif results is not none %}
+      {% if query %}
+        <h2>Results for &ldquo;{{ query }}&rdquo;</h2>
+      {% elif tag %}
+        <h2>Notes tagged {{ tag | format_tag }}</h2>
+      {% else %}
+        <h2>Recently updated</h2>
+      {% endif %}
+
+      {% if results %}
+        <ul class="knowledge-results">
+          {% for note in results %}
+            <li>
+              <a href="/note/{{ note.id }}">{{ note.title or note.path or note.id }}</a>
+              {% if note.path %}
+                <span class="knowledge-result-path">{{ note.path }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="knowledge-empty">No matching notes.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+{% endblock %}
