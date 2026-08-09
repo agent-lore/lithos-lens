@@ -75,7 +75,7 @@
               <span class="chip note-type">{{ note_meta.note_type }}</span>
             {% endif %}
             {% if note_meta.status %}
-              <span class="chip note-status note-status-{{ note_meta.status }}">{{ note_meta.status }}</span>
+              <span class="chip note-status note-status-{{ note_meta.status_slug }}">{{ note_meta.status }}</span>
             {% endif %}
             {% if note_meta.access_scope %}
               <span class="chip note-scope">{{ note_meta.access_scope }}</span>

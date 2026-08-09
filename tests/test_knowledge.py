@@ -260,6 +260,30 @@ def test_build_note_metadata_contributors_accepts_scalar_and_drops_blanks() -> N
     ).contributors == ("a", "b")
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_slug"),
+    [
+        ("quarantined", "quarantined"),
+        ("active", "active"),
+        ("archived", "archived"),
+        # The known states pass through unchanged, so their stylesheet hooks
+        # still match. A hostile status collapses whitespace/punctuation to a
+        # single token — no second CSS class can be smuggled in via the suffix.
+        ("open banner-warning", "open-banner-warning"),
+        ("a\tb\nc", "a-b-c"),
+        ("UPPER Case", "upper-case"),
+        ("--edge--", "edge"),
+    ],
+)
+def test_build_note_metadata_status_slug_is_a_single_class_token(
+    status: str, expected_slug: str
+) -> None:
+    slug = build_note_metadata(_note(status=status)).status_slug
+    assert slug == expected_slug
+    # The whole point: the slug is one whitespace-free class token.
+    assert " " not in slug and "\t" not in slug and "\n" not in slug
+
+
 def _client(config_path: Path, fake: TaskFakeLithosClient) -> TestClient:
     config = load_config(config_path)
     app = create_app(config, lithos_client_factory=lambda _: fake)
@@ -329,6 +353,38 @@ def test_note_page_marks_quarantined_note_visibly(
         Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
     ).read_text()
     assert ".note-status-quarantined" in css
+
+
+def test_note_page_status_class_cannot_inject_a_second_token(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A hostile ``status`` must not smuggle a second class onto the chip.
+
+    Jinja autoescape stops attribute breakout but leaves whitespace intact, so
+    without slugifying, ``status`` = ``quarantined banner-warning`` would render
+    ``class="chip note-status note-status-quarantined banner-warning"`` — an
+    attacker-chosen class (content spoofing). The slug collapses it to one token.
+    """
+    fake = TaskFakeLithosClient()
+    fake.notes["evil-note"] = NoteRecord(
+        id="evil-note",
+        title="Evil Note",
+        content="Body.",
+        metadata={"status": "quarantined banner-warning"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/evil-note")
+
+    assert response.status_code == 200
+    # The injected token never lands as a standalone class.
+    assert "note-status-quarantined banner-warning" not in response.text
+    assert (
+        'class="chip note-status note-status-quarantined-banner-warning"'
+        in response.text
+    )
+    # Display text is still the raw status (escaped as a text node).
+    assert "quarantined banner-warning" in response.text
 
 
 def test_note_page_omits_chips_when_no_frontmatter(

@@ -13,10 +13,14 @@ template renders only the chips a note actually carries.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from lithos_lens.tasks import NoteRecord
+
+# Anything outside this class-safe set collapses to ``-`` in a status slug.
+_NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,20 @@ class NoteMetadata:
         return bool(
             self.author or self.contributors or self.created_at or self.updated_at
         )
+
+    @property
+    def status_slug(self) -> str:
+        """A class-safe slug of ``status`` for the ``note-status-<slug>`` CSS hook.
+
+        ``status`` is untrusted author frontmatter. The template interpolates it
+        as a *class suffix*, and Jinja autoescape leaves whitespace untouched, so
+        a raw value like ``open banner-warning`` would inject a second,
+        attacker-chosen class token onto the chip (UI/content spoofing — e.g.
+        recolouring a quarantined note to look benign). Lower-casing and
+        collapsing every non ``[a-z0-9]`` run to a single ``-`` yields exactly one
+        token, so no extra class can be smuggled in.
+        """
+        return _NON_SLUG_RE.sub("-", self.status.lower()).strip("-")
 
 
 def build_note_metadata(note: NoteRecord) -> NoteMetadata:
