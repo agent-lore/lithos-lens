@@ -455,6 +455,64 @@ def test_legacy_claimed_state_url_is_ignored(
     assert "Unclaimed open task" in response.text
 
 
+def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (f-001): with a project/tag filter active, a blocked row's
+    chip must still show the *title* of a predecessor that lives in a different
+    project (and is therefore filtered out of the visible sections). The master
+    open list is fetched unfiltered so the join can resolve it."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="blk",
+            title="Blocked in project A",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+            tags=("project:a",),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="pred",
+            title="Predecessor in project B",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T09:00:00+00:00",
+            tags=("project:b",),
+        )
+    )
+    fake.ready_ids = {"pred"}
+    fake.blocked = {
+        "blk": (
+            BlockerRecord(
+                kind="task",
+                task_id="pred",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor pred to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&tag=project:a&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert "Blocked in project A" in blocked_group
+    # The chip carries the predecessor's title, resolved from the unfiltered
+    # snapshot, even though project:b is filtered out of the visible sections.
+    assert "Predecessor in project B" in blocked_group
+    # The predecessor is not itself rendered as a visible row.
+    ready_group = text[text.index('data-task-group="ready"') :]
+    ready_group = ready_group[: ready_group.index("</article>")]
+    assert "Predecessor in project B" not in ready_group
+
+
 def test_blocked_task_shows_predecessor_chip_then_moves_to_ready(
     lithos_lens_config_env: Path,
 ) -> None:

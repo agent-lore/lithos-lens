@@ -175,13 +175,12 @@ async def load_dashboard(
         stats_result,
         agents_result,
     ) = await asyncio.gather(
-        lithos.list_tasks(
-            agent=query_agent,
-            status="open",
-            tags=query_tags,
-            since=filters.since,
-            with_claims=True,
-        ),
+        # The master open list is fetched WITHOUT agent/tag filters: project/
+        # agent/tag filtering is applied client-side (below) so one fetch serves
+        # every projection AND the full snapshot can resolve a blocker chip whose
+        # predecessor is itself filtered out of the visible sections. ``since``
+        # still windows server-side (it is not part of the visible-section join).
+        lithos.list_tasks(status="open", since=filters.since, with_claims=True),
         lithos.task_ready(limit=frontier_limit, with_claims=False),
         lithos.task_blocked(limit=frontier_limit),
         lithos.stats(),
@@ -203,7 +202,17 @@ async def load_dashboard(
         return_exceptions=True,
     )
 
-    open_tasks = _rows_for("open", open_result, filters, errors)
+    # The full open snapshot (unfiltered by agent/tag) resolves blocker-chip
+    # predecessor titles even when a predecessor is filtered out of the visible
+    # sections; ``visible_open`` is the agent/tag-filtered subset that the
+    # sections render.
+    open_snapshot = _sorted_or_error("open", open_result, errors)
+    open_index = {task.id: task for task in open_snapshot}
+    visible_open = [
+        task
+        for task in open_snapshot
+        if matches_filters(task, filters=filters, status="open")
+    ]
 
     ready_ids: set[str] = set()
     if isinstance(ready_result, BaseException):
@@ -222,7 +231,10 @@ async def load_dashboard(
         closed[status] = _rows_for(status, result, filters, errors)
 
     partition = classify_open_tasks(
-        open_tasks, ready_ids=ready_ids, blocked=blocked_records
+        visible_open,
+        ready_ids=ready_ids,
+        blocked=blocked_records,
+        index=open_index,
     )
 
     show_open = "open" in filters.statuses
@@ -271,6 +283,26 @@ async def load_dashboard(
         open_total=open_total,
         truncated=bool(partition["unclassified"]),
         errors=tuple(errors),
+    )
+
+
+def _sorted_or_error(
+    status: TaskStatusName,
+    result: list[TaskRecord] | BaseException,
+    errors: list[str],
+) -> list[TaskRecord]:
+    """Sort one status group newest-first, recording a load error if any.
+
+    No filtering — the open snapshot must stay whole so it can resolve blocker
+    chips; the caller applies ``matches_filters`` to pick the visible subset.
+    """
+    if isinstance(result, BaseException):
+        errors.append(f"Could not load {status} tasks.")
+        return []
+    return sorted(
+        cast(list[TaskRecord], result),
+        key=lambda task: task.created_at,
+        reverse=True,
     )
 
 

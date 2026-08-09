@@ -23,12 +23,19 @@ from lithos_lens.tasks import (
 )
 
 
-def _task(task_id: str, *, task_type: str = "task", claims: Any = None) -> TaskRecord:
+def _task(
+    task_id: str,
+    *,
+    task_type: str = "task",
+    claims: Any = None,
+    tags: tuple[str, ...] = (),
+) -> TaskRecord:
     return TaskRecord(
         id=task_id,
         title=f"Title {task_id}",
         status="open",
         task_type=task_type,
+        tags=tags,
         claims=claims,
     )
 
@@ -152,11 +159,17 @@ class _FrontierFake:
         since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
-        return {
+        # Mirror the real server: agent/tag are filtered upstream when passed.
+        rows = {
             "open": self._open,
             "completed": self._completed,
             "cancelled": self._cancelled,
         }[status or "open"]
+        if agent:
+            rows = [task for task in rows if task.created_by == agent]
+        if tags:
+            rows = [task for task in rows if all(tag in task.tags for tag in tags)]
+        return rows
 
     async def task_ready(
         self,
@@ -210,6 +223,30 @@ def test_load_dashboard_partitions_and_counts() -> None:
     assert data.summary.open_total == 3
     assert data.truncated is False
     assert data.errors == ()
+
+
+def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -> None:
+    """Regression (f-001): the blocker chip must render the predecessor's TITLE
+    even when a tag filter hides the predecessor from the visible sections. The
+    master open list is fetched unfiltered so the join can still resolve it."""
+    blocked = _task("blk", claims=(), tags=("project:a",))
+    pred = _task("pred", claims=(), tags=("project:b",))
+    fake = _FrontierFake(
+        open_tasks=[blocked, pred],
+        ready=[pred],
+        blocked=[
+            _blocked(blocked, BlockerRecord(kind="task", task_id="pred", type="blocks"))
+        ],
+    )
+    filters = TaskFilters(statuses=("open",), tags=("project:a",), agent="", since="")
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "blocked") == ["blk"]
+    (row,) = data.sections["blocked"]
+    assert row.blockers[0].label == "Title pred"
+    assert row.blockers[0].target_id == "pred"
+    # The predecessor itself is filtered out of the visible sections.
+    assert _section_ids(data.sections, "ready") == []
 
 
 def test_load_dashboard_reports_frontier_error_and_holds_rows_unclassified() -> None:
