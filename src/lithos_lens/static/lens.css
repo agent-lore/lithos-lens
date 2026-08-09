@@ -53,6 +53,8 @@ a {
 
 nav {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 1rem;
 }
 
@@ -73,11 +75,17 @@ nav a[aria-disabled="true"] {
 
 .nav-search {
   display: flex;
+  min-width: 0;
 }
 
 .nav-search input {
   width: 12rem;
-  max-width: 40vw;
+  /* Never let the search box push the header past the viewport: at the narrow
+     screenshot widths (320px) the nav wraps and the box shrinks to fit rather
+     than forcing horizontal overflow (the e2e responsive contract asserts
+     scrollWidth <= viewport width). */
+  max-width: 100%;
+  min-width: 0;
   padding: 0.3rem 0.6rem;
   border: 1px solid var(--line);
   border-radius: 0.4rem;
@@ -728,6 +736,16 @@ button,
   .shell-header {
     display: grid;
     gap: 1rem;
+  }
+
+  /* On narrow screens the nav stacks; the search box takes the full row so it
+     can never push the header past the viewport (e2e responsive contract). */
+  .nav-search {
+    width: 100%;
+  }
+
+  .nav-search input {
+    width: 100%;
   }
 
   .task-row-meta {
