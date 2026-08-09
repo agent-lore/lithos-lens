@@ -24,7 +24,8 @@ this directory:
 
 ```sh
 npm install
-npm run install-browsers   # playwright install --with-deps chromium
+npm run install-browsers   # playwright install --with-deps chromium (falls back to a
+                           # browser-only install when sudo can't run non-interactively)
 npm test
 ```
 

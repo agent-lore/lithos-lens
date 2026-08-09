@@ -17,7 +17,11 @@ from fastapi.templating import Jinja2Templates
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.fake_lithos import FakeLithosClient, fake_lithos_enabled
 from lithos_lens.knowledge import load_related_panel, render_markdown
-from lithos_lens.lithos_client import LithosClient, LithosClientProtocol
+from lithos_lens.lithos_client import (
+    LithosClient,
+    LithosClientProtocol,
+    LithosToolError,
+)
 from lithos_lens.state import AppState
 from lithos_lens.tasks import (
     default_since,
@@ -199,11 +203,20 @@ def create_app(
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. The note cannot be loaded."
         else:
+            not_found = False
             try:
                 note_record = await state.lithos_client.read_note(knowledge_id)
+            except LithosToolError as exc:
+                # Lithos answers a missing document with a coded error envelope
+                # (doc_not_found) rather than an empty success, so this — not
+                # the None fallback below — is the production not-found path.
+                if exc.code == "doc_not_found":
+                    not_found = True
+                else:
+                    error = "Could not load this document from Lithos."
             except Exception:
                 error = "Could not load this document from Lithos."
-            if note_record is None and not error:
+            if not_found or (note_record is None and not error):
                 error = "Document not found."
             if note_record is not None:
                 related = await load_related_panel(

@@ -26,6 +26,7 @@ from dataclasses import replace
 from typing import Any
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -104,6 +105,41 @@ class FakeLithosClient:
                     "dual-writing.\n"
                 ),
                 tags=("project:influx", "kind:runbook"),
+            ),
+        }
+
+        # Related-panel (K1-S4) neighborhood fixtures over the two notes.
+        self.related_neighborhoods: dict[str, RelatedNeighborhood] = {
+            "note-influx-plan": RelatedNeighborhood(
+                links=(
+                    RelatedRef(
+                        id="note-influx-rollback", title="Influx rollback route"
+                    ),
+                ),
+                unresolved=("drafts/influx-capacity.md",),
+                edges=(
+                    RelatedRef(
+                        id="note-influx-rollback",
+                        edge_type="contradicts",
+                        weight=0.8,
+                        direction="incoming",
+                        conflict_state="unresolved",
+                    ),
+                ),
+            ),
+            "note-influx-rollback": RelatedNeighborhood(
+                backlinks=(
+                    RelatedRef(id="note-influx-plan", title="Influx migration plan"),
+                ),
+                edges=(
+                    RelatedRef(
+                        id="note-influx-plan",
+                        edge_type="contradicts",
+                        weight=0.8,
+                        direction="outgoing",
+                        conflict_state="unresolved",
+                    ),
+                ),
             ),
         }
 
@@ -372,12 +408,35 @@ class FakeLithosClient:
             AgentRecord(id="worker-b", name="Worker B"),
         ]
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None:
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
         if knowledge_id not in self.notes:
+            # Parity with the concrete client: upstream lithos_read answers a
+            # missing doc with an error envelope code "doc_not_found", which
+            # LithosClient raises as a coded LithosToolError. The note route
+            # maps that code to its not-found banner.
             raise LithosToolError(
-                f"Knowledge '{knowledge_id}' not found.", code="knowledge_not_found"
+                f"Document not found: {knowledge_id}", code="doc_not_found"
             )
-        return self.notes[knowledge_id]
+        note = self.notes[knowledge_id]
+        if max_length is not None:
+            # Mirror upstream truncation (used by the related-panel title
+            # fan-out's cheap max_length=1 reads) without mutating the fixture.
+            note = replace(note, content=note.content[:max_length])
+        return note
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        """Neighborhood fixtures so the K1-S4 related panel lights up.
+
+        The two shipped notes reference each other: the plan wiki-links the
+        rollback route (outgoing link / incoming back-link) and the rollback
+        route carries an unresolved ``contradicts`` edge against the plan, so
+        the panel's direction badges and conflict label all render in fake
+        mode. Unknown ids get an empty neighborhood (an empty graph read, not
+        an error — mirroring lithos_related for a note with no relations).
+        """
+        return self.related_neighborhoods.get(knowledge_id, RelatedNeighborhood())
 
     # ── helpers ────────────────────────────────────────────────────────
 

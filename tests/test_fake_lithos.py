@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.fake_lithos import FakeLithosClient, fake_lithos_enabled
+from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
 from lithos_lens.web import create_app
@@ -113,6 +114,74 @@ def test_fake_mode_note_renders(
         response = client.get("/note/note-influx-plan")
     assert response.status_code == 200
     assert "Influx migration plan" in response.text
+
+
+def test_fake_mode_missing_note_renders_not_found_banner(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fixture finding 'finding-orphan' links knowledge_id='missing-note';
+    opening it must exercise the intended not-found path (the 'Document not
+    found.' banner), not the generic load-failure banner."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/note/missing-note")
+    assert response.status_code == 200
+    assert "Document not found." in response.text
+    assert "Could not load this document from Lithos." not in response.text
+
+
+def test_fake_mode_note_renders_related_panel(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K1-S4 note pages carry the related <aside>; the fake supplies a small
+    neighborhood so the panel (and its direction/conflict badges) light up in
+    fake mode / e2e instead of rendering empty."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/note/note-influx-plan")
+    assert response.status_code == 200
+    assert 'aria-label="Related notes"' in response.text
+    assert "Influx rollback route" in response.text
+    assert 'edge-direction">incoming' in response.text
+    assert "conflict: unresolved" in response.text
+
+
+@pytest.mark.anyio
+async def test_fake_client_read_note_missing_raises_doc_not_found() -> None:
+    """Parity with the concrete client: upstream lithos_read answers a missing
+    doc with an error envelope code 'doc_not_found', which LithosClient raises
+    as a coded LithosToolError — the fake must speak the same contract."""
+    client = FakeLithosClient()
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.read_note("missing-note")
+    assert excinfo.value.code == "doc_not_found"
+
+
+@pytest.mark.anyio
+async def test_fake_client_read_note_honors_max_length() -> None:
+    client = FakeLithosClient()
+    note = await client.read_note("note-influx-plan", max_length=1)
+    assert note is not None
+    assert len(note.content) == 1
+    # Truncation must not mutate the stored fixture.
+    full = await client.read_note("note-influx-plan")
+    assert full is not None and len(full.content) > 1
+
+
+@pytest.mark.anyio
+async def test_fake_client_related_returns_neighborhood_for_fixture_note() -> None:
+    client = FakeLithosClient()
+    neighborhood = await client.related("note-influx-plan")
+    assert any(ref.id == "note-influx-rollback" for ref in neighborhood.links)
+    assert any(
+        ref.conflict_state == "unresolved" and ref.direction == "incoming"
+        for ref in neighborhood.edges
+    )
+    # Unknown note ids have no neighborhood, mirroring an empty graph read.
+    empty = await client.related("missing-note")
+    assert empty == RelatedNeighborhood()
 
 
 def test_resolve_port_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:

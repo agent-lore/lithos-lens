@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **24** (28 module-level)
+- Cross-component edges: **24** (29 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 7 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Web -> Config, Web -> Knowledge, Web -> Tasks, Web -> Telemetry)
@@ -39,23 +39,23 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 1 | 1 | 0.50 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
 | Knowledge | 1 | 411 | 325 | 2 | 1 | 0.33 | 11 (`lithos_lens.knowledge._normalize_edges`) | 1 |
-| LithosClient | 2 | 965 | 818 | 2 | 4 | 0.67 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 1 |
+| LithosClient | 2 | 1024 | 867 | 2 | 4 | 0.67 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 1 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 63 | 50 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.refresh_health`) | 0 |
 | TaskGraph | 1 | 119 | 88 | 1 | 1 | 0.50 | 8 (`lithos_lens.task_graph.normalize_edge`) | 0 |
 | Tasks | 1 | 640 | 521 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 5 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 327 | 289 | 1 | 6 | 0.86 | 8 (`lithos_lens.web.create_app.note`) | 0 |
+| Web | 1 | 340 | 299 | 1 | 6 | 0.86 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **15**, lines: **3639**, SLOC: **3019**
+- Modules: **15**, lines: **3711**, SLOC: **3078**
 - Largest module: `lithos_lens.config` (725 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **174**, cyclomatic > 10: **8**
+- Functions: **175**, cyclomatic > 10: **9**
 
 Top 10 most complex functions:
 
@@ -69,8 +69,8 @@ Top 10 most complex functions:
 | 11 | `lithos_lens.knowledge._normalize_edges` |
 | 11 | `lithos_lens.tasks._enrich_open_tasks` |
 | 11 | `lithos_lens.tasks.normalize_task_status` |
+| 11 | `lithos_lens.web.create_app.note` |
 | 10 | `lithos_lens.events.parse_lithos_sse_frame` |
-| 10 | `lithos_lens.fake_lithos.FakeLithosClient.task_children` |
 
 ## Seams
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **24** (25 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.49** (5408 test lines / 3639 source lines)
+- Test-to-source line ratio: **1.48** (5477 test lines / 3711 source lines)
