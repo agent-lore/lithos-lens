@@ -75,13 +75,22 @@ def test_render_markdown_falls_back_to_escaped_plaintext_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """REQUIREMENTS §6.2: a parse failure yields escaped plaintext, never raw
-    passthrough."""
+    passthrough.
 
-    def boom(_text: str) -> str:
+    Patches ``MARKDOWN.parse`` — the first call in ``render_markdown``'s try
+    block since the wiki-link splice moved rendering to ``parse`` +
+    ``renderer.render`` (patching the old ``.render`` seam no longer fires).
+    The ``markdown-fallback`` marker assertion pins that the except path
+    actually ran: without it this test passes vacuously through the normal
+    path, because the renderer escapes raw HTML anyway.
+    """
+
+    def boom(*_args: object, **_kwargs: object) -> list[object]:
         raise RuntimeError("parser exploded")
 
-    monkeypatch.setattr(knowledge.MARKDOWN, "render", boom)
+    monkeypatch.setattr(knowledge.MARKDOWN, "parse", boom)
     html = render_markdown("# Title\n\n<script>alert(1)</script>")
+    assert 'class="markdown-fallback"' in html
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
