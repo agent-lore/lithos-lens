@@ -498,8 +498,8 @@ class LithosClient:
         """List notes via ``lithos_list`` (wiki-link title disambiguation).
 
         Only the arguments an active filter needs are sent; ``lithos_list``
-        returns lightweight rows (``id``/``title``/``path``/``updated``/``tags``,
-        no body).
+        answers ``{"items": [...], "total": ...}`` with lightweight rows
+        (``id``/``title``/``path``/``updated``/``tags``, no body).
         """
         arguments: dict[str, Any] = {}
         if title_contains:
@@ -510,14 +510,12 @@ class LithosClient:
             arguments["limit"] = limit
         payload = await self._call_tool("lithos_list", arguments)
         _raise_for_error(payload)
-        # lithos_list's row container has drifted across versions; accept the
-        # documented aliases rather than pinning one key.
-        rows: Any = (
-            payload.get("notes")
-            or payload.get("documents")
-            or payload.get("results")
-            or []
-        )
+        # lithos_list returns {"items": [...], "total": ...} — "items" has been
+        # its one and only container key since the very first implementation
+        # (verified against the Lithos source and its full git history; the
+        # previously accepted "notes"/"documents"/"results" aliases never
+        # existed — "results" is lithos_search's key).
+        rows: Any = payload.get("items") or []
         return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
