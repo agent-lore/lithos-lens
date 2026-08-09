@@ -101,6 +101,44 @@ def demo_dataset() -> FakeLithosDataset:
                 "- Stage 3: decommission\n"
             ),
             tags=("project:influx", "kind:plan"),
+            # Representative §6.4 frontmatter so chips / lede / supersedes /
+            # authorship all render in fake mode and the browser suites
+            # actually exercise the K1-S3 surface. Scope is deliberately
+            # non-shared: a "shared" scope renders no chip.
+            metadata={
+                "note_type": "summary",
+                "status": "active",
+                "confidence": 0.9,
+                "access_scope": "task",
+                "namespace": "plans",
+                "supersedes": "note-influx-legacy-ingest",
+                "summaries": {
+                    "short": (
+                        "Cut ingest over first, backfill after; "
+                        "abort via the feature gate."
+                    )
+                },
+                "author": "worker-a",
+                "contributors": ["planner", "worker-b"],
+                "created_at": "2026-08-01T09:00:00+00:00",
+                "updated_at": "2026-08-06T10:00:00+00:00",
+            },
+        ),
+        "note-influx-legacy-ingest": NoteRecord(
+            id="note-influx-legacy-ingest",
+            title="Legacy ingest approach",
+            content=(
+                "# Legacy ingest approach\n\n"
+                "Kept for history; superseded by the migration plan.\n"
+            ),
+            tags=("project:influx", "kind:plan"),
+            # The quarantined fixture: exercises the colour-coded status chip
+            # (and its computed-style browser assertion + screenshot capture).
+            metadata={
+                "note_type": "hypothesis",
+                "status": "quarantined",
+                "confidence": 0.2,
+            },
         ),
         "note-influx-rollback": NoteRecord(
             id="note-influx-rollback",
@@ -225,6 +263,7 @@ def demo_dataset() -> FakeLithosDataset:
         notes=notes,
         note_paths={
             "plans/influx-migration.md": "note-influx-plan",
+            "plans/legacy-ingest.md": "note-influx-legacy-ingest",
             "runbooks/influx-rollback.md": "note-influx-rollback",
         },
         related_neighborhoods=related_neighborhoods,

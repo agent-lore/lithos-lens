@@ -449,7 +449,10 @@ button,
 }
 
 /* Metadata chips + lede (§6.4). Neutral chips by default; the status chip is
-   colour-coded so a quarantined note reads as quarantined at a glance. */
+   colour-coded so a quarantined note reads as quarantined at a glance. Only
+   the known statuses below get colours — an UNKNOWN status renders as a
+   neutral chip ON PURPOSE: lens is a knowledge-hygiene surface, so odd
+   frontmatter should be visible, not hidden. */
 .note-chips {
   display: flex;
   flex-wrap: wrap;

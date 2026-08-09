@@ -180,7 +180,7 @@ def test_build_note_metadata_projects_frontmatter_fields() -> None:
             note_type="observation",
             status="active",
             confidence=0.85,
-            access_scope="shared",
+            access_scope="task",
             namespace="runbooks",
             supersedes="old-note-id",
             author="agent-7",
@@ -193,7 +193,8 @@ def test_build_note_metadata_projects_frontmatter_fields() -> None:
     assert meta.note_type == "observation"
     assert meta.status == "active"
     assert meta.confidence == "85%"
-    assert meta.access_scope == "shared"
+    # "shared" would project to "" (no chip) — covered by the scope-chip test.
+    assert meta.access_scope == "task"
     assert meta.namespace == "runbooks"
     assert meta.supersedes == "old-note-id"
     assert meta.author == "agent-7"
@@ -246,6 +247,26 @@ def test_build_note_metadata_confidence_formatting(
     value: object, expected: str
 ) -> None:
     assert build_note_metadata(_note(confidence=value)).confidence == expected
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        # "shared" is the default visibility: no chip (PRD user story — "access
+        # scope WHEN NOT SHARED"). Non-shared scopes are the signal worth a chip.
+        ("shared", ""),
+        ("task", "task"),
+        ("agent_private", "agent_private"),
+        # An odd variant stays VISIBLE (knowledge-hygiene surface): only the
+        # exact "shared" value is the quiet default.
+        ("Shared", "Shared"),
+        ("", ""),
+    ],
+)
+def test_build_note_metadata_scope_chip_only_when_not_shared(
+    scope: str, expected: str
+) -> None:
+    assert build_note_metadata(_note(access_scope=scope)).access_scope == expected
 
 
 def test_build_note_metadata_namespace_falls_back_to_path_directory() -> None:
@@ -313,10 +334,13 @@ def test_note_page_renders_metadata_chips_lede_and_tag_links(
             "note_type": "summary",
             "status": "active",
             "confidence": 0.9,
-            "access_scope": "shared",
+            "access_scope": "task",
             "namespace": "runbooks",
             "supersedes": "prior-note",
             "summaries": {"short": "The one-sentence gist."},
+            "author": "worker-a",
+            "contributors": ["planner", "worker-b"],
+            "created_at": "2026-08-01T09:00:00+00:00",
         },
     )
 
@@ -325,19 +349,46 @@ def test_note_page_renders_metadata_chips_lede_and_tag_links(
 
     assert response.status_code == 200
     body = response.text
-    # Chips for each frontmatter field.
+    # Chips for each frontmatter field (scope shows because it is NOT shared).
     assert "summary" in body
-    assert "shared" in body
+    assert 'class="chip note-scope">task<' in body
     assert "runbooks" in body
     assert "90%" in body
-    # Lede rendered above the body.
+    # Authorship renders in the HTML, not just the view model.
+    assert "By worker-a" in body
+    assert "Contributors: planner, worker-b" in body
+    assert "Created 2026-08-01T09:00:00+00:00" in body
+    # Lede rendered above the body — and literally BEFORE it in document order.
     assert 'class="note-lede"' in body
     assert "The one-sentence gist." in body
+    assert body.index('class="note-lede"') < body.index('class="markdown-body"')
     # Supersedes renders a link to the superseded note.
     assert 'href="/note/prior-note"' in body
     # Tags link to the knowledge list filtered by that tag.
     assert 'href="/knowledge?tag=project%3Ainflux"' in body
     assert 'href="/knowledge?tag=kind%3Aplan"' in body
+
+
+def test_note_page_omits_scope_chip_for_shared_notes(
+    lithos_lens_config_env: Path,
+) -> None:
+    """PRD user story: "access scope WHEN NOT SHARED" — shared is the default
+    visibility, so it earns no chip."""
+    fake = TaskFakeLithosClient()
+    fake.notes["shared-note"] = NoteRecord(
+        id="shared-note",
+        title="Shared Note",
+        content="Body.",
+        metadata={"access_scope": "shared", "note_type": "summary"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/shared-note")
+
+    assert response.status_code == 200
+    assert "note-scope" not in response.text
+    # Other chips still render — the note is not chip-less.
+    assert 'class="chip note-type">summary<' in response.text
 
 
 def test_note_page_marks_quarantined_note_visibly(
@@ -358,11 +409,18 @@ def test_note_page_marks_quarantined_note_visibly(
     # The status chip carries a status-specific class the stylesheet colours,
     # so a quarantined note is visibly quarantined (§6.4 acceptance).
     assert "note-status-quarantined" in response.text
-    # ...and the class is not inert: the stylesheet actually styles it.
+    # ...and the stylesheet carries a real rule for it, with the declarations
+    # that make it read as quarantined (highlighted background + heavy weight).
+    # The browser-truth check — computed style on the rendered chip — lives in
+    # the Playwright suite; this guards the rule itself against deletion.
     css = (
         Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
     ).read_text()
-    assert ".note-status-quarantined" in css
+    rule = re.search(r"\.note-status-quarantined\s*\{([^}]*)\}", css)
+    assert rule is not None, "lens.css lost the .note-status-quarantined rule"
+    declarations = rule.group(1)
+    assert "background" in declarations
+    assert "font-weight" in declarations
 
 
 def test_note_page_status_class_cannot_inject_a_second_token(

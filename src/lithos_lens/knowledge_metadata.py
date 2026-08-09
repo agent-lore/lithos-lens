@@ -78,7 +78,7 @@ def build_note_metadata(note: NoteRecord) -> NoteMetadata:
         note_type=_meta_str(meta, "note_type"),
         status=_meta_str(meta, "status"),
         confidence=_format_confidence(meta.get("confidence")),
-        access_scope=_meta_str(meta, "access_scope"),
+        access_scope=_format_scope(_meta_str(meta, "access_scope")),
         namespace=_derive_namespace(meta),
         lede=_summary_short(meta.get("summaries")),
         supersedes=_meta_str(meta, "supersedes"),
@@ -93,6 +93,18 @@ def _meta_str(meta: dict[str, Any], key: str) -> str:
     """A trimmed string frontmatter value, or empty for a missing/non-string."""
     value = meta.get(key)
     return value.strip() if isinstance(value, str) else ""
+
+
+def _format_scope(value: str) -> str:
+    """The access-scope chip value — empty for the ``shared`` default (§6.4).
+
+    The PRD user story is explicit: "access scope WHEN NOT SHARED". ``shared``
+    is the default visibility, so a chip for it is noise; ``task`` /
+    ``agent_private`` (and any other non-shared value — odd variants stay
+    visible, this is a knowledge-hygiene surface) are the signal worth a chip.
+    Only the exact lowercase ``shared`` is the quiet default.
+    """
+    return "" if value == "shared" else value
 
 
 def _format_confidence(value: Any) -> str:

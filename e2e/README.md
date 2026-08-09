@@ -51,8 +51,9 @@ deterministic layout:
 e2e/artifacts/<page>-<width>.png
 ```
 
-with `<page>` one of `dashboard`, `task-detail`, `note`, `note-missing` and
-`<width>` one of `320`, `768`, `1024`, `1440` — 16 files per run:
+with `<page>` one of `dashboard`, `task-detail`, `note`, `note-quarantined`,
+`note-missing` and `<width>` one of `320`, `768`, `1024`, `1440` — 20 files
+per run:
 
 ```
 e2e/artifacts/dashboard-320.png
