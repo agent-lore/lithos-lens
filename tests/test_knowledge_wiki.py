@@ -249,6 +249,70 @@ def test_resolver_survives_related_failure() -> None:
     assert outcome.target_id == "one"
 
 
+# ── security: path-traversal probe guard (security/f-001) ──────────────
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "../../../secret/note",
+        "/etc/passwd",
+        "a/../../b",
+        "notes\\..\\secret",
+        "note\x00.md",
+    ],
+)
+def test_resolver_never_path_probes_traversal_or_absolute_targets(
+    target: str,
+) -> None:
+    # A traversal/absolute target must NOT be forwarded to read_note_by_path:
+    # even though this fake would "find" a note, the probe is skipped so it
+    # can't leak an id (or act as an existence oracle) via the redirect.
+    fake = ResolverFake(
+        path_hit=NoteRecord(id="leaked-secret", title="Secret", content="")
+    )
+
+    outcome = _run(resolve_wiki_link(fake, target, "src"))
+
+    assert fake.path_calls == []
+    assert outcome.kind == "unresolved"
+
+
+def test_resolver_still_probes_ordinary_dotted_names() -> None:
+    # The guard rejects ".." path *segments*, not any dot — a plain dotted name
+    # must still be probed so real notes keep resolving.
+    fake = ResolverFake(
+        path_hit=NoteRecord(id="v1.2-notes", title="Release", content="")
+    )
+
+    outcome = _run(resolve_wiki_link(fake, "releases/v1.2-notes", "src"))
+
+    assert fake.path_calls == ["releases/v1.2-notes.md"]
+    assert outcome.kind == "redirect"
+
+
+# ── security: linear wiki-link scan (security/f-002) ───────────────────
+
+
+def test_bracket_run_renders_no_wiki_link_and_stays_fast() -> None:
+    """Regression for the O(n²) backtracking DoS: a long run of ``[`` once
+    presented a ``[[`` start at every offset, so the wiki-link pass backtracked
+    quadratically (the finding measured ~8.5 s for 30 KB). Excluding ``[`` from
+    the target class makes each start fail in O(1). Black-box through the public
+    render so the guard is pinned where it's actually reached — a viewer request
+    to render a note body — and asserts both that no anchor is produced and that
+    the render doesn't blow up."""
+    import time
+
+    body = "[" * 30_000
+    start = time.perf_counter()
+    html = render_markdown(body, from_id="src")
+    elapsed = time.perf_counter() - start
+
+    assert "wiki-link" not in html
+    assert elapsed < 2.0  # pre-fix: several seconds and rising with n²
+
+
 # ── resolver route integration ─────────────────────────────────────────
 
 
@@ -368,3 +432,57 @@ def test_note_body_wiki_link_points_at_resolver(lithos_lens_config_env: Path) ->
     assert 'href="/knowledge/resolve?target=note-influx-rollback&amp;from=root"' in (
         response.text
     )
+
+
+# ── /knowledge landing (correctness/f-001: search link is not a dead end) ──
+
+
+def test_unresolved_search_link_reaches_a_real_search_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    # The resolver's unresolved page advertises /knowledge?q=<target>; that
+    # target must render a real search surface, not a 404 dead end.
+    notes = {
+        "influx-plan": NoteRecord(
+            id="influx-plan", title="Influx migration plan", content=""
+        )
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=Influx", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "Results for" in response.text
+    assert "Influx migration plan" in response.text
+    assert "/note/influx-plan" in response.text
+
+
+def test_knowledge_landing_without_query_lists_recent(
+    lithos_lens_config_env: Path,
+) -> None:
+    notes = {
+        "a": NoteRecord(id="a", title="Note A", content=""),
+        "b": NoteRecord(id="b", title="Note B", content=""),
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    assert response.status_code == 200
+    assert "Recently updated" in response.text
+    assert "Note A" in response.text
+    assert "Note B" in response.text
+
+
+def test_knowledge_landing_empty_query_result(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=no-such-note")
+
+    assert response.status_code == 200
+    assert "No matching notes." in response.text

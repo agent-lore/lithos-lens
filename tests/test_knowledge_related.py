@@ -29,6 +29,7 @@ from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
     NoteRecord,
+    NoteSummary,
     SectionState,
     TaskRecord,
     TaskStatusRecord,
@@ -77,11 +78,23 @@ class KnowledgeFakeLithosClient:
             return None
         return NoteRecord(id=knowledge_id, title=title, content="")
 
+    async def read_note_by_path(self, path: str) -> NoteRecord | None:
+        return None
+
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         self.related_calls.append(knowledge_id)
         if self.related_error:
             raise RuntimeError("related unavailable")
         return self.neighborhood
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
 
     # ── unused task surface (present only to satisfy LithosClientProtocol) ──
 

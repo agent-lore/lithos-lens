@@ -95,7 +95,13 @@ def render_markdown(text: str, from_id: str = "") -> str:
 # the token level — only inside *text* tokens of the parsed stream — never by
 # regexing the raw markdown, because ``[[…]]``-shaped text inside a code fence
 # or inline code is a separate token type and must stay literal (§6.3).
-_WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+#
+# ``[`` is excluded from both inner classes (not just ``]``/``|``). Note bodies
+# are never size-bounded, so a long run of ``[`` would otherwise present a
+# ``[[`` start at every offset and force O(n²) backtracking (a CPU-DoS on
+# ``/note/{id}`` render). Excluding ``[`` makes every such start fail in O(1),
+# and no legitimate wiki target/display contains a literal ``[``.
+_WIKI_LINK_RE = re.compile(r"\[\[([^\]\[|]+)(?:\|([^\]\[]+))?\]\]")
 
 
 def wiki_link_href(target: str, from_id: str) -> str:
@@ -597,15 +603,36 @@ def _last_component(target: str) -> str:
     return target.rstrip("/").split("/")[-1] or target
 
 
+def _is_unsafe_probe_target(target: str) -> bool:
+    """Whether ``target`` must not be forwarded to a path-addressed read.
+
+    ``target`` is an unauthenticated query param, so a raw ``target + ".md"``
+    probe would turn ``GET /knowledge/resolve`` into a path-traversal existence
+    oracle against ``lithos_read(path=…)`` — and a hit escalates to full-content
+    disclosure via the ``302 /note/{id}`` redirect (CWE-22 / CWE-639). Reject
+    traversal (``..`` path segments), absolute paths (leading ``/`` or a
+    backslash), and NUL; such a target simply misses the probe and falls through
+    to the title search, which only ever passes the last path component.
+    """
+    if "\x00" in target or "\\" in target:
+        return True
+    if target.startswith("/"):
+        return True
+    return ".." in target.split("/")
+
+
 async def _probe_path(
     lithos: WikiResolverClientProtocol, target: str
 ) -> NoteRecord | None:
     """Cheap ``lithos_read(path=target + ".md", max_length=1)`` existence probe.
 
+    Traversal/absolute targets are refused before the probe (treated as a miss).
     A miss (the common case for a title-style target) is not an error here: any
     failure falls through to the candidate-gathering step, so it degrades to
     ``None`` rather than propagating.
     """
+    if _is_unsafe_probe_target(target):
+        return None
     path = target if target.endswith(".md") else f"{target}.md"
     try:
         return await lithos.read_note_by_path(path)

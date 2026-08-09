@@ -48,6 +48,11 @@ TEMPLATE_DIR = PACKAGE_ROOT / "templates"
 STATIC_DIR = PACKAGE_ROOT / "static"
 logger = logging.getLogger(__name__)
 
+# Cap on the recently-updated list shown by /knowledge with no query. A local
+# constant, not config: K1-S6 introduces the [knowledge].recent_limit dial when
+# it builds out the full landing page.
+_KNOWLEDGE_RECENT_LIMIT = 20
+
 LithosClientFactory = Callable[[LithosLensConfig], LithosClientProtocol]
 
 
@@ -205,6 +210,49 @@ def create_app(
                 "active_view": "tasks",
                 "detail": detail,
                 "offline": False,
+            },
+        )
+
+    @app.get("/knowledge", response_class=HTMLResponse)
+    async def knowledge(request: Request) -> HTMLResponse:
+        """Knowledge landing: a title search and a recently-updated browse list.
+
+        K1-S2 needs this so the resolver's "unresolved link" page can offer a
+        working ``/knowledge?q=…`` search instead of a dead 404. It is the
+        minimal functional surface — a ``lithos_list`` title/tag search plus a
+        recent list; hybrid ``lithos_search`` cards, snippets, and the nav search
+        box are K1-S6.
+        """
+        query = request.query_params.get("q", "").strip()
+        tag = request.query_params.get("tag", "").strip()
+        snapshot = await state.refresh_health()
+        results = None
+        error = ""
+        if snapshot.lithos != "ok":
+            error = "Lithos is offline or degraded. Knowledge search is unavailable."
+        else:
+            try:
+                if query:
+                    results = await state.lithos_client.list_notes(title_contains=query)
+                elif tag:
+                    results = await state.lithos_client.list_notes(tags=[tag])
+                else:
+                    results = await state.lithos_client.list_notes(
+                        limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
+            except Exception:
+                error = "Knowledge search is currently unavailable."
+        return templates.TemplateResponse(
+            request,
+            "knowledge/landing.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "query": query,
+                "tag": tag,
+                "results": results,
+                "error": error,
             },
         )
 
