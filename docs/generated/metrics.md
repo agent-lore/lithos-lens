@@ -38,8 +38,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 2 | 1 | 0.33 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
-| Knowledge | 1 | 691 | 528 | 2 | 1 | 0.33 | 11 (`lithos_lens.knowledge._normalize_edges`) | 1 |
-| LithosClient | 3 | 1336 | 1122 | 2 | 5 | 0.71 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 1 |
+| Knowledge | 1 | 715 | 543 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
+| LithosClient | 3 | 1354 | 1133 | 2 | 5 | 0.71 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 2 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 1 | 119 | 88 | 1 | 1 | 0.50 | 8 (`lithos_lens.task_graph.normalize_edge`) | 0 |
@@ -49,13 +49,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **16**, lines: **4444**, SLOC: **3655**
+- Modules: **16**, lines: **4486**, SLOC: **3681**
 - Largest module: `lithos_lens.config` (725 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **208**, cyclomatic > 10: **9**
+- Functions: **208**, cyclomatic > 10: **11**
 
 Top 10 most complex functions:
 
@@ -65,12 +65,12 @@ Top 10 most complex functions:
 | 23 | `lithos_lens.tasks.normalize_task` |
 | 20 | `lithos_lens.tasks.load_dashboard` |
 | 16 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
+| 13 | `lithos_lens.knowledge._gather_candidates` |
 | 12 | `lithos_lens.tasks._matches_filters` |
+| 11 | `lithos_lens.fake_lithos.FakeLithosClient.list_notes` |
 | 11 | `lithos_lens.knowledge._normalize_edges` |
 | 11 | `lithos_lens.tasks._enrich_open_tasks` |
 | 11 | `lithos_lens.tasks.normalize_task_status` |
-| 11 | `lithos_lens.web.create_app.note` |
-| 10 | `lithos_lens.events.parse_lithos_sse_frame` |
 
 ## Seams
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **27** (26 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.47** (6521 test lines / 4444 source lines)
+- Test-to-source line ratio: **1.51** (6762 test lines / 4486 source lines)

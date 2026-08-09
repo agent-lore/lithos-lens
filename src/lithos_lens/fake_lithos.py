@@ -329,14 +329,16 @@ class FakeLithosClient:
     async def read_note_by_path(self, path: str) -> NoteRecord | None:
         """Resolve a note by path for the wiki-link resolver's existence probe.
 
-        The dataset keys notes by id, so the path stem (``folder/note`` from
-        ``folder/note.md``) is matched against note ids — enough for the demo's
-        ``[[note-influx-rollback]]`` style links to resolve. A miss returns
-        ``None`` (parity with the concrete client, which maps ``doc_not_found``
-        to ``None`` on this probe), never a raised error.
+        Looks the exact path up in the dataset's explicit ``note_paths``
+        mapping (path -> note id — deliberately DISTINCT values, so the
+        path->UUID workflow is exercised for real). A miss returns ``None``
+        (parity with the concrete client, which maps ``doc_not_found`` to
+        ``None`` on this probe), never a raised error.
         """
-        stem = path[:-3] if path.endswith(".md") else path
-        return self.dataset.notes.get(stem) or self.dataset.notes.get(path)
+        note_id = self.dataset.note_paths.get(path)
+        if note_id is None:
+            return None
+        return self.dataset.notes.get(note_id)
 
     async def list_notes(
         self,
@@ -345,8 +347,16 @@ class FakeLithosClient:
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]:
+        paths_by_id = {
+            note_id: path for path, note_id in self.dataset.note_paths.items()
+        }
         rows = [
-            NoteSummary(id=note.id, title=note.title, path=note.id, tags=note.tags)
+            NoteSummary(
+                id=note.id,
+                title=note.title,
+                path=paths_by_id.get(note.id, ""),
+                tags=note.tags,
+            )
             for note in self.dataset.notes.values()
         ]
         if title_contains:

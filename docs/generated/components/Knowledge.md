@@ -11,7 +11,7 @@ Knowledge-note rendering and normalization (safe server-side markdown + the rela
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | M | 9 | 5 |
+| `lithos_lens.knowledge` | L | 9 | 5 |
 
 ## Public API
 
