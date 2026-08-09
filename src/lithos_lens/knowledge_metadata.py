@@ -98,10 +98,15 @@ def _meta_str(meta: dict[str, Any], key: str) -> str:
 def _format_confidence(value: Any) -> str:
     """Render a ``0..1`` confidence fraction as a whole percentage (§6.4).
 
-    Lithos stores confidence as a fraction; anything non-numeric (or a bool,
-    which is an ``int`` subclass) renders no chip rather than a nonsense value.
+    Lithos stores confidence as a fraction; frontmatter is untrusted input, so
+    anything non-numeric (or a bool, which is an ``int`` subclass) and any
+    out-of-range value renders no chip rather than a nonsense/misleading one
+    (``2`` must not become a "200%" chip). The range check also rejects
+    NaN/inf, which would otherwise make ``round()`` raise mid-render.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return ""
+    if not 0 <= value <= 1:
         return ""
     return f"{round(value * 100)}%"
 

@@ -230,6 +230,16 @@ def test_build_note_metadata_lede_only_from_summaries_short() -> None:
         (True, ""),
         ("0.85", ""),
         (None, ""),
+        # Out-of-range fractions are malformed frontmatter (untrusted input):
+        # no chip, rather than a misleading "200%" / "-50%".
+        (2, ""),
+        (1.5, ""),
+        (-0.5, ""),
+        (-1, ""),
+        # NaN/inf are out-of-range too (and would otherwise make round() raise
+        # mid-render); the range guard rejects them the same way.
+        (float("nan"), ""),
+        (float("inf"), ""),
     ],
 )
 def test_build_note_metadata_confidence_formatting(
