@@ -730,13 +730,23 @@ def test_note_page_flows_raw_related_payload_to_html(
             _edge_row(edge_id="e-1", from_id="root", to_id="dup-1", type="supports"),
             _edge_row(edge_id="e-2", from_id="root", to_id="dup-1", type="contradicts"),
         ],
-        "incoming": [],
+        "incoming": [
+            _edge_row(
+                edge_id="e-3",
+                from_id="challenger",
+                to_id="root",
+                type="contradicts",
+                weight=0.9,
+                conflict_state="unresolved",
+            )
+        ],
     }
     stub = _StubLithosClient(
         related_payload=payload,
         notes={
             "root": {"id": "root", "title": "Root Note", "content": "Body text."},
             "dup-1": {"id": "dup-1", "title": "Dup Note", "content": ""},
+            "challenger": {"id": "challenger", "title": "Challenger Note"},
         },
     )
 
@@ -755,6 +765,13 @@ def test_note_page_flows_raw_related_payload_to_html(
     # Edge endpoints resolve to titles via the capped lithos_read fan-out.
     assert "Dup Note" in response.text
     assert "supports" in response.text
+    # Direction is indicated per item ("A supports B" must not read the same
+    # as "B supports A"), and a non-empty conflict_state renders explicitly
+    # (REQUIREMENTS.md §6.5).
+    assert "Challenger Note" in response.text
+    assert 'edge-direction">outgoing' in response.text
+    assert 'edge-direction">incoming' in response.text
+    assert "conflict: unresolved" in response.text
     # Exactly one related call per page render.
     related_calls = [c for c in stub.calls if c[0] == "lithos_related"]
     assert related_calls == [("lithos_related", {"id": "root", "depth": 1})]

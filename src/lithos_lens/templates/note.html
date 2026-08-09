@@ -14,11 +14,17 @@
         {% for item in section.items %}
           <li>
             {{ related_link(item) }}
+            {% if edges and item.direction %}
+              <span class="edge-direction">{{ item.direction }}</span>
+            {% endif %}
             {% if edges and item.edge_type %}
               <span class="edge-type">{{ item.edge_type }}</span>
             {% endif %}
             {% if edges and item.weight is not none %}
               <span class="edge-weight">{{ "%.2f"|format(item.weight) }}</span>
+            {% endif %}
+            {% if edges and item.conflict_state %}
+              <span class="edge-conflict">conflict: {{ item.conflict_state }}</span>
             {% endif %}
           </li>
         {% endfor %}

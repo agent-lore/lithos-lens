@@ -118,12 +118,20 @@ class RelatedNeighborhood:
 
 @dataclass(frozen=True)
 class RelatedItem:
-    """A neighbor rendered in the panel — by title when it could be resolved."""
+    """A neighbor rendered in the panel — by title when it could be resolved.
+
+    For typed-edge items, ``direction`` (``outgoing`` / ``incoming``) and a
+    non-empty ``conflict_state`` carry through from the transport ref so the
+    panel can show which way an edge points and flag unresolved conflicts
+    (REQUIREMENTS.md §6.5).
+    """
 
     id: str
     title: str = ""
     edge_type: str = ""
     weight: float | None = None
+    direction: str = ""
+    conflict_state: str = ""
 
     @property
     def label(self) -> str:
@@ -343,6 +351,8 @@ def _build_section(
                     title=ref.title or titles[ref.id],
                     edge_type=ref.edge_type,
                     weight=ref.weight,
+                    direction=ref.direction,
+                    conflict_state=ref.conflict_state,
                 )
             )
         else:
