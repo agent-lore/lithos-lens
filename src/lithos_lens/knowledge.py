@@ -534,15 +534,21 @@ class ProducedByTask:
 
     @property
     def url(self) -> str:
-        """Task detail URL with the id quoted as a single path segment.
+        """Task detail URL with the id percent-encoded as one path segment.
 
         ``normalize_task`` keeps task ids as arbitrary non-empty strings —
-        nothing excludes URL-reserved characters — so an id like ``task?42``,
-        ``a#b`` or ``parent/child`` must be percent-encoded (``safe=""`` so even
-        ``/`` is escaped) or the browser routes to the wrong (or no) task: ``?``
-        and ``#`` truncate the path, and a bare ``/`` would be read as a segment
-        boundary instead of part of the id. ``safe=""`` keeps the whole
-        validated id inside one ``/tasks/{task_id}`` segment.
+        nothing excludes URL-reserved characters — so an id like ``task?42`` or
+        ``a#b`` must be encoded, or the ``?``/``#`` would truncate the path and
+        route to the wrong (or no) task. ``quote(..., safe="")`` encodes every
+        reserved character; such ids then round-trip through the single-segment
+        ``/tasks/{task_id}`` route (verified end-to-end in the tests).
+
+        The one character that route cannot carry is a literal ``/``: ASGI
+        percent-decodes ``%2F`` back to a separator before routing, so a task id
+        containing ``/`` is not addressable by ``/tasks/{task_id}`` — a
+        constraint shared by every task link in Lens (see ``web.task_detail_url``
+        and the ``@app.get("/tasks/{task_id}")`` detail route), not something the
+        chip claims to special-case. Task ids are treated as single-segment.
         """
         return f"/tasks/{quote(self.task_id, safe='')}"
 

@@ -10,6 +10,7 @@ chip style.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -122,9 +123,12 @@ def test_produced_by_url_quotes_reserved_characters() -> None:
     assert chip.url == f"/tasks/{quote('task?42#x', safe='')}"
 
 
-def test_produced_by_url_quotes_slash_as_single_segment() -> None:
-    """A ``/`` in a validated id must be escaped (``safe=''``) so the whole id
-    stays one ``/tasks/{task_id}`` segment rather than splitting into a subpath."""
+def test_produced_by_url_encodes_slash_without_splitting_path() -> None:
+    """A ``/`` is percent-encoded (``safe=''``) so the href never splits into a
+    ``/tasks/parent/child`` subpath. Note this is about URL *containment*, not
+    routability: the single-segment ``/tasks/{task_id}`` route cannot address a
+    slash-bearing id at all (ASGI decodes ``%2F`` back to a separator), a limit
+    shared by every task link in Lens — see the ``url`` docstring."""
     chip = ProducedByTask(task_id="parent/child", title="X")
     assert chip.url == "/tasks/parent%2Fchild"
     assert "/tasks/parent/child" not in chip.url
@@ -204,6 +208,43 @@ def test_note_page_chip_href_is_url_encoded(lithos_lens_config_env: Path) -> Non
     assert response.status_code == 200
     assert 'href="/tasks/task%3F42"' in response.text
     assert 'href="/tasks/task?42"' not in response.text
+
+
+def test_note_page_chip_href_round_trips_to_the_same_task(
+    lithos_lens_config_env: Path,
+) -> None:
+    """End-to-end link/route contract: the chip href for a reserved-char task id
+    is followable and resolves to the SAME task ``load_produced_by`` validated —
+    not a 404 or a different id. Exercises the real ``/tasks/{task_id}`` route."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="weird?id#frag",
+            title="Weird reserved id task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.notes["rt-note"] = NoteRecord(
+        id="rt-note",
+        title="Round-trip note",
+        content="Body.",
+        metadata={"source": "weird?id#frag"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        note_response = client.get("/note/rt-note")
+        assert note_response.status_code == 200
+        href = re.search(
+            r'class="produced-by-chip[^"]*"\s+href="([^"]+)"', note_response.text
+        )
+        assert href is not None
+        # Follow the chip's own href through the real detail route.
+        task_response = client.get(href.group(1))
+
+    assert task_response.status_code == 200
+    assert "Weird reserved id task" in task_response.text
 
 
 def test_note_page_no_chip_without_source(lithos_lens_config_env: Path) -> None:
