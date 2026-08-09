@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.events import LensEvent
+from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_lithos import (
     FakeEventHub,
     FakeLithosClient,
@@ -25,6 +26,7 @@ from lithos_lens.fake_lithos import (
 )
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
+from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
 
 
@@ -332,6 +334,46 @@ async def test_fake_client_task_blocked_scoped_by_project_and_tags() -> None:
     # influx-backfill lacks these, so a scoped read must exclude it.
     assert await client.task_blocked(tags=["area:observability"]) == []
     assert await client.task_blocked(project="lithos-lens") == []
+
+
+def test_fake_client_defaults_to_the_demo_dataset() -> None:
+    """The app-factory path (FakeLithosClient(config)) must keep serving the
+    shipped demo set — the fixture/behavior split may not change fake mode."""
+    assert FakeLithosClient().dataset == demo_dataset()
+
+
+def test_demo_dataset_is_deterministic() -> None:
+    assert demo_dataset() == demo_dataset()
+
+
+@pytest.mark.anyio
+async def test_fake_client_serves_a_composed_dataset() -> None:
+    """The point of the fixture/behavior split: a test can hand the client its
+    own minimal dataset instead of inheriting (and filtering around) the demo
+    set, while the behavior half keeps the coded error contracts."""
+    task = TaskRecord(
+        id="only-task",
+        title="The only task",
+        status="open",
+        created_by="composer",
+        created_at="2026-08-01T00:00:00+00:00",
+        tags=("project:compose",),
+    )
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(tasks=(task,), ready_ids=frozenset({"only-task"}))
+    )
+
+    assert [t.id for t in await client.list_tasks()] == ["only-task"]
+    assert [t.id for t in await client.task_ready()] == ["only-task"]
+    assert await client.task_blocked() == []
+    assert (await client.task_get("only-task")).title == "The only task"
+    # Claims were not composed, so with_claims surfaces an empty tuple.
+    (ready,) = await client.task_ready(with_claims=True)
+    assert ready.claims == ()
+    # The behavior half still speaks the coded contracts over any dataset.
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.read_note("not-composed")
+    assert excinfo.value.code == "doc_not_found"
 
 
 def test_fake_mode_logs_loud_warning_when_engaged(

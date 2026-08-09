@@ -72,6 +72,7 @@ forbidden_modules = [
     "lithos_lens.events",
     "lithos_lens.lithos_client",
     "lithos_lens.fake_lithos",
+    "lithos_lens.fake_dataset",
     "lithos_lens.state",
     "lithos_lens.web",
     "lithos_lens.main",
@@ -85,6 +86,7 @@ source_modules = [
     "lithos_lens.events",
     "lithos_lens.lithos_client",
     "lithos_lens.fake_lithos",
+    "lithos_lens.fake_dataset",
     "lithos_lens.state",
 ]
 forbidden_modules = [
