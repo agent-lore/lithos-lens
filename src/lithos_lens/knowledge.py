@@ -118,12 +118,22 @@ def _splice_wiki_links(tokens: list[Token], from_id: str) -> None:
 
 def _splice_children(children: list[Token], from_id: str) -> list[Token]:
     spliced: list[Token] = []
+    # Wiki syntax inside an existing Markdown link label (or autolink) stays
+    # LITERAL: splicing an <a> between link_open/link_close would emit invalid
+    # nested anchors whose repair is browser-dependent. Track link depth and
+    # only rewrite text at depth 0.
+    link_depth = 0
     for child in children:
-        if child.type == "text" and "[[" in child.content:
+        if child.type == "link_open":
+            link_depth += 1
+        elif child.type == "link_close":
+            link_depth = max(link_depth - 1, 0)
+        if link_depth == 0 and child.type == "text" and "[[" in child.content:
             spliced.extend(_split_wiki_text(child, from_id))
         else:
-            # code_inline / softbreak / emphasis markers etc. pass through
-            # untouched, so wiki-syntax inside inline code stays literal.
+            # code_inline / softbreak / emphasis markers / in-link text etc.
+            # pass through untouched, so wiki-syntax inside inline code or a
+            # link label stays literal.
             spliced.append(child)
     return spliced
 
@@ -651,8 +661,10 @@ async def _gather_candidates(
 
     A confident match from the source note's own outgoing links (its title
     equals the target or the target's last path component) ranks first; the
-    ``lithos_list(title_contains=…)`` matches follow. De-duplicated by id and
-    capped at ``limit`` so a broad title match can't inflate the page.
+    ``lithos_list(title_contains=…)`` matches follow. Duplicates merge by id —
+    first-seen ranking wins, missing title/path fill from later sources — and
+    the result is capped at ``limit`` so a broad title match can't inflate the
+    page.
     """
     last = _last_component(target)
     candidates: dict[str, ResolveCandidate] = {}
@@ -674,10 +686,22 @@ async def _gather_candidates(
     except Exception:
         matches = []
     for note in matches:
-        if note.id:
-            candidates.setdefault(
-                note.id,
-                ResolveCandidate(id=note.id, title=note.title, path=note.path),
+        if not note.id:
+            continue
+        existing = candidates.get(note.id)
+        if existing is None:
+            candidates[note.id] = ResolveCandidate(
+                id=note.id, title=note.title, path=note.path
+            )
+        else:
+            # Merge, don't drop: the outgoing-link candidate ranked first but
+            # arrived pathless; the title-search row carries the path §6.3
+            # wants on the disambiguation page. Ranking (insertion order) is
+            # preserved; missing fields fill from the later source.
+            candidates[note.id] = ResolveCandidate(
+                id=note.id,
+                title=existing.title or note.title,
+                path=existing.path or note.path,
             )
 
     return tuple(candidates.values())[:limit]

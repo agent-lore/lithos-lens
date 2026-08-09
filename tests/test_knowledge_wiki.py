@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import load_config
+from lithos_lens.config import LithosConfig, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import (
@@ -19,6 +20,7 @@ from lithos_lens.knowledge import (
     resolve_wiki_link,
     wiki_link_href,
 )
+from lithos_lens.lithos_client import LithosClient
 from lithos_lens.tasks import NoteRecord, NoteSummary
 from lithos_lens.web import create_app
 
@@ -88,6 +90,36 @@ def test_text_without_wiki_links_is_untouched() -> None:
     html = render_markdown("prose with [[ dangling and a # Heading", from_id="src")
     assert "prose with [[ dangling and a # Heading" in html
     assert "wiki-link" not in html
+
+
+def test_wiki_syntax_inside_markdown_link_label_stays_literal() -> None:
+    """A wiki pattern inside an existing Markdown link label must NOT be
+    rewritten: splicing an <a> inside an <a> emits invalid nested anchors whose
+    repair is browser-dependent. Inside a link, the syntax stays literal."""
+    html = render_markdown("[outer [[inner]]](https://example.com)", "src")
+
+    assert html.count("<a ") == 1
+    assert "https://example.com" in html
+    assert "[[inner]]" in html
+    assert "/knowledge/resolve" not in html
+
+
+def test_wiki_shaped_text_inside_autolink_stays_literal() -> None:
+    """Autolink labels are text children inside link_open/link_close too."""
+    html = render_markdown("<https://example.com/[[x]]>", "src")
+
+    assert html.count("<a ") == 1
+    assert "/knowledge/resolve" not in html
+
+
+def test_wiki_link_after_a_markdown_link_still_renders() -> None:
+    """Leaving a link's label literal must not disarm splicing AFTER the link
+    closes in the same inline run."""
+    html = render_markdown("[label](https://example.com) then [[note-a]]", "src")
+
+    assert html.count("<a ") == 2
+    assert 'class="wiki-link"' in html
+    assert "target=note-a" in html
 
 
 def test_wiki_link_href_url_encodes_target_and_from() -> None:
@@ -207,6 +239,29 @@ def test_resolver_dedupes_link_and_list_candidate_by_id() -> None:
     assert outcome.target_id == "dup"
 
 
+def test_resolver_duplicated_candidate_keeps_the_list_provided_path() -> None:
+    """§6.3 requires paths on the disambiguation page. The outgoing-link
+    candidate arrives pathless first; when the title search returns the SAME
+    note with its path, the entries merge — ranking preserved, missing fields
+    filled — instead of the richer row being dropped."""
+    fake = ResolverFake(
+        links=(RelatedRef(id="dup", title="Shared"),),
+        list_result=(
+            NoteSummary(id="dup", title="Shared", path="p/dup.md"),
+            NoteSummary(id="other", title="Shared Too", path="p/other.md"),
+        ),
+    )
+
+    outcome = _run(resolve_wiki_link(fake, "Shared", "src"))
+
+    assert outcome.kind == "disambiguation"
+    # The outgoing-link candidate still ranks first…
+    assert [c.id for c in outcome.candidates] == ["dup", "other"]
+    # …but now carries the path the title search supplied.
+    assert outcome.candidates[0].path == "p/dup.md"
+    assert outcome.candidates[0].title == "Shared"
+
+
 def test_resolver_zero_candidates_is_unresolved_with_search() -> None:
     fake = ResolverFake()
 
@@ -322,8 +377,11 @@ def _client(config_path: Path, fake: FakeLithosClient) -> TestClient:
     return TestClient(app)
 
 
-def _dataset(notes: dict[str, NoteRecord]) -> FakeLithosDataset:
-    return FakeLithosDataset(notes=notes)
+def _dataset(
+    notes: dict[str, NoteRecord],
+    note_paths: dict[str, str] | None = None,
+) -> FakeLithosDataset:
+    return FakeLithosDataset(notes=notes, note_paths=note_paths or {})
 
 
 def test_resolve_route_uuid_redirects(lithos_lens_config_env: Path) -> None:
@@ -340,21 +398,23 @@ def test_resolve_route_uuid_redirects(lithos_lens_config_env: Path) -> None:
 
 
 def test_resolve_route_path_probe_redirects(lithos_lens_config_env: Path) -> None:
-    notes = {
-        "target-note": NoteRecord(
-            id="target-note", title="Target Note", content="Body."
-        )
-    }
-    fake = FakeLithosClient(dataset=_dataset(notes))
+    """The probe maps a [[folder/note]] path to a DISTINCT document UUID via
+    the dataset's explicit note_paths — not a path-stem==id identity, which
+    would make this test tautological."""
+    target_id = "33333333-3333-4333-8333-333333333333"
+    notes = {target_id: NoteRecord(id=target_id, title="Target Note", content="Body.")}
+    fake = FakeLithosClient(
+        dataset=_dataset(notes, note_paths={"guides/target-note.md": target_id})
+    )
 
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get(
-            "/knowledge/resolve?target=target-note&from=src",
+            "/knowledge/resolve?target=guides/target-note&from=src",
             follow_redirects=False,
         )
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/note/target-note"
+    assert response.headers["location"] == f"/note/{target_id}"
 
 
 def test_resolve_route_disambiguation_lists_candidates(
@@ -518,3 +578,147 @@ def test_knowledge_tag_search_is_capped(lithos_lens_config_env: Path) -> None:
 
     assert response.status_code == 200
     assert response.text.count('href="/note/') == 20
+
+
+# ── concrete client (transport contract) ───────────────────────────────
+#
+# REAL_LITHOS_LIST_PAYLOAD mirrors the response built by the lithos
+# ``lithos_list`` tool: rows under the "items" key (its one and only container
+# key since the very first implementation) plus "total". Not an invented shape.
+
+REAL_LITHOS_LIST_PAYLOAD: dict[str, Any] = {
+    "items": [
+        {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "title": "Influx migration plan",
+            "path": "plans/influx-migration.md",
+            "updated": "2026-08-01T10:00:00+00:00",
+            "tags": ["project:influx", "kind:plan"],
+            "source_url": "",
+            "derived_from_ids": [],
+            "metadata": {},
+        },
+        {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "title": "Influx rollback route",
+            "path": "runbooks/influx-rollback.md",
+            "updated": "2026-08-02T10:00:00+00:00",
+            "tags": ["project:influx", "kind:runbook"],
+            "source_url": "",
+            "derived_from_ids": [],
+            "metadata": {},
+        },
+    ],
+    "total": 2,
+}
+
+
+class _StubLithosClient(LithosClient):
+    """LithosClient with the MCP transport stubbed out (records exact calls)."""
+
+    def __init__(self, payloads: dict[str, dict[str, Any]]) -> None:
+        super().__init__(LithosConfig())
+        self._payloads = payloads
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _call_tool(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append((name, arguments))
+        return self._payloads.get(name, {})
+
+
+def _run_client(client: LithosClient, coro: Any) -> Any:
+    async def _driver() -> Any:
+        try:
+            return await coro
+        finally:
+            await client.close()
+
+    return asyncio.run(_driver())
+
+
+def test_client_list_notes_reads_the_real_items_envelope() -> None:
+    client = _StubLithosClient({"lithos_list": REAL_LITHOS_LIST_PAYLOAD})
+
+    rows = _run_client(client, client.list_notes())
+
+    assert [row.id for row in rows] == [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
+    assert rows[0].title == "Influx migration plan"
+    assert rows[0].path == "plans/influx-migration.md"
+    assert rows[0].updated == "2026-08-01T10:00:00+00:00"
+    assert rows[0].tags == ("project:influx", "kind:plan")
+    assert client.calls == [("lithos_list", {})]
+
+
+def test_client_list_notes_sends_filters_and_limit() -> None:
+    client = _StubLithosClient({"lithos_list": {"items": [], "total": 0}})
+
+    _run_client(
+        client,
+        client.list_notes(title_contains="rollback", tags=["kind:runbook"], limit=10),
+    )
+
+    assert client.calls == [
+        (
+            "lithos_list",
+            {
+                "title_contains": "rollback",
+                "tags": ["kind:runbook"],
+                "limit": 10,
+            },
+        )
+    ]
+
+
+def test_client_list_notes_does_not_honor_invented_alias_keys() -> None:
+    """ "notes"/"documents"/"results" were never lithos_list container keys in
+    any Lithos version ("results" belongs to lithos_search); honoring them is
+    how the items-key bug hid. A payload using them yields nothing."""
+    client = _StubLithosClient(
+        {"lithos_list": {"notes": [{"id": "x"}], "documents": [{"id": "y"}]}}
+    )
+
+    rows = _run_client(client, client.list_notes())
+
+    assert rows == []
+
+
+def test_client_read_note_by_path_sends_probe_arguments() -> None:
+    payload = {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "title": "Influx rollback route",
+        "content": "#",
+        "metadata": {},
+    }
+    client = _StubLithosClient({"lithos_read": payload})
+
+    note = _run_client(client, client.read_note_by_path("runbooks/influx-rollback.md"))
+
+    # The path maps to a DISTINCT document UUID — the probe's whole point.
+    assert note is not None
+    assert note.id == "22222222-2222-4222-8222-222222222222"
+    name, arguments = client.calls[0]
+    assert name == "lithos_read"
+    assert arguments == {
+        "path": "runbooks/influx-rollback.md",
+        "agent_id": client._config.agent_id,  # noqa: SLF001
+        "max_length": 1,
+    }
+
+
+def test_client_read_note_by_path_maps_doc_not_found_to_none() -> None:
+    client = _StubLithosClient(
+        {
+            "lithos_read": {
+                "status": "error",
+                "code": "doc_not_found",
+                "message": "Document not found: nope.md",
+            }
+        }
+    )
+
+    assert _run_client(client, client.read_note_by_path("nope.md")) is None
