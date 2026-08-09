@@ -11,7 +11,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.web` | M | 0 | 5 |
+| `lithos_lens.web` | M | 0 | 6 |
 
 ## Public API
 
@@ -20,6 +20,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `task_tag_url`
 - def `task_detail_url`
 - def `tasks_url`
+- def `knowledge_tag_url` — Link a note-page tag chip to the ``/knowledge`` list filtered by it (§6.4).
 - def `tag_chip_class`
 
 ## Dependencies

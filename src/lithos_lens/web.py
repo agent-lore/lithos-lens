@@ -26,6 +26,7 @@ from lithos_lens.knowledge import (
     render_markdown,
     resolve_wiki_link,
 )
+from lithos_lens.knowledge_metadata import build_note_metadata
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -101,6 +102,7 @@ def create_app(
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
+    templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -302,6 +304,7 @@ def create_app(
     async def note(request: Request, knowledge_id: str) -> HTMLResponse:
         snapshot = await state.refresh_health()
         note_record = None
+        note_meta = None
         task = None
         related = None
         error = ""
@@ -324,6 +327,7 @@ def create_app(
             if not_found or (note_record is None and not error):
                 error = "Document not found."
             if note_record is not None:
+                note_meta = build_note_metadata(note_record)
                 related = await load_related_panel(
                     state.lithos_client,
                     knowledge_id,
@@ -343,6 +347,7 @@ def create_app(
                 "health": snapshot,
                 "active_view": "knowledge",
                 "note": note_record,
+                "note_meta": note_meta,
                 "task": task,
                 "related": related,
                 "error": error,
@@ -436,6 +441,11 @@ def task_detail_url(request: Request, task_id: str) -> str:
 def tasks_url(request: Request) -> str:
     query = request.url.query
     return f"/tasks?{query}" if query else "/tasks"
+
+
+def knowledge_tag_url(tag: str) -> str:
+    """Link a note-page tag chip to the ``/knowledge`` list filtered by it (§6.4)."""
+    return f"/knowledge?{urlencode({'tag': tag})}"
 
 
 def tag_chip_class(tag: str) -> str:

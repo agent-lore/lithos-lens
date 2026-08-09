@@ -69,11 +69,44 @@
       <header>
         <p class="eyebrow">Knowledge note</p>
         <h1>{{ note.title }}</h1>
+        {% if note_meta and note_meta.has_chips %}
+          <div class="note-chips">
+            {% if note_meta.note_type %}
+              <span class="chip note-type">{{ note_meta.note_type }}</span>
+            {% endif %}
+            {% if note_meta.status %}
+              <span class="chip note-status note-status-{{ note_meta.status }}">{{ note_meta.status }}</span>
+            {% endif %}
+            {% if note_meta.access_scope %}
+              <span class="chip note-scope">{{ note_meta.access_scope }}</span>
+            {% endif %}
+            {% if note_meta.namespace %}
+              <span class="chip note-namespace">{{ note_meta.namespace }}</span>
+            {% endif %}
+            {% if note_meta.confidence %}
+              <span class="chip note-confidence">confidence {{ note_meta.confidence }}</span>
+            {% endif %}
+            {% if note_meta.supersedes %}
+              <span class="chip note-supersedes">replaces: <a href="/note/{{ note_meta.supersedes }}">{{ note_meta.supersedes }}</a></span>
+            {% endif %}
+          </div>
+        {% endif %}
+        {% if note_meta and note_meta.has_authorship %}
+          <div class="note-authorship detail-meta">
+            {% if note_meta.author %}<span>By {{ note_meta.author }}</span>{% endif %}
+            {% if note_meta.contributors %}<span>Contributors: {{ note_meta.contributors | join(", ") }}</span>{% endif %}
+            {% if note_meta.created_at %}<time datetime="{{ note_meta.created_at }}">Created {{ note_meta.created_at }}</time>{% endif %}
+            {% if note_meta.updated_at %}<time datetime="{{ note_meta.updated_at }}">Updated {{ note_meta.updated_at }}</time>{% endif %}
+          </div>
+        {% endif %}
       </header>
+      {% if note_meta and note_meta.lede %}
+        <p class="note-lede">{{ note_meta.lede }}</p>
+      {% endif %}
       {% if note.tags %}
         <div class="tag-list">
           {% for tag in note.tags %}
-            <span>{{ tag | format_tag }}</span>
+            <a class="{{ tag_chip_class(tag) }}" href="{{ knowledge_tag_url(tag) }}">{{ tag | format_tag }}</a>
           {% endfor %}
         </div>
       {% endif %}

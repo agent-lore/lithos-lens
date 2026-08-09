@@ -25,6 +25,19 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class NoteMetadata {
+    +note_type str
+    +status str
+    +confidence str
+    +access_scope str
+    +namespace str
+    +lede str
+    +supersedes str
+    +author str
+    +contributors tuple[str, ...]
+    +created_at str
+    +updated_at str
+  }
   class RelatedItem {
     +id str
     +title str

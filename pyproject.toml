@@ -64,6 +64,7 @@ source_modules = [
     "lithos_lens.tasks",
     "lithos_lens.task_graph",
     "lithos_lens.knowledge",
+    "lithos_lens.knowledge_metadata",
     "lithos_lens.config",
     "lithos_lens.logging",
     "lithos_lens.telemetry",
