@@ -335,7 +335,10 @@ def test_dashboard_shows_current_situation_and_default_groups(
     assert "Blocked" in response.text
     assert "Claimed open task" in response.text
     assert "Unclaimed open task" in response.text
-    assert "Old open task" not in response.text
+    # Open tasks are the live frontier and are NOT windowed by `since` (it scopes
+    # only the resolved completed/cancelled sections), so an old still-open task
+    # stays visible.
+    assert "Old open task" in response.text
     assert "Recently completed task" in response.text
     assert "Old completed task" not in response.text
     assert "Recently cancelled task" in response.text
@@ -385,11 +388,13 @@ def test_dashboard_accepts_uk_created_since_date(
     assert 'value="01/04/2026"' in response.text
     assert 'data-native-date value="2026-04-01"' in response.text
     assert 'data-open-date-picker aria-label="Open calendar"' in response.text
-    open_call = next(call for call in fake.list_calls if call["status"] == "open")
     completed_call = next(
         call for call in fake.list_calls if call["status"] == "completed"
     )
-    assert open_call["since"] == "2026-04-01"
+    # `since` scopes only the resolved (completed/cancelled) windows; the master
+    # open call is unfiltered so it never carries a `since`.
+    open_call = next(call for call in fake.list_calls if call["status"] == "open")
+    assert open_call["since"] is None
     assert completed_call["since"] == "2026-04-01"
 
 
@@ -511,6 +516,57 @@ def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
     ready_group = text[text.index('data-task-group="ready"') :]
     ready_group = ready_group[: ready_group.index("</article>")]
     assert "Predecessor in project B" not in ready_group
+
+
+def test_blocker_chip_resolves_older_predecessor_title_under_since_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (f-001): a still-open predecessor created *before* the `since`
+    date must still name the blocker chip. Open tasks are not windowed by
+    `since`, so the master open snapshot stays whole and the title resolves."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="blk",
+            title="Recent blocked work",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="pred",
+            title="Ancient predecessor",
+            status="open",
+            created_by="planner",
+            created_at="2025-01-01T10:00:00+00:00",
+        )
+    )
+    fake.ready_ids = {"pred"}
+    fake.blocked = {
+        "blk": (
+            BlockerRecord(
+                kind="task",
+                task_id="pred",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor pred to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert "Recent blocked work" in blocked_group
+    # The chip shows the predecessor's title, resolved from the whole open
+    # snapshot, despite the predecessor predating the `since` window.
+    assert "Ancient predecessor" in blocked_group
 
 
 def test_blocked_task_shows_predecessor_chip_then_moves_to_ready(

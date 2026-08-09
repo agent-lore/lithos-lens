@@ -175,12 +175,14 @@ async def load_dashboard(
         stats_result,
         agents_result,
     ) = await asyncio.gather(
-        # The master open list is fetched WITHOUT agent/tag filters: project/
-        # agent/tag filtering is applied client-side (below) so one fetch serves
-        # every projection AND the full snapshot can resolve a blocker chip whose
-        # predecessor is itself filtered out of the visible sections. ``since``
-        # still windows server-side (it is not part of the visible-section join).
-        lithos.list_tasks(status="open", since=filters.since, with_claims=True),
+        # The master open set is the whole open list (PRD data contract):
+        # NO agent/tag/since filter is pushed. Open tasks are the live frontier,
+        # not a time window (``since`` scopes only the resolved completed/
+        # cancelled sections), and filtering client-side keeps one fetch serving
+        # every projection while leaving the snapshot whole — so a blocker chip
+        # can resolve a predecessor's title even when that predecessor is itself
+        # filtered out of, or older than, the visible sections.
+        lithos.list_tasks(status="open", with_claims=True),
         lithos.task_ready(limit=frontier_limit, with_claims=False),
         lithos.task_blocked(limit=frontier_limit),
         lithos.stats(),
