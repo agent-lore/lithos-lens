@@ -17,7 +17,8 @@ browses.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from types import MappingProxyType
 from typing import Any
 
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
@@ -42,6 +43,13 @@ class FakeLithosDataset:
     oracle, not derived state: Lens never re-derives readiness, so
     ``ready_ids`` / ``blocked`` are the source of truth for the frontier the
     client reports.
+
+    Immutability is enforced at the container level: the dataclass is frozen
+    and every mapping field is defensively copied into a read-only view at
+    construction, so neither a caller-held source dict nor a lookup result can
+    mutate the dataset afterwards. The one deliberate gap is the ``metadata``
+    dict *inside* individual records (``TaskRecord`` et al.), which stays as
+    those records define it.
     """
 
     tasks: tuple[TaskRecord, ...] = ()
@@ -57,6 +65,16 @@ class FakeLithosDataset:
     claims: Mapping[str, tuple[ClaimRecord, ...]] = field(default_factory=dict)
     agents: tuple[AgentRecord, ...] = ()
     stats: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Freeze the mapping fields: dict(...) breaks aliasing with whatever
+        # the caller passed in, MappingProxyType rejects later item writes.
+        # object.__setattr__ is the sanctioned frozen-dataclass escape hatch
+        # for __post_init__ normalization.
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, Mapping) and not isinstance(value, MappingProxyType):
+                object.__setattr__(self, f.name, MappingProxyType(dict(value)))
 
 
 def demo_dataset() -> FakeLithosDataset:

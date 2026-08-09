@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any
 
 from lithos_lens.config import LithosConfig
@@ -65,6 +66,35 @@ def _in_scope(task: TaskRecord, project: str | None, tags: list[str] | None) -> 
     if project and f"project:{project}" not in task.tags:
         return False
     return not tags or all(tag in task.tags for tag in tags)
+
+
+def _parse_since(since: str) -> datetime:
+    """Parse a findings ``since`` filter exactly like upstream
+    ``lithos_finding_list``: ``datetime.fromisoformat``, a naive value treated
+    as already-UTC, and a malformed value answered with the ``invalid_input``
+    envelope."""
+    try:
+        parsed = datetime.fromisoformat(since)
+    except ValueError:
+        raise LithosToolError(
+            f"Invalid since datetime: {since}", code="invalid_input"
+        ) from None
+    return _as_utc(parsed)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def _created_after(created_at: str, since_utc: datetime) -> bool:
+    """Strict ``created_at > since``, mirroring the upstream SQL filter. A
+    ``created_at`` that doesn't parse (e.g. a composed record leaving the
+    default ``""``) is excluded rather than crashing the read."""
+    try:
+        created = datetime.fromisoformat(created_at)
+    except ValueError:
+        return False
+    return _as_utc(created) > since_utc
 
 
 def fake_lithos_enabled() -> bool:
@@ -158,7 +188,10 @@ class FakeLithosClient:
         if tags:
             rows = [task for task in rows if all(tag in task.tags for tag in tags)]
         if since:
-            rows = [task for task in rows if task.created_at[:10] >= since[:10]]
+            # Upstream lithos_task_list filters `created_at >= ?` on the raw
+            # ISO strings — inclusive, full precision (deliberately unlike
+            # findings' strict parsed >), so the fake compares the same way.
+            rows = [task for task in rows if task.created_at >= since]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
         return rows
@@ -264,7 +297,8 @@ class FakeLithosClient:
     ) -> list[FindingRecord]:
         rows = list(self.dataset.findings.get(task_id, ()))
         if since:
-            rows = [f for f in rows if f.created_at[:10] >= since[:10]]
+            since_utc = _parse_since(since)
+            rows = [f for f in rows if _created_after(f.created_at, since_utc)]
         return rows
 
     async def stats(self) -> dict[str, Any]:

@@ -457,7 +457,8 @@ class LithosClient:
         if self._worker_task is None:
             # startup() was never called; fall back to a one-shot session so
             # we don't silently break callers that bypass the lifecycle.
-            return await self._call_tool_oneshot(name, arguments)
+            result = await self._call_tool_oneshot(name, arguments)
+            return _decode_tool_result(result)
 
         if not self._session_ready.is_set():
             try:
@@ -473,9 +474,12 @@ class LithosClient:
         result = await session.call_tool(name, arguments)
         return _decode_tool_result(result)
 
-    async def _call_tool_oneshot(
-        self, name: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Run one tool call over a throwaway session.
+
+        Returns the RAW MCP result; decoding stays in ``_call_tool`` so both
+        transport paths share the same error handling.
+        """
         from mcp import ClientSession
         from mcp.client.sse import sse_client
 
@@ -485,8 +489,7 @@ class LithosClient:
             ClientSession(reader, writer) as session,
         ):
             await session.initialize()
-            result = await session.call_tool(name, arguments)
-        return _decode_tool_result(result)
+            return await session.call_tool(name, arguments)
 
     async def _mcp_worker(self) -> None:
         """Hold a single MCP session open for the lifetime of the client.
@@ -556,10 +559,33 @@ def _is_nonempty_str(value: Any) -> bool:
 
 
 def _decode_tool_result(result: Any) -> dict[str, Any]:
+    """Decode an MCP tool result into the Lithos payload dict.
+
+    Every failure mode surfaces as a coded :class:`LithosToolError` — callers
+    must never see a raw ``JSONDecodeError``. ``code="tool_error"`` marks an
+    MCP-level error result (``isError``, plain text — e.g. the live server's
+    FastMCP output-schema validation rejecting a tool's own error envelope);
+    ``code="invalid_response"`` marks a success result whose body isn't a
+    JSON object.
+    """
     blocks = getattr(result, "content", [])
-    if blocks and getattr(blocks[0], "text", None):
-        return json.loads(blocks[0].text)
-    return {}
+    text = str(getattr(blocks[0], "text", "") or "") if blocks else ""
+    if getattr(result, "isError", False):
+        raise LithosToolError(text or "Lithos tool call failed", code="tool_error")
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LithosToolError(
+            f"Lithos returned a non-JSON tool result: {text[:200]}",
+            code="invalid_response",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise LithosToolError(
+            "Lithos returned a non-object tool result", code="invalid_response"
+        )
+    return payload
 
 
 def _raise_for_error(payload: dict[str, Any]) -> None:

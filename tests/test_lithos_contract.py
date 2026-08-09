@@ -105,6 +105,24 @@ async def test_task_edge_list_invalid_direction_raises_coded_invalid_input(
     assert excinfo.value.code == "invalid_input"
 
 
+async def test_list_findings_malformed_since_raises_a_coded_error(
+    client: LithosClientProtocol,
+) -> None:
+    """A malformed `since` answers a coded error, never data.
+
+    Upstream intends invalid_input (the datetime.fromisoformat guard in
+    lithos_finding_list, checked before the task id) and the fake speaks it.
+    The running server, however, trips FastMCP's output-schema validation
+    before that envelope can leave — lithos_finding_list's return annotation
+    (dict[str, list[...]]) forbids the envelope's string fields — which the
+    client surfaces as code="tool_error". Until that upstream bug is fixed,
+    the strongest matrix-wide contract is: one of the two codes, and never a
+    silent full/empty findings list (or a leaked JSONDecodeError)."""
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.list_findings(MISSING_ID, since="not-a-timestamp")
+    assert excinfo.value.code in {"invalid_input", "tool_error"}
+
+
 # ── soft-missing reads (no envelope upstream) ───────────────────────────
 
 
@@ -144,6 +162,7 @@ async def test_list_tasks_claims_presence_follows_with_claims(
     when with_claims=True. The silent-default-inversion class of bug (PR #23,
     issue #24) turns exactly this contract red."""
     with_claims = await client.list_tasks(with_claims=True)
+    _require_rows_on_fake_leg(client, with_claims)
     assert all(task.claims is not None for task in with_claims)
     without = await client.list_tasks()
     assert all(task.claims is None for task in without)
@@ -153,6 +172,7 @@ async def test_task_ready_claims_presence_follows_with_claims(
     client: LithosClientProtocol,
 ) -> None:
     with_claims = await client.task_ready(with_claims=True)
+    _require_rows_on_fake_leg(client, with_claims)
     assert all(task.claims is not None for task in with_claims)
     # Lens's deliberate False default (divergent from upstream's True) must
     # hold on both legs.
@@ -163,22 +183,41 @@ async def test_task_ready_claims_presence_follows_with_claims(
 # ── shape invariants over whatever rows exist ───────────────────────────
 
 
-async def test_task_ready_honors_limit(client: LithosClientProtocol) -> None:
-    assert len(await client.task_ready(limit=1)) <= 1
+async def test_task_ready_limit_returns_the_unlimited_prefix(
+    client: LithosClientProtocol,
+) -> None:
+    unlimited = await client.task_ready()
+    limited = await client.task_ready(limit=1)
+    assert [task.id for task in limited] == [task.id for task in unlimited][:1]
 
 
-async def test_task_blocked_honors_limit_and_rows_carry_blockers(
+async def test_task_blocked_limit_and_rows_carry_blockers(
     client: LithosClientProtocol,
 ) -> None:
     """Blocked means "open but not ready for a stated reason": every row is a
     BlockedTaskRecord pairing an open task with at least one blocker."""
     blocked = await client.task_blocked()
+    _require_rows_on_fake_leg(client, blocked)
     for row in blocked:
         assert isinstance(row, BlockedTaskRecord)
         assert row.task.status == "open"
         assert len(row.blockers) >= 1
-    assert len(await client.task_blocked(limit=1)) <= 1
+    limited = await client.task_blocked(limit=1)
+    assert [row.task.id for row in limited] == [row.task.id for row in blocked][:1]
 
 
 async def test_ready_frontier_rows_are_open(client: LithosClientProtocol) -> None:
-    assert all(task.status == "open" for task in await client.task_ready())
+    ready = await client.task_ready()
+    _require_rows_on_fake_leg(client, ready)
+    assert all(task.status == "open" for task in ready)
+
+
+def _require_rows_on_fake_leg(client: LithosClientProtocol, rows: object) -> None:
+    """Fail a for-all assertion that would pass vacuously on the fake leg.
+
+    The fake leg always serves the demo dataset, which stocks every surface
+    these tests sweep — an empty read there means the assertion exercised
+    nothing. The real leg has no such guarantee (an empty but healthy server
+    is a legitimate state), so it may run the for-alls over zero rows."""
+    if isinstance(client, FakeLithosClient):
+        assert rows, "demo dataset should make this assertion non-vacuous"
