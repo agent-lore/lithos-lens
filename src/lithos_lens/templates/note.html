@@ -72,7 +72,7 @@
         {% if produced_by %}
           <p class="produced-by">
             <a class="produced-by-chip{% if produced_by.is_task_record %} produced-by-chip-record{% endif %}"
-               href="/tasks/{{ produced_by.task_id }}">
+               href="{{ produced_by.url }}">
               {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
               {{ produced_by.title }}
             </a>

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -113,6 +114,14 @@ def test_produced_by_ordinary_note_is_not_task_record() -> None:
     assert chip.is_task_record is False
 
 
+def test_produced_by_url_quotes_reserved_characters() -> None:
+    """Task ids are arbitrary strings; ``?``/``#`` must be percent-encoded so the
+    href targets the whole validated id, not a truncated prefix."""
+    chip = ProducedByTask(task_id="task?42#x", title="X")
+    assert chip.url == "/tasks/task%3F42%23x"
+    assert chip.url == f"/tasks/{quote('task?42#x')}"
+
+
 # ── /note/{id} rendering ───────────────────────────────────────────────
 
 
@@ -158,6 +167,35 @@ def test_note_page_task_record_gets_distinct_chip_style(
     assert response.status_code == 200
     assert "produced-by-chip-record" in response.text
     assert "Task record:" in response.text
+
+
+def test_note_page_chip_href_is_url_encoded(lithos_lens_config_env: Path) -> None:
+    """A validated task id carrying URL-reserved characters is percent-encoded in
+    the chip href, so the link targets the whole id rather than a prefix cut at
+    ``?``/``#``."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="task?42",
+            title="Reserved id task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.notes["reserved-note"] = NoteRecord(
+        id="reserved-note",
+        title="Reserved note",
+        content="Body.",
+        metadata={"source": "task?42"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/reserved-note")
+
+    assert response.status_code == 200
+    assert 'href="/tasks/task%3F42"' in response.text
+    assert 'href="/tasks/task?42"' not in response.text
 
 
 def test_note_page_no_chip_without_source(lithos_lens_config_env: Path) -> None:

@@ -19,8 +19,8 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from html import escape
-from typing import Any, Protocol
-from urllib.parse import urlencode, urlparse
+from typing import Any, Protocol, runtime_checkable
+from urllib.parse import quote, urlencode, urlparse
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -532,33 +532,52 @@ class ProducedByTask:
     title: str
     is_task_record: bool = False
 
+    @property
+    def url(self) -> str:
+        """Task detail URL with the id quoted as a path segment.
 
+        ``normalize_task`` keeps task ids as arbitrary non-empty strings —
+        nothing excludes URL-reserved characters — so an id like ``task?42`` or
+        ``a#b`` must be percent-encoded or the browser truncates the path at the
+        ``?``/``#`` and routes to the wrong (or no) task. Mirrors
+        ``web.task_detail_url``'s path quoting (minus its query passthrough,
+        which the chip does not want).
+        """
+        return f"/tasks/{quote(self.task_id)}"
+
+
+@runtime_checkable
 class ProducedByClientProtocol(Protocol):
-    """Subset of Lithos operations required by the produced-by-task chip."""
+    """The ``task_get`` capability the chip needs — checked at runtime.
+
+    Declared ``@runtime_checkable`` so ``load_produced_by`` can probe an
+    arbitrary client for the method with ``isinstance``: K1 does not require T1
+    to have landed ``task_get``, and a client lacking it degrades to no chip.
+    """
 
     async def task_get(self, task_id: str) -> TaskRecord: ...
 
 
 async def load_produced_by(
-    lithos: ProducedByClientProtocol,
+    lithos: object,
     note: NoteRecord,
 ) -> ProducedByTask | None:
     """Validate a note's ``metadata.source`` into a produced-by-task chip.
 
     Returns ``None`` (render no chip) when there is no ``source``, when the
     client cannot answer ``lithos_task_get`` (the method is absent — K1 tolerates
-    T1 not having landed it), or when validation fails (an unknown/invalid source
-    id raises). Only a successful ``task_get`` yields a chip, so the note view
-    never links to a task that isn't there.
+    T1 not having landed it, so ``lithos`` is typed ``object`` and probed for the
+    capability), or when validation fails (an unknown/invalid source id raises).
+    Only a successful ``task_get`` yields a chip, so the note view never links to
+    a task that isn't there.
     """
     source = note.metadata.get("source")
     if not isinstance(source, str) or not source.strip():
         return None
-    task_get = getattr(lithos, "task_get", None)
-    if task_get is None:
+    if not isinstance(lithos, ProducedByClientProtocol):
         return None
     try:
-        task = await task_get(source.strip())
+        task = await lithos.task_get(source.strip())
     except Exception:
         # Unknown/invalid source (task_not_found), a broken response, or an
         # unreachable backend — all degrade to "no chip", never a dead link.
