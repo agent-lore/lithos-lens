@@ -170,24 +170,38 @@ def test_claimed_but_blocked_is_flagged_in_progress() -> None:
 
 
 class _FrontierFake:
-    """Minimal client covering the five parallel calls load_dashboard makes."""
+    """Minimal client covering the parallel calls load_dashboard makes.
+
+    The frontier reads HONOR their ``limit`` (mirroring the real server), and
+    ``ready`` / ``blocked`` accept either a single response or a SEQUENCE of
+    responses so read-skew retries can be scripted (the last response repeats).
+    Call counts are recorded for retry assertions.
+    """
 
     def __init__(
         self,
         *,
         open_tasks: list[TaskRecord],
-        ready: list[TaskRecord],
-        blocked: list[BlockedTaskRecord],
+        ready: list[TaskRecord] | list[list[TaskRecord]],
+        blocked: list[BlockedTaskRecord] | list[list[BlockedTaskRecord]],
         completed: list[TaskRecord] | None = None,
         cancelled: list[TaskRecord] | None = None,
         fail_ready: bool = False,
     ) -> None:
         self._open = open_tasks
-        self._ready = ready
-        self._blocked = blocked
+        self._ready_seq = self._as_sequence(ready)
+        self._blocked_seq = self._as_sequence(blocked)
         self._completed = completed or []
         self._cancelled = cancelled or []
         self._fail_ready = fail_ready
+        self.ready_calls = 0
+        self.blocked_calls = 0
+
+    @staticmethod
+    def _as_sequence(value: list[Any]) -> list[list[Any]]:
+        if value and isinstance(value[0], list):
+            return value
+        return [value]
 
     async def list_tasks(
         self,
@@ -220,7 +234,10 @@ class _FrontierFake:
     ) -> list[TaskRecord]:
         if self._fail_ready:
             raise RuntimeError("ready frontier unavailable")
-        return self._ready
+        index = min(self.ready_calls, len(self._ready_seq) - 1)
+        self.ready_calls += 1
+        rows = self._ready_seq[index]
+        return rows[:limit] if limit is not None else rows
 
     async def task_blocked(
         self,
@@ -229,7 +246,10 @@ class _FrontierFake:
         project: str | None = None,
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
-        return self._blocked
+        index = min(self.blocked_calls, len(self._blocked_seq) - 1)
+        self.blocked_calls += 1
+        rows = self._blocked_seq[index]
+        return rows[:limit] if limit is not None else rows
 
     async def stats(self) -> dict[str, Any]:
         return {"open_claims": 2, "agents": 3}
@@ -301,15 +321,79 @@ def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
     assert any("ready frontier" in message for message in data.errors)
 
 
-def test_load_dashboard_flags_truncation_when_frontier_hits_its_limit() -> None:
-    """When both frontier reads succeed but omit a workable open task (the
-    frontier-limit overflow case), the tail row IS truncation."""
-    ready = _task("r", claims=())
-    overflow = _task("o", claims=())
-    # Both frontier calls succeed; ``overflow`` is in neither set (as if the
-    # limit dropped it), so it lands in the Not-classified tail.
-    fake = _FrontierFake(open_tasks=[ready, overflow], ready=[ready], blocked=[])
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-    assert _section_ids(data.sections, "unclassified") == ["o"]
+def test_load_dashboard_flags_truncation_only_at_the_limit() -> None:
+    """Truncation means a frontier response actually HIT frontier_limit: with
+    limit=1 and two ready-able rows the ready read returns one row, the other
+    lands in the Not-classified tail, and that tail IS truncation."""
+    r1 = _task("r1", claims=())
+    r2 = _task("r2", claims=())
+    fake = _FrontierFake(open_tasks=[r1, r2], ready=[r1, r2], blocked=[])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert _section_ids(data.sections, "ready") == ["r1"]
+    assert _section_ids(data.sections, "unclassified") == ["r2"]
     assert data.truncated is True
+    assert data.reconciliation_pending is False
     assert data.errors == ()
+    # At the limit there is nothing to reconcile — no retry is spent.
+    assert fake.ready_calls == 1
+
+
+def test_load_dashboard_below_limit_gap_retries_then_classifies_blocked() -> None:
+    """A workable open task absent from BOTH frontier responses while BELOW the
+    limit is read-skew, not truncation (the reads are independent, not a
+    snapshot). Policy: retry the ready+blocked pair once; if the gap persists,
+    classify the row conservatively as Blocked with the reconciliation-warning
+    surface — wrongly-Ready invites wasted operator attention, wrongly-Blocked
+    is safe."""
+    ready = _task("r", claims=())
+    gap = _task("g", claims=())
+    fake = _FrontierFake(open_tasks=[ready, gap], ready=[ready], blocked=[])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    # Retried once, still inconsistent -> conservative Blocked, flagged.
+    assert fake.ready_calls == 2
+    assert fake.blocked_calls == 2
+    assert _section_ids(data.sections, "unclassified") == []
+    assert _section_ids(data.sections, "blocked") == ["g"]
+    (row,) = data.sections["blocked"]
+    assert row.reconciliation_pending is True
+    assert data.truncated is False
+    assert data.reconciliation_pending is True
+    assert data.errors == ()
+
+
+def test_load_dashboard_retry_heals_read_skew() -> None:
+    """When the single retry returns a consistent pair, the row classifies
+    normally — no warning, no conservative bucket."""
+    ready = _task("r", claims=())
+    gap = _task("g", claims=())
+    fake = _FrontierFake(
+        open_tasks=[ready, gap],
+        ready=[[ready], [ready, gap]],  # first read misses g, retry sees it
+        blocked=[],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 2
+    assert _section_ids(data.sections, "ready") == ["r", "g"]
+    assert data.reconciliation_pending is False
+    assert data.truncated is False
+
+
+def test_load_dashboard_ready_and_blocked_overlap_goes_conservative_blocked() -> None:
+    """The same id in BOTH frontier responses is read-skew too: after the
+    failed retry the row must land in Blocked (never Ready) with the
+    reconciliation warning."""
+    both = _task("x", claims=())
+    blocked_record = _blocked(both, BlockerRecord(kind="task", task_id="p"))
+    fake = _FrontierFake(open_tasks=[both], ready=[both], blocked=[blocked_record])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 2
+    assert _section_ids(data.sections, "ready") == []
+    assert _section_ids(data.sections, "blocked") == ["x"]
+    (row,) = data.sections["blocked"]
+    assert row.reconciliation_pending is True
+    assert data.reconciliation_pending is True
+    assert data.truncated is False

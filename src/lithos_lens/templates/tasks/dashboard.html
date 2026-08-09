@@ -50,12 +50,20 @@
         <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
-          <small>Resolved since {{ dashboard.filters.since }}</small>
+          {# The since filter windows terminal rows by CREATED date (see
+             matches_filters); the label must say so. Resolved-time windowing
+             is T1-S10, which should push lithos_task_list's native
+             resolved_since param instead of relabelling this one. #}
+          <small>Created since {{ dashboard.filters.since }}</small>
         </a>
         <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
           <span>Recently cancelled</span>
           <strong>{{ dashboard.summary.recent_cancelled }}</strong>
-          <small>Resolved since {{ dashboard.filters.since }}</small>
+          {# The since filter windows terminal rows by CREATED date (see
+             matches_filters); the label must say so. Resolved-time windowing
+             is T1-S10, which should push lithos_task_list's native
+             resolved_since param instead of relabelling this one. #}
+          <small>Created since {{ dashboard.filters.since }}</small>
         </a>
         <article class="metric-card">
           <span>Agents</span>
@@ -68,6 +76,12 @@
         <section class="banner banner-warning" role="status">
           <strong>Section counts are approximate.</strong>
           <span>The Lithos ready/blocked frontier truncated at {{ dashboard.frontier_limit }}; some open tasks are listed as Not classified below.</span>
+        </section>
+      {% endif %}
+      {% if dashboard.reconciliation_pending %}
+        <section class="banner banner-warning" role="status" data-reconciliation-banner>
+          <strong>Frontier reads disagreed.</strong>
+          <span>The ready/blocked reads returned inconsistent membership even after a retry; the affected rows are shown under Blocked (marked "awaiting reconciliation") until the frontier settles.</span>
         </section>
       {% endif %}
 
@@ -122,6 +136,11 @@
       {% set workable = ("in_progress", "ready", "blocked") %}
       {% set section_order = workable + ("unclassified", "completed", "cancelled") %}
       <section class="task-board" aria-label="Task sections">
+        {# Skeleton strip for just-created tasks: a task.created event lands
+           here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
+           re-renders the board with the task in its real section — a fresh
+           task's frontier membership is unknown until Lithos answers. #}
+        <div class="task-list task-list-pending" data-task-list="pending" aria-label="Just created, awaiting sections"></div>
         {% for section in section_order %}
           {% set rows = dashboard.sections[section] %}
           {% if section in ("completed", "cancelled") %}

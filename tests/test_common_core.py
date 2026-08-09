@@ -6,9 +6,11 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
+from lithos_lens.errors import ConfigError
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
@@ -139,6 +141,7 @@ def test_config_loads_common_core_defaults(lithos_lens_config_env: Path) -> None
     assert config.lithos.mcp_sse_path == "/sse"
     assert config.lithos.agent_id == "lithos-lens-test"
     assert config.tasks.visible_cap == 50
+    assert config.tasks.frontier_limit == 500
     assert config.tasks.default_status_groups == ("open", "completed", "cancelled")
     assert config.events.enabled is True
     assert config.llm.enabled is False
@@ -217,3 +220,51 @@ def test_static_assets_are_served(lithos_lens_config_env: Path) -> None:
     assert "htmx" in htmx.text
     assert tasks_js.status_code == 200
     assert "EventSource" in tasks_js.text
+
+
+def test_env_override_sets_tasks_frontier_limit(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "42")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.frontier_limit == 42
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "nope", "1.5"])
+def test_env_override_tasks_frontier_limit_rejects_junk(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", bad)
+
+    with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_FRONTIER_LIMIT"):
+        load_config(lithos_lens_config_env)
+
+
+def test_visible_cap_in_config_warns_deprecated_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """visible_cap is superseded by frontier_limit (the graph-native dashboard
+    has no per-row claim enrichment to cap); a configured value still parses
+    but warns ONCE so operators migrate without breakage."""
+    import lithos_lens.config as config_module
+
+    monkeypatch.setattr(config_module, "_VISIBLE_CAP_WARNED", False)
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\nvisible_cap = 10\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with caplog.at_level("WARNING", logger="lithos_lens.config"):
+        first = load_config(config_path)
+        load_config(config_path)
+
+    assert first.tasks.visible_cap == 10
+    warnings = [
+        r for r in caplog.records if "visible_cap is deprecated" in r.getMessage()
+    ]
+    assert len(warnings) == 1

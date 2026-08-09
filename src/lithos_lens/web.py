@@ -10,11 +10,17 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.events import LensEvent
 from lithos_lens.fake_lithos import (
     FakeEventHub,
     FakeLithosClient,
@@ -158,6 +164,24 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    if fake_lithos_enabled():
+        # Fake-mode-only harness seam: lets the browser suite drive the REAL
+        # SSE path (publish -> hub -> /tasks/events -> EventSource ->
+        # tasks.js) without a Lithos server. Never registered outside fake
+        # mode, so production has no injection surface.
+        @app.post("/tasks/events/publish")
+        async def publish_test_event(request: Request) -> JSONResponse:
+            data = await request.json()
+            event = LensEvent(
+                id=str(data.get("id") or ""),
+                type=str(data.get("type") or "task.created"),
+                task_id=str(data.get("task_id") or ""),
+                payload=dict(data.get("payload") or {}),
+                requires_refresh=bool(data.get("requires_refresh", True)),
+            )
+            await state.events.publish(event)
+            return JSONResponse({"published": True}, status_code=202)
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:

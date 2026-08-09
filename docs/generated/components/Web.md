@@ -25,7 +25,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [State](State.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md), [Telemetry](Telemetry.md)
+- Depends on: [Config](Config.md), [Events](Events.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [State](State.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md), [Telemetry](Telemetry.md)
 - Used by: [Entrypoint](Entrypoint.md)
 
 [← all generated docs](../README.md)

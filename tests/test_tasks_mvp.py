@@ -789,3 +789,34 @@ def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
     assert response.status_code == 200
     assert "claims unknown" in response.text
     assert 'class="claim-chip claim-chip-open"' not in response.text
+
+
+def test_terminal_card_labels_match_the_created_windowing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Label<->filter consistency: the since filter windows completed/cancelled
+    rows by CREATED date, so the cards must say "Created since". A task created
+    long ago but resolved yesterday is (currently) excluded — resolved-time
+    windowing is T1-S10, which should push lithos_task_list's native
+    resolved_since param rather than relabel this filter."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="old-created-recent-resolved",
+            title="Ancient task resolved yesterday",
+            status="completed",
+            created_by="worker",
+            created_at="2020-01-01T00:00:00+00:00",
+            resolved_at="2026-08-08T00:00:00+00:00",
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    # Created outside the window: excluded even though resolved recently…
+    assert "Ancient task resolved yesterday" not in response.text
+    # …so the cards must describe the filter that actually applies.
+    assert "Created since" in response.text
+    assert "Resolved since" not in response.text

@@ -526,3 +526,52 @@ def test_no_warning_when_fake_mode_off(
     assert not [
         r for r in caplog.records if "fake-Lithos app mode is ENABLED" in r.getMessage()
     ]
+
+
+def test_fake_mode_event_publish_seam_reaches_subscribers(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /tasks/events/publish (fake-mode-only harness seam) pushes a real
+    LensEvent through the in-process hub to /tasks/events subscribers."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        hub = app.state.lens.events
+        queue = hub.subscribe()
+        response = client.post(
+            "/tasks/events/publish",
+            json={
+                "id": "evt-77",
+                "type": "task.created",
+                "task_id": "brand-new",
+                "payload": {"title": "Brand new"},
+            },
+        )
+        event = queue.get_nowait()
+    assert response.status_code == 202
+    assert event.id == "evt-77"
+    assert event.type == "task.created"
+    assert event.task_id == "brand-new"
+
+
+def test_event_publish_seam_absent_outside_fake_mode(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITHOS_LENS_FAKE_LITHOS", raising=False)
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.post("/tasks/events/publish", json={"task_id": "x"})
+    assert response.status_code in (404, 405)
+
+
+def test_fake_mode_dashboard_has_the_pending_strip(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tasks.js targets [data-task-list="pending"] for task.created skeletons
+    (the old data-task-list="open" target died with the sectioned board)."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/tasks?since=2026-08-01")
+    assert response.status_code == 200
+    assert 'data-task-list="pending"' in response.text

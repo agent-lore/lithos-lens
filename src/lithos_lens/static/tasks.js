@@ -61,8 +61,12 @@
   }
 
   function handleEvent(event) {
-    if (!event.id || seenEvents.has(event.id)) return;
-    seenEvents.add(event.id);
+    // An EventSource MessageEvent exposes the SSE `id:` field as
+    // lastEventId — `event.id` does not exist, and reading it dropped every
+    // event at this dedup guard (caught by the task.created browser test).
+    const eventId = event.lastEventId;
+    if (!eventId || seenEvents.has(eventId)) return;
+    seenEvents.add(eventId);
     if (seenEvents.size > 500) {
       seenEvents.delete(seenEvents.values().next().value);
     }
@@ -84,7 +88,11 @@
   function insertSkeletonRow(message) {
     const taskId = message.task_id;
     if (!taskId || rowFor(taskId)) return;
-    const list = document.querySelector('[data-task-list="open"]');
+    // A just-created task has no known section yet (its frontier membership
+    // arrives with the ~800ms reconciliation), so the skeleton lands in the
+    // dedicated pending strip at the top of the board; the reconcile's
+    // fragment replace then re-renders it in its real section.
+    const list = document.querySelector('[data-task-list="pending"]');
     if (!list) return;
     const title = message.payload && message.payload.title ? message.payload.title : `Task ${taskId}`;
     const row = document.createElement("article");

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Protocol, cast
 
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
@@ -173,14 +174,32 @@ async def load_dashboard(
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
 
-    Five calls fan out concurrently: the master open list (claims inline), the
-    ready and blocked frontiers, and the recently-resolved completed/cancelled
-    windows. Stats and the agent list ride along for the header and filter
-    dropdown.
+    All seven independent reads fan out in ONE gather: the master open list
+    (claims inline), the ready and blocked frontiers, stats, the agent list,
+    and the recently-resolved completed/cancelled windows. The only second
+    round-trip is the read-skew retry below — and only when the first pair of
+    frontier responses is inconsistent below the limit.
+
+    The open/ready/blocked calls are independent reads, not a snapshot, so a
+    workable open task can be missing from both frontier lists (or present in
+    both) through pure read-skew. Policy: a frontier response that actually
+    hit ``frontier_limit`` is truncation; an inconsistency BELOW the limit
+    retries the ready+blocked pair once, and if it persists the affected rows
+    classify conservatively as Blocked with the reconciliation-warning surface
+    (wrongly-Ready invites wasted operator attention; wrongly-Blocked is safe)
+    — the same explicit degraded-data pattern as ``claims_unknown``.
     """
     errors: list[str] = []
     query_tags = list(filters.tags) or None
     query_agent = filters.agent or None
+
+    async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
+        return await lithos.list_tasks(
+            agent=query_agent,
+            status=status,
+            tags=query_tags,
+            since=filters.since,
+        )
 
     (
         open_result,
@@ -188,6 +207,8 @@ async def load_dashboard(
         blocked_result,
         stats_result,
         agents_result,
+        completed_result,
+        cancelled_result,
     ) = await asyncio.gather(
         # The master open set is the whole open list (PRD data contract):
         # NO agent/tag/since filter is pushed. Open tasks are the live frontier,
@@ -201,28 +222,24 @@ async def load_dashboard(
         lithos.task_blocked(limit=frontier_limit),
         lithos.stats(),
         lithos.list_agents(),
-        return_exceptions=True,
-    )
-
-    async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
-        return await lithos.list_tasks(
-            agent=query_agent,
-            status=status,
-            tags=query_tags,
-            since=filters.since,
-        )
-
-    closed_results = await asyncio.gather(
         load_closed("completed"),
         load_closed("cancelled"),
         return_exceptions=True,
+    )
+    # gather() overloads stop narrowing positionally beyond five results, so
+    # the per-slot unions are reasserted here.
+    closed_results = (
+        cast("list[TaskRecord] | BaseException", completed_result),
+        cast("list[TaskRecord] | BaseException", cancelled_result),
     )
 
     # The full open snapshot (unfiltered by agent/tag) resolves blocker-chip
     # predecessor titles even when a predecessor is filtered out of the visible
     # sections; ``visible_open`` is the agent/tag-filtered subset that the
     # sections render.
-    open_snapshot = _sorted_or_error("open", open_result, errors)
+    open_snapshot = _sorted_or_error(
+        "open", cast("list[TaskRecord] | BaseException", open_result), errors
+    )
     open_index = {task.id: task for task in open_snapshot}
     visible_open = [
         task
@@ -230,13 +247,13 @@ async def load_dashboard(
         if matches_filters(task, filters=filters, status="open")
     ]
 
-    ready_ids: set[str] = set()
+    ready_list: list[TaskRecord] = []
     frontier_ok = True
     if isinstance(ready_result, BaseException):
         errors.append("Could not load the ready frontier.")
         frontier_ok = False
     else:
-        ready_ids = {task.id for task in cast(list[TaskRecord], ready_result)}
+        ready_list = cast(list[TaskRecord], ready_result)
 
     blocked_records: list[BlockedTaskRecord] = []
     if isinstance(blocked_result, BaseException):
@@ -249,12 +266,49 @@ async def load_dashboard(
     for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
         closed[status] = _rows_for(status, result, filters, errors)
 
-    partition = classify_open_tasks(
-        visible_open,
-        ready_ids=ready_ids,
-        blocked=blocked_records,
-        index=open_index,
-    )
+    def _partition_state(
+        ready_rows: list[TaskRecord], blocked_rows: list[BlockedTaskRecord]
+    ) -> tuple[dict[SectionName, tuple[SectionRow, ...]], set[str], bool, bool]:
+        ready_ids = {task.id for task in ready_rows}
+        overlap = ready_ids & {record.task.id for record in blocked_rows}
+        # Truncation is a fact about the response size, not an inference from
+        # gaps: a frontier read that returned frontier_limit rows hit its cap.
+        at_limit = (
+            len(ready_rows) >= frontier_limit or len(blocked_rows) >= frontier_limit
+        )
+        parts = classify_open_tasks(
+            visible_open,
+            ready_ids=ready_ids,
+            blocked=blocked_rows,
+            index=open_index,
+        )
+        skewed = not at_limit and (bool(overlap) or bool(parts["unclassified"]))
+        return parts, overlap, at_limit, skewed
+
+    partition, overlap, at_limit, skewed = _partition_state(ready_list, blocked_records)
+
+    if frontier_ok and skewed:
+        # Below-limit inconsistency (a workable open task in neither frontier
+        # response, or in both) is read-skew between independent reads. Retry
+        # the pair once; a persisting disagreement is handled conservatively
+        # below rather than trusted.
+        retry_ready, retry_blocked = await asyncio.gather(
+            lithos.task_ready(limit=frontier_limit, with_claims=False),
+            lithos.task_blocked(limit=frontier_limit),
+            return_exceptions=True,
+        )
+        if not isinstance(retry_ready, BaseException) and not isinstance(
+            retry_blocked, BaseException
+        ):
+            ready_list = cast(list[TaskRecord], retry_ready)
+            blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
+            partition, overlap, at_limit, skewed = _partition_state(
+                ready_list, blocked_records
+            )
+
+    reconciliation_pending = frontier_ok and skewed
+    if reconciliation_pending:
+        partition = _reclassify_conservative(partition, overlap)
 
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
@@ -300,13 +354,40 @@ async def load_dashboard(
         agents=agents,
         frontier_limit=frontier_limit,
         open_total=open_total,
-        # Truncation means the frontier reads SUCCEEDED but hit their limit,
-        # leaving otherwise-classifiable rows in the tail. Unclassified rows from
-        # a failed frontier read are surfaced by the error banner instead, not
-        # mislabelled as truncation.
-        truncated=frontier_ok and bool(partition["unclassified"]),
+        # Truncation means a frontier response actually HIT frontier_limit,
+        # leaving otherwise-classifiable rows in the tail. Unclassified rows
+        # from a failed frontier read are surfaced by the error banner, and a
+        # below-limit gap is read-skew (handled by the retry + conservative
+        # Blocked above) — neither is mislabelled as truncation.
+        truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
+        reconciliation_pending=reconciliation_pending,
         errors=tuple(errors),
     )
+
+
+def _reclassify_conservative(
+    partition: dict[SectionName, tuple[SectionRow, ...]],
+    overlap: set[str],
+) -> dict[SectionName, tuple[SectionRow, ...]]:
+    """Fold read-skew rows into Blocked, flagged for the reconciliation banner.
+
+    Overlap rows (in BOTH frontier responses) leave Ready — the ready-first
+    classify branch had placed them there — and every unclassified row joins
+    them in Blocked. Wrongly-Ready invites an operator to start work that may
+    be blocked; wrongly-Blocked merely defers attention, so Blocked is the
+    conservative side.
+    """
+    moved = [
+        replace(row, reconciliation_pending=True)
+        for row in partition["ready"]
+        if row.task.id in overlap
+    ] + [replace(row, reconciliation_pending=True) for row in partition["unclassified"]]
+    return {
+        **partition,
+        "ready": tuple(row for row in partition["ready"] if row.task.id not in overlap),
+        "blocked": partition["blocked"] + tuple(moved),
+        "unclassified": (),
+    }
 
 
 def _sorted_or_error(

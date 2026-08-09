@@ -30,6 +30,9 @@
     {% if row.claimed_but_blocked %}
       <span class="badge badge-blocked" data-claimed-but-blocked>blocked</span>
     {% endif %}
+    {% if row.reconciliation_pending %}
+      <span class="badge badge-blocked" data-reconciliation-pending>awaiting reconciliation</span>
+    {% endif %}
     <span class="finding-chip" data-finding-count hidden>0 new findings</span>
   </div>
   <div class="claim-list" data-claim-list {{ "" if row.claims else "hidden" }}>
@@ -41,6 +44,7 @@
   </div>
   {% if row.blockers %}
     <div class="blocker-list" data-blocker-list aria-label="Blocked by">
+      <span class="blocker-label">Blocked by</span>
       {% for blocker in row.blockers %}
         <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}</span>
       {% endfor %}

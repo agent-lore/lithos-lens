@@ -150,6 +150,11 @@ class SectionRow:
     blockers: tuple[BlockerChip, ...] = ()
     claimed_but_blocked: bool = False
     claims_unknown: bool = False
+    # The frontier reads are independent (no cross-call snapshot); when they
+    # disagree even after the single retry, the row is classified
+    # conservatively as Blocked and flagged so the template can render the
+    # reconciliation warning instead of asserting real blockage.
+    reconciliation_pending: bool = False
 
     @property
     def claim_state(self) -> str:
@@ -189,6 +194,7 @@ class DashboardData:
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int
+    reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
 

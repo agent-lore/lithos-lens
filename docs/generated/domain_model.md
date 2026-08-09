@@ -160,6 +160,7 @@ classDiagram
   class DashboardData {
     +frontier_limit int
     +open_total int
+    +reconciliation_pending bool
     +truncated bool
     +errors tuple[str, ...]
   }
@@ -192,6 +193,7 @@ classDiagram
   class SectionRow {
     +claimed_but_blocked bool
     +claims_unknown bool
+    +reconciliation_pending bool
   }
   class TaskDetailData {
     +status_state SectionState
