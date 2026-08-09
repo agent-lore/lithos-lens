@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Knowledge-note rendering and normalization (safe server-side markdown + the related-panel neighborhood/view models).
+Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede).
 
 **Tier:** Foundation
 
@@ -12,6 +12,7 @@ Knowledge-note rendering and normalization (safe server-side markdown + the rela
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 9 | 5 |
+| `lithos_lens.knowledge_metadata` | S | 1 | 1 |
 
 ## Public API
 
@@ -30,6 +31,10 @@ Knowledge-note rendering and normalization (safe server-side markdown + the rela
 - class `ResolveOutcome` — The result of resolving one wiki-link click.
 - class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
 - def `resolve_wiki_link` — Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3).
+
+### `lithos_lens.knowledge_metadata`
+- class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
+- def `build_note_metadata` — Project a note's frontmatter into the §6.4 metadata view model.
 
 ## Dependencies
 

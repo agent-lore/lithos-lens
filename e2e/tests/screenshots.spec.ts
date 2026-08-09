@@ -65,6 +65,13 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    slug: "note-quarantined",
+    url: "/note/note-influx-legacy-ingest",
+    ready: async (page) => {
+      await expect(page.locator(".note-status-quarantined")).toBeVisible();
+    },
+  },
+  {
     slug: "note-missing",
     url: "/note/missing-note",
     ready: async (page) => {

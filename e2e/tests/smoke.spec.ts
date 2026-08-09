@@ -83,6 +83,59 @@ test("knowledge note renders server-side markdown", async ({ page }) => {
   ).toContainText("Stage 1: dual-write");
 });
 
+test("knowledge note renders metadata chips, lede and authorship", async ({ page }) => {
+  // K1-S3: frontmatter drives the chip row, lede and authorship line.
+  await page.goto("/note/note-influx-plan");
+
+  const chips = page.locator(".note-chips");
+  await expect(chips).toBeVisible();
+  await expect(chips.locator(".note-type")).toHaveText("summary");
+  await expect(chips.locator(".note-status")).toHaveText("active");
+  // Scope shows because the fixture is NOT "shared" (shared renders no chip).
+  await expect(chips.locator(".note-scope")).toHaveText("task");
+  await expect(chips.locator(".note-namespace")).toHaveText("plans");
+  await expect(chips.locator(".note-confidence")).toHaveText("confidence 90%");
+  await expect(chips.locator(".note-supersedes a")).toHaveAttribute(
+    "href",
+    "/note/note-influx-legacy-ingest",
+  );
+
+  await expect(page.locator(".note-lede")).toContainText(
+    "Cut ingest over first, backfill after",
+  );
+  await expect(page.locator(".note-authorship")).toContainText("By worker-a");
+});
+
+test("clicking a note tag opens the filtered knowledge landing", async ({ page }) => {
+  await page.goto("/note/note-influx-plan");
+
+  await page
+    .locator("article .tag-list a", { hasText: "kind: plan" })
+    .first()
+    .click();
+
+  await expect(page).toHaveURL(/\/knowledge\?tag=kind%3Aplan/);
+  // The filtered landing renders and lists the tagged fixture notes.
+  await expect(
+    page.getByRole("link", { name: "Influx migration plan" }),
+  ).toBeVisible();
+});
+
+test("quarantined note is visibly quarantined (computed style)", async ({ page }) => {
+  await page.goto("/note/note-influx-legacy-ingest");
+
+  const chip = page.locator(".note-status-quarantined");
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveText("quarantined");
+  // Browser truth, not stylesheet substrings: the rule actually applies.
+  const style = await chip.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { weight: cs.fontWeight, background: cs.backgroundColor };
+  });
+  expect(style.weight).toBe("700");
+  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+});
+
 test("knowledge note renders the related panel with edge badges", async ({ page }) => {
   // K1-S4: the note page carries a related <aside> fed by one lithos_related
   // call; the fixtures give the plan note a link, an unresolved contradicts

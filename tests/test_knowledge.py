@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens import knowledge
+from lithos_lens import knowledge, knowledge_metadata
 from lithos_lens.config import load_config
 from lithos_lens.knowledge import render_markdown
+from lithos_lens.knowledge_metadata import build_note_metadata
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
 from tests.test_tasks_mvp import TaskFakeLithosClient
@@ -166,10 +167,310 @@ def test_markdown_parser_keeps_raw_html_and_linkify_disabled() -> None:
     assert knowledge.MARKDOWN.options["linkify"] is False
 
 
+# ── Metadata chips + lede (K1-S3) ──────────────────────────────────────
+
+
+def _note(**metadata: object) -> NoteRecord:
+    return NoteRecord(id="n", title="T", content="body", metadata=dict(metadata))
+
+
+def test_build_note_metadata_projects_frontmatter_fields() -> None:
+    meta = build_note_metadata(
+        _note(
+            note_type="observation",
+            status="active",
+            confidence=0.85,
+            access_scope="task",
+            namespace="runbooks",
+            supersedes="old-note-id",
+            author="agent-7",
+            contributors=["reviewer-a", "reviewer-b"],
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-02-01T00:00:00+00:00",
+            summaries={"short": "One-line lede."},
+        )
+    )
+    assert meta.note_type == "observation"
+    assert meta.status == "active"
+    assert meta.confidence == "85%"
+    # "shared" would project to "" (no chip) — covered by the scope-chip test.
+    assert meta.access_scope == "task"
+    assert meta.namespace == "runbooks"
+    assert meta.supersedes == "old-note-id"
+    assert meta.author == "agent-7"
+    assert meta.contributors == ("reviewer-a", "reviewer-b")
+    assert meta.created_at == "2026-01-01T00:00:00+00:00"
+    assert meta.updated_at == "2026-02-01T00:00:00+00:00"
+    assert meta.lede == "One-line lede."
+    assert meta.has_chips
+    assert meta.has_authorship
+
+
+def test_build_note_metadata_empty_when_frontmatter_absent() -> None:
+    meta = build_note_metadata(_note())
+    assert meta == knowledge_metadata.NoteMetadata()
+    assert not meta.has_chips
+    assert not meta.has_authorship
+    assert meta.lede == ""
+
+
+def test_build_note_metadata_lede_only_from_summaries_short() -> None:
+    assert build_note_metadata(_note(summaries={"long": "not this"})).lede == ""
+    assert build_note_metadata(_note(summaries="oops")).lede == ""
+    trimmed = build_note_metadata(_note(summaries={"short": " trim me "}))
+    assert trimmed.lede == "trim me"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.85, "85%"),
+        (0.0, "0%"),
+        (1, "100%"),
+        (0.333, "33%"),
+        (True, ""),
+        ("0.85", ""),
+        (None, ""),
+        # Out-of-range fractions are malformed frontmatter (untrusted input):
+        # no chip, rather than a misleading "200%" / "-50%".
+        (2, ""),
+        (1.5, ""),
+        (-0.5, ""),
+        (-1, ""),
+        # NaN/inf are out-of-range too (and would otherwise make round() raise
+        # mid-render); the range guard rejects them the same way.
+        (float("nan"), ""),
+        (float("inf"), ""),
+    ],
+)
+def test_build_note_metadata_confidence_formatting(
+    value: object, expected: str
+) -> None:
+    assert build_note_metadata(_note(confidence=value)).confidence == expected
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        # "shared" is the default visibility: no chip (PRD user story — "access
+        # scope WHEN NOT SHARED"). Non-shared scopes are the signal worth a chip.
+        ("shared", ""),
+        ("task", "task"),
+        ("agent_private", "agent_private"),
+        # An odd variant stays VISIBLE (knowledge-hygiene surface): only the
+        # exact "shared" value is the quiet default.
+        ("Shared", "Shared"),
+        ("", ""),
+    ],
+)
+def test_build_note_metadata_scope_chip_only_when_not_shared(
+    scope: str, expected: str
+) -> None:
+    assert build_note_metadata(_note(access_scope=scope)).access_scope == expected
+
+
+def test_build_note_metadata_namespace_falls_back_to_path_directory() -> None:
+    # Explicit namespace wins over the path.
+    assert (
+        build_note_metadata(_note(namespace="explicit", path="runbooks/x.md")).namespace
+        == "explicit"
+    )
+    # Otherwise the path's directory stands in as the namespace.
+    assert (
+        build_note_metadata(_note(path="runbooks/influx/x.md")).namespace
+        == "runbooks/influx"
+    )
+    # A bare (directory-less) path derives no namespace.
+    assert build_note_metadata(_note(path="x.md")).namespace == ""
+
+
+def test_build_note_metadata_contributors_accepts_scalar_and_drops_blanks() -> None:
+    assert build_note_metadata(_note(contributors="solo")).contributors == ("solo",)
+    assert build_note_metadata(
+        _note(contributors=["a", "", "  ", "b", 5])
+    ).contributors == ("a", "b")
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_slug"),
+    [
+        ("quarantined", "quarantined"),
+        ("active", "active"),
+        ("archived", "archived"),
+        # The known states pass through unchanged, so their stylesheet hooks
+        # still match. A hostile status collapses whitespace/punctuation to a
+        # single token — no second CSS class can be smuggled in via the suffix.
+        ("open banner-warning", "open-banner-warning"),
+        ("a\tb\nc", "a-b-c"),
+        ("UPPER Case", "upper-case"),
+        ("--edge--", "edge"),
+    ],
+)
+def test_build_note_metadata_status_slug_is_a_single_class_token(
+    status: str, expected_slug: str
+) -> None:
+    slug = build_note_metadata(_note(status=status)).status_slug
+    assert slug == expected_slug
+    # The whole point: the slug is one whitespace-free class token.
+    assert " " not in slug and "\t" not in slug and "\n" not in slug
+
+
 def _client(config_path: Path, fake: TaskFakeLithosClient) -> TestClient:
     config = load_config(config_path)
     app = create_app(config, lithos_client_factory=lambda _: fake)
     return TestClient(app)
+
+
+def test_note_page_renders_metadata_chips_lede_and_tag_links(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["meta-note"] = NoteRecord(
+        id="meta-note",
+        title="Metadata Note",
+        content="Body text.",
+        tags=("project:influx", "kind:plan"),
+        metadata={
+            "note_type": "summary",
+            "status": "active",
+            "confidence": 0.9,
+            "access_scope": "task",
+            "namespace": "runbooks",
+            "supersedes": "prior-note",
+            "summaries": {"short": "The one-sentence gist."},
+            "author": "worker-a",
+            "contributors": ["planner", "worker-b"],
+            "created_at": "2026-08-01T09:00:00+00:00",
+        },
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/meta-note")
+
+    assert response.status_code == 200
+    body = response.text
+    # Chips for each frontmatter field (scope shows because it is NOT shared).
+    assert "summary" in body
+    assert 'class="chip note-scope">task<' in body
+    assert "runbooks" in body
+    assert "90%" in body
+    # Authorship renders in the HTML, not just the view model.
+    assert "By worker-a" in body
+    assert "Contributors: planner, worker-b" in body
+    assert "Created 2026-08-01T09:00:00+00:00" in body
+    # Lede rendered above the body — and literally BEFORE it in document order.
+    assert 'class="note-lede"' in body
+    assert "The one-sentence gist." in body
+    assert body.index('class="note-lede"') < body.index('class="markdown-body"')
+    # Supersedes renders a link to the superseded note.
+    assert 'href="/note/prior-note"' in body
+    # Tags link to the knowledge list filtered by that tag.
+    assert 'href="/knowledge?tag=project%3Ainflux"' in body
+    assert 'href="/knowledge?tag=kind%3Aplan"' in body
+
+
+def test_note_page_omits_scope_chip_for_shared_notes(
+    lithos_lens_config_env: Path,
+) -> None:
+    """PRD user story: "access scope WHEN NOT SHARED" — shared is the default
+    visibility, so it earns no chip."""
+    fake = TaskFakeLithosClient()
+    fake.notes["shared-note"] = NoteRecord(
+        id="shared-note",
+        title="Shared Note",
+        content="Body.",
+        metadata={"access_scope": "shared", "note_type": "summary"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/shared-note")
+
+    assert response.status_code == 200
+    assert "note-scope" not in response.text
+    # Other chips still render — the note is not chip-less.
+    assert 'class="chip note-type">summary<' in response.text
+
+
+def test_note_page_marks_quarantined_note_visibly(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["bad-note"] = NoteRecord(
+        id="bad-note",
+        title="Quarantined Note",
+        content="Body.",
+        metadata={"status": "quarantined"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/bad-note")
+
+    assert response.status_code == 200
+    # The status chip carries a status-specific class the stylesheet colours,
+    # so a quarantined note is visibly quarantined (§6.4 acceptance).
+    assert "note-status-quarantined" in response.text
+    # ...and the stylesheet carries a real rule for it, with the declarations
+    # that make it read as quarantined (highlighted background + heavy weight).
+    # The browser-truth check — computed style on the rendered chip — lives in
+    # the Playwright suite; this guards the rule itself against deletion.
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    rule = re.search(r"\.note-status-quarantined\s*\{([^}]*)\}", css)
+    assert rule is not None, "lens.css lost the .note-status-quarantined rule"
+    declarations = rule.group(1)
+    assert "background" in declarations
+    assert "font-weight" in declarations
+
+
+def test_note_page_status_class_cannot_inject_a_second_token(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A hostile ``status`` must not smuggle a second class onto the chip.
+
+    Jinja autoescape stops attribute breakout but leaves whitespace intact, so
+    without slugifying, ``status`` = ``quarantined banner-warning`` would render
+    ``class="chip note-status note-status-quarantined banner-warning"`` — an
+    attacker-chosen class (content spoofing). The slug collapses it to one token.
+    """
+    fake = TaskFakeLithosClient()
+    fake.notes["evil-note"] = NoteRecord(
+        id="evil-note",
+        title="Evil Note",
+        content="Body.",
+        metadata={"status": "quarantined banner-warning"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/evil-note")
+
+    assert response.status_code == 200
+    # The injected token never lands as a standalone class.
+    assert "note-status-quarantined banner-warning" not in response.text
+    assert (
+        'class="chip note-status note-status-quarantined-banner-warning"'
+        in response.text
+    )
+    # Display text is still the raw status (escaped as a text node).
+    assert "quarantined banner-warning" in response.text
+
+
+def test_note_page_omits_chips_when_no_frontmatter(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["plain-note"] = NoteRecord(
+        id="plain-note",
+        title="Plain Note",
+        content="Just a body.",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/plain-note")
+
+    assert response.status_code == 200
+    assert 'class="note-chips"' not in response.text
+    assert 'class="note-lede"' not in response.text
 
 
 def test_note_page_renders_markdown_body_as_html(

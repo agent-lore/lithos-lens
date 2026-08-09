@@ -1046,7 +1046,7 @@ Data contract: one `lithos_read(id=…)` for the document, one `lithos_related(i
 | `note_type` chip | frontmatter (`observation` / `agent_finding` / `summary` / `concept` / `task_record` / `hypothesis`) |
 | `status` chip (colour-coded) | `active` / `archived` / `quarantined` |
 | Confidence | `confidence` rendered as a percentage |
-| `access_scope` chip | `shared` / `task` / `agent_private` |
+| `access_scope` chip | `task` / `agent_private` (or any other non-default value) — shown only when not `shared`, the default visibility (per the user story: "access scope when not shared") |
 | `namespace` chip | explicit or path-derived |
 | Tags | one chip per tag, each linking to `/knowledge?tag=<tag>` |
 | Lede | `summaries.short` rendered above the body when present |

@@ -6,8 +6,9 @@ orchestrators with per-section state. K1 slice 1 introduced server-side
 markdown rendering; K1-S4 adds the *related panel* — one ``lithos_related``
 call turned into four scannable sections (outgoing links, back-links,
 provenance, typed edges) with link/edge endpoints shown by title rather than
-bare id. Later slices add the wiki-link tokenizer, metadata chips, and search
-view models.
+bare id. The frontmatter-driven metadata chips + lede (K1-S3) live in the
+sibling ``knowledge_metadata`` module to keep this one under the god-module
+ceiling; later slices add the search view models.
 """
 
 from __future__ import annotations

@@ -236,7 +236,9 @@ Coverage ≥ 80% on `knowledge.py` and the wiki-link tokenizer.
    three-step resolver; disambiguation + unresolved pages. Acceptance: the
    decision table passes; links inside code fences stay literal.
 3. **Metadata chips + lede.** note_type/status/confidence/scope/namespace/
-   tags chips; `summaries.short`; `supersedes` link. Acceptance: a
+   tags chips; `summaries.short`; `supersedes` link. The scope chip is shown
+   only when not `shared` (the user story's "when not shared" wording is
+   authoritative; resolved in PR #33 review). Acceptance: a
    quarantined note renders visibly quarantined; tags link to
    `/knowledge?tag=`.
 4. **Related panel.** One `lithos_related` call; four sections; title
