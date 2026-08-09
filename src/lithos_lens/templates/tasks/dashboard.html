@@ -81,7 +81,7 @@
       {% if dashboard.reconciliation_pending %}
         <section class="banner banner-warning" role="status" data-reconciliation-banner>
           <strong>Frontier reads disagreed.</strong>
-          <span>The ready/blocked reads returned inconsistent membership even after a retry; the affected rows are shown under Blocked (marked "awaiting reconciliation") until the frontier settles.</span>
+          <span>The ready/blocked reads returned inconsistent membership even after a retry; the affected rows are marked "awaiting reconciliation" — shown under Blocked, or kept In progress with their blocked decoration — until the frontier settles.</span>
         </section>
       {% endif %}
 

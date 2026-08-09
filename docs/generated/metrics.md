@@ -42,35 +42,35 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 3 | 1401 | 1171 | 2 | 5 | 0.71 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 2 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 2 | 612 | 477 | 2 | 1 | 0.33 | 25 (`lithos_lens.frontier.load_dashboard`) | 2 |
+| TaskGraph | 2 | 654 | 505 | 2 | 1 | 0.33 | 28 (`lithos_lens.frontier.load_dashboard`) | 3 |
 | Tasks | 1 | 549 | 428 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
 | Web | 1 | 488 | 418 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **18**, lines: **5147**, SLOC: **4180**
+- Modules: **18**, lines: **5189**, SLOC: **4208**
 - Largest module: `lithos_lens.config` (769 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **230**, cyclomatic > 10: **11**
+- Functions: **230**, cyclomatic > 10: **12**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
+| 28 | `lithos_lens.frontier.load_dashboard` |
 | 25 | `lithos_lens.config._apply_env_overrides` |
-| 25 | `lithos_lens.frontier.load_dashboard` |
 | 23 | `lithos_lens.tasks.normalize_task` |
 | 16 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 13 | `lithos_lens.knowledge._gather_candidates` |
 | 12 | `lithos_lens.frontier.classify_open_tasks` |
+| 12 | `lithos_lens.frontier.load_dashboard._partition_state` |
 | 12 | `lithos_lens.tasks.matches_filters` |
 | 11 | `lithos_lens.fake_lithos.FakeLithosClient.list_notes` |
 | 11 | `lithos_lens.knowledge._normalize_edges` |
-| 11 | `lithos_lens.tasks.normalize_task_status` |
 
 ## Seams
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **29** (27 associations, 15 without docstrings)
-- Test-to-source line ratio: **1.55** (7978 test lines / 5147 source lines)
+- Test-to-source line ratio: **1.55** (8041 test lines / 5189 source lines)

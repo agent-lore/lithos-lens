@@ -444,9 +444,11 @@ def test_retry_refreshes_master_open_and_completed_task_renders_once() -> None:
     assert data.truncated is False
 
 
-def test_closed_dedup_prefers_the_open_snapshot_when_task_is_in_both() -> None:
-    """A task in the final open snapshot AND a closed list renders once, in its
-    open section — the master-open snapshot is the authority on openness."""
+def test_open_terminal_overlap_retries_then_open_wins_when_still_open() -> None:
+    """Round 4: an id in both the initial open snapshot and a terminal list is
+    freshness skew — it retries ALL THREE reads once rather than silently
+    preferring Open. When the retried snapshot still contains the task, the
+    open section wins for real (evidence-based) and the terminal record drops."""
     both = _task("x", claims=())
     stale_completed = TaskRecord(
         id="x", title="Title x", status="completed", task_type="task"
@@ -456,9 +458,40 @@ def test_closed_dedup_prefers_the_open_snapshot_when_task_is_in_both() -> None:
     )
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
+    assert fake.open_calls == 2
+    assert fake.ready_calls == 2
     assert _section_ids(data.sections, "ready") == ["x"]
     assert _section_ids(data.sections, "completed") == []
     assert data.summary.recent_completed == 0
+    # Terminal overlap drives the retry, not the moved-to-Blocked banner.
+    assert data.reconciliation_pending is False
+
+
+def test_open_terminal_overlap_retry_lets_terminal_win_when_open_drops_it() -> None:
+    """The other outcome: the retried open snapshot no longer contains the
+    task, so the later-snapshot precedence lets the terminal record render —
+    exactly one row, in Completed."""
+    both = _task("x", claims=())
+    done = TaskRecord(id="x", title="Title x", status="completed", task_type="task")
+    fake = _FrontierFake(
+        open_tasks=[[both], []],
+        ready=[[both], []],
+        blocked=[],
+        completed=[done],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    for section in (
+        "in_progress",
+        "ready",
+        "blocked",
+        "claims_unknown",
+        "unclassified",
+    ):
+        assert "x" not in _section_ids(data.sections, section)
+    assert _section_ids(data.sections, "completed") == ["x"]
+    assert data.reconciliation_pending is False
 
 
 def test_overlap_is_skew_even_at_the_frontier_limit() -> None:
@@ -496,9 +529,13 @@ def test_overlap_on_a_filtered_out_task_is_a_no_op() -> None:
     assert data.reconciliation_pending is False
 
 
-def test_overlap_on_a_claimed_task_is_a_no_op() -> None:
-    """A claimed task stays In progress whatever the frontiers say; its overlap
-    must not trigger the rows-moved-to-Blocked banner."""
+def test_claimed_overlap_retries_then_stays_in_progress_flagged() -> None:
+    """Reviewer repro (round 4): blocked membership also drives the
+    claimed_but_blocked decoration and blocker chips on an In-progress row, so
+    a claimed task returned by BOTH frontiers is render-effective skew — it
+    must retry, and on persistence keep the task In progress WITH the blocked
+    decoration (conservative interpretation) but marked awaiting
+    reconciliation so the banner/badge explain it."""
     claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
     fake = _FrontierFake(
         open_tasks=[claimed],
@@ -507,8 +544,34 @@ def test_overlap_on_a_claimed_task_is_a_no_op() -> None:
     )
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
-    assert fake.ready_calls == 1
+    assert fake.ready_calls == 2
     assert _section_ids(data.sections, "in_progress") == ["c"]
+    (row,) = data.sections["in_progress"]
+    assert row.claimed_but_blocked is True
+    assert row.blockers
+    assert row.reconciliation_pending is True
+    assert data.reconciliation_pending is True
+    # Nothing moved to Blocked — the claim still wins the section.
+    assert _section_ids(data.sections, "blocked") == []
+
+
+def test_claimed_overlap_healed_on_retry_leaves_no_residual_flags() -> None:
+    """When the retry drops the claimed task from the blocked response, the
+    false anomaly disappears entirely: no decoration, no pending flag, no
+    banner."""
+    claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
+    fake = _FrontierFake(
+        open_tasks=[claimed],
+        ready=[claimed],
+        blocked=[[_blocked(claimed, BlockerRecord(kind="task", task_id="p"))], []],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 2
+    (row,) = data.sections["in_progress"]
+    assert row.claimed_but_blocked is False
+    assert row.blockers == ()
+    assert row.reconciliation_pending is False
     assert data.reconciliation_pending is False
 
 

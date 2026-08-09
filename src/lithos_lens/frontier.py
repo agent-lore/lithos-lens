@@ -258,6 +258,14 @@ async def load_dashboard(
     else:
         blocked_records = cast(list[BlockedTaskRecord], blocked_result)
 
+    # Raw terminal ids (pre-filter): a task appearing in BOTH the open
+    # snapshot and a terminal result is freshness skew worth a retry, whether
+    # or not the terminal row survives the section filters.
+    terminal_ids: set[str] = set()
+    for closed_result in closed_results:
+        if not isinstance(closed_result, BaseException):
+            terminal_ids.update(task.id for task in closed_result)
+
     def _partition_state(
         snapshot: list[TaskRecord],
         ready_rows: list[TaskRecord],
@@ -283,22 +291,37 @@ async def load_dashboard(
             index=index,
         )
         # Only an overlap that changes what RENDERS is a contradiction worth
-        # the warning: a filtered-out task is in no section, a claimed task
-        # stays In progress, and a claims-unknown row stays in its degraded
-        # group whatever the frontiers say. A would-be-Ready overlap is skew
-        # REGARDLESS of the limit — the same id in both responses is
+        # the warning: a filtered-out task is in no section, and a
+        # claims-unknown row stays in its degraded group whatever the
+        # frontiers say. A would-be-Ready overlap AND a claimed overlap (the
+        # blocked membership decorates the In-progress row with
+        # claimed_but_blocked + chips) both count — and they are skew
+        # REGARDLESS of the limit: the same id in both responses is
         # contradictory even at the cap.
-        effective_overlap = overlap & {row.task.id for row in parts["ready"]}
-        skewed = bool(effective_overlap) or (
+        rendered_overlap_ids = {row.task.id for row in parts["ready"]} | {
+            row.task.id for row in parts["in_progress"]
+        }
+        effective_overlap = overlap & rendered_overlap_ids
+        skewed_frontier = bool(effective_overlap) or (
             not at_limit and bool(parts["unclassified"])
         )
+        # An id in both the open snapshot and a terminal result is freshness
+        # skew: it drives the retry (the later snapshot then arbitrates via
+        # the closed dedup) but not the moved-to-Blocked surface.
+        terminal_overlap = terminal_ids & set(index)
         return _FrontierState(
-            snapshot, index, parts, effective_overlap, at_limit, skewed
+            snapshot,
+            index,
+            parts,
+            effective_overlap,
+            at_limit,
+            skewed_frontier,
+            skewed_frontier or bool(terminal_overlap),
         )
 
     state = _partition_state(open_snapshot, ready_list, blocked_records)
 
-    if frontier_ok and state.skewed:
+    if frontier_ok and state.retry_worthy:
         # Read-skew between independent reads (a would-be-Ready task also in
         # the blocked response, or a below-limit frontier gap). Retry ALL
         # THREE reads together — the master open list too, or a task that
@@ -329,7 +352,7 @@ async def load_dashboard(
     partition = state.partition
     at_limit = state.at_limit
     open_index = state.index
-    reconciliation_pending = frontier_ok and state.skewed
+    reconciliation_pending = frontier_ok and state.skewed_frontier
     if reconciliation_pending:
         partition = _reclassify_conservative(partition, state.effective_overlap)
 
@@ -402,7 +425,13 @@ async def load_dashboard(
 
 
 class _FrontierState:
-    """One generation of the joined reads: snapshot views + skew verdict."""
+    """One generation of the joined reads: snapshot views + skew verdicts.
+
+    ``skewed_frontier`` drives the conservative reclassification + banner;
+    ``retry_worthy`` additionally includes the open∩terminal freshness
+    overlap, which only warrants the retry (the later snapshot then
+    arbitrates via the closed dedup).
+    """
 
     __slots__ = (
         "snapshot",
@@ -410,7 +439,8 @@ class _FrontierState:
         "partition",
         "effective_overlap",
         "at_limit",
-        "skewed",
+        "skewed_frontier",
+        "retry_worthy",
     )
 
     def __init__(
@@ -420,35 +450,47 @@ class _FrontierState:
         partition: dict[SectionName, tuple[SectionRow, ...]],
         effective_overlap: set[str],
         at_limit: bool,
-        skewed: bool,
+        skewed_frontier: bool,
+        retry_worthy: bool,
     ) -> None:
         self.snapshot = snapshot
         self.index = index
         self.partition = partition
         self.effective_overlap = effective_overlap
         self.at_limit = at_limit
-        self.skewed = skewed
+        self.skewed_frontier = skewed_frontier
+        self.retry_worthy = retry_worthy
 
 
 def _reclassify_conservative(
     partition: dict[SectionName, tuple[SectionRow, ...]],
     overlap: set[str],
 ) -> dict[SectionName, tuple[SectionRow, ...]]:
-    """Fold read-skew rows into Blocked, flagged for the reconciliation banner.
+    """Apply the conservative read-skew interpretation, flagged for the banner.
 
-    Overlap rows (in BOTH frontier responses) leave Ready — the ready-first
-    classify branch had placed them there — and every unclassified row joins
-    them in Blocked. Wrongly-Ready invites an operator to start work that may
-    be blocked; wrongly-Blocked merely defers attention, so Blocked is the
-    conservative side.
+    Unclaimed overlap rows (in BOTH frontier responses) leave Ready — the
+    ready-first classify branch had placed them there — and every unclassified
+    row joins them in Blocked: wrongly-Ready invites an operator to start work
+    that may be blocked; wrongly-Blocked merely defers attention. CLAIMED
+    overlap rows stay In progress with their blocked decoration kept, marked
+    awaiting reconciliation.
     """
     moved = [
         replace(row, reconciliation_pending=True)
         for row in partition["ready"]
         if row.task.id in overlap
     ] + [replace(row, reconciliation_pending=True) for row in partition["unclassified"]]
+    # A claimed overlap row stays In progress (the claim wins the section) and
+    # KEEPS its blocked decoration — the conservative interpretation — but is
+    # marked awaiting reconciliation so the badge/banner explain that the
+    # decoration may be read-skew rather than real blockage.
+    in_progress = tuple(
+        replace(row, reconciliation_pending=True) if row.task.id in overlap else row
+        for row in partition["in_progress"]
+    )
     return {
         **partition,
+        "in_progress": in_progress,
         "ready": tuple(row for row in partition["ready"] if row.task.id not in overlap),
         "blocked": partition["blocked"] + tuple(moved),
         "unclassified": (),
