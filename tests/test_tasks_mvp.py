@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
+from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -284,10 +285,15 @@ class TaskFakeLithosClient:
             AgentRecord(id="worker", name="Worker"),
         ]
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None:
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
         if knowledge_id not in self.notes:
             raise RuntimeError("missing note")
         return self.notes[knowledge_id]
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        return RelatedNeighborhood()
 
     async def close(self) -> None:
         self.closed = True

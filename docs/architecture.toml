@@ -33,7 +33,7 @@ LithosClient = "MCP-over-SSE client to the Lithos server — health probing, age
 Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges from the Lithos 0.4 graph reads)."
-Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown; wiki-links + view models to follow)."
+Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown + the related-panel neighborhood/view models)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "Optional OpenTelemetry hooks and request middleware."
 Errors       = "Exception hierarchy rooted at LithosLensError."
@@ -69,7 +69,7 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 22   # +2 for LithosClient -> TaskGraph and TaskGraph -> Tasks (T1 graph reads); direction: down
+cross_component_edges  = 24   # +2 for the K1-S4 Knowledge related-panel seams (LithosClient -> Knowledge, Knowledge -> Tasks); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way
@@ -85,6 +85,7 @@ tests_private_imports     = 0  # tests use only the public surface; keep it that
 include_modules = [
     "lithos_lens.tasks",
     "lithos_lens.task_graph",
+    "lithos_lens.knowledge",
     "lithos_lens.events",
     "lithos_lens.state",
     "lithos_lens.lithos_client",

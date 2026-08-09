@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -119,7 +120,11 @@ class LithosClientProtocol(Protocol):
 
     async def list_agents(self) -> list[AgentRecord]: ...
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None: ...
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None: ...
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood: ...
 
     async def close(self) -> None: ...
 
@@ -421,13 +426,32 @@ class LithosClient:
             if isinstance(agent, dict)
         ]
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None:
-        payload = await self._call_tool(
-            "lithos_read",
-            {"id": knowledge_id, "agent_id": self._config.agent_id},
-        )
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        arguments: dict[str, Any] = {
+            "id": knowledge_id,
+            "agent_id": self._config.agent_id,
+        }
+        if max_length is not None:
+            arguments["max_length"] = max_length
+        payload = await self._call_tool("lithos_read", arguments)
         _raise_for_error(payload)
         return normalize_note(payload)
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        """Fetch a note's related neighborhood via ``lithos_related``.
+
+        The tool accepts only ``id`` / ``include`` / ``depth`` / ``namespace``
+        (FastMCP rejects unexpected arguments outright), so exactly
+        ``{"id", "depth"}`` is sent — §6.5 pins the panel to ``depth=1``.
+        """
+        payload = await self._call_tool(
+            "lithos_related",
+            {"id": knowledge_id, "depth": 1},
+        )
+        _raise_for_error(payload)
+        return normalize_related(payload)
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._worker_task is None:

@@ -27,6 +27,7 @@ __all__ = [
     "EventsConfig",
     "ConfigError",
     "HealthConfig",
+    "KnowledgeConfig",
     "LithosLensConfig",
     "LithosConfig",
     "LLMConfig",
@@ -63,6 +64,8 @@ DEFAULT_TASKS_VISIBLE_CAP = 50
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
+DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
+MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -139,6 +142,14 @@ class HealthConfig:
 
 
 @dataclass(frozen=True)
+class KnowledgeConfig:
+    # The related-panel render bound (RELATED_RENDER_CAP) is an internal
+    # constant in lithos_lens.knowledge, not public config: the PRD only
+    # specifies related_title_fanout_cap.
+    related_title_fanout_cap: int = DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP
+
+
+@dataclass(frozen=True)
 class LithosLensConfig:
     environment: str
     greeting: str
@@ -151,6 +162,7 @@ class LithosLensConfig:
     telemetry: TelemetryConfig
     ui: UIConfig
     health: HealthConfig
+    knowledge: KnowledgeConfig
 
 
 # ── Discovery and loading ──────────────────────────────────────────────
@@ -245,6 +257,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
     telemetry = _parse_telemetry(lithos_lens_section.get("telemetry", {}), config_path)
     ui = _parse_ui(lithos_lens_section.get("ui", {}), config_path)
     health = _parse_health(lithos_lens_section.get("health", {}), config_path)
+    knowledge = _parse_knowledge(lithos_lens_section.get("knowledge", {}), config_path)
 
     cfg = LithosLensConfig(
         environment=environment,
@@ -258,6 +271,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
         telemetry=telemetry,
         ui=ui,
         health=health,
+        knowledge=knowledge,
     )
     return _apply_env_overrides(cfg)
 
@@ -445,6 +459,25 @@ def _parse_health(data: Any, config_path: Path) -> HealthConfig:
     )
 
 
+def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{config_path}: [lithos-lens.knowledge] must be a table")
+    return KnowledgeConfig(
+        related_title_fanout_cap=_optional_int(
+            data,
+            "related_title_fanout_cap",
+            DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
+            config_path,
+            "lithos-lens.knowledge",
+            minimum=1,
+            # Bound the per-request title fan-out so a misconfigured cap can't
+            # amplify one /note/{id} request into an unbounded concurrent
+            # lithos_read burst against the shared MCP session.
+            maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
+        ),
+    )
+
+
 def _optional_str(
     data: dict[str, Any],
     key: str,
@@ -483,6 +516,7 @@ def _optional_int(
     section: str,
     *,
     minimum: int | None = None,
+    maximum: int | None = None,
 ) -> int:
     if key not in data:
         return default
@@ -491,6 +525,8 @@ def _optional_int(
         raise ConfigError(f"{config_path}: [{section}].{key} must be an integer")
     if minimum is not None and value < minimum:
         raise ConfigError(f"{config_path}: [{section}].{key} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ConfigError(f"{config_path}: [{section}].{key} must be <= {maximum}")
     return value
 
 
@@ -543,6 +579,9 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     lithos_events_path_override = os.environ.get("LITHOS_LENS_SSE_EVENTS_PATH", "")
     agent_id_override = os.environ.get("LITHOS_LENS_AGENT_ID", "")
     tasks_visible_cap_override = os.environ.get("LITHOS_LENS_TASKS_VISIBLE_CAP", "")
+    knowledge_fanout_cap_override = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
+    )
     llm_enabled_override = os.environ.get("LITHOS_LENS_LLM_ENABLED", "")
     llm_model_override = os.environ.get("LITHOS_LENS_LLM_MODEL", "")
     llm_provider_override = os.environ.get("LITHOS_LENS_LLM_PROVIDER", "")
@@ -564,6 +603,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             lithos_events_path_override,
             agent_id_override,
             tasks_visible_cap_override,
+            knowledge_fanout_cap_override,
             llm_enabled_override,
             llm_model_override,
             llm_provider_override,
@@ -612,6 +652,18 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             ),
         )
         new_cfg = replace(new_cfg, tasks=new_tasks)
+    if knowledge_fanout_cap_override:
+        new_knowledge = replace(
+            new_cfg.knowledge,
+            related_title_fanout_cap=_parse_env_int(
+                "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
+                knowledge_fanout_cap_override,
+                # Same bounds as the [lithos-lens.knowledge] TOML key: a
+                # misconfigured env can't amplify the per-request read fan-out.
+                maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
+            ),
+        )
+        new_cfg = replace(new_cfg, knowledge=new_knowledge)
     if any(
         [
             llm_enabled_override,
@@ -652,13 +704,15 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     return new_cfg
 
 
-def _parse_env_int(name: str, value: str) -> int:
+def _parse_env_int(name: str, value: str, *, maximum: int | None = None) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer") from exc
     if parsed < 1:
         raise ConfigError(f"{name} must be >= 1")
+    if maximum is not None and parsed > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}")
     return parsed
 
 

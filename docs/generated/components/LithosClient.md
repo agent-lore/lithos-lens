@@ -23,7 +23,7 @@ MCP-over-SSE client to the Lithos server — health probing, agent registration,
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md)
+- Depends on: [Config](Config.md), [Knowledge](Knowledge.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md)
 - Used by: [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

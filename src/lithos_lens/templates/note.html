@@ -2,6 +2,56 @@
 
 {% block title %}Note | Lithos Lens{% endblock %}
 
+{% macro related_link(item) %}
+  <a href="/note/{{ item.id }}">{{ item.label }}</a>
+{%- endmacro %}
+
+{% macro related_section(heading, section, edges=False) %}
+  {% if section.items or section.overflow %}
+    <section class="related-section">
+      <h3>{{ heading }}</h3>
+      <ul>
+        {% for item in section.items %}
+          <li>
+            {{ related_link(item) }}
+            {% if edges and item.direction %}
+              <span class="edge-direction">{{ item.direction }}</span>
+            {% endif %}
+            {% if edges and item.edge_type %}
+              <span class="edge-type">{{ item.edge_type }}</span>
+            {% endif %}
+            {% if edges and item.weight is not none %}
+              <span class="edge-weight">{{ "%.2f"|format(item.weight) }}</span>
+            {% endif %}
+            {% if edges and item.conflict_state %}
+              <span class="edge-conflict">conflict: {{ item.conflict_state }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+        {% if section.overflow %}
+          <li class="related-more">+{{ section.overflow }} more</li>
+        {% endif %}
+      </ul>
+    </section>
+  {% endif %}
+{%- endmacro %}
+
+{% macro related_ref_list(heading, section) %}
+  {% if section.items or section.overflow %}
+    <div class="related-group">
+      <h4>{{ heading }}</h4>
+      <ul>
+        {% for item in section.items %}
+          <li>{{ related_link(item) }}</li>
+        {% endfor %}
+        {% if section.overflow %}
+          <li class="related-more">+{{ section.overflow }} more</li>
+        {% endif %}
+      </ul>
+    </div>
+  {% endif %}
+{%- endmacro %}
+
 {% block content %}
   {% if task %}
     <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a></p>
@@ -29,5 +79,39 @@
       {% endif %}
       <div class="markdown-body">{{ note.content | render_markdown | safe }}</div>
     </article>
+
+    {% if related %}
+      <aside class="related-panel" aria-label="Related notes">
+        <h2>Related</h2>
+        {% if related.state == "error" %}
+          <p class="related-error" role="status">
+            The related panel could not be loaded.
+          </p>
+        {% elif related.is_empty %}
+          <p class="related-empty">No related notes.</p>
+        {% else %}
+          {{ related_section("Outgoing links", related.links) }}
+          {{ related_section("Back-links", related.backlinks) }}
+          {% if related.has_provenance %}
+            <section class="related-section related-provenance">
+              <h3>Provenance</h3>
+              {{ related_ref_list("Sources", related.sources) }}
+              {{ related_ref_list("Derived from", related.derived) }}
+              {% if related.unresolved %}
+                <div class="related-group">
+                  <h4>Unresolved</h4>
+                  <ul>
+                    {% for target in related.unresolved %}
+                      <li>{{ target }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+            </section>
+          {% endif %}
+          {{ related_section("Typed edges", related.edges, edges=True) }}
+        {% endif %}
+      </aside>
+    {% endif %}
   {% endif %}
 {% endblock %}

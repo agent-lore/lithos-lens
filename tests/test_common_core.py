@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
+from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -105,8 +106,13 @@ class RecordingLithosClient:
     async def list_agents(self) -> list[AgentRecord]:
         return []
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None:
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
         return None
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        return RelatedNeighborhood()
 
     async def close(self) -> None:
         self.closed = True

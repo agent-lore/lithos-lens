@@ -149,6 +149,7 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_SSE_EVENTS_PATH` | `lithos-lens.lithos.sse_events_path` | Event stream path. |
 | `LITHOS_LENS_AGENT_ID` | `lithos-lens.lithos.agent_id` | Startup registration agent ID. |
 | `LITHOS_LENS_TASKS_VISIBLE_CAP` | `lithos-lens.tasks.visible_cap` | Must be a positive integer. |
+| `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |
 | `LITHOS_LENS_LLM_PROVIDER` | `lithos-lens.llm.provider` | Optional provider label. |

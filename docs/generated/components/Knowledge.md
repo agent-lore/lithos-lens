@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Knowledge-note rendering and normalization (safe server-side markdown; wiki-links + view models to follow).
+Knowledge-note rendering and normalization (safe server-side markdown + the related-panel neighborhood/view models).
 
 **Tier:** Foundation
 
@@ -11,16 +11,24 @@ Knowledge-note rendering and normalization (safe server-side markdown; wiki-link
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | XS | 0 | 1 |
+| `lithos_lens.knowledge` | M | 6 | 3 |
 
 ## Public API
 
 ### `lithos_lens.knowledge`
 - def `render_markdown` — Render a note's markdown body to safe HTML.
+- class `RelatedRef` — A raw neighbor reference from ``lithos_related``, before title lookup.
+- class `RelatedNeighborhood` — One ``lithos_related`` call's worth of a note's neighborhood (raw ids).
+- class `RelatedItem` — A neighbor rendered in the panel — by title when it could be resolved.
+- class `RelatedSection` — One panel section: resolved items plus a count collapsed past the cap.
+- class `RelatedPanel` — The four related-panel sections plus loose provenance and load state.
+- class `KnowledgeLithosClientProtocol` — Subset of Lithos operations required by the knowledge note view.
+- def `load_related_panel` — Load and resolve a note's related panel from one ``lithos_related`` call.
+- def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
 
 ## Dependencies
 
-- Depends on: —
-- Used by: [Web](Web.md)
+- Depends on: [Tasks](Tasks.md)
+- Used by: [LithosClient](LithosClient.md), [Web](Web.md)
 
 [← all generated docs](../README.md)
