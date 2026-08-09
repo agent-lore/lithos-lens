@@ -319,23 +319,23 @@
         "classes": 0,
         "functions": 18,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 438,
-        "lines": 438,
+        "largest_module_lines": 445,
+        "lines": 445,
         "modules": 1,
         "public_symbols": 5,
-        "sloc": 386
+        "sloc": 390
       }
     },
     "max_module": "lithos_lens.config",
     "max_module_lines": 725,
     "modules_over_800": [],
-    "total_lines": 4437,
+    "total_lines": 4444,
     "total_modules": 16,
-    "total_sloc": 3651
+    "total_sloc": 3655
   },
   "tests": {
-    "ratio": 1.46,
-    "src_lines": 4437,
-    "test_lines": 6480
+    "ratio": 1.47,
+    "src_lines": 4444,
+    "test_lines": 6512
   }
 }

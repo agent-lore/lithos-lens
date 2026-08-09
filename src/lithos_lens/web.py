@@ -232,10 +232,17 @@ def create_app(
             error = "Lithos is offline or degraded. Knowledge search is unavailable."
         else:
             try:
+                # Every branch is capped: a broad ``?q=a`` / ``?tag=`` must not
+                # be able to materialize and render an unbounded result set (the
+                # resolver caps candidates for the same reason).
                 if query:
-                    results = await state.lithos_client.list_notes(title_contains=query)
+                    results = await state.lithos_client.list_notes(
+                        title_contains=query, limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
                 elif tag:
-                    results = await state.lithos_client.list_notes(tags=[tag])
+                    results = await state.lithos_client.list_notes(
+                        tags=[tag], limit=_KNOWLEDGE_RECENT_LIMIT
+                    )
                 else:
                     results = await state.lithos_client.list_notes(
                         limit=_KNOWLEDGE_RECENT_LIMIT

@@ -486,3 +486,35 @@ def test_knowledge_landing_empty_query_result(
 
     assert response.status_code == 200
     assert "No matching notes." in response.text
+
+
+def test_knowledge_query_search_is_capped(lithos_lens_config_env: Path) -> None:
+    # Regression for security/f-003: a broad ?q= must not render an unbounded
+    # result set — it is capped like the recent list and resolver candidates.
+    notes = {
+        f"n-{i}": NoteRecord(id=f"n-{i}", title=f"Match {i:02d}", content="")
+        for i in range(25)
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=Match")
+
+    assert response.status_code == 200
+    assert response.text.count('href="/note/') == 20
+
+
+def test_knowledge_tag_search_is_capped(lithos_lens_config_env: Path) -> None:
+    notes = {
+        f"n-{i}": NoteRecord(
+            id=f"n-{i}", title=f"Note {i:02d}", content="", tags=("project:x",)
+        )
+        for i in range(25)
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?tag=project:x")
+
+    assert response.status_code == 200
+    assert response.text.count('href="/note/') == 20
