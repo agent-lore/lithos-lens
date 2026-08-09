@@ -15,7 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
-from lithos_lens.fake_lithos import FakeLithosClient, fake_lithos_enabled
+from lithos_lens.fake_lithos import (
+    FakeEventHub,
+    FakeLithosClient,
+    fake_lithos_enabled,
+)
 from lithos_lens.knowledge import load_related_panel, render_markdown
 from lithos_lens.lithos_client import (
     LithosClient,
@@ -72,7 +76,13 @@ def create_app(
     """Create the Lithos Lens ASGI app."""
 
     factory = lithos_client_factory or _default_lithos_client
-    state = AppState(config, factory(config))
+    # Fake mode must be hermetic: swapping only the client would still leave
+    # the real EventHub dialing the configured Lithos /events URL, so the
+    # in-process hub is injected alongside the fake client.
+    events = (
+        FakeEventHub(config.events, config.lithos) if fake_lithos_enabled() else None
+    )
+    state = AppState(config, factory(config), events=events)
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
     templates.env.filters["display_date"] = format_display_date

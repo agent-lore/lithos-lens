@@ -44,6 +44,7 @@ graph TD
   Events --> Config
   Knowledge --> Tasks
   LithosClient --> Config
+  LithosClient --> Events
   LithosClient --> Knowledge
   LithosClient --> TaskGraph
   LithosClient --> Tasks
@@ -67,15 +68,15 @@ graph TD
   linkStyle 6 stroke:#bbb
   linkStyle 7 stroke:#bbb
   linkStyle 8 stroke:#bbb
-  linkStyle 9 stroke:#bbb
   linkStyle 10 stroke:#bbb
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
-  linkStyle 16 stroke:#bbb
+  linkStyle 14 stroke:#bbb
   linkStyle 17 stroke:#bbb
-  linkStyle 18 stroke:#999,stroke-dasharray:4
+  linkStyle 18 stroke:#bbb
   linkStyle 19 stroke:#999,stroke-dasharray:4
-  linkStyle 22 stroke:#999,stroke-dasharray:4
+  linkStyle 20 stroke:#999,stroke-dasharray:4
   linkStyle 23 stroke:#999,stroke-dasharray:4
+  linkStyle 24 stroke:#999,stroke-dasharray:4
 ```

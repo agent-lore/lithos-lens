@@ -8,15 +8,21 @@ behind it — without needing a browser. The Playwright suite itself lives under
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import load_config
+from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.errors import ConfigError
-from lithos_lens.fake_lithos import FakeLithosClient, fake_lithos_enabled
-from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.events import LensEvent
+from lithos_lens.fake_lithos import (
+    FakeEventHub,
+    FakeLithosClient,
+    fake_lithos_enabled,
+)
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
 from lithos_lens.web import create_app
@@ -116,6 +122,79 @@ def test_fake_mode_note_renders(
     assert "Influx migration plan" in response.text
 
 
+def test_fake_mode_startup_makes_no_outbound_requests(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fake mode must be hermetic: swapping only LithosClient still left the
+    real EventHub dialing the configured Lithos /events URL. Spy on the
+    transport seam — any httpx.AsyncClient construction IS an outbound
+    attempt (the SSE stream builds one before connecting)."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    constructed: list[str] = []
+    real_async_client = httpx.AsyncClient
+
+    class RecordingAsyncClient(real_async_client):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            constructed.append("httpx.AsyncClient")
+            super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "AsyncClient", RecordingAsyncClient)
+
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        assert client.get("/tasks?since=2026-08-01").status_code == 200
+        health = client.get("/health").json()
+
+    assert isinstance(app.state.lens.events, FakeEventHub)
+    # The live-updates surface stays honest: the hub is genuinely serving the
+    # in-process stream, so it reports live rather than pretending "disabled".
+    assert health["events"] == "live"
+    assert constructed == []
+
+
+@pytest.mark.anyio
+async def test_fake_event_hub_serves_in_process_stream() -> None:
+    """The hermetic hub genuinely serves subscribers (so the browser-facing
+    /tasks/events endpoint and the live-updates banner keep functioning) —
+    it just never dials upstream Lithos."""
+    hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
+    await hub.start()
+    try:
+        assert hub.status == "live"
+        queue = hub.subscribe()
+        event = LensEvent(id="evt-1", type="task.created", task_id="t-1")
+        await hub.publish(event)
+        assert await asyncio.wait_for(queue.get(), timeout=0.1) == event
+    finally:
+        await hub.stop()
+    assert hub.status == "disabled"
+
+
+def test_fake_mode_dashboard_renders_terminal_groups(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The completed/cancelled fixtures must actually fall inside the suite's
+    static since=2026-08-01 window and render as rows — not just the (always
+    present) empty section wrappers."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/tasks?since=2026-08-01")
+    assert response.status_code == 200
+    body = response.text
+    # Completed fixture row: id, title, terminal status metadata.
+    assert 'data-task-id="lens-note-view" data-task-status="completed"' in body
+    assert "Land knowledge note view" in body
+    assert 'class="badge badge-completed"' in body
+    # Cancelled fixture row.
+    assert 'data-task-id="influx-spike" data-task-status="cancelled"' in body
+    assert "Spike Influx client options" in body
+    assert 'class="badge badge-cancelled"' in body
+    # Exactly one row in each terminal group.
+    assert body.count('data-task-status="completed"') == 1
+    assert body.count('data-task-status="cancelled"') == 1
+
+
 def test_fake_mode_missing_note_renders_not_found_banner(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -179,9 +258,11 @@ async def test_fake_client_related_returns_neighborhood_for_fixture_note() -> No
         ref.conflict_state == "unresolved" and ref.direction == "incoming"
         for ref in neighborhood.edges
     )
-    # Unknown note ids have no neighborhood, mirroring an empty graph read.
-    empty = await client.related("missing-note")
-    assert empty == RelatedNeighborhood()
+    # Unknown ids: production lithos_related answers doc_not_found — the
+    # fake speaks the same coded contract, not an invented empty read.
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.related("missing-note")
+    assert excinfo.value.code == "doc_not_found"
 
 
 def test_resolve_port_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:

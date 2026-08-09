@@ -69,7 +69,7 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 24   # +2 for the K1-S4 Knowledge related-panel seams (LithosClient -> Knowledge, Knowledge -> Tasks); direction: down
+cross_component_edges  = 25   # +1 for the hermetic fake-mode event hub (fake_lithos -> events, inside LithosClient -> Events); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way
@@ -90,4 +90,6 @@ include_modules = [
     "lithos_lens.state",
     "lithos_lens.lithos_client",
 ]
-exclude_modules = ["lithos_lens.config", "lithos_lens.errors"]
+# fake_lithos holds fixture plumbing (FakeEventHub/FakeLithosClient), not
+# domain entities.
+exclude_modules = ["lithos_lens.config", "lithos_lens.errors", "lithos_lens.fake_lithos"]

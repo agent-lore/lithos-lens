@@ -26,6 +26,7 @@ from dataclasses import replace
 from typing import Any
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.events import EventHub
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
@@ -38,7 +39,7 @@ from lithos_lens.tasks import (
     TaskStatusRecord,
 )
 
-__all__ = ["FakeLithosClient", "fake_lithos_enabled"]
+__all__ = ["FakeEventHub", "FakeLithosClient", "fake_lithos_enabled"]
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -64,6 +65,31 @@ def fake_lithos_enabled() -> bool:
     the app on the real :class:`~lithos_lens.lithos_client.LithosClient`.
     """
     return os.environ.get("LITHOS_LENS_FAKE_LITHOS", "").strip().lower() in _TRUTHY
+
+
+class FakeEventHub(EventHub):
+    """Hermetic in-process event hub for fake-Lithos app mode.
+
+    The real :class:`~lithos_lens.events.EventHub` run loop dials the
+    configured Lithos ``/events`` SSE endpoint — an outbound connection fake
+    mode must never make. This subclass keeps the whole subscriber surface
+    (``subscribe`` / ``publish`` — so the browser-facing ``/tasks/events``
+    endpoint and its initial connected signal keep functioning) but its run
+    loop just reports ``live`` and idles until stop: it genuinely serves the
+    in-process stream, which is why the status is honest rather than
+    "disabled".
+    """
+
+    async def start(self) -> None:
+        await super().start()
+        if self.config.enabled:
+            # The in-process stream needs no connection phase: it is live the
+            # moment the run task exists, not after a first loop tick.
+            self.status = "live"
+
+    async def _run(self) -> None:
+        self.status = "live"
+        await self._stop.wait()
 
 
 class FakeLithosClient:
@@ -193,8 +219,11 @@ class FakeLithosClient:
                 status="completed",
                 outcome="Shipped in 0.3.0.",
                 created_by="worker-a",
-                created_at="2026-07-28T09:00:00+00:00",
-                resolved_at="2026-08-02T17:00:00+00:00",
+                # Static and inside the suite's static since=2026-08-01 window,
+                # so the completed group renders a real row (no Date.now()-style
+                # nondeterminism — both sides of the comparison are fixed).
+                created_at="2026-08-04T09:00:00+00:00",
+                resolved_at="2026-08-05T17:00:00+00:00",
                 tags=("project:lithos-lens", "milestone:k1"),
             ),
             TaskRecord(
@@ -203,8 +232,9 @@ class FakeLithosClient:
                 status="cancelled",
                 outcome="Superseded by the cutover plan.",
                 created_by="worker-b",
-                created_at="2026-07-20T09:00:00+00:00",
-                resolved_at="2026-07-30T12:00:00+00:00",
+                # Inside the since window for the same reason as lens-note-view.
+                created_at="2026-08-03T09:00:00+00:00",
+                resolved_at="2026-08-04T12:00:00+00:00",
                 tags=("project:influx",),
             ),
         ]
@@ -433,9 +463,16 @@ class FakeLithosClient:
         rollback route (outgoing link / incoming back-link) and the rollback
         route carries an unresolved ``contradicts`` edge against the plan, so
         the panel's direction badges and conflict label all render in fake
-        mode. Unknown ids get an empty neighborhood (an empty graph read, not
-        an error — mirroring lithos_related for a note with no relations).
+        mode. An unknown id answers the production contract: upstream
+        lithos_related returns the doc_not_found error envelope for a missing
+        document, so the fake raises the same coded error. A KNOWN note with
+        no fixture neighborhood still gets an empty read (a document with no
+        relations is a success upstream).
         """
+        if knowledge_id not in self.notes:
+            raise LithosToolError(
+                f"Document not found: {knowledge_id}", code="doc_not_found"
+            )
         return self.related_neighborhoods.get(knowledge_id, RelatedNeighborhood())
 
     # ── helpers ────────────────────────────────────────────────────────
