@@ -349,10 +349,19 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
     all_ids = {t.id for t in await client.task_ready()}
-    assert all_ids == {"influx-ingest-cutover", "influx-dashboards", "lens-graph-view"}
+    assert all_ids == {
+        "influx-ingest-cutover",
+        "influx-dashboards",
+        "lens-graph-view",
+        "influx-ingest-old",
+    }
 
     influx = {t.id for t in await client.task_ready(project="influx")}
-    assert influx == {"influx-ingest-cutover", "influx-dashboards"}
+    assert influx == {
+        "influx-ingest-cutover",
+        "influx-dashboards",
+        "influx-ingest-old",
+    }
 
     observability = {t.id for t in await client.task_ready(tags=["area:observability"])}
     assert observability == {"influx-dashboards"}
@@ -381,6 +390,21 @@ def test_fake_client_defaults_to_the_demo_dataset() -> None:
 
 def test_demo_dataset_is_deterministic() -> None:
     assert demo_dataset() == demo_dataset()
+
+
+def test_demo_dataset_classifies_every_open_workable_task() -> None:
+    """Regression (f-003): every open workable (task-typed) row in the demo set
+    must sit on exactly one frontier. A workable open task in neither ready_ids
+    nor blocked would land in the Not-classified tail and make the rendered
+    dashboard claim a false "frontier truncated at 500" on a five-task corpus."""
+    dataset = demo_dataset()
+    workable_open = {
+        task.id
+        for task in dataset.tasks
+        if task.status == "open" and task.task_type == "task"
+    }
+    classified = set(dataset.ready_ids) | set(dataset.blocked)
+    assert workable_open - classified == set()
 
 
 @pytest.mark.anyio

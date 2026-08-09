@@ -267,12 +267,20 @@ def demo_dataset() -> FakeLithosDataset:
             "runbooks/influx-rollback.md": "note-influx-rollback",
         },
         related_neighborhoods=related_neighborhoods,
-        # Graph oracle: `influx-ingest-cutover` is the ready, claimed,
-        # in-flight task (the only one carrying claims), so it must sit on the
-        # ready frontier too; `influx-dashboards` / `lens-graph-view` are
-        # ready and unclaimed; `influx-backfill` is blocked on the cutover.
+        # Graph oracle: every open workable task is placed on exactly one
+        # frontier so none falls into the Not-classified tail (a healthy corpus
+        # this small can never be limit-truncated). `influx-ingest-cutover` is
+        # the ready, claimed, in-flight task (the only one carrying claims), so
+        # it must sit on the ready frontier too; `influx-dashboards` /
+        # `lens-graph-view` / `influx-ingest-old` are ready and unclaimed;
+        # `influx-backfill` is blocked on the cutover.
         ready_ids=frozenset(
-            {"influx-ingest-cutover", "influx-dashboards", "lens-graph-view"}
+            {
+                "influx-ingest-cutover",
+                "influx-dashboards",
+                "lens-graph-view",
+                "influx-ingest-old",
+            }
         ),
         blocked={
             "influx-backfill": (
