@@ -48,7 +48,7 @@ run-fake:
 # then drives the app in fake-Lithos mode. Not part of `make test`/CI's pytest
 # gate — it needs Node and a browser.
 e2e:
-	cd e2e && npm install && npm run install-browsers && npm test
+	cd e2e && npm ci && npm run install-browsers && npm test
 
 docker-build:
 	docker build -t lithos-lens:dev -f docker/Dockerfile .

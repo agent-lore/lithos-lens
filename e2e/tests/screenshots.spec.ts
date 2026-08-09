@@ -15,15 +15,19 @@ import * as path from "node:path";
  * exactly this naming scheme. Change it only in lockstep with that consumer.
  * The directory is gitignored; files are overwritten on every run.
  *
- * Each test asserts its own capture landed on disk and is non-empty, so a
- * silently broken capture cannot pass.
+ * The contract is exact: each PNG's pixel width equals its stated viewport
+ * width, and the page must not overflow horizontally (scrollWidth <= viewport
+ * width) — both are asserted per capture, alongside the file existing with
+ * non-empty bytes, so a silently broken capture cannot pass.
  */
 
 // Chromium's headless shell occasionally aborts a full-page capture with
-// "Protocol error (Page.captureScreenshot)" under parallel load; one retry
-// absorbs that environmental flake without masking real failures (the ready()
-// waits below are deterministic).
-test.describe.configure({ retries: 1 });
+// "Protocol error (Page.captureScreenshot)" under parallel load. Mitigate the
+// load itself: this file opts out of fullyParallel (mode "default" runs its
+// tests sequentially in one worker) and captures only after a settled wait
+// (fonts loaded + a double rAF tick). One retry stays as backstop; the ready()
+// waits below are deterministic, so a retry can't mask a real failure.
+test.describe.configure({ mode: "default", retries: 1 });
 
 const ARTIFACTS_DIR = path.resolve(__dirname, "..", "artifacts");
 
@@ -76,13 +80,33 @@ for (const { slug, url, ready } of PAGES) {
       await page.goto(url);
       await ready(page);
 
+      // No horizontal overflow: a page wider than the viewport would yield a
+      // wider-than-stated PNG and a broken responsive layout.
+      const scrollWidth = await page.evaluate(
+        () => document.documentElement.scrollWidth,
+      );
+      expect(scrollWidth).toBeLessThanOrEqual(width);
+
+      // Settle before capturing: fonts loaded plus a double rAF tick. This is
+      // the real mitigation for Chromium's intermittent full-page
+      // Page.captureScreenshot abort; the retry above is only a backstop.
+      await page.evaluate(async () => {
+        await document.fonts.ready;
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+      });
+
       const file = path.join(ARTIFACTS_DIR, `${slug}-${width}.png`);
       await page.screenshot({ path: file, fullPage: true });
 
-      // A silently broken capture must not pass: the file has to exist and
-      // carry actual image bytes.
+      // A silently broken capture must not pass: the file has to exist,
+      // carry actual image bytes, and be exactly the stated width (PNG IHDR
+      // width, bytes 16-19 big-endian; deviceScaleFactor is 1).
       const stat = fs.statSync(file);
       expect(stat.size).toBeGreaterThan(0);
+      const header = fs.readFileSync(file).subarray(0, 24);
+      expect(header.readUInt32BE(16)).toBe(width);
     });
   }
 }

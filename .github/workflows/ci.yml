@@ -51,3 +51,50 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           git show "FETCH_HEAD:docs/generated/metrics.json" > /tmp/base-metrics.json 2>/dev/null || echo '{}' > /tmp/base-metrics.json
           uv run python scripts/metrics_diff.py /tmp/base-metrics.json docs/generated/metrics.json --markdown >> "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - run: uv sync --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      # Playwright's list reporter (selected when CI=true) prints per-test
+      # results including "flaky" retries — do not suppress its output.
+      - name: Run Playwright suite (fake-Lithos app mode)
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload screenshot artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/artifacts/
+          if-no-files-found: warn
+
+      - name: Upload traces and test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: e2e/test-results/
+          if-no-files-found: ignore

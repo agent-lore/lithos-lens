@@ -37,7 +37,9 @@ export default defineConfig({
     // from the repo root regardless of Playwright's own cwd.
     command: "uv run --directory .. lithos-lens",
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
+    // Correctness beats convenience: never silently reuse a stale server —
+    // explicit opt-in for dev iteration via LENS_E2E_REUSE_SERVER=1.
+    reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
     timeout: 120_000,
     env: {
       LITHOS_LENS_FAKE_LITHOS: "1",

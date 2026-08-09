@@ -30,6 +30,26 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
 
   // At least one task row rendered overall.
   expect(await page.locator("[data-task-row]").count()).toBeGreaterThan(0);
+
+  // The terminal groups render their fixture rows (not just the always-present
+  // section wrappers): ids, titles, counts, and terminal status metadata.
+  const completed = page.locator('[data-task-group="completed"]');
+  await expect(
+    completed.locator('[data-task-row][data-task-id="lens-note-view"]'),
+  ).toHaveAttribute("data-task-status", "completed");
+  await expect(
+    completed.getByRole("link", { name: "Land knowledge note view" }),
+  ).toBeVisible();
+  expect(await completed.locator("[data-task-row]").count()).toBe(1);
+
+  const cancelled = page.locator('[data-task-group="cancelled"]');
+  await expect(
+    cancelled.locator('[data-task-row][data-task-id="influx-spike"]'),
+  ).toHaveAttribute("data-task-status", "cancelled");
+  await expect(
+    cancelled.getByRole("link", { name: "Spike Influx client options" }),
+  ).toBeVisible();
+  expect(await cancelled.locator("[data-task-row]").count()).toBe(1);
 });
 
 test("clicking a task opens its detail page", async ({ page }) => {

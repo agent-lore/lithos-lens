@@ -19,7 +19,9 @@ From the repo root:
 make e2e
 ```
 
-That installs the Node deps, downloads Chromium, and runs the suite. Or, from
+That installs the locked Node deps (`npm ci` against the committed
+`package-lock.json`), downloads Chromium, and runs the suite. CI runs the same
+suite on every PR (`e2e` job) and uploads the screenshot artifacts. Or, from
 this directory:
 
 ```sh
@@ -63,9 +65,12 @@ e2e/artifacts/note-missing-1440.png
 ([agent-lore/lithos-loom#283](https://github.com/agent-lore/lithos-loom/issues/283))
 collects the images from `e2e/artifacts/` by exactly this naming scheme —
 change either the directory or the `<page>-<width>.png` pattern only in
-lockstep with that consumer. The directory is gitignored; files are
-overwritten on every run, and each capture test asserts its file exists and is
-non-empty so a silently broken capture fails the suite.
+lockstep with that consumer. The contract is exact: **each PNG's pixel width
+equals its stated width**, and the captured page must have **no horizontal
+overflow** (`document.documentElement.scrollWidth <= width`) — both asserted
+per capture, alongside the file existing with non-empty bytes, so a silently
+broken capture fails the suite. The directory is gitignored; files are
+overwritten on every run.
 
 ## Fake-Lithos app mode
 
