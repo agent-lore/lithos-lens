@@ -9,6 +9,7 @@ pattern) because Lens must never recompute it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
     ClaimRecord,
+    SectionName,
     TaskFilters,
     TaskRecord,
 )
@@ -44,8 +46,45 @@ def _blocked(task: TaskRecord, *blockers: BlockerRecord) -> BlockedTaskRecord:
     return BlockedTaskRecord(task=task, blockers=tuple(blockers))
 
 
-def _section_ids(sections: dict[str, tuple[Any, ...]], key: str) -> list[str]:
+def _section_ids(
+    sections: Mapping[SectionName, tuple[Any, ...]], key: SectionName
+) -> list[str]:
     return [row.task.id for row in sections[key]]
+
+
+def test_claims_none_is_unknown_not_unclaimed() -> None:
+    """TaskRecord.claims contract: ``None`` means claims were NOT returned even
+    though requested — distinct from ``()`` no-active-claims. A claims-unknown
+    row still classifies by frontier membership (Lithos owns that answer), but
+    must carry the unknown state instead of silently reading as unclaimed —
+    the same inline-anomaly surface as ``claimed_but_blocked``."""
+    unknown_ready = _task("r", claims=None)
+    unknown_blocked = _task("b", claims=None)
+    known_ready = _task("k", claims=())
+    sections = classify_open_tasks(
+        [unknown_ready, unknown_blocked, known_ready],
+        ready_ids={"r", "k"},
+        blocked=[_blocked(unknown_blocked, BlockerRecord(kind="task", task_id="x"))],
+    )
+
+    # Frontier membership still places the rows…
+    assert _section_ids(sections, "ready") == ["r", "k"]
+    assert _section_ids(sections, "blocked") == ["b"]
+    assert _section_ids(sections, "in_progress") == []
+    # …but None surfaces as claims-unknown, not as a confident "unclaimed".
+    assert sections["ready"][0].claims_unknown is True
+    assert sections["ready"][0].claim_state == "unknown"
+    assert sections["ready"][1].claims_unknown is False
+    assert sections["ready"][1].claim_state == "known_unclaimed"
+    assert sections["blocked"][0].claims_unknown is True
+
+
+def test_claims_none_in_neither_frontier_is_unclassified_and_unknown() -> None:
+    sections = classify_open_tasks(
+        [_task("u", claims=None)], ready_ids=set(), blocked=[]
+    )
+    assert _section_ids(sections, "unclassified") == ["u"]
+    assert sections["unclassified"][0].claims_unknown is True
 
 
 def test_claim_makes_in_progress_beating_ready_and_blocked() -> None:

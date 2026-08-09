@@ -139,19 +139,25 @@ class SectionRow:
     calls don't carry them); ``blockers`` are the resolved blocker chips on a
     blocked row. ``claimed_but_blocked`` flags a claimed row (In progress) that
     Lithos also reports as blocked — an agent holding a claim on infeasible
-    work.
+    work. ``claims_unknown`` flags a row whose ``TaskRecord.claims`` was
+    ``None`` — claims were not returned even though requested — which is NOT
+    the same as an empty tuple (no active claims); the chip reads
+    "claims unknown" instead of a confident "unclaimed".
     """
 
     task: TaskRecord
     claims: tuple[ClaimRecord, ...] = ()
     blockers: tuple[BlockerChip, ...] = ()
     claimed_but_blocked: bool = False
+    claims_unknown: bool = False
 
     @property
     def claim_state(self) -> str:
         if self.task.status != "open":
             return "not_applicable"
-        return "known_claimed" if self.claims else "known_unclaimed"
+        if self.claims:
+            return "known_claimed"
+        return "unknown" if self.claims_unknown else "known_unclaimed"
 
 
 @dataclass(frozen=True)
@@ -179,7 +185,7 @@ class TaskSummary:
 class DashboardData:
     filters: TaskFilters
     summary: TaskSummary
-    sections: dict[str, tuple[SectionRow, ...]]
+    sections: dict[SectionName, tuple[SectionRow, ...]]
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int

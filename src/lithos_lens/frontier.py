@@ -26,6 +26,7 @@ from lithos_lens.tasks import (
     BlockerChip,
     ClaimRecord,
     DashboardData,
+    SectionName,
     SectionRow,
     TaskFilters,
     TaskRecord,
@@ -40,7 +41,7 @@ from lithos_lens.tasks import (
 WORKABLE_TASK_TYPE = "task"
 
 # The three workable sections plus the truncation tail, in render order.
-WORKABLE_SECTIONS: tuple[str, ...] = ("in_progress", "ready", "blocked")
+WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
 
 
 class FrontierLithosClient(Protocol):
@@ -108,7 +109,7 @@ def classify_open_tasks(
     ready_ids: set[str],
     blocked: Sequence[BlockedTaskRecord],
     index: Mapping[str, TaskRecord] | None = None,
-) -> dict[str, tuple[SectionRow, ...]]:
+) -> dict[SectionName, tuple[SectionRow, ...]]:
     """Join the master open list against the ready/blocked frontier.
 
     Returns the three workable sections plus ``unclassified``. ``index`` (id →
@@ -119,7 +120,7 @@ def classify_open_tasks(
     """
     resolve = index if index is not None else {task.id: task for task in open_tasks}
     blocked_map = {record.task.id: record.blockers for record in blocked}
-    buckets: dict[str, list[SectionRow]] = {
+    buckets: dict[SectionName, list[SectionRow]] = {
         "in_progress": [],
         "ready": [],
         "blocked": [],
@@ -128,6 +129,11 @@ def classify_open_tasks(
     for task in open_tasks:
         if task.task_type != WORKABLE_TASK_TYPE:
             continue
+        # TaskRecord.claims: None means claims were NOT returned even though
+        # requested — claims-unknown, NOT unclaimed. Such a row still sections
+        # by frontier membership (Lithos owns that answer) but carries the
+        # inline claims_unknown flag, the same surface as claimed_but_blocked.
+        claims_unknown = task.claims is None
         claims: tuple[ClaimRecord, ...] = task.claims or ()
         chips = _blocker_chips(blocked_map.get(task.id, ()), resolve)
         if claims:
@@ -142,14 +148,20 @@ def classify_open_tasks(
                 )
             )
         elif task.id in ready_ids:
-            buckets["ready"].append(SectionRow(task=task))
+            buckets["ready"].append(
+                SectionRow(task=task, claims_unknown=claims_unknown)
+            )
         elif task.id in blocked_map:
-            buckets["blocked"].append(SectionRow(task=task, blockers=chips))
+            buckets["blocked"].append(
+                SectionRow(task=task, blockers=chips, claims_unknown=claims_unknown)
+            )
         else:
             # A workable open task in neither frontier set. With healthy reads
             # this only happens under frontier-limit truncation; ``load_dashboard``
             # decides whether to label it truncation (vs. a failed frontier read).
-            buckets["unclassified"].append(SectionRow(task=task))
+            buckets["unclassified"].append(
+                SectionRow(task=task, claims_unknown=claims_unknown)
+            )
     return {section: tuple(rows) for section, rows in buckets.items()}
 
 
@@ -245,7 +257,7 @@ async def load_dashboard(
     )
 
     show_open = "open" in filters.statuses
-    sections: dict[str, tuple[SectionRow, ...]] = {}
+    sections: dict[SectionName, tuple[SectionRow, ...]] = {}
     for section in WORKABLE_SECTIONS + ("unclassified",):
         sections[section] = partition[section] if show_open else ()
     for status in ("completed", "cancelled"):

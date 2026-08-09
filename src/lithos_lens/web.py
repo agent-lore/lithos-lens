@@ -418,26 +418,38 @@ async def _render_tasks(
     )
 
 
-def task_tag_url(request: Request, tag: str) -> str:
-    preserved_keys = {"status", "agent", "since"}
-    params: list[tuple[str, str]] = [
+# The live /tasks filter vocabulary. Every generated tasks URL rebuilds its
+# query from this allowlist, so a retired param (e.g. the pre-T1
+# ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
+# of propagating through tag / detail / back-link navigation forever.
+_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag")
+
+
+def _preserved_filter_params(
+    request: Request, *, exclude: str = ""
+) -> list[tuple[str, str]]:
+    return [
         (key, value)
         for key, value in request.query_params.multi_items()
-        if key in preserved_keys and value
+        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
     ]
+
+
+def task_tag_url(request: Request, tag: str) -> str:
+    params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))
     return f"/tasks?{urlencode(params)}"
 
 
 def task_detail_url(request: Request, task_id: str) -> str:
-    query = request.url.query
-    suffix = f"?{query}" if query else ""
+    params = _preserved_filter_params(request)
+    suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
 
 
 def tasks_url(request: Request) -> str:
-    query = request.url.query
-    return f"/tasks?{query}" if query else "/tasks"
+    params = _preserved_filter_params(request)
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
 def knowledge_tag_url(tag: str) -> str:

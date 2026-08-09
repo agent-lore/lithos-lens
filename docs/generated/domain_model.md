@@ -191,6 +191,7 @@ classDiagram
   }
   class SectionRow {
     +claimed_but_blocked bool
+    +claims_unknown bool
   }
   class TaskDetailData {
     +status_state SectionState

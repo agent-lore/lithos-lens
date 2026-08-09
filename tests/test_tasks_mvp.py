@@ -416,10 +416,14 @@ def test_task_list_tag_links_replace_tag_and_preserve_active_filters(
         'href="/tasks?status=open&agent=planner&since=01%2F04%2F2026&tag=area%3Adocs"'
     ) in text
     assert 'class="tag-chip tag-chip-project"' in text
+    # Detail links preserve the active filters but strip the retired
+    # claimed_state param, same as tag links — a legacy bookmark must not
+    # keep propagating it through navigation.
     assert (
-        'href="/tasks/open-claimed?status=open&claimed_state=any&'
-        'agent=planner&since=01/04/2026&tag=project:influx"'
+        'href="/tasks/open-claimed?status=open&agent=planner&'
+        'since=01%2F04%2F2026&tag=project%3Ainflux"'
     ) in text
+    assert "claimed_state" not in text.split("data-task-row")[1].split("</article>")[0]
 
 
 def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
@@ -440,6 +444,35 @@ def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
         'tag=project%3Ainflux"'
     ) in text
     assert 'class="tag-chip tag-chip-project"' in text
+
+
+def test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A stale ``?claimed_state=`` bookmark degrades on the list page AND stops
+    propagating: detail links from the list, tag links, and the detail page's
+    back-link all emit URLs without the retired param."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        listing = client.get(
+            "/tasks?status=open&claimed_state=known_claimed&since=2026-04-01"
+        )
+        detail = client.get(
+            "/tasks/open-claimed?status=open&claimed_state=known_claimed"
+            "&since=2026-04-01"
+        )
+
+    listing_text = unescape(listing.text)
+    detail_text = unescape(detail.text)
+
+    assert listing.status_code == 200 and detail.status_code == 200
+    # No generated link on either page carries the retired param.
+    assert 'href="/tasks/open-claimed?status=open&since=2026-04-01"' in listing_text
+    assert "claimed_state" not in listing_text.split("<main")[1]
+    assert "claimed_state" not in detail_text.split("<main")[1]
+    # The detail back-link keeps the real filters.
+    assert 'href="/tasks?status=open&since=2026-04-01"' in detail_text
 
 
 def test_legacy_claimed_state_url_is_ignored(
@@ -733,3 +766,26 @@ def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
 
     found = asyncio.run(fake.task_get("open-claimed"))
     assert found.id == "open-claimed"
+
+
+def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
+    lithos_lens_config_env: Path,
+) -> None:
+    """When the master open list comes back without inline claims (older
+    lithos / claims stripped), rows must read "claims unknown" — not the
+    confident "unclaimed" — while still sectioning by frontier membership."""
+
+    class NoClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+            rows = await super().list_tasks(**kwargs)
+            # Simulate a server that never inlines claims: None, not ().
+            return [replace(task, claims=None) for task in rows]
+
+    fake = NoClaimsClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "claims unknown" in response.text
+    assert 'class="claim-chip claim-chip-open"' not in response.text
