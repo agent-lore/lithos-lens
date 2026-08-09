@@ -42,7 +42,7 @@ const PAGES: ReadonlyArray<{
     slug: "dashboard",
     url: "/tasks?since=2026-08-01",
     ready: async (page) => {
-      await expect(page.locator('[data-task-group="open"]')).toBeVisible();
+      await expect(page.locator(".task-board")).toBeVisible();
     },
   },
   {

@@ -32,7 +32,7 @@ Events       = "Shared Lithos event subscription and browser fan-out over SSE (L
 LithosClient = "Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode."
 Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
-TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges from the Lithos 0.4 graph reads)."
+TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join and dashboard assembly built on them."
 Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "Optional OpenTelemetry hooks and request middleware."
@@ -46,7 +46,7 @@ Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config"]
 Tasks        = ["lithos_lens.tasks"]
-TaskGraph    = ["lithos_lens.task_graph"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry"]
@@ -69,7 +69,7 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 25   # +1 for the hermetic fake-mode event hub (fake_lithos -> events, inside LithosClient -> Events); direction: down
+cross_component_edges  = 26   # +1 for the hermetic fake-mode event hub (fake_lithos -> events, inside LithosClient -> Events); +1 for Web -> TaskGraph (the frontier dashboard assembly); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way

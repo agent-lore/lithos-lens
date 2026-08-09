@@ -63,6 +63,7 @@ source_modules = [
     "lithos_lens.errors",
     "lithos_lens.tasks",
     "lithos_lens.task_graph",
+    "lithos_lens.frontier",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_metadata",
     "lithos_lens.config",

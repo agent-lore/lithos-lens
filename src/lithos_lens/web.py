@@ -20,6 +20,7 @@ from lithos_lens.fake_lithos import (
     FakeLithosClient,
     fake_lithos_enabled,
 )
+from lithos_lens.frontier import load_dashboard
 from lithos_lens.knowledge import (
     ResolveOutcome,
     load_related_panel,
@@ -38,7 +39,6 @@ from lithos_lens.tasks import (
     find_task,
     format_display_date,
     format_tag,
-    load_dashboard,
     load_task_detail,
     parse_filters,
 )
@@ -377,34 +377,31 @@ async def _render_tasks(
                 "lens_route": str(request.url.path),
                 "query_items": query_items,
                 "statuses": list(filters.statuses),
-                "claimed_state": filters.claimed_state,
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
-                "visible_cap": state.config.tasks.visible_cap,
+                "frontier_limit": state.config.tasks.frontier_limit,
             },
         )
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
-            visible_cap=state.config.tasks.visible_cap,
+            frontier_limit=state.config.tasks.frontier_limit,
         )
         logger.debug(
             "tasks dashboard loaded",
             extra={
                 "lens_route": str(request.url.path),
                 "statuses": list(filters.statuses),
-                "claimed_state": filters.claimed_state,
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
-                "visible_cap": dashboard.visible_cap,
+                "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
-                "group_counts": {
-                    status: len(rows) for status, rows in dashboard.groups.items()
+                "section_counts": {
+                    section: len(rows) for section, rows in dashboard.sections.items()
                 },
-                "claim_cap_exceeded": dashboard.claim_cap_exceeded,
-                "claim_filter_limited": dashboard.claim_filter_limited,
+                "truncated": dashboard.truncated,
                 "errors": list(dashboard.errors),
             },
         )
@@ -422,7 +419,7 @@ async def _render_tasks(
 
 
 def task_tag_url(request: Request, tag: str) -> str:
-    preserved_keys = {"status", "claimed_state", "agent", "since"}
+    preserved_keys = {"status", "agent", "since"}
     params: list[tuple[str, str]] = [
         (key, value)
         for key, value in request.query_params.multi_items()

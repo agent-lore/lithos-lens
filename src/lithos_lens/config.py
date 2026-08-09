@@ -61,6 +61,7 @@ DEFAULT_LITHOS_SSE_EVENTS_PATH = "/events"
 DEFAULT_LENS_AGENT_ID = "lithos-lens"
 DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S = 120
 DEFAULT_TASKS_VISIBLE_CAP = 50
+DEFAULT_TASKS_FRONTIER_LIMIT = 500
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
@@ -101,7 +102,14 @@ class LithosConfig:
 @dataclass(frozen=True)
 class TasksConfig:
     auto_refresh_interval_s: int = DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S
+    # Deprecated with the graph-native dashboard (T1): the per-row claim fan-out
+    # it capped is gone (claims arrive inline). Parsed for backward-compat but
+    # unused; ``frontier_limit`` is the live scale dial.
     visible_cap: int = DEFAULT_TASKS_VISIBLE_CAP
+    # Cap sent to lithos_task_ready / lithos_task_blocked. Sized to clear the
+    # production frontier with headroom; truncation is survivable (a
+    # Not-classified tail) but should be rare.
+    frontier_limit: int = DEFAULT_TASKS_FRONTIER_LIMIT
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
 
@@ -346,6 +354,14 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             data,
             "visible_cap",
             DEFAULT_TASKS_VISIBLE_CAP,
+            config_path,
+            "lithos-lens.tasks",
+            minimum=1,
+        ),
+        frontier_limit=_optional_int(
+            data,
+            "frontier_limit",
+            DEFAULT_TASKS_FRONTIER_LIMIT,
             config_path,
             "lithos-lens.tasks",
             minimum=1,

@@ -58,6 +58,7 @@ graph TD
   Web --> Knowledge
   Web --> LithosClient
   Web --> State
+  Web --> TaskGraph
   Web --> Tasks
   Web --> Telemetry
   linkStyle 0 stroke:#bbb
@@ -79,4 +80,5 @@ graph TD
   linkStyle 20 stroke:#999,stroke-dasharray:4
   linkStyle 23 stroke:#999,stroke-dasharray:4
   linkStyle 24 stroke:#999,stroke-dasharray:4
+  linkStyle 25 stroke:#999,stroke-dasharray:4
 ```

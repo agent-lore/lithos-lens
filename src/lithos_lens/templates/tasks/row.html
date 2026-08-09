@@ -24,8 +24,9 @@
       <span class="claim-chip" data-claim-summary>{{ row.claims | length }} claim{{ "s" if (row.claims | length) != 1 else "" }}</span>
     {% elif row.claim_state == "known_unclaimed" %}
       <span class="claim-chip claim-chip-open" data-claim-summary>unclaimed</span>
-    {% elif row.claim_state == "unknown" %}
-      <span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span>
+    {% endif %}
+    {% if row.claimed_but_blocked %}
+      <span class="badge badge-blocked" data-claimed-but-blocked>blocked</span>
     {% endif %}
     <span class="finding-chip" data-finding-count hidden>0 new findings</span>
   </div>
@@ -36,7 +37,11 @@
       {% endfor %}
     {% endif %}
   </div>
-  {% if row.claim_error %}
-    <small class="warning-text">{{ row.claim_error }}</small>
+  {% if row.blockers %}
+    <div class="blocker-list" data-blocker-list aria-label="Blocked by">
+      {% for blocker in row.blockers %}
+        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}</span>
+      {% endfor %}
+    </div>
   {% endif %}
 </article>

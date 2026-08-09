@@ -19,8 +19,10 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
 
   await expect(page.getByRole("heading", { level: 1, name: "Tasks" })).toBeVisible();
 
-  // The open group and its flagship fixture task are present.
-  await expect(page.locator('[data-task-group="open"]')).toBeVisible();
+  // The workable board and its flagship fixture task are present. Open tasks
+  // are partitioned into In progress / Ready / Blocked sections by the Lithos
+  // frontier, so the row lives in one of those rather than a flat "open" group.
+  await expect(page.locator(".task-board")).toBeVisible();
   await expect(
     page.locator('[data-task-row][data-task-id="influx-ingest-cutover"]'),
   ).toBeVisible();

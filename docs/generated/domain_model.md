@@ -147,20 +147,21 @@ classDiagram
     +type str
     +last_seen_at str
   }
+  class BlockerChip {
+    +label str
+    +kind str
+    +target_id str
+  }
   class ClaimRecord {
     +agent str
     +aspect str
     +expires_at str
   }
   class DashboardData {
-    +visible_cap int
+    +frontier_limit int
     +open_total int
-    +claim_cap_exceeded bool
-    +claim_filter_limited bool
+    +truncated bool
     +errors tuple[str, ...]
-  }
-  class EnrichedTask {
-    +claim_error str
   }
   class FindingRecord {
     +id str
@@ -188,6 +189,9 @@ classDiagram
     +updated str
     +tags tuple[str, ...]
   }
+  class SectionRow {
+    +claimed_but_blocked bool
+  }
   class TaskDetailData {
     +status_state SectionState
     +findings_state SectionState
@@ -196,7 +200,6 @@ classDiagram
   }
   class TaskFilters {
     +statuses tuple[TaskStatusName, ...]
-    +claimed_state ClaimedState
     +tags tuple[str, ...]
     +agent str
     +since str
@@ -222,22 +225,24 @@ classDiagram
     +metadata dict[str, Any]
   }
   class TaskSummary {
-    +open_tasks int
+    +in_progress int
+    +ready int
+    +blocked int
+    +unclassified int
+    +open_total int
     +open_claims int
-    +claimed_open_tasks int
-    +unclaimed_open_tasks int
-    +unknown_claim_open_tasks int
     +recent_completed int
     +recent_cancelled int
     +agents int
   }
   DashboardData "1" --> "0..*" AgentRecord : agents
-  DashboardData "1" --> "0..*" EnrichedTask : groups
+  DashboardData "1" --> "0..*" SectionRow : sections
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
-  EnrichedTask "1" --> "1" TaskRecord : task
-  EnrichedTask "1" --> "0..1" TaskStatusRecord : task_status
   FindingView "1" --> "1" FindingRecord : finding
+  SectionRow "1" --> "0..*" BlockerChip : blockers
+  SectionRow "1" --> "0..*" ClaimRecord : claims
+  SectionRow "1" --> "1" TaskRecord : task
   TaskDetailData "1" --> "0..*" FindingView : findings
   TaskDetailData "1" --> "0..1" TaskRecord : task
   TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status

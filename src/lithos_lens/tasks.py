@@ -9,7 +9,13 @@ from enum import StrEnum
 from typing import Any, Literal, Protocol, cast
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
-ClaimedState = Literal["any", "known_claimed", "known_unclaimed"]
+# Sections of the graph-native dashboard. The three workable sections are
+# computed by joining the master open list against the Lithos ready/blocked
+# frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
+# truncation. Completed/cancelled window recently-resolved work.
+SectionName = Literal[
+    "in_progress", "ready", "blocked", "unclassified", "completed", "cancelled"
+]
 # Known task types from the Lithos 0.4 task graph: "task" (workable), "epic",
 # "gate". Transport records carry the raw server string so an unknown future
 # type survives round-trip; only a MISSING task_type defaults to "task" (legacy
@@ -109,28 +115,48 @@ class NoteSummary:
 
 
 @dataclass(frozen=True)
-class EnrichedTask:
-    task: TaskRecord
-    task_status: TaskStatusRecord | None = None
-    claim_error: str = ""
+class BlockerChip:
+    """One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
 
-    @property
-    def claims(self) -> tuple[ClaimRecord, ...]:
-        return self.task_status.claims if self.task_status else ()
+    ``label`` is the display text — the blocking task's title when it resolves
+    against the open snapshot, else a fallback (the gate/predecessor id or the
+    raw blocker message). ``kind`` mirrors the source
+    :class:`~lithos_lens.task_graph.BlockerRecord` kind
+    (``task``/``gate``/``blocker_unsatisfiable``/``cycle``); ``target_id`` is
+    the blocking task/gate id, kept for the deep-links a later slice adds.
+    """
+
+    label: str
+    kind: str = "task"
+    target_id: str = ""
+
+
+@dataclass(frozen=True)
+class SectionRow:
+    """A task rendered in one dashboard section, with its display extras.
+
+    ``claims`` are the inline claims from the master open list (the frontier
+    calls don't carry them); ``blockers`` are the resolved blocker chips on a
+    blocked row. ``claimed_but_blocked`` flags a claimed row (In progress) that
+    Lithos also reports as blocked — an agent holding a claim on infeasible
+    work.
+    """
+
+    task: TaskRecord
+    claims: tuple[ClaimRecord, ...] = ()
+    blockers: tuple[BlockerChip, ...] = ()
+    claimed_but_blocked: bool = False
 
     @property
     def claim_state(self) -> str:
         if self.task.status != "open":
             return "not_applicable"
-        if self.task_status is None:
-            return "unknown"
-        return "known_claimed" if self.task_status.claims else "known_unclaimed"
+        return "known_claimed" if self.claims else "known_unclaimed"
 
 
 @dataclass(frozen=True)
 class TaskFilters:
     statuses: tuple[TaskStatusName, ...]
-    claimed_state: ClaimedState
     tags: tuple[str, ...]
     agent: str
     since: str
@@ -138,11 +164,12 @@ class TaskFilters:
 
 @dataclass(frozen=True)
 class TaskSummary:
-    open_tasks: int = 0
+    in_progress: int = 0
+    ready: int = 0
+    blocked: int = 0
+    unclassified: int = 0
+    open_total: int = 0
     open_claims: int = 0
-    claimed_open_tasks: int = 0
-    unclaimed_open_tasks: int = 0
-    unknown_claim_open_tasks: int = 0
     recent_completed: int = 0
     recent_cancelled: int = 0
     agents: int = 0
@@ -152,12 +179,11 @@ class TaskSummary:
 class DashboardData:
     filters: TaskFilters
     summary: TaskSummary
-    groups: dict[TaskStatusName, tuple[EnrichedTask, ...]]
+    sections: dict[str, tuple[SectionRow, ...]]
     agents: tuple[AgentRecord, ...]
-    visible_cap: int
+    frontier_limit: int
     open_total: int
-    claim_cap_exceeded: bool = False
-    claim_filter_limited: bool = False
+    truncated: bool = False
     errors: tuple[str, ...] = ()
 
 
@@ -232,128 +258,18 @@ def parse_filters(
     if not statuses:
         statuses = TASK_STATUSES
 
-    claimed_state_raw = (values.get("claimed_state") or ["any"])[0]
-    claimed_state: ClaimedState = (
-        claimed_state_raw
-        if claimed_state_raw in {"any", "known_claimed", "known_unclaimed"}
-        else "any"
-    )  # type: ignore[assignment]
-
+    # ``claimed_state`` was retired with the graph-native dashboard (T1). Legacy
+    # bookmarks that still carry it must degrade gracefully, so it is parsed
+    # away (never read) rather than rejected.
     since = normalize_since_input(
         (values.get("since") or [""])[0],
         default_days=default_days,
     )
     return TaskFilters(
         statuses=statuses,
-        claimed_state=claimed_state,
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
-    )
-
-
-async def load_dashboard(
-    lithos: TaskLithosClientProtocol,
-    *,
-    filters: TaskFilters,
-    visible_cap: int,
-) -> DashboardData:
-    errors: list[str] = []
-    query_tags = list(filters.tags) or None
-    query_agent = filters.agent or None
-
-    async def load_group(status: TaskStatusName) -> list[TaskRecord]:
-        since = filters.since
-        # Only the open group is enriched with per-task claim info downstream,
-        # so we only ask lithos to inline claims for that group. Completed and
-        # cancelled groups stay on the lighter payload.
-        return await lithos.list_tasks(
-            agent=query_agent,
-            status=status,
-            tags=query_tags,
-            since=since,
-            with_claims=(status == "open"),
-        )
-
-    group_results = await asyncio.gather(
-        *(load_group(status) for status in TASK_STATUSES),
-        return_exceptions=True,
-    )
-    raw_groups: dict[TaskStatusName, list[TaskRecord]] = {}
-    for status, result in zip(TASK_STATUSES, group_results, strict=True):
-        if isinstance(result, BaseException):
-            errors.append(f"Could not load {status} tasks.")
-            raw_groups[status] = []
-        else:
-            task_records = cast(list[TaskRecord], result)
-            task_records = [
-                task
-                for task in task_records
-                if _matches_filters(task, filters=filters, status=status)
-            ]
-            raw_groups[status] = sorted(
-                task_records, key=lambda task: task.created_at, reverse=True
-            )
-
-    open_total = len(raw_groups["open"])
-    enriched_open = await _enrich_open_tasks(
-        lithos, raw_groups["open"], visible_cap, errors
-    )
-    filtered_open = _apply_claim_filter(enriched_open, filters.claimed_state)
-
-    stats_result, agents_result = await asyncio.gather(
-        lithos.stats(),
-        lithos.list_agents(),
-        return_exceptions=True,
-    )
-    stats: dict[str, Any] = {}
-    if isinstance(stats_result, BaseException):
-        errors.append("Could not load Lithos stats.")
-    else:
-        stats = cast(dict[str, Any], stats_result)
-
-    agents: tuple[AgentRecord, ...] = ()
-    if isinstance(agents_result, BaseException):
-        errors.append("Could not load agent list.")
-    else:
-        agents = tuple(cast(list[AgentRecord], agents_result))
-
-    groups: dict[TaskStatusName, tuple[EnrichedTask, ...]] = {
-        "open": tuple(filtered_open) if "open" in filters.statuses else (),
-        "completed": tuple(EnrichedTask(task) for task in raw_groups["completed"])
-        if "completed" in filters.statuses
-        else (),
-        "cancelled": tuple(EnrichedTask(task) for task in raw_groups["cancelled"])
-        if "cancelled" in filters.statuses
-        else (),
-    }
-    known_claimed = sum(
-        1 for row in enriched_open if row.claim_state == "known_claimed"
-    )
-    known_unclaimed = sum(
-        1 for row in enriched_open if row.claim_state == "known_unclaimed"
-    )
-    summary = TaskSummary(
-        open_tasks=open_total,
-        open_claims=_int_stat(stats, "open_claims"),
-        claimed_open_tasks=known_claimed,
-        unclaimed_open_tasks=known_unclaimed,
-        unknown_claim_open_tasks=max(open_total - known_claimed - known_unclaimed, 0),
-        recent_completed=len(raw_groups["completed"]),
-        recent_cancelled=len(raw_groups["cancelled"]),
-        agents=_int_stat(stats, "agents", default=len(agents)),
-    )
-    return DashboardData(
-        filters=filters,
-        summary=summary,
-        groups=groups,
-        agents=agents,
-        visible_cap=visible_cap,
-        open_total=open_total,
-        claim_cap_exceeded=open_total > visible_cap,
-        claim_filter_limited=open_total > visible_cap
-        and filters.claimed_state != "any",
-        errors=tuple(errors),
     )
 
 
@@ -577,74 +493,18 @@ def parse_date(value: str) -> date | None:
         return None
 
 
-async def _enrich_open_tasks(
-    lithos: TaskLithosClientProtocol,
-    open_tasks: list[TaskRecord],
-    visible_cap: int,
-    errors: list[str],
-) -> list[EnrichedTask]:
-    visible = open_tasks[:visible_cap]
-
-    # Tasks whose claims were already returned inline by the upstream
-    # lithos_task_list(with_claims=True) call don't need a follow-up
-    # task_status fetch. Anything missing inline claims (older lithos,
-    # call made without with_claims, etc.) falls back to per-task fan-out.
-    needs_fetch = [task for task in visible if task.claims is None]
-    fetch_results: dict[str, TaskStatusRecord | None | BaseException] = {}
-    if needs_fetch:
-        results = await asyncio.gather(
-            *(lithos.task_status(task.id) for task in needs_fetch),
-            return_exceptions=True,
-        )
-        for task, result in zip(needs_fetch, results, strict=True):
-            fetch_results[task.id] = (
-                cast(TaskStatusRecord | None, result)
-                if not isinstance(result, BaseException)
-                else result
-            )
-
-    enriched: list[EnrichedTask] = []
-    for task in visible:
-        if task.claims is not None:
-            enriched.append(
-                EnrichedTask(
-                    task=task,
-                    task_status=TaskStatusRecord(
-                        id=task.id,
-                        title=task.title,
-                        status=task.status,
-                        claims=task.claims,
-                        metadata=task.metadata,
-                    ),
-                )
-            )
-            continue
-        result = fetch_results[task.id]
-        if isinstance(result, BaseException):
-            errors.append(f"Could not load claims for task {task.id}.")
-            enriched.append(EnrichedTask(task=task, claim_error="Claims unavailable."))
-        else:
-            enriched.append(EnrichedTask(task=task, task_status=result))
-
-    enriched.extend(EnrichedTask(task=task) for task in open_tasks[visible_cap:])
-    return enriched
-
-
-def _apply_claim_filter(
-    tasks: list[EnrichedTask],
-    claimed_state: ClaimedState,
-) -> list[EnrichedTask]:
-    if claimed_state == "any":
-        return tasks
-    return [task for task in tasks if task.claim_state == claimed_state]
-
-
-def _matches_filters(
+def matches_filters(
     task: TaskRecord,
     *,
     filters: TaskFilters,
     status: TaskStatusName,
 ) -> bool:
+    """Client-side filter predicate shared by the dashboard sections.
+
+    Public because the frontier join (``frontier.py``) re-applies it over the
+    joined snapshot; the guardrail forbids reaching for another module's
+    privates.
+    """
     if task.status != status:
         return False
     if filters.agent and task.created_by != filters.agent:
@@ -659,7 +519,7 @@ def _matches_filters(
     return True
 
 
-def _int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
+def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
     value = stats.get(key, default)
     return value if isinstance(value, int) else default
 
