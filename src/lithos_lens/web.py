@@ -359,9 +359,7 @@ def create_app(
                     knowledge_id,
                     title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
                 )
-                produced_by = await load_produced_by(
-                    state.lithos_client, note_record
-                )
+                produced_by = await load_produced_by(state.lithos_client, note_record)
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:

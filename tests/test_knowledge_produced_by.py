@@ -101,9 +101,7 @@ def test_produced_by_source_is_stripped_before_lookup() -> None:
 
 def test_produced_by_marks_task_record_notes() -> None:
     fake = _ProducedByFake({"task-7": TaskRecord(id="task-7", title="X")})
-    chip = _run(
-        load_produced_by(fake, _note(source="task-7", note_type="task_record"))
-    )
+    chip = _run(load_produced_by(fake, _note(source="task-7", note_type="task_record")))
     assert chip is not None
     assert chip.is_task_record is True
 
