@@ -29,6 +29,7 @@ from lithos_lens.fake_lithos import (
 from lithos_lens.frontier import load_dashboard
 from lithos_lens.knowledge import (
     ResolveOutcome,
+    load_produced_by,
     load_related_panel,
     render_markdown,
     resolve_wiki_link,
@@ -331,6 +332,7 @@ def create_app(
         note_meta = None
         task = None
         related = None
+        produced_by = None
         error = ""
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. The note cannot be loaded."
@@ -357,6 +359,9 @@ def create_app(
                     knowledge_id,
                     title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
                 )
+                produced_by = await load_produced_by(
+                    state.lithos_client, note_record
+                )
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:
@@ -374,6 +379,7 @@ def create_app(
                 "note_meta": note_meta,
                 "task": task,
                 "related": related,
+                "produced_by": produced_by,
                 "error": error,
             },
         )

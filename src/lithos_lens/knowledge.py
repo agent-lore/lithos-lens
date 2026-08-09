@@ -25,7 +25,7 @@ from urllib.parse import urlencode, urlparse
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from lithos_lens.tasks import NoteRecord, NoteSummary, SectionState
+from lithos_lens.tasks import NoteRecord, NoteSummary, SectionState, TaskRecord
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +507,67 @@ def _normalize_unresolved(items: Any) -> tuple[str, ...]:
     if not isinstance(items, list):
         return ()
     return tuple(item for item in items if isinstance(item, str) and item)
+
+
+# ── Produced-by-task chip (K1-S5) ──────────────────────────────────────
+#
+# A note may record the task that produced it in ``metadata.source`` (a task
+# id). The chip is a validated backlink to ``/tasks/{id}`` — it renders ONLY
+# when ``lithos_task_get`` confirms the source is a real task, so a stale or
+# malformed source id shows nothing rather than a dead link. ``task_get`` is
+# the one client method K1 shares with T1; K1 does not hard-depend on T1 having
+# landed it, so a client without the method degrades to "no chip" (§ slice 5).
+
+
+@dataclass(frozen=True)
+class ProducedByTask:
+    """The validated 'produced by task' chip for a note's ``metadata.source``.
+
+    ``is_task_record`` marks a note whose ``metadata.note_type`` is
+    ``task_record`` — the PRD gives those a distinct chip style, since the whole
+    note *is* a task's record rather than a document a task merely produced.
+    """
+
+    task_id: str
+    title: str
+    is_task_record: bool = False
+
+
+class ProducedByClientProtocol(Protocol):
+    """Subset of Lithos operations required by the produced-by-task chip."""
+
+    async def task_get(self, task_id: str) -> TaskRecord: ...
+
+
+async def load_produced_by(
+    lithos: ProducedByClientProtocol,
+    note: NoteRecord,
+) -> ProducedByTask | None:
+    """Validate a note's ``metadata.source`` into a produced-by-task chip.
+
+    Returns ``None`` (render no chip) when there is no ``source``, when the
+    client cannot answer ``lithos_task_get`` (the method is absent — K1 tolerates
+    T1 not having landed it), or when validation fails (an unknown/invalid source
+    id raises). Only a successful ``task_get`` yields a chip, so the note view
+    never links to a task that isn't there.
+    """
+    source = note.metadata.get("source")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    task_get = getattr(lithos, "task_get", None)
+    if task_get is None:
+        return None
+    try:
+        task = await task_get(source.strip())
+    except Exception:
+        # Unknown/invalid source (task_not_found), a broken response, or an
+        # unreachable backend — all degrade to "no chip", never a dead link.
+        return None
+    return ProducedByTask(
+        task_id=task.id,
+        title=task.title,
+        is_task_record=str(note.metadata.get("note_type") or "") == "task_record",
+    )
 
 
 # ── Wiki-link resolver (K1-S2) ─────────────────────────────────────────

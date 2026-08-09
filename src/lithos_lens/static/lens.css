@@ -384,6 +384,7 @@ button,
 .badge,
 .claim-chip,
 .finding-chip,
+.produced-by-chip,
 .tag-chip {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -439,6 +440,26 @@ button,
 .claim-chip-open,
 .claim-chip-unknown {
   background: transparent;
+}
+
+.produced-by-chip {
+  background: rgba(65, 87, 111, 0.09);
+  border-color: rgba(65, 87, 111, 0.35);
+  color: var(--closed);
+  text-decoration: none;
+}
+
+.produced-by-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A task_record note IS a task's record, not a doc a task produced — the
+   accent styling distinguishes it from an ordinary produced-by backlink. */
+.produced-by-chip-record {
+  background: rgba(189, 79, 43, 0.09);
+  border-color: rgba(189, 79, 43, 0.35);
+  color: var(--accent);
 }
 
 .tag-list,
