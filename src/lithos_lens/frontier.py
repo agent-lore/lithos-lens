@@ -146,7 +146,9 @@ def classify_open_tasks(
         elif task.id in blocked_map:
             buckets["blocked"].append(SectionRow(task=task, blockers=chips))
         else:
-            # Only reachable when the frontier calls truncated at their limit.
+            # A workable open task in neither frontier set. With healthy reads
+            # this only happens under frontier-limit truncation; ``load_dashboard``
+            # decides whether to label it truncation (vs. a failed frontier read).
             buckets["unclassified"].append(SectionRow(task=task))
     return {section: tuple(rows) for section, rows in buckets.items()}
 
@@ -217,14 +219,17 @@ async def load_dashboard(
     ]
 
     ready_ids: set[str] = set()
+    frontier_ok = True
     if isinstance(ready_result, BaseException):
         errors.append("Could not load the ready frontier.")
+        frontier_ok = False
     else:
         ready_ids = {task.id for task in cast(list[TaskRecord], ready_result)}
 
     blocked_records: list[BlockedTaskRecord] = []
     if isinstance(blocked_result, BaseException):
         errors.append("Could not load the blocked frontier.")
+        frontier_ok = False
     else:
         blocked_records = cast(list[BlockedTaskRecord], blocked_result)
 
@@ -283,7 +288,11 @@ async def load_dashboard(
         agents=agents,
         frontier_limit=frontier_limit,
         open_total=open_total,
-        truncated=bool(partition["unclassified"]),
+        # Truncation means the frontier reads SUCCEEDED but hit their limit,
+        # leaving otherwise-classifiable rows in the tail. Unclassified rows from
+        # a failed frontier read are surfaced by the error banner instead, not
+        # mislabelled as truncation.
+        truncated=frontier_ok and bool(partition["unclassified"]),
         errors=tuple(errors),
     )
 

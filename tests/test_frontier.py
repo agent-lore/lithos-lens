@@ -249,11 +249,28 @@ def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -
     assert _section_ids(data.sections, "ready") == []
 
 
-def test_load_dashboard_reports_frontier_error_and_holds_rows_unclassified() -> None:
+def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
+    """Regression (f-002): a failed frontier read leaves rows unclassified, but
+    that is an error (surfaced by the banner), NOT frontier-limit truncation —
+    ``truncated`` must stay False so the dashboard doesn't claim a false cap."""
     ready = _task("r", claims=())
     fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[], fail_ready=True)
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
     # The ready call failed, so the row can't be placed on the frontier.
     assert _section_ids(data.sections, "unclassified") == ["r"]
-    assert data.truncated is True
+    assert data.truncated is False
     assert any("ready frontier" in message for message in data.errors)
+
+
+def test_load_dashboard_flags_truncation_when_frontier_hits_its_limit() -> None:
+    """When both frontier reads succeed but omit a workable open task (the
+    frontier-limit overflow case), the tail row IS truncation."""
+    ready = _task("r", claims=())
+    overflow = _task("o", claims=())
+    # Both frontier calls succeed; ``overflow`` is in neither set (as if the
+    # limit dropped it), so it lands in the Not-classified tail.
+    fake = _FrontierFake(open_tasks=[ready, overflow], ready=[ready], blocked=[])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    assert _section_ids(data.sections, "unclassified") == ["o"]
+    assert data.truncated is True
+    assert data.errors == ()
