@@ -93,6 +93,22 @@ class NoteRecord:
 
 
 @dataclass(frozen=True)
+class NoteSummary:
+    """A lightweight note row from ``lithos_list`` (no body).
+
+    Used by the wiki-link resolver's title-disambiguation step; the ``path`` /
+    ``updated`` / ``tags`` fields carry the browsing metadata later slices (the
+    ``/knowledge`` recent list) render.
+    """
+
+    id: str
+    title: str = ""
+    path: str = ""
+    updated: str = ""
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EnrichedTask:
     task: TaskRecord
     task_status: TaskStatusRecord | None = None
@@ -510,6 +526,18 @@ def normalize_note(raw: dict[str, Any]) -> NoteRecord:
         content=str(raw.get("content") or ""),
         tags=tuple(str(tag) for tag in tags),
         metadata=metadata,
+    )
+
+
+def normalize_note_summary(raw: dict[str, Any]) -> NoteSummary:
+    metadata = dict(raw.get("metadata") or {})
+    tags = raw.get("tags") or metadata.get("tags") or []
+    return NoteSummary(
+        id=str(raw.get("id") or ""),
+        title=str(raw.get("title") or ""),
+        path=str(raw.get("path") or ""),
+        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
+        tags=tuple(str(tag) for tag in tags),
     )
 
 

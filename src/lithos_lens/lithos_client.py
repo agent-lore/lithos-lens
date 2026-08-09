@@ -30,11 +30,13 @@ from lithos_lens.tasks import (
     AgentRecord,
     FindingRecord,
     NoteRecord,
+    NoteSummary,
     TaskRecord,
     TaskStatusRecord,
     normalize_agent,
     normalize_finding,
     normalize_note,
+    normalize_note_summary,
     normalize_task,
     normalize_task_status,
 )
@@ -124,7 +126,17 @@ class LithosClientProtocol(Protocol):
         self, knowledge_id: str, *, max_length: int | None = None
     ) -> NoteRecord | None: ...
 
+    async def read_note_by_path(self, path: str) -> NoteRecord | None: ...
+
     async def related(self, knowledge_id: str) -> RelatedNeighborhood: ...
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]: ...
 
     async def close(self) -> None: ...
 
@@ -439,6 +451,29 @@ class LithosClient:
         _raise_for_error(payload)
         return normalize_note(payload)
 
+    async def read_note_by_path(self, path: str) -> NoteRecord | None:
+        """Resolve a note by ``path`` (the wiki-link resolver's existence probe).
+
+        A missing path is the common case for a title-style wiki target, so the
+        coded ``doc_not_found`` envelope is answered with ``None`` rather than a
+        raised error; any other failure propagates. The truncated
+        ``max_length=1`` read still returns complete frontmatter (§6.3), so the
+        id needed for the redirect is always present on a hit.
+        """
+        arguments: dict[str, Any] = {
+            "path": path,
+            "agent_id": self._config.agent_id,
+            "max_length": 1,
+        }
+        try:
+            payload = await self._call_tool("lithos_read", arguments)
+            _raise_for_error(payload)
+        except LithosToolError as exc:
+            if exc.code == "doc_not_found":
+                return None
+            raise
+        return normalize_note(payload)
+
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         """Fetch a note's related neighborhood via ``lithos_related``.
 
@@ -452,6 +487,38 @@ class LithosClient:
         )
         _raise_for_error(payload)
         return normalize_related(payload)
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        """List notes via ``lithos_list`` (wiki-link title disambiguation).
+
+        Only the arguments an active filter needs are sent; ``lithos_list``
+        returns lightweight rows (``id``/``title``/``path``/``updated``/``tags``,
+        no body).
+        """
+        arguments: dict[str, Any] = {}
+        if title_contains:
+            arguments["title_contains"] = title_contains
+        if tags:
+            arguments["tags"] = tags
+        if limit is not None:
+            arguments["limit"] = limit
+        payload = await self._call_tool("lithos_list", arguments)
+        _raise_for_error(payload)
+        # lithos_list's row container has drifted across versions; accept the
+        # documented aliases rather than pinning one key.
+        rows: Any = (
+            payload.get("notes")
+            or payload.get("documents")
+            or payload.get("results")
+            or []
+        )
+        return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._worker_task is None:

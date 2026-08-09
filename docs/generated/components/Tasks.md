@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 14 | 15 |
+| `lithos_lens.tasks` | M | 15 | 16 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `FindingRecord`
 - class `AgentRecord`
 - class `NoteRecord`
+- class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `EnrichedTask`
 - class `TaskFilters`
 - class `TaskSummary`
@@ -40,6 +41,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_finding`
 - def `normalize_agent`
 - def `normalize_note`
+- def `normalize_note_summary`
 - def `default_since`
 - def `normalize_since_input`
 - def `format_display_date`

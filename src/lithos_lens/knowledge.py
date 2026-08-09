@@ -14,14 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import uuid
 from dataclasses import dataclass, field
 from html import escape
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
-from lithos_lens.tasks import NoteRecord, SectionState
+from lithos_lens.tasks import NoteRecord, NoteSummary, SectionState
 
 logger = logging.getLogger(__name__)
 
@@ -59,25 +62,103 @@ MARKDOWN = (
 MARKDOWN.validateLink = _validate_link
 
 
-def render_markdown(text: str) -> str:
+def render_markdown(text: str, from_id: str = "") -> str:
     """Render a note's markdown body to safe HTML.
 
     Raw HTML in ``text`` is escaped and link schemes outside the §6.2
     allow-list are neutralized, so a hostile or sloppy note cannot script the
-    browser. The full body is always rendered — ``/note/{id}`` is the canonical
+    browser. ``[[wiki-link]]`` patterns are spliced into anchors pointing at the
+    per-click resolver route (``from_id`` is the source note whose links these
+    are; it rides along so the resolver can cross-check the note's own outgoing
+    set). The full body is always rendered — ``/note/{id}`` is the canonical
     document page, so bounding render cost would be an explicit product
     decision, not a silent cap. If parsing fails for any reason the fallback is
     HTML-escaped plaintext — never raw passthrough.
     """
     body = text or ""
     try:
-        return MARKDOWN.render(body)
+        env: dict[str, Any] = {}
+        tokens = MARKDOWN.parse(body, env)
+        _splice_wiki_links(tokens, from_id)
+        return MARKDOWN.renderer.render(tokens, MARKDOWN.options, env)
     except Exception:
         logger.warning(
             "markdown render failed; falling back to escaped plaintext",
             exc_info=True,
         )
         return f'<pre class="markdown-fallback">{escape(body)}</pre>'
+
+
+# ── Wiki-link tokenizer (K1-S2) ────────────────────────────────────────
+#
+# A wiki-link is ``[[target]]`` or ``[[target|display]]``. Splicing happens at
+# the token level — only inside *text* tokens of the parsed stream — never by
+# regexing the raw markdown, because ``[[…]]``-shaped text inside a code fence
+# or inline code is a separate token type and must stay literal (§6.3).
+_WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+
+
+def wiki_link_href(target: str, from_id: str) -> str:
+    """URL for a wiki-link's per-click resolver route (§6.3)."""
+    return "/knowledge/resolve?" + urlencode({"target": target, "from": from_id})
+
+
+def _splice_wiki_links(tokens: list[Token], from_id: str) -> None:
+    """Rewrite ``[[wiki-link]]`` runs inside every inline token's text children."""
+    for token in tokens:
+        if token.type == "inline" and token.children:
+            token.children = _splice_children(token.children, from_id)
+
+
+def _splice_children(children: list[Token], from_id: str) -> list[Token]:
+    spliced: list[Token] = []
+    for child in children:
+        if child.type == "text" and "[[" in child.content:
+            spliced.extend(_split_wiki_text(child, from_id))
+        else:
+            # code_inline / softbreak / emphasis markers etc. pass through
+            # untouched, so wiki-syntax inside inline code stays literal.
+            spliced.append(child)
+    return spliced
+
+
+def _split_wiki_text(token: Token, from_id: str) -> list[Token]:
+    text = token.content
+    pieces: list[Token] = []
+    pos = 0
+    matched = False
+    for match in _WIKI_LINK_RE.finditer(text):
+        matched = True
+        if match.start() > pos:
+            pieces.append(_text_token(text[pos : match.start()]))
+        target = match.group(1).strip()
+        display = (match.group(2) or match.group(1)).strip()
+        pieces.extend(_wiki_link_tokens(target, display, from_id))
+        pos = match.end()
+    if not matched:
+        return [token]
+    if pos < len(text):
+        pieces.append(_text_token(text[pos:]))
+    return pieces
+
+
+def _text_token(content: str) -> Token:
+    token = Token("text", "", 0)
+    token.content = content
+    return token
+
+
+def _wiki_link_tokens(target: str, display: str, from_id: str) -> list[Token]:
+    return [
+        Token(
+            "link_open",
+            "a",
+            1,
+            attrs={"href": wiki_link_href(target, from_id), "class": "wiki-link"},
+        ),
+        _text_token(display),
+        Token("link_close", "a", -1),
+    ]
 
 
 # ── Related panel (K1-S4) ──────────────────────────────────────────────
@@ -409,3 +490,175 @@ def _normalize_unresolved(items: Any) -> tuple[str, ...]:
     if not isinstance(items, list):
         return ()
     return tuple(item for item in items if isinstance(item, str) and item)
+
+
+# ── Wiki-link resolver (K1-S2) ─────────────────────────────────────────
+#
+# No MCP response maps an inline ``[[target]]`` to a note id, so resolution is
+# per-click in ``GET /knowledge/resolve`` (§6.3): a UUID target is a direct
+# redirect, a ``target + ".md"`` path probe covers the dominant
+# ``[[folder/note]]`` convention, and otherwise candidates are gathered from the
+# source note's outgoing links and a title search — one confident candidate
+# redirects, several disambiguate, none is reported as an unresolved link.
+
+# Upper bound on candidates gathered for the title-disambiguation step, so a
+# broad ``title_contains`` match can't inflate the disambiguation page.
+RESOLVE_CANDIDATE_LIMIT = 10
+
+
+@dataclass(frozen=True)
+class ResolveCandidate:
+    """One plausible target for a wiki-link, shown on the disambiguation page."""
+
+    id: str
+    title: str = ""
+    path: str = ""
+
+    @property
+    def label(self) -> str:
+        """Human label: title, then path, falling back to the bare id."""
+        return self.title or self.path or self.id
+
+
+@dataclass(frozen=True)
+class ResolveOutcome:
+    """The result of resolving one wiki-link click.
+
+    ``kind`` is ``redirect`` (follow ``target_id``), ``disambiguation`` (show
+    ``candidates``), or ``unresolved`` (offer a search for ``search_query``).
+    """
+
+    kind: str
+    target: str = ""
+    target_id: str = ""
+    candidates: tuple[ResolveCandidate, ...] = ()
+    search_query: str = ""
+
+
+class WikiResolverClientProtocol(Protocol):
+    """Subset of Lithos operations required by the wiki-link resolver."""
+
+    async def read_note_by_path(self, path: str) -> NoteRecord | None: ...
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood: ...
+
+    async def list_notes(
+        self,
+        *,
+        title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]: ...
+
+
+async def resolve_wiki_link(
+    lithos: WikiResolverClientProtocol,
+    target: str,
+    from_id: str,
+    *,
+    candidate_limit: int = RESOLVE_CANDIDATE_LIMIT,
+) -> ResolveOutcome:
+    """Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3)."""
+    target = target.strip()
+    if not target:
+        return ResolveOutcome(kind="unresolved", target=target)
+
+    if _is_uuid(target):
+        return ResolveOutcome(kind="redirect", target=target, target_id=target)
+
+    note = await _probe_path(lithos, target)
+    if note is not None and note.id:
+        return ResolveOutcome(kind="redirect", target=target, target_id=note.id)
+
+    candidates = await _gather_candidates(
+        lithos, target, from_id, limit=candidate_limit
+    )
+    if len(candidates) == 1:
+        return ResolveOutcome(
+            kind="redirect", target=target, target_id=candidates[0].id
+        )
+    if candidates:
+        return ResolveOutcome(
+            kind="disambiguation", target=target, candidates=candidates
+        )
+    return ResolveOutcome(kind="unresolved", target=target, search_query=target)
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _last_component(target: str) -> str:
+    """The last path component of a ``folder/note`` target (the title search key)."""
+    return target.rstrip("/").split("/")[-1] or target
+
+
+async def _probe_path(
+    lithos: WikiResolverClientProtocol, target: str
+) -> NoteRecord | None:
+    """Cheap ``lithos_read(path=target + ".md", max_length=1)`` existence probe.
+
+    A miss (the common case for a title-style target) is not an error here: any
+    failure falls through to the candidate-gathering step, so it degrades to
+    ``None`` rather than propagating.
+    """
+    path = target if target.endswith(".md") else f"{target}.md"
+    try:
+        return await lithos.read_note_by_path(path)
+    except Exception:
+        return None
+
+
+async def _gather_candidates(
+    lithos: WikiResolverClientProtocol,
+    target: str,
+    from_id: str,
+    *,
+    limit: int,
+) -> tuple[ResolveCandidate, ...]:
+    """Candidate targets from the source note's links plus a title search.
+
+    A confident match from the source note's own outgoing links (its title
+    equals the target or the target's last path component) ranks first; the
+    ``lithos_list(title_contains=…)`` matches follow. De-duplicated by id and
+    capped at ``limit`` so a broad title match can't inflate the page.
+    """
+    last = _last_component(target)
+    candidates: dict[str, ResolveCandidate] = {}
+
+    if from_id:
+        try:
+            neighborhood = await lithos.related(from_id)
+        except Exception:
+            neighborhood = None
+        if neighborhood is not None:
+            for ref in neighborhood.links:
+                if ref.id and _title_matches(ref.title, target, last):
+                    candidates.setdefault(
+                        ref.id, ResolveCandidate(id=ref.id, title=ref.title)
+                    )
+
+    try:
+        matches = await lithos.list_notes(title_contains=last, limit=limit)
+    except Exception:
+        matches = []
+    for note in matches:
+        if note.id:
+            candidates.setdefault(
+                note.id,
+                ResolveCandidate(id=note.id, title=note.title, path=note.path),
+            )
+
+    return tuple(candidates.values())[:limit]
+
+
+def _title_matches(title: str, target: str, last: str) -> bool:
+    """Whether an outgoing link's ``title`` is a confident match for the target."""
+    if not title:
+        return False
+    normalized = title.strip().lower()
+    return normalized in {target.strip().lower(), last.strip().lower()}

@@ -51,6 +51,17 @@ classDiagram
   class RelatedSection {
     +overflow int
   }
+  class ResolveCandidate {
+    +id str
+    +title str
+    +path str
+  }
+  class ResolveOutcome {
+    +kind str
+    +target str
+    +target_id str
+    +search_query str
+  }
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived
   RelatedNeighborhood "1" --> "0..*" RelatedRef : edges
@@ -62,6 +73,7 @@ classDiagram
   RelatedPanel "1" --> "1" RelatedSection : links
   RelatedPanel "1" --> "1" RelatedSection : sources
   RelatedSection "1" --> "0..*" RelatedItem : items
+  ResolveOutcome "1" --> "0..*" ResolveCandidate : candidates
 ```
 
 ## LithosClient
@@ -155,6 +167,13 @@ classDiagram
     +content str
     +tags tuple[str, ...]
     +metadata dict[str, Any]
+  }
+  class NoteSummary {
+    +id str
+    +title str
+    +path str
+    +updated str
+    +tags tuple[str, ...]
   }
   class TaskDetailData {
     +status_state SectionState

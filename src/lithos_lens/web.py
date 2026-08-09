@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -20,7 +20,12 @@ from lithos_lens.fake_lithos import (
     FakeLithosClient,
     fake_lithos_enabled,
 )
-from lithos_lens.knowledge import load_related_panel, render_markdown
+from lithos_lens.knowledge import (
+    ResolveOutcome,
+    load_related_panel,
+    render_markdown,
+    resolve_wiki_link,
+)
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -200,6 +205,41 @@ def create_app(
                 "active_view": "tasks",
                 "detail": detail,
                 "offline": False,
+            },
+        )
+
+    @app.get("/knowledge/resolve")
+    async def knowledge_resolve(request: Request):
+        """Resolve a clicked ``[[wiki-link]]`` per §6.3 and redirect or explain.
+
+        A confident resolution 302-redirects to the note page; an ambiguous one
+        renders a disambiguation page listing candidates; an unresolvable one
+        renders an unresolved page offering a search. When Lithos is offline the
+        link can't be resolved, so the unresolved page is shown directly.
+        """
+        target = request.query_params.get("target", "").strip()
+        from_id = request.query_params.get("from", "").strip()
+        snapshot = await state.refresh_health()
+        offline = snapshot.lithos != "ok"
+        if offline:
+            outcome = ResolveOutcome(
+                kind="unresolved", target=target, search_query=target
+            )
+        else:
+            outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
+            if outcome.kind == "redirect":
+                return RedirectResponse(
+                    f"/note/{quote(outcome.target_id)}", status_code=302
+                )
+        return templates.TemplateResponse(
+            request,
+            "knowledge/resolve.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "outcome": outcome,
+                "offline": offline,
             },
         )
 
