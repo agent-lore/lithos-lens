@@ -1,0 +1,29 @@
+{
+  "tool": "lithos_agent_register",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/agents.py::lithos_agent_register"
+  ],
+  "request": {
+    "canonical": {
+      "id": "lithos-lens",
+      "name": "Lithos Lens",
+      "type": "web-ui"
+    },
+    "notes": "Lens registers once at startup; metadata is accepted upstream but never sent."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "created": true
+    },
+    "variants": {
+      "already_registered": {
+        "success": true,
+        "created": false
+      }
+    },
+    "errors": []
+  },
+  "observed_divergences": ""
+}

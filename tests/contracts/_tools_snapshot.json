@@ -1,0 +1,1882 @@
+{
+  "_comment": "Advisory dump of the live Lithos tools/list surface (refresh via `make contracts-snapshot`). NOT a contract file — response-shape contracts live in the sibling <tool>.json files.",
+  "tools": {
+    "lithos_agent_info": {
+      "description": "Get agent information.\n\nArgs:\n    id: Agent identifier\n\nReturns:\n    Agent info dict or None if not found",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_agent_list": {
+      "description": "List all known agents.\n\nArgs:\n    type: Filter by agent type\n    active_since: Filter by last activity (ISO datetime)\n\nReturns:\n    Dict with agents list",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "active_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_agent_register": {
+      "description": "Register or update an agent.\n\nArgs:\n    id: Agent identifier\n    name: Human-friendly display name\n    type: Agent type (e.g., \"agent-zero\", \"claude-code\")\n    metadata: Optional extra info\n\nReturns:\n    Dict with success and created booleans",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_cache_lookup": {
+      "description": "Check if fresh cached knowledge exists before doing expensive research.\n\nReturns a cache hit with full document content if fresh knowledge exists,\na stale reference if expired knowledge exists (update instead of duplicate),\nor a clean miss if nothing relevant is found.\n\nArgs:\n    query: What you are about to research\n    source_url: Canonical URL for exact dedup-aware lookup\n    max_age_hours: Reject docs older than N hours (uses updated_at)\n    min_confidence: Minimum confidence score threshold — candidates whose\n        ``metadata.confidence`` is strictly below this value are skipped\n        entirely (default: 0.5).\n    limit: Max candidate docs to evaluate (default: 3).\n    tags: Restrict to tagged docs (AND semantics)\n\nReturns:\n    Dict with hit, document, stale_exists, stale_id",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 3,
+            "type": "integer"
+          },
+          "max_age_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min_confidence": {
+            "default": 0.5,
+            "type": "number"
+          },
+          "query": {
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_conflict_resolve": {
+      "description": "Resolve a contradiction between two notes.\n\nSets the resolution state on a contradicts edge so future retrieval\nreflects the resolution.\n\nArgs:\n    edge_id: The edge ID of the contradiction to resolve\n    resolution: One of: accepted_dual, superseded, refuted, merged\n    resolver: Agent or user identifier performing the resolution\n    winner_id: Required when resolution is 'superseded'; must be\n        either from_id or to_id of the edge",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edge_id": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolver": {
+            "type": "string"
+          },
+          "winner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "edge_id",
+          "resolution",
+          "resolver"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_delete": {
+      "description": "Delete a knowledge file.\n\nArgs:\n    id: UUID of knowledge item to delete\n    agent: Agent performing deletion (required for audit trail)\n\nReturns:\n    Dict with success boolean, or error envelope if document not found",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_edge_list": {
+      "description": "Query edges from edges.db by optional filters.\n\nArgs:\n    from_id: Filter by source node ID\n    to_id: Filter by target node ID\n    type: Filter by edge type\n    namespace: Filter by namespace\n\nReturns:\n    Dict with results list of edge dicts.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "from_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_edge_upsert": {
+      "description": "Create or update a typed edge in edges.db.\n\nUpsert key is (from_id, to_id, type, namespace).\n\nArgs:\n    from_id: Source node ID\n    to_id: Target node ID\n    type: Edge type (e.g. 'derived_from', 'related_to')\n    weight: Edge weight (float)\n    namespace: Namespace for the edge (required)\n    provenance_actor: Agent/process that created the edge\n    provenance_type: How the edge was derived\n    evidence: Supporting evidence (dict or list only, not scalars)\n    conflict_state: Conflict state marker\n\nReturns:\n    Status envelope with edge_id.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "conflict_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "evidence": {
+            "default": null,
+            "title": "Evidence"
+          },
+          "from_id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "provenance_actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provenance_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "from_id",
+          "to_id",
+          "type",
+          "weight",
+          "namespace"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_finding_list": {
+      "description": "List findings for a task.\n\nArgs:\n    task_id: Task ID\n    since: Filter by created since (ISO datetime)\n\nReturns:\n    Dict with findings list",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_finding_post": {
+      "description": "Post a finding to a task.\n\nArgs:\n    task_id: Task ID\n    agent: Agent posting the finding\n    summary: Finding summary\n    knowledge_id: Optional linked knowledge document ID\n\nReturns:\n    Dict with finding_id",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "knowledge_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "agent",
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_list": {
+      "description": "List knowledge documents with filters.\n\nArgs:\n    path_prefix: Filter by path prefix\n    tags: Filter by tags (AND)\n    author: Filter by author\n    since: Filter by updated since (ISO datetime)\n    limit: Max results (default: 50)\n    offset: Pagination offset\n    title_contains: Filter by case-insensitive substring match on title\n    entities: Filter by entity names from the document's ``entities``\n        frontmatter (AND across the list, exact match). Resolved via\n        an inverted index (no full scan).\n    metadata_match: Filter by free-form metadata (AND across keys). For\n        each ``key: q`` a document matches when its stored metadata\n        value equals ``q`` or is a list containing ``q`` (so a note with\n        ``github_repos: [\"org/a\",\"org/b\"]`` matches\n        ``{\"github_repos\": \"org/a\"}``). Query values must be scalars\n        (string/number/boolean); type-sensitive. Resolved via an\n        inverted index (no full scan).\n    content_query: Filter by full-text search query (Tantivy).\n        Tantivy-native filters (``tags``, ``author``,\n        ``path_prefix``) are pushed down into the search query so\n        ranking runs over the already-filtered candidate set,\n        which is necessary for correctness under ranking pressure\n        (see #194). ``since`` and ``title_contains`` are applied\n        against the metadata cache after ranking.\n\nReturns:\n    Dict with items list and total count",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "content_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "entities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "metadata_match": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "offset": {
+            "default": 0,
+            "type": "integer"
+          },
+          "path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "title_contains": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_node_stats": {
+      "description": "View a note's salience score, retrieval stats, and penalty counts.\n\nArgs:\n    node_id: The document ID to look up stats for\n\nReturns:\n    Dict with salience, retrieval_count, cited_count, ignored_count,\n    misleading_count, and other stats fields.\n    Returns error envelope if node_id does not match any known document.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "node_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_note_update": {
+      "description": "Patch a note's frontmatter (tags/metadata/title/status) without resending its body.\n\nThe note counterpart to ``lithos_task_update``: a per-field patch\nthat leaves the markdown body untouched. Use this instead of\n``lithos_write`` whenever you only need to change frontmatter — it\nremoves the read → reconstruct-body → write round-trip (and the\nlost-update risk that comes with reproducing the body), since the\nbody is never read into the request at all.\n\nAt least one of ``title``, ``tags``, ``status``, or ``metadata`` must\nbe provided.\n\nArgs:\n    id: UUID of the note to patch.\n    agent: Your agent identifier.\n    title: New title. null/omit preserves existing. Renaming may\n        change the note's slug; a collision with another note's\n        slug is rejected as ``slug_collision``.\n    tags: null/omit preserves existing; ``[]`` clears all tags; a\n        non-empty list replaces them.\n    status: active|archived|quarantined. null/omit preserves existing.\n    metadata: Additive per-key merge into the note's existing\n        frontmatter metadata. A key whose value is null deletes it;\n        other keys are set; keys not mentioned are preserved. As with\n        ``lithos_task_update`` there is no wholesale-clear affordance —\n        ``metadata={}`` makes no metadata change (and, with no other\n        field set, is rejected with code \"invalid_input\"). Keys must be\n        strings and must not collide with reserved frontmatter fields\n        (e.g. title, tags, version) — such patches are rejected with\n        code \"invalid_input\".\n    expected_version: If provided, reject with version_conflict when\n        the note's current version differs. Omit to skip the check.\n\nReturns:\n    On success: {\"status\": \"updated\", ...}. Actionable outcomes keep\n    their own top-level status: slug_collision / duplicate /\n    version_conflict (the latter carries \"current_version\"). All other\n    failures use the standard error envelope {\"status\": \"error\",\n    \"code\", \"message\"} — validation failures carry code\n    \"invalid_input\"; an unknown id carries code \"note_not_found\".",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_read": {
+      "description": "Read a knowledge file by ID or path.\n\nArgs:\n    id: UUID of knowledge item\n    path: File path relative to knowledge/\n    max_length: Truncate content to N characters\n    agent_id: Caller identity for audit logging (optional)\n\nReturns:\n    Dict with id, title, content, metadata, links, truncated,\n    retrieval_count",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_related": {
+      "description": "Composite \"what is this document related to?\" view.\n\nMerges three graph-query backends into a single response so agents\ndon't have to fan out across multiple tools and mentally join the\nresults:\n\n- **links** — structural ``[[wiki-link]]`` navigation (NetworkX).\n- **provenance** — ``derived_from_ids`` chains (frontmatter index).\n- **edges** — typed LCMA edges (edges.db), both directions.\n\nFor edge-table queries that are not centred on a single document\n(e.g. \"list all ``contradicts`` edges\", \"audit a namespace\"), use\n:func:`lithos_edge_list` instead — that tool is the only way to\nexpress filters like ``type`` alone or ``to_id`` alone.\n\nArgs:\n    id: Document UUID.\n    include: Subset of ``[\"links\", \"provenance\", \"edges\"]`` to\n        populate. Defaults to all three. Unknown values are\n        silently ignored so forward-compatible callers don't\n        break when new backends land.\n    depth: BFS depth 1-3 for ``links`` and ``provenance``.\n        Ignored for ``edges`` (LCMA edges are a flat table).\n    namespace: Optional namespace filter applied to ``edges``.\n        ``links`` and ``provenance`` don't use namespaces.\n\nReturns:\n    Dict shaped like::\n\n        {\n          \"id\": \"<doc-id>\",\n          \"included\": [\"links\", \"provenance\", \"edges\"],\n          \"links\": {\"outgoing\": [...], \"incoming\": [...]},\n          \"provenance\": {\n              \"sources\": [...], \"derived\": [...],\n              \"unresolved_sources\": [...]\n          },\n          \"edges\": {\"outgoing\": [...], \"incoming\": [...]},\n          \"related_ids\": [\"<id>\", ...]   # deduped union\n        }\n\n    Sections not listed in ``include`` are omitted entirely\n    (not emitted as empty keys). ``related_ids`` holds the\n    deduped union of every id referenced across the included\n    sections — sorted for determinism.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "depth": {
+            "default": 1,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "include": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_retrieve": {
+      "description": "LCMA cognitive retrieval — runs seven scouts with reranking.\n\nOrchestrates parallel scouts against the knowledge base, applies\nmerge-and-normalize, Terrace 1 reranking, and writes an audit\nreceipt on every call.\n\nArgs:\n    query: Search query string (required)\n    limit: Max results (default: 10)\n    namespace_filter: Restrict to these namespaces\n    agent_id: Caller identity for access-scope gating and audit\n    task_id: Task context — activates task_context scout and\n        working-memory tracking\n    surface_conflicts: Reserved for MVP 2 contradiction surfacing\n    max_context_nodes: Provenance seed count (defaults to limit)\n    tags: Filter by tags (AND semantics)\n    path_prefix: Filter by path prefix\n\nReturns:\n    Dict with results list (superset of lithos_search result\n    schema), temperature, terrace_reached, receipt_id, and the\n    degraded-mode signal ``degraded`` (bool) / ``failed_scouts`` (names\n    of any scouts whose backend raised — empty when all scouts ran).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "limit": {
+            "default": 10,
+            "type": "integer"
+          },
+          "max_context_nodes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace_filter": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "query": {
+            "type": "string"
+          },
+          "surface_conflicts": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_search": {
+      "description": "Search across the knowledge base.\n\nSupports four search modes:\n- ``hybrid`` (default): Merges Tantivy BM25 full-text and ChromaDB\n  cosine-similarity results using Reciprocal Rank Fusion (RRF, k=60).\n  Best overall quality.\n- ``fulltext``: Pure Tantivy full-text search (BM25). Supports Tantivy\n  query syntax (e.g. field-specific queries, boolean operators).\n- ``semantic``: Pure ChromaDB semantic/vector search. Finds documents\n  with similar meaning even when keywords differ.\n- ``graph``: Wiki-link graph traversal. Discovers related documents by\n  following links from seed documents up to *graph_depth* hops.\n  Seeds are either provided via *seed_ids* or discovered automatically\n  via a fast hybrid search on *query*.\n\nArgs:\n    query: Search query string\n    limit: Max results (default: 10)\n    mode: Search mode — \"hybrid\" | \"fulltext\" | \"semantic\" | \"graph\"\n          (default: \"hybrid\")\n    tags: Filter by tags (AND) — fulltext/semantic/hybrid only\n    author: Filter by author (fulltext/semantic/hybrid only)\n    path_prefix: Filter by path prefix (fulltext/semantic/hybrid only)\n    threshold: Minimum similarity 0-1 for semantic/hybrid (default: 0.5)\n    seed_ids: Starting document IDs for graph mode.  If omitted,\n              seeds are discovered via hybrid search.\n    graph_depth: BFS hop depth for graph mode (1-3, default: 2)\n    entities: Filter results to documents whose ``entities``\n              frontmatter contains every named entity (exact\n              match, AND). Applies to all modes; resolved via an\n              inverted index and applied as a post-filter.\n    agent_id: Caller identity for audit logging (optional)\n\nReturns:\n    Dict with results list containing id, title, snippet, score, path,\n    source_url, updated_at, is_stale, derived_from_ids",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "entities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "graph_depth": {
+            "default": 2,
+            "type": "integer"
+          },
+          "limit": {
+            "default": 10,
+            "type": "integer"
+          },
+          "mode": {
+            "default": "hybrid",
+            "type": "string"
+          },
+          "path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "query": {
+            "type": "string"
+          },
+          "seed_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_stats": {
+      "description": "Get knowledge base statistics and health indicators.\n\nReturns:\n    Dict with document counts, search index stats, coordination\n    stats, and health signals (index drift, broken links, expired\n    claims, last-updated timestamps).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "lithos_tags": {
+      "description": "Get all tags with document counts.\n\nArgs:\n    prefix: Optional prefix filter (case-insensitive). Only tags starting with this prefix are returned.\n\nReturns:\n    Dict with tags mapping tag name to count",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_task_blocked": {
+      "description": "Return open tasks that are NOT ready, with structured blocker reasons.\n\nSame filter surface as ``lithos_task_ready``. Each returned task carries\na ``blockers`` list; each blocker has ``kind``:\n``task`` (predecessor still open — just waiting),\n``gate`` (waiting on an unresolved gate),\n``blocker_unsatisfiable`` (predecessor or gate was cancelled — needs\nintervention), or ``cycle`` (the dependency chain forms a cycle).\n\nArgs:\n    project: Shorthand for ``metadata.project == project``.\n    tags: Filter by tags (task must have all specified tags).\n    metadata_match: Metadata filter (AND across keys); scalars only.\n    limit: Maximum tasks to return.\n\nReturns:\n    Dict with a ``tasks`` list, each task including its ``blockers``.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "metadata_match": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_task_cancel": {
+      "description": "Cancel a task, releasing all claims.\n\nArgs:\n    task_id: Task ID\n    agent: Agent cancelling the task\n    reason: Optional reason for cancellation\n\nReturns:\n    Dict with success boolean",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_children": {
+      "description": "Return the child tasks of a parent/epic (via ``parent_child`` edges).\n\nArgs:\n    task_id: Parent (or epic) whose children to list.\n    recursive: Walk the full descendant subtree, not just direct\n        children (default False).\n    include_closed: Include completed/cancelled children in the\n        result (default False = open children only). The subtree is\n        traversed in full regardless, so an open grandchild under a\n        closed child is still surfaced.\n\nReturns:\n    Dict with a ``tasks`` list (task records, same shape as\n    ``lithos_task_list``).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_closed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "recursive": {
+            "default": false,
+            "type": "boolean"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_claim": {
+      "description": "Claim an aspect of a task.\n\nArgs:\n    task_id: Task ID\n    aspect: Aspect being claimed (e.g., \"research\", \"implementation\")\n    agent: Agent making the claim\n    ttl_minutes: Claim duration in minutes (default: 60, max: 480)\n\nReturns:\n    Dict with success and expires_at",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "aspect": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "ttl_minutes": {
+            "default": 60,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "aspect",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_complete": {
+      "description": "Mark a task as completed.\n\nArgs:\n    task_id: Task ID\n    agent: Agent completing the task\n    outcome: Optional free-text completion summary. Persisted on\n        the task row and forwarded in the ``task.completed`` event\n        payload so LCMA consolidation can use it as the frame\n        ``outcome`` slot.\n    cited_nodes: Node IDs the agent found useful (None = no feedback)\n    misleading_nodes: Node IDs the agent found misleading (None = no feedback)\n    receipt_id: Specific receipt to bind feedback to (optional)\n\nReturns:\n    Dict with success boolean, or error envelope if task not found or not open",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "cited_nodes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "misleading_nodes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_create": {
+      "description": "Create a new coordination task.\n\nArgs:\n    title: Task title\n    agent: Creating agent identifier\n    description: Task description\n    tags: Task tags\n    metadata: Arbitrary JSON metadata dict (optional). Must NOT contain\n        ``depends_on``/``blocked_on`` — dependencies are first-class task\n        edges now; pass ``depends_on`` instead.\n    task_type: First-class task type: ``task``, ``epic``, or ``gate``.\n        A ``gate`` is an external wait and requires\n        ``metadata.gate_type`` in human/timer/ci/pr/external_task; a\n        ``timer`` gate also requires a parseable ``metadata.ready_at``\n        (ISO datetime). Link a task to a gate with a ``waits_on_gate``\n        edge; resolve a gate by completing it (``timer`` gates resolve\n        on their own once ``ready_at`` passes).\n    depends_on: Predecessor task IDs. Each creates a ``blocks`` edge so\n        this task is not ready until that predecessor is completed.\n        Predecessors must already exist.\n    parent_task_id: Optional parent. Creates a ``parent_child`` edge\n        ``parent -> this task``. The parent must exist; it may be any\n        task type (an ``epic`` or a plain ``task``).\n\nReturns:\n    Dict with task_id, or an error envelope on validation failure.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "parent_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_type": {
+            "default": "task",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_edge_list": {
+      "description": "List edges touching a task.\n\nArgs:\n    task_id: Task whose edges to list.\n    direction: \"incoming\", \"outgoing\", or \"both\" (default).\n    types: Optional edge-type filter.\n\nReturns:\n    ``{\"edges\": [...]}`` — each edge carries from/to/type, its\n    ``direction`` relative to ``task_id``, metadata, and provenance.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "default": "both",
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_edge_upsert": {
+      "description": "Create or update a typed relation between two tasks.\n\nEdge types accepted in this phase: ``blocks`` (to_task is not ready\nuntil from_task is completed), ``parent_child`` (from_task is the\nparent; purely structural, never blocks), ``discovered_from`` (to_task\nwas discovered while executing from_task; non-blocking), and\n``waits_on_gate`` (to_task is not ready until the gate from_task is\nresolved — the gate is completed, or a ``timer`` gate whose\n``ready_at`` has passed; a cancelled gate makes the waiter\nunsatisfiable).\n\nArgs:\n    from_task_id: Source task (blocker / parent / source).\n    to_task_id: Target task (blocked / child / discovered).\n    type: Edge type (see above).\n    agent: Agent creating the edge.\n    metadata: Optional edge metadata.\n\nReturns:\n    ``{\"success\": true}`` or an error envelope (unaccepted type,\n    self-edge, missing task, or a blocking edge that would create a\n    dependency cycle).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "from_task_id": {
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_task_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_task_id",
+          "to_task_id",
+          "type",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_get": {
+      "description": "Get the full record of a single task by ID.\n\nReturns the task on its own (not wrapped in a list) so callers\nthat already know the ID don't have to unwrap a one-element\nresponse. Does not include claims — use ``lithos_task_status``\nwhen you need claims alongside the task fields.\n\nArgs:\n    task_id: Task ID to look up\n\nReturns:\n    Dict with task fields (id, title, description, status,\n    created_by, created_at, resolved_at, tags, metadata, outcome).\n    Returns the standard error envelope\n    ``{status: \"error\", code: \"task_not_found\", message: ...}``\n    when no task matches.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_list": {
+      "description": "List tasks with optional filters.\n\nArgs:\n    agent: Filter by creating agent\n    status: Filter by status: \"open\", \"completed\", or \"cancelled\" (None = all)\n    task_type: Filter by first-class task type (task/epic/gate)\n    tags: Filter by tags (task must have all specified tags)\n    metadata_match: Filter by metadata (AND across keys). For each\n        ``key: q`` a task matches when its stored metadata value\n        equals ``q`` or is a list containing ``q``. Query values must\n        be scalars (string/number/boolean); type-sensitive.\n    since: Filter by created_at >= this ISO datetime string (e.g. \"2024-01-01T00:00:00Z\")\n    resolved_since: Filter by resolved_at >= this ISO datetime string.\n        ``resolved_at`` is set on both terminal transitions (complete\n        and cancel), so this returns tasks resolved (in either way)\n        within the window. Open tasks and historical cancellations\n        from before the column was populated on cancel are excluded\n        automatically (their ``resolved_at`` is NULL).\n    with_claims: When True, each task in the response includes its\n        active (non-expired) claims inline as a ``claims`` array\n        (same shape as ``lithos_task_status``). Defaults to False.\n        Use to avoid an N+1 of ``lithos_task_status`` calls when\n        rendering a list view that needs claim info.\n\nReturns:\n    Dict with tasks list containing id, title, description, status,\n    created_by, created_at, resolved_at, tags, metadata, outcome,\n    and (when with_claims) claims.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata_match": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "resolved_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "with_claims": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_task_ready": {
+      "description": "Return open tasks that are ready to work.\n\nA task is ready when it is open, not a gate/epic, has no incoming\nblocking edge whose predecessor is unsatisfied (every ``blocks``\npredecessor must be ``completed``), and is not blocked by a gate.\nActive claims are *attached* when ``with_claims`` but never used to\nexclude a task — claims are per-aspect and collision-safety comes\nfrom the atomic claim, so the picking agent decides what \"taken\" means.\n\nArgs:\n    project: Shorthand for ``metadata.project == project``.\n    tags: Filter by tags (task must have all specified tags).\n    metadata_match: Metadata filter (AND across keys); scalars only.\n    limit: Maximum tasks to return.\n    with_claims: Attach each task's active claims inline (default True).\n\nReturns:\n    Dict with a ``tasks`` list (the feasible frontier).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "type": "integer"
+          },
+          "metadata_match": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "with_claims": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "lithos_task_release": {
+      "description": "Release a claim.\n\nArgs:\n    task_id: Task ID\n    aspect: Claimed aspect\n    agent: Agent releasing the claim\n\nReturns:\n    Dict with success boolean, or error envelope if no matching claim",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "aspect": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "aspect",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_renew": {
+      "description": "Renew an existing claim.\n\nArgs:\n    task_id: Task ID\n    aspect: Claimed aspect\n    agent: Agent that owns the claim\n    ttl_minutes: New duration in minutes\n\nReturns:\n    Dict with success and new_expires_at",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "aspect": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "ttl_minutes": {
+            "default": 60,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "task_id",
+          "aspect",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_reopen": {
+      "description": "Reopen a terminal (completed/cancelled) task back to ``open``.\n\nThe inverse of complete/cancel — use it to revive a task to active work\n(e.g. an accidental completion) and to remediate dependents stranded as\n``blocker_unsatisfiable`` by a cancelled blocker/gate: reopening that\nblocker/gate returns its dependents to a waiting state. Clears\n``resolved_at``/``outcome``, records the reopen as a ``[Reopened]``\nfinding, and emits a ``task.reopened`` event.\n\nArgs:\n    task_id: Task ID to reopen\n    agent: Agent performing the reopen\n\nReturns:\n    ``{\"success\": true, \"reblocked\": [...]}`` — ``reblocked`` lists open\n    dependents this reopen put back under the task's block (non-empty\n    only when reopening a *completed* blocker/gate; a cancelled-task\n    reopen un-strands dependents and re-blocks no one). On failure,\n    ``{\"status\": \"error\", \"code\": \"task_not_found\" | \"task_not_resolved\",\n    \"message\": ...}``.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_spawn": {
+      "description": "Create a follow-on task linked to an existing source task.\n\nThe relation edge is always ``source -> spawned``:\n``discovered_from`` records that the spawned task was found while\nexecuting the source (non-blocking); ``blocks`` makes the spawned task\nwait until the source is ``completed``.\n\nArgs:\n    source_task_id: The task this follow-on came from.\n    title: Title for the spawned task.\n    agent: Spawning agent identifier.\n    description: Optional description for the spawned task.\n    relation_type: ``discovered_from`` (default) or ``blocks``.\n    inherit_project: Copy ``metadata.project`` from the source.\n    inherit_tags: Copy the source's tags.\n    inherit_context: Copy scheduling-convention metadata (priority,\n        parallelizable, phase) from the source.\n    metadata: Extra metadata; overrides inherited keys. Must NOT\n        contain ``depends_on``/``blocked_on``.\n\nReturns:\n    Dict with task_id, or an error envelope (unknown source, invalid\n    relation_type, or forbidden metadata key).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "inherit_context": {
+            "default": true,
+            "type": "boolean"
+          },
+          "inherit_project": {
+            "default": true,
+            "type": "boolean"
+          },
+          "inherit_tags": {
+            "default": true,
+            "type": "boolean"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "relation_type": {
+            "default": "discovered_from",
+            "type": "string"
+          },
+          "source_task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_task_id",
+          "title",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_status": {
+      "description": "Get the full record of a specific task with its active claims.\n\nArgs:\n    task_id: Task ID to look up\n\nReturns:\n    Dict with tasks list containing id, title, description, status,\n    created_by, created_at, resolved_at, tags, metadata, outcome,\n    and claims. Returns an empty tasks list if the task does not\n    exist (mirrors the historical behaviour).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_task_update": {
+      "description": "Update mutable task fields (title, description, tags, metadata).\n\nAt least one of title, description, tags, or metadata must be provided.\nWorks on terminal (completed/cancelled) tasks too — useful for annotating\nan archived task (e.g. a metadata snapshot) without reviving it; use\n``lithos_task_reopen`` to bring a task back to active work. ``task_not_found``\nnow means the task genuinely does not exist.\n\n``metadata`` is applied as an additive per-key merge: keys with non-null\nvalues overwrite the existing value, keys whose value is ``None`` are\ndeleted from the existing metadata, and keys not mentioned are preserved.\nTo clear a specific key, pass ``{\"key\": None}``. There is no\nwholesale-clear affordance — ``metadata={}`` is a no-op that preserves\nall existing keys.\n\nArgs:\n    task_id: Task ID to update\n    agent: Agent making the update\n    title: New task title (optional)\n    description: New task description (optional)\n    tags: New task tags (optional)\n    metadata: Per-key merge patch into the existing metadata dict\n        (optional). See merge contract above.\n\nReturns:\n    Dict with success and message",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "task_id",
+          "agent"
+        ],
+        "type": "object"
+      }
+    },
+    "lithos_write": {
+      "description": "Create or update a knowledge file.\n\nArgs are grouped below by role. The grouping is documentation only —\nall parameters remain flat at the MCP boundary. See\n`docs/plans/unified-write-contract.md` for the normative field\ncontract.\n\nArgs:\n    title: Title of the knowledge item.\n    content: Markdown content (without frontmatter).\n    agent: Your agent identifier.\n\n    --- Identity & metadata ---\n    id: UUID to update existing; omit to create new.\n    tags: List of tags. On update: null/omit preserves existing; [] clears\n        all tags; non-empty list replaces.\n    metadata: Free-form key/value dict persisted into the document's\n        frontmatter. On update: null/omit preserves existing; {} clears\n        all metadata; a non-empty dict is an additive per-key merge (a\n        key whose value is null deletes it). Keys must be strings and\n        must not collide with reserved frontmatter fields (e.g. title,\n        tags, version) — such writes are rejected with code \"invalid_input\".\n    confidence: Confidence score 0-1 (default: 1.0 on create). On update:\n        null/omit preserves existing; float sets new value. Integers\n        are coerced to float; anything else that is not a finite\n        number in [0.0, 1.0] (non-numeric, bool, NaN/inf, or\n        out-of-range) is rejected with code \"invalid_input\".\n    path: Where to store the note. Two accepted forms:\n        - Subdirectory (e.g., \"procedures\") — the filename is derived\n          from the title (slugified) and \".md\" is appended.\n        - Full relative file path ending in \".md\"\n          (e.g., \"procedures/my-doc.md\") — the final segment is used\n          as the filename verbatim; the title does NOT influence the\n          filename in this mode.\n        Intermediate path segments may not end in \".md\"; such inputs\n        are rejected with code \"invalid_input\" to prevent\n        accidental creation of directories whose names end in \".md\".\n\n    --- Provenance ---\n    source_url: URL provenance for this knowledge. On update: null/omit\n        preserves existing; \"\" clears; string sets new value.\n    derived_from_ids: List of source document UUIDs this note was derived\n        from. On update: null/omit preserves existing; [] clears;\n        non-empty list replaces.\n    source_task: Task ID this knowledge came from.\n\n    --- Freshness ---\n    ttl_hours: Time-to-live in hours from now. Computes expires_at.\n        Mutually exclusive with expires_at.\n    expires_at: Absolute ISO 8601 expiry datetime. On update: null/omit\n        preserves existing; \"\" clears; ISO string sets new value.\n        Mutually exclusive with ttl_hours.\n\n    --- Concurrency ---\n    expected_version: If provided on update, reject with version_conflict if the\n        document's current version differs. Omit to skip version checking.\n        On create, this parameter is silently ignored.\n\n    --- LCMA ---\n    schema_version: LCMA schema version (default 1 on create).\n    namespace: LCMA namespace. Persisted only if explicitly passed;\n        derived at read time otherwise.\n    access_scope: shared|task|agent_private (default shared on create).\n        task requires source_task.\n    note_type: observation|agent_finding|summary|concept|task_record|hypothesis\n        (default observation on create).\n    status: active|archived|quarantined (default active on create).\n    summaries: Optional dict with short/long summary strings.\n\nReturns:\n    On success: {\"status\": \"created\"|\"updated\", \"id\", \"path\", \"version\",\n    \"warnings\"}. Actionable outcomes keep their own top-level status:\n    duplicate / slug_collision / path_collision / version_conflict\n    (version_conflict carries \"current_version\"). All other failures\n    use the standard error envelope {\"status\": \"error\", \"code\",\n    \"message\"} — validation failures carry code \"invalid_input\".",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "access_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "agent": {
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "content": {
+            "type": "string"
+          },
+          "derived_from_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "note_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "summaries": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "title": {
+            "type": "string"
+          },
+          "ttl_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "title",
+          "content",
+          "agent"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "url": "http://localhost:8765"
+}

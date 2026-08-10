@@ -1,0 +1,46 @@
+{
+  "tool": "lithos_task_edge_list",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_edge_list",
+    "lithos:src/lithos/coordination.py::_edge_row_to_dict"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-ingest-cutover",
+      "direction": "both",
+      "types": [
+        "blocks"
+      ]
+    },
+    "notes": "direction is always sent; types only when filtering. direction outside incoming/outgoing/both answers the invalid_input envelope. A missing task_id answers an empty edges list."
+  },
+  "responses": {
+    "success": {
+      "edges": [
+        {
+          "from_task_id": "influx-ingest-cutover",
+          "to_task_id": "influx-backfill",
+          "type": "blocks",
+          "direction": "outgoing",
+          "metadata": {},
+          "created_by": "planner",
+          "created_at": "2026-08-06T09:05:00+00:00"
+        }
+      ]
+    },
+    "variants": {
+      "missing_task": {
+        "edges": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "direction must be 'incoming', 'outgoing', or 'both', got 'sideways'."
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

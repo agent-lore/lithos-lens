@@ -1,0 +1,57 @@
+{
+  "tool": "lithos_read",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/read_search.py::lithos_read"
+  ],
+  "request": {
+    "canonical": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "agent_id": "lithos-lens"
+    },
+    "variants": {
+      "by_path": {
+        "path": "plans/influx-migration.md",
+        "agent_id": "lithos-lens",
+        "max_length": 1
+      }
+    },
+    "notes": "Exactly one of id/path; agent_id is audit identity; max_length truncates content but frontmatter-derived fields stay complete. metadata carries the frontmatter dict plus source_url, derived_from_ids, and free-form extra."
+  },
+  "responses": {
+    "success": {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "title": "Influx migration plan",
+      "content": "# Influx migration plan\n\nSee [[note-influx-rollback]].\n",
+      "metadata": {
+        "title": "Influx migration plan",
+        "tags": [
+          "project:influx",
+          "kind:plan"
+        ],
+        "created": "2026-08-01T10:00:00+00:00",
+        "updated": "2026-08-02T10:00:00+00:00",
+        "source_url": null,
+        "derived_from_ids": [],
+        "extra": {}
+      },
+      "links": [
+        {
+          "target": "note-influx-rollback",
+          "display": "rollback route"
+        }
+      ],
+      "truncated": false,
+      "retrieval_count": 7
+    },
+    "variants": {},
+    "errors": [
+      {
+        "status": "error",
+        "code": "doc_not_found",
+        "message": "Document not found: missing-note"
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

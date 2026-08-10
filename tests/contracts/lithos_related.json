@@ -1,0 +1,106 @@
+{
+  "tool": "lithos_related",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/read_search.py::lithos_related"
+  ],
+  "request": {
+    "canonical": {
+      "id": "root",
+      "depth": 1
+    },
+    "notes": "Only id/include/depth/namespace are accepted (FastMCP rejects unexpected arguments — a phantom agent_id arg was PR #26's bug). Lens pins depth=1 and takes the default include set."
+  },
+  "responses": {
+    "success": {
+      "id": "root",
+      "included": [
+        "links",
+        "provenance",
+        "edges"
+      ],
+      "links": {
+        "outgoing": [
+          {
+            "id": "out-1",
+            "title": "Outgoing Note"
+          }
+        ],
+        "incoming": [
+          {
+            "id": "in-1",
+            "title": "Incoming Note"
+          }
+        ]
+      },
+      "provenance": {
+        "sources": [
+          {
+            "id": "src-1",
+            "title": "Source Note"
+          }
+        ],
+        "derived": [
+          {
+            "id": "der-1",
+            "title": "Derived Note"
+          }
+        ],
+        "unresolved_sources": [
+          "drafts/missing.md"
+        ]
+      },
+      "edges": {
+        "outgoing": [
+          {
+            "edge_id": "e-1",
+            "from_id": "root",
+            "to_id": "edge-out",
+            "type": "supports",
+            "weight": 0.75,
+            "namespace": "default",
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+            "provenance_actor": "agent-x",
+            "provenance_type": "asserted",
+            "evidence": "",
+            "conflict_state": ""
+          }
+        ],
+        "incoming": [
+          {
+            "edge_id": "e-2",
+            "from_id": "edge-in",
+            "to_id": "root",
+            "type": "contradicts",
+            "weight": 0.9,
+            "namespace": "default",
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+            "provenance_actor": "agent-x",
+            "provenance_type": "asserted",
+            "evidence": "",
+            "conflict_state": "unresolved"
+          }
+        ]
+      },
+      "related_ids": [
+        "der-1",
+        "edge-in",
+        "edge-out",
+        "in-1",
+        "out-1",
+        "src-1"
+      ]
+    },
+    "variants": {},
+    "errors": [
+      {
+        "status": "error",
+        "code": "doc_not_found",
+        "message": "Document not found: missing-note"
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

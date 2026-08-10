@@ -1,0 +1,34 @@
+{
+  "tool": "lithos_stats",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/findings_stats.py::lithos_stats"
+  ],
+  "request": {
+    "canonical": {},
+    "notes": "No arguments."
+  },
+  "responses": {
+    "success": {
+      "documents": 128,
+      "chroma_chunk_count": 512,
+      "agents": 3,
+      "active_tasks": 5,
+      "open_claims": 1,
+      "tags": 24,
+      "duplicate_urls": 0,
+      "index_drift_detected": false,
+      "tantivy_doc_count": 128,
+      "unresolved_links": 2,
+      "expired_docs": 0,
+      "expired_claims": 0,
+      "tantivy_last_updated": "2026-08-06T09:00:00+00:00",
+      "chroma_last_updated": "2026-08-06T09:00:00+00:00",
+      "graph_node_count": 130,
+      "graph_edge_count": 210
+    },
+    "variants": {},
+    "errors": []
+  },
+  "observed_divergences": ""
+}

@@ -27,63 +27,22 @@ from lithos_lens.task_graph import (
     normalize_edge,
 )
 from lithos_lens.tasks import normalize_task
+from tests.conftest import load_contract
 
 # --- Normalizers: blocker kinds -------------------------------------------
 #
-# One fixture per branch of lithos ``_compute_blockers``. Field shapes (and
-# message wording) are copied from the Lithos source, not invented.
+# One fixture per branch of lithos ``_compute_blockers``, loaded from the
+# vendored contract (tests/contracts/lithos_task_blocked.json — the
+# authoritative payload shapes; see tests/contracts/README.md).
 
-BLOCKER_TASK = {
-    "kind": "task",
-    "task_id": "pred-1",
-    "type": "blocks",
-    "status": "open",
-    "message": "Waiting on predecessor pred-1 to complete.",
-}
-
-BLOCKER_GATE = {
-    "kind": "gate",
-    "task_id": "gate-7",
-    "type": "waits_on_gate",
-    "status": "open",
-    "message": "Waiting on pr gate gate-7.",
-}
-
-BLOCKER_GATE_TIMER = {
-    "kind": "gate",
-    "task_id": "gate-9",
-    "type": "waits_on_gate",
-    "status": "open",
-    "message": "Waiting on timer gate gate-9 (ready_at=2026-05-01T00:00:00+00:00).",
-}
-
-BLOCKER_UNSATISFIABLE = {
-    "kind": "blocker_unsatisfiable",
-    "task_id": "old-spike",
-    "type": "blocks",
-    "status": "cancelled",
-    "message": (
-        "Blocking predecessor old-spike was cancelled; this task can never "
-        "become ready without intervention (complete/re-open the predecessor, "
-        "re-route, or cancel this subtree)."
-    ),
-}
-
-BLOCKER_CYCLE = {
-    "kind": "cycle",
-    "task_id": "pred-2",
-    "type": "blocks",
-    "status": "open",
-    "message": "dependency cycle: t-1 -> pred-2 -> pred-2",
-}
-
-REAL_BLOCKER_FIXTURES = [
-    BLOCKER_TASK,
-    BLOCKER_GATE,
-    BLOCKER_GATE_TIMER,
-    BLOCKER_UNSATISFIABLE,
-    BLOCKER_CYCLE,
+_BLOCKER_KINDS = load_contract("lithos_task_blocked")["responses"]["variants"][
+    "blocker_kinds"
 ]
+BLOCKER_TASK = _BLOCKER_KINDS["task"]
+BLOCKER_GATE = _BLOCKER_KINDS["gate"]
+BLOCKER_UNSATISFIABLE = _BLOCKER_KINDS["blocker_unsatisfiable"]
+
+REAL_BLOCKER_FIXTURES = list(_BLOCKER_KINDS.values())
 
 
 @pytest.mark.parametrize("raw", REAL_BLOCKER_FIXTURES, ids=lambda raw: str(raw["kind"]))

@@ -1,0 +1,98 @@
+{
+  "tool": "lithos_task_blocked",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_blocked",
+    "lithos:src/lithos/coordination.py::_compute_blockers"
+  ],
+  "request": {
+    "canonical": {
+      "limit": 500,
+      "project": "influx",
+      "tags": [
+        "area:data"
+      ]
+    },
+    "notes": "Same filter surface as lithos_task_ready; no with_claims. limit must be >= 1."
+  },
+  "responses": {
+    "success": {
+      "tasks": [
+        {
+          "id": "influx-backfill",
+          "title": "Backfill historical Influx series",
+          "description": "Dual-write, then swap reads onto the new store.",
+          "status": "open",
+          "task_type": "task",
+          "created_by": "planner",
+          "created_at": "2026-08-06T09:00:00+00:00",
+          "resolved_at": null,
+          "tags": [
+            "project:influx",
+            "area:data"
+          ],
+          "metadata": {
+            "project": "influx"
+          },
+          "outcome": null,
+          "blockers": [
+            {
+              "kind": "task",
+              "task_id": "pred-1",
+              "type": "blocks",
+              "status": "open",
+              "message": "Waiting on predecessor pred-1 to complete."
+            }
+          ]
+        }
+      ]
+    },
+    "variants": {
+      "blocker_kinds": {
+        "task": {
+          "kind": "task",
+          "task_id": "pred-1",
+          "type": "blocks",
+          "status": "open",
+          "message": "Waiting on predecessor pred-1 to complete."
+        },
+        "gate": {
+          "kind": "gate",
+          "task_id": "gate-7",
+          "type": "waits_on_gate",
+          "status": "open",
+          "message": "Waiting on pr gate gate-7."
+        },
+        "gate_timer": {
+          "kind": "gate",
+          "task_id": "gate-9",
+          "type": "waits_on_gate",
+          "status": "open",
+          "message": "Waiting on timer gate gate-9 (ready_at=2026-05-01T00:00:00+00:00)."
+        },
+        "blocker_unsatisfiable": {
+          "kind": "blocker_unsatisfiable",
+          "task_id": "old-spike",
+          "type": "blocks",
+          "status": "cancelled",
+          "message": "Blocking predecessor old-spike was cancelled; this task can never become ready without intervention (complete/re-open the predecessor, re-route, or cancel this subtree)."
+        },
+        "cycle": {
+          "kind": "cycle",
+          "task_id": "pred-2",
+          "type": "blocks",
+          "status": "open",
+          "message": "dependency cycle: t-1 -> pred-2 -> pred-2"
+        }
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "limit must be >= 1, got 0."
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

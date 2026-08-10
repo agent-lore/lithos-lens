@@ -1,0 +1,36 @@
+{
+  "tool": "lithos_finding_list",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/findings_stats.py::lithos_finding_list"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-ingest-cutover",
+      "since": "2026-08-01T00:00:00+00:00"
+    },
+    "notes": "since is parsed with datetime.fromisoformat (naive == UTC) and filters STRICTLY created_at > since — unlike lithos_task_list's inclusive raw-string >=. Malformed since answers invalid_input."
+  },
+  "responses": {
+    "success": {
+      "findings": [
+        {
+          "id": "finding-plan",
+          "agent": "worker-a",
+          "summary": "Dual-write path validated against the archive.",
+          "knowledge_id": "note-influx-plan",
+          "created_at": "2026-08-06T11:30:00+00:00"
+        }
+      ]
+    },
+    "variants": {},
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "Invalid since datetime: not-a-timestamp"
+      }
+    ]
+  },
+  "observed_divergences": "The intended invalid_input envelope for a malformed since currently cannot leave the server: the tool's dict[str, list[...]] return annotation makes FastMCP output-schema validation reject it, so clients observe an MCP-level error (LithosClient surfaces code='tool_error'). Lithos task 60b3e135-7c77-4547-b437-fa61b7301bc4; tighten tests to invalid_input once fixed."
+}
