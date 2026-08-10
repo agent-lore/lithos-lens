@@ -1,0 +1,52 @@
+{
+  "tool": "lithos_task_status",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_status",
+    "lithos:src/lithos/tools/tasks.py::_serialize_task_record"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-ingest-cutover"
+    },
+    "notes": "A missing task answers an empty tasks list (historical behaviour), NOT a task_not_found envelope — the client maps it to None."
+  },
+  "responses": {
+    "success": {
+      "tasks": [
+        {
+          "id": "influx-ingest-cutover",
+          "title": "Cut over Influx ingest path",
+          "description": "Dual-write, then swap reads onto the new store.",
+          "status": "open",
+          "task_type": "task",
+          "created_by": "planner",
+          "created_at": "2026-08-06T09:00:00+00:00",
+          "resolved_at": null,
+          "tags": [
+            "project:influx",
+            "area:data"
+          ],
+          "metadata": {
+            "project": "influx"
+          },
+          "outcome": null,
+          "claims": [
+            {
+              "agent": "worker-a",
+              "aspect": "implementation",
+              "expires_at": "2026-08-08T18:00:00+00:00"
+            }
+          ]
+        }
+      ]
+    },
+    "variants": {
+      "missing_task": {
+        "tasks": []
+      }
+    },
+    "errors": []
+  },
+  "observed_divergences": ""
+}

@@ -36,6 +36,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.task_graph import BlockedTaskRecord
+from tests.conftest import CONTRACTS_DIR, load_contract
 
 pytestmark = pytest.mark.anyio
 
@@ -210,6 +211,72 @@ async def test_ready_frontier_rows_are_open(client: LithosClientProtocol) -> Non
     ready = await client.task_ready()
     _require_rows_on_fake_leg(client, ready)
     assert all(task.status == "open" for task in ready)
+
+
+# ── vendored-contract verification (issue #31) ──────────────────────────
+
+
+async def test_vendored_contracts_match_live_tool_schemas() -> None:
+    """Verify the vendored contracts themselves against the live server.
+
+    The contracts under tests/contracts/ are the authoring-time reference for
+    hermetic agents, so they need their own truth check: every contract tool
+    must exist on the live server, every vendored request (canonical + named
+    variants) must use only arguments the live inputSchema declares, and must
+    supply everything the schema marks required. Response-shape-vs-live is
+    data-dependent and deferred to the seeded-instance run (Lithos task
+    c144b363).
+    """
+    url = os.environ.get(REAL_URL_ENV, "").strip()
+    if not url:
+        pytest.skip(
+            f"vendored-contract verification needs {REAL_URL_ENV} "
+            "(host/CI only; unit runs stay hermetic)"
+        )
+
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+
+    config = LithosConfig(url=url)
+    endpoint = f"{config.url.rstrip('/')}/{config.mcp_sse_path.strip('/')}"
+    async with (
+        sse_client(endpoint) as (reader, writer),
+        ClientSession(reader, writer) as session,
+    ):
+        await session.initialize()
+        listed = await session.list_tools()
+    live_tools = {tool.name: tool for tool in listed.tools}
+
+    problems: list[str] = []
+    for path in sorted(CONTRACTS_DIR.glob("*.json")):
+        if path.name.startswith("_"):
+            continue
+        contract = load_contract(path.stem)
+        tool = contract["tool"]
+        if tool not in live_tools:
+            problems.append(f"{tool}: not present on the live server")
+            continue
+        schema = live_tools[tool].inputSchema or {}
+        properties = set(schema.get("properties", {}))
+        required = set(schema.get("required", []))
+        requests = {
+            "canonical": contract["request"]["canonical"],
+            **contract["request"].get("variants", {}),
+        }
+        for name, args in requests.items():
+            unknown = set(args) - properties
+            if unknown:
+                problems.append(
+                    f"{tool}[{name}]: args not in live inputSchema: {sorted(unknown)}"
+                )
+            missing = required - set(args)
+            if missing:
+                problems.append(
+                    f"{tool}[{name}]: live-required args missing: {sorted(missing)}"
+                )
+    assert not problems, (
+        "vendored contracts diverge from live tools/list:\n" + "\n".join(problems)
+    )
 
 
 def _require_rows_on_fake_leg(client: LithosClientProtocol, rows: object) -> None:

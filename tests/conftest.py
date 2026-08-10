@@ -1,9 +1,25 @@
-"""Shared pytest fixtures."""
+"""Shared pytest fixtures and helpers."""
 
+import json
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 import pytest
+
+CONTRACTS_DIR = Path(__file__).resolve().parent / "contracts"
+
+
+def load_contract(tool: str) -> dict[str, Any]:
+    """Load a vendored Lithos tool contract (tests/contracts/<tool>.json).
+
+    The contracts are the authoritative payload shapes for every Lithos tool
+    the client calls — see tests/contracts/README.md and issue #31. Tests that
+    need a canonical payload must load it from here, never restate it inline.
+    """
+    payload = json.loads((CONTRACTS_DIR / f"{tool}.json").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 @pytest.fixture

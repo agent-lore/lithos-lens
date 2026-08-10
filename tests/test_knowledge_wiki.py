@@ -23,6 +23,7 @@ from lithos_lens.knowledge import (
 from lithos_lens.lithos_client import LithosClient
 from lithos_lens.tasks import NoteRecord, NoteSummary
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 
 A_UUID = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -582,35 +583,14 @@ def test_knowledge_tag_search_is_capped(lithos_lens_config_env: Path) -> None:
 
 # ── concrete client (transport contract) ───────────────────────────────
 #
-# REAL_LITHOS_LIST_PAYLOAD mirrors the response built by the lithos
-# ``lithos_list`` tool: rows under the "items" key (its one and only container
-# key since the very first implementation) plus "total". Not an invented shape.
+# REAL_LITHOS_LIST_PAYLOAD is the canonical lithos_list response from the
+# vendored contract (tests/contracts/lithos_list.json — the authoritative
+# payload shapes; see tests/contracts/README.md): rows under the "items" key
+# (its one and only container key) plus "total". Not an invented shape.
 
-REAL_LITHOS_LIST_PAYLOAD: dict[str, Any] = {
-    "items": [
-        {
-            "id": "11111111-1111-4111-8111-111111111111",
-            "title": "Influx migration plan",
-            "path": "plans/influx-migration.md",
-            "updated": "2026-08-01T10:00:00+00:00",
-            "tags": ["project:influx", "kind:plan"],
-            "source_url": "",
-            "derived_from_ids": [],
-            "metadata": {},
-        },
-        {
-            "id": "22222222-2222-4222-8222-222222222222",
-            "title": "Influx rollback route",
-            "path": "runbooks/influx-rollback.md",
-            "updated": "2026-08-02T10:00:00+00:00",
-            "tags": ["project:influx", "kind:runbook"],
-            "source_url": "",
-            "derived_from_ids": [],
-            "metadata": {},
-        },
-    ],
-    "total": 2,
-}
+REAL_LITHOS_LIST_PAYLOAD: dict[str, Any] = load_contract("lithos_list")["responses"][
+    "success"
+]
 
 
 class _StubLithosClient(LithosClient):

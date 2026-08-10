@@ -35,6 +35,7 @@ from lithos_lens.tasks import (
     TaskStatusRecord,
 )
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 
 
 class KnowledgeFakeLithosClient:
@@ -174,12 +175,11 @@ def _run(coro):
 
 # ── normalizer ─────────────────────────────────────────────────────────
 #
-# REAL_RELATED_PAYLOAD mirrors, key for key, the response built by the lithos
-# ``lithos_related`` tool (src/lithos/tools/read_search.py): nested
-# ``links``/``edges`` with ``outgoing``/``incoming`` arrays, a ``provenance``
-# object with ``sources``/``derived``/``unresolved_sources``, and full edge
-# rows straight from edges.db (endpoints as ``from_id``/``to_id``). It is NOT
-# an invented flat shape.
+# REAL_RELATED_PAYLOAD is the canonical lithos_related response from the
+# vendored contract (tests/contracts/lithos_related.json — the authoritative
+# payload shapes; see tests/contracts/README.md): nested ``links``/``edges``
+# with ``outgoing``/``incoming`` arrays and full edges.db rows, NOT an
+# invented flat shape.
 
 
 def _edge_row(**overrides: Any) -> dict[str, Any]:
@@ -202,41 +202,9 @@ def _edge_row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
-REAL_RELATED_PAYLOAD: dict[str, Any] = {
-    "id": "root",
-    "included": ["links", "provenance", "edges"],
-    "links": {
-        "outgoing": [{"id": "out-1", "title": "Outgoing Note"}],
-        "incoming": [{"id": "in-1", "title": "Incoming Note"}],
-    },
-    "provenance": {
-        "sources": [{"id": "src-1", "title": "Source Note"}],
-        "derived": [{"id": "der-1", "title": "Derived Note"}],
-        "unresolved_sources": ["drafts/missing.md"],
-    },
-    "edges": {
-        "outgoing": [
-            _edge_row(
-                edge_id="e-1",
-                from_id="root",
-                to_id="edge-out",
-                type="supports",
-                weight=0.75,
-            )
-        ],
-        "incoming": [
-            _edge_row(
-                edge_id="e-2",
-                from_id="edge-in",
-                to_id="root",
-                type="contradicts",
-                weight=0.9,
-                conflict_state="unresolved",
-            )
-        ],
-    },
-    "related_ids": ["der-1", "edge-in", "edge-out", "in-1", "out-1", "src-1"],
-}
+REAL_RELATED_PAYLOAD: dict[str, Any] = load_contract("lithos_related")["responses"][
+    "success"
+]
 
 
 def test_normalize_related_parses_the_real_nested_payload() -> None:

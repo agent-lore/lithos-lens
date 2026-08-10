@@ -1,0 +1,53 @@
+{
+  "tool": "lithos_list",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/read_search.py::lithos_list"
+  ],
+  "request": {
+    "canonical": {
+      "title_contains": "influx",
+      "tags": [
+        "project:influx"
+      ],
+      "limit": 20
+    },
+    "notes": "Lens sends only active filters. Rows live under 'items' — its one and only container key since the first implementation (PR #30's bug was reading invented notes/documents/results aliases)."
+  },
+  "responses": {
+    "success": {
+      "items": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Influx migration plan",
+          "path": "plans/influx-migration.md",
+          "updated": "2026-08-01T10:00:00+00:00",
+          "tags": [
+            "project:influx",
+            "kind:plan"
+          ],
+          "source_url": "",
+          "derived_from_ids": [],
+          "metadata": {}
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "title": "Influx rollback route",
+          "path": "runbooks/influx-rollback.md",
+          "updated": "2026-08-02T10:00:00+00:00",
+          "tags": [
+            "project:influx",
+            "kind:runbook"
+          ],
+          "source_url": "",
+          "derived_from_ids": [],
+          "metadata": {}
+        }
+      ],
+      "total": 2
+    },
+    "variants": {},
+    "errors": []
+  },
+  "observed_divergences": ""
+}
