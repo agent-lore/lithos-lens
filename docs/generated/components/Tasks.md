@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 15 | 16 |
+| `lithos_lens.tasks` | M | 16 | 17 |
 
 ## Public API
 
@@ -24,7 +24,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `AgentRecord`
 - class `NoteRecord`
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
-- class `EnrichedTask`
+- class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
+- class `SectionRow` — A task rendered in one dashboard section, with its display extras.
 - class `TaskFilters`
 - class `TaskSummary`
 - class `DashboardData`
@@ -32,7 +33,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `TaskDetailData`
 - class `TaskLithosClientProtocol` — The subset of the Lithos client this module's loaders consume.
 - def `parse_filters`
-- def `load_dashboard`
 - def `load_task_detail`
 - def `find_task`
 - def `resolve_finding_notes`
@@ -47,6 +47,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `format_display_date`
 - def `format_tag`
 - def `parse_date`
+- def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
+- def `int_stat`
 
 ## Dependencies
 

@@ -8,6 +8,7 @@ file beats built-in default.
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, replace
@@ -18,6 +19,11 @@ from dotenv import load_dotenv
 
 from lithos_lens.errors import ConfigError
 from lithos_lens.tasks import TASK_STATUSES, TaskStatusName
+
+logger = logging.getLogger(__name__)
+
+# One-time deprecation latch for [lithos-lens.tasks].visible_cap.
+_VISIBLE_CAP_WARNED = False
 
 __all__ = [
     "DEFAULT_DATA_DIR",
@@ -61,6 +67,7 @@ DEFAULT_LITHOS_SSE_EVENTS_PATH = "/events"
 DEFAULT_LENS_AGENT_ID = "lithos-lens"
 DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S = 120
 DEFAULT_TASKS_VISIBLE_CAP = 50
+DEFAULT_TASKS_FRONTIER_LIMIT = 500
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
@@ -101,7 +108,14 @@ class LithosConfig:
 @dataclass(frozen=True)
 class TasksConfig:
     auto_refresh_interval_s: int = DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S
+    # Deprecated with the graph-native dashboard (T1): the per-row claim fan-out
+    # it capped is gone (claims arrive inline). Parsed for backward-compat but
+    # unused; ``frontier_limit`` is the live scale dial.
     visible_cap: int = DEFAULT_TASKS_VISIBLE_CAP
+    # Cap sent to lithos_task_ready / lithos_task_blocked. Sized to clear the
+    # production frontier with headroom; truncation is survivable (a
+    # Not-classified tail) but should be rare.
+    frontier_limit: int = DEFAULT_TASKS_FRONTIER_LIMIT
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
 
@@ -333,6 +347,16 @@ def _parse_lithos(data: Any, config_path: Path) -> LithosConfig:
 def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.tasks] must be a table")
+    global _VISIBLE_CAP_WARNED
+    if "visible_cap" in data and not _VISIBLE_CAP_WARNED:
+        _VISIBLE_CAP_WARNED = True
+        logger.warning(
+            "[lithos-lens.tasks].visible_cap is deprecated and unused since the "
+            "graph-native dashboard (T1) — the live scale dial is "
+            "frontier_limit (LITHOS_LENS_TASKS_FRONTIER_LIMIT). Remove "
+            "visible_cap from %s.",
+            config_path,
+        )
     return TasksConfig(
         auto_refresh_interval_s=_optional_int(
             data,
@@ -346,6 +370,14 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             data,
             "visible_cap",
             DEFAULT_TASKS_VISIBLE_CAP,
+            config_path,
+            "lithos-lens.tasks",
+            minimum=1,
+        ),
+        frontier_limit=_optional_int(
+            data,
+            "frontier_limit",
+            DEFAULT_TASKS_FRONTIER_LIMIT,
             config_path,
             "lithos-lens.tasks",
             minimum=1,
@@ -579,6 +611,9 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     lithos_events_path_override = os.environ.get("LITHOS_LENS_SSE_EVENTS_PATH", "")
     agent_id_override = os.environ.get("LITHOS_LENS_AGENT_ID", "")
     tasks_visible_cap_override = os.environ.get("LITHOS_LENS_TASKS_VISIBLE_CAP", "")
+    tasks_frontier_limit_override = os.environ.get(
+        "LITHOS_LENS_TASKS_FRONTIER_LIMIT", ""
+    )
     knowledge_fanout_cap_override = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
     )
@@ -603,6 +638,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             lithos_events_path_override,
             agent_id_override,
             tasks_visible_cap_override,
+            tasks_frontier_limit_override,
             knowledge_fanout_cap_override,
             llm_enabled_override,
             llm_model_override,
@@ -649,6 +685,14 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             new_cfg.tasks,
             visible_cap=_parse_env_int(
                 "LITHOS_LENS_TASKS_VISIBLE_CAP", tasks_visible_cap_override
+            ),
+        )
+        new_cfg = replace(new_cfg, tasks=new_tasks)
+    if tasks_frontier_limit_override:
+        new_tasks = replace(
+            new_cfg.tasks,
+            frontier_limit=_parse_env_int(
+                "LITHOS_LENS_TASKS_FRONTIER_LIMIT", tasks_frontier_limit_override
             ),
         )
         new_cfg = replace(new_cfg, tasks=new_tasks)

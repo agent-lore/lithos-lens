@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges from the Lithos 0.4 graph reads).
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join and dashboard assembly built on them.
 
 **Tier:** Foundation
 
@@ -11,9 +11,15 @@ Task-graph transport records and normalizers (blocked-task rows + edges from the
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.frontier` | M | 1 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
+
+### `lithos_lens.frontier`
+- class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
+- def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
+- def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.
 
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.
@@ -26,6 +32,6 @@ Task-graph transport records and normalizers (blocked-task rows + edges from the
 ## Dependencies
 
 - Depends on: [Tasks](Tasks.md)
-- Used by: [LithosClient](LithosClient.md)
+- Used by: [LithosClient](LithosClient.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

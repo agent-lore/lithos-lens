@@ -102,7 +102,8 @@ agent_id = "lithos-lens"
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `auto_refresh_interval_s` | integer | No | `120` | Polling fallback interval used when live events are unavailable. |
-| `visible_cap` | integer | No | `50` | Maximum visible rows enriched with per-task claim status. |
+| `frontier_limit` | integer | No | `500` | Cap pushed to the Lithos ready/blocked frontier reads; rows past it show as Not classified with the truncation banner. |
+| `visible_cap` | integer | No | `50` | **Deprecated** (unused since the graph-native dashboard); configuring it logs a one-time warning. |
 | `default_time_range_days` | integer | No | `30` | Created-at window for completed/cancelled task context. |
 | `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
 
@@ -148,7 +149,8 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_MCP_SSE_PATH` | `lithos-lens.lithos.mcp_sse_path` | MCP-over-SSE path. |
 | `LITHOS_LENS_SSE_EVENTS_PATH` | `lithos-lens.lithos.sse_events_path` | Event stream path. |
 | `LITHOS_LENS_AGENT_ID` | `lithos-lens.lithos.agent_id` | Startup registration agent ID. |
-| `LITHOS_LENS_TASKS_VISIBLE_CAP` | `lithos-lens.tasks.visible_cap` | Must be a positive integer. |
+| `LITHOS_LENS_TASKS_VISIBLE_CAP` | `lithos-lens.tasks.visible_cap` | Must be a positive integer. **Deprecated** with `visible_cap`. |
+| `LITHOS_LENS_TASKS_FRONTIER_LIMIT` | `lithos-lens.tasks.frontier_limit` | Must be a positive integer. |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |
@@ -176,7 +178,7 @@ First file found wins. Error if none found.
 - `data_dir` must be a string path (`~` is expanded)
 - `logging.level` must be one of `debug`, `info`, `warning`, `error`
 - Boolean fields accept TOML booleans in config and common boolean strings in env overrides
-- Integer fields such as `tasks.visible_cap` and `llm.max_tokens` must be positive
+- Integer fields such as `tasks.frontier_limit` and `llm.max_tokens` must be positive
 - `tasks.default_status_groups` must contain one or more of `open`, `completed`, `cancelled`
 - `LITHOS_LENS_LOG_LEVEL`, if set, must be one of the log-level values above
 

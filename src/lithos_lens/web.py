@@ -10,16 +10,23 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.events import LensEvent
 from lithos_lens.fake_lithos import (
     FakeEventHub,
     FakeLithosClient,
     fake_lithos_enabled,
 )
+from lithos_lens.frontier import load_dashboard
 from lithos_lens.knowledge import (
     ResolveOutcome,
     load_related_panel,
@@ -38,7 +45,6 @@ from lithos_lens.tasks import (
     find_task,
     format_display_date,
     format_tag,
-    load_dashboard,
     load_task_detail,
     parse_filters,
 )
@@ -158,6 +164,24 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    if fake_lithos_enabled():
+        # Fake-mode-only harness seam: lets the browser suite drive the REAL
+        # SSE path (publish -> hub -> /tasks/events -> EventSource ->
+        # tasks.js) without a Lithos server. Never registered outside fake
+        # mode, so production has no injection surface.
+        @app.post("/tasks/events/publish")
+        async def publish_test_event(request: Request) -> JSONResponse:
+            data = await request.json()
+            event = LensEvent(
+                id=str(data.get("id") or ""),
+                type=str(data.get("type") or "task.created"),
+                task_id=str(data.get("task_id") or ""),
+                payload=dict(data.get("payload") or {}),
+                requires_refresh=bool(data.get("requires_refresh", True)),
+            )
+            await state.events.publish(event)
+            return JSONResponse({"published": True}, status_code=202)
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
@@ -377,34 +401,31 @@ async def _render_tasks(
                 "lens_route": str(request.url.path),
                 "query_items": query_items,
                 "statuses": list(filters.statuses),
-                "claimed_state": filters.claimed_state,
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
-                "visible_cap": state.config.tasks.visible_cap,
+                "frontier_limit": state.config.tasks.frontier_limit,
             },
         )
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
-            visible_cap=state.config.tasks.visible_cap,
+            frontier_limit=state.config.tasks.frontier_limit,
         )
         logger.debug(
             "tasks dashboard loaded",
             extra={
                 "lens_route": str(request.url.path),
                 "statuses": list(filters.statuses),
-                "claimed_state": filters.claimed_state,
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
-                "visible_cap": dashboard.visible_cap,
+                "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
-                "group_counts": {
-                    status: len(rows) for status, rows in dashboard.groups.items()
+                "section_counts": {
+                    section: len(rows) for section, rows in dashboard.sections.items()
                 },
-                "claim_cap_exceeded": dashboard.claim_cap_exceeded,
-                "claim_filter_limited": dashboard.claim_filter_limited,
+                "truncated": dashboard.truncated,
                 "errors": list(dashboard.errors),
             },
         )
@@ -421,26 +442,38 @@ async def _render_tasks(
     )
 
 
-def task_tag_url(request: Request, tag: str) -> str:
-    preserved_keys = {"status", "claimed_state", "agent", "since"}
-    params: list[tuple[str, str]] = [
+# The live /tasks filter vocabulary. Every generated tasks URL rebuilds its
+# query from this allowlist, so a retired param (e.g. the pre-T1
+# ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
+# of propagating through tag / detail / back-link navigation forever.
+_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag")
+
+
+def _preserved_filter_params(
+    request: Request, *, exclude: str = ""
+) -> list[tuple[str, str]]:
+    return [
         (key, value)
         for key, value in request.query_params.multi_items()
-        if key in preserved_keys and value
+        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
     ]
+
+
+def task_tag_url(request: Request, tag: str) -> str:
+    params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))
     return f"/tasks?{urlencode(params)}"
 
 
 def task_detail_url(request: Request, task_id: str) -> str:
-    query = request.url.query
-    suffix = f"?{query}" if query else ""
+    params = _preserved_filter_params(request)
+    suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
 
 
 def tasks_url(request: Request) -> str:
-    query = request.url.query
-    return f"/tasks?{query}" if query else "/tasks"
+    params = _preserved_filter_params(request)
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
 def knowledge_tag_url(tag: str) -> str:

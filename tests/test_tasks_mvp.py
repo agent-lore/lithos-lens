@@ -43,8 +43,11 @@ class TaskFakeLithosClient:
         self.list_calls: list[dict[str, Any]] = []
         # Task-graph oracle state (lithos 0.4). Lens never re-derives readiness,
         # so the fake is the source of truth: ready_ids / blocked drive the
-        # frontier, edges/children drive the detail surfaces. All default empty.
-        self.ready_ids: set[str] = set()
+        # frontier, edges/children drive the detail surfaces. By default the two
+        # unclaimed workable open tasks sit on the ready frontier (open-claimed
+        # is claimed, so it classifies as In progress regardless); tests that
+        # exercise blocking override these.
+        self.ready_ids: set[str] = {"open-unclaimed", "open-old"}
         self.blocked: dict[str, tuple[BlockerRecord, ...]] = {}
         self.edges: dict[str, list[EdgeRecord]] = {}
         self.children: dict[str, list[str]] = {}
@@ -327,15 +330,18 @@ def test_dashboard_shows_current_situation_and_default_groups(
         response = client.get("/tasks?since=2026-04-01")
 
     assert response.status_code == 200
-    assert "Open tasks" in response.text
+    assert "In progress" in response.text
+    assert "Ready" in response.text
+    assert "Blocked" in response.text
     assert "Claimed open task" in response.text
     assert "Unclaimed open task" in response.text
-    assert "Old open task" not in response.text
+    # Open tasks are the live frontier and are NOT windowed by `since` (it scopes
+    # only the resolved completed/cancelled sections), so an old still-open task
+    # stays visible.
+    assert "Old open task" in response.text
     assert "Recently completed task" in response.text
     assert "Old completed task" not in response.text
     assert "Recently cancelled task" in response.text
-    assert "Known claimed" in response.text
-    assert "Known unclaimed" in response.text
     assert "implementation - worker-a" in response.text
 
 
@@ -382,11 +388,13 @@ def test_dashboard_accepts_uk_created_since_date(
     assert 'value="01/04/2026"' in response.text
     assert 'data-native-date value="2026-04-01"' in response.text
     assert 'data-open-date-picker aria-label="Open calendar"' in response.text
-    open_call = next(call for call in fake.list_calls if call["status"] == "open")
     completed_call = next(
         call for call in fake.list_calls if call["status"] == "completed"
     )
-    assert open_call["since"] == "2026-04-01"
+    # `since` scopes only the resolved (completed/cancelled) windows; the master
+    # open call is unfiltered so it never carries a `since`.
+    open_call = next(call for call in fake.list_calls if call["status"] == "open")
+    assert open_call["since"] is None
     assert completed_call["since"] == "2026-04-01"
 
 
@@ -403,15 +411,19 @@ def test_task_list_tag_links_replace_tag_and_preserve_active_filters(
     text = unescape(response.text)
 
     assert response.status_code == 200
+    # claimed_state was retired, so it is no longer preserved in tag links.
     assert (
-        'href="/tasks?status=open&claimed_state=any&agent=planner&'
-        'since=01%2F04%2F2026&tag=area%3Adocs"'
+        'href="/tasks?status=open&agent=planner&since=01%2F04%2F2026&tag=area%3Adocs"'
     ) in text
     assert 'class="tag-chip tag-chip-project"' in text
+    # Detail links preserve the active filters but strip the retired
+    # claimed_state param, same as tag links — a legacy bookmark must not
+    # keep propagating it through navigation.
     assert (
-        'href="/tasks/open-claimed?status=open&claimed_state=any&'
-        'agent=planner&since=01/04/2026&tag=project:influx"'
+        'href="/tasks/open-claimed?status=open&agent=planner&'
+        'since=01%2F04%2F2026&tag=project%3Ainflux"'
     ) in text
+    assert "claimed_state" not in text.split("data-task-row")[1].split("</article>")[0]
 
 
 def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
@@ -434,11 +446,40 @@ def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
     assert 'class="tag-chip tag-chip-project"' in text
 
 
-def test_claimed_state_filter_does_not_classify_rows_beyond_cap(
+def test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation(
     lithos_lens_config_env: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LITHOS_LENS_TASKS_VISIBLE_CAP", "1")
+    """A stale ``?claimed_state=`` bookmark degrades on the list page AND stops
+    propagating: detail links from the list, tag links, and the detail page's
+    back-link all emit URLs without the retired param."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        listing = client.get(
+            "/tasks?status=open&claimed_state=known_claimed&since=2026-04-01"
+        )
+        detail = client.get(
+            "/tasks/open-claimed?status=open&claimed_state=known_claimed"
+            "&since=2026-04-01"
+        )
+
+    listing_text = unescape(listing.text)
+    detail_text = unescape(detail.text)
+
+    assert listing.status_code == 200 and detail.status_code == 200
+    # No generated link on either page carries the retired param.
+    assert 'href="/tasks/open-claimed?status=open&since=2026-04-01"' in listing_text
+    assert "claimed_state" not in listing_text.split("<main")[1]
+    assert "claimed_state" not in detail_text.split("<main")[1]
+    # The detail back-link keeps the real filters.
+    assert 'href="/tasks?status=open&since=2026-04-01"' in detail_text
+
+
+def test_legacy_claimed_state_url_is_ignored(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A stale ``?claimed_state=`` bookmark must degrade gracefully (story 24):
+    it is parsed away, never rejected, and does not filter the sections."""
     fake = TaskFakeLithosClient()
 
     with _client(lithos_lens_config_env, fake) as client:
@@ -447,17 +488,199 @@ def test_claimed_state_filter_does_not_classify_rows_beyond_cap(
         )
 
     assert response.status_code == 200
-    assert "Claim filter covers the first 1 open tasks" in response.text
-    assert "Claimed open task" not in response.text
-    assert "Unclaimed open task" not in response.text
-    assert "Old open task" not in response.text
-    # Claims for the visible row arrive inline via lithos_task_list(with_claims=True),
-    # so the per-task lithos_task_status fan-out is not used. Beyond-cap tasks are
-    # not classified either way.
-    assert fake.status_calls == []
-    open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
-    assert open_list_calls, "expected at least one list_tasks call for status=open"
-    assert all(c["with_claims"] is True for c in open_list_calls)
+    # The claimed-state filter is gone, so the claimed row is not filtered out.
+    assert "Claimed open task" in response.text
+    assert "Unclaimed open task" in response.text
+
+
+def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (f-001): with a project/tag filter active, a blocked row's
+    chip must still show the *title* of a predecessor that lives in a different
+    project (and is therefore filtered out of the visible sections). The master
+    open list is fetched unfiltered so the join can resolve it."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="blk",
+            title="Blocked in project A",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+            tags=("project:a",),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="pred",
+            title="Predecessor in project B",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T09:00:00+00:00",
+            tags=("project:b",),
+        )
+    )
+    fake.ready_ids = {"pred"}
+    fake.blocked = {
+        "blk": (
+            BlockerRecord(
+                kind="task",
+                task_id="pred",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor pred to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&tag=project:a&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert "Blocked in project A" in blocked_group
+    # The chip carries the predecessor's title, resolved from the unfiltered
+    # snapshot, even though project:b is filtered out of the visible sections.
+    assert "Predecessor in project B" in blocked_group
+    # The predecessor is not itself rendered as a visible row.
+    ready_group = text[text.index('data-task-group="ready"') :]
+    ready_group = ready_group[: ready_group.index("</article>")]
+    assert "Predecessor in project B" not in ready_group
+
+
+def test_blocker_chip_resolves_older_predecessor_title_under_since_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (f-001): a still-open predecessor created *before* the `since`
+    date must still name the blocker chip. Open tasks are not windowed by
+    `since`, so the master open snapshot stays whole and the title resolves."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="blk",
+            title="Recent blocked work",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="pred",
+            title="Ancient predecessor",
+            status="open",
+            created_by="planner",
+            created_at="2025-01-01T10:00:00+00:00",
+        )
+    )
+    fake.ready_ids = {"pred"}
+    fake.blocked = {
+        "blk": (
+            BlockerRecord(
+                kind="task",
+                task_id="pred",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor pred to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert "Recent blocked work" in blocked_group
+    # The chip shows the predecessor's title, resolved from the whole open
+    # snapshot, despite the predecessor predating the `since` window.
+    assert "Ancient predecessor" in blocked_group
+
+
+def test_blocked_task_shows_predecessor_chip_then_moves_to_ready(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-2 acceptance: an open-predecessor task renders in Blocked with the
+    predecessor's title chip; completing the predecessor (in the fake oracle)
+    moves it onto the ready frontier and into the Ready section."""
+    fake = TaskFakeLithosClient()
+    # open-unclaimed is blocked by open-claimed (an open predecessor). Only the
+    # predecessor stays ready until it completes.
+    fake.ready_ids = {"open-old"}
+    fake.blocked = {
+        "open-unclaimed": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-claimed",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor open-claimed to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        blocked_view = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert blocked_view.status_code == 200
+    board = blocked_view.text
+    blocked_group = board[board.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert "Unclaimed open task" in blocked_group
+    # The chip carries the blocking predecessor's *title*, not its id.
+    assert 'class="blocker-chip blocker-chip-task"' in blocked_group
+    assert "Claimed open task" in blocked_group
+
+    # Complete the predecessor: the blocked task joins the ready frontier.
+    fake.blocked = {}
+    fake.ready_ids = {"open-old", "open-unclaimed"}
+
+    with _client(lithos_lens_config_env, fake) as client:
+        ready_view = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert ready_view.status_code == 200
+    text = ready_view.text
+    ready_group = text[text.index('data-task-group="ready"') :]
+    ready_group = ready_group[: ready_group.index("</article>")]
+    assert "Unclaimed open task" in ready_group
+    # It left Blocked entirely: that section is now empty.
+    blocked_after = text[text.index('data-task-group="blocked"') :]
+    blocked_after = blocked_after[: blocked_after.index("</article>")]
+    assert "Unclaimed open task" not in blocked_after
+
+
+def test_claimed_but_blocked_row_is_decorated_in_progress(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A claimed task that Lithos also reports blocked stays In progress but
+    carries a ``blocked`` decoration (story 13)."""
+    fake = TaskFakeLithosClient()
+    fake.blocked = {
+        "open-claimed": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-unclaimed",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor open-unclaimed to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    in_progress = text[text.index('data-task-group="in_progress"') :]
+    in_progress = in_progress[: in_progress.index("</article>")]
+    assert "Claimed open task" in in_progress
+    assert "data-claimed-but-blocked" in in_progress
 
 
 def test_direct_task_detail_resolves_findings_and_note_links(
@@ -529,52 +752,6 @@ def test_dashboard_uses_inline_claims_and_skips_task_status_fan_out(
     assert all(c["with_claims"] is False for c in other_calls)
 
 
-def test_dashboard_falls_back_to_task_status_when_claims_not_inline(
-    lithos_lens_config_env: Path,
-) -> None:
-    """If the upstream lithos doesn't honour with_claims (older server, etc.),
-    the dashboard still classifies open tasks correctly by falling back to
-    the per-task lithos_task_status fan-out."""
-
-    class StripClaimsClient(TaskFakeLithosClient):
-        async def list_tasks(  # type: ignore[override]
-            self,
-            *,
-            agent: str | None = None,
-            status: str | None = None,
-            tags: list[str] | None = None,
-            since: str | None = None,
-            with_claims: bool = False,
-        ) -> list[TaskRecord]:
-            # Simulate a server that doesn't inline claims regardless of the flag.
-            rows = await super().list_tasks(
-                agent=agent,
-                status=status,
-                tags=tags,
-                since=since,
-                with_claims=False,
-            )
-            # Track the requested flag for assertion below.
-            self.list_calls[-1]["with_claims"] = with_claims
-            return rows
-
-    fake = StripClaimsClient()
-
-    with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/tasks?since=2026-04-01")
-
-    assert response.status_code == 200
-    assert "Claimed open task" in response.text
-    # Lens still asked for inline claims …
-    open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
-    assert open_list_calls
-    assert all(c["with_claims"] is True for c in open_list_calls)
-    # … but since the server dropped them, lens fell back to lithos_task_status
-    # for the visible open tasks.
-    assert "open-claimed" in fake.status_calls
-    assert "open-unclaimed" in fake.status_calls
-
-
 def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
     """The shared fake and the concrete client agree on the not-found contract:
     a coded LithosToolError, never None (the PRD requires callers to be able to
@@ -589,3 +766,65 @@ def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
 
     found = asyncio.run(fake.task_get("open-claimed"))
     assert found.id == "open-claimed"
+
+
+def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
+    lithos_lens_config_env: Path,
+) -> None:
+    """When the master open list comes back without inline claims (older
+    lithos / claims stripped), rows must read "claims unknown" — not the
+    confident "unclaimed" — while still sectioning by frontier membership."""
+
+    class NoClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+            rows = await super().list_tasks(**kwargs)
+            # Simulate a server that never inlines claims: None, not ().
+            return [replace(task, claims=None) for task in rows]
+
+    fake = NoClaimsClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "claims unknown" in response.text
+    assert 'class="claim-chip claim-chip-open"' not in response.text
+    # The rows render in the dedicated degraded-data group, and the workable
+    # counts exclude them: unknown-claims tasks are not "Ready" or "Blocked".
+    assert 'data-task-group="claims_unknown"' in response.text
+    text = response.text
+    ready_card = text.split("#task-group-ready")[1].split("</a>")[0]
+    blocked_card = text.split("#task-group-blocked")[1].split("</a>")[0]
+    assert "<strong>0</strong>" in ready_card
+    assert "<strong>0</strong>" in blocked_card
+
+
+def test_terminal_card_labels_match_the_created_windowing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Label<->filter consistency: the since filter windows completed/cancelled
+    rows by CREATED date, so the cards must say "Created since". A task created
+    long ago but resolved yesterday is (currently) excluded — resolved-time
+    windowing is T1-S10, which should push lithos_task_list's native
+    resolved_since param rather than relabel this filter."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="old-created-recent-resolved",
+            title="Ancient task resolved yesterday",
+            status="completed",
+            created_by="worker",
+            created_at="2020-01-01T00:00:00+00:00",
+            resolved_at="2026-08-08T00:00:00+00:00",
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    # Created outside the window: excluded even though resolved recently…
+    assert "Ancient task resolved yesterday" not in response.text
+    # …so the cards must describe the filter that actually applies.
+    assert "Created since" in response.text
+    assert "Resolved since" not in response.text

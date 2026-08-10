@@ -349,10 +349,19 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
     all_ids = {t.id for t in await client.task_ready()}
-    assert all_ids == {"influx-ingest-cutover", "influx-dashboards", "lens-graph-view"}
+    assert all_ids == {
+        "influx-ingest-cutover",
+        "influx-dashboards",
+        "lens-graph-view",
+        "influx-ingest-old",
+    }
 
     influx = {t.id for t in await client.task_ready(project="influx")}
-    assert influx == {"influx-ingest-cutover", "influx-dashboards"}
+    assert influx == {
+        "influx-ingest-cutover",
+        "influx-dashboards",
+        "influx-ingest-old",
+    }
 
     observability = {t.id for t in await client.task_ready(tags=["area:observability"])}
     assert observability == {"influx-dashboards"}
@@ -381,6 +390,21 @@ def test_fake_client_defaults_to_the_demo_dataset() -> None:
 
 def test_demo_dataset_is_deterministic() -> None:
     assert demo_dataset() == demo_dataset()
+
+
+def test_demo_dataset_classifies_every_open_workable_task() -> None:
+    """Regression (f-003): every open workable (task-typed) row in the demo set
+    must sit on exactly one frontier. A workable open task in neither ready_ids
+    nor blocked would land in the Not-classified tail and make the rendered
+    dashboard claim a false "frontier truncated at 500" on a five-task corpus."""
+    dataset = demo_dataset()
+    workable_open = {
+        task.id
+        for task in dataset.tasks
+        if task.status == "open" and task.task_type == "task"
+    }
+    classified = set(dataset.ready_ids) | set(dataset.blocked)
+    assert workable_open - classified == set()
 
 
 @pytest.mark.anyio
@@ -502,3 +526,52 @@ def test_no_warning_when_fake_mode_off(
     assert not [
         r for r in caplog.records if "fake-Lithos app mode is ENABLED" in r.getMessage()
     ]
+
+
+def test_fake_mode_event_publish_seam_reaches_subscribers(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /tasks/events/publish (fake-mode-only harness seam) pushes a real
+    LensEvent through the in-process hub to /tasks/events subscribers."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        hub = app.state.lens.events
+        queue = hub.subscribe()
+        response = client.post(
+            "/tasks/events/publish",
+            json={
+                "id": "evt-77",
+                "type": "task.created",
+                "task_id": "brand-new",
+                "payload": {"title": "Brand new"},
+            },
+        )
+        event = queue.get_nowait()
+    assert response.status_code == 202
+    assert event.id == "evt-77"
+    assert event.type == "task.created"
+    assert event.task_id == "brand-new"
+
+
+def test_event_publish_seam_absent_outside_fake_mode(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITHOS_LENS_FAKE_LITHOS", raising=False)
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.post("/tasks/events/publish", json={"task_id": "x"})
+    assert response.status_code in (404, 405)
+
+
+def test_fake_mode_dashboard_has_the_pending_strip(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tasks.js targets [data-task-list="pending"] for task.created skeletons
+    (the old data-task-list="open" target died with the sectioned board)."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/tasks?since=2026-08-01")
+    assert response.status_code == 200
+    assert 'data-task-list="pending"' in response.text

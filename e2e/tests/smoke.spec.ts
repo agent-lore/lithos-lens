@@ -19,8 +19,10 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
 
   await expect(page.getByRole("heading", { level: 1, name: "Tasks" })).toBeVisible();
 
-  // The open group and its flagship fixture task are present.
-  await expect(page.locator('[data-task-group="open"]')).toBeVisible();
+  // The workable board and its flagship fixture task are present. Open tasks
+  // are partitioned into In progress / Ready / Blocked sections by the Lithos
+  // frontier, so the row lives in one of those rather than a flat "open" group.
+  await expect(page.locator(".task-board")).toBeVisible();
   await expect(
     page.locator('[data-task-row][data-task-id="influx-ingest-cutover"]'),
   ).toBeVisible();
@@ -50,6 +52,59 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
     cancelled.getByRole("link", { name: "Spike Influx client options" }),
   ).toBeVisible();
   expect(await cancelled.locator("[data-task-row]").count()).toBe(1);
+});
+
+test("blocked row renders styled blocker chips with a visible label", async ({ page }) => {
+  // T1-S2 item: the blocked fixture (influx-backfill, waiting on the cutover)
+  // must show a labelled, STYLED chip strip — browser truth via computed style,
+  // consistent with the chip system.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const blockedRow = page.locator(
+    '[data-task-group="blocked"] [data-task-row][data-task-id="influx-backfill"]',
+  );
+  await expect(blockedRow).toBeVisible();
+  const strip = blockedRow.locator("[data-blocker-list]");
+  await expect(strip.locator(".blocker-label")).toHaveText("Blocked by");
+  const chip = strip.locator(".blocker-chip").first();
+  await expect(chip).toContainText("Cut over Influx ingest path");
+  const style = await chip.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      radius: cs.borderRadius,
+      border: cs.borderStyle,
+      background: cs.backgroundColor,
+    };
+  });
+  expect(style.radius).toBe("999px");
+  expect(style.border).toBe("solid");
+  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+});
+
+test("task.created event inserts a skeleton row in the pending strip", async ({ page, request }) => {
+  // Drives the REAL SSE path via the fake-mode publish seam: publish ->
+  // in-process hub -> /tasks/events -> EventSource -> tasks.js skeleton.
+  await page.goto("/tasks?since=2026-08-01");
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+
+  const publish = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-${Date.now()}`,
+      type: "task.created",
+      task_id: "e2e-just-created",
+      payload: { title: "Freshly created task" },
+      // Hold reconciliation off so the skeleton is deterministically
+      // observable; the reconcile path is covered by its own ~800ms flow.
+      requires_refresh: false,
+    },
+  });
+  expect(publish.status()).toBe(202);
+
+  const skeleton = page.locator(
+    '[data-task-list="pending"] [data-task-row][data-task-id="e2e-just-created"]',
+  );
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toContainText("Freshly created task");
 });
 
 test("clicking a task opens its detail page", async ({ page }) => {

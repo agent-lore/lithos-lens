@@ -55,9 +55,11 @@ graph TD
   TaskGraph --> Tasks
   Telemetry --> Config
   Web --> Config
+  Web --> Events
   Web --> Knowledge
   Web --> LithosClient
   Web --> State
+  Web --> TaskGraph
   Web --> Tasks
   Web --> Telemetry
   linkStyle 0 stroke:#bbb
@@ -76,7 +78,8 @@ graph TD
   linkStyle 17 stroke:#bbb
   linkStyle 18 stroke:#bbb
   linkStyle 19 stroke:#999,stroke-dasharray:4
-  linkStyle 20 stroke:#999,stroke-dasharray:4
-  linkStyle 23 stroke:#999,stroke-dasharray:4
+  linkStyle 21 stroke:#999,stroke-dasharray:4
   linkStyle 24 stroke:#999,stroke-dasharray:4
+  linkStyle 25 stroke:#999,stroke-dasharray:4
+  linkStyle 26 stroke:#999,stroke-dasharray:4
 ```
