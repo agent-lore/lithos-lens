@@ -37,7 +37,7 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 - class `LithosContractError` — Raised when a tool call violates the vendored contract.
 - class `ToolContract` — The vendored shape of one Lithos MCP tool.
 - def `contract` — Return the vendored contract for ``name`` or raise if it is unregistered.
-- def `check_arguments` — Validate that ``arguments`` only carries keys the tool accepts.
+- def `check_arguments` — Validate ``arguments`` against the tool's vendored accepted/required sets.
 - def `envelope_rows` — Return the row list from ``payload`` using the tool's vendored envelope key.
 
 ## Dependencies

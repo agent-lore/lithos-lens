@@ -51,7 +51,11 @@ class ToolContract:
 
     ``arguments`` is the set of argument names Lens may send (a subset of, or
     equal to, the tool's accepted surface); sending anything outside it is a
-    contract violation. ``rows_key`` is the response envelope key holding the
+    contract violation. ``required`` is the subset Lens must send on *every*
+    call — the default-sensitive flags and mandatory keys where omission is the
+    bug, not a valid default (``with_claims`` is the #23 escape: upstream
+    ``lithos_task_ready`` defaults it to true, so dropping it silently inverts
+    Lens's false default). ``rows_key`` is the response envelope key holding the
     row list for a list-returning tool, or ``""`` for tools that return a single
     object or a whole-payload dict. ``error_codes`` documents the coded error
     envelopes the tool can surface. ``source`` cites the upstream tool source.
@@ -59,15 +63,27 @@ class ToolContract:
 
     name: str
     arguments: frozenset[str] = field(default_factory=frozenset)
+    required: frozenset[str] = field(default_factory=frozenset)
     rows_key: str = ""
     error_codes: frozenset[str] = field(default_factory=frozenset)
     source: str = ""
+
+    def __post_init__(self) -> None:
+        # A required argument must also be an accepted one — otherwise the
+        # registry contradicts itself and every call would be unsatisfiable.
+        stray = self.required - self.arguments
+        if stray:
+            raise LithosContractError(
+                f"{self.name}: required arguments {sorted(stray)} are not in "
+                "the accepted set"
+            )
 
 
 def _contract(
     name: str,
     *,
     arguments: tuple[str, ...] = (),
+    required: tuple[str, ...] = (),
     rows_key: str = "",
     error_codes: tuple[str, ...] = (),
     source: str,
@@ -75,6 +91,7 @@ def _contract(
     return ToolContract(
         name=name,
         arguments=frozenset(arguments),
+        required=frozenset(required),
         rows_key=rows_key,
         error_codes=frozenset(error_codes),
         source=source,
@@ -87,6 +104,7 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_agent_register",
             arguments=("id", "name", "type"),
+            required=("id", "name", "type"),
             source="tools/agents.py::lithos_agent_register",
         ),
         _contract(
@@ -102,12 +120,18 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_task_list",
             arguments=("with_claims", "agent", "status", "tags", "since"),
+            # with_claims is always sent explicitly so an upstream default flip
+            # can't silently invert Lens's default (the #23 escape class).
+            required=("with_claims",),
             rows_key="tasks",
             source="tools/tasks.py::lithos_task_list",
         ),
         _contract(
             "lithos_task_ready",
             arguments=("with_claims", "limit", "project", "tags"),
+            # Upstream defaults with_claims to true; Lens's false default is only
+            # honored if the flag is always sent — the #23 escape.
+            required=("with_claims",),
             rows_key="tasks",
             source="tools/tasks.py::lithos_task_ready",
         ),
@@ -120,6 +144,7 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_task_get",
             arguments=("task_id",),
+            required=("task_id",),
             # Primary success is a single {"task": {...}} object (bespoke in the
             # client); "tasks" is the accepted legacy list envelope.
             rows_key="tasks",
@@ -129,12 +154,16 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_task_children",
             arguments=("task_id", "recursive", "include_closed"),
+            required=("task_id",),
             rows_key="tasks",
             source="tools/tasks.py::lithos_task_children",
         ),
         _contract(
             "lithos_task_edge_list",
             arguments=("task_id", "direction", "types"),
+            # direction is always sent (defaulting to "both") so its scoping is
+            # never left to an upstream default.
+            required=("task_id", "direction"),
             rows_key="edges",
             error_codes=("invalid_input",),
             source="tools/tasks.py::lithos_task_edge_list",
@@ -142,12 +171,14 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_task_status",
             arguments=("task_id",),
+            required=("task_id",),
             rows_key="tasks",
             source="tools/tasks.py::lithos_task_status",
         ),
         _contract(
             "lithos_finding_list",
             arguments=("task_id", "since"),
+            required=("task_id",),
             rows_key="findings",
             error_codes=("invalid_input",),
             source="tools/tasks.py::lithos_finding_list",
@@ -156,6 +187,9 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_read",
             arguments=("id", "agent_id", "max_length", "path"),
+            # agent_id is sent on every read (by-id and by-path alike); the
+            # lookup key (id vs path) varies by call shape, so it is not required.
+            required=("agent_id",),
             # Whole-payload note dict (frontmatter + content); no list envelope.
             error_codes=("doc_not_found",),
             source="tools/read_search.py::lithos_read",
@@ -163,6 +197,8 @@ CONTRACTS: dict[str, ToolContract] = {
         _contract(
             "lithos_related",
             arguments=("id", "include", "depth", "namespace"),
+            # depth is always pinned to 1 (§6.5); id identifies the note.
+            required=("id", "depth"),
             # Nested payload (links / provenance / edges); no flat list envelope.
             error_codes=("doc_not_found",),
             source="tools/read_search.py::lithos_related",
@@ -194,18 +230,30 @@ def contract(name: str) -> ToolContract:
 
 
 def check_arguments(name: str, arguments: dict[str, Any]) -> None:
-    """Validate that ``arguments`` only carries keys the tool accepts.
+    """Validate ``arguments`` against the tool's vendored accepted/required sets.
 
-    Guards the #23/#26 class of escape: an argument the tool does not accept
-    (FastMCP rejects it upstream) fails here, before the call, as a
-    :class:`LithosContractError` naming the offending keys.
+    Guards both invented-argument escape classes, before the call, as a
+    :class:`LithosContractError`:
+
+    * an argument the tool does not accept (FastMCP rejects it upstream) — #26;
+    * a *missing required* argument — the #23 class, where dropping a
+      default-sensitive flag (``with_claims``) silently inverts Lens's default
+      against upstream's. A subset that omits a required key is a violation, not
+      a valid default.
     """
-    accepted = contract(name).arguments
-    unexpected = sorted(set(arguments) - accepted)
+    tool = contract(name)
+    keys = set(arguments)
+    missing = sorted(tool.required - keys)
+    if missing:
+        raise LithosContractError(
+            f"{name} requires argument(s) {missing} on every call "
+            "(omitting a default-sensitive flag is the #23 escape)"
+        )
+    unexpected = sorted(keys - tool.arguments)
     if unexpected:
         raise LithosContractError(
             f"{name} does not accept argument(s) {unexpected}; "
-            f"accepted: {sorted(accepted)}"
+            f"accepted: {sorted(tool.arguments)}"
         )
 
 

@@ -103,19 +103,62 @@ def test_related_accepts_exactly_the_vendored_argument_set() -> None:
 # ── check_arguments (unit) ──────────────────────────────────────────────
 
 
-def test_check_arguments_accepts_a_subset() -> None:
+def test_check_arguments_accepts_a_call_carrying_every_required_key() -> None:
     check_arguments("lithos_related", {"id": "n-1", "depth": 1})
 
 
 def test_check_arguments_rejects_an_unexpected_argument() -> None:
     with pytest.raises(LithosContractError) as excinfo:
-        check_arguments("lithos_related", {"id": "n-1", "flat": True})
+        check_arguments("lithos_related", {"id": "n-1", "depth": 1, "flat": True})
     assert "flat" in str(excinfo.value)
 
 
 def test_check_arguments_rejects_an_unregistered_tool() -> None:
     with pytest.raises(LithosContractError):
         check_arguments("lithos_made_up_tool", {})
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("lithos_task_ready", {"limit": 10}),  # missing with_claims (#23)
+        ("lithos_task_list", {"status": "open"}),  # missing with_claims (#23)
+        ("lithos_task_get", {}),  # missing task_id
+        ("lithos_related", {"id": "n-1"}),  # missing depth
+    ],
+)
+def test_check_arguments_rejects_a_missing_required_argument(
+    name: str, arguments: dict[str, Any]
+) -> None:
+    """A subset that omits a required (default-sensitive/mandatory) key is a
+    contract violation — not a valid default. Without required-key enforcement
+    these calls sail through, which is exactly the #23 escape."""
+    with pytest.raises(LithosContractError) as excinfo:
+        check_arguments(name, arguments)
+    assert "requires" in str(excinfo.value)
+
+
+def test_check_arguments_passes_when_required_flag_is_present() -> None:
+    check_arguments("lithos_task_ready", {"with_claims": False, "limit": 10})
+    check_arguments("lithos_task_list", {"with_claims": True, "status": "open"})
+
+
+@pytest.mark.parametrize(
+    ("name", "required"),
+    [
+        ("lithos_task_ready", {"with_claims"}),
+        ("lithos_task_list", {"with_claims"}),
+        ("lithos_task_get", {"task_id"}),
+        ("lithos_related", {"id", "depth"}),
+    ],
+)
+def test_required_arguments_are_pinned(name: str, required: set[str]) -> None:
+    assert contract(name).required == frozenset(required)
+
+
+def test_required_is_always_a_subset_of_accepted() -> None:
+    for tool in CONTRACTS.values():
+        assert tool.required <= tool.arguments, tool.name
 
 
 # ── envelope_rows (unit) ────────────────────────────────────────────────
@@ -218,13 +261,34 @@ def test_related_sends_only_vendored_arguments() -> None:
 def test_call_tool_rejects_an_out_of_contract_argument() -> None:
     client = _OneshotClient(_tool_result("{}"))
     with pytest.raises(LithosContractError):
-        _run(client, client._call_tool("lithos_related", {"id": "n-1", "flat": True}))
+        _run(
+            client,
+            client._call_tool(
+                "lithos_related", {"id": "n-1", "depth": 1, "flat": True}
+            ),
+        )
+
+
+def test_call_tool_rejects_a_missing_required_argument() -> None:
+    """The #23 escape: omitting with_claims for lithos_task_ready silently
+    inverts Lens's false default against upstream's true default. The vendored
+    contract makes that omission fail before it reaches the wire."""
+    client = _OneshotClient(_tool_result('{"tasks": []}'))
+    with pytest.raises(LithosContractError):
+        _run(client, client._call_tool("lithos_task_ready", {"limit": 10}))
 
 
 def test_call_tool_rejects_an_unregistered_tool() -> None:
     client = _OneshotClient(_tool_result("{}"))
     with pytest.raises(LithosContractError):
         _run(client, client._call_tool("lithos_made_up_tool", {}))
+
+
+def test_public_method_satisfies_its_required_contract_end_to_end() -> None:
+    """task_ready() always sends with_claims, so it passes the required-key
+    guard on the real _call_tool path rather than tripping the #23 check."""
+    client = _OneshotClient(_tool_result('{"tasks": []}'))
+    assert _run(client, client.task_ready()) == []
 
 
 def test_call_tool_accepts_in_contract_arguments() -> None:
