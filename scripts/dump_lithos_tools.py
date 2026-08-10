@@ -27,6 +27,24 @@ DEFAULT_URL = "http://localhost:8765"
 MCP_SSE_PATH = "/sse"
 
 
+async def list_all_tools(session: object) -> list[object]:
+    """Collect tools across every tools/list page.
+
+    The MCP client does not auto-follow ``nextCursor``; a paginating server
+    would silently truncate a single-request listing, so every consumer of
+    the tool surface (this script and the live contract-verification test)
+    goes through this cursor loop.
+    """
+    tools: list[object] = []
+    cursor: str | None = None
+    while True:
+        result = await session.list_tools(cursor=cursor)  # type: ignore[attr-defined]
+        tools.extend(result.tools)
+        cursor = getattr(result, "nextCursor", None)
+        if not cursor:
+            return tools
+
+
 async def _dump(url: str) -> dict[str, dict[str, object]]:
     from mcp import ClientSession
     from mcp.client.sse import sse_client
@@ -37,13 +55,13 @@ async def _dump(url: str) -> dict[str, dict[str, object]]:
         ClientSession(reader, writer) as session,
     ):
         await session.initialize()
-        listed = await session.list_tools()
+        tools = await list_all_tools(session)
     return {
-        tool.name: {
-            "description": tool.description or "",
-            "inputSchema": tool.inputSchema or {},
+        tool.name: {  # type: ignore[attr-defined]
+            "description": tool.description or "",  # type: ignore[attr-defined]
+            "inputSchema": tool.inputSchema or {},  # type: ignore[attr-defined]
         }
-        for tool in listed.tools
+        for tool in tools
     }
 
 
@@ -77,10 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         "url": args.url,
         "tools": tools,
     }
-    args.out.write_text(
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    # Write-then-rename so an interrupted run can't leave a truncated snapshot.
+    tmp = args.out.with_name(args.out.name + ".tmp")
+    tmp.write_text(
         json.dumps(snapshot, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    tmp.replace(args.out)
     sys.stdout.write(f"wrote {len(tools)} tool schemas to {args.out}\n")
     return 0
 

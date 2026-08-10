@@ -28,5 +28,5 @@
       }
     ]
   },
-  "observed_divergences": ""
+  "observed_divergences": "Same FastMCP output-schema bug as lithos_finding_list: the intended invalid_input envelope for a malformed active_since cannot leave the server (the tool's dict[str, list[...]] return annotation rejects it), so clients observe an MCP-level error (LithosClient surfaces code='tool_error'). Confirmed live 2026-08-10. Lithos task 60b3e135-7c77-4547-b437-fa61b7301bc4."
 }

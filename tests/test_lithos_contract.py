@@ -24,9 +24,15 @@ empty-on-missing; task_edge_list invalid_input on a bad direction) and
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
+
+# The tools/list pagination helper lives with the snapshot script (scripts/ is
+# not a package; same import pattern as test_metrics_history.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from lithos_lens.config import LithosConfig
 from lithos_lens.fake_lithos import FakeLithosClient
@@ -234,6 +240,9 @@ async def test_vendored_contracts_match_live_tool_schemas() -> None:
             "(host/CI only; unit runs stay hermetic)"
         )
 
+    from dump_lithos_tools import (  # pyright: ignore[reportMissingImports]
+        list_all_tools,
+    )
     from mcp import ClientSession
     from mcp.client.sse import sse_client
 
@@ -244,8 +253,8 @@ async def test_vendored_contracts_match_live_tool_schemas() -> None:
         ClientSession(reader, writer) as session,
     ):
         await session.initialize()
-        listed = await session.list_tools()
-    live_tools = {tool.name: tool for tool in listed.tools}
+        tools = await list_all_tools(session)
+    live_tools = {tool.name: tool for tool in tools}  # type: ignore[attr-defined]
 
     problems: list[str] = []
     for path in sorted(CONTRACTS_DIR.glob("*.json")):

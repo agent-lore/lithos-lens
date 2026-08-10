@@ -35,8 +35,9 @@ Lithos MCP tools comes from the vendored contracts in `tests/contracts/`
   round-trips every canonical payload through the real client.
 - `tests/contracts/_tools_snapshot.json` has the live input schemas of ALL
   server tools (refresh: `make contracts-snapshot`) for authoring new methods.
-- Host-side, `LITHOS_URL=... pytest tests/test_lithos_contract.py` verifies the
-  vendored contracts against a live server.
+- `make contracts-verify` (host-side, manual — CI does not run it; scheduled
+  seeded run tracked as Lithos task `c144b363`) verifies the vendored
+  contracts against a live server. Run it when adding or changing a contract.
 
 ## Agent skills
 

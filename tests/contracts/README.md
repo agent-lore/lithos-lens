@@ -45,13 +45,21 @@ the divergence instead of letting the doc and the contract matrix fight.
 ## Verification layers
 
 - `tests/test_lithos_contracts.py` (hermetic, every run): every tool name the
-  client calls has a contract file and vice versa; files are well-formed; every
-  canonical success payload round-trips through the real client method; every
-  error envelope surfaces as its coded `LithosToolError`.
-- `tests/test_lithos_contract.py` (`LITHOS_URL`-gated, host/CI): the vendored
-  request shapes are validated against the live server's `tools/list` input
-  schemas. Live response-shape verification needs seeded data — Lithos task
-  `c144b363`.
+  client calls has a contract file and vice versa (dynamic tool names are
+  rejected); files are well-formed; every canonical request is bound to a real
+  client call whose recorded outbound arguments must equal it exactly; every
+  canonical success payload round-trips through the real client into
+  full-field expected records; every error envelope surfaces as its coded
+  `LithosToolError`. Scope boundary: the round-trip covers the fields Lens
+  records expose — payload fields Lens deliberately does not model (e.g.
+  `lithos_read`'s `links`/`truncated`/`retrieval_count`) are documented here
+  for authoring but carried by no Lens record.
+- `tests/test_lithos_contract.py` (`LITHOS_URL`-gated): the vendored request
+  shapes are validated against the live server's `tools/list` input schemas.
+  **This is a manual host-side step today** — run `make contracts-verify`
+  (defaults to `http://localhost:8765`) whenever contracts are added or
+  changed; a scheduled CI run against a seeded instance (which will also
+  verify response shapes live) is tracked as Lithos task `c144b363`.
 - `_tools_snapshot.json` (refresh via `make contracts-snapshot`) is an advisory
   dump of ALL live tools' input schemas, so a hermetic agent can author a new
   client method against the real request schema. Underscore-prefixed files are

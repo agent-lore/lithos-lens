@@ -1,5 +1,5 @@
 .PHONY: install fmt lint typecheck test check diagrams metrics-history metrics-diff \
-	contracts-snapshot run-fake e2e docker-build \
+	contracts-snapshot contracts-verify run-fake e2e docker-build \
 	docker-up-dev docker-up-prod docker-down-dev docker-down-prod
 
 install:
@@ -44,6 +44,13 @@ metrics-diff:
 # contract JSONs stay hand-curated. See tests/contracts/README.md.
 contracts-snapshot:
 	uv run python scripts/dump_lithos_tools.py
+
+# Verify the vendored contracts (and the fake<->real matrix) against a live
+# Lithos server. Manual host-side step until the seeded scheduled run lands
+# (Lithos task c144b363). URL from $LITHOS_URL, default http://localhost:8765.
+contracts-verify:
+	LITHOS_URL=$(or $(LITHOS_URL),http://localhost:8765) \
+		uv run pytest tests/test_lithos_contract.py tests/test_lithos_contracts.py -q
 
 # Run the app in fake-Lithos app mode: the real UI served against in-memory
 # fixtures, no Lithos server required. Open http://127.0.0.1:8000/tasks
