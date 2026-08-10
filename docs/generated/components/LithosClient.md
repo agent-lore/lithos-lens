@@ -14,6 +14,7 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 | `lithos_lens.fake_dataset` | M | 1 | 1 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | M | 4 | 0 |
+| `lithos_lens.lithos_contract` | S | 2 | 3 |
 
 ## Public API
 
@@ -31,6 +32,13 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 - class `RegistrationResult`
 - class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.
 - class `LithosClient` — Best-effort Lithos client used by the web app.
+
+### `lithos_lens.lithos_contract`
+- class `LithosContractError` — Raised when a tool call violates the vendored contract.
+- class `ToolContract` — The vendored shape of one Lithos MCP tool.
+- def `contract` — Return the vendored contract for ``name`` or raise if it is unregistered.
+- def `check_arguments` — Validate that ``arguments`` only carries keys the tool accepts.
+- def `envelope_rows` — Return the row list from ``payload`` using the tool's vendored envelope key.
 
 ## Dependencies
 

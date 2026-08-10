@@ -43,7 +43,7 @@ Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
 Web          = ["lithos_lens.web"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
-LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
+LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_contract", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config"]
 Tasks        = ["lithos_lens.tasks"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier"]
@@ -98,4 +98,6 @@ exclude_modules = [
     "lithos_lens.errors",
     "lithos_lens.fake_lithos",
     "lithos_lens.fake_dataset",
+    # Vendored tool-shape registry (ToolContract), not a domain entity.
+    "lithos_lens.lithos_contract",
 ]

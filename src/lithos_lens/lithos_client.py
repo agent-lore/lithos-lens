@@ -20,6 +20,7 @@ import httpx
 
 from lithos_lens.config import LithosConfig
 from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
+from lithos_lens.lithos_contract import check_arguments, envelope_rows
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -277,7 +278,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_task(task)
-            for task in payload.get("tasks", [])
+            for task in envelope_rows("lithos_task_list", payload)
             if isinstance(task, dict)
         ]
 
@@ -309,7 +310,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_task(task)
-            for task in payload.get("tasks", [])
+            for task in envelope_rows("lithos_task_ready", payload)
             if isinstance(task, dict)
         ]
 
@@ -331,7 +332,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_blocked_task(task)
-            for task in payload.get("tasks", [])
+            for task in envelope_rows("lithos_task_blocked", payload)
             if isinstance(task, dict)
         ]
 
@@ -379,7 +380,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_task(task)
-            for task in payload.get("tasks", [])
+            for task in envelope_rows("lithos_task_children", payload)
             if isinstance(task, dict)
         ]
 
@@ -397,14 +398,14 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_edge(edge)
-            for edge in payload.get("edges", [])
+            for edge in envelope_rows("lithos_task_edge_list", payload)
             if isinstance(edge, dict)
         ]
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
         payload = await self._call_tool("lithos_task_status", {"task_id": task_id})
         _raise_for_error(payload)
-        tasks = payload.get("tasks", [])
+        tasks = envelope_rows("lithos_task_status", payload)
         if not tasks:
             return None
         raw = tasks[0]
@@ -420,7 +421,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_finding(finding, task_id)
-            for finding in payload.get("findings", [])
+            for finding in envelope_rows("lithos_finding_list", payload)
             if isinstance(finding, dict)
         ]
 
@@ -434,7 +435,7 @@ class LithosClient:
         _raise_for_error(payload)
         return [
             normalize_agent(agent)
-            for agent in payload.get("agents", [])
+            for agent in envelope_rows("lithos_agent_list", payload)
             if isinstance(agent, dict)
         ]
 
@@ -510,15 +511,20 @@ class LithosClient:
             arguments["limit"] = limit
         payload = await self._call_tool("lithos_list", arguments)
         _raise_for_error(payload)
-        # lithos_list returns {"items": [...], "total": ...} — "items" has been
-        # its one and only container key since the very first implementation
-        # (verified against the Lithos source and its full git history; the
-        # previously accepted "notes"/"documents"/"results" aliases never
-        # existed — "results" is lithos_search's key).
-        rows: Any = payload.get("items") or []
-        return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
+        # The container key ("items") comes from the vendored contract, not a
+        # literal — the invented "notes"/"documents"/"results" aliases (#30) can
+        # no longer be re-guessed here ("results" is lithos_search's key).
+        return [
+            normalize_note_summary(item)
+            for item in envelope_rows("lithos_list", payload)
+            if isinstance(item, dict)
+        ]
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        # Fail loudly on an unregistered tool or an out-of-contract argument
+        # before anything hits the wire — the invented-argument escape class
+        # (#23/#26) becomes a bug here, not a silent upstream rejection.
+        check_arguments(name, arguments)
         if self._worker_task is None:
             # startup() was never called; fall back to a one-shot session so
             # we don't silently break callers that bypass the lifecycle.
