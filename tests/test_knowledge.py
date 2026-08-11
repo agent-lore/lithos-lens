@@ -521,7 +521,9 @@ def test_knowledge_nav_active_on_knowledge_landing(
         response = client.get("/knowledge")
 
     assert response.status_code == 200
-    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+    assert (
+        '<a class="active" aria-current="page" href="/knowledge">Knowledge</a>'
+    ) in response.text
 
 
 def test_knowledge_nav_active_on_note_page(lithos_lens_config_env: Path) -> None:
@@ -532,7 +534,9 @@ def test_knowledge_nav_active_on_note_page(lithos_lens_config_env: Path) -> None
         response = client.get("/note/nav-note")
 
     assert response.status_code == 200
-    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+    assert (
+        '<a class="active" aria-current="page" href="/knowledge">Knowledge</a>'
+    ) in response.text
 
 
 def test_tasks_nav_active_leaves_knowledge_inactive(
@@ -546,7 +550,9 @@ def test_tasks_nav_active_leaves_knowledge_inactive(
         response = client.get("/tasks")
 
     assert response.status_code == 200
-    assert '<a class="active" href="/tasks">Tasks</a>' in response.text
+    assert (
+        '<a class="active" aria-current="page" href="/tasks">Tasks</a>'
+    ) in response.text
     assert '<a class="" href="/knowledge">Knowledge</a>' in response.text
 
 
@@ -562,5 +568,7 @@ def test_knowledge_nav_stays_live_when_lithos_offline(
         response = client.get("/note/whatever")
 
     assert response.status_code == 200
-    assert '<a class="active" href="/knowledge">Knowledge</a>' in response.text
+    assert (
+        '<a class="active" aria-current="page" href="/knowledge">Knowledge</a>'
+    ) in response.text
     assert "Lithos is offline or degraded" in response.text
