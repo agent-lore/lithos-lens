@@ -496,8 +496,9 @@ def test_read_note_by_path_sends_the_vendored_variant_request() -> None:
 
 def test_recent_notes_sends_the_recent_variant_and_sorts_newest_first() -> None:
     """``recent_notes`` is ``lithos_list``'s second request shape (the
-    ``recent``/``recent_tagged`` variants): one fetch-cap page, because the
-    tool has no ordering parameter (upstream task e0e31654). The
+    ``recent``/``recent_tagged`` variants): pages walked via ``offset``,
+    because the tool has no ordering parameter (upstream task e0e31654). The
+    fixture's ``total`` fits one page, so exactly one request goes out. The
     ``insertion_ordered_recent`` response variant's rows are deliberately out
     of updated-order — the client must sort newest-first and truncate."""
     contract = load_contract("lithos_list")
@@ -520,6 +521,62 @@ def test_recent_notes_sends_the_recent_variant_and_sorts_newest_first() -> None:
     ]
     # The limit truncates AFTER the newest-first sort — never before.
     assert [row.id for row in limited] == ["44444444-4444-4444-8444-444444444444"]
+
+
+class _PagedStubClient(LithosClient):
+    """Recording stub serving a distinct canned payload per request offset."""
+
+    def __init__(self, pages: dict[int, dict[str, Any]]) -> None:
+        super().__init__(LithosConfig(agent_id="lithos-lens"))
+        self._pages = pages
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _call_tool(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append((name, arguments))
+        return self._pages[arguments["offset"]]
+
+
+def test_recent_notes_paginates_until_total_so_late_rows_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PR #39 review scenario: the corpus exceeds one fetch page and the
+    GLOBALLY newest note sits beyond it. recent_notes must keep walking
+    ``offset`` until the response's ``total`` is exhausted, so that note wins
+    even with ``limit=1`` — "newest of the first page" is exactly the bug this
+    pins out. Rows are the vendored ``insertion_ordered_recent`` fixtures,
+    re-paged with a shrunken page size (the wire shape per page is identical;
+    only the walk is under test)."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    oldest, newest, middle = fixture_rows
+    pages = {
+        # Page one: older rows only; total says more exist.
+        0: {"items": [oldest, middle], "total": 3},
+        # Page two: the globally newest row.
+        2: {"items": [newest], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes(limit=1)
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [(name, args["offset"]) for name, args in client.calls] == [
+        ("lithos_list", 0),
+        ("lithos_list", 2),
+    ]
+    assert [row.id for row in result] == [newest["id"]]
 
 
 def _error_cases() -> list[tuple[str, dict[str, Any]]]:

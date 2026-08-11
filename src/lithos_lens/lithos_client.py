@@ -63,11 +63,16 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
 
-# One insertion-ordered lithos_list page is fetched and sorted client-side to
-# build the recently-updated list (recent_notes). Exactness bound: with more
-# than this many (filtered) notes, rows beyond the first page can be missed.
-# Removed once upstream lithos_list grows server-side ordering (task e0e31654).
-RECENT_NOTES_FETCH_CAP = 500
+# recent_notes walks lithos_list in pages of this size (via offset) and sorts
+# client-side, because the tool has no ordering parameter — removed once
+# upstream lithos_list grows server-side ordering (task e0e31654).
+RECENT_NOTES_FETCH_PAGE = 500
+
+# Runaway guard for the pagination loop, NOT an expected bound: the walk
+# normally terminates on the response's `total` (~6 pages for today's ~2.9k
+# note corpus). This only stops a server reporting an absurd total from
+# turning one landing-page render into an unbounded crawl.
+_RECENT_NOTES_MAX_PAGES = 40
 
 
 class LithosClientProtocol(Protocol):
@@ -555,27 +560,50 @@ class LithosClient:
 
         ``lithos_list`` has NO ordering parameter at the pinned Lithos version:
         ``knowledge.list_all`` returns metadata-cache insertion order, and
-        ``limit`` slices that order — so a small direct ``limit`` would return
-        an arbitrary old page, not the newest notes (PR #39 review; server-side
+        ``limit``/``offset`` slice that order — so a small direct ``limit``
+        would return an arbitrary old page, not the newest notes (server-side
         ``order_by`` is upstream Lithos task e0e31654). Until that lands,
-        newest-first is computed here: fetch one insertion-ordered page of
-        ``RECENT_NOTES_FETCH_CAP`` rows, sort by ``updated`` descending, and
-        truncate to ``limit``. Exact whenever the (filtered) corpus fits the
-        cap; beyond it, this degrades to newest-of-the-first-cap-rows (the
-        bound is documented in the vendored contract).
+        newest-first is computed here over the WHOLE (filtered) corpus, not one
+        page (PR #39 review: with ~2.9k notes, a note updated today but
+        inserted late would otherwise never surface): pages of
+        ``RECENT_NOTES_FETCH_PAGE`` rows are walked via ``offset`` until the
+        response's ``total`` is exhausted. After each page the accumulator is
+        re-sorted newest-first and, when ``limit`` is given, truncated — so
+        memory stays bounded by page size + ``limit`` however large the corpus.
         """
-        arguments: dict[str, Any] = {}
-        if tags:
-            arguments["tags"] = tags
-        arguments["limit"] = RECENT_NOTES_FETCH_CAP
-        payload = await self._call_tool("lithos_list", arguments)
-        _raise_for_error(payload)
-        rows: Any = payload.get("items") or []
-        summaries = [
-            normalize_note_summary(item) for item in rows if isinstance(item, dict)
-        ]
-        summaries.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
-        return summaries[:limit] if limit is not None else summaries
+        rows: list[NoteSummary] = []
+        offset = 0
+        pages = 0
+        while pages < _RECENT_NOTES_MAX_PAGES:
+            arguments: dict[str, Any] = {}
+            if tags:
+                arguments["tags"] = tags
+            arguments["limit"] = RECENT_NOTES_FETCH_PAGE
+            arguments["offset"] = offset
+            payload = await self._call_tool("lithos_list", arguments)
+            _raise_for_error(payload)
+            items: Any = payload.get("items") or []
+            page_rows = [
+                normalize_note_summary(item) for item in items if isinstance(item, dict)
+            ]
+            rows.extend(page_rows)
+            rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
+            if limit is not None:
+                del rows[limit:]
+            offset += len(page_rows)
+            pages += 1
+            total = payload.get("total")
+            if not page_rows or (isinstance(total, int) and offset >= total):
+                break
+        else:
+            logger.warning(
+                "recent_notes stopped at the %d-page runaway guard "
+                "(%d rows fetched); the recent list may be incomplete",
+                _RECENT_NOTES_MAX_PAGES,
+                offset,
+            )
+        logger.debug("recent_notes fetched %d rows in %d page(s)", offset, pages)
+        return rows
 
     async def search_notes(
         self,

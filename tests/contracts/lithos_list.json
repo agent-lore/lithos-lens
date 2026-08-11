@@ -14,16 +14,18 @@
     },
     "variants": {
       "recent": {
-        "limit": 500
+        "limit": 500,
+        "offset": 0
       },
       "recent_tagged": {
         "tags": [
           "project:influx"
         ],
-        "limit": 500
+        "limit": 500,
+        "offset": 0
       }
     },
-    "notes": "Lens sends only active filters. Rows live under 'items' — its one and only container key since the first implementation (PR #30's bug was reading invented notes/documents/results aliases). The 'recent'/'recent_tagged' variants are recent_notes' requests: lithos_list has NO ordering parameter (knowledge.list_all returns metadata-cache insertion order; limit/offset slice that order — server-side order_by is upstream Lithos task e0e31654), so the client fetches one RECENT_NOTES_FETCH_CAP=500 page and sorts by 'updated' descending itself. Exact while the (filtered) corpus fits the cap; beyond it, newest rows outside the first insertion-ordered page are missed."
+    "notes": "Lens sends only active filters. Rows live under 'items' — its one and only container key since the first implementation (PR #30's bug was reading invented notes/documents/results aliases). The 'recent'/'recent_tagged' variants are recent_notes' FIRST-page requests: lithos_list has NO ordering parameter (knowledge.list_all returns metadata-cache insertion order; limit/offset slice that order — server-side order_by is upstream Lithos task e0e31654), so the client walks pages of RECENT_NOTES_FETCH_PAGE=500 via 'offset' until the response's 'total' is exhausted, sorting by 'updated' descending itself. Follow-up pages repeat the same shape with offset advanced by the rows received."
   },
   "responses": {
     "success": {
@@ -96,5 +98,5 @@
     },
     "errors": []
   },
-  "observed_divergences": "lithos_list has no ordering parameter: items arrive in metadata-cache insertion order (list_all preserves iter_cached_meta order on the full-scan path and restores insertion order via the stored seq on the index path), NOT newest-first. The insertion_ordered_recent variant pins this: its rows are deliberately out of updated-order, and recent_notes must sort them. Upstream ordering tracked as Lithos task e0e31654."
+  "observed_divergences": "lithos_list has no ordering parameter: items arrive in metadata-cache insertion order (list_all preserves iter_cached_meta order on the full-scan path and restores insertion order via the stored seq on the index path), NOT newest-first. The insertion_ordered_recent variant pins this: its rows are deliberately out of updated-order, and recent_notes must sort them — paginating through the full corpus via offset/total first, so a newly updated note beyond the first page still surfaces. Upstream ordering tracked as Lithos task e0e31654."
 }

@@ -402,11 +402,13 @@ class FakeLithosClient:
     ) -> list[NoteSummary]:
         """Newest-first browse list, ordered like the real client's leg.
 
-        The real ``recent_notes`` sorts an insertion-ordered ``lithos_list``
-        page by ``updated`` descending (``note_updated_sort_key``); the fake
-        sorts the whole (filtered) dataset with the same key, so both legs of
-        the contract matrix order identically. The fake corpus is always far
-        below the real leg's fetch cap, so no cap is modeled here.
+        The real ``recent_notes`` pages through the whole corpus via
+        ``lithos_list`` offsets and sorts by ``updated`` descending
+        (``note_updated_sort_key``); the fake sorts the whole (filtered)
+        dataset with the same key — identical corpus-wide semantics, so both
+        legs of the contract matrix order identically. Pagination itself is
+        transport mechanics, covered by the paginated round-trip test against
+        the real client, not modeled here.
         """
         rows = await self.list_notes(tags=tags)
         rows.sort(key=lambda row: note_updated_sort_key(row.updated), reverse=True)
