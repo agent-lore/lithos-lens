@@ -120,9 +120,12 @@ def test_knowledge_search_snippet_is_rendered_escaped(
     assert "/knowledge/resolve" not in response.text
 
 
-def test_knowledge_empty_query_renders_no_matches(
+def test_knowledge_query_with_no_matches_renders_empty_state(
     lithos_lens_config_env: Path,
 ) -> None:
+    """A non-empty query with zero hits renders the empty state (a truly empty
+    ``?q=`` is not a search at all — it falls through to the recent list,
+    covered by the landing tests below)."""
     fake = FakeLithosClient(dataset=_dataset({}))
 
     with _client(lithos_lens_config_env, fake) as client:
@@ -181,6 +184,199 @@ def test_knowledge_query_with_tag_filters_the_search(
     assert response.status_code == 200
     assert 'href="/note/a"' in response.text
     assert 'href="/note/b"' not in response.text
+
+
+# ── landing page: recently-updated browse (no query) ───────────────────
+
+
+def _dated_note(
+    note_id: str, title: str, updated: str, *, content: str = "Body.", **kw: Any
+) -> NoteRecord:
+    return NoteRecord(
+        id=note_id,
+        title=title,
+        content=content,
+        metadata={"updated_at": updated},
+        **kw,
+    )
+
+
+def test_bare_knowledge_renders_recent_list_newest_first(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The bare landing is a RECENCY list: notes render newest-first by their
+    ``updated`` stamp regardless of dataset/insertion order (lithos_list has no
+    ordering parameter — recent_notes owns the sort), with dates shown."""
+    notes = {
+        "oldest": _dated_note("oldest", "Oldest note", "2026-07-01T10:00:00+00:00"),
+        "newest": _dated_note("newest", "Newest note", "2026-08-09T10:00:00+00:00"),
+        "middle": _dated_note("middle", "Middle note", "2026-08-02T10:00:00+00:00"),
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    assert response.status_code == 200
+    assert "Recently updated" in response.text
+    positions = {
+        note_id: response.text.index(f'href="/note/{note_id}"')
+        for note_id in ("newest", "middle", "oldest")
+    }
+    assert positions["newest"] < positions["middle"] < positions["oldest"]
+    # Each row carries its update date, Lens-formatted.
+    assert "09/08/2026" in response.text
+    assert "02/08/2026" in response.text
+
+
+def test_bare_knowledge_uses_recent_notes_not_search(
+    lithos_lens_config_env: Path,
+) -> None:
+    """No query → the recent browse path (recent_notes with the configured
+    recent_limit), never lithos_search."""
+    notes = {"n": _dated_note("n", "A note", "2026-08-01T10:00:00+00:00")}
+    fake = FakeLithosClient(dataset=_dataset(notes))
+    recent_calls: list[dict[str, Any]] = []
+    search_calls: list[dict[str, Any]] = []
+    original_recent = fake.recent_notes
+    original_search = fake.search_notes
+
+    async def record_recent(**kwargs: Any) -> Any:
+        recent_calls.append(kwargs)
+        return await original_recent(**kwargs)
+
+    async def record_search(query: str, **kwargs: Any) -> list[SearchResult]:
+        search_calls.append({"query": query, **kwargs})
+        return await original_search(query, **kwargs)
+
+    fake.recent_notes = record_recent  # type: ignore[method-assign]
+    fake.search_notes = record_search  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        client.get("/knowledge")
+
+    assert recent_calls == [{"tags": None, "limit": 20}]  # [knowledge].recent_limit
+    assert search_calls == []
+
+
+def test_knowledge_tag_browse_forwards_tag_and_orders_newest_first(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Tag-only browsing forwards ``tags=[tag]`` to recent_notes and stays a
+    recency list over the tagged subset."""
+    notes = {
+        "old-x": _dated_note(
+            "old-x", "Old X", "2026-07-01T10:00:00+00:00", tags=("project:x",)
+        ),
+        "new-x": _dated_note(
+            "new-x", "New X", "2026-08-09T10:00:00+00:00", tags=("project:x",)
+        ),
+        "y": _dated_note(
+            "y", "Y note", "2026-08-10T10:00:00+00:00", tags=("project:y",)
+        ),
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+    recent_calls: list[dict[str, Any]] = []
+    original_recent = fake.recent_notes
+
+    async def record_recent(**kwargs: Any) -> Any:
+        recent_calls.append(kwargs)
+        return await original_recent(**kwargs)
+
+    fake.recent_notes = record_recent  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?tag=project:x")
+
+    assert recent_calls == [{"tags": ["project:x"], "limit": 20}]
+    assert response.status_code == 200
+    assert 'href="/note/y"' not in response.text
+    assert response.text.index('href="/note/new-x"') < response.text.index(
+        'href="/note/old-x"'
+    )
+
+
+def test_fake_recent_notes_sorts_and_truncates_like_the_real_leg() -> None:
+    """recent_limit is respected AFTER the newest-first sort: with limit=2 the
+    two newest notes survive, not the first two inserted."""
+    notes = {
+        "oldest": _dated_note("oldest", "Oldest", "2026-07-01T10:00:00+00:00"),
+        "newest": _dated_note("newest", "Newest", "2026-08-09T10:00:00+00:00"),
+        "middle": _dated_note("middle", "Middle", "2026-08-02T10:00:00+00:00"),
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    rows = asyncio.run(fake.recent_notes(limit=2))
+
+    assert [row.id for row in rows] == ["newest", "middle"]
+    assert rows[0].updated == "2026-08-09T10:00:00+00:00"
+
+
+# ── landing form: the active tag round-trips through a search ──────────
+
+
+def test_landing_form_retains_active_tag(lithos_lens_config_env: Path) -> None:
+    """Searching from /knowledge?tag=… must keep the filter: the form carries
+    the active tag as a hidden input (escaped), and shows the active-filter
+    line with a clear link. Without a tag, neither renders."""
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        tagged = client.get("/knowledge?tag=project:x")
+        bare = client.get("/knowledge")
+
+    assert '<input type="hidden" name="tag" value="project:x">' in tagged.text
+    assert "Filtered by" in tagged.text
+    assert 'name="tag"' not in bare.text
+    assert "Filtered by" not in bare.text
+
+
+def test_landing_form_escapes_hostile_tag_value(lithos_lens_config_env: Path) -> None:
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get('/knowledge?tag="><script>alert(1)</script>')
+
+    assert response.status_code == 200
+    assert "<script>alert(1)</script>" not in response.text
+
+
+def test_search_submitted_from_tag_page_stays_filtered(
+    lithos_lens_config_env: Path,
+) -> None:
+    """End-to-end round-trip: submit the landing form exactly as a browser
+    would from /knowledge?tag=… (its q input + the hidden tag input) and the
+    search stays scoped to the tag."""
+    notes = {
+        "a": _dated_note(
+            "a",
+            "Match A",
+            "2026-08-01T10:00:00+00:00",
+            content="shared body",
+            tags=("project:x",),
+        ),
+        "b": _dated_note(
+            "b",
+            "Match B",
+            "2026-08-02T10:00:00+00:00",
+            content="shared body",
+            tags=("project:y",),
+        ),
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        tag_page = client.get("/knowledge?tag=project:x")
+        # The form's GET action with its two inputs, as submitted.
+        response = client.get("/knowledge", params={"q": "shared", "tag": "project:x"})
+
+    assert '<input type="hidden" name="tag" value="project:x">' in tag_page.text
+    assert response.status_code == 200
+    assert 'href="/note/a"' in response.text
+    assert 'href="/note/b"' not in response.text
+    # The results page still shows (and can clear) the active filter.
+    assert "Filtered by" in response.text
+    assert "clear filter" in response.text
 
 
 # ── nav search box (on every page) ─────────────────────────────────────

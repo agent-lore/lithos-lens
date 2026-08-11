@@ -17,8 +17,21 @@
         placeholder="Search notes"
         aria-label="Search knowledge"
       >
+      {% if tag %}
+        {# An active tag filter survives a search submitted from this page —
+           without this, searching from /knowledge?tag=… silently drops the
+           tag (PR #39 review). #}
+        <input type="hidden" name="tag" value="{{ tag }}">
+      {% endif %}
       <button type="submit">Search</button>
     </form>
+
+    {% if tag %}
+      <p class="knowledge-active-filter">
+        Filtered by {{ tag | format_tag }}
+        <a href="/knowledge{% if query %}?q={{ query | urlencode }}{% endif %}">clear filter</a>
+      </p>
+    {% endif %}
 
     {% if error %}
       <section class="banner banner-warning" role="status">

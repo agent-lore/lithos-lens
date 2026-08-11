@@ -129,6 +129,14 @@ class RecordingLithosClient:
     ) -> list[NoteSummary]:
         return []
 
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
+
     async def search_notes(
         self,
         query: str,

@@ -82,6 +82,10 @@
       },
       {
         "complexity": 13,
+        "qualname": "lithos_lens.fake_lithos.FakeLithosClient.list_notes"
+      },
+      {
+        "complexity": 13,
         "qualname": "lithos_lens.knowledge._gather_candidates"
       },
       {
@@ -98,14 +102,10 @@
       },
       {
         "complexity": 11,
-        "qualname": "lithos_lens.fake_lithos.FakeLithosClient.list_notes"
-      },
-      {
-        "complexity": 11,
         "qualname": "lithos_lens.fake_lithos.FakeLithosClient.search_notes"
       }
     ],
-    "total_functions": 240
+    "total_functions": 244
   },
   "domain": {
     "associations": 27,
@@ -258,13 +258,13 @@
       },
       "LithosClient": {
         "classes": 7,
-        "functions": 79,
+        "functions": 82,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 700,
-        "lines": 1502,
+        "largest_module_lines": 746,
+        "lines": 1579,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1262
+        "sloc": 1324
       },
       "Logging": {
         "classes": 1,
@@ -298,13 +298,13 @@
       },
       "Tasks": {
         "classes": 16,
-        "functions": 26,
+        "functions": 27,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 549,
-        "lines": 549,
+        "largest_module_lines": 567,
+        "lines": 567,
         "modules": 1,
-        "public_symbols": 33,
-        "sloc": 428
+        "public_symbols": 34,
+        "sloc": 443
       },
       "Telemetry": {
         "classes": 0,
@@ -324,19 +324,19 @@
         "lines": 490,
         "modules": 1,
         "public_symbols": 6,
-        "sloc": 427
+        "sloc": 424
       }
     },
     "max_module": "lithos_lens.config",
     "max_module_lines": 797,
     "modules_over_800": [],
-    "total_lines": 5493,
+    "total_lines": 5588,
     "total_modules": 19,
-    "total_sloc": 4456
+    "total_sloc": 4530
   },
   "tests": {
-    "ratio": 1.71,
-    "src_lines": 5493,
-    "test_lines": 9381
+    "ratio": 1.73,
+    "src_lines": 5588,
+    "test_lines": 9644
   }
 }

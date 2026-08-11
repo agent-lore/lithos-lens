@@ -478,6 +478,24 @@ def normalize_note_summary(raw: dict[str, Any]) -> NoteSummary:
     )
 
 
+def note_updated_sort_key(updated: str) -> datetime:
+    """Newest-first sort key for a note's ISO ``updated`` timestamp.
+
+    Shared by the real client and the fake so both ``recent_notes`` legs order
+    identically. Naive timestamps are treated as UTC (the server normalizes to
+    UTC before comparing, ``normalize_datetime``); blank or malformed values
+    sort oldest, so unstamped notes sink to the bottom of a recent list instead
+    of raising or floating to the top.
+    """
+    try:
+        parsed = datetime.fromisoformat(updated)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def default_since(default_days: int) -> str:
     return (datetime.now(UTC) - timedelta(days=default_days)).date().isoformat()
 

@@ -494,6 +494,34 @@ def test_read_note_by_path_sends_the_vendored_variant_request() -> None:
     assert result == _expected_note(contract["responses"]["success"])
 
 
+def test_recent_notes_sends_the_recent_variant_and_sorts_newest_first() -> None:
+    """``recent_notes`` is ``lithos_list``'s second request shape (the
+    ``recent``/``recent_tagged`` variants): one fetch-cap page, because the
+    tool has no ordering parameter (upstream task e0e31654). The
+    ``insertion_ordered_recent`` response variant's rows are deliberately out
+    of updated-order — the client must sort newest-first and truncate."""
+    contract = load_contract("lithos_list")
+    payload = contract["responses"]["variants"]["insertion_ordered_recent"]
+
+    result, calls = _run(payload, lambda c: c.recent_notes())
+    assert calls == [("lithos_list", contract["request"]["variants"]["recent"])]
+    assert [row.id for row in result] == [
+        "44444444-4444-4444-8444-444444444444",  # 2026-08-09
+        "55555555-5555-4555-8555-555555555555",  # 2026-08-02
+        "33333333-3333-4333-8333-333333333333",  # 2026-07-01
+    ]
+
+    limited, tagged_calls = _run(
+        payload,
+        lambda c: c.recent_notes(tags=["project:influx"], limit=1),
+    )
+    assert tagged_calls == [
+        ("lithos_list", contract["request"]["variants"]["recent_tagged"])
+    ]
+    # The limit truncates AFTER the newest-first sort — never before.
+    assert [row.id for row in limited] == ["44444444-4444-4444-8444-444444444444"]
+
+
 def _error_cases() -> list[tuple[str, dict[str, Any]]]:
     cases = []
     for tool in sorted(_contract_tools()):

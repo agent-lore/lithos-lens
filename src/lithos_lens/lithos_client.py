@@ -44,6 +44,7 @@ from lithos_lens.tasks import (
     normalize_note_summary,
     normalize_task,
     normalize_task_status,
+    note_updated_sort_key,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +62,12 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
+
+# One insertion-ordered lithos_list page is fetched and sorted client-side to
+# build the recently-updated list (recent_notes). Exactness bound: with more
+# than this many (filtered) notes, rows beyond the first page can be missed.
+# Removed once upstream lithos_list grows server-side ordering (task e0e31654).
+RECENT_NOTES_FETCH_CAP = 500
 
 
 class LithosClientProtocol(Protocol):
@@ -139,6 +146,13 @@ class LithosClientProtocol(Protocol):
         self,
         *,
         title_contains: str | None = None,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]: ...
+
+    async def recent_notes(
+        self,
+        *,
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]: ...
@@ -530,6 +544,38 @@ class LithosClient:
         # existed — "results" is lithos_search's key).
         rows: Any = payload.get("items") or []
         return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        """Most-recently-updated notes (the /knowledge landing browse list).
+
+        ``lithos_list`` has NO ordering parameter at the pinned Lithos version:
+        ``knowledge.list_all`` returns metadata-cache insertion order, and
+        ``limit`` slices that order — so a small direct ``limit`` would return
+        an arbitrary old page, not the newest notes (PR #39 review; server-side
+        ``order_by`` is upstream Lithos task e0e31654). Until that lands,
+        newest-first is computed here: fetch one insertion-ordered page of
+        ``RECENT_NOTES_FETCH_CAP`` rows, sort by ``updated`` descending, and
+        truncate to ``limit``. Exact whenever the (filtered) corpus fits the
+        cap; beyond it, this degrades to newest-of-the-first-cap-rows (the
+        bound is documented in the vendored contract).
+        """
+        arguments: dict[str, Any] = {}
+        if tags:
+            arguments["tags"] = tags
+        arguments["limit"] = RECENT_NOTES_FETCH_CAP
+        payload = await self._call_tool("lithos_list", arguments)
+        _raise_for_error(payload)
+        rows: Any = payload.get("items") or []
+        summaries = [
+            normalize_note_summary(item) for item in rows if isinstance(item, dict)
+        ]
+        summaries.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
+        return summaries[:limit] if limit is not None else summaries
 
     async def search_notes(
         self,

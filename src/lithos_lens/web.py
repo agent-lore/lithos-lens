@@ -263,13 +263,13 @@ def create_app(
                         tags=[tag] if tag else None,
                         limit=state.config.knowledge.search_limit,
                     )
-                elif tag:
-                    results = await state.lithos_client.list_notes(
-                        tags=[tag], limit=state.config.knowledge.recent_limit
-                    )
                 else:
-                    results = await state.lithos_client.list_notes(
-                        limit=state.config.knowledge.recent_limit
+                    # Both browse branches (tagged and bare) are recency
+                    # lists: recent_notes owns the newest-first ordering
+                    # lithos_list cannot provide (upstream task e0e31654).
+                    results = await state.lithos_client.recent_notes(
+                        tags=[tag] if tag else None,
+                        limit=state.config.knowledge.recent_limit,
                     )
             except Exception:
                 error = "Knowledge search is currently unavailable."

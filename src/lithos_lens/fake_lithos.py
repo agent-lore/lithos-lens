@@ -47,6 +47,7 @@ from lithos_lens.tasks import (
     NoteSummary,
     TaskRecord,
     TaskStatusRecord,
+    note_updated_sort_key,
 )
 
 __all__ = ["FakeEventHub", "FakeLithosClient", "fake_lithos_enabled"]
@@ -375,6 +376,13 @@ class FakeLithosClient:
                 id=note.id,
                 title=note.title,
                 path=paths_by_id.get(note.id, ""),
+                # Parity with normalize_note_summary's updated/updated_at
+                # aliasing (the real lithos_list row carries "updated").
+                updated=str(
+                    note.metadata.get("updated")
+                    or note.metadata.get("updated_at")
+                    or ""
+                ),
                 tags=note.tags,
             )
             for note in self.dataset.notes.values()
@@ -384,6 +392,24 @@ class FakeLithosClient:
             rows = [row for row in rows if needle in row.title.lower()]
         if tags:
             rows = [row for row in rows if all(tag in row.tags for tag in tags)]
+        return rows[:limit] if limit is not None else rows
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        """Newest-first browse list, ordered like the real client's leg.
+
+        The real ``recent_notes`` sorts an insertion-ordered ``lithos_list``
+        page by ``updated`` descending (``note_updated_sort_key``); the fake
+        sorts the whole (filtered) dataset with the same key, so both legs of
+        the contract matrix order identically. The fake corpus is always far
+        below the real leg's fetch cap, so no cap is modeled here.
+        """
+        rows = await self.list_notes(tags=tags)
+        rows.sort(key=lambda row: note_updated_sort_key(row.updated), reverse=True)
         return rows[:limit] if limit is not None else rows
 
     async def search_notes(
