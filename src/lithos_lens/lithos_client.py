@@ -569,7 +569,9 @@ class LithosClient:
         ``RECENT_NOTES_FETCH_PAGE`` rows are walked via ``offset`` until the
         response's ``total`` is exhausted. After each page the accumulator is
         re-sorted newest-first and, when ``limit`` is given, truncated — so
-        memory stays bounded by page size + ``limit`` however large the corpus.
+        result-record memory stays bounded by page size + ``limit``; the
+        cross-page dedup id set is the one O(corpus) piece (a few thousand
+        strings today).
         """
         rows: list[NoteSummary] = []
         seen_ids: set[str] = set()
