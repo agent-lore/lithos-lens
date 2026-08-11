@@ -45,13 +45,27 @@ class ProducedByTask:
         reserved character; such ids then round-trip through the single-segment
         ``/tasks/{task_id}`` route (verified end-to-end in the tests).
 
-        The one character that route cannot carry is a literal ``/``: ASGI
-        percent-decodes ``%2F`` back to a separator before routing, so a task id
-        containing ``/`` is not addressable by ``/tasks/{task_id}``.
-        ``load_produced_by`` therefore never builds a chip for such an id — a
-        ``ProducedByTask`` only ever carries a routable ``task_id``.
+        Ids the route cannot carry never get here: ``load_produced_by`` only
+        builds a chip for a routable ``task_id`` (see ``_is_routable_task_id``
+        for the excluded cases — literal ``/`` and the dot segments).
         """
         return f"/tasks/{quote(self.task_id, safe='')}"
+
+
+def _is_routable_task_id(task_id: str) -> bool:
+    """True when ``/tasks/{task_id}`` can address ``task_id`` as one segment.
+
+    Three shapes defeat the single-segment route even after percent-encoding:
+
+    - a literal ``/``: ASGI percent-decodes ``%2F`` back to a separator before
+      routing, so ``/tasks/parent%2Fchild`` 404s;
+    - the dot segments ``.`` and ``..``: ``quote()`` deliberately leaves
+      periods unescaped, and clients apply RFC 3986 dot-segment normalization
+      before the request is sent — ``/tasks/.`` collapses to ``/tasks/`` and
+      ``/tasks/..`` to ``/``, so neither reaches the route;
+    - the empty string (no path segment at all).
+    """
+    return bool(task_id) and "/" not in task_id and task_id not in {".", ".."}
 
 
 @runtime_checkable
@@ -84,17 +98,24 @@ async def load_produced_by(
         return None
     if not isinstance(lithos, ProducedByClientProtocol):
         return None
+    source_id = source.strip()
     try:
-        task = await lithos.task_get(source.strip())
+        task = await lithos.task_get(source_id)
     except Exception:
         # Unknown/invalid source (task_not_found), a broken response, or an
         # unreachable backend — all degrade to "no chip", never a dead link.
         return None
-    if "/" in task.id:
-        # The single-segment /tasks/{task_id} route cannot address an id
-        # containing a literal "/": ASGI percent-decodes %2F back to a
-        # separator before routing, so the chip's href would 404 even though
-        # the task validated. No chip beats a dead link.
+    if task.id != source_id:
+        # Upstream lithos_task_get is an exact-id lookup (coordination.get_task:
+        # SELECT ... WHERE id = ?), so a response naming a DIFFERENT id than the
+        # one requested is a nonconforming client/server — linking it would send
+        # the reader to a task the note never named. No chip beats a wrong link.
+        return None
+    if not _is_routable_task_id(task.id):
+        # The id validated but the single-segment /tasks/{task_id} route cannot
+        # carry it (literal "/", a dot segment, or empty — see
+        # _is_routable_task_id), so the chip's href would never reach the task.
+        # No chip beats a dead link.
         return None
     return ProducedByTask(
         task_id=task.id,

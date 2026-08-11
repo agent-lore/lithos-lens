@@ -147,6 +147,46 @@ def test_produced_by_none_for_unroutable_slash_id() -> None:
     assert fake.get_calls == ["parent/child"]
 
 
+def test_produced_by_none_for_dot_segment_ids() -> None:
+    """``quote(..., safe="")`` leaves periods unescaped, and clients apply RFC
+    3986 dot-segment normalization before the request goes out: ``/tasks/.``
+    collapses to ``/tasks/`` and ``/tasks/..`` to ``/``, so neither href can
+    reach the detail route even though the id validated. Same class as the
+    slash refusal: no chip beats a dead link."""
+    for dot_id in (".", ".."):
+        fake = _ProducedByFake({dot_id: TaskRecord(id=dot_id, title="Dot task")})
+        assert _run(load_produced_by(fake, _note(source=dot_id))) is None
+        assert fake.get_calls == [dot_id]
+
+
+def test_produced_by_none_when_returned_id_differs_from_source() -> None:
+    """Upstream ``lithos_task_get`` is an exact-id lookup, so a success payload
+    naming a different id than the requested source is a nonconforming
+    response — rendering it would link a task the note never named. The loader
+    refuses the chip rather than trust ``task.id`` over ``metadata.source``."""
+
+    class _MismatchFake:
+        async def task_get(self, task_id: str) -> TaskRecord:
+            return TaskRecord(id="different-task", title="Not the one asked for")
+
+    chip = _run(load_produced_by(_MismatchFake(), _note(source="expected-task")))
+    assert chip is None
+
+
+def test_produced_by_none_for_empty_returned_id() -> None:
+    """A nonconforming client answering an empty id yields no chip (the real
+    ``LithosClient.task_get`` already rejects these as invalid_response, but the
+    loader takes any duck-typed client and must not render ``/tasks/``). The
+    id-mismatch guard catches this today; ``_is_routable_task_id`` backstops it
+    even if the guards are ever reordered."""
+
+    class _EmptyIdFake:
+        async def task_get(self, task_id: str) -> TaskRecord:
+            return TaskRecord(id="", title="Idless task")
+
+    assert _run(load_produced_by(_EmptyIdFake(), _note(source="some-task"))) is None
+
+
 # ── /note/{id} rendering ───────────────────────────────────────────────
 
 
@@ -323,3 +363,34 @@ def test_note_page_no_chip_for_slash_bearing_task_id(
         assert "produced-by-chip" not in response.text
         # …and the href it would have carried really is unroutable.
         assert client.get("/tasks/parent%2Fchild").status_code == 404
+
+
+def test_note_page_no_chip_for_dot_segment_task_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A source validating to the ``.`` task id renders no chip: the would-be
+    href ``/tasks/.`` dot-segment-normalizes to ``/tasks/`` before any request
+    is made, so it can never reach the detail route for that task."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id=".",
+            title="Dot id task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.notes["dot-note"] = NoteRecord(
+        id="dot-note",
+        title="Dot note",
+        content="Body.",
+        metadata={"source": "."},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/dot-note")
+
+    assert response.status_code == 200
+    assert "Dot note" in response.text
+    assert "produced-by-chip" not in response.text
