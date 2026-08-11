@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **27** (38 module-level)
+- Cross-component edges: **27** (40 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 8 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Web -> Config, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -38,24 +38,24 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
-| Knowledge | 2 | 868 | 667 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
+| Knowledge | 3 | 992 | 758 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
 | LithosClient | 3 | 1401 | 1171 | 2 | 5 | 0.71 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 2 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 2 | 654 | 505 | 2 | 1 | 0.33 | 28 (`lithos_lens.frontier.load_dashboard`) | 3 |
 | Tasks | 1 | 549 | 428 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 488 | 418 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
+| Web | 1 | 492 | 422 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **18**, lines: **5189**, SLOC: **4208**
+- Modules: **19**, lines: **5317**, SLOC: **4303**
 - Largest module: `lithos_lens.config` (769 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **230**, cyclomatic > 10: **12**
+- Functions: **234**, cyclomatic > 10: **12**
 
 Top 10 most complex functions:
 
@@ -82,5 +82,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **29** (27 associations, 15 without docstrings)
-- Test-to-source line ratio: **1.66** (8599 test lines / 5189 source lines)
+- Domain models: **30** (27 associations, 15 without docstrings)
+- Test-to-source line ratio: **1.69** (8995 test lines / 5317 source lines)

@@ -34,6 +34,7 @@ from lithos_lens.knowledge import (
     resolve_wiki_link,
 )
 from lithos_lens.knowledge_metadata import build_note_metadata
+from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -331,6 +332,7 @@ def create_app(
         note_meta = None
         task = None
         related = None
+        produced_by = None
         error = ""
         if snapshot.lithos != "ok":
             error = "Lithos is offline or degraded. The note cannot be loaded."
@@ -357,6 +359,7 @@ def create_app(
                     knowledge_id,
                     title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
                 )
+                produced_by = await load_produced_by(state.lithos_client, note_record)
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:
@@ -374,6 +377,7 @@ def create_app(
                 "note_meta": note_meta,
                 "task": task,
                 "related": related,
+                "produced_by": produced_by,
                 "error": error,
             },
         )

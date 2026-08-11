@@ -69,6 +69,15 @@
       <header>
         <p class="eyebrow">Knowledge note</p>
         <h1>{{ note.title }}</h1>
+        {% if produced_by %}
+          <p class="produced-by">
+            <a class="produced-by-chip{% if produced_by.is_task_record %} produced-by-chip-record{% endif %}"
+               href="{{ produced_by.url }}">
+              {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
+              {{ produced_by.title }}
+            </a>
+          </p>
+        {% endif %}
         {% if note_meta and note_meta.has_chips %}
           <div class="note-chips">
             {% if note_meta.note_type %}
