@@ -42,6 +42,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.task_graph import BlockedTaskRecord
+from lithos_lens.tasks import note_updated_sort_key
 from tests.conftest import CONTRACTS_DIR, load_contract
 
 pytestmark = pytest.mark.anyio
@@ -217,6 +218,20 @@ async def test_ready_frontier_rows_are_open(client: LithosClientProtocol) -> Non
     ready = await client.task_ready()
     _require_rows_on_fake_leg(client, ready)
     assert all(task.status == "open" for task in ready)
+
+
+async def test_recent_notes_rows_are_newest_first(
+    client: LithosClientProtocol,
+) -> None:
+    """recent_notes owns the newest-first ordering lithos_list cannot provide
+    (no ordering parameter upstream — Lithos task e0e31654), so the ordering is
+    a client-side contract both legs must honour over whatever rows exist."""
+    rows = await client.recent_notes()
+    _require_rows_on_fake_leg(client, rows)
+    keys = [note_updated_sort_key(row.updated) for row in rows]
+    assert keys == sorted(keys, reverse=True)
+    limited = await client.recent_notes(limit=1)
+    assert [row.id for row in limited] == [row.id for row in rows][:1]
 
 
 # ── vendored-contract verification (issue #31) ──────────────────────────

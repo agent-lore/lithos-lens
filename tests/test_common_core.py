@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
-from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -127,6 +127,23 @@ class RecordingLithosClient:
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]:
+        return []
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
         return []
 
     async def close(self) -> None:

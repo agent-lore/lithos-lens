@@ -38,6 +38,11 @@ classDiagram
     +created_at str
     +updated_at str
   }
+  class ProducedByTask {
+    +task_id str
+    +title str
+    +is_task_record bool
+  }
   class RelatedItem {
     +id str
     +title str
@@ -74,6 +79,14 @@ classDiagram
     +target str
     +target_id str
     +search_query str
+  }
+  class SearchResult {
+    +id str
+    +title str
+    +path str
+    +snippet str
+    +updated str
+    +score float | None
   }
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived

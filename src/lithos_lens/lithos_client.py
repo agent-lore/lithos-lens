@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
+from lithos_lens.knowledge import (
+    RelatedNeighborhood,
+    SearchResult,
+    normalize_related,
+    normalize_search_result,
+)
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -39,6 +44,7 @@ from lithos_lens.tasks import (
     normalize_note_summary,
     normalize_task,
     normalize_task_status,
+    note_updated_sort_key,
 )
 
 if TYPE_CHECKING:
@@ -56,6 +62,17 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
+
+# recent_notes walks lithos_list in pages of this size (via offset) and sorts
+# client-side, because the tool has no ordering parameter — removed once
+# upstream lithos_list grows server-side ordering (task e0e31654).
+RECENT_NOTES_FETCH_PAGE = 500
+
+# Runaway guard for the pagination loop, NOT an expected bound: the walk
+# normally terminates on the response's `total` (~6 pages for today's ~2.9k
+# note corpus). This only stops a server reporting an absurd total from
+# turning one landing-page render into an unbounded crawl.
+_RECENT_NOTES_MAX_PAGES = 40
 
 
 class LithosClientProtocol(Protocol):
@@ -137,6 +154,21 @@ class LithosClientProtocol(Protocol):
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]: ...
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]: ...
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]: ...
 
     async def close(self) -> None: ...
 
@@ -517,6 +549,108 @@ class LithosClient:
         # existed — "results" is lithos_search's key).
         rows: Any = payload.get("items") or []
         return [normalize_note_summary(item) for item in rows if isinstance(item, dict)]
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        """Most-recently-updated notes (the /knowledge landing browse list).
+
+        ``lithos_list`` has NO ordering parameter at the pinned Lithos version:
+        ``knowledge.list_all`` returns metadata-cache insertion order, and
+        ``limit``/``offset`` slice that order — so a small direct ``limit``
+        would return an arbitrary old page, not the newest notes (server-side
+        ``order_by`` is upstream Lithos task e0e31654). Until that lands,
+        newest-first is computed here over the WHOLE (filtered) corpus, not one
+        page (PR #39 review: with ~2.9k notes, a note updated today but
+        inserted late would otherwise never surface): pages of
+        ``RECENT_NOTES_FETCH_PAGE`` rows are walked via ``offset`` until the
+        response's ``total`` is exhausted. After each page the accumulator is
+        re-sorted newest-first and, when ``limit`` is given, truncated — so
+        result-record memory stays bounded by page size + ``limit``; the
+        cross-page dedup id set is the one O(corpus) piece (a few thousand
+        strings today).
+        """
+        rows: list[NoteSummary] = []
+        seen_ids: set[str] = set()
+        offset = 0
+        pages = 0
+        fetched = 0
+        while pages < _RECENT_NOTES_MAX_PAGES:
+            arguments: dict[str, Any] = {}
+            if tags:
+                arguments["tags"] = tags
+            arguments["limit"] = RECENT_NOTES_FETCH_PAGE
+            arguments["offset"] = offset
+            payload = await self._call_tool("lithos_list", arguments)
+            _raise_for_error(payload)
+            items: Any = payload.get("items") or []
+            page_rows = [
+                normalize_note_summary(item) for item in items if isinstance(item, dict)
+            ]
+            # Dedup by id across pages: a concurrent corpus mutation can shift
+            # the insertion-ordered window between requests, re-serving a row
+            # an earlier page already delivered.
+            fresh = [row for row in page_rows if row.id not in seen_ids]
+            seen_ids.update(row.id for row in fresh)
+            rows.extend(fresh)
+            rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
+            if limit is not None:
+                del rows[limit:]
+            fetched += len(page_rows)
+            pages += 1
+            # Advance by the REQUESTED page span, never by rows received:
+            # upstream slices the matching ids offset:offset+limit BEFORE
+            # reading documents and then skips unreadable ones, so a short (or
+            # even empty) page has still consumed a full window server-side.
+            # Advancing by received rows would re-read the overlap (duplicate
+            # cards) or stop early on an all-unreadable page.
+            offset += RECENT_NOTES_FETCH_PAGE
+            total = payload.get("total")
+            if isinstance(total, int):
+                if offset >= total:
+                    break
+            elif not page_rows:
+                # No trustworthy total: an empty page is the only stop signal.
+                break
+        else:
+            logger.warning(
+                "recent_notes stopped at the %d-page runaway guard "
+                "(%d rows fetched); the recent list may be incomplete",
+                _RECENT_NOTES_MAX_PAGES,
+                fetched,
+            )
+        logger.debug("recent_notes fetched %d rows in %d page(s)", fetched, pages)
+        return rows
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
+        """Hybrid-search notes via ``lithos_search`` (the /knowledge query path).
+
+        ``mode="hybrid"`` is always sent (§7.1); only the arguments an active
+        filter needs ride along. ``lithos_search`` answers
+        ``{"results": [...]}`` — "results" is its container key (distinct from
+        ``lithos_list``'s "items"). Snippets carry raw markdown and are rendered
+        escaped by the template, never through the markdown renderer.
+        """
+        arguments: dict[str, Any] = {"query": query, "mode": "hybrid"}
+        if tags:
+            arguments["tags"] = tags
+        if limit is not None:
+            arguments["limit"] = limit
+        payload = await self._call_tool("lithos_search", arguments)
+        _raise_for_error(payload)
+        rows: Any = payload.get("results") or []
+        return [
+            normalize_search_result(item) for item in rows if isinstance(item, dict)
+        ]
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._worker_task is None:

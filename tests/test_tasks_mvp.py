@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -61,6 +61,9 @@ class TaskFakeLithosClient:
                 tags=("project:influx",),
             )
         }
+        # /knowledge hybrid-search results, driven per-test (K1-S6).
+        self.search_results: list[SearchResult] = []
+        self.search_calls: list[dict[str, Any]] = []
         self.tasks = [
             TaskRecord(
                 id="open-claimed",
@@ -310,6 +313,25 @@ class TaskFakeLithosClient:
         limit: int | None = None,
     ) -> list[NoteSummary]:
         return []
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
+        self.search_calls.append({"query": query, "tags": tags, "limit": limit})
+        rows = self.search_results
+        return rows[:limit] if limit is not None else rows
 
     async def close(self) -> None:
         self.closed = True

@@ -40,7 +40,7 @@ from typing import Any
 import pytest
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef, SearchResult
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -369,6 +369,20 @@ def _check_note_summaries(result: Any, success: dict[str, Any]) -> None:
     ]
 
 
+def _check_search_results(result: Any, success: dict[str, Any]) -> None:
+    assert result == [
+        SearchResult(
+            id=raw["id"],
+            title=raw["title"],
+            path=raw["path"],
+            snippet=raw["snippet"],
+            updated=raw["updated_at"],
+            score=raw["score"],
+        )
+        for raw in success["results"]
+    ]
+
+
 def _check_register(result: Any, success: dict[str, Any]) -> None:
     assert result is True
 
@@ -442,6 +456,10 @@ TOOL_SPECS: dict[
         ),
         _check_note_summaries,
     ),
+    "lithos_search": (
+        lambda c: c.search_notes("influx", tags=["project:influx"], limit=20),
+        _check_search_results,
+    ),
 }
 
 
@@ -474,6 +492,164 @@ def test_read_note_by_path_sends_the_vendored_variant_request() -> None:
     )
     assert calls == [("lithos_read", contract["request"]["variants"]["by_path"])]
     assert result == _expected_note(contract["responses"]["success"])
+
+
+def test_recent_notes_sends_the_recent_variant_and_sorts_newest_first() -> None:
+    """``recent_notes`` is ``lithos_list``'s second request shape (the
+    ``recent``/``recent_tagged`` variants): pages walked via ``offset``,
+    because the tool has no ordering parameter (upstream task e0e31654). The
+    fixture's ``total`` fits one page, so exactly one request goes out. The
+    ``insertion_ordered_recent`` response variant's rows are deliberately out
+    of updated-order — the client must sort newest-first and truncate."""
+    contract = load_contract("lithos_list")
+    payload = contract["responses"]["variants"]["insertion_ordered_recent"]
+
+    result, calls = _run(payload, lambda c: c.recent_notes())
+    assert calls == [("lithos_list", contract["request"]["variants"]["recent"])]
+    assert [row.id for row in result] == [
+        "44444444-4444-4444-8444-444444444444",  # 2026-08-09
+        "55555555-5555-4555-8555-555555555555",  # 2026-08-02
+        "33333333-3333-4333-8333-333333333333",  # 2026-07-01
+    ]
+
+    limited, tagged_calls = _run(
+        payload,
+        lambda c: c.recent_notes(tags=["project:influx"], limit=1),
+    )
+    assert tagged_calls == [
+        ("lithos_list", contract["request"]["variants"]["recent_tagged"])
+    ]
+    # The limit truncates AFTER the newest-first sort — never before.
+    assert [row.id for row in limited] == ["44444444-4444-4444-8444-444444444444"]
+
+
+class _PagedStubClient(LithosClient):
+    """Recording stub serving a distinct canned payload per request offset."""
+
+    def __init__(self, pages: dict[int, dict[str, Any]]) -> None:
+        super().__init__(LithosConfig(agent_id="lithos-lens"))
+        self._pages = pages
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _call_tool(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append((name, arguments))
+        return self._pages[arguments["offset"]]
+
+
+def test_recent_notes_paginates_until_total_so_late_rows_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PR #39 review scenario: the corpus exceeds one fetch page and the
+    GLOBALLY newest note sits beyond it. recent_notes must keep walking
+    ``offset`` until the response's ``total`` is exhausted, so that note wins
+    even with ``limit=1`` — "newest of the first page" is exactly the bug this
+    pins out. Rows are the vendored ``insertion_ordered_recent`` fixtures,
+    re-paged with a shrunken page size (the wire shape per page is identical;
+    only the walk is under test)."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    oldest, newest, middle = fixture_rows
+    pages = {
+        # Page one: older rows only; total says more exist.
+        0: {"items": [oldest, middle], "total": 3},
+        # Page two: the globally newest row.
+        2: {"items": [newest], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes(limit=1)
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [(name, args["offset"]) for name, args in client.calls] == [
+        ("lithos_list", 0),
+        ("lithos_list", 2),
+    ]
+    assert [row.id for row in result] == [newest["id"]]
+
+
+def test_recent_notes_advances_past_short_pages_by_page_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upstream slices matching ids ``offset:offset+limit`` BEFORE reading
+    documents, then skips unreadable ones — so a page can come back short while
+    having consumed a full window. The cursor must advance by the requested
+    span (offset 0 → 2 with page size 2, never 1), or the next page re-reads
+    the overlap. Page two also re-serves a row page one already delivered (a
+    concurrent-mutation shift): it must appear exactly once."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    oldest, newest, middle = fixture_rows
+    pages = {
+        # A two-slot window where one document was unreadable: ONE row back,
+        # total still counts the full match set.
+        0: {"items": [middle], "total": 3},
+        # The wrongly-advanced offset 1 is not served: hitting it fails loudly.
+        2: {"items": [newest, middle], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes()
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [(name, args["offset"]) for name, args in client.calls] == [
+        ("lithos_list", 0),
+        ("lithos_list", 2),
+    ]
+    assert [row.id for row in result] == [newest["id"], middle["id"]]
+
+
+def test_recent_notes_continues_past_an_all_unreadable_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An entirely unreadable page returns zero items while ``total`` says more
+    matches exist — the walk must continue to the next window, not stop early
+    with later pages unread."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    _oldest, newest, _middle = fixture_rows
+    pages = {
+        0: {"items": [], "total": 3},
+        2: {"items": [newest], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes(limit=1)
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [args["offset"] for _, args in client.calls] == [0, 2]
+    assert [row.id for row in result] == [newest["id"]]
 
 
 def _error_cases() -> list[tuple[str, dict[str, Any]]]:

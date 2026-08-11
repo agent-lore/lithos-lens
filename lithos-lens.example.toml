@@ -30,6 +30,8 @@ default_status_groups = ["open", "completed", "cancelled"]
 
 [lithos-lens.knowledge]
 related_title_fanout_cap = 20   # cap on lithos_read title lookups per related panel (1-100)
+search_limit = 20               # /knowledge?q= hybrid-search result cards (1-200)
+recent_limit = 20               # /knowledge recently-updated + tag browse list length (1-200)
 
 [lithos-lens.events]
 enabled = true

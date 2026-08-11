@@ -11,8 +11,9 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | L | 9 | 5 |
+| `lithos_lens.knowledge` | L | 10 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 1 | 1 |
+| `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 
 ## Public API
 
@@ -27,6 +28,8 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 - class `KnowledgeLithosClientProtocol` — Subset of Lithos operations required by the knowledge note view.
 - def `load_related_panel` — Load and resolve a note's related panel from one ``lithos_related`` call.
 - def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
+- class `SearchResult` — One ``lithos_search`` hit rendered as a result card (§7.1).
+- def `normalize_search_result` — Normalize one ``lithos_search`` result row into a ``SearchResult``.
 - class `ResolveCandidate` — One plausible target for a wiki-link, shown on the disambiguation page.
 - class `ResolveOutcome` — The result of resolving one wiki-link click.
 - class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
@@ -35,6 +38,11 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
 - def `build_note_metadata` — Project a note's frontmatter into the §6.4 metadata view model.
+
+### `lithos_lens.knowledge_produced_by`
+- class `ProducedByTask` — The validated 'produced by task' chip for a note's ``metadata.source``.
+- class `ProducedByClientProtocol` — The ``task_get`` capability the chip needs — checked at runtime.
+- def `load_produced_by` — Validate a note's ``metadata.source`` into a produced-by-task chip.
 
 ## Dependencies
 
