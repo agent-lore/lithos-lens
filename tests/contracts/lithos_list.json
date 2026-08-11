@@ -12,7 +12,20 @@
       ],
       "limit": 20
     },
-    "notes": "Lens sends only active filters. Rows live under 'items' — its one and only container key since the first implementation (PR #30's bug was reading invented notes/documents/results aliases)."
+    "variants": {
+      "recent": {
+        "limit": 500,
+        "offset": 0
+      },
+      "recent_tagged": {
+        "tags": [
+          "project:influx"
+        ],
+        "limit": 500,
+        "offset": 0
+      }
+    },
+    "notes": "Lens sends only active filters. Rows live under 'items' — its one and only container key since the first implementation (PR #30's bug was reading invented notes/documents/results aliases). The 'recent'/'recent_tagged' variants are recent_notes' FIRST-page requests: lithos_list has NO ordering parameter (knowledge.list_all returns metadata-cache insertion order; limit/offset slice that order — server-side order_by is upstream Lithos task e0e31654), so the client walks pages of RECENT_NOTES_FETCH_PAGE=500 via 'offset' until the response's 'total' is exhausted, sorting by 'updated' descending itself. Follow-up pages repeat the same shape with offset advanced by the rows received."
   },
   "responses": {
     "success": {
@@ -46,8 +59,44 @@
       ],
       "total": 2
     },
-    "variants": {},
+    "variants": {
+      "insertion_ordered_recent": {
+        "items": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "title": "Oldest note, inserted first",
+            "path": "notes/oldest.md",
+            "updated": "2026-07-01T10:00:00+00:00",
+            "tags": [],
+            "source_url": "",
+            "derived_from_ids": [],
+            "metadata": {}
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "title": "Newest note, inserted second",
+            "path": "notes/newest.md",
+            "updated": "2026-08-09T10:00:00+00:00",
+            "tags": [],
+            "source_url": "",
+            "derived_from_ids": [],
+            "metadata": {}
+          },
+          {
+            "id": "55555555-5555-4555-8555-555555555555",
+            "title": "Middle note, inserted third",
+            "path": "notes/middle.md",
+            "updated": "2026-08-02T10:00:00+00:00",
+            "tags": [],
+            "source_url": "",
+            "derived_from_ids": [],
+            "metadata": {}
+          }
+        ],
+        "total": 3
+      }
+    },
     "errors": []
   },
-  "observed_divergences": ""
+  "observed_divergences": "lithos_list has no ordering parameter: items arrive in metadata-cache insertion order (list_all preserves iter_cached_meta order on the full-scan path and restores insertion order via the stored seq on the index path), NOT newest-first. The insertion_ordered_recent variant pins this: its rows are deliberately out of updated-order, and recent_notes must sort them — paginating through the full corpus via offset/total first, so a newly updated note beyond the first page still surfaces. Upstream ordering tracked as Lithos task e0e31654."
 }

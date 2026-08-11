@@ -53,6 +53,8 @@ a {
 
 nav {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 1rem;
 }
 
@@ -69,6 +71,28 @@ nav a.active {
 nav a[aria-disabled="true"] {
   opacity: 0.45;
   pointer-events: none;
+}
+
+.nav-search {
+  display: flex;
+  min-width: 0;
+}
+
+.nav-search input {
+  width: 12rem;
+  /* Never let the search box push the header past the viewport: at the narrow
+     screenshot widths (320px) the nav wraps and the box shrinks to fit rather
+     than forcing horizontal overflow (the e2e responsive contract asserts
+     scrollWidth <= viewport width). */
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
 }
 
 .shell-main {
@@ -656,6 +680,73 @@ button,
   white-space: pre-wrap;
 }
 
+/* ── Knowledge landing (search + recently-updated) ─────────────────── */
+
+.knowledge-search {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+}
+
+.knowledge-search input {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+.knowledge-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.knowledge-results li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.knowledge-result-path,
+.knowledge-result-updated,
+.knowledge-card-path,
+.knowledge-card-updated {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.knowledge-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.knowledge-card {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--panel);
+}
+
+.knowledge-card-title {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.knowledge-card-snippet {
+  margin: 0.5rem 0;
+  color: var(--ink);
+}
+
+.knowledge-empty {
+  color: var(--muted);
+}
+
 @media (max-width: 700px) {
   .shell-header,
   .task-row {
@@ -666,6 +757,16 @@ button,
   .shell-header {
     display: grid;
     gap: 1rem;
+  }
+
+  /* On narrow screens the nav stacks; the search box takes the full row so it
+     can never push the header past the viewport (e2e responsive contract). */
+  .nav-search {
+    width: 100%;
+  }
+
+  .nav-search input {
+    width: 100%;
   }
 
   .task-row-meta {

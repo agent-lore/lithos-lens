@@ -138,6 +138,10 @@ def demo_dataset() -> FakeLithosDataset:
                 "note_type": "hypothesis",
                 "status": "quarantined",
                 "confidence": 0.2,
+                # Distinct updated_at stamps (oldest of the three) keep the
+                # /knowledge recently-updated ordering non-trivial in fake
+                # mode: newest-first differs from dict insertion order.
+                "updated_at": "2026-07-20T09:00:00+00:00",
             },
         ),
         "note-influx-rollback": NoteRecord(
@@ -149,6 +153,7 @@ def demo_dataset() -> FakeLithosDataset:
                 "dual-writing.\n"
             ),
             tags=("project:influx", "kind:runbook"),
+            metadata={"updated_at": "2026-08-05T12:00:00+00:00"},
         ),
     }
 

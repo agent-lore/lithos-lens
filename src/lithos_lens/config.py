@@ -73,6 +73,12 @@ DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
 DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
 MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
+DEFAULT_KNOWLEDGE_SEARCH_LIMIT = 20
+DEFAULT_KNOWLEDGE_RECENT_LIMIT = 20
+# Ceiling on the /knowledge result/recent limits: a misconfigured limit must not
+# let one landing-page request materialize an unbounded lithos_search /
+# lithos_list result set (the same bound the related-panel fan-out cap enforces).
+MAX_KNOWLEDGE_LANDING_LIMIT = 200
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -161,6 +167,10 @@ class KnowledgeConfig:
     # constant in lithos_lens.knowledge, not public config: the PRD only
     # specifies related_title_fanout_cap.
     related_title_fanout_cap: int = DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP
+    # /knowledge landing dials: hybrid-search result count and the
+    # recently-updated browse list length (K1-S6).
+    search_limit: int = DEFAULT_KNOWLEDGE_SEARCH_LIMIT
+    recent_limit: int = DEFAULT_KNOWLEDGE_RECENT_LIMIT
 
 
 @dataclass(frozen=True)
@@ -506,6 +516,24 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             # amplify one /note/{id} request into an unbounded concurrent
             # lithos_read burst against the shared MCP session.
             maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
+        ),
+        search_limit=_optional_int(
+            data,
+            "search_limit",
+            DEFAULT_KNOWLEDGE_SEARCH_LIMIT,
+            config_path,
+            "lithos-lens.knowledge",
+            minimum=1,
+            maximum=MAX_KNOWLEDGE_LANDING_LIMIT,
+        ),
+        recent_limit=_optional_int(
+            data,
+            "recent_limit",
+            DEFAULT_KNOWLEDGE_RECENT_LIMIT,
+            config_path,
+            "lithos-lens.knowledge",
+            minimum=1,
+            maximum=MAX_KNOWLEDGE_LANDING_LIMIT,
         ),
     )
 

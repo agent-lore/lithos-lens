@@ -80,6 +80,14 @@ classDiagram
     +target_id str
     +search_query str
   }
+  class SearchResult {
+    +id str
+    +title str
+    +path str
+    +snippet str
+    +updated str
+    +score float | None
+  }
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived
   RelatedNeighborhood "1" --> "0..*" RelatedRef : edges

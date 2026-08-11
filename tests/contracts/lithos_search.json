@@ -1,0 +1,61 @@
+{
+  "tool": "lithos_search",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "source": [
+    "lithos:src/lithos/tools/read_search.py::lithos_search"
+  ],
+  "request": {
+    "canonical": {
+      "query": "influx",
+      "mode": "hybrid",
+      "tags": [
+        "project:influx"
+      ],
+      "limit": 20
+    },
+    "notes": "Lens always sends mode='hybrid' (K1 PRD §7.1); tags/limit ride along only when active. Rows live under 'results' — distinct from lithos_list's 'items'. Each row is _build_result: id, title, snippet, score, path, source_url, updated_at, is_stale, derived_from_ids. Snippets are raw markdown — the results page must escape them, never render them."
+  },
+  "responses": {
+    "success": {
+      "results": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "title": "Influx migration plan",
+          "snippet": "## Cutover\n\nThe influx cutover runs in three phases…",
+          "score": 0.0164,
+          "path": "plans/influx-migration.md",
+          "source_url": "",
+          "updated_at": "2026-08-01T10:00:00+00:00",
+          "is_stale": false,
+          "derived_from_ids": []
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "title": "Influx rollback route",
+          "snippet": "If the influx cutover fails, roll back by…",
+          "score": 0.0157,
+          "path": "runbooks/influx-rollback.md",
+          "source_url": "",
+          "updated_at": "2026-08-02T10:00:00+00:00",
+          "is_stale": false,
+          "derived_from_ids": [
+            "11111111-1111-4111-8111-111111111111"
+          ]
+        }
+      ]
+    },
+    "variants": {
+      "no_entity_match": {
+        "results": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_mode",
+        "message": "Unknown search mode 'ranked'. Valid values: hybrid, fulltext, semantic, graph."
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

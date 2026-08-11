@@ -36,7 +36,7 @@ from typing import Any
 from lithos_lens.config import LithosConfig
 from lithos_lens.events import EventHub
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
-from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -47,6 +47,7 @@ from lithos_lens.tasks import (
     NoteSummary,
     TaskRecord,
     TaskStatusRecord,
+    note_updated_sort_key,
 )
 
 __all__ = ["FakeEventHub", "FakeLithosClient", "fake_lithos_enabled"]
@@ -96,6 +97,26 @@ def _created_after(created_at: str, since_utc: datetime) -> bool:
     except ValueError:
         return False
     return _as_utc(created) > since_utc
+
+
+_SNIPPET_WINDOW = 160
+
+
+def _snippet(content: str, needle: str) -> str:
+    """A short raw-markdown window of ``content`` around the first ``needle`` hit.
+
+    Mirrors the real ``lithos_search`` snippet: raw markdown (not rendered), so
+    the results page must escape it. With no needle (an empty query never
+    reaches search, but stay defensive) the leading window is returned.
+    """
+    if not content:
+        return ""
+    idx = content.lower().find(needle) if needle else 0
+    if idx < 0:
+        idx = 0
+    start = max(idx - _SNIPPET_WINDOW // 2, 0)
+    window = content[start : start + _SNIPPET_WINDOW].strip()
+    return window
 
 
 def fake_lithos_enabled() -> bool:
@@ -355,6 +376,13 @@ class FakeLithosClient:
                 id=note.id,
                 title=note.title,
                 path=paths_by_id.get(note.id, ""),
+                # Parity with normalize_note_summary's updated/updated_at
+                # aliasing (the real lithos_list row carries "updated").
+                updated=str(
+                    note.metadata.get("updated")
+                    or note.metadata.get("updated_at")
+                    or ""
+                ),
                 tags=note.tags,
             )
             for note in self.dataset.notes.values()
@@ -365,6 +393,67 @@ class FakeLithosClient:
         if tags:
             rows = [row for row in rows if all(tag in row.tags for tag in tags)]
         return rows[:limit] if limit is not None else rows
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        """Newest-first browse list, ordered like the real client's leg.
+
+        The real ``recent_notes`` pages through the whole corpus via
+        ``lithos_list`` offsets and sorts by ``updated`` descending
+        (``note_updated_sort_key``); the fake sorts the whole (filtered)
+        dataset with the same key — identical corpus-wide semantics, so both
+        legs of the contract matrix order identically. Pagination itself is
+        transport mechanics, covered by the paginated round-trip test against
+        the real client, not modeled here.
+        """
+        rows = await self.list_notes(tags=tags)
+        rows.sort(key=lambda row: note_updated_sort_key(row.updated), reverse=True)
+        return rows[:limit] if limit is not None else rows
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
+        """Hybrid-search stand-in: substring match over title and body.
+
+        The real ``lithos_search`` runs a hybrid lexical/vector rank; the fake
+        settles for a case-insensitive substring match over title and content
+        so the /knowledge query path lights up offline. The snippet is a short
+        window of the body around the first match (raw markdown, exactly as the
+        real tool returns it — the results page escapes it).
+        """
+        needle = query.strip().lower()
+        paths_by_id = {
+            note_id: path for path, note_id in self.dataset.note_paths.items()
+        }
+        results: list[SearchResult] = []
+        for note in self.dataset.notes.values():
+            if tags and not all(tag in note.tags for tag in tags):
+                continue
+            haystack = f"{note.title}\n{note.content}".lower()
+            if needle and needle not in haystack:
+                continue
+            results.append(
+                SearchResult(
+                    id=note.id,
+                    title=note.title,
+                    path=paths_by_id.get(note.id, ""),
+                    snippet=_snippet(note.content, needle),
+                    updated=str(
+                        note.metadata.get("updated")
+                        or note.metadata.get("updated_at")
+                        or ""
+                    ),
+                )
+            )
+        return results[:limit] if limit is not None else results
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         """Neighborhood lookup so the K1-S4 related panel lights up.

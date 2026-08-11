@@ -20,6 +20,7 @@ from lithos_lens.knowledge import (
     RELATED_RENDER_CAP,
     RelatedNeighborhood,
     RelatedRef,
+    SearchResult,
     load_related_panel,
     normalize_related,
 )
@@ -95,6 +96,23 @@ class KnowledgeFakeLithosClient:
         tags: list[str] | None = None,
         limit: int | None = None,
     ) -> list[NoteSummary]:
+        return []
+
+    async def recent_notes(
+        self,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[NoteSummary]:
+        return []
+
+    async def search_notes(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SearchResult]:
         return []
 
     # ── unused task surface (present only to satisfy LithosClientProtocol) ──

@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 17 |
+| `lithos_lens.tasks` | M | 16 | 18 |
 
 ## Public API
 
@@ -42,6 +42,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_agent`
 - def `normalize_note`
 - def `normalize_note_summary`
+- def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
 - def `normalize_since_input`
 - def `format_display_date`
