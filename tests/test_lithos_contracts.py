@@ -40,7 +40,7 @@ from typing import Any
 import pytest
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef, SearchResult
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -369,6 +369,20 @@ def _check_note_summaries(result: Any, success: dict[str, Any]) -> None:
     ]
 
 
+def _check_search_results(result: Any, success: dict[str, Any]) -> None:
+    assert result == [
+        SearchResult(
+            id=raw["id"],
+            title=raw["title"],
+            path=raw["path"],
+            snippet=raw["snippet"],
+            updated=raw["updated_at"],
+            score=raw["score"],
+        )
+        for raw in success["results"]
+    ]
+
+
 def _check_register(result: Any, success: dict[str, Any]) -> None:
     assert result is True
 
@@ -441,6 +455,10 @@ TOOL_SPECS: dict[
             title_contains="influx", tags=["project:influx"], limit=20
         ),
         _check_note_summaries,
+    ),
+    "lithos_search": (
+        lambda c: c.search_notes("influx", tags=["project:influx"], limit=20),
+        _check_search_results,
     ),
 }
 
