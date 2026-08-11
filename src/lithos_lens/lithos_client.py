@@ -572,8 +572,10 @@ class LithosClient:
         memory stays bounded by page size + ``limit`` however large the corpus.
         """
         rows: list[NoteSummary] = []
+        seen_ids: set[str] = set()
         offset = 0
         pages = 0
+        fetched = 0
         while pages < _RECENT_NOTES_MAX_PAGES:
             arguments: dict[str, Any] = {}
             if tags:
@@ -586,23 +588,39 @@ class LithosClient:
             page_rows = [
                 normalize_note_summary(item) for item in items if isinstance(item, dict)
             ]
-            rows.extend(page_rows)
+            # Dedup by id across pages: a concurrent corpus mutation can shift
+            # the insertion-ordered window between requests, re-serving a row
+            # an earlier page already delivered.
+            fresh = [row for row in page_rows if row.id not in seen_ids]
+            seen_ids.update(row.id for row in fresh)
+            rows.extend(fresh)
             rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
             if limit is not None:
                 del rows[limit:]
-            offset += len(page_rows)
+            fetched += len(page_rows)
             pages += 1
+            # Advance by the REQUESTED page span, never by rows received:
+            # upstream slices the matching ids offset:offset+limit BEFORE
+            # reading documents and then skips unreadable ones, so a short (or
+            # even empty) page has still consumed a full window server-side.
+            # Advancing by received rows would re-read the overlap (duplicate
+            # cards) or stop early on an all-unreadable page.
+            offset += RECENT_NOTES_FETCH_PAGE
             total = payload.get("total")
-            if not page_rows or (isinstance(total, int) and offset >= total):
+            if isinstance(total, int):
+                if offset >= total:
+                    break
+            elif not page_rows:
+                # No trustworthy total: an empty page is the only stop signal.
                 break
         else:
             logger.warning(
                 "recent_notes stopped at the %d-page runaway guard "
                 "(%d rows fetched); the recent list may be incomplete",
                 _RECENT_NOTES_MAX_PAGES,
-                offset,
+                fetched,
             )
-        logger.debug("recent_notes fetched %d rows in %d page(s)", offset, pages)
+        logger.debug("recent_notes fetched %d rows in %d page(s)", fetched, pages)
         return rows
 
     async def search_notes(

@@ -579,6 +579,79 @@ def test_recent_notes_paginates_until_total_so_late_rows_surface(
     assert [row.id for row in result] == [newest["id"]]
 
 
+def test_recent_notes_advances_past_short_pages_by_page_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upstream slices matching ids ``offset:offset+limit`` BEFORE reading
+    documents, then skips unreadable ones — so a page can come back short while
+    having consumed a full window. The cursor must advance by the requested
+    span (offset 0 → 2 with page size 2, never 1), or the next page re-reads
+    the overlap. Page two also re-serves a row page one already delivered (a
+    concurrent-mutation shift): it must appear exactly once."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    oldest, newest, middle = fixture_rows
+    pages = {
+        # A two-slot window where one document was unreadable: ONE row back,
+        # total still counts the full match set.
+        0: {"items": [middle], "total": 3},
+        # The wrongly-advanced offset 1 is not served: hitting it fails loudly.
+        2: {"items": [newest, middle], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes()
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [(name, args["offset"]) for name, args in client.calls] == [
+        ("lithos_list", 0),
+        ("lithos_list", 2),
+    ]
+    assert [row.id for row in result] == [newest["id"], middle["id"]]
+
+
+def test_recent_notes_continues_past_an_all_unreadable_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An entirely unreadable page returns zero items while ``total`` says more
+    matches exist — the walk must continue to the next window, not stop early
+    with later pages unread."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    _oldest, newest, _middle = fixture_rows
+    pages = {
+        0: {"items": [], "total": 3},
+        2: {"items": [newest], "total": 3},
+    }
+    client = _PagedStubClient(pages)
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes(limit=1)
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [args["offset"] for _, args in client.calls] == [0, 2]
+    assert [row.id for row in result] == [newest["id"]]
+
+
 def _error_cases() -> list[tuple[str, dict[str, Any]]]:
     cases = []
     for tool in sorted(_contract_tools()):
