@@ -38,6 +38,11 @@ classDiagram
     +created_at str
     +updated_at str
   }
+  class ProducedByTask {
+    +task_id str
+    +title str
+    +is_task_record bool
+  }
   class RelatedItem {
     +id str
     +title str

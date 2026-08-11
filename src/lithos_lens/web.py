@@ -29,12 +29,12 @@ from lithos_lens.fake_lithos import (
 from lithos_lens.frontier import load_dashboard
 from lithos_lens.knowledge import (
     ResolveOutcome,
-    load_produced_by,
     load_related_panel,
     render_markdown,
     resolve_wiki_link,
 )
 from lithos_lens.knowledge_metadata import build_note_metadata
+from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,

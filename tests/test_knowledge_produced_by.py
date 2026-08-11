@@ -17,7 +17,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.knowledge import ProducedByTask, load_produced_by
+from lithos_lens.knowledge_produced_by import ProducedByTask, load_produced_by
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.tasks import NoteRecord, TaskRecord
 from lithos_lens.web import create_app
@@ -127,11 +127,24 @@ def test_produced_by_url_encodes_slash_without_splitting_path() -> None:
     """A ``/`` is percent-encoded (``safe=''``) so the href never splits into a
     ``/tasks/parent/child`` subpath. Note this is about URL *containment*, not
     routability: the single-segment ``/tasks/{task_id}`` route cannot address a
-    slash-bearing id at all (ASGI decodes ``%2F`` back to a separator), a limit
-    shared by every task link in Lens — see the ``url`` docstring."""
+    slash-bearing id at all (ASGI decodes ``%2F`` back to a separator), which is
+    why ``load_produced_by`` never builds a chip for one — see the next test."""
     chip = ProducedByTask(task_id="parent/child", title="X")
     assert chip.url == "/tasks/parent%2Fchild"
     assert "/tasks/parent/child" not in chip.url
+
+
+def test_produced_by_none_for_unroutable_slash_id() -> None:
+    """A task id containing a literal ``/`` validates via ``task_get`` but is
+    not addressable by the single-segment ``/tasks/{task_id}`` route (ASGI
+    percent-decodes ``%2F`` back to a separator before routing, so the href
+    would 404). The loader refuses the chip: no chip beats a dead link."""
+    fake = _ProducedByFake(
+        {"parent/child": TaskRecord(id="parent/child", title="Nested id task")}
+    )
+    assert _run(load_produced_by(fake, _note(source="parent/child"))) is None
+    # Validation ran — the refusal is about routability, not lookup failure.
+    assert fake.get_calls == ["parent/child"]
 
 
 # ── /note/{id} rendering ───────────────────────────────────────────────
@@ -276,3 +289,37 @@ def test_note_page_no_chip_for_invalid_source(lithos_lens_config_env: Path) -> N
     # The note still renders; only the dead-link chip is suppressed.
     assert "Stale note" in response.text
     assert "produced-by-chip" not in response.text
+
+
+def test_note_page_no_chip_for_slash_bearing_task_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A source that validates to a slash-bearing task id renders no chip: its
+    href (``/tasks/parent%2Fchild``) would 404 against the real single-segment
+    detail route, and a validated-but-dead link is exactly what the chip
+    contract forbids."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="parent/child",
+            title="Nested id task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-26T10:00:00+00:00",
+        )
+    )
+    fake.notes["nested-note"] = NoteRecord(
+        id="nested-note",
+        title="Nested note",
+        content="Body.",
+        metadata={"source": "parent/child"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/nested-note")
+        assert response.status_code == 200
+        # The note renders, the chip does not…
+        assert "Nested note" in response.text
+        assert "produced-by-chip" not in response.text
+        # …and the href it would have carried really is unroutable.
+        assert client.get("/tasks/parent%2Fchild").status_code == 404
