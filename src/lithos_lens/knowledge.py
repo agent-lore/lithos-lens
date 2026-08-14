@@ -37,7 +37,7 @@ RELATED_RENDER_CAP = 50
 
 # Schemes an agent-authored link may use (REQUIREMENTS.md §6.2). Anything else —
 # including ``javascript:``, ``data:``, ``file:``, ``vbscript:``, ``ftp:`` — is
-# rejected; relative links (no scheme) are always allowed.
+# rejected; relative links (no scheme *and* no authority) are always allowed.
 _ALLOWED_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
 
 
@@ -46,9 +46,25 @@ def _validate_link(url: str) -> bool:
 
     Replaces markdown-it-py's default validator, which merely blocks a handful of
     dangerous schemes and still emits anchors for anything else (e.g. ``ftp:``).
+
+    "Relative" means *no scheme and no authority*. A leading ``//`` makes the URL
+    protocol-relative (``//evil.example/x``) — empty scheme, but the browser
+    resolves it against the page's scheme and navigates off-site, which is the
+    open-redirect the allow-list exists to prevent (issue #41). Extra slashes do
+    not help an attacker either: ``///evil.example/x`` leaves ``netloc`` empty
+    under ``urlparse`` but WHATWG special-scheme parsing skips the run of slashes
+    and still treats ``evil.example`` as the host, so the prefix — not just the
+    parsed authority — is what gets rejected.
+
+    Backslash and control-character variants (``\\\\evil.example``, ``/<TAB>x``)
+    need no handling here: markdown-it-py percent-encodes them in
+    ``normalizeLink`` before this validator sees the destination.
     """
-    scheme = urlparse(url.strip()).scheme.lower()
-    return scheme == "" or scheme in _ALLOWED_LINK_SCHEMES
+    stripped = url.strip()
+    parsed = urlparse(stripped)
+    if parsed.scheme:
+        return parsed.scheme.lower() in _ALLOWED_LINK_SCHEMES
+    return not parsed.netloc and not stripped.startswith("//")
 
 
 # Agent-authored note bodies must be safe to render. The CommonMark preset is
