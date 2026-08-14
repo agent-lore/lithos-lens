@@ -67,9 +67,52 @@ def test_render_markdown_rejects_non_allowlisted_schemes(url: str) -> None:
     assert "<a " not in html
 
 
-def test_render_markdown_allows_relative_links() -> None:
-    html = render_markdown("[note](/note/abc)")
-    assert '<a href="/note/abc">note</a>' in html
+@pytest.mark.parametrize(
+    "url",
+    [
+        "//evil.example/x",
+        "//user@evil.example/x",
+        "//evil.example",
+        "///evil.example/x",
+        "  //evil.example/x",
+    ],
+)
+def test_render_markdown_rejects_protocol_relative_links(url: str) -> None:
+    """Issue #41: an empty scheme is not the same as "relative".
+
+    ``//evil.example/x`` parses with no scheme, so the old rule waved it through
+    — but the browser resolves it against the page's scheme and navigates to an
+    arbitrary host, which is exactly the off-site jump §6.2's allow-list exists
+    to stop. ``///…`` is the same attack: ``urlparse`` reports an empty
+    ``netloc``, yet WHATWG special-scheme parsing skips the extra slashes and
+    still lands on ``evil.example``.
+    """
+    html = render_markdown(f"[x]({url})")
+    # No anchor at all: the destination renders as literal text instead.
+    assert "<a " not in html
+    assert "href" not in html
+
+
+def test_render_markdown_rejects_protocol_relative_image_destinations() -> None:
+    # Same hole on the image path — an off-site pixel leaks the reader's IP.
+    html = render_markdown("![x](//evil.example/pixel.png)")
+    assert "<img" not in html
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/note/abc",
+        "docs/note.md",
+        "#section",
+        "./sibling.md",
+        "../parent.md",
+        "/knowledge?tag=project%3Alens",
+    ],
+)
+def test_render_markdown_allows_relative_links(url: str) -> None:
+    html = render_markdown(f"[note]({url})")
+    assert f'<a href="{url}">note</a>' in html
 
 
 def test_render_markdown_falls_back_to_escaped_plaintext_on_error(

@@ -1024,7 +1024,7 @@ Data contract: one `lithos_read(id=…)` for the document, one `lithos_related(i
 
 - Rendering is **server-side** with `markdown-it-py`, configured `commonmark` preset plus the `table` and `strikethrough` extensions.
 - **Raw HTML in note bodies is escaped, never rendered.** Note content is untrusted input (agents write it); Lens's safety posture is *never emit unescaped note content*, which removes the need for a sanitizer dependency.
-- The link validator (`validateLink`) MUST reject `javascript:` and `data:` URL schemes (and any scheme not in an allow-list of `http`, `https`, `mailto`, and relative paths).
+- The link validator (`validateLink`) MUST reject `javascript:` and `data:` URL schemes (and any scheme not in an allow-list of `http`, `https`, `mailto`, and relative paths). A destination counts as *relative* only when it carries **neither a scheme nor an authority**: protocol-relative forms such as `//host/path` (and `///host/path`) MUST be rejected, since the browser resolves them against the page's scheme and navigates off-site.
 - If markdown parsing fails for any reason, the fallback is HTML-escaped plaintext — never raw passthrough.
 
 ### 6.3 Wiki-link handling
