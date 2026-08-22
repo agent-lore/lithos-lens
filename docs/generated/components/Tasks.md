@@ -11,8 +11,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.task_filtering` | S | 0 | 6 |
-| `lithos_lens.tasks` | M | 16 | 18 |
+| `lithos_lens.task_filtering` | S | 0 | 7 |
+| `lithos_lens.tasks` | L | 16 | 18 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `matches_agent` — Creator-OR-claimer agent match (§5.4.2).
 - def `matches_projects` — Multi-select project match: does the task belong to ANY selected project?
 - def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
+- def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
 
 ### `lithos_lens.tasks`
 - class `SectionState`

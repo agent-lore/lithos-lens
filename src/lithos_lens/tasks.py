@@ -13,7 +13,11 @@ TaskStatusName = Literal["open", "completed", "cancelled"]
 # computed by joining the master open list against the Lithos ready/blocked
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
+# ``open`` is the flat-fallback section: it holds every open row when the
+# server has no ready/blocked frontier tools (pre-0.4 Lithos), in which case
+# the three workable sections stay empty. It is never populated alongside them.
 SectionName = Literal[
+    "open",
     "in_progress",
     "ready",
     "blocked",
@@ -29,6 +33,19 @@ SectionName = Literal[
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
+
+# Every open-side section, in render order. Only one mode's are ever filled:
+# the flat ``open`` list, or the workable three plus their degraded tails.
+# Canonical here so the render order, the open row count and the
+# "did anything render?" checks below cannot drift apart.
+OPEN_SECTIONS: tuple[SectionName, ...] = (
+    "open",
+    "in_progress",
+    "ready",
+    "blocked",
+    "claims_unknown",
+    "unclassified",
+)
 # The statuses whose sections are windowed and sorted on ``resolved_at``.
 TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "cancelled"})
 
@@ -281,7 +298,81 @@ class DashboardData:
     projects: tuple[str, ...] = ()
     reconciliation_pending: bool = False
     truncated: bool = False
+    # True when these filters hide part of the corpus from the sections, so
+    # every per-view signal below (truncation, reconciliation, claims-unknown,
+    # emptiness) describes the filtered subset rather than the whole system.
+    filters_narrowed: bool = False
+    # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
+    # the open rows render in the flat ``open`` section behind the
+    # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
+    graph_available: bool = True
+    # True when the open rows render in the flat ``open`` section instead of
+    # the workable three. Distinct from ``graph_available``: BOTH a missing
+    # frontier (pre-0.4) and a failed frontier READ render flat (§14), but only
+    # the first is a version story, and only the first should be remembered by
+    # the caller. Half a frontier is not a classification.
+    open_flat: bool = False
+    # Open rows the graph deliberately rolls up rather than rendering: epics
+    # (they roll up to their children) and gates (§5.3 gives them their own
+    # section in a later slice). Counted so the board can SAY so — an open row
+    # that exists and renders nowhere must not read as an empty tracker, and
+    # must not sit under an affirmative health claim. Always 0 in the flat
+    # fallback, where every open row renders.
+    rolled_up_open: int = 0
+    # True when Lithos answered every read successfully and returned nothing
+    # for this view: no open tasks, and nothing resolved inside the ``since``
+    # window. Distinguishes "there is nothing here" from "your filters hid
+    # everything", which the per-section empty lines already say. Deliberately
+    # NOT a claim about the corpus — the terminal reads are windowed by
+    # ``since``, so work resolved before it is invisible to this flag and the
+    # panel it drives has to name the window.
+    nothing_to_show: bool = False
     errors: tuple[str, ...] = ()
+
+    @property
+    def rolled_up_only(self) -> bool:
+        """True when the open side is empty ONLY because rows were rolled up.
+
+        The degenerate case is a tracker holding nothing but epics: every open
+        section renders empty, ``nothing_to_show`` is False (the open read did
+        return rows), and without this the board would show an empty board
+        under "All systems healthy". Drives the explanatory panel that names
+        the rolled-up rows instead.
+        """
+        if not self.rolled_up_open:
+            return False
+        return not any(self.sections.get(section) for section in OPEN_SECTIONS)
+
+    @property
+    def healthy(self) -> bool:
+        """True when this load carries no degraded signal to report.
+
+        Drives the "All systems healthy" stripe: every read succeeded, the
+        frontier was complete (no truncation) and self-consistent, claims came
+        back for every row, and the graph tools are present. T1-S3 extends this
+        with the needs-attention rules, whose emptiness is the other half of
+        the same statement.
+
+        Withheld when the open side rendered nothing but rolled-up rows exist
+        (see :attr:`rolled_up_only`): the stripe would be the only thing on an
+        empty board, asserting health over work the operator cannot see.
+
+        Withheld on a narrowed view. Truncation, reconciliation and
+        claims-unknown are all measured over the rows the filters left, so on a
+        filtered board they cannot support the stripe's system-wide claim — a
+        ``?tag=`` in a shared link would otherwise turn a degraded system into
+        an affirmative "all healthy". The warning banners are per-view
+        statements and keep rendering under any filter.
+        """
+        return (
+            not self.filters_narrowed
+            and not self.rolled_up_only
+            and self.graph_available
+            and not self.errors
+            and not self.truncated
+            and not self.reconciliation_pending
+            and not self.sections.get("claims_unknown")
+        )
 
 
 @dataclass(frozen=True)
