@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 18 |
+| `lithos_lens.tasks` | M | 17 | 18 |
 
 ## Public API
 
@@ -26,6 +26,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
+- class `EpicRollup` — One open epic's progress chip in the dashboard's epic strip.
 - class `TaskFilters`
 - class `TaskSummary`
 - class `DashboardData`

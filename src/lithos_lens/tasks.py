@@ -172,11 +172,53 @@ class SectionRow:
 
 
 @dataclass(frozen=True)
+class EpicRollup:
+    """One open epic's progress chip in the dashboard's epic strip.
+
+    Built from ``lithos_task_children(recursive=True, include_closed=True)``:
+    ``done``/``total`` count only WORKABLE (``task``-typed) descendants —
+    nested epics and gates are structure, not units of work, and counting a
+    sub-epic would double-count its own children. ``total`` excludes cancelled
+    descendants (work that will never be done must not hold the bar under 100%
+    forever); ``cancelled`` keeps that count visible rather than silent.
+    ``descendant_ids`` holds EVERY descendant id whatever its type — a gate or
+    sub-epic is still part of the initiative — and is what the ``?epic=``
+    scope filters the sections by. On a strip assembled by ``frontier`` it is
+    populated only for the ``selected`` epic: nothing reads another epic's set,
+    and the subtree reads include closed tasks, so keeping them all would hold
+    an id for every task ever closed under every epic.
+
+    Counts are whole-subtree facts, so they are deliberately unaffected by the
+    tag/agent/since filters applied to the sections.
+    """
+
+    task: TaskRecord
+    done: int = 0
+    total: int = 0
+    cancelled: int = 0
+    descendant_ids: frozenset[str] = frozenset()
+    selected: bool = False
+
+    @property
+    def progress_label(self) -> str:
+        return f"{self.done}/{self.total}"
+
+    @property
+    def percent(self) -> int:
+        """Completed share of the non-cancelled subtree, 0-100 (0 when empty)."""
+        return round(self.done * 100 / self.total) if self.total else 0
+
+
+@dataclass(frozen=True)
 class TaskFilters:
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
     since: str
+    # ``?epic=<id>`` — scope every section to one epic's descendants. Empty
+    # means "no epic scope"; an id that is no longer an open epic resolves to
+    # no scope at all (``DashboardData.epic_scope``), not an empty board.
+    epic: str = ""
 
 
 @dataclass(frozen=True)
@@ -189,7 +231,11 @@ class TaskSummary:
     claims_unknown: int = 0
     unclassified: int = 0
     open_total: int = 0
-    open_claims: int = 0
+    # Claims held by the rows rendered In progress. Deliberately NOT the
+    # Lithos-wide lithos_stats.open_claims: this sits under the In-progress
+    # count on the situation card, which is filtered (and can be epic-scoped),
+    # so a server-wide figure would contradict the number above it.
+    active_claims: int = 0
     recent_completed: int = 0
     recent_cancelled: int = 0
     agents: int = 0
@@ -206,6 +252,18 @@ class DashboardData:
     reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
+    # One rollup per open epic, in open-snapshot (newest-first) order.
+    epics: tuple[EpicRollup, ...] = ()
+    # The epic id the sections are actually scoped to — empty when no ``?epic=``
+    # was asked for OR when the requested epic is no longer an open epic, which
+    # the template explains instead of rendering a silently empty board.
+    epic_scope: str = ""
+
+    @property
+    def scoped_epic(self) -> EpicRollup | None:
+        """The epic chip the board is scoped to, if any (the template's handle
+        on it — e.g. to explain a confirmed-childless epic's empty board)."""
+        return next((epic for epic in self.epics if epic.selected), None)
 
 
 @dataclass(frozen=True)
@@ -291,6 +349,9 @@ def parse_filters(
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        # The epic strip scopes to ONE epic at a time (a chip click), so only
+        # the first ``epic`` value is honored.
+        epic=(values.get("epic") or [""])[0],
     )
 
 
@@ -537,13 +598,22 @@ def matches_filters(
     *,
     filters: TaskFilters,
     status: TaskStatusName,
+    scope_ids: frozenset[str] | None = None,
 ) -> bool:
     """Client-side filter predicate shared by the dashboard sections.
 
     Public because the frontier join (``frontier.py``) re-applies it over the
     joined snapshot; the guardrail forbids reaching for another module's
     privates.
+
+    ``scope_ids`` is the resolved ``?epic=`` scope — the selected epic's
+    descendant ids. ``None`` means "no epic scope"; an EMPTY set is a real
+    scope (a confirmed childless epic) and correctly hides everything. The
+    unconfirmable case — an epic that may have closed since the open read —
+    resolves to ``None``, not to an empty set (see ``frontier``).
     """
+    if scope_ids is not None and task.id not in scope_ids:
+        return False
     if task.status != status:
         return False
     if filters.agent and task.created_by != filters.agent:

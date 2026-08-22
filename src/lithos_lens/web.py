@@ -103,6 +103,8 @@ def create_app(
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
+    templates.env.globals["epic_scope_url"] = epic_scope_url
+    templates.env.globals["tasks_status_url"] = tasks_status_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
 
@@ -406,6 +408,7 @@ async def _render_tasks(
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "epic": filters.epic,
                 "frontier_limit": state.config.tasks.frontier_limit,
             },
         )
@@ -422,6 +425,7 @@ async def _render_tasks(
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "epic_scope": dashboard.epic_scope,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
                 "section_counts": {
@@ -448,7 +452,7 @@ async def _render_tasks(
 # query from this allowlist, so a retired param (e.g. the pre-T1
 # ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
 # of propagating through tag / detail / back-link navigation forever.
-_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag")
+_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag", "epic")
 
 
 def _preserved_filter_params(
@@ -471,6 +475,32 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def tasks_status_url(request: Request, status: str) -> str:
+    """Link a situation card to the board narrowed to one status.
+
+    Built from the preserved-filter allowlist with ``status`` REPLACED, so a
+    card click keeps the active epic scope, tag, agent, and window — a card on
+    an epic-scoped board must not silently drop back to every epic.
+    """
+    params = _preserved_filter_params(request, exclude="status")
+    params.append(("status", status))
+    return f"/tasks?{urlencode(params)}"
+
+
+def epic_scope_url(request: Request, epic_id: str) -> str:
+    """Link an epic chip to the dashboard scoped to that epic — or unscoped.
+
+    An empty ``epic_id`` clears the scope, which is what the SELECTED chip
+    links to: clicking the active epic toggles its scope back off. Only one
+    epic scopes the board at a time, so the incoming ``epic`` param is replaced
+    rather than appended.
+    """
+    params = _preserved_filter_params(request, exclude="epic")
+    if epic_id:
+        params.append(("epic", epic_id))
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
 def tasks_url(request: Request) -> str:

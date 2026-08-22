@@ -380,7 +380,7 @@ At process startup Lens performs the following steps in order:
 
 ```python
 lithos_agent_register(
-    id=config.lithos.agent_id,     # "lithos-lens"
+    id=config.lithos.agent_id,  # "lithos-lens"
     name="Lithos Lens",
     type="web-ui",
 )
@@ -1210,7 +1210,7 @@ When `contradicts` edges exist, Lens exposes a resolution panel on the relevant 
 ```python
 lithos_conflict_resolve(
     edge_id=edge_id,
-    resolution="superseded",   # accepted_dual | superseded | refuted | merged
+    resolution="superseded",  # accepted_dual | superseded | refuted | merged
     resolver=operator_id,
     winner_id=winning_note_id,  # required when resolution == "superseded"
 )

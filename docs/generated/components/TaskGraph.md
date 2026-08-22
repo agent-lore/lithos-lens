@@ -11,7 +11,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.frontier` | M | 1 | 2 |
+| `lithos_lens.frontier` | L | 1 | 3 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
@@ -19,6 +19,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ### `lithos_lens.frontier`
 - class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
+- def `build_epic_rollup` — Roll one epic's recursive children up into its progress chip.
 - def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.
 
 ### `lithos_lens.task_graph`
