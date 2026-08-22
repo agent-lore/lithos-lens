@@ -47,18 +47,24 @@ DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS = 24
 DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES = 10
 DEFAULT_TASKS_STALE_OPEN_AGE_DAYS = 7
 DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES = 60
-# Ceilings for those four thresholds, in their own units (a year / a week / ten
-# years / a week). A threshold beyond these is a misconfiguration — the rule it
-# governs could never fire — and an UNBOUNDED one is worse than useless: the
-# value reaches ``timedelta()`` at render time, where a large enough int raises
-# OverflowError and 500s every /tasks request. Bounding it here fails the load
-# instead, with a ConfigError naming the key (the same treatment
-# MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP gives the read fan-out).
-MAX_TASKS_ATTENTION_KNOBS: dict[str, int] = {
+# Ceilings for every [lithos-lens.tasks] knob that reaches ``timedelta()`` —
+# the four Needs-attention thresholds and the resolved-window size — in their
+# own units (a year / a week / ten years / a week / ten years). A value beyond
+# these is a misconfiguration (the rule it governs could never fire), and an
+# UNBOUNDED one is worse than useless: a large enough int makes ``timedelta()``
+# raise OverflowError at render time and 500s every /tasks request. Bounding it
+# here fails the load instead, with a ConfigError naming the key (the same
+# treatment MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP gives the read fan-out).
+#
+# Membership is the timedelta reachability test, not a category: add a key here
+# the moment its value starts feeding a duration.
+MAX_TASKS_INT_KNOBS: dict[str, int] = {
     "gate_waiting_attention_hours": 8760,
     "claim_expiring_soon_minutes": 10080,
     "stale_open_age_days": 3650,
     "unclaimed_ready_age_minutes": 10080,
+    # -> tasks.default_since(days) -> timedelta(days=...), twice per /tasks.
+    "default_time_range_days": 3650,
 }
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30

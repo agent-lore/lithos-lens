@@ -340,14 +340,18 @@ def test_env_override_sets_each_needs_attention_knob(
         ("claim_expiring_soon_minutes", 10081),
         ("stale_open_age_days", 3651),
         ("unclaimed_ready_age_minutes", 10081),
+        # Not a Needs-attention threshold, but the same sink: it feeds
+        # default_since() -> timedelta(days=...) on every /tasks render.
+        ("default_time_range_days", 3651),
+        ("default_time_range_days", 10**12),
     ],
 )
-def test_needs_attention_knob_rejects_a_value_over_its_ceiling(
+def test_duration_knob_rejects_a_value_over_its_ceiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, over_max: int
 ) -> None:
-    """Each threshold is bounded, not merely positive: an unbounded value
-    reaches timedelta() at render time (OverflowError -> 500 on every /tasks),
-    so it has to fail at load with the key named."""
+    """Every [tasks] knob that becomes a timedelta is bounded, not merely
+    positive: an unbounded value raises OverflowError at render time (a 500 on
+    every /tasks), so it has to fail at load with the key named."""
     config_path = tmp_path / "lithos-lens.toml"
     config_path.write_text(
         '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'

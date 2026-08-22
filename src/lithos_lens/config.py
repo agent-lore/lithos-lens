@@ -44,7 +44,7 @@ from lithos_lens.config_schema import (
     DEFAULT_TASKS_VISIBLE_CAP,
     MAX_KNOWLEDGE_LANDING_LIMIT,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
-    MAX_TASKS_ATTENTION_KNOBS,
+    MAX_TASKS_INT_KNOBS,
     EventsConfig,
     HealthConfig,
     KnowledgeConfig,
@@ -93,7 +93,7 @@ __all__ = [
     "DEFAULT_TASKS_VISIBLE_CAP",
     "MAX_KNOWLEDGE_LANDING_LIMIT",
     "MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
-    "MAX_TASKS_ATTENTION_KNOBS",
+    "MAX_TASKS_INT_KNOBS",
     "EventsConfig",
     "ConfigError",
     "HealthConfig",
@@ -292,9 +292,12 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
         )
 
     # Every [tasks] knob below is a positive integer parsed the same way, so
-    # one local binding keeps the eight of them readable. The four
-    # Needs-attention thresholds additionally carry a ceiling (see
-    # MAX_TASKS_ATTENTION_KNOBS); the rest are unbounded counts.
+    # one local binding keeps the eight of them readable. Those whose value
+    # ends up in a ``timedelta`` also carry a ceiling (see MAX_TASKS_INT_KNOBS,
+    # which is the list — do not infer it from the key names). The rest are
+    # unbounded: auto_refresh_interval_s (a browser poll interval),
+    # frontier_limit (a row cap pushed upstream) and the deprecated
+    # visible_cap.
     def positive_int(key: str, default: int) -> int:
         return _optional_int(
             data,
@@ -303,7 +306,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
             "lithos-lens.tasks",
             minimum=1,
-            maximum=MAX_TASKS_ATTENTION_KNOBS.get(key),
+            maximum=MAX_TASKS_INT_KNOBS.get(key),
         )
 
     return TasksConfig(
@@ -629,7 +632,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         field: _parse_env_int(
             f"LITHOS_LENS_TASKS_{field.upper()}",
             raw,
-            maximum=MAX_TASKS_ATTENTION_KNOBS.get(field),
+            maximum=MAX_TASKS_INT_KNOBS.get(field),
         )
         for field, raw in (
             ("visible_cap", tasks_visible_cap_override),

@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 2 | 901 | 750 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 2 | 910 | 751 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
@@ -49,7 +49,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **21**, lines: **6232**, SLOC: **5023**
+- Modules: **21**, lines: **6241**, SLOC: **5024**
 - Largest module: `lithos_lens.lithos_client` (794 lines)
 - Modules over 800 lines: **0**
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **32** (28 associations, 15 without docstrings)
-- Test-to-source line ratio: **1.74** (10856 test lines / 6232 source lines)
+- Test-to-source line ratio: **1.74** (10860 test lines / 6241 source lines)
