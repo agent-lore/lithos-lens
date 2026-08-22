@@ -333,6 +333,55 @@ def test_env_override_sets_each_needs_attention_knob(
         assert getattr(config.tasks, name) == default
 
 
+@pytest.mark.parametrize(
+    ("key", "over_max"),
+    [
+        ("gate_waiting_attention_hours", 8761),
+        ("claim_expiring_soon_minutes", 10081),
+        ("stale_open_age_days", 3651),
+        ("unclaimed_ready_age_minutes", 10081),
+    ],
+)
+def test_needs_attention_knob_rejects_a_value_over_its_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, over_max: int
+) -> None:
+    """Each threshold is bounded, not merely positive: an unbounded value
+    reaches timedelta() at render time (OverflowError -> 500 on every /tasks),
+    so it has to fail at load with the key named."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        f"{key} = {over_max}\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match=key):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("env_var", "over_max"),
+    [
+        ("LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS", 8761),
+        ("LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", 10081),
+        ("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", 10**12),
+        ("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", 10081),
+    ],
+)
+def test_env_override_needs_attention_knob_rejects_a_value_over_its_ceiling(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    over_max: int,
+) -> None:
+    """The env path carries the same ceiling as the TOML path — the 10**12 case
+    is the one that used to overflow timedelta() at render time."""
+    monkeypatch.setenv(env_var, str(over_max))
+
+    with pytest.raises(ConfigError, match=env_var):
+        load_config(lithos_lens_config_env)
+
+
 @pytest.mark.parametrize("bad", ["0", "-5", "nope", "1.5"])
 def test_env_override_needs_attention_knob_rejects_junk(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, bad: str

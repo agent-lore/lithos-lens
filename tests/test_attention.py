@@ -319,6 +319,86 @@ def test_ready_unclaimed_respects_its_knob_and_ignores_claimed_rows() -> None:
     assert _section_ids(sections, "ready") == ["r"]
 
 
+def test_rules_3_to_6_do_not_fire_exactly_at_their_threshold() -> None:
+    """Boundary contract: the rules read "older than" / "below", so a row
+    sitting EXACTLY on its threshold has not crossed it yet. Inclusive
+    comparisons would flag a gate at 24h00m, a task on its 7th day, a ready row
+    at 60m, and a claim with exactly 10m left — none of which is late."""
+    policy = AttentionPolicy()
+    gate = _task(
+        "gate-1",
+        task_type="gate",
+        claims=(),
+        created_at=_ago(hours=policy.gate_waiting_attention_hours),
+        metadata={"gate_type": "human"},
+    )
+    stale = _task("s", claims=(), created_at=_ago(days=policy.stale_open_age_days))
+    unpicked = _task(
+        "r", claims=(), created_at=_ago(minutes=policy.unclaimed_ready_age_minutes)
+    )
+    claimed = _task(
+        "c",
+        claims=(
+            ClaimRecord(
+                agent="a",
+                aspect="impl",
+                expires_at=_ahead(minutes=policy.claim_expiring_soon_minutes),
+            ),
+        ),
+        created_at=_ago(hours=1),
+    )
+    sections = _flag(
+        [gate, stale, unpicked, claimed],
+        ready_ids={"r"},
+        blocked=[_blocked(stale, BlockerRecord(kind="task", task_id="pred"))],
+    )
+
+    assert _section_ids(sections, "attention") == []
+    assert _section_ids(sections, "blocked") == ["s"]
+    assert _section_ids(sections, "ready") == ["r"]
+    assert _section_ids(sections, "in_progress") == ["c"]
+
+
+def test_rules_3_to_6_fire_one_tick_past_their_threshold() -> None:
+    """The other side of the boundary: a minute later every rule fires, so the
+    strict comparison delays the flag rather than suppressing it."""
+    policy = AttentionPolicy()
+    gate = _task(
+        "gate-1",
+        task_type="gate",
+        claims=(),
+        created_at=_ago(hours=policy.gate_waiting_attention_hours, minutes=1),
+        metadata={"gate_type": "human"},
+    )
+    stale = _task(
+        "s", claims=(), created_at=_ago(days=policy.stale_open_age_days, minutes=1)
+    )
+    unpicked = _task(
+        "r", claims=(), created_at=_ago(minutes=policy.unclaimed_ready_age_minutes + 1)
+    )
+    claimed = _task(
+        "c",
+        claims=(
+            ClaimRecord(
+                agent="a",
+                aspect="impl",
+                expires_at=_ahead(minutes=policy.claim_expiring_soon_minutes - 1),
+            ),
+        ),
+        created_at=_ago(hours=1),
+    )
+    sections = _flag(
+        [gate, stale, unpicked, claimed],
+        ready_ids={"r"},
+        blocked=[_blocked(stale, BlockerRecord(kind="task", task_id="pred"))],
+    )
+
+    assert sorted(_section_ids(sections, "attention")) == ["c", "gate-1", "r", "s"]
+    assert _section_ids(sections, "blocked") == []
+    assert _section_ids(sections, "ready") == []
+    assert _section_ids(sections, "in_progress") == []
+
+
 def test_row_firing_several_rules_appears_once_with_a_chip_per_rule() -> None:
     """De-dup + severity order: an old unclaimed ready row fires rules 5 and 6,
     and renders as ONE row carrying both chips, most severe first."""
@@ -371,14 +451,43 @@ def test_attention_sorts_by_severity_then_oldest_first() -> None:
     ]
 
 
-def test_unreadable_created_at_never_fires_an_age_rule() -> None:
-    """A timestamp Lens cannot parse must not manufacture a "stale" flag —
-    a false alarm is worse than a missed one."""
-    blank = _task("blank", claims=(), created_at="")
-    garbage = _task("garbage", claims=(), created_at="not-a-date")
-    sections = _flag([blank, garbage], ready_ids={"blank", "garbage"})
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        "",
+        "not-a-date",
+        # Parses fine, but converting to UTC leaves the datetime domain
+        # (OverflowError, not ValueError). An upstream record carrying one must
+        # degrade to "unreadable" like any other bad value — raising here would
+        # 500 the whole dashboard for every operator until the row was fixed.
+        "9999-12-31T23:59:59-05:00",
+        "0001-01-01T00:00:00+12:00",
+    ],
+)
+def test_unreadable_created_at_never_fires_an_age_rule(created_at: str) -> None:
+    """A timestamp Lens cannot read must not manufacture a "stale" flag — and
+    must not take the render down either."""
+    row = _task("row", claims=(), created_at=created_at)
+    sections = _flag([row], ready_ids={"row"})
     assert _section_ids(sections, "attention") == []
-    assert _section_ids(sections, "ready") == ["blank", "garbage"]
+    assert _section_ids(sections, "ready") == ["row"]
+
+
+def test_unreadable_claim_expiry_never_fires_or_raises() -> None:
+    """Same guarantee on the claim side: an out-of-domain ``expires_at`` is
+    unjudgeable, not a reason to flag (or to crash)."""
+    working = _task(
+        "w",
+        claims=(
+            ClaimRecord(
+                agent="a", aspect="impl", expires_at="9999-12-31T23:59:59-05:00"
+            ),
+        ),
+        created_at=_ago(hours=1),
+    )
+    sections = _flag([working])
+    assert _section_ids(sections, "attention") == []
+    assert _section_ids(sections, "in_progress") == ["w"]
 
 
 def test_degraded_rows_are_never_promoted() -> None:

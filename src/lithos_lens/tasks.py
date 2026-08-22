@@ -567,19 +567,26 @@ def format_tag(tag: str) -> str:
 def parse_timestamp(value: str) -> datetime | None:
     """Parse an ISO timestamp into an aware UTC datetime, or ``None``.
 
-    Shared by the age-based Needs-attention rules (``frontier.py``). A blank or
+    Shared by the age-based Needs-attention rules (``attention.py``). A blank or
     malformed value returns ``None`` so a rule never fires on a timestamp it
     could not read — a false "stale"/"expiring" flag is worse than a missed
     one. Naive timestamps are treated as UTC, matching the server's own
     normalization.
+
+    ``OverflowError`` is caught alongside ``ValueError`` because the UTC
+    conversion — not the parse — is what rejects an offset timestamp at the
+    edge of the datetime domain (``9999-12-31T23:59:59-05:00``). An upstream
+    record carrying one must degrade to "unreadable" like any other bad value:
+    letting it raise would take the whole dashboard down for every operator
+    until the record was fixed.
     """
     try:
         parsed = datetime.fromisoformat(value.strip())
-    except ValueError:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def parse_date(value: str) -> date | None:

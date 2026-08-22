@@ -582,7 +582,9 @@ button,
   margin: 0.2rem 0 0;
 }
 
-/* Empty Needs attention: a thin reassurance stripe, deliberately NOT hidden. */
+/* Empty Needs attention: a thin reassurance stripe, deliberately NOT hidden —
+   or, when the reads behind it were incomplete, the same stripe in a warning
+   key that withholds the claim instead of making it. */
 .healthy-stripe {
   background: rgba(53, 106, 77, 0.1);
   border: 1px solid rgba(53, 106, 77, 0.35);
@@ -591,6 +593,12 @@ button,
   font-size: 0.85rem;
   margin: 0;
   padding: 0.6rem 0.9rem;
+}
+
+.healthy-stripe-unknown {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--ink);
 }
 
 /* Metadata chips + lede (§6.4). Neutral chips by default; the status chip is

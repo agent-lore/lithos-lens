@@ -69,6 +69,7 @@ source_modules = [
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",
     "lithos_lens.config",
+    "lithos_lens.config_schema",
     "lithos_lens.logging",
     "lithos_lens.telemetry",
 ]

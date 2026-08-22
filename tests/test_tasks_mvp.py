@@ -804,6 +804,64 @@ def test_fresh_blocked_unclaimed_row_stays_out_of_needs_attention(
     assert "All systems healthy" in unescape(attention)
 
 
+def test_healthy_stripe_is_withheld_when_a_frontier_read_failed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Alerting integrity: rules 1 and 2 fire ONLY from the blocked frontier,
+    so when that read fails the empty attention list means "nothing was
+    examined", not "nothing is wrong". The stripe must withhold the claim."""
+    fake = TaskFakeLithosClient()
+    # Drop the ancient fixture so the list is genuinely empty.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+
+    async def failing_task_blocked(**_: Any) -> list[BlockedTaskRecord]:
+        raise RuntimeError("blocked frontier unavailable")
+
+    fake.task_blocked = failing_task_blocked  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "All systems healthy" not in text
+    assert "data-attention-healthy" not in text
+    assert "data-attention-unknown" in text
+    assert "Cannot assess" in unescape(text)
+    # The existing error banner still explains what went wrong.
+    assert "Some task data could not be loaded." in text
+
+
+def test_healthy_stripe_is_withheld_when_the_frontier_truncated(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same claim, other cause: a truncated frontier leaves rows unexamined in
+    the Not-classified tail, which is never promoted — so "0 issues" would be
+    asserting health over rows nobody looked at."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.tasks.append(
+        TaskRecord(
+            id="open-fresh",
+            title="Fresh ready task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=5),
+        )
+    )
+    fake.ready_ids = {"open-unclaimed", "open-fresh"}
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "1")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Section counts are approximate." in text  # truncation banner
+    assert "All systems healthy" not in text
+    assert "data-attention-unknown" in text
+
+
 def test_stale_open_row_is_flagged_with_its_reason_chip(
     lithos_lens_config_env: Path,
 ) -> None:

@@ -177,8 +177,21 @@
               {% elif section == "attention" %}
                 <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                 {# Kept visible on purpose (REQUIREMENTS §5.2.2): an empty
-                   attention list is reassurance, not noise to hide. #}
-                <p class="healthy-stripe" data-attention-healthy>All systems healthy &mdash; 0 issues</p>
+                   attention list is reassurance, not noise to hide.
+
+                   But "0 issues" is a positive claim, and an empty list means
+                   nothing when the reads behind it were incomplete: rules 1-2
+                   fire only from the blocked frontier, so a failed frontier
+                   read, a truncated one, or an unreconciled disagreement can
+                   all leave the list empty with dead-end rows unexamined
+                   (they land in Not classified, which is never promoted). In
+                   those states say so instead of asserting health — the
+                   banners above carry the detail. #}
+                {% if dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending %}
+                  <p class="healthy-stripe healthy-stripe-unknown" data-attention-unknown>Cannot assess &mdash; task data is incomplete; see the notice above.</p>
+                {% else %}
+                  <p class="healthy-stripe" data-attention-healthy>All systems healthy &mdash; 0 issues</p>
+                {% endif %}
               {% else %}
                 <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                 <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>

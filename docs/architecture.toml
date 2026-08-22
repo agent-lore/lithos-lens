@@ -30,7 +30,7 @@ Web          = "FastAPI application factory serving the server-rendered dashboar
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
 LithosClient = "Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode."
-Config       = "Configuration and environment loading from lithos-lens.toml with env overrides."
+Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, and the dashboard assembly built on them."
 Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
@@ -44,7 +44,7 @@ Web          = ["lithos_lens.web"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
-Config       = ["lithos_lens.config"]
+Config       = ["lithos_lens.config", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.attention"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
@@ -73,7 +73,7 @@ cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); 
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 modules_over_800_lines = 0    # no god modules today; keep it that way
-max_module_lines       = 800  # stop-loss at the god-module threshold; largest today is config (792)
+max_module_lines       = 800  # stop-loss at the god-module threshold; largest today is lithos_client (794)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 
@@ -100,6 +100,7 @@ include_modules = [
 exclude_modules = [
     "lithos_lens.attention",
     "lithos_lens.config",
+    "lithos_lens.config_schema",
     "lithos_lens.errors",
     "lithos_lens.fake_lithos",
     "lithos_lens.fake_dataset",

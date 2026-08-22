@@ -177,7 +177,10 @@ def _attention_reasons(
         )
     stale_after = timedelta(days=policy.stale_open_age_days)
     age = _age(row.task.created_at, now=now)
-    if age is not None and age >= stale_after:
+    # Every threshold comparison is STRICT: the rules read "older than" /
+    # "below", so a row sitting exactly ON its threshold has not crossed it
+    # yet and must not be flagged (it will be one tick later).
+    if age is not None and age > stale_after:
         reasons.append(
             AttentionReason(
                 rule="stale-open",
@@ -189,7 +192,7 @@ def _attention_reasons(
         # correct behavior, not a warning (the pre-graph rule flagged it and
         # was a structural false positive).
         unpicked_after = timedelta(minutes=policy.unclaimed_ready_age_minutes)
-        if age is not None and age >= unpicked_after:
+        if age is not None and age > unpicked_after:
             reasons.append(
                 AttentionReason(
                     rule="ready-unclaimed",
@@ -205,7 +208,7 @@ def _waiting_human_gates(
     policy: AttentionPolicy,
     now: datetime,
 ) -> list[SectionRow]:
-    """Rule 3: open human gates that have waited past the threshold.
+    """Rule 3: open human gates that have waited LONGER than the threshold.
 
     Gates are not part of the workable partition, so a flagged gate is promoted
     from the (T1-S4) Gates section into this list; an unflagged one is
@@ -219,7 +222,9 @@ def _waiting_human_gates(
         if str(task.metadata.get("gate_type") or "") != HUMAN_GATE_TYPE:
             continue
         age = _age(task.created_at, now=now)
-        if age is None or age < waiting_after:
+        # Strict: "waited LONGER than the threshold" — exactly at it is not yet
+        # late (same boundary policy as the other age rules).
+        if age is None or age <= waiting_after:
             continue
         rows.append(
             SectionRow(
@@ -258,7 +263,9 @@ def _expiring_claim(
             # A claim with no readable expiry can't be judged — never guess.
             continue
         remaining = expires_at - now
-        if remaining > threshold:
+        # Strict: the rule fires when the remaining time is BELOW the
+        # threshold, so a claim with exactly the threshold left is not flagged.
+        if remaining >= threshold:
             continue
         if soonest is None or remaining < soonest[1]:
             soonest = (claim, remaining)
