@@ -17,7 +17,7 @@ on the task-graph records in ``task_graph.py``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
@@ -43,6 +43,82 @@ WORKABLE_TASK_TYPE = "task"
 
 # The three workable sections plus the truncation tail, in render order.
 WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
+
+# The flat-fallback section, rendered INSTEAD of the workable three when the
+# server has no frontier tools. Kept separate so the two modes never mix.
+FLAT_SECTIONS: tuple[SectionName, ...] = ("open",)
+
+# Every open-side section, in render order (only one mode's are ever filled).
+OPEN_SECTIONS: tuple[SectionName, ...] = (
+    FLAT_SECTIONS + WORKABLE_SECTIONS + ("claims_unknown", "unclassified")
+)
+
+# Version-skew detection (story 27). A pre-0.4 Lithos has no
+# ``lithos_task_ready`` / ``lithos_task_blocked`` at all: MCP answers an unknown
+# tool with an error result naming it ("Unknown tool: lithos_task_ready"), which
+# the client raises as a ``LithosToolError`` with code ``tool_error`` (an
+# uncoded transport-level failure), while a server that spells the failure in
+# its own error envelope supplies one of the codes below. Anything else — a
+# timeout, a dropped session, a coded runtime failure — is an OUTAGE, not
+# version skew, and keeps the ordinary error banner.
+#
+# The exception is matched structurally (``code`` attribute + message) rather
+# than by class: ``LithosToolError`` lives in the Core tier, which Foundation
+# modules like this one must not import.
+TOOL_MISSING_CODES = frozenset({"unknown_tool", "tool_not_found", "method_not_found"})
+_UNCODED_ERROR_CODES = frozenset({"", "tool_error"})
+_TOOL_MISSING_FRAGMENTS = (
+    "unknown tool",
+    "tool not found",
+    "no such tool",
+    "method not found",
+)
+
+
+def is_tool_missing_error(exc: BaseException) -> bool:
+    """True when ``exc`` says the Lithos server does not implement the tool.
+
+    Deliberately conservative: a failure that carries any OTHER Lithos error
+    code is a real error (the caller keeps its error banner), and an uncoded
+    failure only counts when its message names the missing tool.
+    """
+    code = str(getattr(exc, "code", "") or "")
+    if code in TOOL_MISSING_CODES:
+        return True
+    if code not in _UNCODED_ERROR_CODES:
+        return False
+    message = str(exc).lower()
+    return any(fragment in message for fragment in _TOOL_MISSING_FRAGMENTS)
+
+
+def flat_open_sections(
+    open_tasks: Sequence[TaskRecord],
+) -> dict[SectionName, tuple[SectionRow, ...]]:
+    """Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
+
+    Without the frontier there is no honest way to say ready vs blocked, so
+    Lens says neither — every open row lands in one list with its claim chips
+    (the 0.1.0 dashboard's behavior). No task-type filter either: epics and
+    gates do not exist on a server without the task graph. The claims-unknown
+    contract is unchanged: a server old enough to lack the frontier tools may
+    also ignore ``with_claims``, and a row whose claims came back ``None`` must
+    still say "claims unknown" rather than a confident "unclaimed".
+    """
+    return {
+        "open": tuple(
+            SectionRow(
+                task=task,
+                claims=task.claims or (),
+                claims_unknown=task.claims is None,
+            )
+            for task in open_tasks
+        ),
+        "in_progress": (),
+        "ready": (),
+        "blocked": (),
+        "claims_unknown": (),
+        "unclassified": (),
+    }
 
 
 class FrontierLithosClient(Protocol):
@@ -173,6 +249,7 @@ async def load_dashboard(
     *,
     filters: TaskFilters,
     frontier_limit: int,
+    graph_available: bool = True,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
 
@@ -181,6 +258,13 @@ async def load_dashboard(
     and the recently-resolved completed/cancelled windows. The only second
     round-trip is the read-skew retry below — and only when the first pair of
     frontier responses is inconsistent below the limit.
+
+    ``graph_available=False`` says the caller already learned this server has
+    no frontier tools (story 27): the two frontier calls are skipped and the
+    open rows render flat. Detection is the same either way — a frontier call
+    that fails because the TOOL is missing (never because the read failed)
+    switches this load to the flat fallback and reports
+    ``DashboardData.graph_available=False`` so the caller can remember it.
 
     The open/ready/blocked calls are independent reads, not a snapshot, so a
     workable open task can be missing from both frontier lists (or present in
@@ -203,6 +287,9 @@ async def load_dashboard(
             since=filters.since,
         )
 
+    ready_read, blocked_read = _frontier_reads(
+        lithos, frontier_limit=frontier_limit, graph_available=graph_available
+    )
     (
         open_result,
         ready_result,
@@ -220,8 +307,8 @@ async def load_dashboard(
         # can resolve a predecessor's title even when that predecessor is itself
         # filtered out of, or older than, the visible sections.
         lithos.list_tasks(status="open", with_claims=True),
-        lithos.task_ready(limit=frontier_limit, with_claims=False),
-        lithos.task_blocked(limit=frontier_limit),
+        ready_read,
+        blocked_read,
         lithos.stats(),
         lithos.list_agents(),
         load_closed("completed"),
@@ -243,20 +330,9 @@ async def load_dashboard(
         "open", cast("list[TaskRecord] | BaseException", open_result), errors
     )
 
-    ready_list: list[TaskRecord] = []
-    frontier_ok = True
-    if isinstance(ready_result, BaseException):
-        errors.append("Could not load the ready frontier.")
-        frontier_ok = False
-    else:
-        ready_list = cast(list[TaskRecord], ready_result)
-
-    blocked_records: list[BlockedTaskRecord] = []
-    if isinstance(blocked_result, BaseException):
-        errors.append("Could not load the blocked frontier.")
-        frontier_ok = False
-    else:
-        blocked_records = cast(list[BlockedTaskRecord], blocked_result)
+    graph_available, frontier_ok, ready_list, blocked_records = _resolve_frontier(
+        ready_result, blocked_result, graph_available=graph_available, errors=errors
+    )
 
     # Raw terminal ids (pre-filter): a task appearing in BOTH the open
     # snapshot and a terminal result is freshness skew worth a retry, whether
@@ -319,42 +395,59 @@ async def load_dashboard(
             skewed_frontier or bool(terminal_overlap),
         )
 
-    state = _partition_state(open_snapshot, ready_list, blocked_records)
+    if graph_available:
+        state = _partition_state(open_snapshot, ready_list, blocked_records)
 
-    if frontier_ok and state.retry_worthy:
-        # Read-skew between independent reads (a would-be-Ready task also in
-        # the blocked response, or a below-limit frontier gap). Retry ALL
-        # THREE reads together — the master open list too, or a task that
-        # closed after the stale open read would keep rendering in an open
-        # section alongside its terminal row. Adopt the retried generation
-        # only when every read succeeds (no mixed generations); a persisting
-        # disagreement is handled conservatively below rather than trusted.
-        retry_open, retry_ready, retry_blocked = await asyncio.gather(
-            lithos.list_tasks(status="open", with_claims=True),
-            lithos.task_ready(limit=frontier_limit, with_claims=False),
-            lithos.task_blocked(limit=frontier_limit),
-            return_exceptions=True,
-        )
-        if not (
-            isinstance(retry_open, BaseException)
-            or isinstance(retry_ready, BaseException)
-            or isinstance(retry_blocked, BaseException)
-        ):
-            open_snapshot = sorted(
-                cast(list[TaskRecord], retry_open),
-                key=lambda task: task.created_at,
-                reverse=True,
+        if frontier_ok and state.retry_worthy:
+            # Read-skew between independent reads (a would-be-Ready task also in
+            # the blocked response, or a below-limit frontier gap). Retry ALL
+            # THREE reads together — the master open list too, or a task that
+            # closed after the stale open read would keep rendering in an open
+            # section alongside its terminal row. Adopt the retried generation
+            # only when every read succeeds (no mixed generations); a persisting
+            # disagreement is handled conservatively below rather than trusted.
+            retry_open, retry_ready, retry_blocked = await asyncio.gather(
+                lithos.list_tasks(status="open", with_claims=True),
+                lithos.task_ready(limit=frontier_limit, with_claims=False),
+                lithos.task_blocked(limit=frontier_limit),
+                return_exceptions=True,
             )
-            ready_list = cast(list[TaskRecord], retry_ready)
-            blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
-            state = _partition_state(open_snapshot, ready_list, blocked_records)
+            if not (
+                isinstance(retry_open, BaseException)
+                or isinstance(retry_ready, BaseException)
+                or isinstance(retry_blocked, BaseException)
+            ):
+                open_snapshot = sorted(
+                    cast(list[TaskRecord], retry_open),
+                    key=lambda task: task.created_at,
+                    reverse=True,
+                )
+                ready_list = cast(list[TaskRecord], retry_ready)
+                blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
+                state = _partition_state(open_snapshot, ready_list, blocked_records)
 
-    partition = state.partition
-    at_limit = state.at_limit
-    open_index = state.index
-    reconciliation_pending = frontier_ok and state.skewed_frontier
-    if reconciliation_pending:
-        partition = _reclassify_conservative(partition, state.effective_overlap)
+        partition = state.partition
+        at_limit = state.at_limit
+        open_index = state.index
+        reconciliation_pending = frontier_ok and state.skewed_frontier
+        if reconciliation_pending:
+            partition = _reclassify_conservative(partition, state.effective_overlap)
+    else:
+        # Flat fallback (story 27): with no frontier there is nothing to
+        # join, nothing to truncate, and no pair of reads that could
+        # disagree — so the skew machinery above is skipped outright
+        # rather than fed empty frontiers, which would read every open row
+        # as "unclassified" and raise a false reconciliation warning.
+        partition = flat_open_sections(
+            [
+                task
+                for task in open_snapshot
+                if matches_filters(task, filters=filters, status="open")
+            ]
+        )
+        at_limit = False
+        open_index = {task.id: task for task in open_snapshot}
+        reconciliation_pending = False
 
     closed: dict[str, list[TaskRecord]] = {}
     for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
@@ -368,8 +461,8 @@ async def load_dashboard(
 
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
-    for section in WORKABLE_SECTIONS + ("claims_unknown", "unclassified"):
-        sections[section] = partition[section] if show_open else ()
+    for section in OPEN_SECTIONS:
+        sections[section] = partition.get(section, ()) if show_open else ()
     for status in ("completed", "cancelled"):
         sections[status] = (
             tuple(SectionRow(task=task) for task in closed[status])
@@ -389,11 +482,8 @@ async def load_dashboard(
     else:
         agents = tuple(cast(list[AgentRecord], agents_result))
 
-    open_total = (
-        sum(len(partition[section]) for section in WORKABLE_SECTIONS)
-        + len(partition["claims_unknown"])
-        + len(partition["unclassified"])
-    )
+    open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
+    corpus_empty = _is_corpus_empty(open_snapshot, closed_results, errors=errors)
     summary = TaskSummary(
         in_progress=len(partition["in_progress"]),
         ready=len(partition["ready"]),
@@ -420,8 +510,100 @@ async def load_dashboard(
         # Blocked above) — neither is mislabelled as truncation.
         truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
         reconciliation_pending=reconciliation_pending,
+        graph_available=graph_available,
+        corpus_empty=corpus_empty,
         errors=tuple(errors),
     )
+
+
+def _frontier_reads(
+    lithos: FrontierLithosClient,
+    *,
+    frontier_limit: int,
+    graph_available: bool,
+) -> tuple[Awaitable[Any], Awaitable[Any]]:
+    """The ready/blocked awaitables for one generation of the assembly.
+
+    A server already known to lack the frontier tools is not asked again (the
+    flat fallback is sticky for the process): two guaranteed failures per
+    render is pure cost, so the two gather slots are filled with placeholders.
+    """
+    if not graph_available:
+        return _skipped_frontier_call(), _skipped_frontier_call()
+    return (
+        lithos.task_ready(limit=frontier_limit, with_claims=False),
+        lithos.task_blocked(limit=frontier_limit),
+    )
+
+
+def _resolve_frontier(
+    ready_result: Any,
+    blocked_result: Any,
+    *,
+    graph_available: bool,
+    errors: list[str],
+) -> tuple[bool, bool, list[TaskRecord], list[BlockedTaskRecord]]:
+    """Read the two frontier responses into rows, verdicts, and error lines.
+
+    Returns ``(graph_available, frontier_ok, ready_rows, blocked_rows)``.
+    Version skew is separated from an outage here: a frontier call that failed
+    because the TOOL is absent means this Lithos predates the task graph, so
+    the load drops to the flat fallback (which carries its own notice) instead
+    of reporting two errors the operator could act on. Any other failure keeps
+    the graph surface and records the error line.
+    """
+    frontier_missing = graph_available and any(
+        isinstance(result, BaseException) and is_tool_missing_error(result)
+        for result in (ready_result, blocked_result)
+    )
+    if frontier_missing or not graph_available:
+        return False, False, [], []
+
+    frontier_ok = True
+    ready_rows: list[TaskRecord] = []
+    blocked_rows: list[BlockedTaskRecord] = []
+    if isinstance(ready_result, BaseException):
+        errors.append("Could not load the ready frontier.")
+        frontier_ok = False
+    else:
+        ready_rows = cast(list[TaskRecord], ready_result)
+    if isinstance(blocked_result, BaseException):
+        errors.append("Could not load the blocked frontier.")
+        frontier_ok = False
+    else:
+        blocked_rows = cast(list[BlockedTaskRecord], blocked_result)
+    return True, frontier_ok, ready_rows, blocked_rows
+
+
+def _is_corpus_empty(
+    open_snapshot: list[TaskRecord],
+    closed_results: tuple[list[TaskRecord] | BaseException, ...],
+    *,
+    errors: list[str],
+) -> bool:
+    """True when Lithos answered everything and returned nothing at all.
+
+    "Nothing at all" as opposed to "your filters hid everything", which the
+    per-section empty lines already say. Measured on the RAW responses, before
+    the client-side filters, so an over-narrow filter never masquerades as an
+    empty corpus; any recorded error rules it out, since an outage empties the
+    snapshot too.
+    """
+    if errors or open_snapshot:
+        return False
+    return not any(
+        not isinstance(result, BaseException) and bool(result)
+        for result in closed_results
+    )
+
+
+async def _skipped_frontier_call() -> list[Any]:
+    """Stand in for a frontier call not made (the tools are known absent).
+
+    Keeps ``load_dashboard``'s single gather positional: the slot is filled
+    with an empty result instead of the response, and the flat branch renders.
+    """
+    return []
 
 
 class _FrontierState:

@@ -850,3 +850,172 @@ def test_terminal_card_labels_match_the_created_windowing(
     # …so the cards must describe the filter that actually applies.
     assert "Created since" in response.text
     assert "Resolved since" not in response.text
+
+
+# --- T1 slice 12: empty/degraded states -------------------------------------
+
+
+class NoFrontierClient(TaskFakeLithosClient):
+    """A pre-0.4 Lithos: the task-graph frontier tools do not exist.
+
+    MCP answers a call for a tool the server does not have with an error result
+    naming it, which the client raises as an uncoded ``LithosToolError`` — the
+    shape ``frontier.is_tool_missing_error`` matches.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.frontier_calls = 0
+
+    async def task_ready(self, **kwargs: Any) -> list[TaskRecord]:
+        self.frontier_calls += 1
+        raise LithosToolError("Unknown tool: lithos_task_ready", code="tool_error")
+
+    async def task_blocked(self, **kwargs: Any) -> list[BlockedTaskRecord]:
+        self.frontier_calls += 1
+        raise LithosToolError("Unknown tool: lithos_task_blocked", code="tool_error")
+
+
+def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 27: version skew degrades instead of breaking — the flat 0.1.0
+    open list plus a notice naming the version that restores the graph."""
+    fake = NoFrontierClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Graph features need Lithos 0.4 or newer" in response.text
+    assert "data-graph-unavailable" in response.text
+    # One flat Open section carrying every open row…
+    assert 'data-task-group="open"' in response.text
+    assert "Claimed open task" in response.text
+    assert "Unclaimed open task" in response.text
+    assert "Old open task" in response.text
+    # …instead of the graph sections, which have nothing to say here.
+    assert 'data-task-group="ready"' not in response.text
+    assert 'data-task-group="blocked"' not in response.text
+    assert 'data-task-group="in_progress"' not in response.text
+    # The counters follow: no Ready/Blocked cards, one Open tasks count.
+    assert "#task-group-ready" not in response.text
+    assert "Open tasks" in response.text
+    # A missing tool is not a failed read, and the fallback is not "healthy".
+    assert "Some task data could not be loaded" not in response.text
+    assert "data-healthy-stripe" not in response.text
+    # Terminal sections are unaffected (lithos_task_list predates the graph).
+    assert "Recently completed task" in response.text
+
+
+def test_flat_fallback_is_remembered_and_stops_probing_the_frontier(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Feature detection is a fact about the server build, so it is answered
+    once per process: later renders skip both frontier calls rather than buying
+    two guaranteed failures each."""
+    fake = NoFrontierClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        first = client.get("/tasks")
+        calls_after_first = fake.frontier_calls
+        second = client.get("/tasks")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls_after_first > 0
+    assert fake.frontier_calls == calls_after_first
+    # The fallback still renders on the remembered answer.
+    assert "Graph features need Lithos 0.4 or newer" in second.text
+    assert 'data-task-group="open"' in second.text
+
+
+def test_dashboard_renders_empty_state_when_lithos_has_no_tasks(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Empty corpus: every read succeeded and returned nothing. The board says
+    so once, instead of repeating "nothing matched these filters" per section —
+    a claim about filters that were never the reason."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = []
+    fake.ready_ids = set()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert 'data-empty-state="corpus"' in response.text
+    assert "No tasks yet" in response.text
+    assert "match these filters" not in response.text
+    # The live-update strip stays, so a task.created event still has somewhere
+    # to land without a reload.
+    assert 'data-task-list="pending"' in response.text
+
+
+def test_empty_filter_result_keeps_the_per_section_message(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The mirror image: Lithos has tasks, the filter hides them all. That is a
+    filter story, not an empty corpus, and must not read as "no tasks yet"."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=project:nope&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert 'data-empty-state="corpus"' not in response.text
+    assert "No ready tasks match these filters" in response.text
+
+
+def test_dashboard_renders_healthy_stripe_when_nothing_is_degraded(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The positive branch: every read landed, the frontier was complete and
+    self-consistent, claims came back for every row."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "data-healthy-stripe" in response.text
+    assert "All systems healthy" in response.text
+    assert "Some task data could not be loaded" not in response.text
+
+
+def test_healthy_stripe_disappears_when_a_read_fails(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A degraded load must never also claim to be healthy."""
+
+    class FailingStatsClient(TaskFakeLithosClient):
+        async def stats(self) -> dict[str, Any]:
+            raise RuntimeError("stats unavailable")
+
+    fake = FailingStatsClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Some task data could not be loaded" in response.text
+    assert "data-healthy-stripe" not in response.text
+
+
+def test_dashboard_hides_the_board_when_lithos_is_unreachable(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Lithos unreachable: the banner and the service-status grid replace the
+    board entirely — no sections, no empty state pretending the corpus is
+    empty, and no counts Lens cannot stand behind."""
+    fake = TaskFakeLithosClient(health="unreachable")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Lithos is offline or degraded" in response.text
+    assert 'class="status-grid"' in response.text
+    assert 'class="task-board"' not in response.text
+    assert 'data-empty-state="corpus"' not in response.text
+    assert "data-healthy-stripe" not in response.text

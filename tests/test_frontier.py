@@ -14,7 +14,12 @@ from typing import Any
 
 import pytest
 
-from lithos_lens.frontier import classify_open_tasks, load_dashboard
+from lithos_lens.frontier import (
+    classify_open_tasks,
+    is_tool_missing_error,
+    load_dashboard,
+)
+from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -189,6 +194,7 @@ class _FrontierFake:
         completed: list[TaskRecord] | None = None,
         cancelled: list[TaskRecord] | None = None,
         fail_ready: bool = False,
+        frontier_error: BaseException | None = None,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -196,6 +202,9 @@ class _FrontierFake:
         self._completed = completed or []
         self._cancelled = cancelled or []
         self._fail_ready = fail_ready
+        # Raised by BOTH frontier reads — the shape of a server that has
+        # neither tool (version skew) or has lost both (outage).
+        self._frontier_error = frontier_error
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
@@ -241,6 +250,9 @@ class _FrontierFake:
     ) -> list[TaskRecord]:
         if self._fail_ready:
             raise RuntimeError("ready frontier unavailable")
+        if self._frontier_error is not None:
+            self.ready_calls += 1
+            raise self._frontier_error
         index = min(self.ready_calls, len(self._ready_seq) - 1)
         self.ready_calls += 1
         rows = self._ready_seq[index]
@@ -253,6 +265,9 @@ class _FrontierFake:
         project: str | None = None,
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
+        if self._frontier_error is not None:
+            self.blocked_calls += 1
+            raise self._frontier_error
         index = min(self.blocked_calls, len(self._blocked_seq) - 1)
         self.blocked_calls += 1
         rows = self._blocked_seq[index]
@@ -612,3 +627,231 @@ def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
     assert _section_ids(data.sections, "ready") == []
     assert _section_ids(data.sections, "blocked") == []
     assert data.reconciliation_pending is False
+
+
+# --- T1 slice 12: empty/degraded states -------------------------------------
+
+
+def _tool_missing(message: str = "Unknown tool: lithos_task_ready") -> LithosToolError:
+    """The error a pre-0.4 Lithos produces for a frontier call.
+
+    MCP answers an unknown tool with an error result naming it, which the
+    client raises as an uncoded (``tool_error``) LithosToolError — see
+    ``lithos_client._decode_tool_result``.
+    """
+    return LithosToolError(message, code="tool_error")
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        LithosToolError("Unknown tool: lithos_task_ready", code="tool_error"),
+        LithosToolError("Tool not found", code="tool_error"),
+        LithosToolError("no such tool: lithos_task_blocked"),
+        LithosToolError("lithos_task_ready is unavailable", code="unknown_tool"),
+    ],
+)
+def test_is_tool_missing_error_detects_version_skew(exc: BaseException) -> None:
+    assert is_tool_missing_error(exc) is True
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        # An outage, not version skew: the tool exists, the read failed.
+        RuntimeError("ready frontier unavailable"),
+        TimeoutError("Lithos MCP session is not available"),
+        LithosToolError("Lithos tool call failed", code="tool_error"),
+        # A coded, specific failure is never version skew — task_not_found in
+        # particular must not blank the whole graph surface.
+        LithosToolError("Task 'x' not found.", code="task_not_found"),
+        LithosToolError("Unknown tool", code="invalid_response"),
+    ],
+)
+def test_is_tool_missing_error_rejects_ordinary_failures(exc: BaseException) -> None:
+    assert is_tool_missing_error(exc) is False
+
+
+def test_missing_frontier_tools_fall_back_to_the_flat_open_section() -> None:
+    """Story 27: a Lithos without the frontier tools degrades to the flat
+    0.1.0 open list — every open row in one section, the workable three empty,
+    and ``graph_available=False`` so the caller can render the version notice
+    and remember the answer."""
+    claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
+    unclaimed = _task("u", claims=())
+    fake = _FrontierFake(
+        open_tasks=[claimed, unclaimed],
+        ready=[],
+        blocked=[],
+        frontier_error=_tool_missing(),
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.graph_available is False
+    assert _section_ids(data.sections, "open") == ["c", "u"]
+    assert _section_ids(data.sections, "in_progress") == []
+    assert _section_ids(data.sections, "ready") == []
+    assert _section_ids(data.sections, "blocked") == []
+    assert _section_ids(data.sections, "unclassified") == []
+    assert data.summary.open_total == 2
+    # The missing tools are a version fact, not an error the operator can act
+    # on, and there is no frontier left to truncate or reconcile.
+    assert data.errors == ()
+    assert data.truncated is False
+    assert data.reconciliation_pending is False
+    assert data.healthy is False
+    # Claims still render — they come from the master open list.
+    assert data.sections["open"][0].claims[0].agent == "a"
+    assert data.sections["open"][1].claim_state == "known_unclaimed"
+    # No retry: there is nothing to reconcile.
+    assert fake.ready_calls == 1
+
+
+def test_flat_fallback_keeps_the_claims_unknown_contract() -> None:
+    """A server old enough to lack the frontier tools may also ignore
+    ``with_claims``; a row whose claims came back None must still read
+    "claims unknown", never a confident "unclaimed"."""
+    fake = _FrontierFake(
+        open_tasks=[_task("u", claims=None)],
+        ready=[],
+        blocked=[],
+        frontier_error=_tool_missing(),
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    (row,) = data.sections["open"]
+    assert row.claim_state == "unknown"
+
+
+def test_known_missing_frontier_skips_the_frontier_calls() -> None:
+    """``graph_available=False`` from the caller (the process already learned
+    this server is pre-0.4) skips both frontier reads instead of buying two
+    guaranteed failures per render."""
+    fake = _FrontierFake(
+        open_tasks=[_task("u", claims=())],
+        ready=[],
+        blocked=[],
+        frontier_error=_tool_missing(),
+    )
+
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, graph_available=False
+        )
+    )
+
+    assert fake.ready_calls == 0
+    assert fake.blocked_calls == 0
+    assert data.graph_available is False
+    assert _section_ids(data.sections, "open") == ["u"]
+    assert data.errors == ()
+
+
+def test_frontier_outage_keeps_the_error_banner_and_the_graph_surface() -> None:
+    """The fallback is for version skew only: a frontier read that fails for
+    any other reason stays an error (banner + unclassified rows), because
+    blanking Ready/Blocked on a transient outage would hide a real problem
+    behind a "your Lithos is too old" story."""
+    fake = _FrontierFake(
+        open_tasks=[_task("r", claims=())],
+        ready=[],
+        blocked=[],
+        frontier_error=RuntimeError("connection reset"),
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.graph_available is True
+    assert _section_ids(data.sections, "open") == []
+    assert _section_ids(data.sections, "unclassified") == ["r"]
+    assert any("ready frontier" in message for message in data.errors)
+    assert data.healthy is False
+
+
+def test_empty_corpus_is_flagged_when_lithos_returns_nothing() -> None:
+    """All reads succeeded and Lithos has nothing at all: the board says "no
+    tasks yet" rather than the per-section "nothing matched these filters"."""
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.corpus_empty is True
+    assert data.open_total == 0
+    assert data.healthy is True
+
+
+def test_filters_hiding_every_row_is_not_an_empty_corpus() -> None:
+    """corpus_empty is measured on the RAW responses: a filter that hides
+    every row leaves the corpus non-empty, so the operator is told their
+    filters matched nothing instead of that Lithos is empty."""
+    fake = _FrontierFake(
+        open_tasks=[_task("r", claims=(), tags=("project:a",))],
+        ready=[_task("r", claims=(), tags=("project:a",))],
+        blocked=[],
+    )
+    filters = TaskFilters(statuses=("open",), tags=("project:b",), agent="", since="")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.corpus_empty is False
+    assert data.open_total == 0
+
+
+def test_terminal_rows_alone_are_not_an_empty_corpus() -> None:
+    """Open is empty but something resolved in the window — there IS work to
+    show, so the empty-corpus panel must not claim otherwise."""
+    done = TaskRecord(id="d", title="Done", status="completed", task_type="task")
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[], completed=[done])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.corpus_empty is False
+    assert _section_ids(data.sections, "completed") == ["d"]
+
+
+def test_failed_read_is_never_reported_as_an_empty_corpus() -> None:
+    """An outage empties the open snapshot too; "no tasks yet" would be a lie,
+    so any recorded error rules the empty-corpus panel out."""
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[], fail_ready=True)
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.errors
+    assert data.corpus_empty is False
+
+
+def test_healthy_is_false_while_a_degraded_signal_is_live() -> None:
+    """The healthy stripe is the claim "nothing is wrong": truncation,
+    reconciliation, failed reads, and unknown claims each falsify it."""
+    r1 = _task("r1", claims=())
+    r2 = _task("r2", claims=())
+    truncated = asyncio.run(
+        load_dashboard(
+            _FrontierFake(open_tasks=[r1, r2], ready=[r1, r2], blocked=[]),
+            filters=_FILTERS,
+            frontier_limit=1,
+        )
+    )
+    assert truncated.truncated is True
+    assert truncated.healthy is False
+
+    unknown_claims = asyncio.run(
+        load_dashboard(
+            _FrontierFake(open_tasks=[_task("u", claims=None)], ready=[], blocked=[]),
+            filters=_FILTERS,
+            frontier_limit=500,
+        )
+    )
+    assert unknown_claims.sections["claims_unknown"]
+    assert unknown_claims.healthy is False
+
+    healthy = asyncio.run(
+        load_dashboard(
+            _FrontierFake(open_tasks=[r1], ready=[r1], blocked=[]),
+            filters=_FILTERS,
+            frontier_limit=500,
+        )
+    )
+    assert healthy.healthy is True

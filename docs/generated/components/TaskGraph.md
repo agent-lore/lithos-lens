@@ -11,12 +11,14 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.frontier` | M | 1 | 2 |
+| `lithos_lens.frontier` | L | 1 | 4 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
 
 ### `lithos_lens.frontier`
+- def `is_tool_missing_error` — True when ``exc`` says the Lithos server does not implement the tool.
+- def `flat_open_sections` — Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
 - class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.

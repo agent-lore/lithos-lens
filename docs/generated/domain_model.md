@@ -175,6 +175,8 @@ classDiagram
     +open_total int
     +reconciliation_pending bool
     +truncated bool
+    +graph_available bool
+    +corpus_empty bool
     +errors tuple[str, ...]
   }
   class FindingRecord {

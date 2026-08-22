@@ -413,7 +413,17 @@ async def _render_tasks(
             state.lithos_client,
             filters=filters,
             frontier_limit=state.config.tasks.frontier_limit,
+            graph_available=state.graph_available,
         )
+        if state.graph_available and not dashboard.graph_available:
+            # Loud once, then remembered: every later render skips the two
+            # frontier calls and goes straight to the flat fallback.
+            logger.warning(
+                "Lithos does not expose the task-graph frontier tools; "
+                "falling back to the flat task list (graph features need "
+                "Lithos >= 0.4)"
+            )
+            state.graph_available = False
         logger.debug(
             "tasks dashboard loaded",
             extra={
@@ -428,6 +438,8 @@ async def _render_tasks(
                     section: len(rows) for section, rows in dashboard.sections.items()
                 },
                 "truncated": dashboard.truncated,
+                "graph_available": dashboard.graph_available,
+                "corpus_empty": dashboard.corpus_empty,
                 "errors": list(dashboard.errors),
             },
         )

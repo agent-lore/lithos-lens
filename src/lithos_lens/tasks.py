@@ -13,7 +13,11 @@ TaskStatusName = Literal["open", "completed", "cancelled"]
 # computed by joining the master open list against the Lithos ready/blocked
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
+# ``open`` is the flat-fallback section: it holds every open row when the
+# server has no ready/blocked frontier tools (pre-0.4 Lithos), in which case
+# the three workable sections stay empty. It is never populated alongside them.
 SectionName = Literal[
+    "open",
     "in_progress",
     "ready",
     "blocked",
@@ -205,7 +209,34 @@ class DashboardData:
     open_total: int
     reconciliation_pending: bool = False
     truncated: bool = False
+    # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
+    # the open rows render in the flat ``open`` section behind the
+    # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
+    graph_available: bool = True
+    # True when Lithos answered every read successfully and returned nothing
+    # at all — no open tasks and nothing resolved in the window. Distinguishes
+    # "there is no work yet" from "your filters hid everything", which the
+    # per-section empty lines already say.
+    corpus_empty: bool = False
     errors: tuple[str, ...] = ()
+
+    @property
+    def healthy(self) -> bool:
+        """True when this load carries no degraded signal to report.
+
+        Drives the "All systems healthy" stripe: every read succeeded, the
+        frontier was complete (no truncation) and self-consistent, claims came
+        back for every row, and the graph tools are present. T1-S3 extends this
+        with the needs-attention rules, whose emptiness is the other half of
+        the same statement.
+        """
+        return (
+            self.graph_available
+            and not self.errors
+            and not self.truncated
+            and not self.reconciliation_pending
+            and not self.sections.get("claims_unknown")
+        )
 
 
 @dataclass(frozen=True)

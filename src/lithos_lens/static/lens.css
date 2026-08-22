@@ -131,6 +131,17 @@ h1 {
   border-color: var(--warning-border);
 }
 
+/* The "all systems healthy" stripe: the only positive banner, so it reads
+   green against the warning family it replaces. */
+.banner-healthy {
+  background: rgba(53, 106, 77, 0.08);
+  border-color: var(--ok);
+}
+
+.banner-healthy strong {
+  color: var(--ok);
+}
+
 .banner span {
   display: block;
   margin-top: 0.25rem;
@@ -343,6 +354,15 @@ button,
 
 .task-group {
   overflow: hidden;
+}
+
+.task-board-empty {
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+
+.task-board-empty h2 {
+  margin: 0 0 0.5rem;
 }
 
 .task-group > header {

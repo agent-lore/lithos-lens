@@ -44,6 +44,13 @@ class AppState:
         )
         self.health = HealthSnapshot(llm="disabled" if not config.llm.enabled else "ok")
         self._last_health_probe_at = 0.0
+        # Task-graph feature detection (T1 story 27): flipped to False the
+        # first time a frontier read fails because the TOOL is missing, which
+        # means this Lithos predates 0.4. Sticky for the process — the answer
+        # is a property of the server build, so re-probing every render would
+        # buy two guaranteed failures per request; upgrading Lithos needs a
+        # Lens restart to re-enable the graph sections.
+        self.graph_available = True
 
     async def startup(self) -> None:
         await self.lithos_client.startup()
