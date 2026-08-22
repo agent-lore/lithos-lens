@@ -44,7 +44,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_note_summary`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
-- def `lookback_date`
+- def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
 - def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
 - def `format_display_date`
 - def `format_tag`

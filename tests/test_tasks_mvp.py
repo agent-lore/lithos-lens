@@ -24,6 +24,7 @@ from lithos_lens.tasks import (
     NoteSummary,
     TaskRecord,
     TaskStatusRecord,
+    default_since,
     normalize_since_input,
 )
 from lithos_lens.web import create_app
@@ -949,18 +950,24 @@ def test_dashboard_honors_a_since_inside_the_max_window(
     assert completed_call["resolved_since"] == inside
 
 
-def test_since_clamp_never_shrinks_a_wider_configured_window() -> None:
-    """The ceiling is a safety bound on runaway lookbacks, not a cap on the
-    operator's configured window: a ``default_time_range_days`` wider than
-    MAX_SINCE_LOOKBACK_DAYS still governs."""
-    wide = MAX_SINCE_LOOKBACK_DAYS + 100
-    requested = (datetime.now(UTC) - timedelta(days=wide - 1)).date().isoformat()
-
-    assert normalize_since_input(requested, default_days=wide) == requested
-    assert (
-        normalize_since_input("01/01/0001", default_days=wide)
-        == (datetime.now(UTC) - timedelta(days=wide)).date().isoformat()
+def test_since_ceiling_holds_against_a_wider_configured_window() -> None:
+    """The ceiling is ABSOLUTE: no configured window can raise it (config
+    rejects a wider value, and the day-count→date conversion clamps anyway),
+    so neither the requested nor the default path can widen the two unlimited
+    terminal reads (correctness/f-001)."""
+    ceiling = (
+        (datetime.now(UTC) - timedelta(days=MAX_SINCE_LOOKBACK_DAYS)).date().isoformat()
     )
+    wide = MAX_SINCE_LOOKBACK_DAYS + 10_000
+
+    # An explicit request older than the ceiling, under a wider default…
+    assert normalize_since_input("01/01/0001", default_days=wide) == ceiling
+    # …and the default window itself, which the blank/unparseable paths use.
+    assert normalize_since_input("", default_days=wide) == ceiling
+    assert normalize_since_input("not-a-date", default_days=wide) == ceiling
+    assert default_since(wide) == ceiling
+    # A day count no date arithmetic could take is bounded, not a 500.
+    assert default_since(10**9) == ceiling
 
 
 def test_task_detail_marks_a_task_reopened_from_its_reopen_finding(

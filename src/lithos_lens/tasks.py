@@ -45,13 +45,15 @@ TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 # slice 6); cross-checking against it is the follow-up.
 REOPENED_FINDING_PREFIX = "[Reopened]"
 
-# Ceiling on the ``?since=`` lookback, in days. ``lithos_task_list`` takes no
-# row limit, so this window is the ONLY bound on the completed/cancelled reads
-# — and terminal history, unlike the open frontier, only ever grows: an
-# unclamped ``?since=01/01/0001`` would pull the whole archive into one render.
-# A safety bound rather than an operator dial, the same shape as the client's
-# ``_RECENT_NOTES_MAX_PAGES`` runaway guard; ``default_time_range_days`` stays
-# the tunable window.
+# Absolute ceiling on the completed/cancelled lookback, in days.
+# ``lithos_task_list`` takes no row limit, so this window is the ONLY bound on
+# those two reads — and terminal history, unlike the open frontier, only ever
+# grows: an unbounded ``?since=01/01/0001`` would pull the whole archive into
+# one render. It bounds BOTH inputs that can widen the window — the ``?since=``
+# request AND the configured ``default_time_range_days`` (rejected above this
+# value at config load, and clamped here regardless) — so no configuration can
+# raise it. A safety bound rather than an operator dial, the same shape as the
+# client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
 MAX_SINCE_LOOKBACK_DAYS = 365
 
 
@@ -552,7 +554,17 @@ def default_since(default_days: int) -> str:
 
 
 def lookback_date(days: int) -> date:
-    return (datetime.now(UTC) - timedelta(days=days)).date()
+    """The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
+
+    The single place a day count becomes a window floor, so the ceiling holds
+    for every path — the default window, the ``?since=`` filter, and any later
+    caller — whatever the configuration says. Clamping into ``[0, MAX]`` also
+    means no admitted integer can overflow the date arithmetic (a 500 on the
+    dashboard route).
+    """
+    return (
+        datetime.now(UTC) - timedelta(days=min(max(days, 0), MAX_SINCE_LOOKBACK_DAYS))
+    ).date()
 
 
 def normalize_since_input(value: str, *, default_days: int) -> str:
@@ -560,10 +572,11 @@ def normalize_since_input(value: str, *, default_days: int) -> str:
 
     Blank or unparseable input falls back to the default window; a lookback
     longer than :data:`MAX_SINCE_LOOKBACK_DAYS` is clamped to that ceiling
-    rather than honored. Clamping (rather than snapping back to the default)
-    keeps the filter doing what it says as far as it is permitted to, and the
-    clamped value is what the filter bar re-renders, so the window shown is
-    the window applied.
+    rather than honored — including when the CONFIGURED default is wider, which
+    ``lookback_date`` bounds too. Clamping (rather than snapping back to the
+    default) keeps the filter doing what it says as far as it is permitted to,
+    and the clamped value is what the filter bar re-renders, so the window
+    shown is the window applied.
     """
     value = value.strip()
     if not value:
@@ -571,8 +584,7 @@ def normalize_since_input(value: str, *, default_days: int) -> str:
     parsed = parse_date(value)
     if parsed is None:
         return default_since(default_days)
-    # A default window wider than the ceiling must not be shrunk by it.
-    floor = lookback_date(max(MAX_SINCE_LOOKBACK_DAYS, default_days))
+    floor = lookback_date(MAX_SINCE_LOOKBACK_DAYS)
     return parsed.isoformat() if parsed >= floor else floor.isoformat()
 
 

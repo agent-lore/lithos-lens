@@ -18,7 +18,7 @@ from typing import Any, Literal, cast
 from dotenv import load_dotenv
 
 from lithos_lens.errors import ConfigError
-from lithos_lens.tasks import TASK_STATUSES, TaskStatusName
+from lithos_lens.tasks import MAX_SINCE_LOOKBACK_DAYS, TASK_STATUSES, TaskStatusName
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +399,8 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
             "lithos-lens.tasks",
             minimum=1,
+            # This window is the only bound on the unlimited terminal reads.
+            maximum=MAX_SINCE_LOOKBACK_DAYS,
         ),
         default_status_groups=_optional_status_groups(
             data,
