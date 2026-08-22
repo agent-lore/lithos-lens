@@ -201,16 +201,7 @@
            re-renders the board with the task in its real section — a fresh
            task's frontier membership is unknown until Lithos answers. #}
         <div class="task-list task-list-pending" data-task-list="pending" aria-label="Just created, awaiting sections"></div>
-        {% if dashboard.rolled_up_only %}
-          {# Open rows came back, but every one of them rolls up rather than
-             rendering (epics; gates until they get their own section). Saying
-             nothing here would show a blank board over a non-empty tracker —
-             and the healthy stripe is withheld for the same reason. #}
-          <article class="task-group task-board-empty" data-empty-state="rolled-up">
-            <h2>Nothing to work on here</h2>
-            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics track their children, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
-          </article>
-        {% elif dashboard.nothing_to_show %}
+        {% if dashboard.nothing_to_show %}
           {# Nothing came back for this view, and no tag/agent/status filter is
              narrowing it, so the per-section "no tasks match these filters"
              lines would misdescribe the cause. The heading is scoped to the
@@ -221,10 +212,29 @@
             <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Resolved since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
           </article>
         {% else %}
+        {% if dashboard.rolled_up_only %}
+          {# Open rows came back, but every one of them rolls up rather than
+             rendering (epics; gates until they get their own section). Saying
+             nothing would leave a blank open side over a non-empty tracker —
+             and the healthy stripe is withheld for the same reason.
+
+             This replaces the OPEN sections only. It sits inside the loop's
+             else-branch rather than beside it, because a board whose open side
+             is all roll-ups still has completed and cancelled rows to show. #}
+          <article class="task-group task-board-empty" data-empty-state="rolled-up">
+            <h2>Nothing to work on here</h2>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics track their children, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+          </article>
+        {% endif %}
         {% for section in section_order %}
           {% set rows = dashboard.sections[section] %}
           {% if section in ("completed", "cancelled") %}
             {% set active = section in dashboard.filters.statuses %}
+          {% elif dashboard.rolled_up_only %}
+            {# The panel above already explains the empty open side once; three
+               "no tasks match these filters" groups would blame the filters
+               for it. #}
+            {% set active = false %}
           {% elif section in ("claims_unknown", "unclassified") %}
             {% set active = "open" in dashboard.filters.statuses and rows %}
           {% elif section == "open" %}

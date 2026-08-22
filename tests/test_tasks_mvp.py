@@ -1359,6 +1359,51 @@ def test_a_board_of_only_rolled_up_rows_says_so_instead_of_claiming_health(
     assert 'data-empty-state="rolled-up"' not in terminal_only.text
 
 
+def test_rolled_up_panel_replaces_the_open_side_not_the_whole_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression: the panel is an OPEN-side empty state.
+
+    Rendered in place of the whole section loop it hid the terminal rows too —
+    on the default board (all three statuses), a tracker whose only open row is
+    an epic and which finished something last week showed the panel and NO
+    completed section. Hiding real rows to explain an empty half is worse than
+    the blank board this panel was added to fix.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks = [
+        TaskRecord(
+            id="epic-1",
+            title="Ship the thing",
+            status="open",
+            created_by="planner",
+            created_at="2026-08-01T00:00:00+00:00",
+            task_type="epic",
+        ),
+        TaskRecord(
+            id="done-1",
+            title="Finished last week",
+            status="completed",
+            created_by="worker",
+            created_at="2026-07-01T00:00:00+00:00",
+            resolved_at="2026-08-08T00:00:00+00:00",
+        ),
+    ]
+    fake.ready_ids = set()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    # The open side is explained…
+    assert 'data-empty-state="rolled-up"' in response.text
+    # …and the terminal side still renders, group and row.
+    assert 'data-task-group="completed"' in response.text
+    assert "Finished last week" in response.text
+    # The empty workable groups stay out of the way: one explanation, not four.
+    assert 'data-task-group="ready"' not in response.text
+
+
 def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
     lithos_lens_config_env: Path,
 ) -> None:
