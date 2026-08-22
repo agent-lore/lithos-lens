@@ -249,15 +249,18 @@ class DashboardData:
     reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
-    # One rollup per open epic, in open-snapshot (newest-first) order, bounded
-    # by ``frontier.EPIC_STRIP_CAP``; ``epics_omitted`` counts the epics that cap
-    # dropped so the strip can say it is partial instead of quietly shrinking.
+    # One rollup per open epic, in open-snapshot (newest-first) order.
     epics: tuple[EpicRollup, ...] = ()
-    epics_omitted: int = 0
     # The epic id the sections are actually scoped to — empty when no ``?epic=``
     # was asked for OR when the requested epic is no longer an open epic, which
     # the template explains instead of rendering a silently empty board.
     epic_scope: str = ""
+
+    @property
+    def scoped_epic(self) -> EpicRollup | None:
+        """The epic chip the board is scoped to, if any (the template's handle
+        on it — e.g. to explain a confirmed-childless epic's empty board)."""
+        return next((epic for epic in self.epics if epic.selected), None)
 
 
 @dataclass(frozen=True)
@@ -601,9 +604,10 @@ def matches_filters(
     privates.
 
     ``scope_ids`` is the resolved ``?epic=`` scope — the selected epic's
-    descendant ids. ``None`` means "no epic scope". An empty set would hide
-    everything, which is why ``frontier.load_dashboard`` never resolves one:
-    an epic answering with no subtree falls back to an unscoped board.
+    descendant ids. ``None`` means "no epic scope"; an EMPTY set is a real
+    scope (a confirmed childless epic) and correctly hides everything. The
+    unconfirmable case — an epic that may have closed since the open read —
+    resolves to ``None``, not to an empty set (see ``frontier``).
     """
     if scope_ids is not None and task.id not in scope_ids:
         return False

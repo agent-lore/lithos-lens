@@ -426,7 +426,6 @@ async def _render_tasks(
                 "agent": filters.agent,
                 "since": filters.since,
                 "epic_scope": dashboard.epic_scope,
-                "epics_omitted": dashboard.epics_omitted,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
                 "section_counts": {

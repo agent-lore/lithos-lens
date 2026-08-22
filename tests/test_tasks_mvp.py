@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.frontier import EPIC_STRIP_CAP
+from lithos_lens.frontier import EPIC_FANOUT_BATCH
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
@@ -1039,9 +1039,18 @@ def test_epic_that_lost_its_subtree_between_reads_falls_back_unscoped(
     lithos_lens_config_env: Path,
 ) -> None:
     """Reviewer repro (c-001) end to end: the epic is still in the open list but
-    its children read comes back empty (it closed in between). The board must
+    has closed by the time its children are read, so that read comes back empty
+    and the confirming ``task_get`` answers the coded not-found. The board must
     render whole with the explanation, not as an empty scoped page."""
-    fake = _with_epic(TaskFakeLithosClient())
+
+    class VanishedEpicClient(TaskFakeLithosClient):
+        async def task_get(self, task_id: str) -> TaskRecord:
+            # The epic was deleted after the open list was read.
+            if task_id == "epic-1":
+                raise LithosToolError("Task 'epic-1' not found.", code="task_not_found")
+            return await super().task_get(task_id)
+
+    fake = _with_epic(VanishedEpicClient())
     fake.children["epic-1"] = []
 
     with _client(lithos_lens_config_env, fake) as client:
@@ -1050,19 +1059,19 @@ def test_epic_that_lost_its_subtree_between_reads_falls_back_unscoped(
     assert response.status_code == 200
     text = response.text
     assert "data-epic-scope-missing" in text
+    assert "data-epic-scope-empty" not in text
     assert "Unclaimed open task" in _group(text, "ready")
-    assert "epic-chip-selected" not in text
+    # The stale chip is gone with the scope it claimed.
+    assert 'data-epic-chip="epic-1"' not in text
 
 
-def test_epic_strip_cap_reports_the_epics_it_did_not_fan_out_to(
-    lithos_lens_config_env: Path,
-) -> None:
-    """The fan-out bound is visible, not silent: past ``EPIC_STRIP_CAP`` the
-    strip renders the chips it could afford and states how many epics are
-    missing from it."""
+def test_every_open_epic_renders_a_chip(lithos_lens_config_env: Path) -> None:
+    """Story 8 at the rendering level: past one fan-out batch the strip keeps
+    going — every open epic still gets its chip, with no "partial strip"
+    caveat."""
     fake = _with_epic(TaskFakeLithosClient())
-    surplus = 3
-    for n in range(EPIC_STRIP_CAP + surplus - 1):
+    extra = EPIC_FANOUT_BATCH * 2
+    for n in range(extra):
         fake.tasks.append(
             TaskRecord(
                 id=f"epic-extra-{n}",
@@ -1079,6 +1088,28 @@ def test_epic_strip_cap_reports_the_epics_it_did_not_fan_out_to(
 
     assert response.status_code == 200
     text = response.text
-    assert text.count("data-epic-chip=") == EPIC_STRIP_CAP
-    assert "data-epic-strip-truncated" in text
-    assert f"{surplus} more open epics are not shown" in text
+    assert text.count("data-epic-chip=") == extra + 1
+    assert 'data-epic-chip="epic-extra-0"' in text
+    assert f'data-epic-chip="epic-extra-{extra - 1}"' in text
+
+
+def test_childless_epic_scope_renders_an_explained_empty_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-001), the valid boundary: an open epic with no tasks
+    scopes to an EMPTY board — its descendant set really is empty — and the
+    page says so instead of looking broken or leaking other epics' work."""
+    fake = _with_epic(TaskFakeLithosClient())
+    fake.children["epic-1"] = []
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-empty" in text
+    assert "data-epic-scope-missing" not in text
+    assert "epic-chip-selected" in text
+    # No other epic's work leaked in.
+    assert "Unclaimed open task" not in text
+    assert "Claimed open task" not in text

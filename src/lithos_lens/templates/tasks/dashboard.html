@@ -157,10 +157,13 @@
           {% endfor %}
         </section>
       {% endif %}
-      {% if dashboard.epics_omitted %}
-        <section class="banner banner-warning" role="status" data-epic-strip-truncated>
-          <strong>The epic strip is partial.</strong>
-          <span>{{ dashboard.epics_omitted }} more open epic{{ "s are" if dashboard.epics_omitted != 1 else " is" }} not shown: the strip fans one Lithos children read out per epic, and stops at the {{ dashboard.epics | length }} it can afford.</span>
+      {% if dashboard.scoped_epic and not dashboard.scoped_epic.descendant_ids %}
+        {# A confirmed childless epic IS a scope — an empty one. Every section
+           below is legitimately empty, which needs saying, or the board looks
+           broken. Distinct from "scope not applied" (nothing was scoped). #}
+        <section class="banner" role="status" data-epic-scope-empty>
+          <strong>Nothing under this epic yet.</strong>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; is open with no tasks in its subtree, so every section below is empty.</span>
         </section>
       {% endif %}
       {% if dashboard.filters.epic and not dashboard.epic_scope %}
