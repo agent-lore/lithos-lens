@@ -22,6 +22,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
+from lithos_lens.task_filtering import (
+    invalid_project_metadata,
+    matches_filters,
+    project_convention_conflict,
+    task_projects,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -35,10 +41,6 @@ from lithos_lens.tasks import (
     TaskStatusName,
     TaskSummary,
     int_stat,
-    invalid_project_metadata,
-    matches_filters,
-    project_convention_conflict,
-    task_projects,
 )
 
 logger = logging.getLogger(__name__)

@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import pytest
 
+from lithos_lens.task_filtering import (
+    invalid_project_metadata,
+    matches_agent,
+    matches_filters,
+    project_convention_conflict,
+    task_projects,
+)
 from lithos_lens.tasks import (
     ClaimRecord,
     TaskFilters,
     TaskRecord,
-    invalid_project_metadata,
-    matches_agent,
-    matches_filters,
     parse_filters,
-    project_convention_conflict,
-    task_projects,
 )
 
 
