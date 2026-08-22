@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.tasks.matches_filters"
       }
     ],
-    "total_functions": 247
+    "total_functions": 249
   },
   "domain": {
     "associations": 27,
@@ -298,13 +298,13 @@
       },
       "Tasks": {
         "classes": 16,
-        "functions": 30,
+        "functions": 32,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 657,
-        "lines": 657,
+        "largest_module_lines": 682,
+        "lines": 682,
         "modules": 1,
         "public_symbols": 35,
-        "sloc": 495
+        "sloc": 516
       },
       "Telemetry": {
         "classes": 0,
@@ -330,13 +330,13 @@
     "max_module": "lithos_lens.config",
     "max_module_lines": 799,
     "modules_over_800": [],
-    "total_lines": 5773,
+    "total_lines": 5798,
     "total_modules": 19,
-    "total_sloc": 4651
+    "total_sloc": 4672
   },
   "tests": {
     "ratio": 1.77,
-    "src_lines": 5773,
-    "test_lines": 10221
+    "src_lines": 5798,
+    "test_lines": 10276
   }
 }

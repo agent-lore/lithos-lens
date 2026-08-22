@@ -22,6 +22,12 @@ body {
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
+  /* The body background propagates to the canvas: on a page shorter than the
+     viewport (a not-found panel, an empty state) the gradient sizes to the
+     short body box and then TILES down the rest, drawing hard seams that read
+     as a half-loaded page. Fill the viewport and never repeat. */
+  background-repeat: no-repeat;
+  min-height: 100vh;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }

@@ -29,6 +29,8 @@ SectionName = Literal[
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
+# The statuses whose sections are windowed and sorted on ``resolved_at``.
+TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "cancelled"})
 
 # ``lithos_task_reopen`` records every reopen as a durable finding whose
 # summary starts with this literal marker; it clears ``resolved_at`` and
@@ -195,6 +197,29 @@ class SectionRow:
         if self.claims:
             return "known_claimed"
         return "unknown" if self.claims_unknown else "known_unclaimed"
+
+    @property
+    def timestamp(self) -> str:
+        """The timestamp this row shows: RESOLUTION time on a terminal row.
+
+        Completed/Cancelled are windowed and sorted on ``resolved_at``, so a
+        row there must show that date — otherwise a task created long ago and
+        finished yesterday reads as a filter bug ("2020-01-01" under "Resolved
+        since 2026-04-01") and the newest-resolved-first order looks unsorted.
+        Falls back to ``created_at`` when an older Lithos omitted
+        ``resolved_at``, mirroring ``frontier._rows_for``'s sort key; open rows
+        keep their creation date. ``timestamp_label`` says which one it is.
+        """
+        if self.task.status in TERMINAL_TASK_STATUSES:
+            return self.task.resolved_at or self.task.created_at
+        return self.task.created_at
+
+    @property
+    def timestamp_label(self) -> str:
+        """Which date :attr:`timestamp` is — the two differ, so rows say so."""
+        if self.task.status in TERMINAL_TASK_STATUSES and self.task.resolved_at:
+            return "resolved"
+        return "created"
 
 
 @dataclass(frozen=True)
@@ -630,7 +655,7 @@ def matches_filters(
         return False
     if filters.tags and not all(tag in task.tags for tag in filters.tags):
         return False
-    if status in {"completed", "cancelled"} and filters.since:
+    if status in TERMINAL_TASK_STATUSES and filters.since:
         # Terminal rows are windowed by RESOLUTION time (``resolved_since``
         # upstream), not creation time — a task created months ago and finished
         # yesterday is recent work. A row whose ``resolved_at`` is missing or

@@ -22,6 +22,7 @@ from lithos_lens.tasks import (
     FindingRecord,
     NoteRecord,
     NoteSummary,
+    SectionRow,
     TaskRecord,
     TaskStatusRecord,
     default_since,
@@ -968,6 +969,60 @@ def test_since_ceiling_holds_against_a_wider_configured_window() -> None:
     assert default_since(wide) == ceiling
     # A day count no date arithmetic could take is bounded, not a 500.
     assert default_since(10**9) == ceiling
+
+
+def test_terminal_rows_show_the_resolution_timestamp_they_are_windowed_on(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A Completed/Cancelled row must show its RESOLUTION date: the section is
+    windowed and sorted on it, so showing the creation date instead makes a
+    long-lived task read as a filter bug and the order look unsorted
+    (security/f-004). Open rows keep their creation date; each is labelled so
+    the two dates are distinguishable."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="old-created-recent-resolved",
+            title="Ancient task resolved yesterday",
+            status="completed",
+            created_by="worker",
+            created_at="2020-01-01T00:00:00+00:00",
+            resolved_at="2026-08-08T00:00:00+00:00",
+        )
+    )
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    # The resolved date, labelled — not the 2020 creation date.
+    assert (
+        '<time datetime="2026-08-08T00:00:00+00:00" data-timestamp-kind="resolved">'
+        "resolved 2026-08-08 00:00</time>" in response.text
+    )
+    assert "2020-01-01" not in response.text
+    # Open rows are unaffected — they are not windowed on resolution.
+    assert (
+        '<time datetime="2026-04-26T10:00:00+00:00" data-timestamp-kind="created">'
+        "created 2026-04-26 10:00</time>" in response.text
+    )
+
+
+def test_terminal_row_timestamp_falls_back_when_resolved_at_is_absent() -> None:
+    """Defensive fallback, mirroring ``frontier._rows_for``'s sort key: a
+    resolved_since window drops NULL-resolved rows upstream, so this is only
+    reachable from a server that ignored the filter — the row must still show a
+    date, labelled for the date it actually is."""
+    row = SectionRow(
+        task=TaskRecord(
+            id="cancelled-unstamped",
+            title="Unstamped cancelled task",
+            status="cancelled",
+            created_at="2026-04-24T10:00:00+00:00",
+        )
+    )
+
+    assert row.timestamp == "2026-04-24T10:00:00+00:00"
+    assert row.timestamp_label == "created"
 
 
 def test_task_detail_marks_a_task_reopened_from_its_reopen_finding(
