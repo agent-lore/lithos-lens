@@ -209,6 +209,10 @@ class DashboardData:
     open_total: int
     reconciliation_pending: bool = False
     truncated: bool = False
+    # True when these filters hide part of the corpus from the sections, so
+    # every per-view signal below (truncation, reconciliation, claims-unknown,
+    # emptiness) describes the filtered subset rather than the whole system.
+    filters_narrowed: bool = False
     # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
     # the open rows render in the flat ``open`` section behind the
     # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
@@ -229,9 +233,17 @@ class DashboardData:
         back for every row, and the graph tools are present. T1-S3 extends this
         with the needs-attention rules, whose emptiness is the other half of
         the same statement.
+
+        Withheld on a narrowed view. Truncation, reconciliation and
+        claims-unknown are all measured over the rows the filters left, so on a
+        filtered board they cannot support the stripe's system-wide claim — a
+        ``?tag=`` in a shared link would otherwise turn a degraded system into
+        an affirmative "all healthy". The warning banners are per-view
+        statements and keep rendering under any filter.
         """
         return (
-            self.graph_available
+            not self.filters_narrowed
+            and self.graph_available
             and not self.errors
             and not self.truncated
             and not self.reconciliation_pending
@@ -587,6 +599,24 @@ def matches_filters(
         if task_date is not None and since_date is not None and task_date < since_date:
             return False
     return True
+
+
+def filters_narrow_the_board(filters: TaskFilters) -> bool:
+    """True when these filters hide part of the corpus from the sections.
+
+    The whole-system claims on the dashboard (the healthy stripe, the empty
+    corpus panel) are only sound on an unnarrowed board, because both the
+    section partition and the terminal reads are filtered by agent/tag/status.
+
+    ``since`` is deliberately not narrowing here: it windows only the resolved
+    completed/cancelled reads, which the empty-corpus copy names explicitly,
+    and the open reads every degraded signal derives from ignore it.
+    """
+    return (
+        bool(filters.tags)
+        or bool(filters.agent)
+        or set(filters.statuses) != set(TASK_STATUSES)
+    )
 
 
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:

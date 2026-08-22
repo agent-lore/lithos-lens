@@ -33,6 +33,7 @@ from lithos_lens.tasks import (
     TaskRecord,
     TaskStatusName,
     TaskSummary,
+    filters_narrow_the_board,
     int_stat,
     matches_filters,
 )
@@ -62,6 +63,16 @@ OPEN_SECTIONS: tuple[SectionName, ...] = (
 # timeout, a dropped session, a coded runtime failure — is an OUTAGE, not
 # version skew, and keeps the ordinary error banner.
 #
+# The uncoded branch reads server-supplied TEXT, and that text is not
+# necessarily Lithos's own: an MCP ``isError`` result can carry a FastMCP
+# output-validation message quoting the tool's payload — i.e. task titles
+# written by any agent with task-write access, who is less privileged than the
+# Lens operator. Three things keep that from becoming a control channel: the
+# message must name the very tool whose call failed, BOTH frontier tools must
+# report themselves missing (see ``_frontier_tools_missing``), and the verdict
+# is neither silent (an error line is recorded) nor permanent (the caller
+# re-probes; see ``AppState.graph_available``).
+#
 # The exception is matched structurally (``code`` attribute + message) rather
 # than by class: ``LithosToolError`` lives in the Core tier, which Foundation
 # modules like this one must not import.
@@ -73,14 +84,18 @@ _TOOL_MISSING_FRAGMENTS = (
     "no such tool",
     "method not found",
 )
+READY_TOOL = "lithos_task_ready"
+BLOCKED_TOOL = "lithos_task_blocked"
 
 
-def is_tool_missing_error(exc: BaseException) -> bool:
-    """True when ``exc`` says the Lithos server does not implement the tool.
+def is_tool_missing_error(exc: BaseException, tool: str) -> bool:
+    """True when ``exc`` says the server does not implement ``tool``.
 
     Deliberately conservative: a failure that carries any OTHER Lithos error
     code is a real error (the caller keeps its error banner), and an uncoded
-    failure only counts when its message names the missing tool.
+    failure counts only when its message BOTH names ``tool`` and reads as a
+    missing-tool report — so an error whose text merely quotes the phrase back
+    from user-controlled payload data cannot pass for version skew.
     """
     code = str(getattr(exc, "code", "") or "")
     if code in TOOL_MISSING_CODES:
@@ -88,7 +103,25 @@ def is_tool_missing_error(exc: BaseException) -> bool:
     if code not in _UNCODED_ERROR_CODES:
         return False
     message = str(exc).lower()
+    if tool.lower() not in message:
+        return False
     return any(fragment in message for fragment in _TOOL_MISSING_FRAGMENTS)
+
+
+def _frontier_tools_missing(ready_result: Any, blocked_result: Any) -> bool:
+    """True only when BOTH frontier reads report their own tool as missing.
+
+    A server that has one frontier tool and not the other is broken, not old,
+    and one failing read on its own is an outage — either way the graph surface
+    stays up and the failure is reported as an error. Requiring both, each
+    naming its own tool, is also what makes the uncoded text branch above hard
+    to drive from a single injected string.
+    """
+    return isinstance(ready_result, BaseException) and (
+        isinstance(blocked_result, BaseException)
+        and is_tool_missing_error(ready_result, READY_TOOL)
+        and is_tool_missing_error(blocked_result, BLOCKED_TOOL)
+    )
 
 
 def flat_open_sections(
@@ -483,7 +516,13 @@ async def load_dashboard(
         agents = tuple(cast(list[AgentRecord], agents_result))
 
     open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
-    corpus_empty = _is_corpus_empty(open_snapshot, closed_results, errors=errors)
+    filters_narrowed = filters_narrow_the_board(filters)
+    corpus_empty = _is_corpus_empty(
+        open_snapshot,
+        closed_results,
+        errors=errors,
+        filters_narrowed=filters_narrowed,
+    )
     summary = TaskSummary(
         in_progress=len(partition["in_progress"]),
         ready=len(partition["ready"]),
@@ -510,6 +549,7 @@ async def load_dashboard(
         # Blocked above) — neither is mislabelled as truncation.
         truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
         reconciliation_pending=reconciliation_pending,
+        filters_narrowed=filters_narrowed,
         graph_available=graph_available,
         corpus_empty=corpus_empty,
         errors=tuple(errors),
@@ -546,17 +586,25 @@ def _resolve_frontier(
     """Read the two frontier responses into rows, verdicts, and error lines.
 
     Returns ``(graph_available, frontier_ok, ready_rows, blocked_rows)``.
-    Version skew is separated from an outage here: a frontier call that failed
-    because the TOOL is absent means this Lithos predates the task graph, so
-    the load drops to the flat fallback (which carries its own notice) instead
-    of reporting two errors the operator could act on. Any other failure keeps
-    the graph surface and records the error line.
+    Version skew is separated from an outage here: when BOTH frontier calls
+    failed because their TOOL is absent, the load drops to the flat fallback
+    (which carries its own notice) rather than rendering Ready/Blocked sections
+    it has no data for. Any other failure keeps the graph surface.
+
+    Either way an error line is recorded. "The frontier tools are missing" is
+    also what an authorization filter or a server-side outage looks like from
+    here, and those must stay visible to the operator and to log-based
+    monitoring instead of being dressed up as a benign version notice.
     """
-    frontier_missing = graph_available and any(
-        isinstance(result, BaseException) and is_tool_missing_error(result)
-        for result in (ready_result, blocked_result)
+    frontier_missing = graph_available and _frontier_tools_missing(
+        ready_result, blocked_result
     )
-    if frontier_missing or not graph_available:
+    if frontier_missing:
+        errors.append(
+            "Lithos reported the ready/blocked frontier tools as unavailable."
+        )
+        return False, False, [], []
+    if not graph_available:
         return False, False, [], []
 
     frontier_ok = True
@@ -580,16 +628,19 @@ def _is_corpus_empty(
     closed_results: tuple[list[TaskRecord] | BaseException, ...],
     *,
     errors: list[str],
+    filters_narrowed: bool,
 ) -> bool:
     """True when Lithos answered everything and returned nothing at all.
 
     "Nothing at all" as opposed to "your filters hid everything", which the
-    per-section empty lines already say. Measured on the RAW responses, before
-    the client-side filters, so an over-narrow filter never masquerades as an
-    empty corpus; any recorded error rules it out, since an outage empties the
-    snapshot too.
+    per-section empty lines already say. Three things must hold: no recorded
+    error (an outage empties the snapshot too), an empty master open list
+    (which is read unfiltered), and no narrowing filter — the two terminal
+    reads DO push ``agent``/``tags`` upstream, so under a filter their
+    emptiness says nothing about the corpus. ``since`` is the one window that
+    survives, and the panel copy names it.
     """
-    if errors or open_snapshot:
+    if errors or open_snapshot or filters_narrowed:
         return False
     return not any(
         not isinstance(result, BaseException) and bool(result)

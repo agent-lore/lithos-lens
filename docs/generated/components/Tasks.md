@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 18 |
+| `lithos_lens.tasks` | M | 16 | 19 |
 
 ## Public API
 
@@ -49,6 +49,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `format_tag`
 - def `parse_date`
 - def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
+- def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
 - def `int_stat`
 
 ## Dependencies

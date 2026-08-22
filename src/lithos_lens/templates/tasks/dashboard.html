@@ -31,12 +31,14 @@
         </section>
       {% endif %}
 
-      {# Version skew, not an outage: this Lithos has no ready/blocked frontier
-         tools, so the board falls back to the flat 0.1.0 open list. #}
+      {# No ready/blocked frontier, so the board falls back to the flat 0.1.0
+         open list. Usually version skew — but the same symptom means an
+         outage or tools withheld from this client, so the copy says so and
+         the error banner above carries the machine-readable line. #}
       {% if not dashboard.graph_available %}
         <section class="banner banner-warning" role="status" data-graph-unavailable>
           <strong>Graph features need Lithos 0.4 or newer.</strong>
-          <span>This server does not expose the ready/blocked frontier, so Lens is showing the flat open task list. Ready, Blocked, and blocker chips return once Lithos is upgraded and Lens is restarted.</span>
+          <span>Lithos did not answer the ready/blocked frontier reads, so Lens is showing the flat open task list — no Ready, Blocked, gate, or blocker-chip detail. That usually means a server older than 0.4; it can also mean those tools are unavailable to this client. Lens re-checks periodically and the sections return with the frontier.</span>
         </section>
       {% endif %}
 

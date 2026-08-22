@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from lithos_lens import state
 from lithos_lens.config import load_config
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
@@ -901,8 +902,11 @@ def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
     # The counters follow: no Ready/Blocked cards, one Open tasks count.
     assert "#task-group-ready" not in response.text
     assert "Open tasks" in response.text
-    # A missing tool is not a failed read, and the fallback is not "healthy".
-    assert "Some task data could not be loaded" not in response.text
+    # The fallback is never silent: the same symptom is an outage or an
+    # authorization filter, so the condition stays on the error channel for the
+    # operator and for log-based monitoring (security f-001).
+    assert "Some task data could not be loaded" in response.text
+    assert "frontier tools as unavailable" in response.text
     assert "data-healthy-stripe" not in response.text
     # Terminal sections are unaffected (lithos_task_list predates the graph).
     assert "Recently completed task" in response.text
@@ -1019,3 +1023,94 @@ def test_dashboard_hides_the_board_when_lithos_is_unreachable(
     assert 'class="task-board"' not in response.text
     assert 'data-empty-state="corpus"' not in response.text
     assert "data-healthy-stripe" not in response.text
+
+
+def test_missing_frontier_verdict_expires_and_is_re_probed(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (security f-001): the fallback verdict is remembered, never
+    permanent. "The frontier tools are missing" is also what an outage or an
+    authorization filter looks like, so once the re-probe window lapses Lens
+    asks again and the graph sections come back with the frontier — no restart."""
+    monkeypatch.setattr(state, "GRAPH_REPROBE_INTERVAL_S", 0.0)
+
+    class RecoveringClient(NoFrontierClient):
+        recovered = False
+
+        async def task_ready(self, **kwargs: Any) -> list[TaskRecord]:
+            if self.recovered:
+                self.frontier_calls += 1
+                return await TaskFakeLithosClient.task_ready(self, **kwargs)
+            return await super().task_ready(**kwargs)
+
+        async def task_blocked(self, **kwargs: Any) -> list[BlockedTaskRecord]:
+            if self.recovered:
+                self.frontier_calls += 1
+                return await TaskFakeLithosClient.task_blocked(self, **kwargs)
+            return await super().task_blocked(**kwargs)
+
+    fake = RecoveringClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        degraded = client.get("/tasks?since=2026-04-01")
+        calls_after_probe = fake.frontier_calls
+        fake.recovered = True
+        healed = client.get("/tasks?since=2026-04-01")
+
+    assert "Graph features need Lithos 0.4 or newer" in degraded.text
+    # The lapsed window let the next render probe again…
+    assert fake.frontier_calls > calls_after_probe
+    # …and the graph surface returns without a restart.
+    assert "Graph features need Lithos 0.4 or newer" not in healed.text
+    assert 'data-task-group="ready"' in healed.text
+    assert 'data-task-group="open"' not in healed.text
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["tag=project:nope", "agent=nobody", "status=completed"],
+)
+def test_healthy_stripe_is_withheld_on_a_filtered_board(
+    lithos_lens_config_env: Path, query: str
+) -> None:
+    """Regression (security f-002): the stripe makes a system-wide claim, but
+    truncation, reconciliation and claims-unknown are measured over the rows
+    the filters left. A shared link carrying ?tag=/?agent=/?status= must not be
+    able to turn this degraded server into an affirmative "all healthy"."""
+
+    class NoClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+            rows = await super().list_tasks(**kwargs)
+            return [replace(task, claims=None) for task in rows]
+
+    fake = NoClaimsClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unfiltered = client.get("/tasks?since=2026-04-01")
+        filtered = client.get(f"/tasks?since=2026-04-01&{query}")
+
+    # The degraded signal is real and visible on the whole board…
+    assert "data-healthy-stripe" not in unfiltered.text
+    assert 'data-task-group="claims_unknown"' in unfiltered.text
+    # …and filtering it out of view does not make the system healthy.
+    assert "data-healthy-stripe" not in filtered.text
+
+
+def test_empty_state_is_withheld_when_a_filter_could_hide_terminal_rows(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness f-001): the completed/cancelled reads push
+    agent/tags upstream, so with a terminal-only corpus a non-matching filter
+    empties every response. That is a filter result — the board must say so
+    instead of claiming Lithos has no tasks."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.status == "completed"]
+    fake.ready_ids = set()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=project:nope&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert 'data-empty-state="corpus"' not in response.text
+    assert "No tasks yet" not in response.text
+    assert "No completed tasks match these filters" in response.text

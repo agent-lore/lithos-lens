@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.tasks.matches_filters"
       }
     ],
-    "total_functions": 251
+    "total_functions": 255
   },
   "domain": {
     "associations": 27,
@@ -278,33 +278,33 @@
       },
       "State": {
         "classes": 2,
-        "functions": 5,
+        "functions": 7,
         "largest_module": "lithos_lens.state",
-        "largest_module_lines": 78,
-        "lines": 78,
+        "largest_module_lines": 99,
+        "lines": 99,
         "modules": 1,
         "public_symbols": 2,
-        "sloc": 57
+        "sloc": 70
       },
       "TaskGraph": {
         "classes": 5,
-        "functions": 23,
+        "functions": 24,
         "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 717,
-        "lines": 836,
+        "largest_module_lines": 768,
+        "lines": 887,
         "modules": 2,
         "public_symbols": 11,
-        "sloc": 645
+        "sloc": 682
       },
       "Tasks": {
         "classes": 16,
-        "functions": 28,
+        "functions": 29,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 598,
-        "lines": 598,
+        "largest_module_lines": 628,
+        "lines": 628,
         "modules": 1,
-        "public_symbols": 34,
-        "sloc": 462
+        "public_symbols": 35,
+        "sloc": 484
       },
       "Telemetry": {
         "classes": 0,
@@ -320,23 +320,23 @@
         "classes": 0,
         "functions": 21,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 502,
-        "lines": 502,
+        "largest_module_lines": 506,
+        "lines": 506,
         "modules": 1,
         "public_symbols": 6,
-        "sloc": 434
+        "sloc": 436
       }
     },
     "max_module": "lithos_lens.config",
     "max_module_lines": 797,
     "modules_over_800": [],
-    "total_lines": 5886,
+    "total_lines": 5992,
     "total_modules": 19,
-    "total_sloc": 4750
+    "total_sloc": 4824
   },
   "tests": {
-    "ratio": 1.75,
-    "src_lines": 5886,
-    "test_lines": 10308
+    "ratio": 1.76,
+    "src_lines": 5992,
+    "test_lines": 10520
   }
 }

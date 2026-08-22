@@ -175,6 +175,7 @@ classDiagram
     +open_total int
     +reconciliation_pending bool
     +truncated bool
+    +filters_narrowed bool
     +graph_available bool
     +corpus_empty bool
     +errors tuple[str, ...]
