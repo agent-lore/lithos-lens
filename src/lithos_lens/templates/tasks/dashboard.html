@@ -85,7 +85,7 @@
              matches_filters); the label must say so. Resolved-time windowing
              is T1-S10, which should push lithos_task_list's native
              resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since }}</small>
+          <small>Created since {{ dashboard.filters.since | display_date }}</small>
         </a>
         <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
           <span>Recently cancelled</span>
@@ -94,7 +94,7 @@
              matches_filters); the label must say so. Resolved-time windowing
              is T1-S10, which should push lithos_task_list's native
              resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since }}</small>
+          <small>Created since {{ dashboard.filters.since | display_date }}</small>
         </a>
         <article class="metric-card">
           <span>Agents</span>

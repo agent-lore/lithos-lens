@@ -22,6 +22,12 @@ body {
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
+  /* The body background propagates to the canvas, so a page shorter than the
+     viewport would TILE the gradient down it — visible banding under short
+     pages (a not-found note, or the "No tasks in this window" board). Cover
+     the viewport, and never repeat whatever is left. */
+  background-repeat: no-repeat;
+  min-height: 100vh;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }
@@ -208,11 +214,16 @@ h1 {
   margin-bottom: 1.5rem;
 }
 
+/* Card treatment for the surfaces that sit on the page wash. The just-created
+   strip is a sibling of the .task-group cards and needs the same treatment —
+   but only while it holds a row, or every ordinary render would carry an empty
+   card at the top of the board. */
 .metric-card,
 .panel,
 .detail-panel,
 .filter-bar,
-.task-group {
+.task-group,
+.task-list-pending:not(:empty) {
   background: rgba(255, 250, 240, 0.86);
   border: 1px solid var(--line);
   border-radius: 1.25rem;
@@ -352,7 +363,8 @@ button,
   gap: 1.25rem;
 }
 
-.task-group {
+.task-group,
+.task-list-pending:not(:empty) {
   overflow: hidden;
 }
 
@@ -609,6 +621,18 @@ button,
 
 .claim-list {
   grid-column: 1 / -1;
+}
+
+/* One claim, one chip: the same pill language as the blocker chips in the row
+   below and the claim/status chips beside them. Scoped away from the detail
+   page's claim-list-large, which keeps its larger bordered box. */
+.claim-list:not(.claim-list-large) span {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
 }
 
 .claim-list-large span {

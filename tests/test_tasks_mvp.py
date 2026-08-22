@@ -1136,6 +1136,25 @@ def test_empty_state_is_withheld_when_a_filter_could_hide_terminal_rows(
     assert "No completed tasks match these filters" in response.text
 
 
+def test_since_renders_in_one_format_across_the_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression: the terminal cards, the filter field and the empty-state
+    panel all show the SAME `since` value, so they must all show it the same
+    way — the cards used to print raw ISO a few hundred pixels above the
+    DD/MM/YYYY input holding the identical date."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Created since 01/04/2026" in response.text
+    assert "Created since 2026-04-01" not in response.text
+    # The links behind the cards keep the machine format the route parses.
+    assert "/tasks?status=completed&since=2026-04-01" in response.text
+
+
 def test_future_since_does_not_claim_the_tracker_is_empty(
     lithos_lens_config_env: Path,
 ) -> None:
