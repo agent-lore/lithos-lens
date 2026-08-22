@@ -15,7 +15,18 @@
       ],
       "since": "2026-08-01T00:00:00+00:00"
     },
-    "notes": "with_claims is ALWAYS sent explicitly (issue #24); the other filters only when active. since filters created_at >= since on the RAW ISO strings (inclusive, full precision) — deliberately unlike lithos_finding_list's parsed strict >."
+    "variants": {
+      "resolved_window": {
+        "with_claims": false,
+        "agent": "planner",
+        "status": "completed",
+        "tags": [
+          "project:influx"
+        ],
+        "resolved_since": "2026-07-01T00:00:00+00:00"
+      }
+    },
+    "notes": "with_claims is ALWAYS sent explicitly (issue #24); the other filters only when active. since filters created_at >= since on the RAW ISO strings (inclusive, full precision) — deliberately unlike lithos_finding_list's parsed strict >. The `resolved_window` variant is the dashboard's Completed/Cancelled window: resolved_since filters resolved_at >= that ISO string and excludes rows whose resolved_at is NULL (open tasks, and cancellations from before the column was populated on cancel) — so terminal sections window by resolution time, not creation time."
   },
   "responses": {
     "success": {

@@ -173,6 +173,7 @@ classDiagram
   class DashboardData {
     +frontier_limit int
     +open_total int
+    +projects tuple[str, ...]
     +reconciliation_pending bool
     +truncated bool
     +filters_narrowed bool
@@ -222,6 +223,9 @@ classDiagram
     +tags tuple[str, ...]
     +agent str
     +since str
+    +projects tuple[str, ...]
+    +project_convention ProjectConvention
+    +project_tag_key str
   }
   class TaskRecord {
     +id str

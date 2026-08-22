@@ -24,6 +24,10 @@
         <h1>{{ detail.task.title }}</h1>
         <div class="detail-meta">
           <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+          {# Attributed, not asserted: any client can post a [Reopened]
+             finding, so the badge names who reported it (tasks.py trust
+             note on REOPENED_FINDING_PREFIX). #}
+          {% if detail.reopen_report %}<span class="badge badge-reopened" data-reopened-marker>reopen reported by {{ detail.reopen_report.finding.agent or "unknown agent" }}</span>{% endif %}
           {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
           {% if detail.task.created_at %}<time datetime="{{ detail.task.created_at }}">{{ detail.task.created_at }}</time>{% endif %}
         </div>

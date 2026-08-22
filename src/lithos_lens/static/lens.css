@@ -22,10 +22,10 @@ body {
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
-  /* The body background propagates to the canvas, so a page shorter than the
-     viewport would TILE the gradient down it — visible banding under short
-     pages (a not-found note, or the "No tasks in this window" board). Cover
-     the viewport, and never repeat whatever is left. */
+  /* The body background propagates to the canvas: on a page shorter than the
+     viewport (a not-found panel, an empty state) the gradient sizes to the
+     short body box and then TILES down the rest, drawing hard seams that read
+     as a half-loaded page. Fill the viewport and never repeat. */
   background-repeat: no-repeat;
   min-height: 100vh;
   color: var(--ink);
@@ -290,6 +290,20 @@ small {
   margin-right: 0.65rem;
 }
 
+/* Submit + reset share one filter-bar cell (see dashboard.html): side by side
+   while they fit, wrapping within the cell rather than across the bar's rows. */
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.filter-actions > * {
+  /* Overrides the shared control width:100% so the pair can share one cell. */
+  flex: 1 1 auto;
+  width: auto;
+}
+
 .date-picker-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.9rem;
@@ -480,6 +494,13 @@ button,
 .badge-cancelled {
   border-color: rgba(138, 74, 59, 0.35);
   color: var(--cancelled);
+}
+
+.badge-reopened {
+  background: rgba(189, 79, 43, 0.09);
+  border-color: rgba(189, 79, 43, 0.45);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .claim-chip {
@@ -699,6 +720,12 @@ button,
   border: 1px solid var(--line);
   border-radius: 1rem;
   padding: 1rem;
+}
+
+/* A reopen is a lifecycle reversal, so its finding is tinted like the marker
+   badge that the same finding drives on the header. */
+.findings-timeline li.finding-reopened {
+  border-color: rgba(189, 79, 43, 0.45);
 }
 
 .findings-timeline header {

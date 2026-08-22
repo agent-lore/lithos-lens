@@ -28,7 +28,7 @@
       },
       "LithosClient": {
         "functions_over_10": 4,
-        "max_complexity": 16,
+        "max_complexity": 20,
         "max_function": "lithos_lens.fake_lithos.FakeLithosClient.list_tasks"
       },
       "Logging": {
@@ -77,7 +77,7 @@
         "qualname": "lithos_lens.tasks.normalize_task"
       },
       {
-        "complexity": 16,
+        "complexity": 20,
         "qualname": "lithos_lens.fake_lithos.FakeLithosClient.list_tasks"
       },
       {
@@ -93,24 +93,24 @@
         "qualname": "lithos_lens.lithos_client.LithosClient.recent_notes"
       },
       {
+        "complexity": 13,
+        "qualname": "lithos_lens.task_filtering.matches_filters"
+      },
+      {
         "complexity": 12,
         "qualname": "lithos_lens.frontier.classify_open_tasks"
       },
       {
         "complexity": 12,
         "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
-      },
-      {
-        "complexity": 12,
-        "qualname": "lithos_lens.tasks.matches_filters"
       }
     ],
-    "total_functions": 260
+    "total_functions": 276
   },
   "domain": {
     "associations": 27,
     "models": 31,
-    "models_without_docstrings": 15
+    "models_without_docstrings": 14
   },
   "graph": {
     "component_cycles": [],
@@ -177,7 +177,7 @@
       }
     },
     "cross_component_edges": 27,
-    "cross_component_module_edges": 40,
+    "cross_component_module_edges": 43,
     "longest_component_chain": 6,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -208,13 +208,13 @@
     "components": {
       "Config": {
         "classes": 11,
-        "functions": 22,
+        "functions": 24,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 797,
-        "lines": 797,
-        "modules": 1,
-        "public_symbols": 14,
-        "sloc": 675
+        "largest_module_lines": 761,
+        "lines": 880,
+        "modules": 2,
+        "public_symbols": 19,
+        "sloc": 742
       },
       "Entrypoint": {
         "classes": 0,
@@ -260,11 +260,11 @@
         "classes": 8,
         "functions": 87,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 821,
-        "lines": 1745,
+        "largest_module_lines": 826,
+        "lines": 1761,
         "modules": 4,
         "public_symbols": 11,
-        "sloc": 1450
+        "sloc": 1461
       },
       "Logging": {
         "classes": 1,
@@ -288,23 +288,23 @@
       },
       "TaskGraph": {
         "classes": 5,
-        "functions": 24,
+        "functions": 27,
         "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 752,
-        "lines": 871,
+        "largest_module_lines": 880,
+        "lines": 999,
         "modules": 2,
         "public_symbols": 11,
-        "sloc": 677
+        "sloc": 772
       },
       "Tasks": {
         "classes": 16,
-        "functions": 29,
+        "functions": 40,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 631,
-        "lines": 631,
-        "modules": 1,
-        "public_symbols": 35,
-        "sloc": 484
+        "largest_module_lines": 725,
+        "lines": 918,
+        "modules": 2,
+        "public_symbols": 41,
+        "sloc": 694
       },
       "Telemetry": {
         "classes": 0,
@@ -320,25 +320,26 @@
         "classes": 0,
         "functions": 21,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 506,
-        "lines": 506,
+        "largest_module_lines": 510,
+        "lines": 510,
         "modules": 1,
         "public_symbols": 6,
-        "sloc": 436
+        "sloc": 440
       }
     },
-    "max_module": "lithos_lens.lithos_client",
-    "max_module_lines": 821,
+    "max_module": "lithos_lens.frontier",
+    "max_module_lines": 880,
     "modules_over_800": [
+      "lithos_lens.frontier",
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 6095,
-    "total_modules": 20,
-    "total_sloc": 4909
+    "total_lines": 6613,
+    "total_modules": 22,
+    "total_sloc": 5296
   },
   "tests": {
-    "ratio": 1.77,
-    "src_lines": 6095,
-    "test_lines": 10783
+    "ratio": 1.81,
+    "src_lines": 6613,
+    "test_lines": 11958
   }
 }

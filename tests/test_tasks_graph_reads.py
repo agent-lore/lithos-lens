@@ -286,6 +286,40 @@ def test_list_tasks_sends_explicit_false_with_claims() -> None:
     )
 
 
+def test_list_tasks_sends_resolved_since_for_the_terminal_window() -> None:
+    """The Completed/Cancelled window is a resolved_since push (T1-S10):
+    upstream filters resolved_at >= value and drops NULL-resolved rows, which
+    is what makes "created months ago, finished yesterday" recent work."""
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(
+        client,
+        client.list_tasks(
+            status="completed", resolved_since="2026-07-01T00:00:00+00:00"
+        ),
+    )
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {
+            "with_claims": False,
+            "status": "completed",
+            "resolved_since": "2026-07-01T00:00:00+00:00",
+        },
+    )
+
+
+def test_list_tasks_omits_resolved_since_when_not_windowed() -> None:
+    """An unset window must not leak a null argument: the master open read is
+    deliberately unwindowed."""
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(client, client.list_tasks(status="open", with_claims=True))
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {"status": "open", "with_claims": True},
+    )
+
+
 def test_task_ready_sends_limit_and_claims_and_normalizes() -> None:
     client = _StubClient(
         {"lithos_task_ready": {"tasks": [{"id": "r-1", "title": "Ready one"}]}}

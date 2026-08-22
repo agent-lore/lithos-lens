@@ -11,9 +11,19 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 19 |
+| `lithos_lens.task_filtering` | S | 0 | 7 |
+| `lithos_lens.tasks` | L | 16 | 18 |
 
 ## Public API
+
+### `lithos_lens.task_filtering`
+- def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
+- def `task_projects` — Every project slug a task claims under ``convention`` (§5B.1).
+- def `project_convention_conflict` — True when a task carries BOTH conventions and they disagree (§5B.1).
+- def `matches_agent` — Creator-OR-claimer agent match (§5.4.2).
+- def `matches_projects` — Multi-select project match: does the task belong to ANY selected project?
+- def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
+- def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
 
 ### `lithos_lens.tasks`
 - class `SectionState`
@@ -26,7 +36,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
-- class `TaskFilters`
+- class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
 - class `TaskSummary`
 - class `DashboardData`
 - class `FindingView`
@@ -44,12 +54,11 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_note_summary`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
-- def `normalize_since_input`
+- def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
+- def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
 - def `format_display_date`
 - def `format_tag`
 - def `parse_date`
-- def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
-- def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
 - def `int_stat`
 
 ## Dependencies

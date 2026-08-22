@@ -396,6 +396,8 @@ async def _render_tasks(
             query_items,
             state.config.tasks.default_time_range_days,
             state.config.tasks.default_status_groups,
+            project_convention=state.config.tasks.project_convention,
+            project_tag_key=state.config.tasks.project_tag_key,
         )
         logger.debug(
             "tasks dashboard filters parsed",
@@ -403,6 +405,7 @@ async def _render_tasks(
                 "lens_route": str(request.url.path),
                 "query_items": query_items,
                 "statuses": list(filters.statuses),
+                "projects": list(filters.projects),
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
@@ -433,6 +436,7 @@ async def _render_tasks(
             extra={
                 "lens_route": str(request.url.path),
                 "statuses": list(filters.statuses),
+                "projects": list(filters.projects),
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
@@ -464,7 +468,7 @@ async def _render_tasks(
 # query from this allowlist, so a retired param (e.g. the pre-T1
 # ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
 # of propagating through tag / detail / back-link navigation forever.
-_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag")
+_PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag")
 
 
 def _preserved_filter_params(

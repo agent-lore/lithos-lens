@@ -81,20 +81,18 @@
         <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
-          {# The since filter windows terminal rows by CREATED date (see
-             matches_filters); the label must say so. Resolved-time windowing
-             is T1-S10, which should push lithos_task_list's native
-             resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since | display_date }}</small>
+          {# The since filter windows terminal rows by RESOLVED date — it is
+             pushed upstream as lithos_task_list's native resolved_since param
+             (see frontier.load_dashboard) — so the label says so. #}
+          <small>Resolved since {{ dashboard.filters.since | display_date }}</small>
         </a>
         <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
           <span>Recently cancelled</span>
           <strong>{{ dashboard.summary.recent_cancelled }}</strong>
-          {# The since filter windows terminal rows by CREATED date (see
-             matches_filters); the label must say so. Resolved-time windowing
-             is T1-S10, which should push lithos_task_list's native
-             resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since | display_date }}</small>
+          {# The since filter windows terminal rows by RESOLVED date — it is
+             pushed upstream as lithos_task_list's native resolved_since param
+             (see frontier.load_dashboard) — so the label says so. #}
+          <small>Resolved since {{ dashboard.filters.since | display_date }}</small>
         </a>
         <article class="metric-card">
           <span>Agents</span>
@@ -126,12 +124,25 @@
             </label>
           {% endfor %}
         </fieldset>
+        {# Project matches either convention (metadata.project or the
+           project:<slug> tag) per [tasks].project_convention; the datalist is
+           the union of slugs present in the loaded snapshot. Comma-separated
+           values select several projects (OR). #}
         <label>
-          Tag
-          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="project:influx">
+          Project
+          <input list="projects" name="project" value="{{ dashboard.filters.projects | join(',') }}" placeholder="Any project">
+          <datalist id="projects">
+            {% for project in dashboard.projects %}
+              <option value="{{ project }}"></option>
+            {% endfor %}
+          </datalist>
         </label>
         <label>
-          Creating agent
+          Tag
+          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="area:docs">
+        </label>
+        <label>
+          Agent (creator or claimer)
           <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
           <datalist id="agents">
             {% for agent in dashboard.agents %}
@@ -140,15 +151,23 @@
           </datalist>
         </label>
         <label>
-          Created since
+          Resolved since
           <span class="date-picker-control">
             <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
-            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose created since date">
+            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose resolved since date">
             <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
           </span>
         </label>
-        <button type="submit">Apply filters</button>
-        <a class="button-secondary" href="/tasks">Reset</a>
+        {# The two actions are ONE grid child. As independent items they were
+           laid out by the same auto-fit column count as the fields, so a field
+           count that doesn't divide evenly (7 items across 3 columns, ~768px)
+           orphaned Reset onto a row of its own where the eye expects another
+           filter. Wrapping keeps the pair together at every width, and survives
+           the next filter this bar grows. #}
+        <div class="filter-actions">
+          <button type="submit">Apply filters</button>
+          <a class="button-secondary" href="/tasks">Reset</a>
+        </div>
       </form>
 
       {#
@@ -184,7 +203,7 @@
              is invisible here, so this must not claim the tracker is empty. #}
           <article class="task-group task-board-empty" data-empty-state="window">
             <h2>No tasks in this window</h2>
-            <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Created since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
+            <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Resolved since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
           </article>
         {% else %}
         {% for section in section_order %}

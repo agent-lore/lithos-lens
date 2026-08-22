@@ -33,6 +33,43 @@ SectionName = Literal[
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
+# The statuses whose sections are windowed and sorted on ``resolved_at``.
+TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "cancelled"})
+
+# ``lithos_task_reopen`` records every reopen as a durable finding whose
+# summary starts with this literal marker; it clears ``resolved_at`` and
+# ``outcome``, so the finding is the only surviving evidence of the reopen.
+#
+# TRUST BOUNDARY: findings are free text. ``lithos_finding_post`` takes
+# ``{task_id, agent, summary}`` with no credential, so ANY Lithos client can
+# mint this prefix on ANY task under any ``agent`` string — the marker is a
+# REPORT, not a verified fact, and the UI must attribute it rather than assert
+# it (hence the "reopen reported by <agent>" copy). Corroborating against task
+# state is not available either: a reopened-then-recompleted task legitimately
+# carries ``resolved_at`` again. The authoritative signal is the upstream
+# ``task.reopened`` event, which the Lens pipeline does not consume yet (T1
+# slice 6); cross-checking against it is the follow-up.
+REOPENED_FINDING_PREFIX = "[Reopened]"
+
+# Absolute ceiling on the completed/cancelled lookback, in days.
+# ``lithos_task_list`` takes no row limit, so this window is the ONLY bound on
+# those two reads — and terminal history, unlike the open frontier, only ever
+# grows: an unbounded ``?since=01/01/0001`` would pull the whole archive into
+# one render. It bounds BOTH inputs that can widen the window — the ``?since=``
+# request AND the configured ``default_time_range_days`` (rejected above this
+# value at config load, and clamped here regardless) — so no configuration can
+# raise it. A safety bound rather than an operator dial, the same shape as the
+# client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
+MAX_SINCE_LOOKBACK_DAYS = 365
+
+# Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
+# production corpus and their counts disagree: ``metadata.project = "<slug>"``
+# (what Lithos itself understands) and a ``project:<slug>`` tag (the original
+# Lens convention). ``project_convention`` selects which are honoured.
+ProjectConvention = Literal["metadata", "tag", "both"]
+PROJECT_CONVENTIONS: tuple[ProjectConvention, ...] = ("metadata", "tag", "both")
+DEFAULT_PROJECT_CONVENTION: ProjectConvention = "both"
+DEFAULT_PROJECT_TAG_KEY = "project"
 
 
 class SectionState(StrEnum):
@@ -174,13 +211,48 @@ class SectionRow:
             return "known_claimed"
         return "unknown" if self.claims_unknown else "known_unclaimed"
 
+    @property
+    def timestamp(self) -> str:
+        """The timestamp this row shows: RESOLUTION time on a terminal row.
+
+        Completed/Cancelled are windowed and sorted on ``resolved_at``, so a
+        row there must show that date — otherwise a task created long ago and
+        finished yesterday reads as a filter bug ("2020-01-01" under "Resolved
+        since 2026-04-01") and the newest-resolved-first order looks unsorted.
+        Falls back to ``created_at`` when an older Lithos omitted
+        ``resolved_at``, mirroring ``frontier._rows_for``'s sort key; open rows
+        keep their creation date. ``timestamp_label`` says which one it is.
+        """
+        if self.task.status in TERMINAL_TASK_STATUSES:
+            return self.task.resolved_at or self.task.created_at
+        return self.task.created_at
+
+    @property
+    def timestamp_label(self) -> str:
+        """Which date :attr:`timestamp` is — the two differ, so rows say so."""
+        if self.task.status in TERMINAL_TASK_STATUSES and self.task.resolved_at:
+            return "resolved"
+        return "created"
+
 
 @dataclass(frozen=True)
 class TaskFilters:
+    """The live ``/tasks`` filter vocabulary, parsed from the query string.
+
+    ``projects`` is multi-valued and matches a task under ``project_convention``
+    (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
+    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and
+    ``since`` windows only the resolved sections. The convention knobs travel on
+    the filters so the pure predicates below stay pure.
+    """
+
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
     since: str
+    projects: tuple[str, ...] = ()
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)
@@ -207,6 +279,10 @@ class DashboardData:
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int
+    # The project universe for the filter dropdown: the UNION of both
+    # conventions' slugs over the loaded snapshot (§5B.1), so no project is
+    # invisible to its own view.
+    projects: tuple[str, ...] = ()
     reconciliation_pending: bool = False
     truncated: bool = False
     # True when these filters hide part of the corpus from the sections, so
@@ -264,6 +340,18 @@ class FindingView:
     def link_label(self) -> str:
         return self.note_title or "View document"
 
+    @property
+    def is_reopen(self) -> bool:
+        """True for a ``[Reopened]`` finding — a reopen REPORT, not a verdict.
+
+        ``lithos_task_reopen`` posts this finding and leaves no other trace (it
+        clears ``resolved_at`` and ``outcome``), but any client can post the
+        same prefix under any agent name; see the trust note on
+        :data:`REOPENED_FINDING_PREFIX`. Both markers it drives are worded as
+        attributed reports for that reason.
+        """
+        return self.finding.summary.lstrip().startswith(REOPENED_FINDING_PREFIX)
+
 
 @dataclass(frozen=True)
 class TaskDetailData:
@@ -274,6 +362,20 @@ class TaskDetailData:
     findings_state: SectionState = SectionState.OK
     not_found: bool = False
     errors: tuple[str, ...] = ()
+
+    @property
+    def reopen_report(self) -> FindingView | None:
+        """The most recent reopen report on this task, if any.
+
+        Derived from the findings timeline (see ``FindingView.is_reopen``),
+        which is the only durable record of a reopen — and an unauthenticated
+        one, so the view carries the REPORTING AGENT and the header attributes
+        the claim to them instead of stating a lifecycle reversal as fact.
+        ``findings`` is ordered oldest-first by ``resolve_finding_notes``, so
+        the last match is the latest report. A findings load failure yields
+        None ("unknown"), never a false negative claim.
+        """
+        return next((view for view in reversed(self.findings) if view.is_reopen), None)
 
 
 class TaskLithosClientProtocol(Protocol):
@@ -291,6 +393,7 @@ class TaskLithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -311,6 +414,9 @@ def parse_filters(
     query_items: list[tuple[str, str]],
     default_days: int,
     default_statuses: tuple[TaskStatusName, ...] = TASK_STATUSES,
+    *,
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
@@ -337,6 +443,11 @@ def parse_filters(
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        # Multi-select: ``?project=x&project=y`` (and the comma form) select
+        # the union of those projects, not their intersection.
+        projects=tuple(values.get("project", [])),
+        project_convention=project_convention,
+        project_tag_key=project_tag_key,
     )
 
 
@@ -543,15 +654,42 @@ def note_updated_sort_key(updated: str) -> datetime:
 
 
 def default_since(default_days: int) -> str:
-    return (datetime.now(UTC) - timedelta(days=default_days)).date().isoformat()
+    return lookback_date(default_days).isoformat()
+
+
+def lookback_date(days: int) -> date:
+    """The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
+
+    The single place a day count becomes a window floor, so the ceiling holds
+    for every path — the default window, the ``?since=`` filter, and any later
+    caller — whatever the configuration says. Clamping into ``[0, MAX]`` also
+    means no admitted integer can overflow the date arithmetic (a 500 on the
+    dashboard route).
+    """
+    return (
+        datetime.now(UTC) - timedelta(days=min(max(days, 0), MAX_SINCE_LOOKBACK_DAYS))
+    ).date()
 
 
 def normalize_since_input(value: str, *, default_days: int) -> str:
+    """Parse the ``?since=`` filter into a BOUNDED ISO date.
+
+    Blank or unparseable input falls back to the default window; a lookback
+    longer than :data:`MAX_SINCE_LOOKBACK_DAYS` is clamped to that ceiling
+    rather than honored — including when the CONFIGURED default is wider, which
+    ``lookback_date`` bounds too. Clamping (rather than snapping back to the
+    default) keeps the filter doing what it says as far as it is permitted to,
+    and the clamped value is what the filter bar re-renders, so the window
+    shown is the window applied.
+    """
     value = value.strip()
     if not value:
         return default_since(default_days)
     parsed = parse_date(value)
-    return parsed.isoformat() if parsed else default_since(default_days)
+    if parsed is None:
+        return default_since(default_days)
+    floor = lookback_date(MAX_SINCE_LOOKBACK_DAYS)
+    return parsed.isoformat() if parsed >= floor else floor.isoformat()
 
 
 def format_display_date(value: str) -> str:
@@ -576,50 +714,6 @@ def parse_date(value: str) -> date | None:
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def matches_filters(
-    task: TaskRecord,
-    *,
-    filters: TaskFilters,
-    status: TaskStatusName,
-) -> bool:
-    """Client-side filter predicate shared by the dashboard sections.
-
-    Public because the frontier join (``frontier.py``) re-applies it over the
-    joined snapshot; the guardrail forbids reaching for another module's
-    privates.
-    """
-    if task.status != status:
-        return False
-    if filters.agent and task.created_by != filters.agent:
-        return False
-    if filters.tags and not all(tag in task.tags for tag in filters.tags):
-        return False
-    if status in {"completed", "cancelled"} and filters.since:
-        task_date = parse_date(task.created_at)
-        since_date = parse_date(filters.since)
-        if task_date is not None and since_date is not None and task_date < since_date:
-            return False
-    return True
-
-
-def filters_narrow_the_board(filters: TaskFilters) -> bool:
-    """True when these filters hide part of the corpus from the sections.
-
-    The whole-system claims on the dashboard (the healthy stripe, the empty
-    corpus panel) are only sound on an unnarrowed board, because both the
-    section partition and the terminal reads are filtered by agent/tag/status.
-
-    ``since`` is deliberately not narrowing here: it windows only the resolved
-    completed/cancelled reads, which the empty-corpus copy names explicitly,
-    and the open reads every degraded signal derives from ignore it.
-    """
-    return (
-        bool(filters.tags)
-        or bool(filters.agent)
-        or set(filters.statuses) != set(TASK_STATUSES)
-    )
 
 
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
