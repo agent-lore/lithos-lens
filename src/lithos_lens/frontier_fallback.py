@@ -21,10 +21,6 @@ from typing import Any, Protocol, cast
 from lithos_lens.task_graph import BlockedTaskRecord
 from lithos_lens.tasks import SectionName, SectionRow, TaskRecord
 
-# The three workable sections, in render order (mirrored from ``frontier`` so
-# the open-side order can be stated in one place).
-WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
-
 
 class FrontierProbeClient(Protocol):
     """The narrow client surface this module needs.
@@ -47,15 +43,6 @@ class FrontierProbeClient(Protocol):
 
     async def list_tool_names(self) -> set[str]: ...
 
-
-# The flat-fallback section, rendered INSTEAD of the workable three when the
-# server has no frontier tools. Kept separate so the two modes never mix.
-FLAT_SECTIONS: tuple[SectionName, ...] = ("open",)
-
-# Every open-side section, in render order (only one mode's are ever filled).
-OPEN_SECTIONS: tuple[SectionName, ...] = (
-    FLAT_SECTIONS + WORKABLE_SECTIONS + ("claims_unknown", "unclassified")
-)
 
 # Version-skew detection (story 27): the names of the two task-graph frontier
 # tools, looked for in the server's own ``tools/list``. A pre-0.4 Lithos has

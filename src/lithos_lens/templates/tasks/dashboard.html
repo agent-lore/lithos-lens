@@ -48,37 +48,43 @@
       {% if dashboard.healthy and not dashboard.nothing_to_show %}
         <section class="banner banner-healthy" role="status" data-healthy-stripe>
           <strong>All systems healthy.</strong>
-          <span>Every open task is classified; no failed reads, truncated frontier, or unresolved frontier disagreement.</span>
+          <span>Every workable open task is classified; no failed reads, truncated frontier, or unresolved frontier disagreement.</span>
         </section>
       {% endif %}
 
       <section class="situation-grid" aria-label="Current situation">
-        {% if dashboard.graph_available %}
-          <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-in_progress">
+        {# Keyed on open_flat, exactly like the sections below: the cards
+           describe the board that rendered. Keying them on graph_available
+           instead put Ready/Blocked zeros above a flat Open list during an
+           outage — three counts presented as facts about a frontier that
+           never answered, and no card for the list actually on screen. #}
+        {% if not dashboard.open_flat %}
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-in_progress') }}">
             <span>In progress</span>
             <strong>{{ dashboard.summary.in_progress }}</strong>
             <small>{{ dashboard.summary.open_claims }} active claims</small>
           </a>
-          <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-ready">
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-ready') }}">
             <span>Ready</span>
             <strong>{{ dashboard.summary.ready }}</strong>
             <small>Unclaimed and workable now</small>
           </a>
-          <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-blocked">
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-blocked') }}">
             <span>Blocked</span>
             <strong>{{ dashboard.summary.blocked }}</strong>
             <small>Waiting on predecessors or gates</small>
           </a>
         {% else %}
-          {# No frontier: Ready/Blocked counts would be zeros dressed as facts,
-             so the flat fallback shows the one count it can stand behind. #}
-          <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-open">
+          {# No usable frontier: Ready/Blocked counts would be zeros dressed as
+             facts, so the flat fallback shows the one count it can stand
+             behind. #}
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-open') }}">
             <span>Open tasks</span>
             <strong>{{ dashboard.summary.open_total }}</strong>
             <small>{{ dashboard.summary.open_claims }} active claims</small>
           </a>
         {% endif %}
-        <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
+        <a class="metric-card" href="{{ task_card_url(request, 'completed', dashboard.filters.since) }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
           {# The since filter windows terminal rows by RESOLVED date — it is
@@ -86,7 +92,7 @@
              (see frontier.load_dashboard) — so the label says so. #}
           <small>Resolved since {{ dashboard.filters.since | display_date }}</small>
         </a>
-        <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
+        <a class="metric-card" href="{{ task_card_url(request, 'cancelled', dashboard.filters.since) }}">
           <span>Recently cancelled</span>
           <strong>{{ dashboard.summary.recent_cancelled }}</strong>
           {# The since filter windows terminal rows by RESOLVED date — it is
@@ -195,7 +201,16 @@
            re-renders the board with the task in its real section — a fresh
            task's frontier membership is unknown until Lithos answers. #}
         <div class="task-list task-list-pending" data-task-list="pending" aria-label="Just created, awaiting sections"></div>
-        {% if dashboard.nothing_to_show %}
+        {% if dashboard.rolled_up_only %}
+          {# Open rows came back, but every one of them rolls up rather than
+             rendering (epics; gates until they get their own section). Saying
+             nothing here would show a blank board over a non-empty tracker —
+             and the healthy stripe is withheld for the same reason. #}
+          <article class="task-group task-board-empty" data-empty-state="rolled-up">
+            <h2>Nothing to work on here</h2>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics track their children, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+          </article>
+        {% elif dashboard.nothing_to_show %}
           {# Nothing came back for this view, and no tag/agent/status filter is
              narrowing it, so the per-section "no tasks match these filters"
              lines would misdescribe the cause. The heading is scoped to the

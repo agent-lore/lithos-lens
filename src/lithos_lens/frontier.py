@@ -23,7 +23,6 @@ from dataclasses import replace
 from typing import Any, Protocol, cast
 
 from lithos_lens.frontier_fallback import (
-    OPEN_SECTIONS,
     RETRY_FAILED_ERROR,
     flat_open_sections,
     frontier_reads,
@@ -39,6 +38,7 @@ from lithos_lens.task_filtering import (
 )
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
+    OPEN_SECTIONS,
     AgentRecord,
     BlockerChip,
     ClaimRecord,
@@ -434,6 +434,26 @@ async def load_dashboard(
         open_index = {task.id: task for task in open_snapshot}
         reconciliation_pending = False
 
+    open_flat = not (graph_available and frontier_ok)
+
+    # Rows the graph rolls up rather than rendering (epics, gates). Counted
+    # over the SAME filtered set the sections are built from, and after the
+    # skew retry may have replaced the snapshot, so the number describes what
+    # this render actually withheld.
+    # Zero unless the open side is actually on screen: with ``?status=completed``
+    # the open sections are emptied by choice, and an epic in the snapshot must
+    # not turn that into "nothing to work on here".
+    rolled_up_open = (
+        0
+        if open_flat or "open" not in filters.statuses
+        else sum(
+            1
+            for task in open_snapshot
+            if task.task_type != WORKABLE_TASK_TYPE
+            and matches_filters(task, filters=filters, status="open")
+        )
+    )
+
     closed: dict[str, list[TaskRecord]] = {}
     for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
         rows = _rows_for(status, result, filters, errors)
@@ -519,7 +539,8 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
         graph_available=graph_available,
-        open_flat=not (graph_available and frontier_ok),
+        open_flat=open_flat,
+        rolled_up_open=rolled_up_open,
         nothing_to_show=nothing_to_show,
         errors=tuple(errors),
     )

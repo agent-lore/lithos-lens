@@ -33,6 +33,19 @@ SectionName = Literal[
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
+
+# Every open-side section, in render order. Only one mode's are ever filled:
+# the flat ``open`` list, or the workable three plus their degraded tails.
+# Canonical here so the render order, the open row count and the
+# "did anything render?" checks below cannot drift apart.
+OPEN_SECTIONS: tuple[SectionName, ...] = (
+    "open",
+    "in_progress",
+    "ready",
+    "blocked",
+    "claims_unknown",
+    "unclassified",
+)
 # The statuses whose sections are windowed and sorted on ``resolved_at``.
 TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "cancelled"})
 
@@ -299,6 +312,13 @@ class DashboardData:
     # the first is a version story, and only the first should be remembered by
     # the caller. Half a frontier is not a classification.
     open_flat: bool = False
+    # Open rows the graph deliberately rolls up rather than rendering: epics
+    # (they roll up to their children) and gates (§5.3 gives them their own
+    # section in a later slice). Counted so the board can SAY so — an open row
+    # that exists and renders nowhere must not read as an empty tracker, and
+    # must not sit under an affirmative health claim. Always 0 in the flat
+    # fallback, where every open row renders.
+    rolled_up_open: int = 0
     # True when Lithos answered every read successfully and returned nothing
     # for this view: no open tasks, and nothing resolved inside the ``since``
     # window. Distinguishes "there is nothing here" from "your filters hid
@@ -310,6 +330,20 @@ class DashboardData:
     errors: tuple[str, ...] = ()
 
     @property
+    def rolled_up_only(self) -> bool:
+        """True when the open side is empty ONLY because rows were rolled up.
+
+        The degenerate case is a tracker holding nothing but epics: every open
+        section renders empty, ``nothing_to_show`` is False (the open read did
+        return rows), and without this the board would show an empty board
+        under "All systems healthy". Drives the explanatory panel that names
+        the rolled-up rows instead.
+        """
+        if not self.rolled_up_open:
+            return False
+        return not any(self.sections.get(section) for section in OPEN_SECTIONS)
+
+    @property
     def healthy(self) -> bool:
         """True when this load carries no degraded signal to report.
 
@@ -318,6 +352,10 @@ class DashboardData:
         back for every row, and the graph tools are present. T1-S3 extends this
         with the needs-attention rules, whose emptiness is the other half of
         the same statement.
+
+        Withheld when the open side rendered nothing but rolled-up rows exist
+        (see :attr:`rolled_up_only`): the stripe would be the only thing on an
+        empty board, asserting health over work the operator cannot see.
 
         Withheld on a narrowed view. Truncation, reconciliation and
         claims-unknown are all measured over the rows the filters left, so on a
@@ -328,6 +366,7 @@ class DashboardData:
         """
         return (
             not self.filters_narrowed
+            and not self.rolled_up_only
             and self.graph_available
             and not self.errors
             and not self.truncated

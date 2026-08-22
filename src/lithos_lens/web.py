@@ -103,6 +103,7 @@ def create_app(
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
+    templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
 
@@ -491,6 +492,27 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def task_card_url(request: Request, status: str, since: str, anchor: str = "") -> str:
+    """Link a summary card to the board it actually counts.
+
+    The card's number is computed over the ACTIVE filters, so the link has to
+    carry them: project/tag/agent ride along (rebuilt from the request through
+    the same allowlist as every other generated tasks URL), the card supplies
+    the status it counts, and ``since`` is the resolved window this page is
+    showing rather than whatever the request did or did not say. Dropping the
+    filters made the card a lie by one click: the count described the filtered
+    board, the destination showed the unfiltered one.
+    """
+    params = [
+        (key, value)
+        for key, value in _preserved_filter_params(request)
+        if key not in {"status", "since"}
+    ]
+    params.append(("status", status))
+    params.append(("since", since))
+    return f"/tasks?{urlencode(params)}{anchor}"
 
 
 def tasks_url(request: Request) -> str:

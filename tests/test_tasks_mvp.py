@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from html import unescape
@@ -1251,6 +1252,113 @@ class NoFrontierClient(TaskFakeLithosClient):
         raise LithosToolError("Unknown tool: lithos_task_blocked", code="tool_error")
 
 
+class FrontierOutageClient(TaskFakeLithosClient):
+    """A 0.4+ Lithos whose frontier reads fail transiently.
+
+    The opposite of ``NoFrontierClient`` in the one way that matters: the tools
+    ARE advertised, so detection must call this an outage rather than version
+    skew — while the board still renders flat, since half a frontier classifies
+    nothing.
+    """
+
+    async def task_ready(self, **kwargs: Any) -> list[TaskRecord]:
+        raise LithosToolError("connection reset", code="tool_error")
+
+    async def task_blocked(self, **kwargs: Any) -> list[BlockedTaskRecord]:
+        raise LithosToolError("connection reset", code="tool_error")
+
+
+def test_outage_cards_describe_the_flat_board_they_sit_above(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression: the summary cards follow the RENDER, not `graph_available`.
+
+    Keyed on the latter they showed Ready/Blocked zeros — three counts
+    presented as facts about a frontier that never answered — above a flat Open
+    list that had no card of its own.
+    """
+    fake = FrontierOutageClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    # Rendered flat, but as an outage: no version notice, and the read error
+    # is on screen.
+    assert "Graph features need Lithos 0.4 or newer" not in response.text
+    assert "Could not load the ready frontier." in response.text
+    # The cards match the board: the flat Open count, no frontier zeros.
+    assert "Open tasks" in response.text
+    assert ">Ready<" not in response.text
+    assert ">Blocked<" not in response.text
+    assert "task-group-open" in response.text
+
+
+def test_summary_cards_keep_the_filters_their_counts_were_computed_from(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression: a card counts the FILTERED board, so its link must carry the
+    same filters — otherwise one click swaps the dataset out from under the
+    number the operator just read."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?since=2026-04-01&tag=area:docs&agent=planner&project=influx"
+        )
+
+    assert response.status_code == 200
+    text = unescape(response.text)
+    for card in ("status=open", "status=completed", "status=cancelled"):
+        hrefs = [
+            href for href in re.findall(r'href="(/tasks\?[^"]*)"', text) if card in href
+        ]
+        assert hrefs, f"no card link for {card}"
+        for href in hrefs:
+            assert "tag=area%3Adocs" in href or "tag=area:docs" in href
+            assert "agent=planner" in href
+            assert "project=influx" in href
+            assert "since=2026-04-01" in href
+
+
+def test_a_board_of_only_rolled_up_rows_says_so_instead_of_claiming_health(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression: epics are stripped from the graph sections (§5.3), so a
+    tracker holding nothing but an open epic rendered an empty board under
+    "All systems healthy" — an affirmative claim over work the operator could
+    not see, and no explanation of where it went."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [
+        TaskRecord(
+            id="epic-1",
+            title="Ship the thing",
+            status="open",
+            created_by="planner",
+            created_at="2026-08-01T00:00:00+00:00",
+            task_type="epic",
+        )
+    ]
+    fake.ready_ids = set()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    assert 'data-empty-state="rolled-up"' in response.text
+    assert "Nothing to work on here" in response.text
+    assert "data-healthy-stripe" not in response.text
+    # Not the empty-corpus panel: the open read DID return a row.
+    assert 'data-empty-state="window"' not in response.text
+
+    # …and it is scoped to a board that SHOWS the open side: asking for only
+    # terminal rows empties those sections by choice, not by roll-up.
+    with _client(lithos_lens_config_env, fake) as client:
+        terminal_only = client.get("/tasks?status=completed&since=2026-04-01")
+
+    assert 'data-empty-state="rolled-up"' not in terminal_only.text
+
+
 def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -1520,8 +1628,10 @@ def test_since_renders_in_one_format_across_the_page(
     assert response.status_code == 200
     assert "Resolved since 01/04/2026" in response.text
     assert "Resolved since 2026-04-01" not in response.text
-    # The links behind the cards keep the machine format the route parses.
-    assert "/tasks?status=completed&since=2026-04-01" in response.text
+    # The links behind the cards keep the machine format the route parses
+    # (unescaped like every other generated-URL assertion: the href carries
+    # `&amp;` because it is now built in Python and autoescaped).
+    assert "/tasks?status=completed&since=2026-04-01" in unescape(response.text)
 
 
 def test_future_since_does_not_claim_the_tracker_is_empty(

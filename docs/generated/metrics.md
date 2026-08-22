@@ -42,27 +42,27 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 4 | 1761 | 1461 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 99 | 70 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 3 | 1077 | 817 | 2 | 1 | 0.33 | 35 (`lithos_lens.frontier.load_dashboard`) | 3 |
-| Tasks | 2 | 924 | 695 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 3 |
+| TaskGraph | 3 | 1085 | 824 | 2 | 1 | 0.33 | 40 (`lithos_lens.frontier.load_dashboard`) | 3 |
+| Tasks | 2 | 963 | 720 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 510 | 440 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
+| Web | 1 | 532 | 459 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **23**, lines: **6697**, SLOC: **5342**
+- Modules: **23**, lines: **6766**, SLOC: **5393**
 - Largest module: `lithos_lens.lithos_client` (826 lines)
 - Modules over 800 lines: **1**
   - `lithos_lens.lithos_client`
 
 ## Complexity
 
-- Functions: **279**, cyclomatic > 10: **14**
+- Functions: **281**, cyclomatic > 10: **14**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
-| 35 | `lithos_lens.frontier.load_dashboard` |
+| 40 | `lithos_lens.frontier.load_dashboard` |
 | 25 | `lithos_lens.config._apply_env_overrides` |
 | 23 | `lithos_lens.tasks.normalize_task` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
@@ -84,4 +84,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **31** (27 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.79** (12016 test lines / 6697 source lines)
+- Test-to-source line ratio: **1.79** (12126 test lines / 6766 source lines)
