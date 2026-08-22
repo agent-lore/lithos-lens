@@ -17,7 +17,8 @@ on the task-graph records in ``task_graph.py``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
@@ -35,7 +36,11 @@ from lithos_lens.tasks import (
     TaskSummary,
     int_stat,
     matches_filters,
+    project_convention_conflict,
+    task_projects,
 )
+
+logger = logging.getLogger(__name__)
 
 # Only ``task``-typed rows are workable. Epics and gates roll up / gate elsewhere
 # and are excluded from both Lithos frontiers, so they never classify here.
@@ -192,16 +197,14 @@ async def load_dashboard(
     — the same explicit degraded-data pattern as ``claims_unknown``.
     """
     errors: list[str] = []
-    query_tags = list(filters.tags) or None
-    query_agent = filters.agent or None
 
     async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
-        return await lithos.list_tasks(
-            agent=query_agent,
-            status=status,
-            tags=query_tags,
-            since=filters.since,
-        )
+        # Only ``since`` is pushed upstream (it bounds the fetch). Project, tag
+        # and agent filtering is applied client-side over the fetched rows (PRD
+        # "Filters and URL contract"): no upstream call can express the
+        # metadata-OR-tag project match, and the upstream ``agent`` argument is
+        # creator-only, which would drop rows the agent merely claims.
+        return await lithos.list_tasks(status=status, since=filters.since)
 
     (
         open_result,
@@ -366,6 +369,21 @@ async def load_dashboard(
         # sections derive from the snapshot).
         closed[status] = [task for task in rows if task.id not in open_index]
 
+    _log_project_convention_conflicts(open_snapshot, filters)
+    # The dropdown's universe is built from the UNFILTERED reads, so selecting
+    # one project never collapses the list of projects you can switch to.
+    projects = _project_universe(
+        [
+            open_snapshot,
+            *(
+                cast("list[TaskRecord]", result)
+                for result in closed_results
+                if not isinstance(result, BaseException)
+            ),
+        ],
+        filters,
+    )
+
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
     for section in WORKABLE_SECTIONS + ("claims_unknown", "unclassified"):
@@ -413,6 +431,7 @@ async def load_dashboard(
         agents=agents,
         frontier_limit=frontier_limit,
         open_total=open_total,
+        projects=projects,
         # Truncation means a frontier response actually HIT frontier_limit,
         # leaving otherwise-classifiable rows in the tail. Unclassified rows
         # from a failed frontier read are surfaced by the error banner, and a
@@ -421,6 +440,58 @@ async def load_dashboard(
         truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
         reconciliation_pending=reconciliation_pending,
         errors=tuple(errors),
+    )
+
+
+def _project_universe(
+    groups: Iterable[Sequence[TaskRecord]],
+    filters: TaskFilters,
+) -> tuple[str, ...]:
+    """Every project slug present in the loaded snapshot, sorted (§5B.1).
+
+    The union is taken under the ACTIVE convention, so every slug the filter
+    dropdown offers is one the filter can actually match.
+    """
+    slugs: set[str] = set()
+    for rows in groups:
+        for task in rows:
+            slugs.update(
+                task_projects(
+                    task,
+                    convention=filters.project_convention,
+                    tag_key=filters.project_tag_key,
+                )
+            )
+    return tuple(sorted(slugs))
+
+
+def _log_project_convention_conflicts(
+    open_snapshot: Sequence[TaskRecord],
+    filters: TaskFilters,
+) -> None:
+    """Warn to telemetry about tasks whose two project conventions disagree.
+
+    Only meaningful under the reconciling ``"both"`` posture (§5B.1); the
+    single-convention postures deliberately read one side. Neither value is
+    dropped — the task matches under both slugs — so this is a data-quality
+    signal, not a rendering decision.
+    """
+    if filters.project_convention != "both":
+        return
+    conflicts = [
+        task.id
+        for task in open_snapshot
+        if project_convention_conflict(task, tag_key=filters.project_tag_key)
+    ]
+    if not conflicts:
+        return
+    logger.warning(
+        "task project conventions disagree",
+        extra={
+            "lens_event": "lens.tasks.project_convention_conflict",
+            "conflict_count": len(conflicts),
+            "conflicting_task_ids": conflicts[:20],
+        },
     )
 
 

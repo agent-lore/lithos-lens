@@ -106,6 +106,8 @@ agent_id = "lithos-lens"
 | `visible_cap` | integer | No | `50` | **Deprecated** (unused since the graph-native dashboard); configuring it logs a one-time warning. |
 | `default_time_range_days` | integer | No | `30` | Created-at window for completed/cancelled task context. |
 | `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
+| `project_convention` | string | No | `both` | Which project convention the `?project=` filter honours: `metadata` (`metadata.project`), `tag` (`project:<slug>`), or `both` (a task matches under either). |
+| `project_tag_key` | string | No | `project` | Tag key reserved for the tag convention; must not contain `:`. |
 
 #### `[lithos-lens.events]`
 

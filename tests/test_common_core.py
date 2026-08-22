@@ -160,6 +160,8 @@ def test_config_loads_common_core_defaults(lithos_lens_config_env: Path) -> None
     assert config.tasks.visible_cap == 50
     assert config.tasks.frontier_limit == 500
     assert config.tasks.default_status_groups == ("open", "completed", "cancelled")
+    assert config.tasks.project_convention == "both"
+    assert config.tasks.project_tag_key == "project"
     assert config.events.enabled is True
     assert config.llm.enabled is False
     assert config.telemetry.enabled is False
@@ -257,6 +259,45 @@ def test_env_override_tasks_frontier_limit_rejects_junk(
 
     with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_FRONTIER_LIMIT"):
         load_config(lithos_lens_config_env)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("project_convention", '"neither"'),
+        ("project_tag_key", '""'),
+        # The key becomes a "<key>:" tag prefix, so a value that already
+        # carries the separator would match nothing.
+        ("project_tag_key", '"project:"'),
+    ],
+)
+def test_invalid_project_convention_settings_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        f'[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n{key} = {value}\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match=key):
+        load_config(config_path)
+
+
+def test_project_convention_settings_are_read_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        'project_convention = "tag"\nproject_tag_key = "proj"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.project_convention == "tag"
+    assert config.tasks.project_tag_key == "proj"
 
 
 def test_visible_cap_in_config_warns_deprecated_once(

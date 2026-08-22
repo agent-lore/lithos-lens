@@ -31,13 +31,18 @@ def _task(
     task_type: str = "task",
     claims: Any = None,
     tags: tuple[str, ...] = (),
+    created_by: str = "",
+    metadata: dict[str, Any] | None = None,
+    status: str = "open",
 ) -> TaskRecord:
     return TaskRecord(
         id=task_id,
         title=f"Title {task_id}",
-        status="open",
+        status=status,  # type: ignore[arg-type]
         task_type=task_type,
         tags=tags,
+        created_by=created_by,
+        metadata=dict(metadata or {}),
         claims=claims,
     )
 
@@ -199,6 +204,7 @@ class _FrontierFake:
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
+        self.list_calls: list[dict[str, Any]] = []
 
     @staticmethod
     def _as_sequence(value: list[Any]) -> list[list[Any]]:
@@ -216,6 +222,9 @@ class _FrontierFake:
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         # Mirror the real server: agent/tag are filtered upstream when passed.
+        self.list_calls.append(
+            {"agent": agent, "status": status, "tags": tags, "since": since}
+        )
         if (status or "open") == "open":
             index = min(self.open_calls, len(self._open_seq) - 1)
             self.open_calls += 1
@@ -612,3 +621,185 @@ def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
     assert _section_ids(data.sections, "ready") == []
     assert _section_ids(data.sections, "blocked") == []
     assert data.reconciliation_pending is False
+
+
+# ── T1 slice 9: filters rebase ─────────────────────────────────────────
+
+
+def test_project_and_agent_filters_are_never_pushed_upstream() -> None:
+    """Only ``since`` is pushed: the upstream agent argument is creator-only and
+    no upstream call can express the metadata-OR-tag project match, so both
+    filters are applied client-side over the fetched rows."""
+    mine = _task("m", claims=(), created_by="agent-zero", tags=("project:influx",))
+    fake = _FrontierFake(open_tasks=[mine], ready=[mine], blocked=[])
+    filters = TaskFilters(
+        statuses=("open", "completed", "cancelled"),
+        tags=("area:docs",),
+        agent="agent-zero",
+        since="2026-04-01",
+        projects=("influx",),
+    )
+
+    asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    closed_calls = [call for call in fake.list_calls if call["status"] != "open"]
+    assert closed_calls, "the completed/cancelled windows were never fetched"
+    for call in closed_calls:
+        assert call["agent"] is None
+        assert call["tags"] is None
+        assert call["since"] == "2026-04-01"
+
+
+def test_agent_filter_keeps_a_task_the_agent_only_claims() -> None:
+    """Story 22 acceptance: ``?agent=X`` matches a task X merely claims."""
+    claimed = _task(
+        "claimed",
+        created_by="planner",
+        claims=(ClaimRecord(agent="agent-zero", aspect="implementation"),),
+    )
+    created = _task("created", created_by="agent-zero", claims=())
+    other = _task("other", created_by="planner", claims=())
+    fake = _FrontierFake(
+        open_tasks=[claimed, created, other],
+        ready=[created, other],
+        blocked=[],
+    )
+    filters = TaskFilters(statuses=("open",), tags=(), agent="agent-zero", since="")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "in_progress") == ["claimed"]
+    assert _section_ids(data.sections, "ready") == ["created"]
+    assert data.summary.open_total == 2
+
+
+def test_project_filter_matches_either_convention_over_the_snapshot() -> None:
+    """Story 23: neither convention makes a task invisible to its project view."""
+    stamped = _task("stamped", claims=(), metadata={"project": "influx"})
+    tagged = _task("tagged", claims=(), tags=("project:influx",))
+    elsewhere = _task("elsewhere", claims=(), tags=("project:ganglion",))
+    fake = _FrontierFake(
+        open_tasks=[stamped, tagged, elsewhere],
+        ready=[stamped, tagged, elsewhere],
+        blocked=[],
+    )
+    filters = TaskFilters(
+        statuses=("open",), tags=(), agent="", since="", projects=("influx",)
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "ready") == ["stamped", "tagged"]
+
+
+def test_project_universe_unions_open_and_resolved_rows() -> None:
+    """The filter dropdown's universe is the union of both conventions' slugs
+    across the loaded snapshot (§5B.1), resolved rows included."""
+    stamped = _task("stamped", claims=(), metadata={"project": "influx"})
+    tagged = _task("tagged", claims=(), tags=("project:ganglion",))
+    done = _task("done", status="completed", tags=("project:cardinal",))
+    fake = _FrontierFake(
+        open_tasks=[stamped, tagged],
+        ready=[stamped, tagged],
+        blocked=[],
+        completed=[done],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.projects == ("cardinal", "ganglion", "influx")
+
+
+def test_project_universe_survives_an_active_project_filter() -> None:
+    """Scoping to one project must not collapse the dropdown to that project —
+    the universe comes from the unfiltered reads."""
+    mine = _task("mine", claims=(), tags=("project:influx",))
+    other = _task("other", claims=(), tags=("project:ganglion",))
+    done = _task("done", status="completed", tags=("project:cardinal",))
+    fake = _FrontierFake(
+        open_tasks=[mine, other], ready=[mine, other], blocked=[], completed=[done]
+    )
+    filters = TaskFilters(
+        statuses=("open", "completed"),
+        tags=(),
+        agent="",
+        since="",
+        projects=("influx",),
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "ready") == ["mine"]
+    assert data.projects == ("cardinal", "ganglion", "influx")
+
+
+def test_disagreeing_project_conventions_warn_to_telemetry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """§5B.1: when both conventions are present and disagree, neither value is
+    dropped (the task matches under both slugs) but the conflict is reported."""
+    conflicted = _task(
+        "conflicted",
+        claims=(),
+        tags=("project:tagged",),
+        metadata={"project": "stamped"},
+    )
+    agreeing = _task(
+        "agreeing", claims=(), tags=("project:same",), metadata={"project": "same"}
+    )
+    fake = _FrontierFake(
+        open_tasks=[conflicted, agreeing], ready=[conflicted, agreeing], blocked=[]
+    )
+
+    with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
+        data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
+    ]
+    # The structured extras the JSON formatter emits (see JsonFormatter).
+    assert record.__dict__["conflicting_task_ids"] == ["conflicted"]
+    assert record.__dict__["conflict_count"] == 1
+    # Both slugs still select the task, and both reach the filter dropdown.
+    assert data.projects == ("same", "stamped", "tagged")
+    for slug in ("stamped", "tagged"):
+        scoped = TaskFilters(
+            statuses=("open",), tags=(), agent="", since="", projects=(slug,)
+        )
+        scoped_data = asyncio.run(
+            load_dashboard(fake, filters=scoped, frontier_limit=500)
+        )
+        assert _section_ids(scoped_data.sections, "ready") == ["conflicted"]
+
+
+def test_single_convention_posture_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Under a single-convention posture Lens deliberately reads one side, so a
+    disagreement is not a reconciliation event worth warning about."""
+    conflicted = _task(
+        "conflicted",
+        claims=(),
+        tags=("project:tagged",),
+        metadata={"project": "stamped"},
+    )
+    fake = _FrontierFake(open_tasks=[conflicted], ready=[conflicted], blocked=[])
+    filters = TaskFilters(
+        statuses=("open",),
+        tags=(),
+        agent="",
+        since="",
+        project_convention="metadata",
+    )
+
+    with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
+        data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert not [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
+    ]
+    assert data.projects == ("stamped",)

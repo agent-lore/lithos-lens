@@ -515,6 +515,82 @@ def test_legacy_claimed_state_url_is_ignored(
     assert "Unclaimed open task" in response.text
 
 
+def test_agent_filter_matches_a_task_the_agent_only_claims(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 22 acceptance: ``?agent=X`` matches a task X merely claims, not
+    only the tasks it created ("everything agent-zero is involved in")."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?agent=worker-a&since=2026-04-01")
+
+    assert response.status_code == 200
+    # open-claimed was created by "planner" and is claimed by "worker-a".
+    assert "Claimed open task" in response.text
+    # …while the tasks worker-a neither created nor claims drop out.
+    assert "Unclaimed open task" not in response.text
+    assert "Recently completed task" not in response.text
+    # The agent filter is applied by Lens, never pushed upstream (the upstream
+    # argument is creator-only and would drop the claimed row).
+    assert all(call["agent"] is None for call in fake.list_calls)
+
+
+def test_project_filter_matches_both_conventions(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 23: a project view shows tasks stamped with ``metadata.project``
+    AND tasks carrying the ``project:<slug>`` tag — neither convention hides a
+    task from its own project (§5B.1)."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="stamped",
+            title="Stamped by metadata",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-24T10:00:00+00:00",
+            metadata={"project": "influx"},
+        )
+    )
+    fake.ready_ids.add("stamped")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?project=influx&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Stamped by metadata" in response.text
+    # Tagged with project:influx.
+    assert "Claimed open task" in response.text
+    assert "Unclaimed open task" in response.text
+    # No project at all: out of scope of the project view.
+    assert "Old open task" not in response.text
+    # Both conventions' slugs reach the filter datalist.
+    assert '<datalist id="projects">' in response.text
+    assert '<option value="influx">' in response.text
+
+
+def test_project_filter_is_preserved_across_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``?project=`` is part of the live filter vocabulary, so generated tag and
+    detail links carry it (unlike the retired ``claimed_state``)."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=open&project=influx&claimed_state=any&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert (
+        'href="/tasks/open-claimed?status=open&project=influx&since=2026-04-01"'
+    ) in text
+    assert "claimed_state" not in text.split("<main")[1]
+
+
 def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
     lithos_lens_config_env: Path,
 ) -> None:

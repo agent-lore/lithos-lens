@@ -30,6 +30,15 @@ KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
+# Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
+# production corpus and their counts disagree: ``metadata.project = "<slug>"``
+# (what Lithos itself understands) and a ``project:<slug>`` tag (the original
+# Lens convention). ``project_convention`` selects which are honoured.
+ProjectConvention = Literal["metadata", "tag", "both"]
+PROJECT_CONVENTIONS: tuple[ProjectConvention, ...] = ("metadata", "tag", "both")
+DEFAULT_PROJECT_CONVENTION: ProjectConvention = "both"
+DEFAULT_PROJECT_TAG_KEY = "project"
+
 
 class SectionState(StrEnum):
     OK = "ok"
@@ -173,10 +182,22 @@ class SectionRow:
 
 @dataclass(frozen=True)
 class TaskFilters:
+    """The live ``/tasks`` filter vocabulary, parsed from the query string.
+
+    ``projects`` is multi-valued and matches a task under ``project_convention``
+    (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
+    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and
+    ``since`` windows only the resolved sections. The convention knobs travel on
+    the filters so the pure predicates below stay pure.
+    """
+
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
     since: str
+    projects: tuple[str, ...] = ()
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)
@@ -203,6 +224,10 @@ class DashboardData:
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int
+    # The project universe for the filter dropdown: the UNION of both
+    # conventions' slugs over the loaded snapshot (§5B.1), so no project is
+    # invisible to its own view.
+    projects: tuple[str, ...] = ()
     reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
@@ -265,6 +290,9 @@ def parse_filters(
     query_items: list[tuple[str, str]],
     default_days: int,
     default_statuses: tuple[TaskStatusName, ...] = TASK_STATUSES,
+    *,
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
@@ -291,6 +319,11 @@ def parse_filters(
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        # Multi-select: ``?project=x&project=y`` (and the comma form) select
+        # the union of those projects, not their intersection.
+        projects=tuple(values.get("project", [])),
+        project_convention=project_convention,
+        project_tag_key=project_tag_key,
     )
 
 
@@ -532,6 +565,85 @@ def parse_date(value: str) -> date | None:
         return None
 
 
+def task_projects(
+    task: TaskRecord,
+    *,
+    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> tuple[str, ...]:
+    """Every project slug a task claims under ``convention`` (§5B.1).
+
+    Both live conventions are read under ``"both"`` — ``metadata.project``
+    first, then each ``<tag_key>:<slug>`` tag — and the result is the UNION, so
+    a task tagged for one project and stamped with another is visible in both
+    project views rather than invisible to one. (Display precedence, where the
+    metadata value wins the single row chip, is a row-anatomy concern; here
+    membership is what matters.) Order is stable — metadata slug first — and
+    duplicates collapse.
+    """
+    slugs: list[str] = []
+    if convention in ("metadata", "both"):
+        metadata_slug = str(task.metadata.get("project") or "").strip()
+        if metadata_slug:
+            slugs.append(metadata_slug)
+    if convention in ("tag", "both"):
+        prefix = f"{tag_key}:"
+        for tag in task.tags:
+            if not tag.startswith(prefix):
+                continue
+            tag_slug = tag[len(prefix) :].strip()
+            if tag_slug and tag_slug not in slugs:
+                slugs.append(tag_slug)
+    return tuple(slugs)
+
+
+def project_convention_conflict(
+    task: TaskRecord,
+    *,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> bool:
+    """True when a task carries BOTH conventions and they disagree (§5B.1).
+
+    Neither value is dropped — the task stays visible under both slugs — but
+    the disagreement is a data-quality signal the loader reports to telemetry
+    (``lens.tasks.project_convention_conflict``).
+    """
+    metadata_slugs = task_projects(task, convention="metadata", tag_key=tag_key)
+    tag_slugs = task_projects(task, convention="tag", tag_key=tag_key)
+    if not metadata_slugs or not tag_slugs:
+        return False
+    return metadata_slugs[0] not in tag_slugs
+
+
+def matches_agent(task: TaskRecord, agent: str) -> bool:
+    """Creator-OR-claimer agent match (§5.4.2).
+
+    "Everything agent-zero is involved in" is one filter: the row matches when
+    the agent created the task or holds one of its inline claims. Claims are
+    only inline on the master open list; a row whose claims were not returned
+    (``claims is None``) can only match on creator — Lens does not guess.
+    """
+    if task.created_by == agent:
+        return True
+    return any(claim.agent == agent for claim in task.claims or ())
+
+
+def matches_projects(task: TaskRecord, filters: TaskFilters) -> bool:
+    """Multi-select project match: does the task belong to ANY selected project?
+
+    An empty selection matches everything; otherwise the task's slugs under the
+    active convention are intersected with the selection (§5.4.2).
+    """
+    if not filters.projects:
+        return True
+    slugs = task_projects(
+        task,
+        convention=filters.project_convention,
+        tag_key=filters.project_tag_key,
+    )
+    return any(slug in filters.projects for slug in slugs)
+
+
 def matches_filters(
     task: TaskRecord,
     *,
@@ -546,7 +658,9 @@ def matches_filters(
     """
     if task.status != status:
         return False
-    if filters.agent and task.created_by != filters.agent:
+    if filters.agent and not matches_agent(task, filters.agent):
+        return False
+    if not matches_projects(task, filters):
         return False
     if filters.tags and not all(tag in task.tags for tag in filters.tags):
         return False
