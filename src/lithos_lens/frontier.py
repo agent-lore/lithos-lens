@@ -17,10 +17,17 @@ on the task-graph records in ``task_graph.py``.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
+from lithos_lens.task_filtering import (
+    invalid_project_metadata,
+    matches_filters,
+    project_convention_conflict,
+    task_projects,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -34,8 +41,9 @@ from lithos_lens.tasks import (
     TaskStatusName,
     TaskSummary,
     int_stat,
-    matches_filters,
 )
+
+logger = logging.getLogger(__name__)
 
 # Only ``task``-typed rows are workable. Epics and gates roll up / gate elsewhere
 # and are excluded from both Lithos frontiers, so they never classify here.
@@ -193,18 +201,28 @@ async def load_dashboard(
     — the same explicit degraded-data pattern as ``claims_unknown``.
     """
     errors: list[str] = []
-    query_tags = list(filters.tags) or None
-    query_agent = filters.agent or None
 
     async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
         # Terminal rows are windowed by RESOLUTION time, never creation time:
         # ``resolved_since`` is the upstream filter for "recent work", so a
         # task created months ago and finished yesterday is in the window.
+        #
+        # That window is the ONLY filter pushed upstream (it bounds the fetch).
+        # Project, tag and agent filtering is applied client-side over the
+        # fetched rows (PRD "Filters and URL contract"): no upstream call can
+        # express the metadata-OR-tag project match, and the upstream ``agent``
+        # argument is creator-only, which would drop rows the agent merely
+        # claims. Claims are omitted by default (lithos_task_list contract),
+        # which leaves a resolved row ``claims=None`` — unknown, not "no
+        # claimer" — and would silently hide resolved work the selected agent
+        # claims. They are requested exactly when the agent filter needs them:
+        # resolved rows render no claim chips (``claim_state`` is
+        # not_applicable off the open list), so the unfiltered dashboard keeps
+        # the cheaper read.
         return await lithos.list_tasks(
-            agent=query_agent,
             status=status,
-            tags=query_tags,
             resolved_since=filters.since,
+            with_claims=bool(filters.agent),
         )
 
     (
@@ -370,6 +388,21 @@ async def load_dashboard(
         # sections derive from the snapshot).
         closed[status] = [task for task in rows if task.id not in open_index]
 
+    # Both project surfaces below read every row this load fetched — open AND
+    # resolved — from the UNFILTERED reads, deduped by id: selecting one
+    # project must not collapse the list of projects you can switch to, and a
+    # convention conflict is a property of the task, not of its status.
+    loaded_tasks = _loaded_task_rows(
+        open_snapshot,
+        [
+            cast("list[TaskRecord]", result)
+            for result in closed_results
+            if not isinstance(result, BaseException)
+        ],
+    )
+    _log_project_data_quality(loaded_tasks, filters)
+    projects = _project_universe(loaded_tasks, filters)
+
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
     for section in WORKABLE_SECTIONS + ("claims_unknown", "unclassified"):
@@ -417,6 +450,7 @@ async def load_dashboard(
         agents=agents,
         frontier_limit=frontier_limit,
         open_total=open_total,
+        projects=projects,
         # Truncation means a frontier response actually HIT frontier_limit,
         # leaving otherwise-classifiable rows in the tail. Unclassified rows
         # from a failed frontier read are surfaced by the error banner, and a
@@ -426,6 +460,89 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         errors=tuple(errors),
     )
+
+
+def _loaded_task_rows(
+    open_snapshot: Sequence[TaskRecord],
+    closed_groups: Iterable[Sequence[TaskRecord]],
+) -> tuple[TaskRecord, ...]:
+    """Every task row this load fetched, deduped by id (open snapshot wins).
+
+    Read skew can return the same id in both the open snapshot and a terminal
+    window; the open snapshot is the authority on the row, and dedup keeps
+    per-load reporting counted once.
+    """
+    rows: list[TaskRecord] = list(open_snapshot)
+    seen = {task.id for task in rows}
+    for group in closed_groups:
+        for task in group:
+            if task.id not in seen:
+                seen.add(task.id)
+                rows.append(task)
+    return tuple(rows)
+
+
+def _project_universe(
+    tasks: Sequence[TaskRecord],
+    filters: TaskFilters,
+) -> tuple[str, ...]:
+    """Every project slug present in the loaded rows, sorted (§5B.1).
+
+    The universe is the union of BOTH conventions' slugs regardless of the
+    active posture — §5B.1 is explicit that no project may be invisible to its
+    own view — even though matching under a single-convention posture honours
+    only that convention. Only the tag KEY follows configuration (§5B.9).
+    """
+    slugs: set[str] = set()
+    for task in tasks:
+        slugs.update(
+            task_projects(task, convention="both", tag_key=filters.project_tag_key)
+        )
+    return tuple(sorted(slugs))
+
+
+def _log_project_data_quality(
+    tasks: Sequence[TaskRecord],
+    filters: TaskFilters,
+) -> None:
+    """Report this load's project data-quality signals, once each (§5B.1).
+
+    Two independent signals over every loaded row — resolved rows carry their
+    conventions too:
+
+    - the two conventions are present and DISAGREE. Reported in every posture:
+      §5B.1 makes the warning a property of the data, not of the matching
+      posture Lens happens to run (both values are read for the universe
+      regardless). Neither value is dropped — the task matches under both slugs.
+    - ``metadata.project`` is present but is not a string. Lens cannot read a
+      project out of it, so the task is invisible to its project view; the
+      value is ignored rather than coerced into a fabricated slug.
+    """
+    conflicts: list[str] = []
+    malformed: list[str] = []
+    for task in tasks:
+        if project_convention_conflict(task, tag_key=filters.project_tag_key):
+            conflicts.append(task.id)
+        if invalid_project_metadata(task):
+            malformed.append(task.id)
+    if conflicts:
+        logger.warning(
+            "task project conventions disagree",
+            extra={
+                "lens_event": "lens.tasks.project_convention_conflict",
+                "conflict_count": len(conflicts),
+                "conflicting_task_ids": conflicts[:20],
+            },
+        )
+    if malformed:
+        logger.warning(
+            "task metadata.project is not a string slug",
+            extra={
+                "lens_event": "lens.tasks.project_metadata_invalid",
+                "invalid_count": len(malformed),
+                "invalid_task_ids": malformed[:20],
+            },
+        )
 
 
 class _FrontierState:

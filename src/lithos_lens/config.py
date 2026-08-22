@@ -17,8 +17,23 @@ from typing import Any, Literal, cast
 
 from dotenv import load_dotenv
 
+from lithos_lens.config_fields import (
+    optional_bool,
+    optional_int,
+    optional_path,
+    optional_status_groups,
+    optional_str,
+)
 from lithos_lens.errors import ConfigError
-from lithos_lens.tasks import MAX_SINCE_LOOKBACK_DAYS, TASK_STATUSES, TaskStatusName
+from lithos_lens.tasks import (
+    DEFAULT_PROJECT_CONVENTION,
+    DEFAULT_PROJECT_TAG_KEY,
+    MAX_SINCE_LOOKBACK_DAYS,
+    PROJECT_CONVENTIONS,
+    TASK_STATUSES,
+    ProjectConvention,
+    TaskStatusName,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +139,11 @@ class TasksConfig:
     frontier_limit: int = DEFAULT_TASKS_FRONTIER_LIMIT
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
+    # Which project convention the /tasks project filter honours (§5B.1):
+    # "metadata" (metadata.project), "tag" (project:<slug>), or "both" (union).
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    # Tag key reserved for the tag convention, per deployment (§5B.9).
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)
@@ -258,14 +278,14 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
     if not isinstance(lithos_lens_section, dict):
         raise ConfigError(f"{config_path}: 'lithos-lens' must be a table")
 
-    environment = _optional_str(
+    environment = optional_str(
         lithos_lens_section,
         "environment",
         DEFAULT_ENVIRONMENT,
         config_path,
         "lithos-lens",
     )
-    greeting = _optional_str(
+    greeting = optional_str(
         lithos_lens_section,
         "greeting",
         DEFAULT_GREETING,
@@ -306,7 +326,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
 def _parse_storage(data: Any, config_path: Path) -> StorageConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.storage] must be a table")
-    data_dir = _optional_path(
+    data_dir = optional_path(
         data, "data_dir", DEFAULT_DATA_DIR, config_path, "lithos-lens.storage"
     )
     return StorageConfig(data_dir=data_dir)
@@ -331,24 +351,24 @@ def _parse_lithos(data: Any, config_path: Path) -> LithosConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.lithos] must be a table")
     return LithosConfig(
-        url=_optional_str(
+        url=optional_str(
             data, "url", DEFAULT_LITHOS_URL, config_path, "lithos-lens.lithos"
         ),
-        mcp_sse_path=_optional_str(
+        mcp_sse_path=optional_str(
             data,
             "mcp_sse_path",
             DEFAULT_LITHOS_MCP_SSE_PATH,
             config_path,
             "lithos-lens.lithos",
         ),
-        sse_events_path=_optional_str(
+        sse_events_path=optional_str(
             data,
             "sse_events_path",
             DEFAULT_LITHOS_SSE_EVENTS_PATH,
             config_path,
             "lithos-lens.lithos",
         ),
-        agent_id=_optional_str(
+        agent_id=optional_str(
             data, "agent_id", DEFAULT_LENS_AGENT_ID, config_path, "lithos-lens.lithos"
         ),
     )
@@ -368,7 +388,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
         )
     return TasksConfig(
-        auto_refresh_interval_s=_optional_int(
+        auto_refresh_interval_s=optional_int(
             data,
             "auto_refresh_interval_s",
             DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S,
@@ -376,7 +396,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             "lithos-lens.tasks",
             minimum=1,
         ),
-        visible_cap=_optional_int(
+        visible_cap=optional_int(
             data,
             "visible_cap",
             DEFAULT_TASKS_VISIBLE_CAP,
@@ -384,7 +404,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             "lithos-lens.tasks",
             minimum=1,
         ),
-        frontier_limit=_optional_int(
+        frontier_limit=optional_int(
             data,
             "frontier_limit",
             DEFAULT_TASKS_FRONTIER_LIMIT,
@@ -392,7 +412,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             "lithos-lens.tasks",
             minimum=1,
         ),
-        default_time_range_days=_optional_int(
+        default_time_range_days=optional_int(
             data,
             "default_time_range_days",
             DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS,
@@ -402,14 +422,50 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             # This window is the only bound on the unlimited terminal reads.
             maximum=MAX_SINCE_LOOKBACK_DAYS,
         ),
-        default_status_groups=_optional_status_groups(
+        default_status_groups=optional_status_groups(
             data,
             "default_status_groups",
             TASK_STATUSES,
             config_path,
             "lithos-lens.tasks",
         ),
+        project_convention=_project_convention(data, config_path),
+        project_tag_key=_project_tag_key(data, config_path),
     )
+
+
+def _project_convention(data: dict[str, Any], config_path: Path) -> ProjectConvention:
+    value = optional_str(
+        data,
+        "project_convention",
+        DEFAULT_PROJECT_CONVENTION,
+        config_path,
+        "lithos-lens.tasks",
+    )
+    if value not in PROJECT_CONVENTIONS:
+        raise ConfigError(
+            f"{config_path}: [lithos-lens.tasks].project_convention must be one "
+            f"of {sorted(PROJECT_CONVENTIONS)}"
+        )
+    return cast(ProjectConvention, value)
+
+
+def _project_tag_key(data: dict[str, Any], config_path: Path) -> str:
+    value = optional_str(
+        data,
+        "project_tag_key",
+        DEFAULT_PROJECT_TAG_KEY,
+        config_path,
+        "lithos-lens.tasks",
+    ).strip()
+    # The key is used as a "<key>:" tag prefix, so an empty or already-suffixed
+    # key would silently match every tag (or nothing at all).
+    if not value or ":" in value:
+        raise ConfigError(
+            f"{config_path}: [lithos-lens.tasks].project_tag_key must be a "
+            "non-empty tag key without ':'"
+        )
+    return value
 
 
 def _parse_events(data: Any, config_path: Path) -> EventsConfig:
@@ -424,9 +480,7 @@ def _parse_events(data: Any, config_path: Path) -> EventsConfig:
             "must be a list of integers"
         )
     return EventsConfig(
-        enabled=_optional_bool(
-            data, "enabled", True, config_path, "lithos-lens.events"
-        ),
+        enabled=optional_bool(data, "enabled", True, config_path, "lithos-lens.events"),
         reconnect_backoff_ms=tuple(backoff),
     )
 
@@ -435,15 +489,15 @@ def _parse_llm(data: Any, config_path: Path) -> LLMConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.llm] must be a table")
     return LLMConfig(
-        enabled=_optional_bool(data, "enabled", False, config_path, "lithos-lens.llm"),
-        provider=_optional_str(data, "provider", "", config_path, "lithos-lens.llm"),
-        model=_optional_str(data, "model", "", config_path, "lithos-lens.llm"),
-        api_key=_optional_str(data, "api_key", "", config_path, "lithos-lens.llm"),
-        base_url=_optional_str(data, "base_url", "", config_path, "lithos-lens.llm"),
-        extra_headers_json=_optional_str(
+        enabled=optional_bool(data, "enabled", False, config_path, "lithos-lens.llm"),
+        provider=optional_str(data, "provider", "", config_path, "lithos-lens.llm"),
+        model=optional_str(data, "model", "", config_path, "lithos-lens.llm"),
+        api_key=optional_str(data, "api_key", "", config_path, "lithos-lens.llm"),
+        base_url=optional_str(data, "base_url", "", config_path, "lithos-lens.llm"),
+        extra_headers_json=optional_str(
             data, "extra_headers_json", "", config_path, "lithos-lens.llm"
         ),
-        max_tokens=_optional_int(
+        max_tokens=optional_int(
             data,
             "max_tokens",
             DEFAULT_LLM_MAX_TOKENS,
@@ -458,16 +512,16 @@ def _parse_telemetry(data: Any, config_path: Path) -> TelemetryConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.telemetry] must be a table")
     return TelemetryConfig(
-        enabled=_optional_bool(
+        enabled=optional_bool(
             data, "enabled", False, config_path, "lithos-lens.telemetry"
         ),
-        console_fallback=_optional_bool(
+        console_fallback=optional_bool(
             data, "console_fallback", False, config_path, "lithos-lens.telemetry"
         ),
-        service_name=_optional_str(
+        service_name=optional_str(
             data, "service_name", "lithos-lens", config_path, "lithos-lens.telemetry"
         ),
-        export_interval_ms=_optional_int(
+        export_interval_ms=optional_int(
             data,
             "export_interval_ms",
             30000,
@@ -482,7 +536,7 @@ def _parse_ui(data: Any, config_path: Path) -> UIConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.ui] must be a table")
     return UIConfig(
-        default_view=_optional_str(
+        default_view=optional_str(
             data, "default_view", "tasks", config_path, "lithos-lens.ui"
         )
     )
@@ -492,7 +546,7 @@ def _parse_health(data: Any, config_path: Path) -> HealthConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.health] must be a table")
     return HealthConfig(
-        refresh_interval_s=_optional_int(
+        refresh_interval_s=optional_int(
             data,
             "refresh_interval_s",
             DEFAULT_HEALTH_REFRESH_INTERVAL_S,
@@ -507,7 +561,7 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.knowledge] must be a table")
     return KnowledgeConfig(
-        related_title_fanout_cap=_optional_int(
+        related_title_fanout_cap=optional_int(
             data,
             "related_title_fanout_cap",
             DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
@@ -519,7 +573,7 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             # lithos_read burst against the shared MCP session.
             maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
         ),
-        search_limit=_optional_int(
+        search_limit=optional_int(
             data,
             "search_limit",
             DEFAULT_KNOWLEDGE_SEARCH_LIMIT,
@@ -528,7 +582,7 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             minimum=1,
             maximum=MAX_KNOWLEDGE_LANDING_LIMIT,
         ),
-        recent_limit=_optional_int(
+        recent_limit=optional_int(
             data,
             "recent_limit",
             DEFAULT_KNOWLEDGE_RECENT_LIMIT,
@@ -538,98 +592,6 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             maximum=MAX_KNOWLEDGE_LANDING_LIMIT,
         ),
     )
-
-
-def _optional_str(
-    data: dict[str, Any],
-    key: str,
-    default: str,
-    config_path: Path,
-    section: str,
-) -> str:
-    if key not in data:
-        return default
-    value = data[key]
-    if not isinstance(value, str):
-        raise ConfigError(f"{config_path}: [{section}].{key} must be a string")
-    return value
-
-
-def _optional_path(
-    data: dict[str, Any],
-    key: str,
-    default: Path,
-    config_path: Path,
-    section: str,
-) -> Path:
-    if key not in data:
-        return default
-    value = data[key]
-    if not isinstance(value, str):
-        raise ConfigError(f"{config_path}: [{section}].{key} must be a string path")
-    return Path(value).expanduser()
-
-
-def _optional_int(
-    data: dict[str, Any],
-    key: str,
-    default: int,
-    config_path: Path,
-    section: str,
-    *,
-    minimum: int | None = None,
-    maximum: int | None = None,
-) -> int:
-    if key not in data:
-        return default
-    value = data[key]
-    if not isinstance(value, int):
-        raise ConfigError(f"{config_path}: [{section}].{key} must be an integer")
-    if minimum is not None and value < minimum:
-        raise ConfigError(f"{config_path}: [{section}].{key} must be >= {minimum}")
-    if maximum is not None and value > maximum:
-        raise ConfigError(f"{config_path}: [{section}].{key} must be <= {maximum}")
-    return value
-
-
-def _optional_bool(
-    data: dict[str, Any],
-    key: str,
-    default: bool,
-    config_path: Path,
-    section: str,
-) -> bool:
-    if key not in data:
-        return default
-    value = data[key]
-    if not isinstance(value, bool):
-        raise ConfigError(f"{config_path}: [{section}].{key} must be a boolean")
-    return value
-
-
-def _optional_status_groups(
-    data: dict[str, Any],
-    key: str,
-    default: tuple[TaskStatusName, ...],
-    config_path: Path,
-    section: str,
-) -> tuple[TaskStatusName, ...]:
-    if key not in data:
-        return default
-    value = data[key]
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ConfigError(f"{config_path}: [{section}].{key} must be a list of strings")
-    groups: list[TaskStatusName] = []
-    for item in value:
-        if item not in TASK_STATUSES:
-            raise ConfigError(
-                f"{config_path}: [{section}].{key} contains invalid status {item!r}"
-            )
-        if item not in groups:
-            groups.append(cast(TaskStatusName, item))
-    if not groups:
-        raise ConfigError(f"{config_path}: [{section}].{key} must not be empty")
-    return tuple(groups)
 
 
 def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:

@@ -58,6 +58,15 @@ REOPENED_FINDING_PREFIX = "[Reopened]"
 # client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
 MAX_SINCE_LOOKBACK_DAYS = 365
 
+# Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
+# production corpus and their counts disagree: ``metadata.project = "<slug>"``
+# (what Lithos itself understands) and a ``project:<slug>`` tag (the original
+# Lens convention). ``project_convention`` selects which are honoured.
+ProjectConvention = Literal["metadata", "tag", "both"]
+PROJECT_CONVENTIONS: tuple[ProjectConvention, ...] = ("metadata", "tag", "both")
+DEFAULT_PROJECT_CONVENTION: ProjectConvention = "both"
+DEFAULT_PROJECT_TAG_KEY = "project"
+
 
 class SectionState(StrEnum):
     OK = "ok"
@@ -224,10 +233,22 @@ class SectionRow:
 
 @dataclass(frozen=True)
 class TaskFilters:
+    """The live ``/tasks`` filter vocabulary, parsed from the query string.
+
+    ``projects`` is multi-valued and matches a task under ``project_convention``
+    (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
+    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and
+    ``since`` windows only the resolved sections. The convention knobs travel on
+    the filters so the pure predicates below stay pure.
+    """
+
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
     since: str
+    projects: tuple[str, ...] = ()
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)
@@ -254,6 +275,10 @@ class DashboardData:
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int
+    # The project universe for the filter dropdown: the UNION of both
+    # conventions' slugs over the loaded snapshot (§5B.1), so no project is
+    # invisible to its own view.
+    projects: tuple[str, ...] = ()
     reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
@@ -343,6 +368,9 @@ def parse_filters(
     query_items: list[tuple[str, str]],
     default_days: int,
     default_statuses: tuple[TaskStatusName, ...] = TASK_STATUSES,
+    *,
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
@@ -369,6 +397,11 @@ def parse_filters(
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        # Multi-select: ``?project=x&project=y`` (and the comma form) select
+        # the union of those projects, not their intersection.
+        projects=tuple(values.get("project", [])),
+        project_convention=project_convention,
+        project_tag_key=project_tag_key,
     )
 
 
@@ -635,42 +668,6 @@ def parse_date(value: str) -> date | None:
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def matches_filters(
-    task: TaskRecord,
-    *,
-    filters: TaskFilters,
-    status: TaskStatusName,
-) -> bool:
-    """Client-side filter predicate shared by the dashboard sections.
-
-    Public because the frontier join (``frontier.py``) re-applies it over the
-    joined snapshot; the guardrail forbids reaching for another module's
-    privates.
-    """
-    if task.status != status:
-        return False
-    if filters.agent and task.created_by != filters.agent:
-        return False
-    if filters.tags and not all(tag in task.tags for tag in filters.tags):
-        return False
-    if status in TERMINAL_TASK_STATUSES and filters.since:
-        # Terminal rows are windowed by RESOLUTION time (``resolved_since``
-        # upstream), not creation time — a task created months ago and finished
-        # yesterday is recent work. A row whose ``resolved_at`` is missing or
-        # unparseable is kept: upstream already excluded NULL-resolved rows
-        # from the window, so re-deriving the exclusion here would only hide
-        # rows the server deliberately returned.
-        resolved_date = parse_date(task.resolved_at)
-        since_date = parse_date(filters.since)
-        if (
-            resolved_date is not None
-            and since_date is not None
-            and resolved_date < since_date
-        ):
-            return False
-    return True
 
 
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:

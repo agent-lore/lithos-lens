@@ -58,6 +58,18 @@ class TaskFakeLithosClient:
         self.children: dict[str, list[str]] = {}
         self.get_calls: list[str] = []
         self.edge_list_calls: list[dict[str, Any]] = []
+        # Inline claims per task id, returned only when a read asks for them
+        # (with_claims / task_status) — the same contract as the server. Tests
+        # extend this map (e.g. a resolved task an agent still claims).
+        self.claims: dict[str, tuple[ClaimRecord, ...]] = {
+            "open-claimed": (
+                ClaimRecord(
+                    agent="worker-a",
+                    aspect="implementation",
+                    expires_at="2026-04-26T11:00:00+00:00",
+                ),
+            )
+        }
         self.notes: dict[str, NoteRecord] = {
             "note-1": NoteRecord(
                 id="note-1",
@@ -275,15 +287,7 @@ class TaskFakeLithosClient:
         return rows
 
     def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
-        if task_id == "open-claimed":
-            return (
-                ClaimRecord(
-                    agent="worker-a",
-                    aspect="implementation",
-                    expires_at="2026-04-26T11:00:00+00:00",
-                ),
-            )
-        return ()
+        return self.claims.get(task_id, ())
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
         self.status_calls.append(task_id)
@@ -401,6 +405,31 @@ def test_dashboard_renders_filter_bar_before_task_groups(
     assert response.text.index('class="filter-bar"') < response.text.index(
         'class="task-board"'
     )
+
+
+def test_filter_bar_actions_stay_together_in_one_grid_cell(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (round-3 visual review): "Apply filters" and "Reset" are wrapped
+    in a single ``.filter-actions`` child of the filter bar. As two independent
+    grid items they were flowed by the same auto-fit column count as the fields,
+    so adding the Project filter (7 items, 3 columns at ~768px) orphaned Reset
+    onto a row of its own."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+        css = client.get("/static/lens.css")
+
+    assert response.status_code == 200
+    bar = response.text.split('class="filter-bar"')[1].split("</form>")[0]
+    # Both actions live in the one wrapper, and the wrapper is in the filter bar.
+    actions = bar.split('class="filter-actions"')[1].split("</div>")[0]
+    assert "Apply filters" in actions
+    assert 'href="/tasks">Reset</a>' in actions
+    # …and the container is laid out as one cell rather than falling back to
+    # two stacked full-width blocks.
+    assert ".filter-actions {" in css.text
 
 
 def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
@@ -535,6 +564,106 @@ def test_legacy_claimed_state_url_is_ignored(
     # The claimed-state filter is gone, so the claimed row is not filtered out.
     assert "Claimed open task" in response.text
     assert "Unclaimed open task" in response.text
+
+
+def test_agent_filter_matches_a_task_the_agent_only_claims(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 22 acceptance: ``?agent=X`` matches a task X merely claims, not
+    only the tasks it created ("everything agent-zero is involved in")."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?agent=worker-a&since=2026-04-01")
+
+    assert response.status_code == 200
+    # open-claimed was created by "planner" and is claimed by "worker-a".
+    assert "Claimed open task" in response.text
+    # …while the tasks worker-a neither created nor claims drop out.
+    assert "Unclaimed open task" not in response.text
+    assert "Recently completed task" not in response.text
+    # The agent filter is applied by Lens, never pushed upstream (the upstream
+    # argument is creator-only and would drop the claimed row).
+    assert all(call["agent"] is None for call in fake.list_calls)
+
+
+def test_agent_filter_matches_a_claimer_on_a_resolved_task(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 22 holds for resolved rows too: the completed/cancelled windows are
+    fetched WITH claims, so a completed task someone else created stays visible
+    to the agent that claimed it (without claims it would read as unknown, and
+    the row would silently vanish from the filter)."""
+    fake = TaskFakeLithosClient()
+    fake.claims["done-recent"] = (
+        ClaimRecord(agent="worker-a", aspect="review", expires_at=""),
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?agent=worker-a&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Recently completed task" in response.text
+    # Created by "worker", claimed by nobody: out of scope for worker-a.
+    assert "Recently cancelled task" not in response.text
+    closed_calls = [call for call in fake.list_calls if call["status"] != "open"]
+    assert closed_calls
+    assert all(call["with_claims"] is True for call in closed_calls)
+
+
+def test_project_filter_matches_both_conventions(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 23: a project view shows tasks stamped with ``metadata.project``
+    AND tasks carrying the ``project:<slug>`` tag — neither convention hides a
+    task from its own project (§5B.1)."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="stamped",
+            title="Stamped by metadata",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-24T10:00:00+00:00",
+            metadata={"project": "influx"},
+        )
+    )
+    fake.ready_ids.add("stamped")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?project=influx&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Stamped by metadata" in response.text
+    # Tagged with project:influx.
+    assert "Claimed open task" in response.text
+    assert "Unclaimed open task" in response.text
+    # No project at all: out of scope of the project view.
+    assert "Old open task" not in response.text
+    # Both conventions' slugs reach the filter datalist.
+    assert '<datalist id="projects">' in response.text
+    assert '<option value="influx">' in response.text
+
+
+def test_project_filter_is_preserved_across_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``?project=`` is part of the live filter vocabulary, so generated tag and
+    detail links carry it (unlike the retired ``claimed_state``)."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=open&project=influx&claimed_state=any&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert (
+        'href="/tasks/open-claimed?status=open&project=influx&since=2026-04-01"'
+    ) in text
+    assert "claimed_state" not in text.split("<main")[1]
 
 
 def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
@@ -788,7 +917,9 @@ def test_dashboard_uses_inline_claims_and_skips_task_status_fan_out(
     open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
     assert open_list_calls
     assert all(c["with_claims"] is True for c in open_list_calls)
-    # Other status groups don't carry the cost of the join.
+    # With no agent filter active, nothing reads a resolved row's claims (they
+    # render no chips), so those windows don't carry the cost of the join —
+    # they DO request claims once ?agent= is set, see the claimer test above.
     other_calls = [
         c for c in fake.list_calls if c["status"] in {"completed", "cancelled"}
     ]

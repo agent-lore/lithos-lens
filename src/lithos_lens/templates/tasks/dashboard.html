@@ -93,12 +93,25 @@
             </label>
           {% endfor %}
         </fieldset>
+        {# Project matches either convention (metadata.project or the
+           project:<slug> tag) per [tasks].project_convention; the datalist is
+           the union of slugs present in the loaded snapshot. Comma-separated
+           values select several projects (OR). #}
         <label>
-          Tag
-          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="project:influx">
+          Project
+          <input list="projects" name="project" value="{{ dashboard.filters.projects | join(',') }}" placeholder="Any project">
+          <datalist id="projects">
+            {% for project in dashboard.projects %}
+              <option value="{{ project }}"></option>
+            {% endfor %}
+          </datalist>
         </label>
         <label>
-          Creating agent
+          Tag
+          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="area:docs">
+        </label>
+        <label>
+          Agent (creator or claimer)
           <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
           <datalist id="agents">
             {% for agent in dashboard.agents %}
@@ -114,8 +127,16 @@
             <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
           </span>
         </label>
-        <button type="submit">Apply filters</button>
-        <a class="button-secondary" href="/tasks">Reset</a>
+        {# The two actions are ONE grid child. As independent items they were
+           laid out by the same auto-fit column count as the fields, so a field
+           count that doesn't divide evenly (7 items across 3 columns, ~768px)
+           orphaned Reset onto a row of its own where the eye expects another
+           filter. Wrapping keeps the pair together at every width, and survives
+           the next filter this bar grows. #}
+        <div class="filter-actions">
+          <button type="submit">Apply filters</button>
+          <a class="button-secondary" href="/tasks">Reset</a>
+        </div>
       </form>
 
       {#
