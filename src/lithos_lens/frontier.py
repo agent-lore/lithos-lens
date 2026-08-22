@@ -61,6 +61,7 @@ class FrontierLithosClient(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -200,19 +201,26 @@ async def load_dashboard(
     errors: list[str] = []
 
     async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
-        # Only ``since`` is pushed upstream (it bounds the fetch). Project, tag
-        # and agent filtering is applied client-side over the fetched rows (PRD
-        # "Filters and URL contract"): no upstream call can express the
-        # metadata-OR-tag project match, and the upstream ``agent`` argument is
-        # creator-only, which would drop rows the agent merely claims.
-        # Claims are omitted by default (lithos_task_list contract), which
-        # leaves a resolved row ``claims=None`` — unknown, not "no claimer" —
-        # and would silently hide resolved work the selected agent claims. They
-        # are requested exactly when the agent filter needs them: resolved rows
-        # render no claim chips (``claim_state`` is not_applicable off the open
-        # list), so the unfiltered dashboard keeps the cheaper read.
+        # Terminal rows are windowed by RESOLUTION time, never creation time:
+        # ``resolved_since`` is the upstream filter for "recent work", so a
+        # task created months ago and finished yesterday is in the window.
+        #
+        # That window is the ONLY filter pushed upstream (it bounds the fetch).
+        # Project, tag and agent filtering is applied client-side over the
+        # fetched rows (PRD "Filters and URL contract"): no upstream call can
+        # express the metadata-OR-tag project match, and the upstream ``agent``
+        # argument is creator-only, which would drop rows the agent merely
+        # claims. Claims are omitted by default (lithos_task_list contract),
+        # which leaves a resolved row ``claims=None`` — unknown, not "no
+        # claimer" — and would silently hide resolved work the selected agent
+        # claims. They are requested exactly when the agent filter needs them:
+        # resolved rows render no claim chips (``claim_state`` is
+        # not_applicable off the open list), so the unfiltered dashboard keeps
+        # the cheaper read.
         return await lithos.list_tasks(
-            status=status, since=filters.since, with_claims=bool(filters.agent)
+            status=status,
+            resolved_since=filters.since,
+            with_claims=bool(filters.agent),
         )
 
     (
@@ -634,7 +642,12 @@ def _rows_for(
     filters: TaskFilters,
     errors: list[str],
 ) -> list[TaskRecord]:
-    """Filter + sort one status group's rows, recording a load error if any."""
+    """Filter + sort one status group's rows, recording a load error if any.
+
+    Terminal groups sort newest-RESOLVED first (matching the ``resolved_since``
+    window they are drawn from), falling back to ``created_at`` for a row whose
+    ``resolved_at`` an older Lithos omitted.
+    """
     if isinstance(result, BaseException):
         errors.append(f"Could not load {status} tasks.")
         return []
@@ -643,4 +656,6 @@ def _rows_for(
         for task in cast(list[TaskRecord], result)
         if matches_filters(task, filters=filters, status=status)
     ]
-    return sorted(rows, key=lambda task: task.created_at, reverse=True)
+    return sorted(
+        rows, key=lambda task: task.resolved_at or task.created_at, reverse=True
+    )

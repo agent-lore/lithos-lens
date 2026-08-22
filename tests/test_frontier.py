@@ -220,6 +220,7 @@ class _FrontierFake:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         # Mirror the real server: agent/tag are filtered upstream when passed.
@@ -229,6 +230,7 @@ class _FrontierFake:
                 "status": status,
                 "tags": tags,
                 "since": since,
+                "resolved_since": resolved_since,
                 "with_claims": with_claims,
             }
         )
@@ -241,6 +243,13 @@ class _FrontierFake:
                 "completed": self._completed,
                 "cancelled": self._cancelled,
             }[status or "open"]
+            if resolved_since:
+                # Upstream windows on resolved_at and drops NULL-resolved rows.
+                rows = [
+                    task
+                    for task in rows
+                    if task.resolved_at and task.resolved_at >= resolved_since
+                ]
         if agent:
             rows = [task for task in rows if task.created_by == agent]
         if tags:
@@ -333,6 +342,69 @@ def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -
     assert row.blockers[0].target_id == "pred"
     # The predecessor itself is filtered out of the visible sections.
     assert _section_ids(data.sections, "ready") == []
+
+
+def test_load_dashboard_windows_terminal_sections_by_resolution_time() -> None:
+    """T1-S10: the Completed/Cancelled window is pushed as ``resolved_since``
+    (never the created-at ``since``), so a task created long before the window
+    but resolved inside it renders — and one resolved before it does not."""
+    ancient = replace(
+        _task("ancient", claims=()),
+        status="completed",
+        created_at="2020-01-01T00:00:00+00:00",
+        resolved_at="2026-08-08T00:00:00+00:00",
+    )
+    stale = replace(
+        _task("stale", claims=()),
+        status="completed",
+        created_at="2026-07-30T00:00:00+00:00",
+        resolved_at="2026-07-31T00:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[], ready=[], blocked=[], completed=[ancient, stale]
+    )
+    filters = TaskFilters(
+        statuses=("open", "completed", "cancelled"),
+        tags=(),
+        agent="",
+        since="2026-08-01",
+    )
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["ancient"]
+    assert data.summary.recent_completed == 1
+    terminal_calls = [
+        {key: call[key] for key in ("status", "since", "resolved_since")}
+        for call in fake.list_calls
+        if call["status"] != "open"
+    ]
+    assert terminal_calls == [
+        {"status": "completed", "since": None, "resolved_since": "2026-08-01"},
+        {"status": "cancelled", "since": None, "resolved_since": "2026-08-01"},
+    ]
+
+
+def test_load_dashboard_orders_terminal_rows_newest_resolved_first() -> None:
+    """Terminal rows come from a resolved-time window, so they sort by
+    resolution — creation order would bury just-finished old work."""
+    old_created = replace(
+        _task("old-created", claims=()),
+        status="completed",
+        created_at="2020-01-01T00:00:00+00:00",
+        resolved_at="2026-08-08T00:00:00+00:00",
+    )
+    new_created = replace(
+        _task("new-created", claims=()),
+        status="completed",
+        created_at="2026-08-02T00:00:00+00:00",
+        resolved_at="2026-08-03T00:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[], ready=[], blocked=[], completed=[new_created, old_created]
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["old-created", "new-created"]
 
 
 def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
@@ -638,9 +710,15 @@ def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
 
 
 def test_project_and_agent_filters_are_never_pushed_upstream() -> None:
-    """Only ``since`` is pushed: the upstream agent argument is creator-only and
-    no upstream call can express the metadata-OR-tag project match, so both
-    filters are applied client-side over the fetched rows."""
+    """Only the resolved-time window is pushed: the upstream agent argument is
+    creator-only and no upstream call can express the metadata-OR-tag project
+    match, so both filters are applied client-side over the fetched rows.
+
+    The window rides on ``resolved_since`` (T1-S10), never ``since``: terminal
+    sections are scoped by when work FINISHED, so pushing the same value as a
+    created-at bound would silently drop long-running work that resolved inside
+    the window.
+    """
     mine = _task("m", claims=(), created_by="agent-zero", tags=("project:influx",))
     fake = _FrontierFake(open_tasks=[mine], ready=[mine], blocked=[])
     filters = TaskFilters(
@@ -658,7 +736,8 @@ def test_project_and_agent_filters_are_never_pushed_upstream() -> None:
     for call in closed_calls:
         assert call["agent"] is None
         assert call["tags"] is None
-        assert call["since"] == "2026-04-01"
+        assert call["since"] is None
+        assert call["resolved_since"] == "2026-04-01"
 
 
 def test_agent_filter_keeps_a_task_the_agent_only_claims() -> None:

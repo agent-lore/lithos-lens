@@ -28,6 +28,7 @@ from lithos_lens.errors import ConfigError
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
+    MAX_SINCE_LOOKBACK_DAYS,
     PROJECT_CONVENTIONS,
     TASK_STATUSES,
     ProjectConvention,
@@ -418,6 +419,8 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
             "lithos-lens.tasks",
             minimum=1,
+            # This window is the only bound on the unlimited terminal reads.
+            maximum=MAX_SINCE_LOOKBACK_DAYS,
         ),
         default_status_groups=optional_status_groups(
             data,

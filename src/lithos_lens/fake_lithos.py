@@ -198,6 +198,7 @@ class FakeLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         rows = [
@@ -214,6 +215,16 @@ class FakeLithosClient:
             # ISO strings — inclusive, full precision (deliberately unlike
             # findings' strict parsed >), so the fake compares the same way.
             rows = [task for task in rows if task.created_at >= since]
+        if resolved_since:
+            # Upstream lithos_task_list filters `resolved_at >= ?` on the raw
+            # ISO strings and drops NULL-resolved rows (open tasks, and
+            # cancellations predating the column) automatically — the fake
+            # mirrors both halves.
+            rows = [
+                task
+                for task in rows
+                if task.resolved_at and task.resolved_at >= resolved_since
+            ]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
         return rows
