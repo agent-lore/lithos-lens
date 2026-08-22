@@ -21,6 +21,7 @@ from lithos_lens.frontier import (
     load_dashboard,
 )
 from lithos_lens.lithos_client import LithosToolError
+from lithos_lens.lithos_tools import ToolListError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     TASK_STATUSES,
@@ -710,6 +711,27 @@ def test_unlistable_tools_are_never_read_as_absent() -> None:
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
     assert data.graph_available is True
+    assert any("ready frontier" in message for message in data.errors)
+
+
+def test_truncated_tool_listing_does_not_retire_the_graph_surface() -> None:
+    """Regression (correctness f-002 / security f-004): a listing stopped by
+    the page guard is incomplete, not evidence of absence — the graph surface
+    survives it. ``collect_tool_names`` raises rather than returning the
+    partial set precisely so this path is reachable."""
+    fake = _FrontierFake(
+        open_tasks=[_task("r", claims=())],
+        ready=[],
+        blocked=[],
+        ready_error=_tool_missing(READY_TOOL),
+        blocked_error=_tool_missing(BLOCKED_TOOL),
+        tool_list_error=ToolListError("tools/list did not terminate"),
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.graph_available is True
+    assert _section_ids(data.sections, "open") == []
     assert any("ready frontier" in message for message in data.errors)
 
 

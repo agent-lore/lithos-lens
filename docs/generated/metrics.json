@@ -257,14 +257,14 @@
         "sloc": 806
       },
       "LithosClient": {
-        "classes": 7,
+        "classes": 8,
         "functions": 87,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 844,
-        "lines": 1707,
-        "modules": 3,
-        "public_symbols": 9,
-        "sloc": 1420
+        "largest_module_lines": 821,
+        "lines": 1745,
+        "modules": 4,
+        "public_symbols": 11,
+        "sloc": 1450
       },
       "Logging": {
         "classes": 1,
@@ -328,17 +328,17 @@
       }
     },
     "max_module": "lithos_lens.lithos_client",
-    "max_module_lines": 844,
+    "max_module_lines": 821,
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 6057,
-    "total_modules": 19,
-    "total_sloc": 4879
+    "total_lines": 6095,
+    "total_modules": 20,
+    "total_sloc": 4909
   },
   "tests": {
-    "ratio": 1.75,
-    "src_lines": 6057,
-    "test_lines": 10622
+    "ratio": 1.77,
+    "src_lines": 6095,
+    "test_lines": 10764
   }
 }

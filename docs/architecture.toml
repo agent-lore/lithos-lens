@@ -43,7 +43,7 @@ Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
 Web          = ["lithos_lens.web"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
-LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
+LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_tools", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config"]
 Tasks        = ["lithos_lens.tasks"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier"]
@@ -72,14 +72,15 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
-# Raised deliberately in T1-S12 (security review, round 3): task-graph feature
-# detection must read the server's tools/list rather than error text, and the
-# probe belongs on LithosClient — which was already one line under the old
-# ceiling. Ratchet both back by splitting the MCP transport (session worker,
-# tool-call decoding, tools/list paging) out of lithos_client.py; nothing else
-# may cross 800 in the meantime.
-modules_over_800_lines = 1    # lithos_client (844); no other module may join it
-max_module_lines       = 860  # stop-loss just above today's largest, lithos_client (844)
+# Raised deliberately in T1-S12 (security review): task-graph feature detection
+# must read the server's tools/list rather than error text, and the probe
+# belongs on LithosClient — which was already one line under the old 800
+# ceiling. Round 4 moved the tools/list cursor walk into lithos_tools.py, which
+# is why this is 830 and not the 860 round 3 asked for; the rest of the MCP
+# transport (session worker, tool-call decoding) is the next slice to lift out.
+# Nothing else may cross 800 in the meantime.
+modules_over_800_lines = 1    # lithos_client (821); no other module may join it
+max_module_lines       = 830  # stop-loss just above today's largest, lithos_client (821)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

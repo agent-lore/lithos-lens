@@ -25,6 +25,7 @@ from lithos_lens.knowledge import (
     normalize_related,
     normalize_search_result,
 )
+from lithos_lens.lithos_tools import collect_tool_names
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -62,10 +63,6 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
-
-# Runaway guard for the tools/list cursor walk, NOT an expected bound: Lithos
-# serves its whole tool surface in one page.
-_TOOL_LIST_MAX_PAGES = 20
 
 # recent_notes walks lithos_list in pages of this size (via offset) and sorts
 # client-side, because the tool has no ordering parameter — removed once
@@ -661,25 +658,29 @@ class LithosClient:
     async def list_tool_names(self) -> set[str]:
         """Every tool name this server advertises (MCP ``tools/list``).
 
-        The authoritative answer to "does this Lithos have <tool>", used for
+        The authoritative answer to "does this Lithos have <tool>", for
         task-graph feature detection — which must never be decided from error
-        TEXT, since a tool's error payload can quote task data written by any
-        agent with task-write access, who is less privileged than the Lens
-        operator. ``tools/list`` is the server's own structured statement.
+        TEXT, since a tool's error payload can quote task data written by an
+        agent far less privileged than the Lens operator.
 
-        Raises when no live session exists (deliberately no throwaway-session
-        fallback, unlike ``_call_tool``): a listing Lens could not make says
-        nothing about the server, and no caller may read failure as absence.
+        Raises when no session is up (no throwaway fallback, unlike
+        ``_call_tool``, and no waiting): a listing Lens could not make says
+        nothing about the server, and failure is never absence.
         """
-        return await _collect_tool_names(await self._live_session())
+        return await collect_tool_names(await self._live_session(wait_s=0.0))
 
-    async def _live_session(self) -> Any:
-        """The worker's MCP session, waiting briefly for startup to finish."""
+    async def _live_session(self, *, wait_s: float = _SESSION_WAIT_TIMEOUT_S) -> Any:
+        """The worker's MCP session, waiting up to ``wait_s`` for startup.
+
+        ``wait_s=0`` asks only whether a session exists right now: the probe
+        runs after other reads already failed, so waiting again buys nothing
+        and doubles an unauthenticated request's hold during an outage.
+        """
         if not self._session_ready.is_set():
+            if wait_s <= 0:
+                raise LithosToolError("Lithos MCP session is not available")
             try:
-                await asyncio.wait_for(
-                    self._session_ready.wait(), timeout=_SESSION_WAIT_TIMEOUT_S
-                )
+                await asyncio.wait_for(self._session_ready.wait(), timeout=wait_s)
             except TimeoutError as exc:
                 raise LithosToolError("Lithos MCP session is not available") from exc
 
@@ -777,30 +778,6 @@ class LithosClient:
             self._worker_task = None
         if self._owns_http_client:
             await self._http.aclose()
-
-
-async def _collect_tool_names(session: Any) -> set[str]:
-    """Collect tool names across every ``tools/list`` page.
-
-    The MCP client does not auto-follow ``nextCursor``; a paginating server
-    would silently truncate a single-request listing and make a tool that IS
-    present look absent — the same cursor loop scripts/dump_lithos_tools.py
-    documents. ``_TOOL_LIST_MAX_PAGES`` is a runaway guard, not an expected
-    bound (Lithos serves ~20 tools in one page).
-    """
-    names: set[str] = set()
-    cursor: str | None = None
-    for _ in range(_TOOL_LIST_MAX_PAGES):
-        result = await session.list_tools(cursor=cursor)
-        names.update(
-            str(getattr(tool, "name", "") or "")
-            for tool in getattr(result, "tools", [])
-        )
-        cursor = getattr(result, "nextCursor", None)
-        if not cursor:
-            break
-    names.discard("")
-    return names
 
 
 def _is_nonempty_str(value: Any) -> bool:
