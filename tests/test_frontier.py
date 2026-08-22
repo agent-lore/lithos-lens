@@ -9,6 +9,7 @@ pattern) because Lens must never recompute it.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
@@ -179,6 +180,15 @@ def test_claimed_but_blocked_is_flagged_in_progress() -> None:
 # --- load_dashboard assembly ----------------------------------------------
 
 
+class _Response(list[TaskRecord]):
+    """A weak-referenceable ``task_children`` response.
+
+    A plain ``list`` cannot be weakly referenced, and the residency probe in
+    ``_FrontierFake.task_children`` needs to watch a finished batch's responses
+    actually die (CPython frees them the moment the last reference drops).
+    """
+
+
 class _FrontierFake:
     """Minimal client covering the parallel calls load_dashboard makes.
 
@@ -217,6 +227,10 @@ class _FrontierFake:
         self._missing_gets = missing_gets or set()
         self._inflight = 0
         self.max_children_inflight = 0
+        # Weakrefs to every response handed out, plus the high-water mark of
+        # how many were alive at once — the memory bound the batching claims.
+        self._responses: list[weakref.ref[_Response]] = []
+        self.max_live_responses = 0
         self.get_calls: list[str] = []
         self.open_calls = 0
         self.ready_calls = 0
@@ -303,9 +317,19 @@ class _FrontierFake:
             await asyncio.sleep(0)
             if task_id in self._fail_children:
                 raise RuntimeError(f"children unavailable for {task_id}")
-            rows = self._children.get(task_id, [])
-            if not include_closed:
-                rows = [task for task in rows if task.status == "open"]
+            # A fresh list per call, like the real client's normalization —
+            # returning the fixture's own list would make it immortal and the
+            # residency probe meaningless.
+            rows = _Response(
+                task
+                for task in self._children.get(task_id, [])
+                if include_closed or task.status == "open"
+            )
+            self._responses.append(weakref.ref(rows))
+            self.max_live_responses = max(
+                self.max_live_responses,
+                sum(1 for ref in self._responses if ref() is not None),
+            )
             return rows
         finally:
             self._inflight -= 1
@@ -978,6 +1002,62 @@ def test_every_open_epic_gets_a_chip_with_the_fan_out_kept_in_batches() -> None:
     assert len(fake.children_calls) == count
     # …but never more than one batch in flight at a time.
     assert fake.max_children_inflight == EPIC_FANOUT_BATCH
+
+
+def test_a_finished_batch_is_released_before_the_next_is_issued() -> None:
+    """The residency half of the fan-out bound: the previous batch's subtrees
+    (and the loop variables pointing into them) must be gone before the next
+    batch goes out, or two batches' responses coexist. Reducing each batch in
+    its own frame is what guarantees it."""
+    epics = [_epic(f"epic-{n}") for n in range(EPIC_FANOUT_BATCH * 3)]
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[*epics, ready],
+        ready=[ready],
+        blocked=[],
+        children={epic.id: _subtree(done=1, open_=1) for epic in epics},
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert len(data.epics) == len(epics)
+    # Never more than ONE batch of responses alive at any moment.
+    assert fake.max_live_responses == EPIC_FANOUT_BATCH
+
+
+def test_only_the_selected_epic_keeps_its_descendant_ids() -> None:
+    """The set is read only as the ``?epic=`` scope, and the subtree reads are
+    include_closed=True — so keeping one per epic would retain an id for every
+    task ever closed under every epic, for the whole render. The strip keeps at
+    most the selected epic's."""
+    epics = [_epic(f"epic-{n}") for n in range(3)]
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[*epics, ready],
+        ready=[ready],
+        blocked=[],
+        children={epic.id: _subtree(done=1, open_=1) for epic in epics},
+    )
+
+    unscoped = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    # Nothing is scoped, so no set is retained at all.
+    assert all(rollup.descendant_ids == frozenset() for rollup in unscoped.epics)
+    # …and the counts, which is what the chips actually render, are unharmed.
+    assert [rollup.progress_label for rollup in unscoped.epics] == ["1/2"] * 3
+
+    scoped = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(_FILTERS, epic="epic-1"), frontier_limit=500
+        )
+    )
+    kept = {
+        rollup.task.id: rollup.descendant_ids
+        for rollup in scoped.epics
+        if rollup.descendant_ids
+    }
+    assert list(kept) == ["epic-1"]
+    assert kept["epic-1"] == {"d0", "o0"}
+    # The retained set is the real scope: the sections still filter by it.
+    assert scoped.epic_scope == "epic-1"
 
 
 def test_a_scope_on_a_late_epic_still_resolves() -> None:

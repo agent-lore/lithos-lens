@@ -183,7 +183,10 @@ class EpicRollup:
     forever); ``cancelled`` keeps that count visible rather than silent.
     ``descendant_ids`` holds EVERY descendant id whatever its type — a gate or
     sub-epic is still part of the initiative — and is what the ``?epic=``
-    scope filters the sections by.
+    scope filters the sections by. On a strip assembled by ``frontier`` it is
+    populated only for the ``selected`` epic: nothing reads another epic's set,
+    and the subtree reads include closed tasks, so keeping them all would hold
+    an id for every task ever closed under every epic.
 
     Counts are whole-subtree facts, so they are deliberately unaffected by the
     tag/agent/since filters applied to the sections.

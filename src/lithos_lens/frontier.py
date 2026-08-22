@@ -216,7 +216,9 @@ def build_epic_rollup(
     include_closed=True)`` answer, so it is the whole subtree in every status.
     Progress counts only WORKABLE descendants and drops cancelled ones from the
     denominator — see :class:`~lithos_lens.tasks.EpicRollup` for why — while the
-    scope set keeps EVERY descendant id, whatever its type or status.
+    scope set keeps EVERY descendant id, whatever its type or status. This pure
+    function always reports the full set; ``_load_children_batch`` is where it
+    is dropped for the epics whose set nothing will read.
     """
     workable = [task for task in children if task.task_type == WORKABLE_TASK_TYPE]
     done = sum(1 for task in workable if task.status == "completed")
@@ -242,11 +244,10 @@ async def _load_epic_rollups(
     each open epic, so nothing is dropped. This is the one read that cannot
     join the main gather (the epic ids come from the open list it fetches) and
     the one whose call count follows the corpus rather than a server-side
-    limit, so it runs in batches of ``EPIC_FANOUT_BATCH``: each batch is
-    gathered and reduced to rollups before the next is issued, bounding both
-    the reads contending for the shared MCP session and the subtrees resident
-    at once. Per-subtree truncation is deliberately NOT applied either: a
-    clipped subtree would report a wrong ``5/8`` and silently shrink the scope.
+    limit, so it runs one ``EPIC_FANOUT_BATCH``-sized batch at a time, each
+    reduced to rollups by ``_load_children_batch`` before the next is issued.
+    Per-subtree truncation is deliberately NOT applied: a clipped subtree would
+    report a wrong ``5/8`` and silently shrink the scope.
 
     ``failed`` is set when ANY call failed; a failed epic is dropped rather
     than shown with a wrong count, and the caller turns the flag into the usual
@@ -260,25 +261,57 @@ async def _load_epic_rollups(
     rollups: list[EpicRollup] = []
     failed = False
     for start in range(0, len(epics), EPIC_FANOUT_BATCH):
-        batch = epics[start : start + EPIC_FANOUT_BATCH]
-        results = await asyncio.gather(
-            *(
-                lithos.task_children(epic.id, recursive=True, include_closed=True)
-                for epic in batch
-            ),
-            return_exceptions=True,
+        batch_rollups, batch_failed = await _load_children_batch(
+            lithos, epics[start : start + EPIC_FANOUT_BATCH], selected=selected
         )
-        for epic, result in zip(batch, results, strict=True):
-            if isinstance(result, BaseException):
-                failed = True
-                continue
-            rollup = build_epic_rollup(epic, cast(list[TaskRecord], result))
-            rollups.append(
-                replace(rollup, selected=bool(selected) and epic.id == selected)
-            )
-        # ``results`` (and the subtrees it holds) is released here, before the
-        # next batch is issued — that is what bounds peak residency.
+        rollups.extend(batch_rollups)
+        failed = failed or batch_failed
     return await _resolve_empty_selection(lithos, tuple(rollups), failed)
+
+
+async def _load_children_batch(
+    lithos: FrontierLithosClient,
+    batch: Sequence[TaskRecord],
+    *,
+    selected: str,
+) -> tuple[list[EpicRollup], bool]:
+    """Read one batch of epics' subtrees concurrently and reduce them to chips.
+
+    A separate frame on purpose: the bulky part — the raw ``task_children``
+    responses — is local to it and released when it RETURNS, so the caller
+    never holds a finished batch's subtrees (nor the loop variables pointing
+    into them) while the next batch is in flight. That, with the batch size, is
+    what bounds how many subtrees are resident at once.
+
+    What survives the frame is one small ``EpicRollup`` per epic. Even there,
+    ``descendant_ids`` is kept ONLY for the selected epic: those reads are
+    ``include_closed=True``, so retaining every epic's set would hold an id for
+    every task ever closed under every epic, for the whole render — and nothing
+    reads the set of an epic that is not the ``?epic=`` scope.
+    """
+    results = await asyncio.gather(
+        *(
+            lithos.task_children(epic.id, recursive=True, include_closed=True)
+            for epic in batch
+        ),
+        return_exceptions=True,
+    )
+    rollups: list[EpicRollup] = []
+    failed = False
+    for epic, result in zip(batch, results, strict=True):
+        if isinstance(result, BaseException):
+            failed = True
+            continue
+        rollup = build_epic_rollup(epic, cast(list[TaskRecord], result))
+        is_selected = bool(selected) and epic.id == selected
+        rollups.append(
+            replace(
+                rollup,
+                selected=is_selected,
+                descendant_ids=rollup.descendant_ids if is_selected else frozenset(),
+            )
+        )
+    return rollups, failed
 
 
 async def _resolve_empty_selection(
