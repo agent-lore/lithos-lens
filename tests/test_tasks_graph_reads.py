@@ -18,7 +18,7 @@ from typing import Any, cast
 import pytest
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.frontier import frontier_tools_absent
+from lithos_lens.frontier_fallback import frontier_tools_absent
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.lithos_tools import (
     TOOL_LIST_MAX_PAGES,

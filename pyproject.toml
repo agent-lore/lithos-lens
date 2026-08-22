@@ -65,6 +65,7 @@ source_modules = [
     "lithos_lens.task_filtering",
     "lithos_lens.task_graph",
     "lithos_lens.frontier",
+    "lithos_lens.frontier_fallback",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",

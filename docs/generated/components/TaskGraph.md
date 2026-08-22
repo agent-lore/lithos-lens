@@ -11,17 +11,23 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.frontier` | L | 1 | 4 |
+| `lithos_lens.frontier` | L | 1 | 2 |
+| `lithos_lens.frontier_fallback` | S | 1 | 4 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
 
 ### `lithos_lens.frontier`
-- def `frontier_tools_absent` — Ask the server whether it actually has the two frontier tools.
-- def `flat_open_sections` — Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
 - class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.
+
+### `lithos_lens.frontier_fallback`
+- class `FrontierProbeClient` — The narrow client surface this module needs.
+- def `frontier_tools_absent` — Ask the server whether it actually has the two frontier tools.
+- def `flat_open_sections` — Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
+- def `frontier_reads` — The ready/blocked awaitables for one generation of the assembly.
+- def `resolve_frontier` — Read the two frontier responses into rows, verdicts, and error lines.
 
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.

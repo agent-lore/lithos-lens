@@ -15,13 +15,12 @@ from typing import Any
 
 import pytest
 
-from lithos_lens.frontier import (
+from lithos_lens.frontier import classify_open_tasks, load_dashboard
+from lithos_lens.frontier_fallback import (
     BLOCKED_TOOL,
     FRONTIER_UNAVAILABLE_ERROR,
     READY_TOOL,
     RETRY_FAILED_ERROR,
-    classify_open_tasks,
-    load_dashboard,
 )
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.lithos_tools import ToolListError
