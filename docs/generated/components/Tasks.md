@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 18 |
+| `lithos_lens.tasks` | M | 16 | 19 |
 
 ## Public API
 
@@ -44,7 +44,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_note_summary`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
-- def `normalize_since_input`
+- def `lookback_date`
+- def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
 - def `format_display_date`
 - def `format_tag`
 - def `parse_date`

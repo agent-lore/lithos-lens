@@ -32,8 +32,27 @@ TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
 # ``lithos_task_reopen`` records every reopen as a durable finding whose
 # summary starts with this literal marker; it clears ``resolved_at`` and
-# ``outcome``, so the finding is the ONLY surviving evidence of the reopen.
+# ``outcome``, so the finding is the only surviving evidence of the reopen.
+#
+# TRUST BOUNDARY: findings are free text. ``lithos_finding_post`` takes
+# ``{task_id, agent, summary}`` with no credential, so ANY Lithos client can
+# mint this prefix on ANY task under any ``agent`` string — the marker is a
+# REPORT, not a verified fact, and the UI must attribute it rather than assert
+# it (hence the "reopen reported by <agent>" copy). Corroborating against task
+# state is not available either: a reopened-then-recompleted task legitimately
+# carries ``resolved_at`` again. The authoritative signal is the upstream
+# ``task.reopened`` event, which the Lens pipeline does not consume yet (T1
+# slice 6); cross-checking against it is the follow-up.
 REOPENED_FINDING_PREFIX = "[Reopened]"
+
+# Ceiling on the ``?since=`` lookback, in days. ``lithos_task_list`` takes no
+# row limit, so this window is the ONLY bound on the completed/cancelled reads
+# — and terminal history, unlike the open frontier, only ever grows: an
+# unclamped ``?since=01/01/0001`` would pull the whole archive into one render.
+# A safety bound rather than an operator dial, the same shape as the client's
+# ``_RECENT_NOTES_MAX_PAGES`` runaway guard; ``default_time_range_days`` stays
+# the tunable window.
+MAX_SINCE_LOOKBACK_DAYS = 365
 
 
 class SectionState(StrEnum):
@@ -225,11 +244,14 @@ class FindingView:
 
     @property
     def is_reopen(self) -> bool:
-        """True for the durable ``[Reopened]`` finding ``lithos_task_reopen``
-        posts. Reopen leaves no other trace on the task itself — it CLEARS
-        ``resolved_at`` and ``outcome`` — so this finding is the only durable
-        evidence a task came back from a terminal state, and it drives both
-        the timeline marker and the header marker."""
+        """True for a ``[Reopened]`` finding — a reopen REPORT, not a verdict.
+
+        ``lithos_task_reopen`` posts this finding and leaves no other trace (it
+        clears ``resolved_at`` and ``outcome``), but any client can post the
+        same prefix under any agent name; see the trust note on
+        :data:`REOPENED_FINDING_PREFIX`. Both markers it drives are worded as
+        attributed reports for that reason.
+        """
         return self.finding.summary.lstrip().startswith(REOPENED_FINDING_PREFIX)
 
 
@@ -244,15 +266,18 @@ class TaskDetailData:
     errors: tuple[str, ...] = ()
 
     @property
-    def reopened(self) -> bool:
-        """Whether this task carries a reopen in its history.
+    def reopen_report(self) -> FindingView | None:
+        """The most recent reopen report on this task, if any.
 
-        Derived from the findings timeline (see ``FindingView.is_reopen``) —
-        the only durable record of a reopen. A findings load failure therefore
-        means "unknown", which renders as no marker rather than a false
-        negative claim.
+        Derived from the findings timeline (see ``FindingView.is_reopen``),
+        which is the only durable record of a reopen — and an unauthenticated
+        one, so the view carries the REPORTING AGENT and the header attributes
+        the claim to them instead of stating a lifecycle reversal as fact.
+        ``findings`` is ordered oldest-first by ``resolve_finding_notes``, so
+        the last match is the latest report. A findings load failure yields
+        None ("unknown"), never a false negative claim.
         """
-        return any(view.is_reopen for view in self.findings)
+        return next((view for view in reversed(self.findings) if view.is_reopen), None)
 
 
 class TaskLithosClientProtocol(Protocol):
@@ -523,15 +548,32 @@ def note_updated_sort_key(updated: str) -> datetime:
 
 
 def default_since(default_days: int) -> str:
-    return (datetime.now(UTC) - timedelta(days=default_days)).date().isoformat()
+    return lookback_date(default_days).isoformat()
+
+
+def lookback_date(days: int) -> date:
+    return (datetime.now(UTC) - timedelta(days=days)).date()
 
 
 def normalize_since_input(value: str, *, default_days: int) -> str:
+    """Parse the ``?since=`` filter into a BOUNDED ISO date.
+
+    Blank or unparseable input falls back to the default window; a lookback
+    longer than :data:`MAX_SINCE_LOOKBACK_DAYS` is clamped to that ceiling
+    rather than honored. Clamping (rather than snapping back to the default)
+    keeps the filter doing what it says as far as it is permitted to, and the
+    clamped value is what the filter bar re-renders, so the window shown is
+    the window applied.
+    """
     value = value.strip()
     if not value:
         return default_since(default_days)
     parsed = parse_date(value)
-    return parsed.isoformat() if parsed else default_since(default_days)
+    if parsed is None:
+        return default_since(default_days)
+    # A default window wider than the ceiling must not be shrunk by it.
+    floor = lookback_date(max(MAX_SINCE_LOOKBACK_DAYS, default_days))
+    return parsed.isoformat() if parsed >= floor else floor.isoformat()
 
 
 def format_display_date(value: str) -> str:

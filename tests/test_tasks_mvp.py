@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
+    MAX_SINCE_LOOKBACK_DAYS,
     AgentRecord,
     ClaimRecord,
     FindingRecord,
@@ -22,6 +24,7 @@ from lithos_lens.tasks import (
     NoteSummary,
     TaskRecord,
     TaskStatusRecord,
+    normalize_since_input,
 )
 from lithos_lens.web import create_app
 
@@ -902,12 +905,77 @@ def test_terminal_rows_sort_newest_resolved_first(
     )
 
 
+def test_dashboard_clamps_an_unbounded_since_to_the_max_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``lithos_task_list`` takes no row limit, so ``since`` is the ONLY bound
+    on the completed/cancelled reads and terminal history only grows: a
+    lookback past ``MAX_SINCE_LOOKBACK_DAYS`` must be clamped before it
+    reaches the wire, not honored (security/f-003)."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=01/01/0001")
+
+    assert response.status_code == 200
+    expected = (
+        (datetime.now(UTC) - timedelta(days=MAX_SINCE_LOOKBACK_DAYS)).date().isoformat()
+    )
+    terminal_calls = [
+        call for call in fake.list_calls if call["status"] in {"completed", "cancelled"}
+    ]
+    assert terminal_calls
+    assert all(call["resolved_since"] == expected for call in terminal_calls)
+    # The clamp is what the operator sees, so the filter never lies about its
+    # own window.
+    assert f'data-native-date value="{expected}"' in response.text
+
+
+def test_dashboard_honors_a_since_inside_the_max_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The clamp is a ceiling, not a fixed window: a lookback within it is
+    passed through untouched."""
+    fake = TaskFakeLithosClient()
+    inside = (datetime.now(UTC) - timedelta(days=90)).date().isoformat()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?since={inside}")
+
+    assert response.status_code == 200
+    completed_call = next(
+        call for call in fake.list_calls if call["status"] == "completed"
+    )
+    assert completed_call["resolved_since"] == inside
+
+
+def test_since_clamp_never_shrinks_a_wider_configured_window() -> None:
+    """The ceiling is a safety bound on runaway lookbacks, not a cap on the
+    operator's configured window: a ``default_time_range_days`` wider than
+    MAX_SINCE_LOOKBACK_DAYS still governs."""
+    wide = MAX_SINCE_LOOKBACK_DAYS + 100
+    requested = (datetime.now(UTC) - timedelta(days=wide - 1)).date().isoformat()
+
+    assert normalize_since_input(requested, default_days=wide) == requested
+    assert (
+        normalize_since_input("01/01/0001", default_days=wide)
+        == (datetime.now(UTC) - timedelta(days=wide)).date().isoformat()
+    )
+
+
 def test_task_detail_marks_a_task_reopened_from_its_reopen_finding(
     lithos_lens_config_env: Path,
 ) -> None:
     """T1-S10 acceptance: ``lithos_task_reopen`` CLEARS resolved_at/outcome, so
     its durable ``[Reopened]`` finding is the only surviving evidence of the
-    reopen — it drives both the header marker and the timeline marker."""
+    reopen — it drives both the header marker and the timeline marker.
+
+    Findings are unauthenticated free text (any client can post the prefix
+    under any agent name), so the header ATTRIBUTES the report to its posting
+    agent rather than asserting the reversal as a system fact, and the
+    timeline decoration is emitted as real markup (not through the escaping
+    channel) so its class actually applies.
+    """
     fake = TaskFakeLithosClient()
     fake.findings["open-unclaimed"] = [
         FindingRecord(
@@ -924,7 +992,11 @@ def test_task_detail_marks_a_task_reopened_from_its_reopen_finding(
 
     assert response.status_code == 200
     assert "data-reopened-marker" in response.text
-    assert "data-reopen-finding" in response.text
+    # Attributed, not asserted (security/f-001).
+    assert "reopen reported by operator" in response.text
+    # Real markup, not escaped text (security/f-002): the class must render as
+    # an attribute or the timeline decoration silently never applies.
+    assert '<li class="finding-reopened" data-reopen-finding>' in response.text
 
 
 def test_task_detail_without_a_reopen_finding_carries_no_marker(
