@@ -11,7 +11,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.tasks` | M | 16 | 22 |
+| `lithos_lens.tasks` | L | 16 | 23 |
 
 ## Public API
 
@@ -48,6 +48,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `format_display_date`
 - def `format_tag`
 - def `parse_date`
+- def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
 - def `task_projects` — Every project slug a task claims under ``convention`` (§5B.1).
 - def `project_convention_conflict` — True when a task carries BOTH conventions and they disagree (§5B.1).
 - def `matches_agent` — Creator-OR-claimer agent match (§5.4.2).

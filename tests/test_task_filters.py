@@ -14,6 +14,7 @@ from lithos_lens.tasks import (
     ClaimRecord,
     TaskFilters,
     TaskRecord,
+    invalid_project_metadata,
     matches_agent,
     matches_filters,
     parse_filters,
@@ -109,6 +110,54 @@ def test_task_projects_uses_the_configured_tag_key() -> None:
 
 def test_task_without_a_project_claims_no_slug() -> None:
     assert task_projects(_task(tags=("area:docs",), metadata={"project": "  "})) == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [["influx"], {"slug": "influx"}, 42, 3.5, True, False, None],
+)
+def test_non_string_metadata_project_claims_no_slug(value: object) -> None:
+    """§5B.1 defines metadata.project as a string slug. A non-string value is
+    ignored, never coerced — ``str(["influx"])`` would fabricate the project
+    ``['influx']``, put it in the dropdown, and match a URL nobody could
+    otherwise produce."""
+    task = _task(metadata={"project": value})
+
+    assert task_projects(task) == ()
+    assert task_projects(task, convention="metadata") == ()
+    assert not matches_filters(
+        task, filters=_filters(projects=(str(value),)), status="open"
+    )
+
+
+def test_malformed_metadata_project_does_not_fake_a_conflict() -> None:
+    """An unreadable metadata value is not a competing convention: the tag is
+    simply the task's only project."""
+    task = _task(tags=("project:influx",), metadata={"project": ["influx"]})
+
+    assert task_projects(task) == ("influx",)
+    assert not project_convention_conflict(task)
+    assert invalid_project_metadata(task)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({}, False),
+        ({"project": "influx"}, False),
+        # Explicit null and blank strings mean "no project", not malformed.
+        ({"project": None}, False),
+        ({"project": "   "}, False),
+        ({"project": ["influx"]}, True),
+        ({"project": {"slug": "influx"}}, True),
+        ({"project": 42}, True),
+        ({"project": True}, True),
+    ],
+)
+def test_invalid_project_metadata_flags_only_non_strings(
+    metadata: dict[str, object], expected: bool
+) -> None:
+    assert invalid_project_metadata(_task(metadata=metadata)) is expected
 
 
 def test_project_filter_matches_either_convention() -> None:

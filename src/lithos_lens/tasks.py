@@ -565,6 +565,31 @@ def parse_date(value: str) -> date | None:
         return None
 
 
+def _metadata_project_slug(task: TaskRecord) -> str:
+    """The task's ``metadata.project`` slug — ``""`` when absent or unusable.
+
+    ``metadata`` is free-form upstream JSON, but §5B.1 defines this key as a
+    string slug. A non-string value is NOT coerced: ``str(["influx"])`` would
+    fabricate a project named ``['influx']`` that reaches the filter dropdown,
+    matches a URL nobody could otherwise produce, and can fake a convention
+    conflict. Such a value is ignored here and reported by the loader
+    (``lens.tasks.project_metadata_invalid``) instead.
+    """
+    value = task.metadata.get("project")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def invalid_project_metadata(task: TaskRecord) -> bool:
+    """True when ``metadata.project`` is present but is not a string (§5B.1).
+
+    Explicit ``None`` and blank strings mean "no project" and are not flagged;
+    a list/mapping/number/bool is malformed data whose project is unreadable,
+    so the task is invisible to its project view and someone should know.
+    """
+    value = task.metadata.get("project")
+    return value is not None and not isinstance(value, str)
+
+
 def task_projects(
     task: TaskRecord,
     *,
@@ -583,7 +608,7 @@ def task_projects(
     """
     slugs: list[str] = []
     if convention in ("metadata", "both"):
-        metadata_slug = str(task.metadata.get("project") or "").strip()
+        metadata_slug = _metadata_project_slug(task)
         if metadata_slug:
             slugs.append(metadata_slug)
     if convention in ("tag", "both"):

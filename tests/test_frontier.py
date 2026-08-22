@@ -785,11 +785,13 @@ def test_disagreeing_project_conventions_warn_to_telemetry(
         assert _section_ids(scoped_data.sections, "ready") == ["conflicted"]
 
 
-def test_single_convention_posture_does_not_warn(
+def test_single_convention_posture_still_warns_about_a_conflict(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Under a single-convention posture Lens deliberately reads one side, so a
-    disagreement is not a reconciliation event worth warning about."""
+    """§5B.1 makes the conflict warning a property of the DATA: a task carrying
+    two disagreeing conventions is reported whatever posture Lens matches
+    under. The posture narrows matching only — both values are read either
+    way."""
     conflicted = _task(
         "conflicted",
         claims=(),
@@ -808,14 +810,48 @@ def test_single_convention_posture_does_not_warn(
     with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
         data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
 
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
+    ]
+    assert record.__dict__["conflicting_task_ids"] == ["conflicted"]
+    # The posture narrows MATCHING, not the universe: §5B.1 keeps the dropdown
+    # the union of both conventions' slugs so no project is invisible.
+    assert data.projects == ("stamped", "tagged")
+
+
+def test_malformed_metadata_project_is_reported_and_never_fabricates_a_slug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-string metadata.project cannot be read as a project: it must not
+    reach the dropdown as a coerced ``['influx']``, must not fake a convention
+    conflict, and must not vanish silently either."""
+    malformed = _task(
+        "malformed",
+        claims=(),
+        tags=("project:real",),
+        metadata={"project": ["real"]},
+    )
+    fake = _FrontierFake(open_tasks=[malformed], ready=[malformed], blocked=[])
+
+    with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
+        data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.projects == ("real",)
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_metadata_invalid"
+    ]
+    assert record.__dict__["invalid_task_ids"] == ["malformed"]
+    assert record.__dict__["invalid_count"] == 1
+    # The tag is the only readable convention, so there is nothing to reconcile.
     assert not [
         r
         for r in caplog.records
         if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
     ]
-    # The posture narrows MATCHING, not the universe: §5B.1 keeps the dropdown
-    # the union of both conventions' slugs so no project is invisible.
-    assert data.projects == ("stamped", "tagged")
 
 
 def test_project_universe_unions_both_conventions_under_a_single_posture() -> None:

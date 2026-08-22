@@ -35,6 +35,7 @@ from lithos_lens.tasks import (
     TaskStatusName,
     TaskSummary,
     int_stat,
+    invalid_project_metadata,
     matches_filters,
     project_convention_conflict,
     task_projects,
@@ -389,7 +390,7 @@ async def load_dashboard(
             if not isinstance(result, BaseException)
         ],
     )
-    _log_project_convention_conflicts(loaded_tasks, filters)
+    _log_project_data_quality(loaded_tasks, filters)
     projects = _project_universe(loaded_tasks, filters)
 
     show_open = "open" in filters.statuses
@@ -490,35 +491,48 @@ def _project_universe(
     return tuple(sorted(slugs))
 
 
-def _log_project_convention_conflicts(
+def _log_project_data_quality(
     tasks: Sequence[TaskRecord],
     filters: TaskFilters,
 ) -> None:
-    """Warn to telemetry about tasks whose two project conventions disagree.
+    """Report this load's project data-quality signals, once each (§5B.1).
 
-    Reported over every loaded row — resolved rows carry their conventions too
-    — once per load. Only meaningful under the reconciling ``"both"`` posture
-    (§5B.1); the single-convention postures deliberately read one side. Neither
-    value is dropped — the task matches under both slugs — so this is a
-    data-quality signal, not a rendering decision.
+    Two independent signals over every loaded row — resolved rows carry their
+    conventions too:
+
+    - the two conventions are present and DISAGREE. Reported in every posture:
+      §5B.1 makes the warning a property of the data, not of the matching
+      posture Lens happens to run (both values are read for the universe
+      regardless). Neither value is dropped — the task matches under both slugs.
+    - ``metadata.project`` is present but is not a string. Lens cannot read a
+      project out of it, so the task is invisible to its project view; the
+      value is ignored rather than coerced into a fabricated slug.
     """
-    if filters.project_convention != "both":
-        return
-    conflicts = [
-        task.id
-        for task in tasks
-        if project_convention_conflict(task, tag_key=filters.project_tag_key)
-    ]
-    if not conflicts:
-        return
-    logger.warning(
-        "task project conventions disagree",
-        extra={
-            "lens_event": "lens.tasks.project_convention_conflict",
-            "conflict_count": len(conflicts),
-            "conflicting_task_ids": conflicts[:20],
-        },
-    )
+    conflicts: list[str] = []
+    malformed: list[str] = []
+    for task in tasks:
+        if project_convention_conflict(task, tag_key=filters.project_tag_key):
+            conflicts.append(task.id)
+        if invalid_project_metadata(task):
+            malformed.append(task.id)
+    if conflicts:
+        logger.warning(
+            "task project conventions disagree",
+            extra={
+                "lens_event": "lens.tasks.project_convention_conflict",
+                "conflict_count": len(conflicts),
+                "conflicting_task_ids": conflicts[:20],
+            },
+        )
+    if malformed:
+        logger.warning(
+            "task metadata.project is not a string slug",
+            extra={
+                "lens_event": "lens.tasks.project_metadata_invalid",
+                "invalid_count": len(malformed),
+                "invalid_task_ids": malformed[:20],
+            },
+        )
 
 
 class _FrontierState:
