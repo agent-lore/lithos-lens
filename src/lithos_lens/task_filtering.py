@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
-    TASK_STATUSES,
     DEFAULT_PROJECT_TAG_KEY,
+    TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
     ProjectConvention,
     TaskFilters,

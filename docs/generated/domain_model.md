@@ -178,6 +178,7 @@ classDiagram
     +truncated bool
     +filters_narrowed bool
     +graph_available bool
+    +open_flat bool
     +nothing_to_show bool
     +errors tuple[str, ...]
   }

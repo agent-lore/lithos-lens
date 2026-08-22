@@ -73,6 +73,13 @@ BLOCKED_TOOL = "lithos_task_blocked"
 # monitoring rather than only on the render that discovered it.
 FRONTIER_UNAVAILABLE_ERROR = "The Lithos ready/blocked frontier tools are unavailable."
 
+# A skewed read could not be re-read. Reported rather than swallowed: the
+# dashboard's affirmative "All systems healthy" stripe is gated on this error
+# channel, and a retry triggered by terminal overlap alone leaves no other
+# trace — the board would otherwise claim health while rendering one task in
+# both an open section and a terminal one.
+RETRY_FAILED_ERROR = "Could not re-read the task graph to reconcile a skewed read."
+
 
 async def frontier_tools_absent(lithos: FrontierLithosClient) -> bool:
     """Ask the server whether it actually has the two frontier tools.
@@ -432,7 +439,11 @@ async def load_dashboard(
             skewed_frontier or bool(terminal_overlap),
         )
 
-    if graph_available:
+    # §14: a frontier READ failure renders the master open list flat too, not
+    # just a missing-tools verdict. Half a frontier is not a classification —
+    # rows would land in "Not classified", the tail whose banner explains it as
+    # frontier-limit overflow, and an outage would read as truncation.
+    if graph_available and frontier_ok:
         state = _partition_state(open_snapshot, ready_list, blocked_records)
 
         if frontier_ok and state.retry_worthy:
@@ -449,11 +460,16 @@ async def load_dashboard(
                 lithos.task_blocked(limit=frontier_limit),
                 return_exceptions=True,
             )
-            if not (
+            if (
                 isinstance(retry_open, BaseException)
                 or isinstance(retry_ready, BaseException)
                 or isinstance(retry_blocked, BaseException)
             ):
+                # Keep the first generation (a mixed one would be worse), but
+                # SAY SO: without this the stripe can call a board healthy
+                # whose skew was never resolved.
+                errors.append(RETRY_FAILED_ERROR)
+            else:
                 open_snapshot = sorted(
                     cast(list[TaskRecord], retry_open),
                     key=lambda task: task.created_at,
@@ -470,11 +486,18 @@ async def load_dashboard(
         if reconciliation_pending:
             partition = _reclassify_conservative(partition, state.effective_overlap)
     else:
-        # Flat fallback (story 27): with no frontier there is nothing to
-        # join, nothing to truncate, and no pair of reads that could
-        # disagree — so the skew machinery above is skipped outright
-        # rather than fed empty frontiers, which would read every open row
-        # as "unclassified" and raise a false reconciliation warning.
+        # Flat fallback — no usable frontier, whether because the tools are
+        # absent (story 27) or because a read of them failed. Either way there
+        # is nothing to join, nothing to truncate, and no pair of reads that
+        # could disagree, so the skew machinery above is skipped outright
+        # rather than fed empty frontiers, which would read every open row as
+        # "unclassified" and raise a false reconciliation warning.
+        #
+        # The two causes stay distinguishable to the operator through the
+        # error lines (`FRONTIER_UNAVAILABLE_ERROR` vs "Could not load the
+        # ready frontier.") and through `graph_available`, which stays True
+        # for an outage: a transient failure must not be dressed up as "your
+        # Lithos is too old", nor cost the caller its graph verdict.
         partition = flat_open_sections(
             [
                 task
@@ -571,6 +594,7 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
         graph_available=graph_available,
+        open_flat=not (graph_available and frontier_ok),
         nothing_to_show=nothing_to_show,
         errors=tuple(errors),
     )

@@ -214,10 +214,12 @@
             {% set active = "open" in dashboard.filters.statuses and rows %}
           {% elif section == "open" %}
             {# The flat fallback's only open section — it replaces the workable
-               three rather than joining them. #}
-            {% set active = "open" in dashboard.filters.statuses and not dashboard.graph_available %}
+               three rather than joining them. Keyed on open_flat, not on
+               graph_available: a frontier READ failure renders flat too, while
+               the server keeps its graph. #}
+            {% set active = "open" in dashboard.filters.statuses and dashboard.open_flat %}
           {% else %}
-            {% set active = "open" in dashboard.filters.statuses and dashboard.graph_available %}
+            {% set active = "open" in dashboard.filters.statuses and not dashboard.open_flat %}
           {% endif %}
           {% if active %}
             <article class="task-group" id="task-group-{{ section }}" data-task-group="{{ section }}">

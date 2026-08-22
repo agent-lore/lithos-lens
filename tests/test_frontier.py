@@ -17,7 +17,9 @@ import pytest
 
 from lithos_lens.frontier import (
     BLOCKED_TOOL,
+    FRONTIER_UNAVAILABLE_ERROR,
     READY_TOOL,
+    RETRY_FAILED_ERROR,
     classify_open_tasks,
     load_dashboard,
 )
@@ -203,6 +205,7 @@ class _FrontierFake:
         completed: list[TaskRecord] | None = None,
         cancelled: list[TaskRecord] | None = None,
         fail_ready: bool = False,
+        fail_ready_from: int | None = None,
         ready_error: BaseException | None = None,
         blocked_error: BaseException | None = None,
         tool_names: set[str] | None = None,
@@ -214,6 +217,9 @@ class _FrontierFake:
         self._completed = completed or []
         self._cancelled = cancelled or []
         self._fail_ready = fail_ready
+        # Which ready call starts failing (0-based): scripts a first
+        # generation that succeeds and a RETRY that does not.
+        self._fail_ready_from = fail_ready_from
         # Per-tool frontier failures: version-skew detection is anchored to the
         # tool whose call failed, so the two are scripted separately.
         self._ready_error = ready_error
@@ -295,6 +301,11 @@ class _FrontierFake:
         tags: list[str] | None = None,
     ) -> list[TaskRecord]:
         if self._fail_ready:
+            raise RuntimeError("ready frontier unavailable")
+        if self._fail_ready_from is not None and self.ready_calls >= (
+            self._fail_ready_from
+        ):
+            self.ready_calls += 1
             raise RuntimeError("ready frontier unavailable")
         if self._ready_error is not None:
             self.ready_calls += 1
@@ -446,14 +457,20 @@ def test_load_dashboard_orders_terminal_rows_newest_resolved_first() -> None:
 
 
 def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
-    """Regression (f-002): a failed frontier read leaves rows unclassified, but
-    that is an error (surfaced by the banner), NOT frontier-limit truncation —
-    ``truncated`` must stay False so the dashboard doesn't claim a false cap."""
+    """Regression (f-002): a failed frontier read is an error (surfaced by the
+    banner), NOT frontier-limit truncation — ``truncated`` must stay False so
+    the dashboard doesn't claim a false cap.
+
+    §14 also settles where the row goes: the master open list renders FLAT.
+    Leaving it in "Not classified" would file an outage under the tail whose
+    banner explains it as frontier-limit overflow.
+    """
     ready = _task("r", claims=())
     fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[], fail_ready=True)
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-    # The ready call failed, so the row can't be placed on the frontier.
-    assert _section_ids(data.sections, "unclassified") == ["r"]
+    assert data.open_flat is True
+    assert _section_ids(data.sections, "open") == ["r"]
+    assert _section_ids(data.sections, "unclassified") == []
     assert data.truncated is False
     assert any("ready frontier" in message for message in data.errors)
 
@@ -1145,7 +1162,9 @@ def test_error_text_alone_never_retires_the_graph_surface() -> None:
     # The server's own tool list still names both tools, so this is an outage.
     assert fake.tool_list_calls == 1
     assert data.graph_available is True
-    assert _section_ids(data.sections, "open") == []
+    # The rows do render flat — both reads failed (§14) — but as an OUTAGE:
+    # the version notice is absent and the graph verdict is untouched.
+    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
     assert any("ready frontier" in message for message in data.errors)
 
 
@@ -1184,7 +1203,9 @@ def test_truncated_tool_listing_does_not_retire_the_graph_surface() -> None:
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
     assert data.graph_available is True
-    assert _section_ids(data.sections, "open") == []
+    # The rows do render flat — both reads failed (§14) — but as an OUTAGE:
+    # the version notice is absent and the graph verdict is untouched.
+    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
     assert any("ready frontier" in message for message in data.errors)
 
 
@@ -1329,11 +1350,16 @@ def test_known_missing_frontier_skips_the_frontier_calls() -> None:
     assert any("frontier tools" in message for message in data.errors)
 
 
-def test_frontier_outage_keeps_the_error_banner_and_the_graph_surface() -> None:
-    """The fallback is for missing tools only: a frontier read that fails for
-    any other reason stays an error (banner + unclassified rows), because
-    blanking Ready/Blocked on a transient outage would hide a real problem
-    behind a "your Lithos is too old" story."""
+def test_frontier_outage_renders_flat_without_the_version_story() -> None:
+    """A transient outage renders the master open list FLAT with the read error
+    (§14), and is still not the missing-tools fallback.
+
+    Two separate contracts meet here. The rows go flat because half a frontier
+    is not a classification. But ``graph_available`` stays True and the error
+    names the failing read, because blanking Ready/Blocked behind "your Lithos
+    is too old" would hide a real problem — and would cost the caller its graph
+    verdict for the whole re-probe window.
+    """
     fake = _FrontierFake(
         open_tasks=[_task("r", claims=())],
         ready=[],
@@ -1345,9 +1371,42 @@ def test_frontier_outage_keeps_the_error_banner_and_the_graph_surface() -> None:
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
     assert data.graph_available is True
-    assert _section_ids(data.sections, "open") == []
-    assert _section_ids(data.sections, "unclassified") == ["r"]
+    assert data.open_flat is True
+    assert _section_ids(data.sections, "open") == ["r"]
+    assert _section_ids(data.sections, "unclassified") == []
     assert any("ready frontier" in message for message in data.errors)
+    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
+    assert data.healthy is False
+
+
+def test_a_failed_skew_retry_is_reported_not_swallowed() -> None:
+    """Regression: a retry that fails must reach the error channel.
+
+    The retry keeps the first generation when it cannot re-read (a mixed
+    generation would be worse), and that part is deliberate. What was missing
+    is the report: a retry triggered by TERMINAL overlap alone leaves
+    ``reconciliation_pending`` False, so with no error line the board rendered
+    the affirmative "All systems healthy" stripe over a task showing in both an
+    open section and a terminal one.
+    """
+    dupe = _task("t", claims=())
+    completed = replace(dupe, status="completed")
+    fake = _FrontierFake(
+        open_tasks=[dupe],
+        ready=[dupe],
+        blocked=[],
+        completed=[completed],
+        fail_ready_from=1,
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    # The retry was attempted and failed; the first generation still renders.
+    assert fake.ready_calls == 2
+    assert _section_ids(data.sections, "ready") == ["t"]
+    # No frontier disagreement, so this error line is the ONLY signal there is.
+    assert data.reconciliation_pending is False
+    assert RETRY_FAILED_ERROR in data.errors
     assert data.healthy is False
 
 

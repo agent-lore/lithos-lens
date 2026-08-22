@@ -293,6 +293,12 @@ class DashboardData:
     # the open rows render in the flat ``open`` section behind the
     # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
     graph_available: bool = True
+    # True when the open rows render in the flat ``open`` section instead of
+    # the workable three. Distinct from ``graph_available``: BOTH a missing
+    # frontier (pre-0.4) and a failed frontier READ render flat (§14), but only
+    # the first is a version story, and only the first should be remembered by
+    # the caller. Half a frontier is not a classification.
+    open_flat: bool = False
     # True when Lithos answered every read successfully and returned nothing
     # for this view: no open tasks, and nothing resolved inside the ``since``
     # window. Distinguishes "there is nothing here" from "your filters hid
