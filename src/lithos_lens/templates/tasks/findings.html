@@ -7,9 +7,10 @@
   {% elif detail and detail.findings %}
     <ol class="findings-timeline">
       {% for item in detail.findings %}
-        <li>
+        <li {{ 'class="finding-reopened" data-reopen-finding' if item.is_reopen else "" }}>
           <header>
             <strong>{{ item.finding.agent or "unknown agent" }}</strong>
+            {% if item.is_reopen %}<span class="badge badge-reopened">reopened</span>{% endif %}
             {% if item.finding.created_at %}
               <time datetime="{{ item.finding.created_at }}">{{ item.finding.created_at }}</time>
             {% endif %}

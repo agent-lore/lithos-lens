@@ -55,6 +55,7 @@ class FrontierLithosClient(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -196,11 +197,14 @@ async def load_dashboard(
     query_agent = filters.agent or None
 
     async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
+        # Terminal rows are windowed by RESOLUTION time, never creation time:
+        # ``resolved_since`` is the upstream filter for "recent work", so a
+        # task created months ago and finished yesterday is in the window.
         return await lithos.list_tasks(
             agent=query_agent,
             status=status,
             tags=query_tags,
-            since=filters.since,
+            resolved_since=filters.since,
         )
 
     (
@@ -523,7 +527,12 @@ def _rows_for(
     filters: TaskFilters,
     errors: list[str],
 ) -> list[TaskRecord]:
-    """Filter + sort one status group's rows, recording a load error if any."""
+    """Filter + sort one status group's rows, recording a load error if any.
+
+    Terminal groups sort newest-RESOLVED first (matching the ``resolved_since``
+    window they are drawn from), falling back to ``created_at`` for a row whose
+    ``resolved_at`` an older Lithos omitted.
+    """
     if isinstance(result, BaseException):
         errors.append(f"Could not load {status} tasks.")
         return []
@@ -532,4 +541,6 @@ def _rows_for(
         for task in cast(list[TaskRecord], result)
         if matches_filters(task, filters=filters, status=status)
     ]
-    return sorted(rows, key=lambda task: task.created_at, reverse=True)
+    return sorted(
+        rows, key=lambda task: task.resolved_at or task.created_at, reverse=True
+    )

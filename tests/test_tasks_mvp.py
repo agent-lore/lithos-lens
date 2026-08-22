@@ -61,6 +61,28 @@ class TaskFakeLithosClient:
                 tags=("project:influx",),
             )
         }
+        # Findings per task id, driven per-test (a staged ``[Reopened]``
+        # finding is how a reopen is observable at all — see T1-S10).
+        self.findings: dict[str, list[FindingRecord]] = {
+            "open-claimed": [
+                FindingRecord(
+                    id="finding-1",
+                    task_id="open-claimed",
+                    agent="worker-a",
+                    summary="Important finding",
+                    knowledge_id="note-1",
+                    created_at="2026-04-26T10:30:00+00:00",
+                ),
+                FindingRecord(
+                    id="finding-2",
+                    task_id="open-claimed",
+                    agent="worker-b",
+                    summary="Fallback finding",
+                    knowledge_id="missing-note",
+                    created_at="2026-04-26T10:45:00+00:00",
+                ),
+            ]
+        }
         # /knowledge hybrid-search results, driven per-test (K1-S6).
         self.search_results: list[SearchResult] = []
         self.search_calls: list[dict[str, Any]] = []
@@ -95,6 +117,7 @@ class TaskFakeLithosClient:
                 status="completed",
                 created_by="worker",
                 created_at="2026-04-20T10:00:00+00:00",
+                resolved_at="2026-04-22T10:00:00+00:00",
             ),
             TaskRecord(
                 id="done-old",
@@ -102,6 +125,7 @@ class TaskFakeLithosClient:
                 status="completed",
                 created_by="worker",
                 created_at="2025-01-01T10:00:00+00:00",
+                resolved_at="2025-01-02T10:00:00+00:00",
             ),
             TaskRecord(
                 id="cancelled-recent",
@@ -109,6 +133,7 @@ class TaskFakeLithosClient:
                 status="cancelled",
                 created_by="worker",
                 created_at="2026-04-21T10:00:00+00:00",
+                resolved_at="2026-04-23T10:00:00+00:00",
             ),
         ]
 
@@ -129,6 +154,7 @@ class TaskFakeLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         self.list_calls.append(
@@ -137,6 +163,7 @@ class TaskFakeLithosClient:
                 "status": status,
                 "tags": tags,
                 "since": since,
+                "resolved_since": resolved_since,
                 "with_claims": with_claims,
             }
         )
@@ -147,6 +174,14 @@ class TaskFakeLithosClient:
             rows = [task for task in rows if all(tag in task.tags for tag in tags)]
         if since:
             rows = [task for task in rows if task.created_at[:10] >= since[:10]]
+        if resolved_since:
+            # Upstream windows terminal rows on resolved_at and drops
+            # NULL-resolved rows; the fake mirrors both halves.
+            rows = [
+                task
+                for task in rows
+                if task.resolved_at and task.resolved_at[:10] >= resolved_since[:10]
+            ]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
         return rows
@@ -262,26 +297,7 @@ class TaskFakeLithosClient:
     async def list_findings(
         self, task_id: str, *, since: str | None = None
     ) -> list[FindingRecord]:
-        if task_id == "open-claimed":
-            return [
-                FindingRecord(
-                    id="finding-1",
-                    task_id=task_id,
-                    agent="worker-a",
-                    summary="Important finding",
-                    knowledge_id="note-1",
-                    created_at="2026-04-26T10:30:00+00:00",
-                ),
-                FindingRecord(
-                    id="finding-2",
-                    task_id=task_id,
-                    agent="worker-b",
-                    summary="Fallback finding",
-                    knowledge_id="missing-note",
-                    created_at="2026-04-26T10:45:00+00:00",
-                ),
-            ]
-        return []
+        return list(self.findings.get(task_id, []))
 
     async def stats(self) -> dict[str, Any]:
         return {"open_claims": 1, "agents": 2}
@@ -398,7 +414,7 @@ def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
     assert "No completed tasks match these filters" in response.text
 
 
-def test_dashboard_accepts_uk_created_since_date(
+def test_dashboard_accepts_uk_resolved_since_date(
     lithos_lens_config_env: Path,
 ) -> None:
     fake = TaskFakeLithosClient()
@@ -413,11 +429,12 @@ def test_dashboard_accepts_uk_created_since_date(
     completed_call = next(
         call for call in fake.list_calls if call["status"] == "completed"
     )
-    # `since` scopes only the resolved (completed/cancelled) windows; the master
-    # open call is unfiltered so it never carries a `since`.
+    # The date scopes only the resolved (completed/cancelled) windows, and it
+    # goes out as `resolved_since`; the master open call is unfiltered.
     open_call = next(call for call in fake.list_calls if call["status"] == "open")
     assert open_call["since"] is None
-    assert completed_call["since"] == "2026-04-01"
+    assert open_call["resolved_since"] is None
+    assert completed_call["resolved_since"] == "2026-04-01"
 
 
 def test_task_list_tag_links_replace_tag_and_preserve_active_filters(
@@ -821,14 +838,13 @@ def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
     assert "<strong>0</strong>" in blocked_card
 
 
-def test_terminal_card_labels_match_the_created_windowing(
+def test_terminal_sections_window_by_resolution_time_not_creation_time(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Label<->filter consistency: the since filter windows completed/cancelled
-    rows by CREATED date, so the cards must say "Created since". A task created
-    long ago but resolved yesterday is (currently) excluded — resolved-time
-    windowing is T1-S10, which should push lithos_task_list's native
-    resolved_since param rather than relabel this filter."""
+    """T1-S10 acceptance: a task created 60+ days ago but resolved inside the
+    window is recent work and must render — the window is pushed upstream as
+    lithos_task_list's native resolved_since, and the card/filter labels say
+    "Resolved since" so label and filter agree."""
     fake = TaskFakeLithosClient()
     fake.tasks.append(
         TaskRecord(
@@ -845,8 +861,91 @@ def test_terminal_card_labels_match_the_created_windowing(
         response = client.get("/tasks?since=2026-04-01")
 
     assert response.status_code == 200
-    # Created outside the window: excluded even though resolved recently…
-    assert "Ancient task resolved yesterday" not in response.text
-    # …so the cards must describe the filter that actually applies.
-    assert "Created since" in response.text
-    assert "Resolved since" not in response.text
+    assert "Ancient task resolved yesterday" in response.text
+    # Resolved before the window: still excluded (created_at is irrelevant).
+    assert "Old completed task" not in response.text
+    assert "Resolved since" in response.text
+    assert "Created since" not in response.text
+
+    # The window is a resolved_since push, never a created-at `since`.
+    terminal_calls = [
+        call for call in fake.list_calls if call["status"] in {"completed", "cancelled"}
+    ]
+    assert terminal_calls
+    assert all(call["resolved_since"] == "2026-04-01" for call in terminal_calls)
+    assert all(call["since"] is None for call in terminal_calls)
+
+
+def test_terminal_rows_sort_newest_resolved_first(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The Completed group is drawn from a resolved-time window, so it orders
+    by resolution: the ancient-but-just-resolved task leads the group."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="old-created-recent-resolved",
+            title="Ancient task resolved yesterday",
+            status="completed",
+            created_by="worker",
+            created_at="2020-01-01T00:00:00+00:00",
+            resolved_at="2026-08-08T00:00:00+00:00",
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=completed&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert response.text.index("Ancient task resolved yesterday") < response.text.index(
+        "Recently completed task"
+    )
+
+
+def test_task_detail_marks_a_task_reopened_from_its_reopen_finding(
+    lithos_lens_config_env: Path,
+) -> None:
+    """T1-S10 acceptance: ``lithos_task_reopen`` CLEARS resolved_at/outcome, so
+    its durable ``[Reopened]`` finding is the only surviving evidence of the
+    reopen — it drives both the header marker and the timeline marker."""
+    fake = TaskFakeLithosClient()
+    fake.findings["open-unclaimed"] = [
+        FindingRecord(
+            id="finding-reopen",
+            task_id="open-unclaimed",
+            agent="operator",
+            summary="[Reopened] from completed by operator",
+            created_at="2026-04-27T09:00:00+00:00",
+        )
+    ]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    assert "data-reopened-marker" in response.text
+    assert "data-reopen-finding" in response.text
+
+
+def test_task_detail_without_a_reopen_finding_carries_no_marker(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Ordinary findings must not be mistaken for reopens — the marker claims a
+    lifecycle reversal, so it fires only on the ``[Reopened]`` prefix."""
+    fake = TaskFakeLithosClient()
+    fake.findings["open-unclaimed"] = [
+        FindingRecord(
+            id="finding-mention",
+            task_id="open-unclaimed",
+            agent="worker-a",
+            summary="Discussed whether [Reopened] tasks need a follow-up",
+            created_at="2026-04-27T09:00:00+00:00",
+        )
+    ]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    assert "data-reopened-marker" not in response.text
+    assert "data-reopen-finding" not in response.text

@@ -30,6 +30,11 @@ KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 
+# ``lithos_task_reopen`` records every reopen as a durable finding whose
+# summary starts with this literal marker; it clears ``resolved_at`` and
+# ``outcome``, so the finding is the ONLY surviving evidence of the reopen.
+REOPENED_FINDING_PREFIX = "[Reopened]"
+
 
 class SectionState(StrEnum):
     OK = "ok"
@@ -218,6 +223,15 @@ class FindingView:
     def link_label(self) -> str:
         return self.note_title or "View document"
 
+    @property
+    def is_reopen(self) -> bool:
+        """True for the durable ``[Reopened]`` finding ``lithos_task_reopen``
+        posts. Reopen leaves no other trace on the task itself — it CLEARS
+        ``resolved_at`` and ``outcome`` — so this finding is the only durable
+        evidence a task came back from a terminal state, and it drives both
+        the timeline marker and the header marker."""
+        return self.finding.summary.lstrip().startswith(REOPENED_FINDING_PREFIX)
+
 
 @dataclass(frozen=True)
 class TaskDetailData:
@@ -228,6 +242,17 @@ class TaskDetailData:
     findings_state: SectionState = SectionState.OK
     not_found: bool = False
     errors: tuple[str, ...] = ()
+
+    @property
+    def reopened(self) -> bool:
+        """Whether this task carries a reopen in its history.
+
+        Derived from the findings timeline (see ``FindingView.is_reopen``) —
+        the only durable record of a reopen. A findings load failure therefore
+        means "unknown", which renders as no marker rather than a false
+        negative claim.
+        """
+        return any(view.is_reopen for view in self.findings)
 
 
 class TaskLithosClientProtocol(Protocol):
@@ -245,6 +270,7 @@ class TaskLithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -551,9 +577,19 @@ def matches_filters(
     if filters.tags and not all(tag in task.tags for tag in filters.tags):
         return False
     if status in {"completed", "cancelled"} and filters.since:
-        task_date = parse_date(task.created_at)
+        # Terminal rows are windowed by RESOLUTION time (``resolved_since``
+        # upstream), not creation time — a task created months ago and finished
+        # yesterday is recent work. A row whose ``resolved_at`` is missing or
+        # unparseable is kept: upstream already excluded NULL-resolved rows
+        # from the window, so re-deriving the exclusion here would only hide
+        # rows the server deliberately returned.
+        resolved_date = parse_date(task.resolved_at)
         since_date = parse_date(filters.since)
-        if task_date is not None and since_date is not None and task_date < since_date:
+        if (
+            resolved_date is not None
+            and since_date is not None
+            and resolved_date < since_date
+        ):
             return False
     return True
 

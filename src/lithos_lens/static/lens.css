@@ -450,6 +450,13 @@ button,
   color: var(--cancelled);
 }
 
+.badge-reopened {
+  background: rgba(189, 79, 43, 0.09);
+  border-color: rgba(189, 79, 43, 0.45);
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .claim-chip {
   background: rgba(53, 106, 77, 0.09);
   border-color: rgba(53, 106, 77, 0.35);
@@ -655,6 +662,12 @@ button,
   border: 1px solid var(--line);
   border-radius: 1rem;
   padding: 1rem;
+}
+
+/* A reopen is a lifecycle reversal, so its finding is tinted like the marker
+   badge that the same finding drives on the header. */
+.findings-timeline li.finding-reopened {
+  border-color: rgba(189, 79, 43, 0.45);
 }
 
 .findings-timeline header {

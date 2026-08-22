@@ -24,6 +24,7 @@
         <h1>{{ detail.task.title }}</h1>
         <div class="detail-meta">
           <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+          {% if detail.reopened %}<span class="badge badge-reopened" data-reopened-marker>reopened</span>{% endif %}
           {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
           {% if detail.task.created_at %}<time datetime="{{ detail.task.created_at }}">{{ detail.task.created_at }}</time>{% endif %}
         </div>
