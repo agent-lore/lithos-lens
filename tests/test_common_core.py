@@ -259,6 +259,90 @@ def test_env_override_tasks_frontier_limit_rejects_junk(
         load_config(lithos_lens_config_env)
 
 
+def test_needs_attention_knobs_default_to_the_shipped_thresholds(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The rules must work out of the box: an operator who never writes a
+    [tasks] table still gets the documented thresholds."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.gate_waiting_attention_hours == 24
+    assert config.tasks.claim_expiring_soon_minutes == 10
+    assert config.tasks.stale_open_age_days == 7
+    assert config.tasks.unclaimed_ready_age_minutes == 60
+
+
+def test_needs_attention_knobs_read_from_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        "gate_waiting_attention_hours = 4\nclaim_expiring_soon_minutes = 2\n"
+        "stale_open_age_days = 3\nunclaimed_ready_age_minutes = 15\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.gate_waiting_attention_hours == 4
+    assert config.tasks.claim_expiring_soon_minutes == 2
+    assert config.tasks.stale_open_age_days == 3
+    assert config.tasks.unclaimed_ready_age_minutes == 15
+
+
+@pytest.mark.parametrize(
+    ("env_var", "attribute"),
+    [
+        (
+            "LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS",
+            "gate_waiting_attention_hours",
+        ),
+        (
+            "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES",
+            "claim_expiring_soon_minutes",
+        ),
+        ("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "stale_open_age_days"),
+        (
+            "LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES",
+            "unclaimed_ready_age_minutes",
+        ),
+    ],
+)
+def test_env_override_sets_each_needs_attention_knob(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    attribute: str,
+) -> None:
+    """Each knob is independently overridable — they share one apply pass, so
+    one override must not reset its neighbours to defaults."""
+    monkeypatch.setenv(env_var, "3")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert getattr(config.tasks, attribute) == 3
+    untouched = {
+        "gate_waiting_attention_hours": 24,
+        "claim_expiring_soon_minutes": 10,
+        "stale_open_age_days": 7,
+        "unclaimed_ready_age_minutes": 60,
+    }
+    del untouched[attribute]
+    for name, default in untouched.items():
+        assert getattr(config.tasks, name) == default
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "nope", "1.5"])
+def test_env_override_needs_attention_knob_rejects_junk(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", bad)
+
+    with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS"):
+        load_config(lithos_lens_config_env)
+
+
 def test_visible_cap_in_config_warns_deprecated_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

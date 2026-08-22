@@ -9,9 +9,13 @@ carries an inline claim, else *Ready* or *Blocked* by frontier membership, else
 gates are excluded from both frontiers upstream, so they never enter the
 workable partition; their dedicated sections arrive in later T1 slices.
 
+On top of that join sits the Needs-attention severity model
+(``attention.flag_attention``), applied last because it promotes rows OUT of
+the sections computed here.
+
 ``classify_open_tasks`` is the pure join; ``load_dashboard`` is the five-call
-assembly that feeds it. Both live here (not in ``tasks.py``) because they depend
-on the task-graph records in ``task_graph.py``.
+assembly that feeds it. Both live here (not in ``tasks.py``) because they
+depend on the task-graph records in ``task_graph.py``.
 """
 
 from __future__ import annotations
@@ -19,8 +23,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -43,6 +49,17 @@ WORKABLE_TASK_TYPE = "task"
 
 # The three workable sections plus the truncation tail, in render order.
 WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
+
+# Every open section the dashboard renders, in render order — Needs attention
+# leads, the degraded groups tail.
+OPEN_SECTIONS: tuple[SectionName, ...] = (
+    "attention",
+    "in_progress",
+    "ready",
+    "blocked",
+    "claims_unknown",
+    "unclassified",
+)
 
 
 class FrontierLithosClient(Protocol):
@@ -88,8 +105,9 @@ def _blocker_chips(
 
     Each chip's label is the blocking task's title when it resolves against the
     open snapshot; otherwise a legible fallback (the predecessor/gate id, or the
-    raw blocker message) so a chip is never blank. Gate-name/type polish and the
-    unsatisfiable/cycle promotion out of Blocked are later T1 slices.
+    raw blocker message) so a chip is never blank. Gate-name/type polish is a
+    later T1 slice; the unsatisfiable/cycle promotion out of Blocked lives in
+    ``attention.flag_attention``.
     """
     chips: list[BlockerChip] = []
     for blocker in blockers:
@@ -173,6 +191,8 @@ async def load_dashboard(
     *,
     filters: TaskFilters,
     frontier_limit: int,
+    attention: AttentionPolicy | None = None,
+    now: datetime | None = None,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
 
@@ -190,8 +210,15 @@ async def load_dashboard(
     classify conservatively as Blocked with the reconciliation-warning surface
     (wrongly-Ready invites wasted operator attention; wrongly-Blocked is safe)
     — the same explicit degraded-data pattern as ``claims_unknown``.
+
+    Once the partition settles, ``flag_attention`` promotes the rows that need
+    an operator into the Needs-attention section. ``attention`` carries the
+    rule thresholds (config-backed; defaults when omitted) and ``now`` is
+    injectable so the age-based rules are testable without freezing the clock.
     """
     errors: list[str] = []
+    policy = attention or AttentionPolicy()
+    evaluated_at = now or datetime.now(UTC)
     query_tags = list(filters.tags) or None
     query_agent = filters.agent or None
 
@@ -312,6 +339,7 @@ async def load_dashboard(
         return _FrontierState(
             snapshot,
             index,
+            visible,
             parts,
             effective_overlap,
             at_limit,
@@ -355,6 +383,16 @@ async def load_dashboard(
     reconciliation_pending = frontier_ok and state.skewed_frontier
     if reconciliation_pending:
         partition = _reclassify_conservative(partition, state.effective_overlap)
+    # Needs attention last: it promotes rows OUT of the sections above, so it
+    # must see their final (post-reconciliation) membership.
+    partition = flag_attention(
+        partition,
+        state.visible,
+        blocked=blocked_records,
+        policy=policy,
+        now=evaluated_at,
+        index=open_index,
+    )
 
     closed: dict[str, list[TaskRecord]] = {}
     for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
@@ -368,7 +406,7 @@ async def load_dashboard(
 
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
-    for section in WORKABLE_SECTIONS + ("claims_unknown", "unclassified"):
+    for section in OPEN_SECTIONS:
         sections[section] = partition[section] if show_open else ()
     for status in ("completed", "cancelled"):
         sections[status] = (
@@ -389,12 +427,21 @@ async def load_dashboard(
     else:
         agents = tuple(cast(list[AgentRecord], agents_result))
 
+    # ``open_total`` counts the open WORKABLE tasks Lens classified. Promoted
+    # rows still count (they only changed section), but a promoted human gate
+    # does not — gates were never part of the workable partition.
     open_total = (
         sum(len(partition[section]) for section in WORKABLE_SECTIONS)
         + len(partition["claims_unknown"])
         + len(partition["unclassified"])
+        + sum(
+            1
+            for row in partition["attention"]
+            if row.task.task_type == WORKABLE_TASK_TYPE
+        )
     )
     summary = TaskSummary(
+        attention=len(partition["attention"]),
         in_progress=len(partition["in_progress"]),
         ready=len(partition["ready"]),
         blocked=len(partition["blocked"]),
@@ -436,6 +483,7 @@ class _FrontierState:
     __slots__ = (
         "snapshot",
         "index",
+        "visible",
         "partition",
         "effective_overlap",
         "at_limit",
@@ -447,6 +495,7 @@ class _FrontierState:
         self,
         snapshot: list[TaskRecord],
         index: Mapping[str, TaskRecord],
+        visible: list[TaskRecord],
         partition: dict[SectionName, tuple[SectionRow, ...]],
         effective_overlap: set[str],
         at_limit: bool,
@@ -455,6 +504,9 @@ class _FrontierState:
     ) -> None:
         self.snapshot = snapshot
         self.index = index
+        # The filter-scoped subset the sections render (the gate rule reads it;
+        # ``snapshot``/``index`` stay whole so blocker titles resolve).
+        self.visible = visible
         self.partition = partition
         self.effective_overlap = effective_overlap
         self.at_limit = at_limit

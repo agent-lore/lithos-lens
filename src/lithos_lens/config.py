@@ -69,6 +69,12 @@ DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S = 120
 DEFAULT_TASKS_VISIBLE_CAP = 50
 DEFAULT_TASKS_FRONTIER_LIMIT = 500
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
+# Needs-attention rule thresholds (REQUIREMENTS §5.2.2 rules 3-6). Rules 1
+# (unsatisfiable blocker) and 2 (cycle) are intrinsic and have no knob.
+DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS = 24
+DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES = 10
+DEFAULT_TASKS_STALE_OPEN_AGE_DAYS = 7
+DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES = 60
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
 DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
@@ -123,6 +129,11 @@ class TasksConfig:
     # Not-classified tail) but should be rare.
     frontier_limit: int = DEFAULT_TASKS_FRONTIER_LIMIT
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
+    # Needs-attention thresholds; ``frontier.AttentionPolicy`` consumes them.
+    gate_waiting_attention_hours: int = DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS
+    claim_expiring_soon_minutes: int = DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
+    stale_open_age_days: int = DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
+    unclaimed_ready_age_minutes: int = DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
 
 
@@ -367,38 +378,34 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             "visible_cap from %s.",
             config_path,
         )
+
+    # Every [tasks] knob below is a positive integer parsed the same way, so
+    # one local binding keeps the eight of them readable.
+    def positive_int(key: str, default: int) -> int:
+        return _optional_int(
+            data, key, default, config_path, "lithos-lens.tasks", minimum=1
+        )
+
     return TasksConfig(
-        auto_refresh_interval_s=_optional_int(
-            data,
-            "auto_refresh_interval_s",
-            DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S,
-            config_path,
-            "lithos-lens.tasks",
-            minimum=1,
+        auto_refresh_interval_s=positive_int(
+            "auto_refresh_interval_s", DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S
         ),
-        visible_cap=_optional_int(
-            data,
-            "visible_cap",
-            DEFAULT_TASKS_VISIBLE_CAP,
-            config_path,
-            "lithos-lens.tasks",
-            minimum=1,
+        visible_cap=positive_int("visible_cap", DEFAULT_TASKS_VISIBLE_CAP),
+        frontier_limit=positive_int("frontier_limit", DEFAULT_TASKS_FRONTIER_LIMIT),
+        default_time_range_days=positive_int(
+            "default_time_range_days", DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
         ),
-        frontier_limit=_optional_int(
-            data,
-            "frontier_limit",
-            DEFAULT_TASKS_FRONTIER_LIMIT,
-            config_path,
-            "lithos-lens.tasks",
-            minimum=1,
+        gate_waiting_attention_hours=positive_int(
+            "gate_waiting_attention_hours", DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS
         ),
-        default_time_range_days=_optional_int(
-            data,
-            "default_time_range_days",
-            DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS,
-            config_path,
-            "lithos-lens.tasks",
-            minimum=1,
+        claim_expiring_soon_minutes=positive_int(
+            "claim_expiring_soon_minutes", DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
+        ),
+        stale_open_age_days=positive_int(
+            "stale_open_age_days", DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
+        ),
+        unclaimed_ready_age_minutes=positive_int(
+            "unclaimed_ready_age_minutes", DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
         ),
         default_status_groups=_optional_status_groups(
             data,
@@ -642,6 +649,12 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     tasks_frontier_limit_override = os.environ.get(
         "LITHOS_LENS_TASKS_FRONTIER_LIMIT", ""
     )
+    gate_wait_env = os.environ.get("LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS", "")
+    claim_expiry_env = os.environ.get(
+        "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
+    )
+    stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
+    unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     knowledge_fanout_cap_override = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
     )
@@ -655,30 +668,6 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     )
     llm_max_tokens_override = os.environ.get("LITHOS_LENS_LLM_MAX_TOKENS", "")
     telemetry_enabled_override = os.environ.get("LITHOS_LENS_OTEL_ENABLED", "")
-
-    if not any(
-        [
-            env_override,
-            data_dir_override,
-            log_level_override,
-            lithos_url_override,
-            lithos_mcp_sse_path_override,
-            lithos_events_path_override,
-            agent_id_override,
-            tasks_visible_cap_override,
-            tasks_frontier_limit_override,
-            knowledge_fanout_cap_override,
-            llm_enabled_override,
-            llm_model_override,
-            llm_provider_override,
-            llm_api_key_override,
-            llm_base_url_override,
-            llm_extra_headers_override,
-            llm_max_tokens_override,
-            telemetry_enabled_override,
-        ]
-    ):
-        return cfg
 
     new_cfg = cfg
     if env_override:
@@ -708,22 +697,28 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             agent_id=agent_id_override or new_cfg.lithos.agent_id,
         )
         new_cfg = replace(new_cfg, lithos=new_lithos)
-    if tasks_visible_cap_override:
-        new_tasks = replace(
-            new_cfg.tasks,
-            visible_cap=_parse_env_int(
-                "LITHOS_LENS_TASKS_VISIBLE_CAP", tasks_visible_cap_override
-            ),
+    # Every [tasks] env override is an independent positive integer, so they
+    # are collected in one pass and applied in a single replace() — the
+    # literal names keep the docs<->code env guardrail (which reads them by
+    # AST) able to see each one.
+    # Every [tasks] env override is an independent positive integer, so they
+    # are applied in one pass. The name follows the shipped convention
+    # (LITHOS_LENS_TASKS_<FIELD>), and the literal os.environ.get reads above
+    # are what the docs<->code env guardrail matches on.
+    tasks_env_overrides = {
+        field: _parse_env_int(f"LITHOS_LENS_TASKS_{field.upper()}", raw)
+        for field, raw in (
+            ("visible_cap", tasks_visible_cap_override),
+            ("frontier_limit", tasks_frontier_limit_override),
+            ("gate_waiting_attention_hours", gate_wait_env),
+            ("claim_expiring_soon_minutes", claim_expiry_env),
+            ("stale_open_age_days", stale_open_env),
+            ("unclaimed_ready_age_minutes", unclaimed_env),
         )
-        new_cfg = replace(new_cfg, tasks=new_tasks)
-    if tasks_frontier_limit_override:
-        new_tasks = replace(
-            new_cfg.tasks,
-            frontier_limit=_parse_env_int(
-                "LITHOS_LENS_TASKS_FRONTIER_LIMIT", tasks_frontier_limit_override
-            ),
-        )
-        new_cfg = replace(new_cfg, tasks=new_tasks)
+        if raw
+    }
+    if tasks_env_overrides:
+        new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
     if knowledge_fanout_cap_override:
         new_knowledge = replace(
             new_cfg.knowledge,

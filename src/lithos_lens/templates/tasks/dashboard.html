@@ -32,6 +32,11 @@
       {% endif %}
 
       <section class="situation-grid" aria-label="Current situation">
+        <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-attention">
+          <span>Needs attention</span>
+          <strong data-attention-count>{{ dashboard.summary.attention }}</strong>
+          <small>Promoted out of their section</small>
+        </a>
         <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-in_progress">
           <span>In progress</span>
           <strong>{{ dashboard.summary.in_progress }}</strong>
@@ -122,12 +127,16 @@
 
       {#
         Section order derives from the ready/blocked frontier, not claim-state
-        inference. The three workable sections show when the "open" status is
-        selected; "Claims unknown" (degraded data: claims not returned, so the
-        rows can't honestly count as Ready/Blocked/In progress) and
-        "Not classified" (frontier truncation) appear only when they have rows.
+        inference. "Needs attention" leads: its rows are promoted OUT of the
+        workable sections (single-placement rule), and it stays visible when
+        empty so the healthy stripe can reassure. The three workable sections
+        show when the "open" status is selected; "Claims unknown" (degraded
+        data: claims not returned, so the rows can't honestly count as
+        Ready/Blocked/In progress) and "Not classified" (frontier truncation)
+        appear only when they have rows.
       #}
       {% set section_labels = {
+        "attention": "Needs attention",
         "in_progress": "In progress",
         "ready": "Ready",
         "blocked": "Blocked",
@@ -137,7 +146,7 @@
         "cancelled": "Cancelled",
       } %}
       {% set workable = ("in_progress", "ready", "blocked") %}
-      {% set section_order = workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
+      {% set section_order = ("attention",) + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
       <section class="task-board" aria-label="Task sections">
         {# Skeleton strip for just-created tasks: a task.created event lands
            here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
@@ -165,6 +174,11 @@
                     {% include "tasks/row.html" %}
                   {% endfor %}
                 </div>
+              {% elif section == "attention" %}
+                <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                {# Kept visible on purpose (REQUIREMENTS §5.2.2): an empty
+                   attention list is reassurance, not noise to hide. #}
+                <p class="healthy-stripe" data-attention-healthy>All systems healthy &mdash; 0 issues</p>
               {% else %}
                 <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                 <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>

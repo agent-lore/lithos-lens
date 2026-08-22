@@ -13,7 +13,10 @@ TaskStatusName = Literal["open", "completed", "cancelled"]
 # computed by joining the master open list against the Lithos ready/blocked
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
+# ``attention`` is the severity-ordered Needs-attention list: rows promoted OUT
+# of the section they would otherwise occupy (single-placement rule).
 SectionName = Literal[
+    "attention",
     "in_progress",
     "ready",
     "blocked",
@@ -137,6 +140,39 @@ class BlockerChip:
     target_id: str = ""
 
 
+# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug IS the
+# reason chip's text, so the vocabulary is fixed here and rendered verbatim.
+ATTENTION_RULES: tuple[str, ...] = (
+    "unsatisfiable",
+    "cycle",
+    "gate-waiting",
+    "claim-expiring",
+    "stale-open",
+    "ready-unclaimed",
+)
+
+
+@dataclass(frozen=True)
+class AttentionReason:
+    """One fired Needs-attention rule on a promoted row.
+
+    ``rule`` is a slug from :data:`ATTENTION_RULES` (also the chip text);
+    ``detail`` is the one-line supporting fact the chip carries (e.g. ``Blocker
+    "Design schema" was cancelled``), which the detail page's "Why this task is
+    here" block reuses.
+    """
+
+    rule: str
+    detail: str = ""
+
+    @property
+    def severity(self) -> int:
+        """Rule order — lower is more severe. Unknown slugs sort last."""
+        if self.rule in ATTENTION_RULES:
+            return ATTENTION_RULES.index(self.rule)
+        return len(ATTENTION_RULES)
+
+
 @dataclass(frozen=True)
 class SectionRow:
     """A task rendered in one dashboard section, with its display extras.
@@ -149,6 +185,10 @@ class SectionRow:
     ``None`` — claims were not returned even though requested — which is NOT
     the same as an empty tuple (no active claims); the chip reads
     "claims unknown" instead of a confident "unclaimed".
+
+    ``attention`` holds the Needs-attention reasons that fired for the row
+    (empty for every row outside that section): a flagged row is promoted OUT
+    of the section it would otherwise occupy, so the reasons travel with it.
     """
 
     task: TaskRecord
@@ -156,6 +196,7 @@ class SectionRow:
     blockers: tuple[BlockerChip, ...] = ()
     claimed_but_blocked: bool = False
     claims_unknown: bool = False
+    attention: tuple[AttentionReason, ...] = ()
     # The frontier reads are independent (no cross-call snapshot); when they
     # disagree even after the single retry, the row is classified
     # conservatively as Blocked and flagged so the template can render the
@@ -181,6 +222,9 @@ class TaskFilters:
 
 @dataclass(frozen=True)
 class TaskSummary:
+    # Rows in the Needs-attention list. They are promoted out of their home
+    # section, so this count never overlaps the section counts below.
+    attention: int = 0
     in_progress: int = 0
     ready: int = 0
     blocked: int = 0
@@ -518,6 +562,24 @@ def format_tag(tag: str) -> str:
         return tag
     key, value = tag.split(":", 1)
     return f"{key}: {value}"
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    """Parse an ISO timestamp into an aware UTC datetime, or ``None``.
+
+    Shared by the age-based Needs-attention rules (``frontier.py``). A blank or
+    malformed value returns ``None`` so a rule never fires on a timestamp it
+    could not read — a false "stale"/"expiring" flag is worse than a missed
+    one. Naive timestamps are treated as UTC, matching the server's own
+    normalization.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def parse_date(value: str) -> date | None:

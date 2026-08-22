@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
@@ -32,6 +33,31 @@ from lithos_lens.tasks import (
 )
 
 __all__ = ["FakeLithosDataset", "demo_dataset"]
+
+
+# One clock read per process: every relative fixture timestamp is an offset
+# from this anchor, so ``demo_dataset()`` stays deterministic (repeated builds
+# are identical, and a test can compare two of them) while still being
+# "recent" relative to whenever the demo is actually run.
+_ANCHOR = datetime.now(UTC)
+
+
+def _ago(**delta: float) -> str:
+    """An ISO timestamp that far before the process anchor.
+
+    The Needs-attention rules (T1-S3) compare a row's ``created_at`` against
+    the real clock, so the demo's *open* rows are relative: a fixed date would
+    age past ``stale_open_age_days`` and drain every workable section into
+    Needs attention, leaving fake mode showing a permanently unhealthy board.
+    Terminal rows stay fixed — they are windowed by a ``since`` filter the
+    browsing suites also state as a fixed date, so both sides of THAT
+    comparison must be static.
+    """
+    return (_ANCHOR - timedelta(**delta)).isoformat()
+
+
+def _ahead(**delta: float) -> str:
+    return (_ANCHOR + timedelta(**delta)).isoformat()
 
 
 @dataclass(frozen=True)
@@ -200,7 +226,7 @@ def demo_dataset() -> FakeLithosDataset:
             description="Dual-write, then swap reads onto the new store.",
             status="open",
             created_by="planner",
-            created_at="2026-08-06T09:00:00+00:00",
+            created_at=_ago(hours=3),
             tags=("project:influx", "area:data"),
         ),
         TaskRecord(
@@ -209,7 +235,7 @@ def demo_dataset() -> FakeLithosDataset:
             description="Replay the archive once the cutover is stable.",
             status="open",
             created_by="planner",
-            created_at="2026-08-05T09:00:00+00:00",
+            created_at=_ago(hours=2),
             tags=("project:influx", "area:data"),
         ),
         TaskRecord(
@@ -217,7 +243,9 @@ def demo_dataset() -> FakeLithosDataset:
             title="Rebuild Influx operator dashboards",
             status="open",
             created_by="planner",
-            created_at="2026-08-04T09:00:00+00:00",
+            # Younger than unclaimed_ready_age_minutes, so the demo keeps a
+            # populated Ready section rather than flagging its whole frontier.
+            created_at=_ago(minutes=40),
             tags=("project:influx", "area:observability"),
         ),
         TaskRecord(
@@ -226,7 +254,7 @@ def demo_dataset() -> FakeLithosDataset:
             description="Rebuild the dashboard on the ready/blocked frontier.",
             status="open",
             created_by="planner",
-            created_at="2026-08-03T09:00:00+00:00",
+            created_at=_ago(minutes=20),
             tags=("project:lithos-lens", "milestone:t1"),
         ),
         TaskRecord(
@@ -234,6 +262,8 @@ def demo_dataset() -> FakeLithosDataset:
             title="Retire legacy Influx ingest shim",
             status="open",
             created_by="planner",
+            # Deliberately ancient: the demo's Needs-attention row (stale open
+            # + ready-but-unclaimed), so that section has something to show.
             created_at="2025-11-01T09:00:00+00:00",
             tags=("project:influx",),
         ),
@@ -324,7 +354,9 @@ def demo_dataset() -> FakeLithosDataset:
                     agent="worker-a",
                     summary="Dual-write path validated against the archive.",
                     knowledge_id="note-influx-plan",
-                    created_at="2026-08-06T11:30:00+00:00",
+                    # Findings track their task's (relative) creation so the
+                    # detail timeline never predates the task it belongs to.
+                    created_at=_ago(hours=2, minutes=30),
                 ),
                 FindingRecord(
                     id="finding-orphan",
@@ -332,7 +364,7 @@ def demo_dataset() -> FakeLithosDataset:
                     agent="worker-b",
                     summary="Read swap needs a rollback gate.",
                     knowledge_id="missing-note",
-                    created_at="2026-08-06T12:15:00+00:00",
+                    created_at=_ago(hours=2),
                 ),
             ),
         },
@@ -341,7 +373,9 @@ def demo_dataset() -> FakeLithosDataset:
                 ClaimRecord(
                     agent="worker-a",
                     aspect="implementation",
-                    expires_at="2026-08-08T18:00:00+00:00",
+                    # Well outside claim_expiring_soon_minutes: the demo's
+                    # In-progress row stays In progress.
+                    expires_at=_ahead(hours=6),
                 ),
             ),
         },
