@@ -54,6 +54,28 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   expect(await cancelled.locator("[data-task-row]").count()).toBe(1);
 });
 
+test("elements marked hidden stay hidden", async ({ page }) => {
+  // Browser truth for the [hidden] reset in lens.css: the chip rule sets
+  // `display: inline-flex` on .finding-chip, which outranks the UA's
+  // `[hidden] { display: none }` — without the reset every row advertised a
+  // "0 new findings" badge, and the claim list on an unclaimed row rendered as
+  // an empty box. tasks.js toggles both via the same attribute.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const row = page.locator(
+    '[data-task-row][data-task-id="influx-dashboards"]',
+  );
+  await expect(row).toBeVisible();
+  await expect(row.locator("[data-finding-count]")).toBeHidden();
+  await expect(row.locator("[data-claim-list]")).toBeHidden();
+  // The claimed fixture proves the reset does not hide what should show.
+  await expect(
+    page
+      .locator('[data-task-row][data-task-id="influx-ingest-cutover"]')
+      .locator("[data-claim-list]"),
+  ).toBeVisible();
+});
+
 test("epic strip rolls the subtree up and scopes the board", async ({ page }) => {
   // T1-S5 item: the demo epic covers six subtree tasks — one completed, one
   // cancelled (cancelled work leaves the denominator), so the chip reads 1/5.

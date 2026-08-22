@@ -1027,12 +1027,31 @@ def test_in_progress_card_claims_count_follows_the_scope(
 
     unscoped_card = _card(unscoped.text, "#task-group-in_progress")
     assert "<strong>1</strong>" in unscoped_card
-    assert "1 active claims" in unscoped_card
+    assert "1 active claim<" in unscoped_card
 
     scoped_card = _card(scoped.text, "#task-group-in_progress")
     # No claimed task inside the epic: both numbers must read zero.
     assert "<strong>0</strong>" in scoped_card
     assert "0 active claims" in scoped_card
+
+
+def test_in_progress_card_pluralizes_its_claim_count_like_the_row_chip(
+    lithos_lens_config_env: Path,
+) -> None:
+    """One quantity, one page, one spelling: the card used to hardcode the
+    plural, so the single claim in the fixture read "1 active claims" while the
+    row chip a few hundred pixels below said "1 claim". Now that the card
+    counts only the rendered rows, 0 and 1 are the ordinary case."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    card = _card(response.text, "#task-group-in_progress")
+    assert "1 active claim<" in card
+    assert "1 active claims" not in card
+    # The row chip's wording is the convention being matched.
+    assert "1 claim<" in response.text
 
 
 def test_epic_that_lost_its_subtree_between_reads_falls_back_unscoped(

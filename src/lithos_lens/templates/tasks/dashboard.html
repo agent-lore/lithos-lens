@@ -40,7 +40,7 @@
           <strong>{{ dashboard.summary.in_progress }}</strong>
           {# Claims on the rows counted above, not the Lithos-wide stat: the
              two numbers on one card must describe the same set of tasks. #}
-          <small>{{ dashboard.summary.active_claims }} active claims</small>
+          <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
         </a>
         <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-ready">
           <span>Ready</span>

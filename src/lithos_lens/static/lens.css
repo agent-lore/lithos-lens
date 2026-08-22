@@ -17,11 +17,26 @@
   box-sizing: border-box;
 }
 
+/* The `hidden` attribute is how this UI hides elements it will later reveal
+   (row.html's finding chip and claim list; tasks.js toggles both). The UA's
+   `[hidden] { display: none }` is a type-less selector, so ANY class rule that
+   sets `display` outranks it — e.g. the chip rule below — and the element
+   shows anyway. This reset restores the attribute's meaning for all of them. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
+  /* One wash, not a tiled one: without no-repeat the gradients repeat to fill
+     the canvas, and without min-height a short page (e.g. the note not-found
+     panel) makes the positioning area shorter than the viewport, so the seams
+     land mid-screen. */
+  min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
+  background-repeat: no-repeat;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }
