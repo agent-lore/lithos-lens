@@ -53,6 +53,18 @@ class TaskFakeLithosClient:
         self.children: dict[str, list[str]] = {}
         self.get_calls: list[str] = []
         self.edge_list_calls: list[dict[str, Any]] = []
+        # Inline claims per task id, returned only when a read asks for them
+        # (with_claims / task_status) — the same contract as the server. Tests
+        # extend this map (e.g. a resolved task an agent still claims).
+        self.claims: dict[str, tuple[ClaimRecord, ...]] = {
+            "open-claimed": (
+                ClaimRecord(
+                    agent="worker-a",
+                    aspect="implementation",
+                    expires_at="2026-04-26T11:00:00+00:00",
+                ),
+            )
+        }
         self.notes: dict[str, NoteRecord] = {
             "note-1": NoteRecord(
                 id="note-1",
@@ -235,15 +247,7 @@ class TaskFakeLithosClient:
         return rows
 
     def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
-        if task_id == "open-claimed":
-            return (
-                ClaimRecord(
-                    agent="worker-a",
-                    aspect="implementation",
-                    expires_at="2026-04-26T11:00:00+00:00",
-                ),
-            )
-        return ()
+        return self.claims.get(task_id, ())
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
         self.status_calls.append(task_id)
@@ -534,6 +538,30 @@ def test_agent_filter_matches_a_task_the_agent_only_claims(
     # The agent filter is applied by Lens, never pushed upstream (the upstream
     # argument is creator-only and would drop the claimed row).
     assert all(call["agent"] is None for call in fake.list_calls)
+
+
+def test_agent_filter_matches_a_claimer_on_a_resolved_task(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Story 22 holds for resolved rows too: the completed/cancelled windows are
+    fetched WITH claims, so a completed task someone else created stays visible
+    to the agent that claimed it (without claims it would read as unknown, and
+    the row would silently vanish from the filter)."""
+    fake = TaskFakeLithosClient()
+    fake.claims["done-recent"] = (
+        ClaimRecord(agent="worker-a", aspect="review", expires_at=""),
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?agent=worker-a&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Recently completed task" in response.text
+    # Created by "worker", claimed by nobody: out of scope for worker-a.
+    assert "Recently cancelled task" not in response.text
+    closed_calls = [call for call in fake.list_calls if call["status"] != "open"]
+    assert closed_calls
+    assert all(call["with_claims"] is True for call in closed_calls)
 
 
 def test_project_filter_matches_both_conventions(
@@ -842,7 +870,9 @@ def test_dashboard_uses_inline_claims_and_skips_task_status_fan_out(
     open_list_calls = [c for c in fake.list_calls if c["status"] == "open"]
     assert open_list_calls
     assert all(c["with_claims"] is True for c in open_list_calls)
-    # Other status groups don't carry the cost of the join.
+    # With no agent filter active, nothing reads a resolved row's claims (they
+    # render no chips), so those windows don't carry the cost of the join —
+    # they DO request claims once ?agent= is set, see the claimer test above.
     other_calls = [
         c for c in fake.list_calls if c["status"] in {"completed", "cancelled"}
     ]

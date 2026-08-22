@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -223,7 +224,13 @@ class _FrontierFake:
     ) -> list[TaskRecord]:
         # Mirror the real server: agent/tag are filtered upstream when passed.
         self.list_calls.append(
-            {"agent": agent, "status": status, "tags": tags, "since": since}
+            {
+                "agent": agent,
+                "status": status,
+                "tags": tags,
+                "since": since,
+                "with_claims": with_claims,
+            }
         )
         if (status or "open") == "open":
             index = min(self.open_calls, len(self._open_seq) - 1)
@@ -238,6 +245,10 @@ class _FrontierFake:
             rows = [task for task in rows if task.created_by == agent]
         if tags:
             rows = [task for task in rows if all(tag in task.tags for tag in tags)]
+        if not with_claims:
+            # Contract: claims are OMITTED unless requested, and the normalizer
+            # renders that absence as ``None`` (unknown), not an empty tuple.
+            rows = [replace(task, claims=None) for task in rows]
         return rows
 
     async def task_ready(
@@ -802,4 +813,140 @@ def test_single_convention_posture_does_not_warn(
         for r in caplog.records
         if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
     ]
-    assert data.projects == ("stamped",)
+    # The posture narrows MATCHING, not the universe: §5B.1 keeps the dropdown
+    # the union of both conventions' slugs so no project is invisible.
+    assert data.projects == ("stamped", "tagged")
+
+
+def test_project_universe_unions_both_conventions_under_a_single_posture() -> None:
+    """§5B.1: the universe is the union of both conventions' slugs whatever the
+    posture — a tag-only project must not vanish from the dropdown just because
+    matching honours ``metadata``."""
+    stamped = _task("stamped", claims=(), metadata={"project": "influx"})
+    tagged = _task("tagged", claims=(), tags=("project:ganglion",))
+    fake = _FrontierFake(
+        open_tasks=[stamped, tagged], ready=[stamped, tagged], blocked=[]
+    )
+    filters = TaskFilters(
+        statuses=("open",),
+        tags=(),
+        agent="",
+        since="",
+        project_convention="metadata",
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.projects == ("ganglion", "influx")
+    # Matching still honours the posture: the tag-only row is out of scope.
+    filters = replace(filters, projects=("ganglion",))
+    scoped = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    assert _section_ids(scoped.sections, "ready") == []
+
+
+def test_resolved_rows_are_fetched_with_claims_only_for_the_agent_match() -> None:
+    """Claims are omitted unless requested, so the completed/cancelled windows
+    must ask for them whenever the agent filter is active — otherwise every
+    resolved row is claims-unknown and the creator-OR-claimer match silently
+    degrades to creator-only. Nothing else reads them (resolved rows render no
+    claim chips), so the unfiltered dashboard keeps the cheaper read."""
+
+    def closed_calls(fake: _FrontierFake) -> list[dict[str, Any]]:
+        return [call for call in fake.list_calls if call["status"] != "open"]
+
+    scoped = _FrontierFake(open_tasks=[], ready=[], blocked=[])
+    asyncio.run(
+        load_dashboard(
+            scoped,
+            filters=TaskFilters(
+                statuses=("open", "completed", "cancelled"),
+                tags=(),
+                agent="agent-zero",
+                since="",
+            ),
+            frontier_limit=500,
+        )
+    )
+    unscoped = _FrontierFake(open_tasks=[], ready=[], blocked=[])
+    asyncio.run(load_dashboard(unscoped, filters=_FILTERS, frontier_limit=500))
+
+    assert closed_calls(scoped)
+    assert all(call["with_claims"] is True for call in closed_calls(scoped))
+    assert closed_calls(unscoped)
+    assert all(call["with_claims"] is False for call in closed_calls(unscoped))
+
+
+def test_agent_filter_keeps_a_resolved_task_the_agent_only_claimed() -> None:
+    """Story 22 across the whole dashboard: a completed task someone else
+    created, still claimed by the selected agent, stays visible."""
+    done = _task(
+        "done",
+        status="completed",
+        created_by="planner",
+        claims=(ClaimRecord(agent="agent-zero", aspect="review"),),
+    )
+    other = _task("other-done", status="completed", created_by="planner", claims=())
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[], completed=[done, other])
+    filters = TaskFilters(
+        statuses=("open", "completed"), tags=(), agent="agent-zero", since=""
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["done"]
+    assert data.summary.recent_completed == 1
+
+
+def test_conflict_on_a_resolved_row_warns_too(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A convention conflict is a property of the task, not of its status: a
+    recently resolved row with disagreeing conventions is reported like any
+    other, and each id is counted once per load."""
+    done = _task(
+        "done",
+        status="completed",
+        tags=("project:tagged",),
+        metadata={"project": "stamped"},
+    )
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[], completed=[done])
+
+    with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
+        data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
+    ]
+    assert record.__dict__["conflicting_task_ids"] == ["done"]
+    assert record.__dict__["conflict_count"] == 1
+    assert data.projects == ("stamped", "tagged")
+
+
+def test_a_task_in_both_the_open_and_terminal_reads_is_reported_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Read skew can return the same id twice; the conflict report dedups it."""
+    conflicted = _task(
+        "x", claims=(), tags=("project:tagged",), metadata={"project": "stamped"}
+    )
+    terminal = replace(conflicted, status="completed")
+    fake = _FrontierFake(
+        open_tasks=[conflicted],
+        ready=[conflicted],
+        blocked=[],
+        completed=[terminal],
+    )
+
+    with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
+        asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    records = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
+    ]
+    # One warning per load, and the duplicated id counted once.
+    assert [r.__dict__["conflict_count"] for r in records] == [1]
+    assert records[0].__dict__["conflicting_task_ids"] == ["x"]

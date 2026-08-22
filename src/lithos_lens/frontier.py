@@ -204,7 +204,15 @@ async def load_dashboard(
         # "Filters and URL contract"): no upstream call can express the
         # metadata-OR-tag project match, and the upstream ``agent`` argument is
         # creator-only, which would drop rows the agent merely claims.
-        return await lithos.list_tasks(status=status, since=filters.since)
+        # Claims are omitted by default (lithos_task_list contract), which
+        # leaves a resolved row ``claims=None`` — unknown, not "no claimer" —
+        # and would silently hide resolved work the selected agent claims. They
+        # are requested exactly when the agent filter needs them: resolved rows
+        # render no claim chips (``claim_state`` is not_applicable off the open
+        # list), so the unfiltered dashboard keeps the cheaper read.
+        return await lithos.list_tasks(
+            status=status, since=filters.since, with_claims=bool(filters.agent)
+        )
 
     (
         open_result,
@@ -369,20 +377,20 @@ async def load_dashboard(
         # sections derive from the snapshot).
         closed[status] = [task for task in rows if task.id not in open_index]
 
-    _log_project_convention_conflicts(open_snapshot, filters)
-    # The dropdown's universe is built from the UNFILTERED reads, so selecting
-    # one project never collapses the list of projects you can switch to.
-    projects = _project_universe(
+    # Both project surfaces below read every row this load fetched — open AND
+    # resolved — from the UNFILTERED reads, deduped by id: selecting one
+    # project must not collapse the list of projects you can switch to, and a
+    # convention conflict is a property of the task, not of its status.
+    loaded_tasks = _loaded_task_rows(
+        open_snapshot,
         [
-            open_snapshot,
-            *(
-                cast("list[TaskRecord]", result)
-                for result in closed_results
-                if not isinstance(result, BaseException)
-            ),
+            cast("list[TaskRecord]", result)
+            for result in closed_results
+            if not isinstance(result, BaseException)
         ],
-        filters,
     )
+    _log_project_convention_conflicts(loaded_tasks, filters)
+    projects = _project_universe(loaded_tasks, filters)
 
     show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
@@ -443,44 +451,62 @@ async def load_dashboard(
     )
 
 
+def _loaded_task_rows(
+    open_snapshot: Sequence[TaskRecord],
+    closed_groups: Iterable[Sequence[TaskRecord]],
+) -> tuple[TaskRecord, ...]:
+    """Every task row this load fetched, deduped by id (open snapshot wins).
+
+    Read skew can return the same id in both the open snapshot and a terminal
+    window; the open snapshot is the authority on the row, and dedup keeps
+    per-load reporting counted once.
+    """
+    rows: list[TaskRecord] = list(open_snapshot)
+    seen = {task.id for task in rows}
+    for group in closed_groups:
+        for task in group:
+            if task.id not in seen:
+                seen.add(task.id)
+                rows.append(task)
+    return tuple(rows)
+
+
 def _project_universe(
-    groups: Iterable[Sequence[TaskRecord]],
+    tasks: Sequence[TaskRecord],
     filters: TaskFilters,
 ) -> tuple[str, ...]:
-    """Every project slug present in the loaded snapshot, sorted (§5B.1).
+    """Every project slug present in the loaded rows, sorted (§5B.1).
 
-    The union is taken under the ACTIVE convention, so every slug the filter
-    dropdown offers is one the filter can actually match.
+    The universe is the union of BOTH conventions' slugs regardless of the
+    active posture — §5B.1 is explicit that no project may be invisible to its
+    own view — even though matching under a single-convention posture honours
+    only that convention. Only the tag KEY follows configuration (§5B.9).
     """
     slugs: set[str] = set()
-    for rows in groups:
-        for task in rows:
-            slugs.update(
-                task_projects(
-                    task,
-                    convention=filters.project_convention,
-                    tag_key=filters.project_tag_key,
-                )
-            )
+    for task in tasks:
+        slugs.update(
+            task_projects(task, convention="both", tag_key=filters.project_tag_key)
+        )
     return tuple(sorted(slugs))
 
 
 def _log_project_convention_conflicts(
-    open_snapshot: Sequence[TaskRecord],
+    tasks: Sequence[TaskRecord],
     filters: TaskFilters,
 ) -> None:
     """Warn to telemetry about tasks whose two project conventions disagree.
 
-    Only meaningful under the reconciling ``"both"`` posture (§5B.1); the
-    single-convention postures deliberately read one side. Neither value is
-    dropped — the task matches under both slugs — so this is a data-quality
-    signal, not a rendering decision.
+    Reported over every loaded row — resolved rows carry their conventions too
+    — once per load. Only meaningful under the reconciling ``"both"`` posture
+    (§5B.1); the single-convention postures deliberately read one side. Neither
+    value is dropped — the task matches under both slugs — so this is a
+    data-quality signal, not a rendering decision.
     """
     if filters.project_convention != "both":
         return
     conflicts = [
         task.id
-        for task in open_snapshot
+        for task in tasks
         if project_convention_conflict(task, tag_key=filters.project_tag_key)
     ]
     if not conflicts:
