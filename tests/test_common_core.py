@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -233,6 +234,13 @@ def test_static_assets_are_served(lithos_lens_config_env: Path) -> None:
 
     assert css.status_code == 200
     assert "--accent" in css.text
+    # The `hidden` attribute is the app's only hide mechanism for JS-toggled
+    # chrome (row.html's finding chip and claim list), and an author-origin
+    # `display` on those classes beats the UA's own `[hidden]` rule. The
+    # stylesheet must re-assert it, or the markup's `hidden` is decorative.
+    # Matched as a RULE, not a substring: the explanatory comment above it
+    # names the selector too, so a looser check would pass on prose alone.
+    assert re.search(r"\[hidden\]\s*\{[^}]*display:\s*none\s*!important", css.text)
     assert htmx.status_code == 200
     assert "htmx" in htmx.text
     assert tasks_js.status_code == 200

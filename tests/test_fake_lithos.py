@@ -9,6 +9,7 @@ behind it — without needing a browser. The Playwright suite itself lives under
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
 from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 
 
 @pytest.mark.parametrize(
@@ -387,6 +389,35 @@ def test_fake_client_defaults_to_the_demo_dataset() -> None:
     """The app-factory path (FakeLithosClient(config)) must keep serving the
     shipped demo set — the fixture/behavior split may not change fake mode."""
     assert FakeLithosClient().dataset == demo_dataset()
+
+
+def test_demo_timestamps_keep_the_contracts_second_precision() -> None:
+    """Fixtures reproduce the canonical payloads, not approximations of them
+    (AGENTS.md): every vendored contract stamps whole seconds, so the demo's
+    now-relative timestamps must too. ``datetime.now(UTC)`` carries
+    microseconds, and the surfaces that render a timestamp verbatim — the task
+    detail page — would show a six-digit fraction no Lithos record can produce
+    (and wrap it mid-value at 320px)."""
+    dataset = demo_dataset()
+    stamps = [task.created_at for task in dataset.tasks]
+    stamps += [task.resolved_at for task in dataset.tasks if task.resolved_at]
+    stamps += [
+        claim.expires_at for claims in dataset.claims.values() for claim in claims
+    ]
+    stamps += [
+        finding.created_at
+        for findings in dataset.findings.values()
+        for finding in findings
+    ]
+    assert stamps, "no fixture timestamps found — the sweep would pass vacuously"
+
+    # Shape taken from the contract itself, so the pattern cannot drift from
+    # what the server actually emits.
+    canonical = load_contract("lithos_task_list")["responses"]["success"]["tasks"][0]
+    pattern = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}")
+    assert pattern.fullmatch(canonical["created_at"])
+    for value in stamps:
+        assert pattern.fullmatch(value), f"not contract-shaped: {value!r}"
 
 
 def test_demo_dataset_is_deterministic() -> None:

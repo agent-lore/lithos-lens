@@ -261,10 +261,10 @@
         "functions": 84,
         "largest_module": "lithos_lens.lithos_client",
         "largest_module_lines": 794,
-        "lines": 1663,
+        "lines": 1670,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1375
+        "sloc": 1381
       },
       "Logging": {
         "classes": 1,
@@ -330,13 +330,13 @@
     "max_module": "lithos_lens.lithos_client",
     "max_module_lines": 794,
     "modules_over_800": [],
-    "total_lines": 6241,
+    "total_lines": 6248,
     "total_modules": 21,
-    "total_sloc": 5024
+    "total_sloc": 5030
   },
   "tests": {
     "ratio": 1.74,
-    "src_lines": 6241,
-    "test_lines": 10860
+    "src_lines": 6248,
+    "test_lines": 10899
   }
 }

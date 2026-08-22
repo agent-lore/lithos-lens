@@ -17,11 +17,27 @@
   box-sizing: border-box;
 }
 
+/* The `hidden` attribute must actually hide. The UA sheet's
+   `[hidden] { display: none }` loses to ANY author-origin `display` rule
+   regardless of specificity, and several components below set one on a
+   class that is toggled via `hidden` (.finding-chip, .claim-list). Without
+   this, `<span class="finding-chip" hidden>0 new findings</span>` renders on
+   every row until JS un-hides it — the opposite of what the markup asks for. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
+  /* A short page (an error/empty state) ends well above the fold, and a
+     background box that short would TILE its gradients down the canvas —
+     drawing a hard seam where the corner glow restarts. Paint one copy over
+     a full-viewport box instead. */
+  background-repeat: no-repeat;
+  min-height: 100vh;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }

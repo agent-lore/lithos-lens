@@ -52,12 +52,19 @@ def _ago(**delta: float) -> str:
     Terminal rows stay fixed — they are windowed by a ``since`` filter the
     browsing suites also state as a fixed date, so both sides of THAT
     comparison must be static.
+
+    Microseconds are dropped so the fixtures keep the second precision the
+    vendored contracts use (``"created_at": "2026-08-06T09:00:00+00:00"``).
+    Lithos never emits a fractional timestamp, and surfaces that render the
+    raw string — the task detail page — would otherwise show a six-digit
+    fraction no real record can produce.
     """
-    return (_ANCHOR - timedelta(**delta)).isoformat()
+    return (_ANCHOR - timedelta(**delta)).replace(microsecond=0).isoformat()
 
 
 def _ahead(**delta: float) -> str:
-    return (_ANCHOR + timedelta(**delta)).isoformat()
+    """The mirror of :func:`_ago`, same second precision."""
+    return (_ANCHOR + timedelta(**delta)).replace(microsecond=0).isoformat()
 
 
 @dataclass(frozen=True)
