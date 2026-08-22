@@ -116,9 +116,51 @@
             <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
           </span>
         </label>
+        {# Keep the epic scope across a filter submit — the chip strip owns it,
+           the form must not silently drop it. #}
+        {% if dashboard.epic_scope %}
+          <input type="hidden" name="epic" value="{{ dashboard.epic_scope }}">
+        {% endif %}
         <button type="submit">Apply filters</button>
         <a class="button-secondary" href="/tasks">Reset</a>
       </form>
+
+      {#
+        Epic rollup strip: one progress chip per open epic, counted over its
+        RECURSIVE subtree (lithos_task_children), so epics roll up instead of
+        polluting the open sections. A chip links to ?epic=<id>, which scopes
+        every section to that epic's descendants; the selected chip links back
+        out, so clicking it again clears the scope. The counts are whole-subtree
+        facts and deliberately ignore the other filters.
+      #}
+      {% if dashboard.epics %}
+        <section class="epic-strip" aria-label="Epics" data-epic-strip>
+          {% for epic in dashboard.epics %}
+            <a class="epic-chip{{ " epic-chip-selected" if epic.selected else "" }}"
+               href="{{ epic_scope_url(request, "" if epic.selected else epic.task.id) }}"
+               data-epic-chip="{{ epic.task.id }}"
+               {% if epic.selected %}aria-current="true"{% endif %}
+               title="{{ epic.task.title }} — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
+              <span class="epic-chip-title">{{ epic.task.title }}</span>
+              {# max=0 is invalid for <progress>; an epic with no (non-cancelled)
+                 children shows its count alone. #}
+              {% if epic.total %}
+                <progress class="epic-chip-bar" max="{{ epic.total }}" value="{{ epic.done }}"></progress>
+              {% endif %}
+              <span class="epic-chip-count" data-epic-progress>{{ epic.progress_label }}</span>
+            </a>
+          {% endfor %}
+        </section>
+      {% endif %}
+      {% if dashboard.filters.epic and not dashboard.epic_scope %}
+        {# Wording covers both causes — the epic is no longer open, or its
+           children read failed and the chip was dropped — because the board is
+           unscoped either way and only the errors banner distinguishes them. #}
+        <section class="banner banner-warning" role="status" data-epic-scope-missing>
+          <strong>Epic scope not applied.</strong>
+          <span>&ldquo;{{ dashboard.filters.epic }}&rdquo; is not one of the open epics Lens could load, so every task is shown.</span>
+        </section>
+      {% endif %}
 
       {#
         Section order derives from the ready/blocked frontier, not claim-state

@@ -850,3 +850,130 @@ def test_terminal_card_labels_match_the_created_windowing(
     # …so the cards must describe the filter that actually applies.
     assert "Created since" in response.text
     assert "Resolved since" not in response.text
+
+
+def _with_epic(fake: TaskFakeLithosClient) -> TaskFakeLithosClient:
+    """Give the fake an epic over eight subtree tasks, five of them completed.
+
+    The three open children are placed on the ready frontier (the fake is the
+    readiness oracle) so they classify normally instead of tripping the
+    read-skew surface.
+    """
+    fake.tasks.append(
+        TaskRecord(
+            id="epic-1",
+            title="Storage migration",
+            status="open",
+            task_type="epic",
+            created_by="planner",
+            created_at="2026-04-27T10:00:00+00:00",
+        )
+    )
+    fake.tasks.extend(
+        TaskRecord(
+            id=f"epic-child-{n}",
+            title=f"Epic child {n}",
+            status="completed" if n <= 5 else "open",
+            created_by="worker",
+            created_at="2026-04-24T10:00:00+00:00",
+            resolved_at="2026-04-25T10:00:00+00:00" if n <= 5 else "",
+        )
+        for n in range(1, 9)
+    )
+    fake.children["epic-1"] = [f"epic-child-{n}" for n in range(1, 9)]
+    fake.ready_ids |= {"epic-child-6", "epic-child-7", "epic-child-8"}
+    return fake
+
+
+def _group(text: str, section: str) -> str:
+    start = text.index(f'data-task-group="{section}"')
+    return text[start:][: text[start:].index("</article>")]
+
+
+def test_epic_strip_chip_shows_recursive_subtree_progress(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-5 acceptance: an epic with 5 of 8 subtree tasks done renders a
+    ``5/8`` chip — and the epic itself never becomes a task row."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    strip = text[text.index("data-epic-strip") :]
+    strip = strip[: strip.index("</section>")]
+    assert 'data-epic-chip="epic-1"' in strip
+    assert "Storage migration" in strip
+    assert ">5/8<" in strip
+    assert 'max="8" value="5"' in strip
+    # The chip links the board at that epic; the epic is not a section row.
+    assert "epic=epic-1" in strip
+    assert 'data-task-id="epic-1"' not in text
+
+
+def test_clicking_an_epic_chip_scopes_the_sections_to_its_descendants(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-5 acceptance: following the chip's ``?epic=`` link leaves only the
+    epic's descendants on the board, and the active chip links back out so the
+    scope can be cleared."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unscoped = client.get("/tasks?since=2026-04-01")
+        scoped = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert unscoped.status_code == 200
+    assert "Unclaimed open task" in _group(unscoped.text, "ready")
+
+    assert scoped.status_code == 200
+    text = scoped.text
+    ready = _group(text, "ready")
+    assert "Epic child 6" in ready
+    # Everything outside the epic subtree is gone from every section.
+    assert "Unclaimed open task" not in text
+    assert "Claimed open task" not in text
+    assert "Recently completed task" not in text
+    assert "Epic child 1" in _group(text, "completed")
+    # The active chip is marked and toggles the scope off.
+    strip = text[text.index("data-epic-strip") :]
+    strip = strip[: strip.index("</section>")]
+    assert "epic-chip-selected" in strip
+    assert "epic=epic-1" not in strip
+    # A filter submit keeps the scope instead of silently dropping it.
+    assert '<input type="hidden" name="epic" value="epic-1">' in text
+
+
+def test_stale_epic_scope_shows_the_whole_board_with_a_notice(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A bookmark naming an epic that is no longer open must not render an
+    unexplained empty board: everything shows, with the reason stated."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-gone")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-missing" in text
+    assert "Unclaimed open task" in _group(text, "ready")
+
+
+def test_epic_scope_survives_tag_and_detail_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The scope is a live filter param, so the links generated on a scoped
+    board carry it (an epic-scoped tag click stays inside the epic)."""
+    fake = _with_epic(TaskFakeLithosClient())
+    fake.children["epic-1"].append("open-unclaimed")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    row = response.text[response.text.index('data-task-id="open-unclaimed"') :]
+    row = row[: row.index("</article>")]
+    assert "epic=epic-1" in row

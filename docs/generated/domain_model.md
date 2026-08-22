@@ -176,6 +176,14 @@ classDiagram
     +reconciliation_pending bool
     +truncated bool
     +errors tuple[str, ...]
+    +epic_scope str
+  }
+  class EpicRollup {
+    +done int
+    +total int
+    +cancelled int
+    +descendant_ids frozenset[str]
+    +selected bool
   }
   class FindingRecord {
     +id str
@@ -219,6 +227,7 @@ classDiagram
     +tags tuple[str, ...]
     +agent str
     +since str
+    +epic str
   }
   class TaskRecord {
     +id str
@@ -253,9 +262,11 @@ classDiagram
     +agents int
   }
   DashboardData "1" --> "0..*" AgentRecord : agents
+  DashboardData "1" --> "0..*" EpicRollup : epics
   DashboardData "1" --> "0..*" SectionRow : sections
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
+  EpicRollup "1" --> "1" TaskRecord : task
   FindingView "1" --> "1" FindingRecord : finding
   SectionRow "1" --> "0..*" BlockerChip : blockers
   SectionRow "1" --> "0..*" ClaimRecord : claims

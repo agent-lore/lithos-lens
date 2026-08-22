@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from lithos_lens.frontier import classify_open_tasks, load_dashboard
+from lithos_lens.frontier import (
+    build_epic_rollup,
+    classify_open_tasks,
+    load_dashboard,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -22,6 +27,7 @@ from lithos_lens.tasks import (
     SectionName,
     TaskFilters,
     TaskRecord,
+    TaskStatusName,
 )
 
 
@@ -31,11 +37,12 @@ def _task(
     task_type: str = "task",
     claims: Any = None,
     tags: tuple[str, ...] = (),
+    status: TaskStatusName = "open",
 ) -> TaskRecord:
     return TaskRecord(
         id=task_id,
         title=f"Title {task_id}",
-        status="open",
+        status=status,
         task_type=task_type,
         tags=tags,
         claims=claims,
@@ -189,6 +196,8 @@ class _FrontierFake:
         completed: list[TaskRecord] | None = None,
         cancelled: list[TaskRecord] | None = None,
         fail_ready: bool = False,
+        children: dict[str, list[TaskRecord]] | None = None,
+        fail_children: set[str] | None = None,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -196,9 +205,12 @@ class _FrontierFake:
         self._completed = completed or []
         self._cancelled = cancelled or []
         self._fail_ready = fail_ready
+        self._children = children or {}
+        self._fail_children = fail_children or set()
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
+        self.children_calls: list[dict[str, Any]] = []
 
     @staticmethod
     def _as_sequence(value: list[Any]) -> list[list[Any]]:
@@ -257,6 +269,27 @@ class _FrontierFake:
         self.blocked_calls += 1
         rows = self._blocked_seq[index]
         return rows[:limit] if limit is not None else rows
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        self.children_calls.append(
+            {
+                "task_id": task_id,
+                "recursive": recursive,
+                "include_closed": include_closed,
+            }
+        )
+        if task_id in self._fail_children:
+            raise RuntimeError(f"children unavailable for {task_id}")
+        rows = self._children.get(task_id, [])
+        if not include_closed:
+            rows = [task for task in rows if task.status == "open"]
+        return rows
 
     async def stats(self) -> dict[str, Any]:
         return {"open_claims": 2, "agents": 3}
@@ -612,3 +645,224 @@ def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
     assert _section_ids(data.sections, "ready") == []
     assert _section_ids(data.sections, "blocked") == []
     assert data.reconciliation_pending is False
+
+
+# --- epic rollup strip (T1-S5) --------------------------------------------
+
+
+def _epic(task_id: str = "epic-1") -> TaskRecord:
+    return _task(task_id, task_type="epic")
+
+
+def _subtree(done: int, open_: int) -> list[TaskRecord]:
+    return [_task(f"d{n}", status="completed") for n in range(done)] + [
+        _task(f"o{n}") for n in range(open_)
+    ]
+
+
+def test_build_epic_rollup_reports_completed_over_subtree_size() -> None:
+    """Slice-5 acceptance (data half): an epic with 5 of 8 subtree tasks
+    completed rolls up to 5/8."""
+    rollup = build_epic_rollup(_epic(), _subtree(done=5, open_=3))
+
+    assert (rollup.done, rollup.total) == (5, 8)
+    assert rollup.progress_label == "5/8"
+    assert rollup.percent == 62
+    assert rollup.selected is False
+
+
+def test_build_epic_rollup_counts_only_workable_descendants() -> None:
+    """Nested epics and gates are structure, not units of work: they never
+    enter the counts (a sub-epic would double-count its own children) but they
+    DO stay in the scope set — they are part of the initiative."""
+    children = [
+        _task("t1", status="completed"),
+        _task("t2"),
+        _task("sub-epic", task_type="epic"),
+        _task("gate-1", task_type="gate"),
+    ]
+    rollup = build_epic_rollup(_epic(), children)
+
+    assert rollup.progress_label == "1/2"
+    assert rollup.descendant_ids == {"t1", "t2", "sub-epic", "gate-1"}
+
+
+def test_build_epic_rollup_drops_cancelled_work_from_the_denominator() -> None:
+    """Cancelled descendants can never complete, so keeping them in the
+    denominator would pin the chip below 100% forever. They are counted
+    separately instead of vanishing."""
+    children = [
+        _task("t1", status="completed"),
+        _task("t2", status="completed"),
+        _task("t3", status="cancelled"),
+    ]
+    rollup = build_epic_rollup(_epic(), children)
+
+    assert rollup.progress_label == "2/2"
+    assert rollup.percent == 100
+    assert rollup.cancelled == 1
+
+
+def test_build_epic_rollup_handles_a_childless_epic() -> None:
+    rollup = build_epic_rollup(_epic(), [])
+    assert rollup.progress_label == "0/0"
+    assert rollup.percent == 0
+    assert rollup.descendant_ids == frozenset()
+
+
+def test_load_dashboard_builds_one_chip_per_open_epic() -> None:
+    epic = _epic("epic-1")
+    other = _epic("epic-2")
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, other, ready],
+        ready=[ready],
+        blocked=[],
+        children={
+            "epic-1": _subtree(done=5, open_=3),
+            "epic-2": [_task("x", status="completed")],
+        },
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert [rollup.progress_label for rollup in data.epics] == ["5/8", "1/1"]
+    # One recursive, closed-inclusive call per epic — and none for plain tasks.
+    assert fake.children_calls == [
+        {"task_id": "epic-1", "recursive": True, "include_closed": True},
+        {"task_id": "epic-2", "recursive": True, "include_closed": True},
+    ]
+    # The epics themselves never enter a section; the workable task still does.
+    assert _section_ids(data.sections, "ready") == ["r"]
+    assert data.epic_scope == ""
+    assert not any(rollup.selected for rollup in data.epics)
+
+
+def test_load_dashboard_scopes_every_section_to_the_selected_epic() -> None:
+    """Slice-5 acceptance (view half): ``?epic=`` scopes the sections to that
+    epic's descendants — in-scope rows keep their classification, everything
+    else disappears from the board and from the counts."""
+    epic = _epic("epic-1")
+    inside_ready = _task("in-ready", claims=())
+    inside_done = _task("in-done", status="completed")
+    outside = _task("outside", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, inside_ready, outside],
+        ready=[inside_ready, outside],
+        blocked=[],
+        completed=[inside_done, _task("outside-done", status="completed")],
+        children={"epic-1": [inside_ready, inside_done]},
+    )
+    filters = replace(_FILTERS, epic="epic-1")
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "ready") == ["in-ready"]
+    assert _section_ids(data.sections, "completed") == ["in-done"]
+    assert data.summary.ready == 1
+    assert data.summary.open_total == 1
+    assert data.summary.recent_completed == 1
+    # The strip still lists every epic (so the operator can switch scope) and
+    # marks the active one.
+    assert data.epic_scope == "epic-1"
+    assert [rollup.selected for rollup in data.epics] == [True]
+
+
+def test_epic_rollup_counts_ignore_the_section_filters() -> None:
+    """Rollup counts are whole-subtree facts: a tag filter that hides the
+    descendants from the sections must not change the chip."""
+    epic = _epic("epic-1")
+    tagged = _task("in-ready", claims=(), tags=("project:mine",))
+    fake = _FrontierFake(
+        open_tasks=[epic, tagged],
+        ready=[tagged],
+        blocked=[],
+        children={"epic-1": _subtree(done=5, open_=3)},
+    )
+    filters = TaskFilters(
+        statuses=("open",), tags=("project:other",), agent="", since=""
+    )
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "ready") == []
+    assert [rollup.progress_label for rollup in data.epics] == ["5/8"]
+
+
+def test_load_dashboard_ignores_a_scope_that_is_no_longer_an_open_epic() -> None:
+    """A stale ``?epic=`` bookmark (the epic completed, or the id is junk)
+    resolves to NO scope — the full board with ``epic_scope`` empty, so the
+    template can explain it — rather than an unexplained empty page."""
+    ready = _task("r", claims=())
+    fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[])
+    filters = replace(_FILTERS, epic="epic-gone")
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.epics == ()
+    assert data.epic_scope == ""
+    assert _section_ids(data.sections, "ready") == ["r"]
+    assert data.errors == ()
+
+
+def test_epic_with_no_descendants_scopes_to_an_empty_board() -> None:
+    """An epic that HAS resolved but has no children is a real (empty) scope —
+    distinct from "no scope at all"."""
+    epic = _epic("epic-1")
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, ready], ready=[ready], blocked=[], children={"epic-1": []}
+    )
+    filters = replace(_FILTERS, epic="epic-1")
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.epic_scope == "epic-1"
+    assert _section_ids(data.sections, "ready") == []
+    assert data.summary.open_total == 0
+
+
+def test_failed_epic_children_read_drops_the_chip_and_reports_the_error() -> None:
+    """A children read that fails must not produce a chip with a wrong count:
+    the epic drops out of the strip and the load-error banner says so. The rest
+    of the dashboard still renders."""
+    epic = _epic("epic-1")
+    healthy = _epic("epic-2")
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, healthy, ready],
+        ready=[ready],
+        blocked=[],
+        children={"epic-2": [_task("x", status="completed")]},
+        fail_children={"epic-1"},
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-2"]
+    assert any("epic progress" in message for message in data.errors)
+    assert _section_ids(data.sections, "ready") == ["r"]
+
+
+def test_epic_strip_is_refetched_when_the_skew_retry_adopts_a_new_snapshot() -> None:
+    """The strip must not mix generations with the sections: when read-skew
+    forces the master-open retry, the epic fan-out runs again over the retried
+    snapshot (the first snapshot's epic had already closed)."""
+    stale_epic = _epic("epic-old")
+    fresh_epic = _epic("epic-new")
+    ready = _task("r", claims=())
+    gap = _task("g", claims=())
+    fake = _FrontierFake(
+        # First open read carries the stale epic and a task in neither
+        # frontier (the skew trigger); the retried snapshot replaces it.
+        open_tasks=[[stale_epic, ready, gap], [fresh_epic, ready]],
+        ready=[ready],
+        blocked=[],
+        children={
+            "epic-old": _subtree(done=1, open_=1),
+            "epic-new": _subtree(done=5, open_=3),
+        },
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    assert [rollup.task.id for rollup in data.epics] == ["epic-new"]
+    assert [rollup.progress_label for rollup in data.epics] == ["5/8"]
+    assert [call["task_id"] for call in fake.children_calls] == [
+        "epic-old",
+        "epic-new",
+    ]
