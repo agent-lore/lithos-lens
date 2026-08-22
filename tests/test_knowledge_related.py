@@ -124,6 +124,7 @@ class KnowledgeFakeLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         return []

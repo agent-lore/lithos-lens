@@ -104,7 +104,7 @@ agent_id = "lithos-lens"
 | `auto_refresh_interval_s` | integer | No | `120` | Polling fallback interval used when live events are unavailable. |
 | `frontier_limit` | integer | No | `500` | Cap pushed to the Lithos ready/blocked frontier reads; rows past it show as Not classified with the truncation banner. |
 | `visible_cap` | integer | No | `50` | **Deprecated** (unused since the graph-native dashboard); configuring it logs a one-time warning. |
-| `default_time_range_days` | integer | No | `30` | Created-at window for completed/cancelled task context. |
+| `default_time_range_days` | integer | No | `30` | Resolved-at window for completed/cancelled task context. Bounded by a hard 365-day ceiling: a larger value is rejected at load, and a longer `?since=` request is clamped to it (those two reads have no row limit). |
 | `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
 
 #### `[lithos-lens.events]`

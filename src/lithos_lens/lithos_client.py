@@ -91,6 +91,7 @@ class LithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -290,6 +291,7 @@ class LithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         # Upstream lithos_task_list currently defaults with_claims to False,
@@ -305,6 +307,9 @@ class LithosClient:
             arguments["tags"] = tags
         if since:
             arguments["since"] = since
+        if resolved_since:
+            # Terminal window: resolved_at >= value, NULL-resolved dropped.
+            arguments["resolved_since"] = resolved_since
         payload = await self._call_tool("lithos_task_list", arguments)
         _raise_for_error(payload)
         return [

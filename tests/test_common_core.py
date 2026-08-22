@@ -16,6 +16,7 @@ from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
+    MAX_SINCE_LOOKBACK_DAYS,
     AgentRecord,
     FindingRecord,
     NoteRecord,
@@ -50,6 +51,7 @@ class RecordingLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         return []
@@ -257,6 +259,24 @@ def test_env_override_tasks_frontier_limit_rejects_junk(
 
     with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_FRONTIER_LIMIT"):
         load_config(lithos_lens_config_env)
+
+
+def test_config_rejects_a_time_range_wider_than_the_lookback_ceiling(
+    tmp_path: Path,
+) -> None:
+    """``default_time_range_days`` is the only bound on the row-unlimited
+    completed/cancelled reads, so a window past the safety ceiling is a config
+    error rather than a silently honored one (correctness/f-001)."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        "[lithos-lens]\n"
+        'environment = "test"\n'
+        "[lithos-lens.tasks]\n"
+        f"default_time_range_days = {MAX_SINCE_LOOKBACK_DAYS + 1}\n"
+    )
+
+    with pytest.raises(ConfigError, match="default_time_range_days"):
+        load_config(config_path)
 
 
 def test_visible_cap_in_config_warns_deprecated_once(

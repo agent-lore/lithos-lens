@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -199,6 +200,7 @@ class _FrontierFake:
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
+        self.terminal_calls: list[dict[str, Any]] = []
 
     @staticmethod
     def _as_sequence(value: list[Any]) -> list[list[Any]]:
@@ -213,6 +215,7 @@ class _FrontierFake:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         # Mirror the real server: agent/tag are filtered upstream when passed.
@@ -221,10 +224,20 @@ class _FrontierFake:
             self.open_calls += 1
             rows = self._open_seq[index]
         else:
+            self.terminal_calls.append(
+                {"status": status, "since": since, "resolved_since": resolved_since}
+            )
             rows = {
                 "completed": self._completed,
                 "cancelled": self._cancelled,
             }[status or "open"]
+            if resolved_since:
+                # Upstream windows on resolved_at and drops NULL-resolved rows.
+                rows = [
+                    task
+                    for task in rows
+                    if task.resolved_at and task.resolved_at >= resolved_since
+                ]
         if agent:
             rows = [task for task in rows if task.created_by == agent]
         if tags:
@@ -313,6 +326,64 @@ def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -
     assert row.blockers[0].target_id == "pred"
     # The predecessor itself is filtered out of the visible sections.
     assert _section_ids(data.sections, "ready") == []
+
+
+def test_load_dashboard_windows_terminal_sections_by_resolution_time() -> None:
+    """T1-S10: the Completed/Cancelled window is pushed as ``resolved_since``
+    (never the created-at ``since``), so a task created long before the window
+    but resolved inside it renders — and one resolved before it does not."""
+    ancient = replace(
+        _task("ancient", claims=()),
+        status="completed",
+        created_at="2020-01-01T00:00:00+00:00",
+        resolved_at="2026-08-08T00:00:00+00:00",
+    )
+    stale = replace(
+        _task("stale", claims=()),
+        status="completed",
+        created_at="2026-07-30T00:00:00+00:00",
+        resolved_at="2026-07-31T00:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[], ready=[], blocked=[], completed=[ancient, stale]
+    )
+    filters = TaskFilters(
+        statuses=("open", "completed", "cancelled"),
+        tags=(),
+        agent="",
+        since="2026-08-01",
+    )
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["ancient"]
+    assert data.summary.recent_completed == 1
+    assert fake.terminal_calls == [
+        {"status": "completed", "since": None, "resolved_since": "2026-08-01"},
+        {"status": "cancelled", "since": None, "resolved_since": "2026-08-01"},
+    ]
+
+
+def test_load_dashboard_orders_terminal_rows_newest_resolved_first() -> None:
+    """Terminal rows come from a resolved-time window, so they sort by
+    resolution — creation order would bury just-finished old work."""
+    old_created = replace(
+        _task("old-created", claims=()),
+        status="completed",
+        created_at="2020-01-01T00:00:00+00:00",
+        resolved_at="2026-08-08T00:00:00+00:00",
+    )
+    new_created = replace(
+        _task("new-created", claims=()),
+        status="completed",
+        created_at="2026-08-02T00:00:00+00:00",
+        resolved_at="2026-08-03T00:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[], ready=[], blocked=[], completed=[new_created, old_created]
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["old-created", "new-created"]
 
 
 def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
