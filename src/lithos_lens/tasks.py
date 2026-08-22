@@ -228,7 +228,11 @@ class TaskSummary:
     claims_unknown: int = 0
     unclassified: int = 0
     open_total: int = 0
-    open_claims: int = 0
+    # Claims held by the rows rendered In progress. Deliberately NOT the
+    # Lithos-wide lithos_stats.open_claims: this sits under the In-progress
+    # count on the situation card, which is filtered (and can be epic-scoped),
+    # so a server-wide figure would contradict the number above it.
+    active_claims: int = 0
     recent_completed: int = 0
     recent_cancelled: int = 0
     agents: int = 0
@@ -245,8 +249,11 @@ class DashboardData:
     reconciliation_pending: bool = False
     truncated: bool = False
     errors: tuple[str, ...] = ()
-    # One rollup per open epic, in open-snapshot (newest-first) order.
+    # One rollup per open epic, in open-snapshot (newest-first) order, bounded
+    # by ``frontier.EPIC_STRIP_CAP``; ``epics_omitted`` counts the epics that cap
+    # dropped so the strip can say it is partial instead of quietly shrinking.
     epics: tuple[EpicRollup, ...] = ()
+    epics_omitted: int = 0
     # The epic id the sections are actually scoped to — empty when no ``?epic=``
     # was asked for OR when the requested epic is no longer an open epic, which
     # the template explains instead of rendering a silently empty board.
@@ -594,8 +601,9 @@ def matches_filters(
     privates.
 
     ``scope_ids`` is the resolved ``?epic=`` scope — the selected epic's
-    descendant ids. ``None`` means "no epic scope"; an EMPTY set is a real
-    scope (an epic with no descendants yet) and correctly hides everything.
+    descendant ids. ``None`` means "no epic scope". An empty set would hide
+    everything, which is why ``frontier.load_dashboard`` never resolves one:
+    an epic answering with no subtree falls back to an unscoped board.
     """
     if scope_ids is not None and task.id not in scope_ids:
         return False

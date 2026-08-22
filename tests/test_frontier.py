@@ -298,6 +298,10 @@ class _FrontierFake:
         return [AgentRecord(id="a"), AgentRecord(id="b")]
 
 
+# Comfortably above every fixture's epic count: the cap is exercised by its own
+# test, not incidentally by the rest of the suite.
+_EPIC_CAP = 50
+
 _FILTERS = TaskFilters(
     statuses=("open", "completed", "cancelled"), tags=(), agent="", since=""
 )
@@ -312,7 +316,11 @@ def test_load_dashboard_partitions_and_counts() -> None:
         ready=[ready],
         blocked=[_blocked(blocked, BlockerRecord(kind="task", task_id="c"))],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
     assert _section_ids(data.sections, "in_progress") == ["c"]
     assert _section_ids(data.sections, "ready") == ["r"]
     assert _section_ids(data.sections, "blocked") == ["b"]
@@ -338,7 +346,11 @@ def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -
         ],
     )
     filters = TaskFilters(statuses=("open",), tags=("project:a",), agent="", since="")
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert _section_ids(data.sections, "blocked") == ["blk"]
     (row,) = data.sections["blocked"]
@@ -354,7 +366,11 @@ def test_load_dashboard_frontier_error_is_not_reported_as_truncation() -> None:
     ``truncated`` must stay False so the dashboard doesn't claim a false cap."""
     ready = _task("r", claims=())
     fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[], fail_ready=True)
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
     # The ready call failed, so the row can't be placed on the frontier.
     assert _section_ids(data.sections, "unclassified") == ["r"]
     assert data.truncated is False
@@ -368,7 +384,11 @@ def test_load_dashboard_flags_truncation_only_at_the_limit() -> None:
     r1 = _task("r1", claims=())
     r2 = _task("r2", claims=())
     fake = _FrontierFake(open_tasks=[r1, r2], ready=[r1, r2], blocked=[])
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=1, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert _section_ids(data.sections, "ready") == ["r1"]
     assert _section_ids(data.sections, "unclassified") == ["r2"]
@@ -389,7 +409,11 @@ def test_load_dashboard_below_limit_gap_retries_then_classifies_blocked() -> Non
     ready = _task("r", claims=())
     gap = _task("g", claims=())
     fake = _FrontierFake(open_tasks=[ready, gap], ready=[ready], blocked=[])
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     # Retried once, still inconsistent -> conservative Blocked, flagged.
     assert fake.ready_calls == 2
@@ -413,7 +437,11 @@ def test_load_dashboard_retry_heals_read_skew() -> None:
         ready=[[ready], [ready, gap]],  # first read misses g, retry sees it
         blocked=[],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 2
     assert _section_ids(data.sections, "ready") == ["r", "g"]
@@ -428,7 +456,11 @@ def test_load_dashboard_ready_and_blocked_overlap_goes_conservative_blocked() ->
     both = _task("x", claims=())
     blocked_record = _blocked(both, BlockerRecord(kind="task", task_id="p"))
     fake = _FrontierFake(open_tasks=[both], ready=[both], blocked=[blocked_record])
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 2
     assert _section_ids(data.sections, "ready") == []
@@ -457,7 +489,11 @@ def test_retry_refreshes_master_open_and_completed_task_renders_once() -> None:
         blocked=[],
         completed=[done_completed],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.open_calls == 2
     assert fake.ready_calls == 2
@@ -489,7 +525,11 @@ def test_open_terminal_overlap_retries_then_open_wins_when_still_open() -> None:
     fake = _FrontierFake(
         open_tasks=[both], ready=[both], blocked=[], completed=[stale_completed]
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.open_calls == 2
     assert fake.ready_calls == 2
@@ -512,7 +552,11 @@ def test_open_terminal_overlap_retry_lets_terminal_win_when_open_drops_it() -> N
         blocked=[],
         completed=[done],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.open_calls == 2
     for section in (
@@ -534,7 +578,11 @@ def test_overlap_is_skew_even_at_the_frontier_limit() -> None:
     both = _task("x", claims=())
     blocked_record = _blocked(both, BlockerRecord(kind="task", task_id="p"))
     fake = _FrontierFake(open_tasks=[both], ready=[both], blocked=[blocked_record])
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=1, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 2
     assert _section_ids(data.sections, "ready") == []
@@ -555,7 +603,11 @@ def test_overlap_on_a_filtered_out_task_is_a_no_op() -> None:
     filters = TaskFilters(
         statuses=("open",), tags=("project:mine",), agent="", since=""
     )
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 1
     assert _section_ids(data.sections, "ready") == ["v"]
@@ -575,7 +627,11 @@ def test_claimed_overlap_retries_then_stays_in_progress_flagged() -> None:
         ready=[claimed],
         blocked=[_blocked(claimed, BlockerRecord(kind="task", task_id="p"))],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 2
     assert _section_ids(data.sections, "in_progress") == ["c"]
@@ -598,7 +654,11 @@ def test_claimed_overlap_healed_on_retry_leaves_no_residual_flags() -> None:
         ready=[claimed],
         blocked=[[_blocked(claimed, BlockerRecord(kind="task", task_id="p"))], []],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 2
     (row,) = data.sections["in_progress"]
@@ -614,7 +674,11 @@ def test_summary_counts_exclude_claims_unknown_rows() -> None:
     fake = _FrontierFake(
         open_tasks=[unknown, ready], ready=[unknown, ready], blocked=[]
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert data.summary.ready == 1
     assert data.summary.blocked == 0
@@ -638,7 +702,11 @@ def test_overlap_row_with_unknown_claims_stays_in_claims_unknown() -> None:
         ready=[both],
         blocked=[_blocked(both, BlockerRecord(kind="task", task_id="p"))],
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.ready_calls == 1
     assert _section_ids(data.sections, "claims_unknown") == ["x"]
@@ -723,7 +791,11 @@ def test_load_dashboard_builds_one_chip_per_open_epic() -> None:
             "epic-2": [_task("x", status="completed")],
         },
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert [rollup.progress_label for rollup in data.epics] == ["5/8", "1/1"]
     # One recursive, closed-inclusive call per epic — and none for plain tasks.
@@ -753,7 +825,11 @@ def test_load_dashboard_scopes_every_section_to_the_selected_epic() -> None:
         children={"epic-1": [inside_ready, inside_done]},
     )
     filters = replace(_FILTERS, epic="epic-1")
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert _section_ids(data.sections, "ready") == ["in-ready"]
     assert _section_ids(data.sections, "completed") == ["in-done"]
@@ -780,7 +856,11 @@ def test_epic_rollup_counts_ignore_the_section_filters() -> None:
     filters = TaskFilters(
         statuses=("open",), tags=("project:other",), agent="", since=""
     )
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert _section_ids(data.sections, "ready") == []
     assert [rollup.progress_label for rollup in data.epics] == ["5/8"]
@@ -793,7 +873,11 @@ def test_load_dashboard_ignores_a_scope_that_is_no_longer_an_open_epic() -> None
     ready = _task("r", claims=())
     fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[])
     filters = replace(_FILTERS, epic="epic-gone")
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert data.epics == ()
     assert data.epic_scope == ""
@@ -801,20 +885,116 @@ def test_load_dashboard_ignores_a_scope_that_is_no_longer_an_open_epic() -> None
     assert data.errors == ()
 
 
-def test_epic_with_no_descendants_scopes_to_an_empty_board() -> None:
-    """An epic that HAS resolved but has no children is a real (empty) scope —
-    distinct from "no scope at all"."""
+def test_an_empty_subtree_never_scopes_the_board() -> None:
+    """Reviewer repro (c-001), lifecycle race: the epic is in the open snapshot
+    but ``task_children`` — issued after it — answers empty, which is exactly
+    what the contract returns for an epic that closed in between. Lens cannot
+    tell that from a childless epic, so it must NOT resolve a scope: the board
+    stays whole with ``epic_scope`` empty (the announced fallback) instead of
+    silently rendering an empty scoped page."""
     epic = _epic("epic-1")
     ready = _task("r", claims=())
     fake = _FrontierFake(
         open_tasks=[epic, ready], ready=[ready], blocked=[], children={"epic-1": []}
     )
     filters = replace(_FILTERS, epic="epic-1")
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
+
+    assert data.epic_scope == ""
+    assert _section_ids(data.sections, "ready") == ["r"]
+    assert data.summary.open_total == 1
+    # The chip still renders (0/0 is honest about what the read returned), it
+    # just is not the active scope.
+    assert [rollup.progress_label for rollup in data.epics] == ["0/0"]
+    assert not any(rollup.selected for rollup in data.epics)
+
+
+def test_scope_survives_a_child_closing_between_the_two_reads() -> None:
+    """The other half of the generation gap: a DESCENDANT that completes after
+    the open read still scopes correctly, because the scope is an id set (the
+    child renders from whichever snapshot the sections came from) and the chip
+    counts are display-only."""
+    epic = _epic("epic-1")
+    inside = _task("in", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, inside],
+        ready=[inside],
+        blocked=[],
+        # The children read is a generation newer: it already reports the child
+        # completed, while the open snapshot still has it open.
+        children={"epic-1": [_task("in", status="completed")]},
+    )
+    filters = replace(_FILTERS, epic="epic-1")
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert data.epic_scope == "epic-1"
-    assert _section_ids(data.sections, "ready") == []
-    assert data.summary.open_total == 0
+    assert [rollup.progress_label for rollup in data.epics] == ["1/1"]
+    # The row still renders from the open snapshot — the newer count did not
+    # move it anywhere.
+    assert _section_ids(data.sections, "ready") == ["in"]
+
+
+def test_epic_fan_out_stops_at_the_cap_and_reports_the_remainder() -> None:
+    """The strip is the one read whose fan-out follows the corpus, so it is
+    capped — and the surplus is COUNTED, never silently dropped."""
+    epics = [_epic(f"epic-{n}") for n in range(4)]
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[*epics, ready],
+        ready=[ready],
+        blocked=[],
+        children={epic.id: _subtree(done=1, open_=1) for epic in epics},
+    )
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=2)
+    )
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-0", "epic-1"]
+    assert data.epics_omitted == 2
+    # The cap bounds the backend calls, not just what renders.
+    assert len(fake.children_calls) == 2
+
+
+def test_active_claims_counts_only_the_rendered_in_progress_rows() -> None:
+    """Reviewer repro (c-003): the situation card pairs the In-progress count
+    with its claims, so both must describe the same set. A claim outside the
+    epic scope must not inflate the scoped card."""
+    epic = _epic("epic-1")
+    inside = _task("in", claims=(ClaimRecord(agent="a", aspect="impl"),))
+    outside = _task("out", claims=(ClaimRecord(agent="b", aspect="impl"),))
+    fake = _FrontierFake(
+        open_tasks=[epic, inside, outside],
+        ready=[],
+        blocked=[],
+        children={"epic-1": [inside]},
+    )
+    filters = replace(_FILTERS, epic="epic-1")
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=filters, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
+
+    assert data.summary.in_progress == 1
+    assert data.summary.active_claims == 1
+
+    unscoped = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
+    assert unscoped.summary.in_progress == 2
+    # Unscoped, the same derivation still describes the rendered rows — the
+    # fake's Lithos-wide stat (open_claims=2 here) is not what drives it.
+    assert unscoped.summary.active_claims == 2
 
 
 def test_failed_epic_children_read_drops_the_chip_and_reports_the_error() -> None:
@@ -831,7 +1011,11 @@ def test_failed_epic_children_read_drops_the_chip_and_reports_the_error() -> Non
         children={"epic-2": [_task("x", status="completed")]},
         fail_children={"epic-1"},
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert [rollup.task.id for rollup in data.epics] == ["epic-2"]
     assert any("epic progress" in message for message in data.errors)
@@ -857,7 +1041,11 @@ def test_epic_strip_is_refetched_when_the_skew_retry_adopts_a_new_snapshot() -> 
             "epic-new": _subtree(done=5, open_=3),
         },
     )
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=_FILTERS, frontier_limit=500, epic_strip_cap=_EPIC_CAP
+        )
+    )
 
     assert fake.open_calls == 2
     assert [rollup.task.id for rollup in data.epics] == ["epic-new"]

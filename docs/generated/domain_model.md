@@ -176,6 +176,7 @@ classDiagram
     +reconciliation_pending bool
     +truncated bool
     +errors tuple[str, ...]
+    +epics_omitted int
     +epic_scope str
   }
   class EpicRollup {
@@ -256,7 +257,7 @@ classDiagram
     +claims_unknown int
     +unclassified int
     +open_total int
-    +open_claims int
+    +active_claims int
     +recent_completed int
     +recent_cancelled int
     +agents int

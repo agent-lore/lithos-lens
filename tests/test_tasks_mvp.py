@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
+from lithos_lens.frontier import EPIC_STRIP_CAP
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
@@ -977,3 +978,107 @@ def test_epic_scope_survives_tag_and_detail_navigation(
     row = response.text[response.text.index('data-task-id="open-unclaimed"') :]
     row = row[: row.index("</article>")]
     assert "epic=epic-1" in row
+
+
+def _card(text: str, anchor: str) -> str:
+    """The situation card whose link carries ``anchor`` (an href or fragment)."""
+    return text.split(anchor)[1].split("</a>")[0]
+
+
+def test_situation_cards_keep_the_active_epic_scope_and_filters(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-002): the five situation cards are the dashboard's
+    primary navigation. On a scoped board they must stay inside the scope —
+    clicking a count used to drop ``epic=`` and show every epic again."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1&tag=project:influx")
+
+    assert response.status_code == 200
+    grid = response.text.split('aria-label="Current situation"')[1]
+    grid = grid[: grid.index("</section>")]
+    hrefs = [
+        chunk.split('"')[0] for chunk in grid.split('class="metric-card" href="')[1:]
+    ]
+    assert len(hrefs) == 5
+    for href in hrefs:
+        assert "epic=epic-1" in href
+        assert "tag=project%3Ainflux" in href
+        assert "since=2026-04-01" in href
+    # Each card still narrows to its own status.
+    assert sum("status=open" in href for href in hrefs) == 3
+    assert sum("status=completed" in href for href in hrefs) == 1
+    assert sum("status=cancelled" in href for href in hrefs) == 1
+
+
+def test_in_progress_card_claims_count_follows_the_scope(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-003): the claims line under the In-progress count must
+    describe the same rows as the count above it. The fake's Lithos-wide stat
+    reports one open claim on ``open-claimed``, which is outside the epic."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unscoped = client.get("/tasks?since=2026-04-01")
+        scoped = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    unscoped_card = _card(unscoped.text, "#task-group-in_progress")
+    assert "<strong>1</strong>" in unscoped_card
+    assert "1 active claims" in unscoped_card
+
+    scoped_card = _card(scoped.text, "#task-group-in_progress")
+    # No claimed task inside the epic: both numbers must read zero.
+    assert "<strong>0</strong>" in scoped_card
+    assert "0 active claims" in scoped_card
+
+
+def test_epic_that_lost_its_subtree_between_reads_falls_back_unscoped(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-001) end to end: the epic is still in the open list but
+    its children read comes back empty (it closed in between). The board must
+    render whole with the explanation, not as an empty scoped page."""
+    fake = _with_epic(TaskFakeLithosClient())
+    fake.children["epic-1"] = []
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-missing" in text
+    assert "Unclaimed open task" in _group(text, "ready")
+    assert "epic-chip-selected" not in text
+
+
+def test_epic_strip_cap_reports_the_epics_it_did_not_fan_out_to(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The fan-out bound is visible, not silent: past ``EPIC_STRIP_CAP`` the
+    strip renders the chips it could afford and states how many epics are
+    missing from it."""
+    fake = _with_epic(TaskFakeLithosClient())
+    surplus = 3
+    for n in range(EPIC_STRIP_CAP + surplus - 1):
+        fake.tasks.append(
+            TaskRecord(
+                id=f"epic-extra-{n}",
+                title=f"Extra epic {n}",
+                status="open",
+                task_type="epic",
+                created_by="planner",
+                created_at="2026-04-27T10:00:00+00:00",
+            )
+        )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert text.count("data-epic-chip=") == EPIC_STRIP_CAP
+    assert "data-epic-strip-truncated" in text
+    assert f"{surplus} more open epics are not shown" in text

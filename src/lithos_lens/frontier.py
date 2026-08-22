@@ -10,8 +10,16 @@ gates are excluded from both frontiers upstream, so they never enter the
 workable partition; their dedicated sections arrive in later T1 slices.
 
 Open epics roll up instead: one ``lithos_task_children`` fan-out per open epic
-builds the progress chips of the epic strip (``build_epic_rollup``), and the
-selected chip's descendant set scopes every section (``?epic=``).
+(bounded by ``EPIC_STRIP_CAP``) builds the progress chips of the epic strip
+(``build_epic_rollup``), and the selected chip's descendant set scopes every
+section (``?epic=``). Those children reads are independent of the open read
+like every other call here, so a chip's counts may be one generation newer than
+the sections — harmless, because counts are display-only and never decide a
+row's placement. The SCOPE does decide placement, so it is only honored when
+the selected epic answers with a non-empty subtree: an epic that closed between
+the two reads answers empty (per the ``lithos_task_children`` contract) and is
+indistinguishable from a childless one, so both degrade to the announced
+"scope not applied" fallback instead of a silently empty board.
 
 ``classify_open_tasks`` is the pure join; ``load_dashboard`` is the five-call
 assembly that feeds it. Both live here (not in ``tasks.py``) because they depend
@@ -23,7 +31,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Protocol, cast
+from typing import Any, NamedTuple, Protocol, cast
 
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
@@ -49,6 +57,17 @@ WORKABLE_TASK_TYPE = "task"
 # Epics roll up into the strip (one progress chip each) rather than appearing
 # in any section; the strip is built from their recursive children.
 EPIC_TASK_TYPE = "epic"
+
+# Fan-out safety net for that strip: one lithos_task_children call per open
+# epic is the only read here whose cost follows the corpus instead of a limit
+# the server enforces, so it is bounded — in call count AND in peak subtree
+# residency, since asyncio.gather holds every response. Sized far above the
+# production corpus (~21 open epics); epics past it are COUNTED and surfaced,
+# never silently dropped. An internal constant rather than public config, for
+# the same reason as knowledge.RELATED_RENDER_CAP: it is a safety net, not a
+# dial an operator has a reason to tune (and load_dashboard parameterizes it
+# for tests).
+EPIC_STRIP_CAP = 50
 
 # The three workable sections plus the truncation tail, in render order.
 WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
@@ -214,22 +233,32 @@ async def _load_epic_rollups(
     snapshot: Sequence[TaskRecord],
     *,
     selected: str,
-) -> tuple[tuple[EpicRollup, ...], bool]:
-    """Fan ``lithos_task_children`` out over every open epic in the snapshot.
+    cap: int,
+) -> _EpicStrip:
+    """Fan ``lithos_task_children`` out over the open epics in the snapshot.
 
-    One recursive, closed-inclusive call per epic, all gathered — the epic
-    count is small (~20 in production) and the calls are independent. This is
-    the one read that cannot join the main gather: the epic ids come from the
-    open list it fetches.
+    One recursive, closed-inclusive call per epic, all gathered — the calls are
+    independent and the epic count is small (~20 in production). This is the
+    one read that cannot join the main gather: the epic ids come from the open
+    list it fetches. It is also the one read whose fan-out follows the corpus
+    rather than a server-side limit, so ``cap`` bounds it (call count AND peak
+    subtree residency, since every response is held until the gather returns).
+    Epics past the cap are counted into ``omitted`` for the UI — the strip says
+    it is partial rather than quietly showing fewer chips. Per-subtree
+    truncation is deliberately NOT applied: a clipped subtree would report a
+    wrong ``5/8``, which is worse than the fan-out it would save.
 
-    Returns the rollups in snapshot order (marking the ``?epic=`` selection)
-    plus a flag set when ANY call failed. A failed epic is dropped from the
-    strip rather than shown with a wrong count; the caller turns the flag into
+    ``selected`` is honored only for an epic that answers with a non-empty
+    subtree — see the module docstring: an empty answer cannot be told apart
+    from an epic that closed between the two reads, so it must not scope the
+    board. ``failed`` is set when ANY call failed; a failed epic is dropped
+    rather than shown with a wrong count, and the caller turns the flag into
     the usual load-error banner.
     """
-    epics = [task for task in snapshot if task.task_type == EPIC_TASK_TYPE]
-    if not epics:
-        return (), False
+    all_epics = [task for task in snapshot if task.task_type == EPIC_TASK_TYPE]
+    if not all_epics:
+        return _EpicStrip((), False, 0)
+    epics = all_epics[:cap]
     results = await asyncio.gather(
         *(
             lithos.task_children(epic.id, recursive=True, include_closed=True)
@@ -244,8 +273,23 @@ async def _load_epic_rollups(
             failed = True
             continue
         rollup = build_epic_rollup(epic, cast(list[TaskRecord], result))
-        rollups.append(replace(rollup, selected=bool(selected) and epic.id == selected))
-    return tuple(rollups), failed
+        rollups.append(
+            replace(
+                rollup,
+                selected=bool(selected)
+                and epic.id == selected
+                and bool(rollup.descendant_ids),
+            )
+        )
+    return _EpicStrip(tuple(rollups), failed, len(all_epics) - len(epics))
+
+
+class _EpicStrip(NamedTuple):
+    """One epic-strip load: the chips, the read-failure flag, the dropped count."""
+
+    rollups: tuple[EpicRollup, ...]
+    failed: bool
+    omitted: int
 
 
 async def load_dashboard(
@@ -253,6 +297,7 @@ async def load_dashboard(
     *,
     filters: TaskFilters,
     frontier_limit: int,
+    epic_strip_cap: int = EPIC_STRIP_CAP,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
 
@@ -406,12 +451,14 @@ async def load_dashboard(
 
     # The epic strip depends on the open snapshot (its epic ids), so it is
     # fetched here rather than in the main gather — and refetched below if the
-    # skew retry adopts a newer snapshot, so strip and sections never mix
-    # generations.
-    epics, epic_error = await _load_epic_rollups(
-        lithos, open_snapshot, selected=filters.epic
+    # skew retry adopts a newer snapshot, so the strip lists the epics of the
+    # snapshot the sections were built from. The children reads themselves stay
+    # independent reads (see the module docstring): counts can be a generation
+    # newer, which is why only a non-empty subtree is allowed to scope.
+    strip = await _load_epic_rollups(
+        lithos, open_snapshot, selected=filters.epic, cap=epic_strip_cap
     )
-    scope_ids = _epic_scope_ids(epics)
+    scope_ids = _epic_scope_ids(strip.rollups)
     state = _partition_state(open_snapshot, ready_list, blocked_records, scope_ids)
 
     if frontier_ok and state.retry_worthy:
@@ -440,15 +487,15 @@ async def load_dashboard(
             )
             ready_list = cast(list[TaskRecord], retry_ready)
             blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
-            epics, epic_error = await _load_epic_rollups(
-                lithos, open_snapshot, selected=filters.epic
+            strip = await _load_epic_rollups(
+                lithos, open_snapshot, selected=filters.epic, cap=epic_strip_cap
             )
-            scope_ids = _epic_scope_ids(epics)
+            scope_ids = _epic_scope_ids(strip.rollups)
             state = _partition_state(
                 open_snapshot, ready_list, blocked_records, scope_ids
             )
 
-    if epic_error:
+    if strip.failed:
         errors.append("Could not load epic progress.")
 
     partition = state.partition
@@ -503,7 +550,11 @@ async def load_dashboard(
         claims_unknown=len(partition["claims_unknown"]),
         unclassified=len(partition["unclassified"]),
         open_total=open_total,
-        open_claims=int_stat(stats, "open_claims"),
+        # Claims on the rows actually rendered In progress — NOT the Lithos-wide
+        # lithos_stats.open_claims. The card pairs this with the (filtered,
+        # possibly epic-scoped) In-progress count, so a global stat there would
+        # read "1 in progress / 10 active claims" on a scoped board.
+        active_claims=sum(len(row.claims) for row in partition["in_progress"]),
         recent_completed=len(closed["completed"]),
         recent_cancelled=len(closed["cancelled"]),
         agents=int_stat(stats, "agents", default=len(agents)),
@@ -523,11 +574,12 @@ async def load_dashboard(
         truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
         reconciliation_pending=reconciliation_pending,
         errors=tuple(errors),
-        epics=epics,
-        # An ``?epic=`` naming something that is no longer an open epic (a
-        # stale bookmark, or an epic that just completed) resolves to NO scope:
-        # the board shows everything and the template says why, rather than
-        # rendering an unexplained empty page.
+        epics=strip.rollups,
+        epics_omitted=strip.omitted,
+        # An ``?epic=`` that resolves to no scope — no longer an open epic, its
+        # children read failed, or it answered with an empty subtree (which a
+        # just-closed epic is indistinguishable from) — shows the whole board
+        # with the template's explanation, never an unexplained empty page.
         epic_scope=filters.epic if scope_ids is not None else "",
     )
 
@@ -608,8 +660,9 @@ def _reclassify_conservative(
 def _epic_scope_ids(epics: Sequence[EpicRollup]) -> frozenset[str] | None:
     """The selected epic's descendant ids, or ``None`` when nothing is scoped.
 
-    ``None`` (no scope) and an empty frozenset (an epic with no descendants)
-    are deliberately different answers — see ``matches_filters``.
+    Never an empty set: ``_load_epic_rollups`` only marks an epic selected when
+    its subtree came back non-empty, so a scope that reaches here always has
+    rows to show.
     """
     return next((epic.descendant_ids for epic in epics if epic.selected), None)
 

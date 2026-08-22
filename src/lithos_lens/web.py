@@ -104,6 +104,7 @@ def create_app(
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
+    templates.env.globals["tasks_status_url"] = tasks_status_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
 
@@ -425,6 +426,7 @@ async def _render_tasks(
                 "agent": filters.agent,
                 "since": filters.since,
                 "epic_scope": dashboard.epic_scope,
+                "epics_omitted": dashboard.epics_omitted,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
                 "section_counts": {
@@ -474,6 +476,18 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def tasks_status_url(request: Request, status: str) -> str:
+    """Link a situation card to the board narrowed to one status.
+
+    Built from the preserved-filter allowlist with ``status`` REPLACED, so a
+    card click keeps the active epic scope, tag, agent, and window — a card on
+    an epic-scoped board must not silently drop back to every epic.
+    """
+    params = _preserved_filter_params(request, exclude="status")
+    params.append(("status", status))
+    return f"/tasks?{urlencode(params)}"
 
 
 def epic_scope_url(request: Request, epic_id: str) -> str:

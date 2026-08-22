@@ -11,7 +11,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.frontier` | M | 1 | 3 |
+| `lithos_lens.frontier` | L | 1 | 3 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API

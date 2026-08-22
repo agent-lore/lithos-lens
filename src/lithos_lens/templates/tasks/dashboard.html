@@ -32,22 +32,27 @@
       {% endif %}
 
       <section class="situation-grid" aria-label="Current situation">
-        <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-in_progress">
+        {# Card links go through the preserved-filter helper (status replaced),
+           so clicking a count on an epic-scoped or tag-filtered board stays in
+           that view instead of silently widening to every task. #}
+        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-in_progress">
           <span>In progress</span>
           <strong>{{ dashboard.summary.in_progress }}</strong>
-          <small>{{ dashboard.summary.open_claims }} active claims</small>
+          {# Claims on the rows counted above, not the Lithos-wide stat: the
+             two numbers on one card must describe the same set of tasks. #}
+          <small>{{ dashboard.summary.active_claims }} active claims</small>
         </a>
-        <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-ready">
+        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-ready">
           <span>Ready</span>
           <strong>{{ dashboard.summary.ready }}</strong>
           <small>Unclaimed and workable now</small>
         </a>
-        <a class="metric-card" href="/tasks?status=open&since={{ dashboard.filters.since }}#task-group-blocked">
+        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-blocked">
           <span>Blocked</span>
           <strong>{{ dashboard.summary.blocked }}</strong>
           <small>Waiting on predecessors or gates</small>
         </a>
-        <a class="metric-card" href="/tasks?status=completed&since={{ dashboard.filters.since }}">
+        <a class="metric-card" href="{{ tasks_status_url(request, "completed") }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
           {# The since filter windows terminal rows by CREATED date (see
@@ -56,7 +61,7 @@
              resolved_since param instead of relabelling this one. #}
           <small>Created since {{ dashboard.filters.since }}</small>
         </a>
-        <a class="metric-card" href="/tasks?status=cancelled&since={{ dashboard.filters.since }}">
+        <a class="metric-card" href="{{ tasks_status_url(request, "cancelled") }}">
           <span>Recently cancelled</span>
           <strong>{{ dashboard.summary.recent_cancelled }}</strong>
           {# The since filter windows terminal rows by CREATED date (see
@@ -152,13 +157,20 @@
           {% endfor %}
         </section>
       {% endif %}
+      {% if dashboard.epics_omitted %}
+        <section class="banner banner-warning" role="status" data-epic-strip-truncated>
+          <strong>The epic strip is partial.</strong>
+          <span>{{ dashboard.epics_omitted }} more open epic{{ "s are" if dashboard.epics_omitted != 1 else " is" }} not shown: the strip fans one Lithos children read out per epic, and stops at the {{ dashboard.epics | length }} it can afford.</span>
+        </section>
+      {% endif %}
       {% if dashboard.filters.epic and not dashboard.epic_scope %}
-        {# Wording covers both causes — the epic is no longer open, or its
-           children read failed and the chip was dropped — because the board is
-           unscoped either way and only the errors banner distinguishes them. #}
+        {# One wording for every cause — the epic is no longer open, its
+           children read failed, or it answered with an empty subtree (which a
+           just-closed epic is indistinguishable from). The board is unscoped in
+           all three, and only the errors banner distinguishes the read failure. #}
         <section class="banner banner-warning" role="status" data-epic-scope-missing>
           <strong>Epic scope not applied.</strong>
-          <span>&ldquo;{{ dashboard.filters.epic }}&rdquo; is not one of the open epics Lens could load, so every task is shown.</span>
+          <span>Lens could not resolve any tasks under &ldquo;{{ dashboard.filters.epic }}&rdquo; — it may have closed — so every task is shown.</span>
         </section>
       {% endif %}
 
