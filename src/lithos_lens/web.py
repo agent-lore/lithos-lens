@@ -443,7 +443,7 @@ async def _render_tasks(
                 },
                 "truncated": dashboard.truncated,
                 "graph_available": dashboard.graph_available,
-                "corpus_empty": dashboard.corpus_empty,
+                "nothing_to_show": dashboard.nothing_to_show,
                 "errors": list(dashboard.errors),
             },
         )

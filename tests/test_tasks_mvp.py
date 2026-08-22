@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from lithos_lens import state
 from lithos_lens.config import load_config
+from lithos_lens.fake_lithos import FAKE_TOOL_NAMES
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
@@ -39,6 +40,10 @@ class TaskFakeLithosClient:
         self.visible_failures = visible_failures
         self.ignore_tags = ignore_tags
         self.closed = False
+        # What a tools/list probe sees. Feature detection reads THIS, never
+        # error text, so a test models a pre-0.4 server by removing the two
+        # frontier tools from the set.
+        self.tool_names: set[str] = set(FAKE_TOOL_NAMES)
         self.register_calls = 0
         self.status_calls: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
@@ -122,6 +127,10 @@ class TaskFakeLithosClient:
     async def register_agent(self) -> bool:
         self.register_calls += 1
         return True
+
+    async def list_tool_names(self) -> set[str]:
+        """The graph-capable tool surface, unless a test narrows it."""
+        return set(self.tool_names)
 
     async def list_tasks(
         self,
@@ -859,14 +868,15 @@ def test_terminal_card_labels_match_the_created_windowing(
 class NoFrontierClient(TaskFakeLithosClient):
     """A pre-0.4 Lithos: the task-graph frontier tools do not exist.
 
-    MCP answers a call for a tool the server does not have with an error result
-    naming it, which the client raises as an uncoded ``LithosToolError`` — the
-    shape ``frontier.is_tool_missing_error`` matches.
+    Both halves of that server are modelled: the calls fail (MCP answers an
+    unknown tool with an error result), and — the part detection actually
+    reads — ``tools/list`` does not name them.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.frontier_calls = 0
+        self.tool_names -= {"lithos_task_ready", "lithos_task_blocked"}
 
     async def task_ready(self, **kwargs: Any) -> list[TaskRecord]:
         self.frontier_calls += 1
@@ -906,7 +916,7 @@ def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
     # authorization filter, so the condition stays on the error channel for the
     # operator and for log-based monitoring (security f-001).
     assert "Some task data could not be loaded" in response.text
-    assert "frontier tools as unavailable" in response.text
+    assert "frontier tools are unavailable" in response.text
     assert "data-healthy-stripe" not in response.text
     # Terminal sections are unaffected (lithos_task_list predates the graph).
     assert "Recently completed task" in response.text
@@ -929,9 +939,14 @@ def test_flat_fallback_is_remembered_and_stops_probing_the_frontier(
     assert second.status_code == 200
     assert calls_after_first > 0
     assert fake.frontier_calls == calls_after_first
-    # The fallback still renders on the remembered answer.
+    # The fallback still renders on the remembered answer…
     assert "Graph features need Lithos 0.4 or newer" in second.text
     assert 'data-task-group="open"' in second.text
+    # …and still reports itself (security f-001): a degraded state that shows
+    # its error only on the render that discovered it is invisible to most
+    # refreshes inside the re-probe window.
+    assert "frontier tools are unavailable" in first.text
+    assert "frontier tools are unavailable" in second.text
 
 
 def test_dashboard_renders_empty_state_when_lithos_has_no_tasks(
@@ -948,8 +963,8 @@ def test_dashboard_renders_empty_state_when_lithos_has_no_tasks(
         response = client.get("/tasks?since=2026-04-01")
 
     assert response.status_code == 200
-    assert 'data-empty-state="corpus"' in response.text
-    assert "No tasks yet" in response.text
+    assert 'data-empty-state="window"' in response.text
+    assert "No tasks in this window" in response.text
     assert "match these filters" not in response.text
     # The live-update strip stays, so a task.created event still has somewhere
     # to land without a reload.
@@ -967,7 +982,7 @@ def test_empty_filter_result_keeps_the_per_section_message(
         response = client.get("/tasks?tag=project:nope&since=2026-04-01")
 
     assert response.status_code == 200
-    assert 'data-empty-state="corpus"' not in response.text
+    assert 'data-empty-state="window"' not in response.text
     assert "No ready tasks match these filters" in response.text
 
 
@@ -1021,7 +1036,7 @@ def test_dashboard_hides_the_board_when_lithos_is_unreachable(
     assert "Lithos is offline or degraded" in response.text
     assert 'class="status-grid"' in response.text
     assert 'class="task-board"' not in response.text
-    assert 'data-empty-state="corpus"' not in response.text
+    assert 'data-empty-state="window"' not in response.text
     assert "data-healthy-stripe" not in response.text
 
 
@@ -1049,12 +1064,17 @@ def test_missing_frontier_verdict_expires_and_is_re_probed(
                 return await TaskFakeLithosClient.task_blocked(self, **kwargs)
             return await super().task_blocked(**kwargs)
 
+        def upgrade(self) -> None:
+            """The server gains the task graph (upgraded, or access restored)."""
+            self.recovered = True
+            self.tool_names = set(FAKE_TOOL_NAMES)
+
     fake = RecoveringClient()
 
     with _client(lithos_lens_config_env, fake) as client:
         degraded = client.get("/tasks?since=2026-04-01")
         calls_after_probe = fake.frontier_calls
-        fake.recovered = True
+        fake.upgrade()
         healed = client.get("/tasks?since=2026-04-01")
 
     assert "Graph features need Lithos 0.4 or newer" in degraded.text
@@ -1111,6 +1131,33 @@ def test_empty_state_is_withheld_when_a_filter_could_hide_terminal_rows(
         response = client.get("/tasks?tag=project:nope&since=2026-04-01")
 
     assert response.status_code == 200
-    assert 'data-empty-state="corpus"' not in response.text
-    assert "No tasks yet" not in response.text
+    assert 'data-empty-state="window"' not in response.text
+    assert "No tasks in this window" not in response.text
     assert "No completed tasks match these filters" in response.text
+
+
+def test_future_since_does_not_claim_the_tracker_is_empty(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (security f-003): ``since`` is pushed into both terminal
+    reads, so a date newer than every resolved task empties the board on a
+    corpus that holds work. The panel may still render — nothing IS showing —
+    but it must scope its claim to the window it was given rather than
+    announcing an empty tracker, and it must say how to widen it."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.status == "completed"]
+    fake.ready_ids = set()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        windowed = client.get("/tasks?since=2099-01-01")
+        in_window = client.get("/tasks?since=2026-04-01")
+
+    assert windowed.status_code == 200
+    assert "No tasks yet" not in windowed.text
+    assert "No tasks in this window" in windowed.text
+    # The window that produced the emptiness is named, with the way out.
+    assert "01/01/2099" in windowed.text
+    assert 'Widen "Created since"' in windowed.text
+    # Same server, a window that contains the work: the rows render.
+    assert "Recently completed task" in in_window.text
+    assert 'data-empty-state="window"' not in in_window.text

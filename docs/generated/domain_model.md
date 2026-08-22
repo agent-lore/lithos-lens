@@ -177,7 +177,7 @@ classDiagram
     +truncated bool
     +filters_narrowed bool
     +graph_available bool
-    +corpus_empty bool
+    +nothing_to_show bool
     +errors tuple[str, ...]
   }
   class FindingRecord {

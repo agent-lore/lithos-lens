@@ -54,74 +54,39 @@ OPEN_SECTIONS: tuple[SectionName, ...] = (
     FLAT_SECTIONS + WORKABLE_SECTIONS + ("claims_unknown", "unclassified")
 )
 
-# Version-skew detection (story 27). A pre-0.4 Lithos has no
-# ``lithos_task_ready`` / ``lithos_task_blocked`` at all: MCP answers an unknown
-# tool with an error result naming it ("Unknown tool: lithos_task_ready"), which
-# the client raises as a ``LithosToolError`` with code ``tool_error`` (an
-# uncoded transport-level failure), while a server that spells the failure in
-# its own error envelope supplies one of the codes below. Anything else — a
-# timeout, a dropped session, a coded runtime failure — is an OUTAGE, not
-# version skew, and keeps the ordinary error banner.
-#
-# The uncoded branch reads server-supplied TEXT, and that text is not
-# necessarily Lithos's own: an MCP ``isError`` result can carry a FastMCP
-# output-validation message quoting the tool's payload — i.e. task titles
-# written by any agent with task-write access, who is less privileged than the
-# Lens operator. Three things keep that from becoming a control channel: the
-# message must name the very tool whose call failed, BOTH frontier tools must
-# report themselves missing (see ``_frontier_tools_missing``), and the verdict
-# is neither silent (an error line is recorded) nor permanent (the caller
-# re-probes; see ``AppState.graph_available``).
-#
-# The exception is matched structurally (``code`` attribute + message) rather
-# than by class: ``LithosToolError`` lives in the Core tier, which Foundation
-# modules like this one must not import.
-TOOL_MISSING_CODES = frozenset({"unknown_tool", "tool_not_found", "method_not_found"})
-_UNCODED_ERROR_CODES = frozenset({"", "tool_error"})
-_TOOL_MISSING_FRAGMENTS = (
-    "unknown tool",
-    "tool not found",
-    "no such tool",
-    "method not found",
-)
+# Version-skew detection (story 27): the names of the two task-graph frontier
+# tools, looked for in the server's own ``tools/list``. A pre-0.4 Lithos has
+# neither.
 READY_TOOL = "lithos_task_ready"
 BLOCKED_TOOL = "lithos_task_blocked"
 
+# One line for both flat-fallback paths (a fresh verdict and a cached one), so
+# the degraded state is continuously visible to the banner and to log-based
+# monitoring rather than only on the render that discovered it.
+FRONTIER_UNAVAILABLE_ERROR = "The Lithos ready/blocked frontier tools are unavailable."
 
-def is_tool_missing_error(exc: BaseException, tool: str) -> bool:
-    """True when ``exc`` says the server does not implement ``tool``.
 
-    Deliberately conservative: a failure that carries any OTHER Lithos error
-    code is a real error (the caller keeps its error banner), and an uncoded
-    failure counts only when its message BOTH names ``tool`` and reads as a
-    missing-tool report — so an error whose text merely quotes the phrase back
-    from user-controlled payload data cannot pass for version skew.
+async def frontier_tools_absent(lithos: FrontierLithosClient) -> bool:
+    """Ask the server whether it actually has the two frontier tools.
+
+    This is the ONLY input to the fallback verdict. Error text is never
+    consulted: an MCP error result can quote the failing tool's own payload —
+    task titles written by any agent with task-write access, who is strictly
+    less privileged than the Lens operator — so a planted string must not be
+    able to retire the Ready/Blocked/gate surface. ``tools/list`` is the
+    server's structured statement about itself.
+
+    Answers False unless the listing succeeded, was non-empty, and named
+    neither tool: a listing Lens could not make (or an empty one) says nothing
+    about the server, and absence must never be inferred from a failure. A
+    server exposing exactly one of the pair is broken rather than old, and is
+    likewise reported as an error instead of silently losing the graph.
     """
-    code = str(getattr(exc, "code", "") or "")
-    if code in TOOL_MISSING_CODES:
-        return True
-    if code not in _UNCODED_ERROR_CODES:
+    try:
+        names = await lithos.list_tool_names()
+    except Exception:
         return False
-    message = str(exc).lower()
-    if tool.lower() not in message:
-        return False
-    return any(fragment in message for fragment in _TOOL_MISSING_FRAGMENTS)
-
-
-def _frontier_tools_missing(ready_result: Any, blocked_result: Any) -> bool:
-    """True only when BOTH frontier reads report their own tool as missing.
-
-    A server that has one frontier tool and not the other is broken, not old,
-    and one failing read on its own is an outage — either way the graph surface
-    stays up and the failure is reported as an error. Requiring both, each
-    naming its own tool, is also what makes the uncoded text branch above hard
-    to drive from a single injected string.
-    """
-    return isinstance(ready_result, BaseException) and (
-        isinstance(blocked_result, BaseException)
-        and is_tool_missing_error(ready_result, READY_TOOL)
-        and is_tool_missing_error(blocked_result, BLOCKED_TOOL)
-    )
+    return bool(names) and not (names & {READY_TOOL, BLOCKED_TOOL})
 
 
 def flat_open_sections(
@@ -187,6 +152,8 @@ class FrontierLithosClient(Protocol):
     async def stats(self) -> dict[str, Any]: ...
 
     async def list_agents(self) -> list[AgentRecord]: ...
+
+    async def list_tool_names(self) -> set[str]: ...
 
 
 def _blocker_chips(
@@ -363,8 +330,23 @@ async def load_dashboard(
         "open", cast("list[TaskRecord] | BaseException", open_result), errors
     )
 
+    # Suspicion comes from the reads failing TOGETHER; the verdict comes from
+    # the server's tool list. Both frontier calls failing is already a degraded
+    # render, so the extra round-trip is cheap and never on the happy path.
+    tools_absent = False
+    if (
+        graph_available
+        and isinstance(ready_result, BaseException)
+        and isinstance(blocked_result, BaseException)
+    ):
+        tools_absent = await frontier_tools_absent(lithos)
+
     graph_available, frontier_ok, ready_list, blocked_records = _resolve_frontier(
-        ready_result, blocked_result, graph_available=graph_available, errors=errors
+        ready_result,
+        blocked_result,
+        graph_available=graph_available,
+        tools_absent=tools_absent,
+        errors=errors,
     )
 
     # Raw terminal ids (pre-filter): a task appearing in BOTH the open
@@ -517,7 +499,7 @@ async def load_dashboard(
 
     open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
     filters_narrowed = filters_narrow_the_board(filters)
-    corpus_empty = _is_corpus_empty(
+    nothing_to_show = _is_nothing_to_show(
         open_snapshot,
         closed_results,
         errors=errors,
@@ -551,7 +533,7 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
         graph_available=graph_available,
-        corpus_empty=corpus_empty,
+        nothing_to_show=nothing_to_show,
         errors=tuple(errors),
     )
 
@@ -564,9 +546,10 @@ def _frontier_reads(
 ) -> tuple[Awaitable[Any], Awaitable[Any]]:
     """The ready/blocked awaitables for one generation of the assembly.
 
-    A server already known to lack the frontier tools is not asked again (the
-    flat fallback is sticky for the process): two guaranteed failures per
-    render is pure cost, so the two gather slots are filled with placeholders.
+    A server whose tool list recently came back without the frontier tools is
+    not asked again until the caller's re-probe window lapses: two guaranteed
+    failures per render is pure cost, so the two gather slots are filled with
+    placeholders (the fallback still reports itself — see ``_resolve_frontier``).
     """
     if not graph_available:
         return _skipped_frontier_call(), _skipped_frontier_call()
@@ -581,30 +564,25 @@ def _resolve_frontier(
     blocked_result: Any,
     *,
     graph_available: bool,
+    tools_absent: bool,
     errors: list[str],
 ) -> tuple[bool, bool, list[TaskRecord], list[BlockedTaskRecord]]:
     """Read the two frontier responses into rows, verdicts, and error lines.
 
     Returns ``(graph_available, frontier_ok, ready_rows, blocked_rows)``.
-    Version skew is separated from an outage here: when BOTH frontier calls
-    failed because their TOOL is absent, the load drops to the flat fallback
-    (which carries its own notice) rather than rendering Ready/Blocked sections
-    it has no data for. Any other failure keeps the graph surface.
+    ``tools_absent`` is the confirmed ``tools/list`` verdict (see
+    ``frontier_tools_absent``); only that drops the load to the flat fallback.
+    Every other failure keeps the graph surface and reports itself.
 
-    Either way an error line is recorded. "The frontier tools are missing" is
-    also what an authorization filter or a server-side outage looks like from
-    here, and those must stay visible to the operator and to log-based
-    monitoring instead of being dressed up as a benign version notice.
+    The fallback is never silent — on the render that discovers it AND on every
+    render served from the caller's cached verdict. The same symptom is
+    produced by an outage or by the tools being withheld from this client, so
+    the condition has to stay continuously visible to the operator and to
+    log-based monitoring rather than being dressed up as a benign version
+    notice that lapses off the error channel.
     """
-    frontier_missing = graph_available and _frontier_tools_missing(
-        ready_result, blocked_result
-    )
-    if frontier_missing:
-        errors.append(
-            "Lithos reported the ready/blocked frontier tools as unavailable."
-        )
-        return False, False, [], []
-    if not graph_available:
+    if tools_absent or not graph_available:
+        errors.append(FRONTIER_UNAVAILABLE_ERROR)
         return False, False, [], []
 
     frontier_ok = True
@@ -623,22 +601,28 @@ def _resolve_frontier(
     return True, frontier_ok, ready_rows, blocked_rows
 
 
-def _is_corpus_empty(
+def _is_nothing_to_show(
     open_snapshot: list[TaskRecord],
     closed_results: tuple[list[TaskRecord] | BaseException, ...],
     *,
     errors: list[str],
     filters_narrowed: bool,
 ) -> bool:
-    """True when Lithos answered everything and returned nothing at all.
+    """True when Lithos answered everything and returned nothing for this view.
 
-    "Nothing at all" as opposed to "your filters hid everything", which the
+    "Nothing here" as opposed to "your filters hid everything", which the
     per-section empty lines already say. Three things must hold: no recorded
     error (an outage empties the snapshot too), an empty master open list
     (which is read unfiltered), and no narrowing filter — the two terminal
     reads DO push ``agent``/``tags`` upstream, so under a filter their
-    emptiness says nothing about the corpus. ``since`` is the one window that
-    survives, and the panel copy names it.
+    emptiness says nothing at all.
+
+    ``since`` is the one filter that survives this test, because it always has
+    a value and windowing the resolved sections is the dashboard's normal
+    posture rather than a narrowing choice. That is precisely why this is not a
+    statement about the corpus: work resolved before the window is invisible
+    here, so the panel this drives must name the window rather than claim there
+    are no tasks.
     """
     if errors or open_snapshot or filters_narrowed:
         return False

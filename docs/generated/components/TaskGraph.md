@@ -17,7 +17,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ## Public API
 
 ### `lithos_lens.frontier`
-- def `is_tool_missing_error` — True when ``exc`` says the server does not implement ``tool``.
+- def `frontier_tools_absent` — Ask the server whether it actually has the two frontier tools.
 - def `flat_open_sections` — Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
 - class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.

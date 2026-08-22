@@ -218,10 +218,13 @@ class DashboardData:
     # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
     graph_available: bool = True
     # True when Lithos answered every read successfully and returned nothing
-    # at all — no open tasks and nothing resolved in the window. Distinguishes
-    # "there is no work yet" from "your filters hid everything", which the
-    # per-section empty lines already say.
-    corpus_empty: bool = False
+    # for this view: no open tasks, and nothing resolved inside the ``since``
+    # window. Distinguishes "there is nothing here" from "your filters hid
+    # everything", which the per-section empty lines already say. Deliberately
+    # NOT a claim about the corpus — the terminal reads are windowed by
+    # ``since``, so work resolved before it is invisible to this flag and the
+    # panel it drives has to name the window.
+    nothing_to_show: bool = False
     errors: tuple[str, ...] = ()
 
     @property

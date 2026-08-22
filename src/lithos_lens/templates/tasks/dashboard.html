@@ -45,7 +45,7 @@
       {# The positive counterpart of the banners above: every read landed, the
          frontier was complete and self-consistent, claims came back for every
          row. T1-S3 extends this with "nothing needs attention". #}
-      {% if dashboard.healthy and not dashboard.corpus_empty %}
+      {% if dashboard.healthy and not dashboard.nothing_to_show %}
         <section class="banner banner-healthy" role="status" data-healthy-stripe>
           <strong>All systems healthy.</strong>
           <span>Every open task is classified; no failed reads, truncated frontier, or unresolved frontier disagreement.</span>
@@ -176,12 +176,15 @@
            re-renders the board with the task in its real section — a fresh
            task's frontier membership is unknown until Lithos answers. #}
         <div class="task-list task-list-pending" data-task-list="pending" aria-label="Just created, awaiting sections"></div>
-        {% if dashboard.corpus_empty %}
-          {# Nothing anywhere, not "nothing matched": the per-section
-             "no tasks match these filters" lines would be misleading here. #}
-          <article class="task-group task-board-empty" data-empty-state="corpus">
-            <h2>No tasks yet</h2>
-            <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. New tasks appear here as soon as an agent creates one.</p>
+        {% if dashboard.nothing_to_show %}
+          {# Nothing came back for this view, and no tag/agent/status filter is
+             narrowing it, so the per-section "no tasks match these filters"
+             lines would misdescribe the cause. The heading is scoped to the
+             one filter still in play: work resolved before the `since` window
+             is invisible here, so this must not claim the tracker is empty. #}
+          <article class="task-group task-board-empty" data-empty-state="window">
+            <h2>No tasks in this window</h2>
+            <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Created since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
           </article>
         {% else %}
         {% for section in section_order %}
