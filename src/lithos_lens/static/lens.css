@@ -268,6 +268,20 @@ small {
   margin-right: 0.65rem;
 }
 
+/* Submit + reset share one filter-bar cell (see dashboard.html): side by side
+   while they fit, wrapping within the cell rather than across the bar's rows. */
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.filter-actions > * {
+  /* Overrides the shared control width:100% so the pair can share one cell. */
+  flex: 1 1 auto;
+  width: auto;
+}
+
 .date-picker-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.9rem;

@@ -386,6 +386,31 @@ def test_dashboard_renders_filter_bar_before_task_groups(
     )
 
 
+def test_filter_bar_actions_stay_together_in_one_grid_cell(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (round-3 visual review): "Apply filters" and "Reset" are wrapped
+    in a single ``.filter-actions`` child of the filter bar. As two independent
+    grid items they were flowed by the same auto-fit column count as the fields,
+    so adding the Project filter (7 items, 3 columns at ~768px) orphaned Reset
+    onto a row of its own."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+        css = client.get("/static/lens.css")
+
+    assert response.status_code == 200
+    bar = response.text.split('class="filter-bar"')[1].split("</form>")[0]
+    # Both actions live in the one wrapper, and the wrapper is in the filter bar.
+    actions = bar.split('class="filter-actions"')[1].split("</div>")[0]
+    assert "Apply filters" in actions
+    assert 'href="/tasks">Reset</a>' in actions
+    # …and the container is laid out as one cell rather than falling back to
+    # two stacked full-width blocks.
+    assert ".filter-actions {" in css.text
+
+
 def test_dashboard_applies_tag_filter_after_lithos_returns_rows(
     lithos_lens_config_env: Path,
 ) -> None:
