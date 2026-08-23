@@ -62,7 +62,9 @@
           <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-in_progress') }}">
             <span>In progress</span>
             <strong>{{ dashboard.summary.in_progress }}</strong>
-            <small>{{ dashboard.summary.open_claims }} active claims</small>
+            {# Claims on the rows counted above, not the Lithos-wide stat:
+               the two numbers on one card must describe the same set. #}
+            <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
           </a>
           <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-ready') }}">
             <span>Ready</span>
@@ -81,7 +83,9 @@
           <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-open') }}">
             <span>Open tasks</span>
             <strong>{{ dashboard.summary.open_total }}</strong>
-            <small>{{ dashboard.summary.open_claims }} active claims</small>
+            {# Claims on the rows counted above, not the Lithos-wide stat:
+               the two numbers on one card must describe the same set. #}
+            <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
           </a>
         {% endif %}
         <a class="metric-card" href="{{ task_card_url(request, 'completed', dashboard.filters.since) }}">
@@ -164,6 +168,11 @@
             <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
           </span>
         </label>
+        {# Keep the epic scope across a filter submit — the chip strip owns it,
+           the form must not silently drop it. #}
+        {% if dashboard.epic_scope %}
+          <input type="hidden" name="epic" value="{{ dashboard.epic_scope }}">
+        {% endif %}
         {# The two actions are ONE grid child. As independent items they were
            laid out by the same auto-fit column count as the fields, so a field
            count that doesn't divide evenly (7 items across 3 columns, ~768px)
@@ -175,6 +184,53 @@
           <a class="button-secondary" href="/tasks">Reset</a>
         </div>
       </form>
+
+      {#
+        Epic rollup strip: one progress chip per open epic, counted over its
+        RECURSIVE subtree (lithos_task_children), so epics roll up instead of
+        polluting the open sections. A chip links to ?epic=<id>, which scopes
+        every section to that epic's descendants; the selected chip links back
+        out, so clicking it again clears the scope. The counts are whole-subtree
+        facts and deliberately ignore the other filters.
+      #}
+      {% if dashboard.epics %}
+        <section class="epic-strip" aria-label="Epics" data-epic-strip>
+          {% for epic in dashboard.epics %}
+            <a class="epic-chip{{ " epic-chip-selected" if epic.selected else "" }}"
+               href="{{ epic_scope_url(request, "" if epic.selected else epic.task.id) }}"
+               data-epic-chip="{{ epic.task.id }}"
+               {% if epic.selected %}aria-current="true"{% endif %}
+               title="{{ epic.task.title }} — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
+              <span class="epic-chip-title">{{ epic.task.title }}</span>
+              {# max=0 is invalid for <progress>; an epic with no (non-cancelled)
+                 children shows its count alone. #}
+              {% if epic.total %}
+                <progress class="epic-chip-bar" max="{{ epic.total }}" value="{{ epic.done }}"></progress>
+              {% endif %}
+              <span class="epic-chip-count" data-epic-progress>{{ epic.progress_label }}</span>
+            </a>
+          {% endfor %}
+        </section>
+      {% endif %}
+      {% if dashboard.scoped_epic and not dashboard.scoped_epic.descendant_ids %}
+        {# A confirmed childless epic IS a scope — an empty one. Every section
+           below is legitimately empty, which needs saying, or the board looks
+           broken. Distinct from "scope not applied" (nothing was scoped). #}
+        <section class="banner" role="status" data-epic-scope-empty>
+          <strong>Nothing under this epic yet.</strong>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; is open with no tasks in its subtree, so every section below is empty.</span>
+        </section>
+      {% endif %}
+      {% if dashboard.filters.epic and not dashboard.epic_scope %}
+        {# One wording for every cause — the epic is no longer open, its
+           children read failed, or it answered with an empty subtree (which a
+           just-closed epic is indistinguishable from). The board is unscoped in
+           all three, and only the errors banner distinguishes the read failure. #}
+        <section class="banner banner-warning" role="status" data-epic-scope-missing>
+          <strong>Epic scope not applied.</strong>
+          <span>Lens could not resolve any tasks under &ldquo;{{ dashboard.filters.epic }}&rdquo; — it may have closed — so every task is shown.</span>
+        </section>
+      {% endif %}
 
       {#
         Section order derives from the ready/blocked frontier, not claim-state
@@ -223,7 +279,7 @@
              is all roll-ups still has completed and cancelled rows to show. #}
           <article class="task-group task-board-empty" data-empty-state="rolled-up">
             <h2>Nothing to work on here</h2>
-            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics track their children, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
           </article>
         {% endif %}
         {% for section in section_order %}

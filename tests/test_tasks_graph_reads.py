@@ -25,6 +25,7 @@ from lithos_lens.lithos_tools import (
     ToolListError,
     collect_tool_names,
 )
+from lithos_lens.normalizers import normalize_task
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     BlockerRecord,
@@ -33,7 +34,6 @@ from lithos_lens.task_graph import (
     normalize_blocker,
     normalize_edge,
 )
-from lithos_lens.tasks import normalize_task
 from tests.conftest import load_contract
 
 # --- Normalizers: blocker kinds -------------------------------------------

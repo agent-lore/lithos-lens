@@ -26,6 +26,14 @@ from lithos_lens.knowledge import (
     normalize_search_result,
 )
 from lithos_lens.lithos_tools import collect_tool_names
+from lithos_lens.normalizers import (
+    normalize_agent,
+    normalize_finding,
+    normalize_note,
+    normalize_note_summary,
+    normalize_task,
+    normalize_task_status,
+)
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -39,12 +47,6 @@ from lithos_lens.tasks import (
     NoteSummary,
     TaskRecord,
     TaskStatusRecord,
-    normalize_agent,
-    normalize_finding,
-    normalize_note,
-    normalize_note_summary,
-    normalize_task,
-    normalize_task_status,
     note_updated_sort_key,
 )
 

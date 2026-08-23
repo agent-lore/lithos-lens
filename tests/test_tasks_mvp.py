@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from lithos_lens import state
 from lithos_lens.config import load_config
+from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
 from lithos_lens.fake_lithos import FAKE_TOOL_NAMES
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
@@ -1704,3 +1705,289 @@ def test_future_since_does_not_claim_the_tracker_is_empty(
     # Same server, a window that contains the work: the rows render.
     assert "Recently completed task" in in_window.text
     assert 'data-empty-state="window"' not in in_window.text
+
+
+def _with_epic(fake: TaskFakeLithosClient) -> TaskFakeLithosClient:
+    """Give the fake an epic over eight subtree tasks, five of them completed.
+
+    The three open children are placed on the ready frontier (the fake is the
+    readiness oracle) so they classify normally instead of tripping the
+    read-skew surface.
+    """
+    fake.tasks.append(
+        TaskRecord(
+            id="epic-1",
+            title="Storage migration",
+            status="open",
+            task_type="epic",
+            created_by="planner",
+            created_at="2026-04-27T10:00:00+00:00",
+        )
+    )
+    fake.tasks.extend(
+        TaskRecord(
+            id=f"epic-child-{n}",
+            title=f"Epic child {n}",
+            status="completed" if n <= 5 else "open",
+            created_by="worker",
+            created_at="2026-04-24T10:00:00+00:00",
+            resolved_at="2026-04-25T10:00:00+00:00" if n <= 5 else "",
+        )
+        for n in range(1, 9)
+    )
+    fake.children["epic-1"] = [f"epic-child-{n}" for n in range(1, 9)]
+    fake.ready_ids |= {"epic-child-6", "epic-child-7", "epic-child-8"}
+    return fake
+
+
+def _group(text: str, section: str) -> str:
+    start = text.index(f'data-task-group="{section}"')
+    return text[start:][: text[start:].index("</article>")]
+
+
+def test_epic_strip_chip_shows_recursive_subtree_progress(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-5 acceptance: an epic with 5 of 8 subtree tasks done renders a
+    ``5/8`` chip — and the epic itself never becomes a task row."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    strip = text[text.index("data-epic-strip") :]
+    strip = strip[: strip.index("</section>")]
+    assert 'data-epic-chip="epic-1"' in strip
+    assert "Storage migration" in strip
+    assert ">5/8<" in strip
+    assert 'max="8" value="5"' in strip
+    # The chip links the board at that epic; the epic is not a section row.
+    assert "epic=epic-1" in strip
+    assert 'data-task-id="epic-1"' not in text
+
+
+def test_clicking_an_epic_chip_scopes_the_sections_to_its_descendants(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-5 acceptance: following the chip's ``?epic=`` link leaves only the
+    epic's descendants on the board, and the active chip links back out so the
+    scope can be cleared."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unscoped = client.get("/tasks?since=2026-04-01")
+        scoped = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert unscoped.status_code == 200
+    assert "Unclaimed open task" in _group(unscoped.text, "ready")
+
+    assert scoped.status_code == 200
+    text = scoped.text
+    ready = _group(text, "ready")
+    assert "Epic child 6" in ready
+    # Everything outside the epic subtree is gone from every section.
+    assert "Unclaimed open task" not in text
+    assert "Claimed open task" not in text
+    assert "Recently completed task" not in text
+    assert "Epic child 1" in _group(text, "completed")
+    # The active chip is marked and toggles the scope off.
+    strip = text[text.index("data-epic-strip") :]
+    strip = strip[: strip.index("</section>")]
+    assert "epic-chip-selected" in strip
+    assert "epic=epic-1" not in strip
+    # A filter submit keeps the scope instead of silently dropping it.
+    assert '<input type="hidden" name="epic" value="epic-1">' in text
+
+
+def test_stale_epic_scope_shows_the_whole_board_with_a_notice(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A bookmark naming an epic that is no longer open must not render an
+    unexplained empty board: everything shows, with the reason stated."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-gone")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-missing" in text
+    assert "Unclaimed open task" in _group(text, "ready")
+
+
+def test_epic_scope_survives_tag_and_detail_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The scope is a live filter param, so the links generated on a scoped
+    board carry it (an epic-scoped tag click stays inside the epic)."""
+    fake = _with_epic(TaskFakeLithosClient())
+    fake.children["epic-1"].append("open-unclaimed")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    row = response.text[response.text.index('data-task-id="open-unclaimed"') :]
+    row = row[: row.index("</article>")]
+    assert "epic=epic-1" in row
+
+
+def _card(text: str, anchor: str) -> str:
+    """The situation card whose link carries ``anchor`` (an href or fragment)."""
+    return text.split(anchor)[1].split("</a>")[0]
+
+
+def test_situation_cards_keep_the_active_epic_scope_and_filters(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-002): the five situation cards are the dashboard's
+    primary navigation. On a scoped board they must stay inside the scope —
+    clicking a count used to drop ``epic=`` and show every epic again."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1&tag=project:influx")
+
+    assert response.status_code == 200
+    grid = response.text.split('aria-label="Current situation"')[1]
+    grid = grid[: grid.index("</section>")]
+    hrefs = [
+        chunk.split('"')[0] for chunk in grid.split('class="metric-card" href="')[1:]
+    ]
+    assert len(hrefs) == 5
+    for href in hrefs:
+        assert "epic=epic-1" in href
+        assert "tag=project%3Ainflux" in href
+        assert "since=2026-04-01" in href
+    # Each card still narrows to its own status.
+    assert sum("status=open" in href for href in hrefs) == 3
+    assert sum("status=completed" in href for href in hrefs) == 1
+    assert sum("status=cancelled" in href for href in hrefs) == 1
+
+
+def test_in_progress_card_claims_count_follows_the_scope(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-003): the claims line under the In-progress count must
+    describe the same rows as the count above it. The fake's Lithos-wide stat
+    reports one open claim on ``open-claimed``, which is outside the epic."""
+    fake = _with_epic(TaskFakeLithosClient())
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unscoped = client.get("/tasks?since=2026-04-01")
+        scoped = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    unscoped_card = _card(unscoped.text, "#task-group-in_progress")
+    assert "<strong>1</strong>" in unscoped_card
+    assert "1 active claim<" in unscoped_card
+
+    scoped_card = _card(scoped.text, "#task-group-in_progress")
+    # No claimed task inside the epic: both numbers must read zero.
+    assert "<strong>0</strong>" in scoped_card
+    assert "0 active claims" in scoped_card
+
+
+def test_in_progress_card_pluralizes_its_claim_count_like_the_row_chip(
+    lithos_lens_config_env: Path,
+) -> None:
+    """One quantity, one page, one spelling: the card used to hardcode the
+    plural, so the single claim in the fixture read "1 active claims" while the
+    row chip a few hundred pixels below said "1 claim". Now that the card
+    counts only the rendered rows, 0 and 1 are the ordinary case."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    card = _card(response.text, "#task-group-in_progress")
+    assert "1 active claim<" in card
+    assert "1 active claims" not in card
+    # The row chip's wording is the convention being matched.
+    assert "1 claim<" in response.text
+
+
+def test_epic_that_lost_its_subtree_between_reads_falls_back_unscoped(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-001) end to end: the epic is still in the open list but
+    has closed by the time its children are read, so that read comes back empty
+    and the confirming ``task_get`` answers the coded not-found. The board must
+    render whole with the explanation, not as an empty scoped page."""
+
+    class VanishedEpicClient(TaskFakeLithosClient):
+        async def task_get(self, task_id: str) -> TaskRecord:
+            # The epic was deleted after the open list was read.
+            if task_id == "epic-1":
+                raise LithosToolError("Task 'epic-1' not found.", code="task_not_found")
+            return await super().task_get(task_id)
+
+    fake = _with_epic(VanishedEpicClient())
+    fake.children["epic-1"] = []
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-missing" in text
+    assert "data-epic-scope-empty" not in text
+    assert "Unclaimed open task" in _group(text, "ready")
+    # The stale chip is gone with the scope it claimed.
+    assert 'data-epic-chip="epic-1"' not in text
+
+
+def test_every_open_epic_renders_a_chip(lithos_lens_config_env: Path) -> None:
+    """Story 8 at the rendering level: past one fan-out batch the strip keeps
+    going — every open epic still gets its chip, with no "partial strip"
+    caveat."""
+    fake = _with_epic(TaskFakeLithosClient())
+    extra = EPIC_FANOUT_BATCH * 2
+    for n in range(extra):
+        fake.tasks.append(
+            TaskRecord(
+                id=f"epic-extra-{n}",
+                title=f"Extra epic {n}",
+                status="open",
+                task_type="epic",
+                created_by="planner",
+                created_at="2026-04-27T10:00:00+00:00",
+            )
+        )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert text.count("data-epic-chip=") == extra + 1
+    assert 'data-epic-chip="epic-extra-0"' in text
+    assert f'data-epic-chip="epic-extra-{extra - 1}"' in text
+
+
+def test_childless_epic_scope_renders_an_explained_empty_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-001), the valid boundary: an open epic with no tasks
+    scopes to an EMPTY board — its descendant set really is empty — and the
+    page says so instead of looking broken or leaking other epics' work."""
+    fake = _with_epic(TaskFakeLithosClient())
+    fake.children["epic-1"] = []
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&epic=epic-1")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "data-epic-scope-empty" in text
+    assert "data-epic-scope-missing" not in text
+    assert "epic-chip-selected" in text
+    # No other epic's work leaked in.
+    assert "Unclaimed open task" not in text
+    assert "Claimed open task" not in text
+    # Regression: the board is SCOPED, so it cannot also make the system-wide
+    # claim — "Nothing under this epic yet" beside "All systems healthy" told
+    # the operator both that a slice was empty and that everything was fine.
+    assert "data-healthy-stripe" not in text
+    assert "All systems healthy" not in text

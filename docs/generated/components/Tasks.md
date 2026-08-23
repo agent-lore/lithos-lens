@@ -11,10 +11,19 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | S | 0 | 7 |
-| `lithos_lens.tasks` | L | 16 | 18 |
+| `lithos_lens.tasks` | L | 17 | 12 |
 
 ## Public API
+
+### `lithos_lens.normalizers`
+- def `normalize_task`
+- def `normalize_task_status`
+- def `normalize_finding`
+- def `normalize_agent`
+- def `normalize_note`
+- def `normalize_note_summary`
 
 ### `lithos_lens.task_filtering`
 - def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
@@ -36,6 +45,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
+- class `EpicRollup` — One open epic's progress chip in the dashboard's epic strip.
 - class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
 - class `TaskSummary`
 - class `DashboardData`
@@ -46,12 +56,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `load_task_detail`
 - def `find_task`
 - def `resolve_finding_notes`
-- def `normalize_task`
-- def `normalize_task_status`
-- def `normalize_finding`
-- def `normalize_agent`
-- def `normalize_note`
-- def `normalize_note_summary`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
 - def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.

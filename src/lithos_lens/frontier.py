@@ -9,6 +9,19 @@ carries an inline claim, else *Ready* or *Blocked* by frontier membership, else
 gates are excluded from both frontiers upstream, so they never enter the
 workable partition; their dedicated sections arrive in later T1 slices.
 
+Open epics roll up instead: EVERY open epic gets a ``lithos_task_children``
+read and a progress chip (``build_epic_rollup``), issued in bounded batches
+(``EPIC_FANOUT_BATCH``) so the fan-out cannot flood the shared MCP session or
+hold every subtree at once. The selected chip's descendant set scopes every
+section (``?epic=``). Those children reads are independent of the open read
+like every other call here, so a chip's counts may be one generation newer than
+the sections — harmless, because counts are display-only and never decide a
+row's placement. The SCOPE does decide placement, and there the generation gap
+is ambiguous: an epic that closed between the two reads answers with an empty
+subtree (per the ``lithos_task_children`` contract) and so does a genuinely
+childless open epic, which must scope to an empty board. One authoritative
+``lithos_task_get`` breaks that tie — see ``_is_open_epic``.
+
 ``classify_open_tasks`` is the pure join; ``load_dashboard`` is the five-call
 assembly that feeds it. Both live here (not in ``tasks.py``) because they depend
 on the task-graph records in ``task_graph.py``.
@@ -19,15 +32,24 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
 from typing import Any, Protocol, cast
 
+from lithos_lens.epic_strip import (
+    EpicStrip,
+    epic_scope_ids,
+    load_epic_rollups,
+)
 from lithos_lens.frontier_fallback import (
     RETRY_FAILED_ERROR,
     flat_open_sections,
     frontier_reads,
     frontier_tools_absent,
     resolve_frontier,
+)
+from lithos_lens.frontier_join import (
+    WORKABLE_TASK_TYPE,
+    classify_open_tasks,
+    reclassify_conservative,
 )
 from lithos_lens.task_filtering import (
     filters_narrow_the_board,
@@ -36,12 +58,10 @@ from lithos_lens.task_filtering import (
     project_convention_conflict,
     task_projects,
 )
-from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
+from lithos_lens.task_graph import BlockedTaskRecord
 from lithos_lens.tasks import (
     OPEN_SECTIONS,
     AgentRecord,
-    BlockerChip,
-    ClaimRecord,
     DashboardData,
     SectionName,
     SectionRow,
@@ -53,10 +73,6 @@ from lithos_lens.tasks import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Only ``task``-typed rows are workable. Epics and gates roll up / gate elsewhere
-# and are excluded from both Lithos frontiers, so they never classify here.
-WORKABLE_TASK_TYPE = "task"
 
 
 class FrontierLithosClient(Protocol):
@@ -90,99 +106,21 @@ class FrontierLithosClient(Protocol):
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]: ...
 
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]: ...
+
+    async def task_get(self, task_id: str) -> TaskRecord: ...
+
     async def stats(self) -> dict[str, Any]: ...
 
     async def list_agents(self) -> list[AgentRecord]: ...
 
     async def list_tool_names(self) -> set[str]: ...
-
-
-def _blocker_chips(
-    blockers: Sequence[BlockerRecord],
-    index: Mapping[str, TaskRecord],
-) -> tuple[BlockerChip, ...]:
-    """Render a blocked row's structured blockers as display chips.
-
-    Each chip's label is the blocking task's title when it resolves against the
-    open snapshot; otherwise a legible fallback (the predecessor/gate id, or the
-    raw blocker message) so a chip is never blank. Gate-name/type polish and the
-    unsatisfiable/cycle promotion out of Blocked are later T1 slices.
-    """
-    chips: list[BlockerChip] = []
-    for blocker in blockers:
-        predecessor = index.get(blocker.task_id)
-        if predecessor is not None:
-            label = predecessor.title
-        else:
-            label = blocker.task_id or blocker.message or blocker.kind
-        chips.append(
-            BlockerChip(label=label, kind=blocker.kind, target_id=blocker.task_id)
-        )
-    return tuple(chips)
-
-
-def classify_open_tasks(
-    open_tasks: Sequence[TaskRecord],
-    *,
-    ready_ids: set[str],
-    blocked: Sequence[BlockedTaskRecord],
-    index: Mapping[str, TaskRecord] | None = None,
-) -> dict[SectionName, tuple[SectionRow, ...]]:
-    """Join the master open list against the ready/blocked frontier.
-
-    Returns the three workable sections plus ``unclassified``. ``index`` (id →
-    task) resolves blocker-chip titles; it defaults to ``open_tasks`` but a
-    caller can pass the unfiltered snapshot so a filtered-out predecessor still
-    names its chip. Readiness is taken verbatim from ``ready_ids`` / ``blocked``
-    — never recomputed.
-    """
-    resolve = index if index is not None else {task.id: task for task in open_tasks}
-    blocked_map = {record.task.id: record.blockers for record in blocked}
-    buckets: dict[SectionName, list[SectionRow]] = {
-        "in_progress": [],
-        "ready": [],
-        "blocked": [],
-        "claims_unknown": [],
-        "unclassified": [],
-    }
-    for task in open_tasks:
-        if task.task_type != WORKABLE_TASK_TYPE:
-            continue
-        claims: tuple[ClaimRecord, ...] = task.claims or ()
-        chips = _blocker_chips(blocked_map.get(task.id, ()), resolve)
-        if claims:
-            # In progress wins over ready/blocked: a claim means an agent is on
-            # it. A claim on a blocked row is the anomaly flagged inline.
-            buckets["in_progress"].append(
-                SectionRow(
-                    task=task,
-                    claims=claims,
-                    blockers=chips,
-                    claimed_but_blocked=task.id in blocked_map,
-                )
-            )
-        elif task.claims is None:
-            # TaskRecord.claims: None means claims were NOT returned even
-            # though requested — the task might belong in In progress, so it
-            # must not sit in the Ready ("unclaimed and workable now") or
-            # Blocked counts. It renders in the dedicated claims-unknown group
-            # (visible, flagged, blocker chips kept for context) — the same
-            # degraded-data treatment as the read-skew rows. The bucket does
-            # not depend on frontier membership, so these rows never feed the
-            # truncation or skew signals either.
-            buckets["claims_unknown"].append(
-                SectionRow(task=task, blockers=chips, claims_unknown=True)
-            )
-        elif task.id in ready_ids:
-            buckets["ready"].append(SectionRow(task=task))
-        elif task.id in blocked_map:
-            buckets["blocked"].append(SectionRow(task=task, blockers=chips))
-        else:
-            # A workable open task in neither frontier set. With healthy reads
-            # this only happens under frontier-limit truncation; ``load_dashboard``
-            # decides whether to label it truncation (vs. a failed frontier read).
-            buckets["unclassified"].append(SectionRow(task=task))
-    return {section: tuple(rows) for section, rows in buckets.items()}
 
 
 async def load_dashboard(
@@ -196,7 +134,9 @@ async def load_dashboard(
 
     All seven independent reads fan out in ONE gather: the master open list
     (claims inline), the ready and blocked frontiers, stats, the agent list,
-    and the recently-resolved completed/cancelled windows. The only second
+    and the recently-resolved completed/cancelled windows. The epic-strip
+    children fan-out follows as a second (internally parallel) round-trip
+    because its epic ids come from the open list; the only other extra
     round-trip is the read-skew retry below — and only when the first pair of
     frontier responses is inconsistent below the limit.
 
@@ -315,12 +255,15 @@ async def load_dashboard(
         snapshot: list[TaskRecord],
         ready_rows: list[TaskRecord],
         blocked_rows: list[BlockedTaskRecord],
+        scope_ids: frozenset[str] | None,
     ) -> _FrontierState:
         index = {task.id: task for task in snapshot}
         visible = [
             task
             for task in snapshot
-            if matches_filters(task, filters=filters, status="open")
+            if matches_filters(
+                task, filters=filters, status="open", scope_ids=scope_ids
+            )
         ]
         ready_ids = {task.id for task in ready_rows}
         overlap = ready_ids & {record.task.id for record in blocked_rows}
@@ -364,12 +307,32 @@ async def load_dashboard(
             skewed_frontier or bool(terminal_overlap),
         )
 
+    # The epic strip depends on the open snapshot (its epic ids), so it is
+    # fetched here rather than in the main gather — and refetched below if the
+    # skew retry adopts a newer snapshot, so the strip lists the epics of the
+    # snapshot the sections were built from. The children reads themselves stay
+    # independent reads (see the module docstring): counts can be a generation
+    # newer, which is why only a non-empty subtree is allowed to scope.
+    #
+    # Skipped entirely when the server has no task graph: ``task_children`` is
+    # part of the same 0.4 surface as the frontier tools, so asking would buy
+    # one guaranteed failure per epic and an error banner for a server that
+    # simply predates the feature. A frontier OUTAGE is different — the tools
+    # exist, this is a different call, and it may well answer — so the strip is
+    # still attempted there.
+    strip = (
+        await load_epic_rollups(lithos, open_snapshot, selected=filters.epic)
+        if graph_available
+        else EpicStrip((), False)
+    )
+    scope_ids = epic_scope_ids(strip.rollups)
+
     # §14: a frontier READ failure renders the master open list flat too, not
     # just a missing-tools verdict. Half a frontier is not a classification —
     # rows would land in "Not classified", the tail whose banner explains it as
     # frontier-limit overflow, and an outage would read as truncation.
     if graph_available and frontier_ok:
-        state = _partition_state(open_snapshot, ready_list, blocked_records)
+        state = _partition_state(open_snapshot, ready_list, blocked_records, scope_ids)
 
         if frontier_ok and state.retry_worthy:
             # Read-skew between independent reads (a would-be-Ready task also in
@@ -402,14 +365,22 @@ async def load_dashboard(
                 )
                 ready_list = cast(list[TaskRecord], retry_ready)
                 blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
-                state = _partition_state(open_snapshot, ready_list, blocked_records)
+                # Re-read the strip against the adopted snapshot, so the chips
+                # list the epics of the generation the sections were built from.
+                strip = await load_epic_rollups(
+                    lithos, open_snapshot, selected=filters.epic
+                )
+                scope_ids = epic_scope_ids(strip.rollups)
+                state = _partition_state(
+                    open_snapshot, ready_list, blocked_records, scope_ids
+                )
 
         partition = state.partition
         at_limit = state.at_limit
         open_index = state.index
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
-            partition = _reclassify_conservative(partition, state.effective_overlap)
+            partition = reclassify_conservative(partition, state.effective_overlap)
     else:
         # Flat fallback — no usable frontier, whether because the tools are
         # absent (story 27) or because a read of them failed. Either way there
@@ -427,12 +398,17 @@ async def load_dashboard(
             [
                 task
                 for task in open_snapshot
-                if matches_filters(task, filters=filters, status="open")
+                if matches_filters(
+                    task, filters=filters, status="open", scope_ids=scope_ids
+                )
             ]
         )
         at_limit = False
         open_index = {task.id: task for task in open_snapshot}
         reconciliation_pending = False
+
+    if strip.failed:
+        errors.append("Could not load epic progress.")
 
     open_flat = not (graph_available and frontier_ok)
 
@@ -450,13 +426,15 @@ async def load_dashboard(
             1
             for task in open_snapshot
             if task.task_type != WORKABLE_TASK_TYPE
-            and matches_filters(task, filters=filters, status="open")
+            and matches_filters(
+                task, filters=filters, status="open", scope_ids=scope_ids
+            )
         )
     )
 
     closed: dict[str, list[TaskRecord]] = {}
     for status, result in zip(("completed", "cancelled"), closed_results, strict=True):
-        rows = _rows_for(status, result, filters, errors)
+        rows = _rows_for(status, result, filters, errors, scope_ids)
         # Exactly-one-row dedup: the (retried) master-open snapshot is the
         # authority on openness. A task still in the final open snapshot
         # renders in its open section only; a task absent from it renders in
@@ -503,7 +481,9 @@ async def load_dashboard(
         agents = tuple(cast(list[AgentRecord], agents_result))
 
     open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
-    filters_narrowed = filters_narrow_the_board(filters)
+    filters_narrowed = filters_narrow_the_board(
+        filters, scope_applied=scope_ids is not None
+    )
     nothing_to_show = _is_nothing_to_show(
         open_snapshot,
         closed_results,
@@ -517,7 +497,11 @@ async def load_dashboard(
         claims_unknown=len(partition["claims_unknown"]),
         unclassified=len(partition["unclassified"]),
         open_total=open_total,
-        open_claims=int_stat(stats, "open_claims"),
+        # Claims on the rows actually rendered In progress — NOT the Lithos-wide
+        # lithos_stats.open_claims. The card pairs this with the (filtered,
+        # possibly epic-scoped) In-progress count, so a global stat there would
+        # read "1 in progress / 10 active claims" on a scoped board.
+        active_claims=sum(len(row.claims) for row in partition["in_progress"]),
         recent_completed=len(closed["completed"]),
         recent_cancelled=len(closed["cancelled"]),
         agents=int_stat(stats, "agents", default=len(agents)),
@@ -543,6 +527,13 @@ async def load_dashboard(
         rolled_up_open=rolled_up_open,
         nothing_to_show=nothing_to_show,
         errors=tuple(errors),
+        epics=strip.rollups,
+        # An ``?epic=`` that resolves to no scope — no longer an open epic, its
+        # children read failed, or an empty subtree Lens could not confirm —
+        # shows the whole board with the template's explanation. A CONFIRMED
+        # childless epic is a real (empty) scope instead: an empty board, also
+        # explained.
+        epic_scope=filters.epic if scope_ids is not None else "",
     )
 
 
@@ -698,41 +689,6 @@ class _FrontierState:
         self.retry_worthy = retry_worthy
 
 
-def _reclassify_conservative(
-    partition: dict[SectionName, tuple[SectionRow, ...]],
-    overlap: set[str],
-) -> dict[SectionName, tuple[SectionRow, ...]]:
-    """Apply the conservative read-skew interpretation, flagged for the banner.
-
-    Unclaimed overlap rows (in BOTH frontier responses) leave Ready — the
-    ready-first classify branch had placed them there — and every unclassified
-    row joins them in Blocked: wrongly-Ready invites an operator to start work
-    that may be blocked; wrongly-Blocked merely defers attention. CLAIMED
-    overlap rows stay In progress with their blocked decoration kept, marked
-    awaiting reconciliation.
-    """
-    moved = [
-        replace(row, reconciliation_pending=True)
-        for row in partition["ready"]
-        if row.task.id in overlap
-    ] + [replace(row, reconciliation_pending=True) for row in partition["unclassified"]]
-    # A claimed overlap row stays In progress (the claim wins the section) and
-    # KEEPS its blocked decoration — the conservative interpretation — but is
-    # marked awaiting reconciliation so the badge/banner explain that the
-    # decoration may be read-skew rather than real blockage.
-    in_progress = tuple(
-        replace(row, reconciliation_pending=True) if row.task.id in overlap else row
-        for row in partition["in_progress"]
-    )
-    return {
-        **partition,
-        "in_progress": in_progress,
-        "ready": tuple(row for row in partition["ready"] if row.task.id not in overlap),
-        "blocked": partition["blocked"] + tuple(moved),
-        "unclassified": (),
-    }
-
-
 def _sorted_or_error(
     status: TaskStatusName,
     result: list[TaskRecord] | BaseException,
@@ -758,6 +714,7 @@ def _rows_for(
     result: list[TaskRecord] | BaseException,
     filters: TaskFilters,
     errors: list[str],
+    scope_ids: frozenset[str] | None = None,
 ) -> list[TaskRecord]:
     """Filter + sort one status group's rows, recording a load error if any.
 
@@ -771,7 +728,7 @@ def _rows_for(
     rows = [
         task
         for task in cast(list[TaskRecord], result)
-        if matches_filters(task, filters=filters, status=status)
+        if matches_filters(task, filters=filters, status=status, scope_ids=scope_ids)
     ]
     return sorted(
         rows, key=lambda task: task.resolved_at or task.created_at, reverse=True

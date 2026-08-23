@@ -45,8 +45,8 @@ State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_tools", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields"]
-Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback"]
+Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry"]
@@ -81,8 +81,8 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # Nothing else may cross 800 in the meantime — merging T1-S9/S10/S12 put
 # frontier.py at 904 and it was split (frontier_fallback) rather than admitted
 # here, which is what this allowance being a named exception is for.
-modules_over_800_lines = 1    # lithos_client (826); no other module may join it
-max_module_lines       = 830  # stop-loss just above today's largest, lithos_client (826)
+modules_over_800_lines = 1    # lithos_client (828); no other module may join it
+max_module_lines       = 830  # stop-loss just above today's largest, lithos_client (828)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

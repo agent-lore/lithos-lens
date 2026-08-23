@@ -249,6 +249,44 @@ class SectionRow:
 
 
 @dataclass(frozen=True)
+class EpicRollup:
+    """One open epic's progress chip in the dashboard's epic strip.
+
+    Built from ``lithos_task_children(recursive=True, include_closed=True)``:
+    ``done``/``total`` count only WORKABLE (``task``-typed) descendants —
+    nested epics and gates are structure, not units of work, and counting a
+    sub-epic would double-count its own children. ``total`` excludes cancelled
+    descendants (work that will never be done must not hold the bar under 100%
+    forever); ``cancelled`` keeps that count visible rather than silent.
+    ``descendant_ids`` holds EVERY descendant id whatever its type — a gate or
+    sub-epic is still part of the initiative — and is what the ``?epic=``
+    scope filters the sections by. On a strip assembled by ``frontier`` it is
+    populated only for the ``selected`` epic: nothing reads another epic's set,
+    and the subtree reads include closed tasks, so keeping them all would hold
+    an id for every task ever closed under every epic.
+
+    Counts are whole-subtree facts, so they are deliberately unaffected by the
+    tag/agent/since filters applied to the sections.
+    """
+
+    task: TaskRecord
+    done: int = 0
+    total: int = 0
+    cancelled: int = 0
+    descendant_ids: frozenset[str] = frozenset()
+    selected: bool = False
+
+    @property
+    def progress_label(self) -> str:
+        return f"{self.done}/{self.total}"
+
+    @property
+    def percent(self) -> int:
+        """Completed share of the non-cancelled subtree, 0-100 (0 when empty)."""
+        return round(self.done * 100 / self.total) if self.total else 0
+
+
+@dataclass(frozen=True)
 class TaskFilters:
     """The live ``/tasks`` filter vocabulary, parsed from the query string.
 
@@ -263,6 +301,10 @@ class TaskFilters:
     tags: tuple[str, ...]
     agent: str
     since: str
+    # ``?epic=<id>`` — scope every section to one epic's descendants. Empty
+    # means "no epic scope"; an id that is no longer an open epic resolves to
+    # no scope at all (``DashboardData.epic_scope``), not an empty board.
+    epic: str = ""
     projects: tuple[str, ...] = ()
     project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
     project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
@@ -278,7 +320,11 @@ class TaskSummary:
     claims_unknown: int = 0
     unclassified: int = 0
     open_total: int = 0
-    open_claims: int = 0
+    # Claims held by the rows rendered In progress. Deliberately NOT the
+    # Lithos-wide lithos_stats.open_claims: this sits under the In-progress
+    # count on the situation card, which is filtered (and can be epic-scoped),
+    # so a server-wide figure would contradict the number above it.
+    active_claims: int = 0
     recent_completed: int = 0
     recent_cancelled: int = 0
     agents: int = 0
@@ -328,6 +374,18 @@ class DashboardData:
     # panel it drives has to name the window.
     nothing_to_show: bool = False
     errors: tuple[str, ...] = ()
+    # One rollup per open epic, in open-snapshot (newest-first) order.
+    epics: tuple[EpicRollup, ...] = ()
+    # The epic id the sections are actually scoped to — empty when no ``?epic=``
+    # was asked for OR when the requested epic is no longer an open epic, which
+    # the template explains instead of rendering a silently empty board.
+    epic_scope: str = ""
+
+    @property
+    def scoped_epic(self) -> EpicRollup | None:
+        """The epic chip the board is scoped to, if any (the template's handle
+        on it — e.g. to explain a confirmed-childless epic's empty board)."""
+        return next((epic for epic in self.epics if epic.selected), None)
 
     @property
     def rolled_up_only(self) -> bool:
@@ -488,6 +546,9 @@ def parse_filters(
         tags=tuple(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        # The epic strip scopes to ONE epic at a time (a chip click), so only
+        # the first ``epic`` value is honored.
+        epic=(values.get("epic") or [""])[0],
         # Multi-select: ``?project=x&project=y`` (and the comma form) select
         # the union of those projects, not their intersection.
         projects=tuple(values.get("project", [])),
@@ -582,102 +643,6 @@ async def resolve_finding_notes(
             )
         )
     return tuple(views)
-
-
-def normalize_task(raw: dict[str, Any]) -> TaskRecord:
-    status_raw = str(raw.get("status") or "open")
-    status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
-    # Raw passthrough: only a MISSING/empty task_type defaults to "task"
-    # (legacy payloads); an unknown explicit value survives round-trip.
-    task_type = str(raw.get("task_type") or "task")
-    claims: tuple[ClaimRecord, ...] | None = None
-    if "claims" in raw and raw["claims"] is not None:
-        claims = tuple(
-            ClaimRecord(
-                agent=str(claim.get("agent") or ""),
-                aspect=str(claim.get("aspect") or ""),
-                expires_at=str(claim.get("expires_at") or ""),
-            )
-            for claim in raw["claims"]
-            if isinstance(claim, dict)
-        )
-    return TaskRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or "Untitled task"),
-        description=str(raw.get("description") or ""),
-        status=status,
-        created_by=str(raw.get("created_by") or raw.get("agent") or ""),
-        created_at=str(raw.get("created_at") or ""),
-        tags=tuple(str(tag) for tag in raw.get("tags") or []),
-        metadata=dict(raw.get("metadata") or {}),
-        outcome=str(raw.get("outcome") or ""),
-        completed_at=str(raw.get("completed_at") or ""),
-        task_type=task_type,
-        resolved_at=str(raw.get("resolved_at") or ""),
-        claims=claims,
-    )
-
-
-def normalize_task_status(raw: dict[str, Any]) -> TaskStatusRecord:
-    return TaskStatusRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        status=str(raw.get("status") or ""),
-        claims=tuple(
-            ClaimRecord(
-                agent=str(claim.get("agent") or ""),
-                aspect=str(claim.get("aspect") or ""),
-                expires_at=str(claim.get("expires_at") or ""),
-            )
-            for claim in raw.get("claims") or []
-            if isinstance(claim, dict)
-        ),
-        metadata=dict(raw.get("metadata") or {}),
-    )
-
-
-def normalize_finding(raw: dict[str, Any], task_id: str) -> FindingRecord:
-    return FindingRecord(
-        id=str(raw.get("id") or ""),
-        task_id=str(raw.get("task_id") or task_id),
-        agent=str(raw.get("agent") or ""),
-        summary=str(raw.get("summary") or ""),
-        knowledge_id=str(raw.get("knowledge_id") or ""),
-        created_at=str(raw.get("created_at") or ""),
-    )
-
-
-def normalize_agent(raw: dict[str, Any]) -> AgentRecord:
-    return AgentRecord(
-        id=str(raw.get("id") or ""),
-        name=str(raw.get("name") or ""),
-        type=str(raw.get("type") or ""),
-        last_seen_at=str(raw.get("last_seen_at") or ""),
-    )
-
-
-def normalize_note(raw: dict[str, Any]) -> NoteRecord:
-    metadata = dict(raw.get("metadata") or {})
-    tags = raw.get("tags") or metadata.get("tags") or []
-    return NoteRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or "Untitled document"),
-        content=str(raw.get("content") or ""),
-        tags=tuple(str(tag) for tag in tags),
-        metadata=metadata,
-    )
-
-
-def normalize_note_summary(raw: dict[str, Any]) -> NoteSummary:
-    metadata = dict(raw.get("metadata") or {})
-    tags = raw.get("tags") or metadata.get("tags") or []
-    return NoteSummary(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        path=str(raw.get("path") or ""),
-        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
-        tags=tuple(str(tag) for tag in tags),
-    )
 
 
 def note_updated_sort_key(updated: str) -> datetime:

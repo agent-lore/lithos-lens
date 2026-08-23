@@ -36,10 +36,12 @@ python -m lithos_lens
 ```
 
 The Tasks dashboard is available at `/tasks` and is also the current root view.
-It reads from Lithos using `lithos_task_list`, `lithos_task_status`,
+It reads from Lithos using `lithos_task_list`, `lithos_task_ready`,
+`lithos_task_blocked`, `lithos_task_children`, `lithos_task_status`,
 `lithos_finding_list`, `lithos_read`, `lithos_stats`, and
-`lithos_agent_list`. Lens does not create, claim, mutate, complete, or cancel
-tasks. Browser tabs receive normalized live events from `/tasks/events`; Lens
+`lithos_agent_list`. Open epics roll up into a progress strip above the
+sections; clicking a chip (`?epic=<id>`) scopes the whole board to that epic's
+descendants. Lens does not create, claim, mutate, complete, or cancel tasks. Browser tabs receive normalized live events from `/tasks/events`; Lens
 itself holds the single server-side subscription to Lithos `/events`.
 
 ## Configuration
