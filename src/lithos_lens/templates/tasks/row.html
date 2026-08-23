@@ -17,8 +17,10 @@
     {% if row.task.created_by %}
       <span>{{ row.task.created_by }}</span>
     {% endif %}
-    {% if row.task.created_at %}
-      <time datetime="{{ row.task.created_at }}">{{ row.task.created_at[:16].replace("T", " ") }}</time>
+    {% if row.timestamp %}
+      {# Terminal sections are windowed/sorted on resolved_at, so their rows
+         show it — labelled, because created and resolved differ. #}
+      <time datetime="{{ row.timestamp }}" data-timestamp-kind="{{ row.timestamp_label }}">{{ row.timestamp_label }} {{ row.timestamp[:16].replace("T", " ") }}</time>
     {% endif %}
     {% if row.claim_state == "known_claimed" %}
       <span class="claim-chip" data-claim-summary>{{ row.claims | length }} claim{{ "s" if (row.claims | length) != 1 else "" }}</span>

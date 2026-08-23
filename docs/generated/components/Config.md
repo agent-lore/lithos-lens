@@ -11,7 +11,8 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | L | 0 | 2 |
+| `lithos_lens.config` | M | 0 | 2 |
+| `lithos_lens.config_fields` | S | 0 | 5 |
 | `lithos_lens.config_schema` | S | 11 | 1 |
 
 ## Public API
@@ -19,6 +20,13 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 ### `lithos_lens.config`
 - def `find_config_path` — Return the first existing ``lithos-lens.toml`` in the discovery order.
 - def `load_config` — Load, validate, and return a ``LithosLensConfig``.
+
+### `lithos_lens.config_fields`
+- def `optional_str`
+- def `optional_path`
+- def `optional_int`
+- def `optional_bool`
+- def `optional_status_groups`
 
 ### `lithos_lens.config_schema`
 - def `parse_log_level` — Validate and narrow a string to a ``LogLevel`` literal.

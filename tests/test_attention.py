@@ -509,3 +509,36 @@ def test_degraded_rows_are_never_promoted() -> None:
     assert _section_ids(sections, "attention") == []
     assert _section_ids(sections, "claims_unknown") == ["u"]
     assert _section_ids(sections, "unclassified") == ["n"]
+
+
+def test_promoted_gate_keeps_claims_unknown_when_claims_were_not_returned() -> None:
+    """A gate promoted by rule 3 must not claim to be unclaimed.
+
+    ``TaskRecord.claims=None`` means the read did not return claims — the
+    degraded case a server that ignores ``with_claims`` produces. Collapsing it
+    to ``()`` gave the promoted row ``claim_state == "known_unclaimed"``, i.e. a
+    confident "unclaimed" chip over data Lens does not have.
+    """
+    gate = TaskRecord(
+        id="gate-1",
+        title="Sign-off",
+        status="open",
+        task_type="gate",
+        created_by="planner",
+        created_at=_ago(days=3),
+        metadata={"gate_type": "human"},
+        claims=None,
+    )
+
+    sections = flag_attention(
+        {"in_progress": (), "ready": (), "blocked": ()},
+        [gate],
+        blocked=[],
+        policy=AttentionPolicy(),
+        now=_NOW,
+        index={gate.id: gate},
+    )
+
+    (row,) = sections["attention"]
+    assert row.claims_unknown is True
+    assert row.claim_state == "unknown"

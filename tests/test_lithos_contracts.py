@@ -482,6 +482,27 @@ def test_canonical_request_and_payload_round_trip(tool: str) -> None:
     check(result, contract["responses"]["success"])
 
 
+def test_list_tasks_resolved_window_sends_the_vendored_variant_request() -> None:
+    """The dashboard's Completed/Cancelled window is lithos_task_list's second
+    request shape (the ``resolved_window`` variant): resolved_since instead of
+    since, so terminal rows are windowed by resolution time."""
+    contract = load_contract("lithos_task_list")
+    payload = contract["responses"]["success"]
+    result, calls = _run(
+        payload,
+        lambda c: c.list_tasks(
+            agent="planner",
+            status="completed",
+            tags=["project:influx"],
+            resolved_since="2026-07-01T00:00:00+00:00",
+        ),
+    )
+    assert calls == [
+        ("lithos_task_list", contract["request"]["variants"]["resolved_window"])
+    ]
+    _check_task_list(result, payload)
+
+
 def test_read_note_by_path_sends_the_vendored_variant_request() -> None:
     """The by-path probe (wiki-link resolver) is a distinct request shape,
     vendored as lithos_read's ``by_path`` request variant."""

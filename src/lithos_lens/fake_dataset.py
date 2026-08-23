@@ -227,6 +227,19 @@ def demo_dataset() -> FakeLithosDataset:
     }
 
     tasks: tuple[TaskRecord, ...] = (
+        # The rollup epic: never a section row (epics are excluded from both
+        # frontiers), it renders as the epic strip's progress chip over its
+        # recursive subtree — every influx task below is a descendant.
+        TaskRecord(
+            id="influx-epic",
+            title="Influx storage migration",
+            description="Umbrella epic for the Influx cutover programme.",
+            status="open",
+            task_type="epic",
+            created_by="planner",
+            created_at="2026-08-07T09:00:00+00:00",
+            tags=("project:influx",),
+        ),
         TaskRecord(
             id="influx-ingest-cutover",
             title="Cut over Influx ingest path",
@@ -287,6 +300,19 @@ def demo_dataset() -> FakeLithosDataset:
             resolved_at="2026-08-05T17:00:00+00:00",
             tags=("project:lithos-lens", "milestone:k1"),
         ),
+        # Completed BEFORE the demo since-window on purpose: it is invisible in
+        # the Completed section yet still counts in the epic chip, which is the
+        # rollup contract (subtree facts ignore the section filters).
+        TaskRecord(
+            id="influx-schema-design",
+            title="Design the Influx replacement schema",
+            status="completed",
+            outcome="Schema agreed and documented.",
+            created_by="worker-a",
+            created_at="2026-07-18T09:00:00+00:00",
+            resolved_at="2026-07-25T15:00:00+00:00",
+            tags=("project:influx", "area:data"),
+        ),
         TaskRecord(
             id="influx-spike",
             title="Spike Influx client options",
@@ -333,6 +359,19 @@ def demo_dataset() -> FakeLithosDataset:
                     status="open",
                     message="Waiting on the ingest cutover to land.",
                 ),
+            ),
+        },
+        # Epic subtree for the rollup strip (lithos_task_children): four open
+        # tasks, one completed, one cancelled -> the chip reads 1/5 (cancelled
+        # work leaves the denominator).
+        children={
+            "influx-epic": (
+                "influx-schema-design",
+                "influx-ingest-cutover",
+                "influx-backfill",
+                "influx-dashboards",
+                "influx-ingest-old",
+                "influx-spike",
             ),
         },
         edges={

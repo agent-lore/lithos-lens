@@ -177,9 +177,24 @@ classDiagram
   class DashboardData {
     +frontier_limit int
     +open_total int
+    +projects tuple[str, ...]
     +reconciliation_pending bool
     +truncated bool
+    +filters_narrowed bool
+    +open_side_narrowed bool
+    +graph_available bool
+    +open_flat bool
+    +rolled_up_open int
+    +nothing_to_show bool
     +errors tuple[str, ...]
+    +epic_scope str
+  }
+  class EpicRollup {
+    +done int
+    +total int
+    +cancelled int
+    +descendant_ids frozenset[str]
+    +selected bool
   }
   class FindingRecord {
     +id str
@@ -223,6 +238,10 @@ classDiagram
     +tags tuple[str, ...]
     +agent str
     +since str
+    +epic str
+    +projects tuple[str, ...]
+    +project_convention ProjectConvention
+    +project_tag_key str
   }
   class TaskRecord {
     +id str
@@ -252,15 +271,17 @@ classDiagram
     +claims_unknown int
     +unclassified int
     +open_total int
-    +open_claims int
+    +active_claims int
     +recent_completed int
     +recent_cancelled int
     +agents int
   }
   DashboardData "1" --> "0..*" AgentRecord : agents
+  DashboardData "1" --> "0..*" EpicRollup : epics
   DashboardData "1" --> "0..*" SectionRow : sections
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
+  EpicRollup "1" --> "1" TaskRecord : task
   FindingView "1" --> "1" FindingRecord : finding
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers

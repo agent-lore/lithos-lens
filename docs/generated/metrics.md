@@ -14,14 +14,14 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 27 | 27 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 794 | 800 | 6 |
+| `max_module_lines` | 828 | 830 | 2 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 0 | 0 | 0 |
+| `modules_over_800_lines` | 1 | 1 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **27** (43 module-level)
+- Cross-component edges: **27** (52 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 8 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Web -> Config, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -34,42 +34,43 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 2 | 910 | 751 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 3 | 997 | 822 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
 | Knowledge | 3 | 1057 | 806 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
-| LithosClient | 3 | 1670 | 1381 | 2 | 5 | 0.71 | 16 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
+| LithosClient | 4 | 1843 | 1514 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
-| State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 3 | 1017 | 799 | 2 | 1 | 0.33 | 32 (`lithos_lens.frontier.load_dashboard`) | 4 |
-| Tasks | 1 | 636 | 494 | 5 | 0 | 0.00 | 23 (`lithos_lens.tasks.normalize_task`) | 3 |
+| State | 1 | 99 | 70 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
+| TaskGraph | 6 | 1803 | 1379 | 2 | 1 | 0.33 | 48 (`lithos_lens.frontier.load_dashboard`) | 4 |
+| Tasks | 4 | 1204 | 898 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 498 | 432 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
+| Web | 1 | 560 | 484 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **21**, lines: **6248**, SLOC: **5030**
-- Largest module: `lithos_lens.lithos_client` (794 lines)
-- Modules over 800 lines: **0**
+- Modules: **29**, lines: **7952**, SLOC: **6284**
+- Largest module: `lithos_lens.lithos_client` (828 lines)
+- Modules over 800 lines: **1**
+  - `lithos_lens.lithos_client`
 
 ## Complexity
 
-- Functions: **258**, cyclomatic > 10: **15**
+- Functions: **310**, cyclomatic > 10: **15**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
-| 32 | `lithos_lens.frontier.load_dashboard` |
+| 48 | `lithos_lens.frontier.load_dashboard` |
 | 25 | `lithos_lens.config._apply_env_overrides` |
-| 23 | `lithos_lens.tasks.normalize_task` |
+| 23 | `lithos_lens.normalizers.normalize_task` |
+| 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 17 | `lithos_lens.attention._attention_reasons` |
-| 16 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
+| 15 | `lithos_lens.task_filtering.matches_filters` |
 | 13 | `lithos_lens.fake_lithos.FakeLithosClient.list_notes` |
 | 13 | `lithos_lens.knowledge._gather_candidates` |
 | 13 | `lithos_lens.lithos_client.LithosClient.recent_notes` |
-| 12 | `lithos_lens.frontier.classify_open_tasks` |
 | 12 | `lithos_lens.frontier.load_dashboard._partition_state` |
 
 ## Seams
@@ -82,5 +83,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **32** (28 associations, 15 without docstrings)
-- Test-to-source line ratio: **1.74** (10899 test lines / 6248 source lines)
+- Domain models: **33** (30 associations, 14 without docstrings)
+- Test-to-source line ratio: **1.78** (14115 test lines / 7952 source lines)

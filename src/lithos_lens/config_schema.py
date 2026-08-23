@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Literal, cast
 
 from lithos_lens.errors import ConfigError
-from lithos_lens.tasks import TASK_STATUSES, TaskStatusName
+from lithos_lens.tasks import (
+    DEFAULT_PROJECT_CONVENTION,
+    DEFAULT_PROJECT_TAG_KEY,
+    MAX_SINCE_LOOKBACK_DAYS,
+    TASK_STATUSES,
+    ProjectConvention,
+    TaskStatusName,
+)
 
 # ── Literal types + validators ─────────────────────────────────────────
 
@@ -64,7 +71,10 @@ MAX_TASKS_INT_KNOBS: dict[str, int] = {
     "stale_open_age_days": 3650,
     "unclaimed_ready_age_minutes": 10080,
     # -> tasks.default_since(days) -> timedelta(days=...), twice per /tasks.
-    "default_time_range_days": 3650,
+    # Bounded by T1-S10's window ceiling rather than the overflow-safe 3650:
+    # ``lithos_task_list`` takes no row limit, so this window is the ONLY bound
+    # on the two terminal reads, and terminal history only ever grows.
+    "default_time_range_days": MAX_SINCE_LOOKBACK_DAYS,
 }
 DEFAULT_LLM_MAX_TOKENS = 2048
 DEFAULT_HEALTH_REFRESH_INTERVAL_S = 30
@@ -126,6 +136,11 @@ class TasksConfig:
     stale_open_age_days: int = DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
     unclaimed_ready_age_minutes: int = DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
+    # Which project convention the /tasks project filter honours (§5B.1):
+    # "metadata" (metadata.project), "tag" (project:<slug>), or "both" (union).
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    # Tag key reserved for the tag convention, per deployment (§5B.9).
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)

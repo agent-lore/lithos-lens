@@ -230,6 +230,11 @@ def _waiting_human_gates(
             SectionRow(
                 task=task,
                 claims=task.claims or (),
+                # ``claims=None`` means the read did not return claims, not
+                # that there are none: without this the promoted gate renders
+                # a confident "unclaimed" chip (SectionRow.claim_state), which
+                # is the one thing the claims-unknown contract forbids.
+                claims_unknown=task.claims is None,
                 attention=(
                     AttentionReason(
                         rule="gate-waiting",

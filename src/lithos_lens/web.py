@@ -40,13 +40,15 @@ from lithos_lens.lithos_client import (
     LithosClientProtocol,
     LithosToolError,
 )
-from lithos_lens.state import AppState
+from lithos_lens.state import GRAPH_REPROBE_INTERVAL_S, AppState
+from lithos_lens.task_detail import (
+    find_task,
+    load_task_detail,
+)
 from lithos_lens.tasks import (
     default_since,
-    find_task,
     format_display_date,
     format_tag,
-    load_task_detail,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -103,6 +105,8 @@ def create_app(
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
+    templates.env.globals["epic_scope_url"] = epic_scope_url
+    templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
 
@@ -396,6 +400,8 @@ async def _render_tasks(
             query_items,
             state.config.tasks.default_time_range_days,
             state.config.tasks.default_status_groups,
+            project_convention=state.config.tasks.project_convention,
+            project_tag_key=state.config.tasks.project_tag_key,
         )
         logger.debug(
             "tasks dashboard filters parsed",
@@ -403,13 +409,16 @@ async def _render_tasks(
                 "lens_route": str(request.url.path),
                 "query_items": query_items,
                 "statuses": list(filters.statuses),
+                "projects": list(filters.projects),
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "epic": filters.epic,
                 "frontier_limit": state.config.tasks.frontier_limit,
             },
         )
         tasks_config = state.config.tasks
+        probed_graph = state.graph_available
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
@@ -420,15 +429,30 @@ async def _render_tasks(
                 stale_open_age_days=tasks_config.stale_open_age_days,
                 unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
             ),
+            graph_available=probed_graph,
         )
+        if probed_graph and not dashboard.graph_available:
+            # Only a render that actually PROBED may (re-)open the window;
+            # re-arming it from a cached verdict would make the fallback
+            # permanent again. The warning is per probe, not per request, so
+            # the log shows how long the frontier has really been gone.
+            logger.warning(
+                "Lithos did not answer the task-graph frontier reads; serving "
+                "the flat task list and re-probing in %ss (graph features need "
+                "Lithos >= 0.4, or the tools are unavailable to this client)",
+                GRAPH_REPROBE_INTERVAL_S,
+            )
+            state.note_graph_unavailable()
         logger.debug(
             "tasks dashboard loaded",
             extra={
                 "lens_route": str(request.url.path),
                 "statuses": list(filters.statuses),
+                "projects": list(filters.projects),
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "epic_scope": dashboard.epic_scope,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
                 "attention": dashboard.summary.attention,
@@ -436,6 +460,8 @@ async def _render_tasks(
                     section: len(rows) for section, rows in dashboard.sections.items()
                 },
                 "truncated": dashboard.truncated,
+                "graph_available": dashboard.graph_available,
+                "nothing_to_show": dashboard.nothing_to_show,
                 "errors": list(dashboard.errors),
             },
         )
@@ -456,7 +482,7 @@ async def _render_tasks(
 # query from this allowlist, so a retired param (e.g. the pre-T1
 # ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
 # of propagating through tag / detail / back-link navigation forever.
-_PRESERVED_FILTER_KEYS = ("status", "agent", "since", "tag")
+_PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
 
 
 def _preserved_filter_params(
@@ -479,6 +505,42 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def epic_scope_url(request: Request, epic_id: str) -> str:
+    """Link an epic chip to the dashboard scoped to that epic — or unscoped.
+
+    An empty ``epic_id`` clears the scope, which is what the SELECTED chip
+    links to: clicking the active epic toggles its scope back off. Only one
+    epic scopes the board at a time, so the incoming ``epic`` param is replaced
+    rather than appended.
+    """
+    params = _preserved_filter_params(request, exclude="epic")
+    if epic_id:
+        params.append(("epic", epic_id))
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
+
+
+def task_card_url(request: Request, status: str, since: str, anchor: str = "") -> str:
+    """Link a summary card to the board it actually counts.
+
+    The card's number is computed over the ACTIVE filters, so the link has to
+    carry them: project/tag/agent — and the epic scope — ride along (rebuilt
+    from the request through the same allowlist as every other generated tasks
+    URL), the card supplies
+    the status it counts, and ``since`` is the resolved window this page is
+    showing rather than whatever the request did or did not say. Dropping the
+    filters made the card a lie by one click: the count described the filtered
+    board, the destination showed the unfiltered one.
+    """
+    params = [
+        (key, value)
+        for key, value in _preserved_filter_params(request)
+        if key not in {"status", "since"}
+    ]
+    params.append(("status", status))
+    params.append(("since", since))
+    return f"/tasks?{urlencode(params)}{anchor}"
 
 
 def tasks_url(request: Request) -> str:
