@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
+from lithos_lens.fake_lithos import FAKE_TOOL_NAMES
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
@@ -43,6 +44,9 @@ class RecordingLithosClient:
     async def register_agent(self) -> bool:
         self.register_calls += 1
         return True
+
+    async def list_tool_names(self) -> set[str]:
+        return set(FAKE_TOOL_NAMES)
 
     async def list_tasks(
         self,

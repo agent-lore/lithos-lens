@@ -25,6 +25,7 @@ from lithos_lens.knowledge import (
     normalize_related,
     normalize_search_result,
 )
+from lithos_lens.lithos_tools import collect_tool_names
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     EdgeRecord,
@@ -83,6 +84,8 @@ class LithosClientProtocol(Protocol):
     async def health(self) -> LithosHealth: ...
 
     async def register_agent(self) -> bool: ...
+
+    async def list_tool_names(self) -> set[str]: ...
 
     async def list_tasks(
         self,
@@ -657,6 +660,40 @@ class LithosClient:
             normalize_search_result(item) for item in rows if isinstance(item, dict)
         ]
 
+    async def list_tool_names(self) -> set[str]:
+        """Every tool name this server advertises (MCP ``tools/list``).
+
+        The authoritative answer to "does this Lithos have <tool>", for
+        task-graph feature detection — which must never be decided from error
+        TEXT, since a tool's error payload can quote task data written by an
+        agent far less privileged than the Lens operator.
+
+        Raises when no session is up (no throwaway fallback, unlike
+        ``_call_tool``, and no waiting): a listing Lens could not make says
+        nothing about the server, and failure is never absence.
+        """
+        return await collect_tool_names(await self._live_session(wait_s=0.0))
+
+    async def _live_session(self, *, wait_s: float = _SESSION_WAIT_TIMEOUT_S) -> Any:
+        """The worker's MCP session, waiting up to ``wait_s`` for startup.
+
+        ``wait_s=0`` asks only whether a session exists right now: the probe
+        runs after other reads already failed, so waiting again buys nothing
+        and doubles an unauthenticated request's hold during an outage.
+        """
+        if not self._session_ready.is_set():
+            if wait_s <= 0:
+                raise LithosToolError("Lithos MCP session is not available")
+            try:
+                await asyncio.wait_for(self._session_ready.wait(), timeout=wait_s)
+            except TimeoutError as exc:
+                raise LithosToolError("Lithos MCP session is not available") from exc
+
+        session = self._session
+        if session is None:
+            raise LithosToolError("Lithos MCP session is not available")
+        return session
+
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._worker_task is None:
             # startup() was never called; fall back to a one-shot session so
@@ -664,17 +701,7 @@ class LithosClient:
             result = await self._call_tool_oneshot(name, arguments)
             return _decode_tool_result(result)
 
-        if not self._session_ready.is_set():
-            try:
-                await asyncio.wait_for(
-                    self._session_ready.wait(), timeout=_SESSION_WAIT_TIMEOUT_S
-                )
-            except TimeoutError as exc:
-                raise LithosToolError("Lithos MCP session is not available") from exc
-
-        session = self._session
-        if session is None:
-            raise LithosToolError("Lithos MCP session is not available")
+        session = await self._live_session()
         result = await session.call_tool(name, arguments)
         return _decode_tool_result(result)
 

@@ -176,6 +176,11 @@ classDiagram
     +projects tuple[str, ...]
     +reconciliation_pending bool
     +truncated bool
+    +filters_narrowed bool
+    +graph_available bool
+    +open_flat bool
+    +rolled_up_open int
+    +nothing_to_show bool
     +errors tuple[str, ...]
   }
   class FindingRecord {

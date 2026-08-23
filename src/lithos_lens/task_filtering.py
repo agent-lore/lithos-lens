@@ -18,6 +18,7 @@ from __future__ import annotations
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
+    TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
     ProjectConvention,
     TaskFilters,
@@ -167,3 +168,26 @@ def matches_filters(
         ):
             return False
     return True
+
+
+def filters_narrow_the_board(filters: TaskFilters) -> bool:
+    """True when these filters hide part of the corpus from the sections.
+
+    The whole-system claims on the dashboard (the healthy stripe, the empty
+    corpus panel) are only sound on an unnarrowed board, because both the
+    section partition and the terminal reads are filtered by agent/tag/status.
+
+    ``project`` narrows like tag/agent: T1-S9 filters the sections down to one
+    project's rows, and a shared ``?project=`` link must not let a slice of the
+    board make the stripe's system-wide claim.
+
+    ``since`` is deliberately not narrowing here: it windows only the resolved
+    completed/cancelled reads, which the empty-corpus copy names explicitly,
+    and the open reads every degraded signal derives from ignore it.
+    """
+    return (
+        bool(filters.tags)
+        or bool(filters.agent)
+        or bool(filters.projects)
+        or set(filters.statuses) != set(TASK_STATUSES)
+    )
