@@ -1986,3 +1986,8 @@ def test_childless_epic_scope_renders_an_explained_empty_board(
     # No other epic's work leaked in.
     assert "Unclaimed open task" not in text
     assert "Claimed open task" not in text
+    # Regression: the board is SCOPED, so it cannot also make the system-wide
+    # claim — "Nothing under this epic yet" beside "All systems healthy" told
+    # the operator both that a slice was empty and that everything was fine.
+    assert "data-healthy-stripe" not in text
+    assert "All systems healthy" not in text

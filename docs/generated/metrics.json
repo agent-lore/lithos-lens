@@ -290,21 +290,21 @@
         "classes": 8,
         "functions": 40,
         "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 733,
-        "lines": 1426,
+        "largest_module_lines": 735,
+        "lines": 1428,
         "modules": 5,
         "public_symbols": 20,
-        "sloc": 1080
+        "sloc": 1082
       },
       "Tasks": {
         "classes": 17,
         "functions": 44,
         "largest_module": "lithos_lens.tasks",
         "largest_module_lines": 735,
-        "lines": 1058,
+        "lines": 1069,
         "modules": 3,
         "public_symbols": 42,
-        "sloc": 789
+        "sloc": 799
       },
       "Telemetry": {
         "classes": 0,
@@ -332,13 +332,13 @@
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 7261,
+    "total_lines": 7274,
     "total_modules": 26,
-    "total_sloc": 5765
+    "total_sloc": 5777
   },
   "tests": {
-    "ratio": 1.79,
-    "src_lines": 7261,
-    "test_lines": 12994
+    "ratio": 1.8,
+    "src_lines": 7274,
+    "test_lines": 13061
   }
 }

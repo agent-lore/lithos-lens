@@ -1860,6 +1860,68 @@ def test_epic_confirmed_resolved_falls_back_unscoped() -> None:
     assert _section_ids(data.sections, "ready") == ["r"]
 
 
+def test_an_applied_epic_scope_narrows_the_board() -> None:
+    """Regression: a scope hides part of the corpus, so the whole-system claims
+    must stand down.
+
+    ``?epic=`` filters every section to one subtree — exactly what
+    ``filters_narrowed`` exists to detect — but the predicate only knew about
+    tag/agent/project/status, so a scoped board still rendered the system-wide
+    "All systems healthy" stripe over the tasks it was hiding.
+    """
+    epic = _epic("epic-1")
+    child = _task("child", claims=())
+    outsider = _task("outsider", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, child, outsider],
+        ready=[child, outsider],
+        blocked=[],
+        children={"epic-1": [child]},
+    )
+
+    scoped = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(_FILTERS, epic="epic-1"), frontier_limit=500
+        )
+    )
+
+    assert scoped.epic_scope == "epic-1"
+    assert _section_ids(scoped.sections, "ready") == ["child"]
+    assert scoped.filters_narrowed is True
+    assert scoped.healthy is False
+
+    # …and the same board unscoped is not narrowed, so the stripe returns.
+    unscoped = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    assert unscoped.filters_narrowed is False
+    assert unscoped.healthy is True
+
+
+def test_an_unresolved_epic_scope_does_not_narrow_the_board() -> None:
+    """The mirror case: a requested epic that could NOT be resolved leaves the
+    board showing everything under the "scope not applied" banner. Nothing is
+    hidden, so nothing about the whole-system claims changes — narrowing tracks
+    the scope that was applied, not the one that was asked for."""
+    epic = _epic("epic-1")
+    ready = _task("r", claims=())
+    fake = _FrontierFake(
+        open_tasks=[epic, ready],
+        ready=[ready],
+        blocked=[],
+        children={"epic-1": []},
+        missing_gets={"epic-1"},
+    )
+
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(_FILTERS, epic="epic-1"), frontier_limit=500
+        )
+    )
+
+    assert data.epic_scope == ""
+    assert _section_ids(data.sections, "ready") == ["r"]
+    assert data.filters_narrowed is False
+
+
 def test_an_unselected_childless_epic_is_never_re_read() -> None:
     """The confirming read is paid only for the ambiguity that matters: a
     childless epic nobody scoped to just renders 0/0."""

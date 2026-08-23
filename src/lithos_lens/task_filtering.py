@@ -179,7 +179,9 @@ def matches_filters(
     return True
 
 
-def filters_narrow_the_board(filters: TaskFilters) -> bool:
+def filters_narrow_the_board(
+    filters: TaskFilters, *, scope_applied: bool = False
+) -> bool:
     """True when these filters hide part of the corpus from the sections.
 
     The whole-system claims on the dashboard (the healthy stripe, the empty
@@ -190,12 +192,21 @@ def filters_narrow_the_board(filters: TaskFilters) -> bool:
     project's rows, and a shared ``?project=`` link must not let a slice of the
     board make the stripe's system-wide claim.
 
+    ``scope_applied`` is the ``?epic=`` scope, and it is passed rather than
+    read off ``filters.epic`` because the two differ: a REQUESTED epic that
+    could not be resolved (closed since the open read, or a failed children
+    read) leaves the board showing everything under a "scope not applied"
+    banner, which is not narrowed. Only a scope that actually filtered the
+    sections — ``frontier``'s ``scope_ids is not None``, including the empty
+    set of a confirmed childless epic — hides part of the corpus.
+
     ``since`` is deliberately not narrowing here: it windows only the resolved
     completed/cancelled reads, which the empty-corpus copy names explicitly,
     and the open reads every degraded signal derives from ignore it.
     """
     return (
-        bool(filters.tags)
+        scope_applied
+        or bool(filters.tags)
         or bool(filters.agent)
         or bool(filters.projects)
         or set(filters.statuses) != set(TASK_STATUSES)

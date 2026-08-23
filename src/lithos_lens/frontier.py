@@ -481,7 +481,9 @@ async def load_dashboard(
         agents = tuple(cast(list[AgentRecord], agents_result))
 
     open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
-    filters_narrowed = filters_narrow_the_board(filters)
+    filters_narrowed = filters_narrow_the_board(
+        filters, scope_applied=scope_ids is not None
+    )
     nothing_to_show = _is_nothing_to_show(
         open_snapshot,
         closed_results,
