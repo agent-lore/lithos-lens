@@ -11,16 +11,35 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.frontier` | L | 1 | 3 |
+| `lithos_lens.epic_strip` | S | 2 | 3 |
+| `lithos_lens.frontier` | L | 1 | 1 |
+| `lithos_lens.frontier_fallback` | S | 1 | 4 |
+| `lithos_lens.frontier_join` | S | 0 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
 
+### `lithos_lens.epic_strip`
+- class `EpicChildrenClient` — The narrow client surface the strip needs.
+- def `build_epic_rollup` — Roll one epic's recursive children up into its progress chip.
+- def `load_epic_rollups` — Fan ``lithos_task_children`` out over EVERY open epic in the snapshot.
+- class `EpicStrip` — One epic-strip load: the chips plus the read-failure flag.
+- def `epic_scope_ids` — The selected epic's descendant ids, or ``None`` when nothing is scoped.
+
 ### `lithos_lens.frontier`
 - class `FrontierLithosClient` — The client surface ``load_dashboard`` consumes (the five parallel calls).
-- def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
-- def `build_epic_rollup` — Roll one epic's recursive children up into its progress chip.
 - def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.
+
+### `lithos_lens.frontier_fallback`
+- class `FrontierProbeClient` — The narrow client surface this module needs.
+- def `frontier_tools_absent` — Ask the server whether it actually has the two frontier tools.
+- def `flat_open_sections` — Partition open tasks for the pre-0.4 fallback: one flat ``open`` section.
+- def `frontier_reads` — The ready/blocked awaitables for one generation of the assembly.
+- def `resolve_frontier` — Read the two frontier responses into rows, verdicts, and error lines.
+
+### `lithos_lens.frontier_join`
+- def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
+- def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
 
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.

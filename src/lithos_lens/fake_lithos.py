@@ -154,6 +154,31 @@ class FakeEventHub(EventHub):
         await self._stop.wait()
 
 
+# The tool surface the fake advertises to a ``tools/list`` probe: exactly the
+# Lithos tools this client serves, which is every tool the real client calls
+# (one vendored contract each, tests/contracts/). Fake mode therefore looks
+# like a 0.4-capable server and renders the graph sections.
+FAKE_TOOL_NAMES = frozenset(
+    {
+        "lithos_agent_list",
+        "lithos_agent_register",
+        "lithos_finding_list",
+        "lithos_list",
+        "lithos_read",
+        "lithos_related",
+        "lithos_search",
+        "lithos_stats",
+        "lithos_task_blocked",
+        "lithos_task_children",
+        "lithos_task_edge_list",
+        "lithos_task_get",
+        "lithos_task_list",
+        "lithos_task_ready",
+        "lithos_task_status",
+    }
+)
+
+
 class FakeLithosClient:
     """A protocol-complete Lithos client backed by an in-memory dataset.
 
@@ -189,6 +214,9 @@ class FakeLithosClient:
     async def close(self) -> None:
         self.closed = True
 
+    async def list_tool_names(self) -> set[str]:
+        return set(FAKE_TOOL_NAMES)
+
     # ── reads ──────────────────────────────────────────────────────────
 
     async def list_tasks(
@@ -198,6 +226,7 @@ class FakeLithosClient:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]:
         rows = [
@@ -214,6 +243,16 @@ class FakeLithosClient:
             # ISO strings — inclusive, full precision (deliberately unlike
             # findings' strict parsed >), so the fake compares the same way.
             rows = [task for task in rows if task.created_at >= since]
+        if resolved_since:
+            # Upstream lithos_task_list filters `resolved_at >= ?` on the raw
+            # ISO strings and drops NULL-resolved rows (open tasks, and
+            # cancellations predating the column) automatically — the fake
+            # mirrors both halves.
+            rows = [
+                task
+                for task in rows
+                if task.resolved_at and task.resolved_at >= resolved_since
+            ]
         if with_claims:
             rows = [replace(task, claims=self._claims_for(task.id)) for task in rows]
         return rows

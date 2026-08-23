@@ -36,7 +36,12 @@ body {
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
+  /* The body background propagates to the canvas: on a page shorter than the
+     viewport (a not-found panel, an empty state) the gradient sizes to the
+     short body box and then TILES down the rest, drawing hard seams that read
+     as a half-loaded page. Fill the viewport and never repeat. */
   background-repeat: no-repeat;
+  min-height: 100vh;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }
@@ -146,6 +151,17 @@ h1 {
   border-color: var(--warning-border);
 }
 
+/* The "all systems healthy" stripe: the only positive banner, so it reads
+   green against the warning family it replaces. */
+.banner-healthy {
+  background: rgba(53, 106, 77, 0.08);
+  border-color: var(--ok);
+}
+
+.banner-healthy strong {
+  color: var(--ok);
+}
+
 .banner span {
   display: block;
   margin-top: 0.25rem;
@@ -212,11 +228,16 @@ h1 {
   margin-bottom: 1.5rem;
 }
 
+/* Card treatment for the surfaces that sit on the page wash. The just-created
+   strip is a sibling of the .task-group cards and needs the same treatment —
+   but only while it holds a row, or every ordinary render would carry an empty
+   card at the top of the board. */
 .metric-card,
 .panel,
 .detail-panel,
 .filter-bar,
-.task-group {
+.task-group,
+.task-list-pending:not(:empty) {
   background: rgba(255, 250, 240, 0.86);
   border: 1px solid var(--line);
   border-radius: 1.25rem;
@@ -281,6 +302,20 @@ small {
 .filter-bar fieldset label {
   display: inline-flex;
   margin-right: 0.65rem;
+}
+
+/* Submit + reset share one filter-bar cell (see dashboard.html): side by side
+   while they fit, wrapping within the cell rather than across the bar's rows. */
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.filter-actions > * {
+  /* Overrides the shared control width:100% so the pair can share one cell. */
+  flex: 1 1 auto;
+  width: auto;
 }
 
 .date-picker-control {
@@ -356,8 +391,18 @@ button,
   gap: 1.25rem;
 }
 
-.task-group {
+.task-group,
+.task-list-pending:not(:empty) {
   overflow: hidden;
+}
+
+.task-board-empty {
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+
+.task-board-empty h2 {
+  margin: 0 0 0.5rem;
 }
 
 .task-group > header {
@@ -463,6 +508,13 @@ button,
 .badge-cancelled {
   border-color: rgba(138, 74, 59, 0.35);
   color: var(--cancelled);
+}
+
+.badge-reopened {
+  background: rgba(189, 79, 43, 0.09);
+  border-color: rgba(189, 79, 43, 0.45);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .claim-chip {
@@ -664,6 +716,18 @@ button,
   grid-column: 1 / -1;
 }
 
+/* One claim, one chip: the same pill language as the blocker chips in the row
+   below and the claim/status chips beside them. Scoped away from the detail
+   page's claim-list-large, which keeps its larger bordered box. */
+.claim-list:not(.claim-list-large) span {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+}
+
 .claim-list-large span {
   background: var(--panel-strong);
   border: 1px solid var(--line);
@@ -728,6 +792,12 @@ button,
   border: 1px solid var(--line);
   border-radius: 1rem;
   padding: 1rem;
+}
+
+/* A reopen is a lifecycle reversal, so its finding is tinted like the marker
+   badge that the same finding drives on the header. */
+.findings-timeline li.finding-reopened {
+  border-color: rgba(189, 79, 43, 0.45);
 }
 
 .findings-timeline header {

@@ -13,7 +13,11 @@ TaskStatusName = Literal["open", "completed", "cancelled"]
 # computed by joining the master open list against the Lithos ready/blocked
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
+# ``open`` is the flat-fallback section: it holds every open row when the
+# server has no ready/blocked frontier tools (pre-0.4 Lithos), in which case
+# the three workable sections stay empty. It is never populated alongside them.
 SectionName = Literal[
+    "open",
     "in_progress",
     "ready",
     "blocked",
@@ -29,6 +33,56 @@ SectionName = Literal[
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
+
+# Every open-side section, in render order. Only one mode's are ever filled:
+# the flat ``open`` list, or the workable three plus their degraded tails.
+# Canonical here so the render order, the open row count and the
+# "did anything render?" checks below cannot drift apart.
+OPEN_SECTIONS: tuple[SectionName, ...] = (
+    "open",
+    "in_progress",
+    "ready",
+    "blocked",
+    "claims_unknown",
+    "unclassified",
+)
+# The statuses whose sections are windowed and sorted on ``resolved_at``.
+TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "cancelled"})
+
+# ``lithos_task_reopen`` records every reopen as a durable finding whose
+# summary starts with this literal marker; it clears ``resolved_at`` and
+# ``outcome``, so the finding is the only surviving evidence of the reopen.
+#
+# TRUST BOUNDARY: findings are free text. ``lithos_finding_post`` takes
+# ``{task_id, agent, summary}`` with no credential, so ANY Lithos client can
+# mint this prefix on ANY task under any ``agent`` string — the marker is a
+# REPORT, not a verified fact, and the UI must attribute it rather than assert
+# it (hence the "reopen reported by <agent>" copy). Corroborating against task
+# state is not available either: a reopened-then-recompleted task legitimately
+# carries ``resolved_at`` again. The authoritative signal is the upstream
+# ``task.reopened`` event, which the Lens pipeline does not consume yet (T1
+# slice 6); cross-checking against it is the follow-up.
+REOPENED_FINDING_PREFIX = "[Reopened]"
+
+# Absolute ceiling on the completed/cancelled lookback, in days.
+# ``lithos_task_list`` takes no row limit, so this window is the ONLY bound on
+# those two reads — and terminal history, unlike the open frontier, only ever
+# grows: an unbounded ``?since=01/01/0001`` would pull the whole archive into
+# one render. It bounds BOTH inputs that can widen the window — the ``?since=``
+# request AND the configured ``default_time_range_days`` (rejected above this
+# value at config load, and clamped here regardless) — so no configuration can
+# raise it. A safety bound rather than an operator dial, the same shape as the
+# client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
+MAX_SINCE_LOOKBACK_DAYS = 365
+
+# Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
+# production corpus and their counts disagree: ``metadata.project = "<slug>"``
+# (what Lithos itself understands) and a ``project:<slug>`` tag (the original
+# Lens convention). ``project_convention`` selects which are honoured.
+ProjectConvention = Literal["metadata", "tag", "both"]
+PROJECT_CONVENTIONS: tuple[ProjectConvention, ...] = ("metadata", "tag", "both")
+DEFAULT_PROJECT_CONVENTION: ProjectConvention = "both"
+DEFAULT_PROJECT_TAG_KEY = "project"
 
 
 class SectionState(StrEnum):
@@ -170,6 +224,29 @@ class SectionRow:
             return "known_claimed"
         return "unknown" if self.claims_unknown else "known_unclaimed"
 
+    @property
+    def timestamp(self) -> str:
+        """The timestamp this row shows: RESOLUTION time on a terminal row.
+
+        Completed/Cancelled are windowed and sorted on ``resolved_at``, so a
+        row there must show that date — otherwise a task created long ago and
+        finished yesterday reads as a filter bug ("2020-01-01" under "Resolved
+        since 2026-04-01") and the newest-resolved-first order looks unsorted.
+        Falls back to ``created_at`` when an older Lithos omitted
+        ``resolved_at``, mirroring ``frontier._rows_for``'s sort key; open rows
+        keep their creation date. ``timestamp_label`` says which one it is.
+        """
+        if self.task.status in TERMINAL_TASK_STATUSES:
+            return self.task.resolved_at or self.task.created_at
+        return self.task.created_at
+
+    @property
+    def timestamp_label(self) -> str:
+        """Which date :attr:`timestamp` is — the two differ, so rows say so."""
+        if self.task.status in TERMINAL_TASK_STATUSES and self.task.resolved_at:
+            return "resolved"
+        return "created"
+
 
 @dataclass(frozen=True)
 class EpicRollup:
@@ -211,6 +288,15 @@ class EpicRollup:
 
 @dataclass(frozen=True)
 class TaskFilters:
+    """The live ``/tasks`` filter vocabulary, parsed from the query string.
+
+    ``projects`` is multi-valued and matches a task under ``project_convention``
+    (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
+    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and
+    ``since`` windows only the resolved sections. The convention knobs travel on
+    the filters so the pure predicates below stay pure.
+    """
+
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
@@ -219,6 +305,9 @@ class TaskFilters:
     # means "no epic scope"; an id that is no longer an open epic resolves to
     # no scope at all (``DashboardData.epic_scope``), not an empty board.
     epic: str = ""
+    projects: tuple[str, ...] = ()
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
 @dataclass(frozen=True)
@@ -249,8 +338,41 @@ class DashboardData:
     agents: tuple[AgentRecord, ...]
     frontier_limit: int
     open_total: int
+    # The project universe for the filter dropdown: the UNION of both
+    # conventions' slugs over the loaded snapshot (§5B.1), so no project is
+    # invisible to its own view.
+    projects: tuple[str, ...] = ()
     reconciliation_pending: bool = False
     truncated: bool = False
+    # True when these filters hide part of the corpus from the sections, so
+    # every per-view signal below (truncation, reconciliation, claims-unknown,
+    # emptiness) describes the filtered subset rather than the whole system.
+    filters_narrowed: bool = False
+    # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
+    # the open rows render in the flat ``open`` section behind the
+    # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
+    graph_available: bool = True
+    # True when the open rows render in the flat ``open`` section instead of
+    # the workable three. Distinct from ``graph_available``: BOTH a missing
+    # frontier (pre-0.4) and a failed frontier READ render flat (§14), but only
+    # the first is a version story, and only the first should be remembered by
+    # the caller. Half a frontier is not a classification.
+    open_flat: bool = False
+    # Open rows the graph deliberately rolls up rather than rendering: epics
+    # (they roll up to their children) and gates (§5.3 gives them their own
+    # section in a later slice). Counted so the board can SAY so — an open row
+    # that exists and renders nowhere must not read as an empty tracker, and
+    # must not sit under an affirmative health claim. Always 0 in the flat
+    # fallback, where every open row renders.
+    rolled_up_open: int = 0
+    # True when Lithos answered every read successfully and returned nothing
+    # for this view: no open tasks, and nothing resolved inside the ``since``
+    # window. Distinguishes "there is nothing here" from "your filters hid
+    # everything", which the per-section empty lines already say. Deliberately
+    # NOT a claim about the corpus — the terminal reads are windowed by
+    # ``since``, so work resolved before it is invisible to this flag and the
+    # panel it drives has to name the window.
+    nothing_to_show: bool = False
     errors: tuple[str, ...] = ()
     # One rollup per open epic, in open-snapshot (newest-first) order.
     epics: tuple[EpicRollup, ...] = ()
@@ -265,6 +387,51 @@ class DashboardData:
         on it — e.g. to explain a confirmed-childless epic's empty board)."""
         return next((epic for epic in self.epics if epic.selected), None)
 
+    @property
+    def rolled_up_only(self) -> bool:
+        """True when the open side is empty ONLY because rows were rolled up.
+
+        The degenerate case is a tracker holding nothing but epics: every open
+        section renders empty, ``nothing_to_show`` is False (the open read did
+        return rows), and without this the board would show an empty board
+        under "All systems healthy". Drives the explanatory panel that names
+        the rolled-up rows instead.
+        """
+        if not self.rolled_up_open:
+            return False
+        return not any(self.sections.get(section) for section in OPEN_SECTIONS)
+
+    @property
+    def healthy(self) -> bool:
+        """True when this load carries no degraded signal to report.
+
+        Drives the "All systems healthy" stripe: every read succeeded, the
+        frontier was complete (no truncation) and self-consistent, claims came
+        back for every row, and the graph tools are present. T1-S3 extends this
+        with the needs-attention rules, whose emptiness is the other half of
+        the same statement.
+
+        Withheld when the open side rendered nothing but rolled-up rows exist
+        (see :attr:`rolled_up_only`): the stripe would be the only thing on an
+        empty board, asserting health over work the operator cannot see.
+
+        Withheld on a narrowed view. Truncation, reconciliation and
+        claims-unknown are all measured over the rows the filters left, so on a
+        filtered board they cannot support the stripe's system-wide claim — a
+        ``?tag=`` in a shared link would otherwise turn a degraded system into
+        an affirmative "all healthy". The warning banners are per-view
+        statements and keep rendering under any filter.
+        """
+        return (
+            not self.filters_narrowed
+            and not self.rolled_up_only
+            and self.graph_available
+            and not self.errors
+            and not self.truncated
+            and not self.reconciliation_pending
+            and not self.sections.get("claims_unknown")
+        )
+
 
 @dataclass(frozen=True)
 class FindingView:
@@ -276,6 +443,18 @@ class FindingView:
     def link_label(self) -> str:
         return self.note_title or "View document"
 
+    @property
+    def is_reopen(self) -> bool:
+        """True for a ``[Reopened]`` finding — a reopen REPORT, not a verdict.
+
+        ``lithos_task_reopen`` posts this finding and leaves no other trace (it
+        clears ``resolved_at`` and ``outcome``), but any client can post the
+        same prefix under any agent name; see the trust note on
+        :data:`REOPENED_FINDING_PREFIX`. Both markers it drives are worded as
+        attributed reports for that reason.
+        """
+        return self.finding.summary.lstrip().startswith(REOPENED_FINDING_PREFIX)
+
 
 @dataclass(frozen=True)
 class TaskDetailData:
@@ -286,6 +465,20 @@ class TaskDetailData:
     findings_state: SectionState = SectionState.OK
     not_found: bool = False
     errors: tuple[str, ...] = ()
+
+    @property
+    def reopen_report(self) -> FindingView | None:
+        """The most recent reopen report on this task, if any.
+
+        Derived from the findings timeline (see ``FindingView.is_reopen``),
+        which is the only durable record of a reopen — and an unauthenticated
+        one, so the view carries the REPORTING AGENT and the header attributes
+        the claim to them instead of stating a lifecycle reversal as fact.
+        ``findings`` is ordered oldest-first by ``resolve_finding_notes``, so
+        the last match is the latest report. A findings load failure yields
+        None ("unknown"), never a false negative claim.
+        """
+        return next((view for view in reversed(self.findings) if view.is_reopen), None)
 
 
 class TaskLithosClientProtocol(Protocol):
@@ -303,6 +496,7 @@ class TaskLithosClientProtocol(Protocol):
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[TaskRecord]: ...
 
@@ -323,6 +517,9 @@ def parse_filters(
     query_items: list[tuple[str, str]],
     default_days: int,
     default_statuses: tuple[TaskStatusName, ...] = TASK_STATUSES,
+    *,
+    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    project_tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
@@ -352,6 +549,11 @@ def parse_filters(
         # The epic strip scopes to ONE epic at a time (a chip click), so only
         # the first ``epic`` value is honored.
         epic=(values.get("epic") or [""])[0],
+        # Multi-select: ``?project=x&project=y`` (and the comma form) select
+        # the union of those projects, not their intersection.
+        projects=tuple(values.get("project", [])),
+        project_convention=project_convention,
+        project_tag_key=project_tag_key,
     )
 
 
@@ -443,102 +645,6 @@ async def resolve_finding_notes(
     return tuple(views)
 
 
-def normalize_task(raw: dict[str, Any]) -> TaskRecord:
-    status_raw = str(raw.get("status") or "open")
-    status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
-    # Raw passthrough: only a MISSING/empty task_type defaults to "task"
-    # (legacy payloads); an unknown explicit value survives round-trip.
-    task_type = str(raw.get("task_type") or "task")
-    claims: tuple[ClaimRecord, ...] | None = None
-    if "claims" in raw and raw["claims"] is not None:
-        claims = tuple(
-            ClaimRecord(
-                agent=str(claim.get("agent") or ""),
-                aspect=str(claim.get("aspect") or ""),
-                expires_at=str(claim.get("expires_at") or ""),
-            )
-            for claim in raw["claims"]
-            if isinstance(claim, dict)
-        )
-    return TaskRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or "Untitled task"),
-        description=str(raw.get("description") or ""),
-        status=status,
-        created_by=str(raw.get("created_by") or raw.get("agent") or ""),
-        created_at=str(raw.get("created_at") or ""),
-        tags=tuple(str(tag) for tag in raw.get("tags") or []),
-        metadata=dict(raw.get("metadata") or {}),
-        outcome=str(raw.get("outcome") or ""),
-        completed_at=str(raw.get("completed_at") or ""),
-        task_type=task_type,
-        resolved_at=str(raw.get("resolved_at") or ""),
-        claims=claims,
-    )
-
-
-def normalize_task_status(raw: dict[str, Any]) -> TaskStatusRecord:
-    return TaskStatusRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        status=str(raw.get("status") or ""),
-        claims=tuple(
-            ClaimRecord(
-                agent=str(claim.get("agent") or ""),
-                aspect=str(claim.get("aspect") or ""),
-                expires_at=str(claim.get("expires_at") or ""),
-            )
-            for claim in raw.get("claims") or []
-            if isinstance(claim, dict)
-        ),
-        metadata=dict(raw.get("metadata") or {}),
-    )
-
-
-def normalize_finding(raw: dict[str, Any], task_id: str) -> FindingRecord:
-    return FindingRecord(
-        id=str(raw.get("id") or ""),
-        task_id=str(raw.get("task_id") or task_id),
-        agent=str(raw.get("agent") or ""),
-        summary=str(raw.get("summary") or ""),
-        knowledge_id=str(raw.get("knowledge_id") or ""),
-        created_at=str(raw.get("created_at") or ""),
-    )
-
-
-def normalize_agent(raw: dict[str, Any]) -> AgentRecord:
-    return AgentRecord(
-        id=str(raw.get("id") or ""),
-        name=str(raw.get("name") or ""),
-        type=str(raw.get("type") or ""),
-        last_seen_at=str(raw.get("last_seen_at") or ""),
-    )
-
-
-def normalize_note(raw: dict[str, Any]) -> NoteRecord:
-    metadata = dict(raw.get("metadata") or {})
-    tags = raw.get("tags") or metadata.get("tags") or []
-    return NoteRecord(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or "Untitled document"),
-        content=str(raw.get("content") or ""),
-        tags=tuple(str(tag) for tag in tags),
-        metadata=metadata,
-    )
-
-
-def normalize_note_summary(raw: dict[str, Any]) -> NoteSummary:
-    metadata = dict(raw.get("metadata") or {})
-    tags = raw.get("tags") or metadata.get("tags") or []
-    return NoteSummary(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        path=str(raw.get("path") or ""),
-        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
-        tags=tuple(str(tag) for tag in tags),
-    )
-
-
 def note_updated_sort_key(updated: str) -> datetime:
     """Newest-first sort key for a note's ISO ``updated`` timestamp.
 
@@ -558,15 +664,42 @@ def note_updated_sort_key(updated: str) -> datetime:
 
 
 def default_since(default_days: int) -> str:
-    return (datetime.now(UTC) - timedelta(days=default_days)).date().isoformat()
+    return lookback_date(default_days).isoformat()
+
+
+def lookback_date(days: int) -> date:
+    """The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
+
+    The single place a day count becomes a window floor, so the ceiling holds
+    for every path — the default window, the ``?since=`` filter, and any later
+    caller — whatever the configuration says. Clamping into ``[0, MAX]`` also
+    means no admitted integer can overflow the date arithmetic (a 500 on the
+    dashboard route).
+    """
+    return (
+        datetime.now(UTC) - timedelta(days=min(max(days, 0), MAX_SINCE_LOOKBACK_DAYS))
+    ).date()
 
 
 def normalize_since_input(value: str, *, default_days: int) -> str:
+    """Parse the ``?since=`` filter into a BOUNDED ISO date.
+
+    Blank or unparseable input falls back to the default window; a lookback
+    longer than :data:`MAX_SINCE_LOOKBACK_DAYS` is clamped to that ceiling
+    rather than honored — including when the CONFIGURED default is wider, which
+    ``lookback_date`` bounds too. Clamping (rather than snapping back to the
+    default) keeps the filter doing what it says as far as it is permitted to,
+    and the clamped value is what the filter bar re-renders, so the window
+    shown is the window applied.
+    """
     value = value.strip()
     if not value:
         return default_since(default_days)
     parsed = parse_date(value)
-    return parsed.isoformat() if parsed else default_since(default_days)
+    if parsed is None:
+        return default_since(default_days)
+    floor = lookback_date(MAX_SINCE_LOOKBACK_DAYS)
+    return parsed.isoformat() if parsed >= floor else floor.isoformat()
 
 
 def format_display_date(value: str) -> str:
@@ -591,41 +724,6 @@ def parse_date(value: str) -> date | None:
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def matches_filters(
-    task: TaskRecord,
-    *,
-    filters: TaskFilters,
-    status: TaskStatusName,
-    scope_ids: frozenset[str] | None = None,
-) -> bool:
-    """Client-side filter predicate shared by the dashboard sections.
-
-    Public because the frontier join (``frontier.py``) re-applies it over the
-    joined snapshot; the guardrail forbids reaching for another module's
-    privates.
-
-    ``scope_ids`` is the resolved ``?epic=`` scope — the selected epic's
-    descendant ids. ``None`` means "no epic scope"; an EMPTY set is a real
-    scope (a confirmed childless epic) and correctly hides everything. The
-    unconfirmable case — an epic that may have closed since the open read —
-    resolves to ``None``, not to an empty set (see ``frontier``).
-    """
-    if scope_ids is not None and task.id not in scope_ids:
-        return False
-    if task.status != status:
-        return False
-    if filters.agent and task.created_by != filters.agent:
-        return False
-    if filters.tags and not all(tag in task.tags for tag in filters.tags):
-        return False
-    if status in {"completed", "cancelled"} and filters.since:
-        task_date = parse_date(task.created_at)
-        since_date = parse_date(filters.since)
-        if task_date is not None and since_date is not None and task_date < since_date:
-            return False
-    return True
 
 
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:

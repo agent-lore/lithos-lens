@@ -11,13 +11,21 @@ emits exactly ``{kind, task_id, type, status, message}``.
 from __future__ import annotations
 
 import asyncio
+from time import monotonic
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.frontier_fallback import frontier_tools_absent
 from lithos_lens.lithos_client import LithosClient, LithosToolError
+from lithos_lens.lithos_tools import (
+    TOOL_LIST_MAX_PAGES,
+    ToolListError,
+    collect_tool_names,
+)
+from lithos_lens.normalizers import normalize_task
 from lithos_lens.task_graph import (
     BlockedTaskRecord,
     BlockerRecord,
@@ -26,7 +34,6 @@ from lithos_lens.task_graph import (
     normalize_blocker,
     normalize_edge,
 )
-from lithos_lens.tasks import normalize_task
 from tests.conftest import load_contract
 
 # --- Normalizers: blocker kinds -------------------------------------------
@@ -279,6 +286,40 @@ def test_list_tasks_sends_explicit_false_with_claims() -> None:
     )
 
 
+def test_list_tasks_sends_resolved_since_for_the_terminal_window() -> None:
+    """The Completed/Cancelled window is a resolved_since push (T1-S10):
+    upstream filters resolved_at >= value and drops NULL-resolved rows, which
+    is what makes "created months ago, finished yesterday" recent work."""
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(
+        client,
+        client.list_tasks(
+            status="completed", resolved_since="2026-07-01T00:00:00+00:00"
+        ),
+    )
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {
+            "with_claims": False,
+            "status": "completed",
+            "resolved_since": "2026-07-01T00:00:00+00:00",
+        },
+    )
+
+
+def test_list_tasks_omits_resolved_since_when_not_windowed() -> None:
+    """An unset window must not leak a null argument: the master open read is
+    deliberately unwindowed."""
+    client = _StubClient({"lithos_task_list": {"tasks": []}})
+    _run(client, client.list_tasks(status="open", with_claims=True))
+
+    assert client.calls[0] == (
+        "lithos_task_list",
+        {"status": "open", "with_claims": True},
+    )
+
+
 def test_task_ready_sends_limit_and_claims_and_normalizes() -> None:
     client = _StubClient(
         {"lithos_task_ready": {"tasks": [{"id": "r-1", "title": "Ready one"}]}}
@@ -473,3 +514,116 @@ def test_task_edge_list_sends_direction_and_types_and_normalizes() -> None:
         "lithos_task_edge_list",
         {"task_id": "g-1", "direction": "outgoing", "types": ["waits_on_gate"]},
     )
+
+
+# --- Tool-surface probe (feature detection) --------------------------------
+#
+# ``collect_tool_names`` answers "does this Lithos advertise <tool>", and
+# ``frontier_tools_absent`` reads ABSENCE from it — so an incomplete walk must
+# never be handed back as if it were the whole listing.
+
+
+class _PagedSession:
+    """Fake MCP session serving tools/list in cursor-linked pages."""
+
+    def __init__(self, pages: dict[str | None, tuple[list[str], str | None]]) -> None:
+        self._pages = pages
+        self.cursors_seen: list[str | None] = []
+
+    async def list_tools(self, cursor: str | None = None) -> SimpleNamespace:
+        self.cursors_seen.append(cursor)
+        names, next_cursor = self._pages[cursor]
+        return SimpleNamespace(
+            tools=[SimpleNamespace(name=name) for name in names],
+            nextCursor=next_cursor,
+        )
+
+
+def test_collect_tool_names_follows_cursors_to_the_end() -> None:
+    session = _PagedSession(
+        {
+            None: (["lithos_task_list"], "page-2"),
+            "page-2": (["lithos_task_ready", "lithos_task_blocked"], None),
+        }
+    )
+
+    names = asyncio.run(collect_tool_names(session))
+
+    assert names == {"lithos_task_list", "lithos_task_ready", "lithos_task_blocked"}
+    assert session.cursors_seen == [None, "page-2"]
+
+
+def test_tools_past_the_page_guard_raise_instead_of_reading_as_absent() -> None:
+    """Regression (correctness f-002 / security f-004): a walk stopped by the
+    page guard is a FAILED enumeration. Returning the partial set would let a
+    paginating gateway — frontier tools sitting one page past the guard —
+    retire the graph surface on a server that advertises them."""
+    pages: dict[str | None, tuple[list[str], str | None]] = {
+        None: (["tool-0"], "page-1"),
+    }
+    for page in range(1, TOOL_LIST_MAX_PAGES):
+        pages[f"page-{page}"] = ([f"tool-{page}"], f"page-{page + 1}")
+    # The page the guard never reaches — where the frontier tools live.
+    pages[f"page-{TOOL_LIST_MAX_PAGES}"] = (
+        ["lithos_task_ready", "lithos_task_blocked"],
+        None,
+    )
+    session = _PagedSession(pages)
+
+    with pytest.raises(ToolListError):
+        asyncio.run(collect_tool_names(session))
+
+    # It walked right up to the guard — the cursor was still pending there.
+    assert len(session.cursors_seen) == TOOL_LIST_MAX_PAGES
+
+
+def test_frontier_probe_answers_not_absent_when_the_walk_is_truncated() -> None:
+    """The review's f-004 reproduction, end to end: with the frontier tools on
+    the page after the guard, the probe must answer "not absent" (False) so the
+    graph surface survives — the old collector returned the partial set and the
+    probe answered True on a server that advertises both tools."""
+    pages: dict[str | None, tuple[list[str], str | None]] = {
+        None: (["tool-0"], "page-1"),
+    }
+    for page in range(1, TOOL_LIST_MAX_PAGES):
+        pages[f"page-{page}"] = ([f"tool-{page}"], f"page-{page + 1}")
+    pages[f"page-{TOOL_LIST_MAX_PAGES}"] = (
+        ["lithos_task_ready", "lithos_task_blocked"],
+        None,
+    )
+
+    class _ProbeOnlyClient:
+        async def list_tool_names(self) -> set[str]:
+            return await collect_tool_names(_PagedSession(pages))
+
+    assert asyncio.run(frontier_tools_absent(cast(Any, _ProbeOnlyClient()))) is False
+
+
+def test_a_cursor_that_never_advances_raises() -> None:
+    """A server repeating its cursor never terminates; stop at the repeat
+    rather than spending the whole guard, and still report failure."""
+    session = _PagedSession(
+        {None: (["tool-a"], "stuck"), "stuck": (["tool-b"], "stuck")}
+    )
+
+    with pytest.raises(ToolListError):
+        asyncio.run(collect_tool_names(session))
+
+    assert session.cursors_seen == [None, "stuck"]
+
+
+def test_list_tool_names_does_not_wait_for_a_missing_session() -> None:
+    """Regression (security f-005): the probe runs after other reads have
+    already failed, so it asks only whether a session exists RIGHT NOW. Waiting
+    the full session timeout again would double the hold time of an
+    unauthenticated /tasks request whenever the MCP session is down."""
+    client = LithosClient(LithosConfig())
+
+    started = monotonic()
+    with pytest.raises(LithosToolError):
+        _run(client, client.list_tool_names())
+    elapsed = monotonic() - started
+
+    # The waiting path is 5s (_SESSION_WAIT_TIMEOUT_S); this one must not wait
+    # at all. A generous bound keeps the assertion about behaviour, not speed.
+    assert elapsed < 1.0

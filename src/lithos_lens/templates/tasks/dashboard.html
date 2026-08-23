@@ -31,44 +31,78 @@
         </section>
       {% endif %}
 
+      {# No ready/blocked frontier, so the board falls back to the flat 0.1.0
+         open list. Usually version skew — but the same symptom means an
+         outage or tools withheld from this client, so the copy says so and
+         the error banner above carries the machine-readable line. #}
+      {% if not dashboard.graph_available %}
+        <section class="banner banner-warning" role="status" data-graph-unavailable>
+          <strong>Graph features need Lithos 0.4 or newer.</strong>
+          <span>Lithos did not answer the ready/blocked frontier reads, so Lens is showing the flat open task list — no Ready, Blocked, gate, or blocker-chip detail. That usually means a server older than 0.4; it can also mean those tools are unavailable to this client. Lens re-checks periodically and the sections return with the frontier.</span>
+        </section>
+      {% endif %}
+
+      {# The positive counterpart of the banners above: every read landed, the
+         frontier was complete and self-consistent, claims came back for every
+         row. T1-S3 extends this with "nothing needs attention". #}
+      {% if dashboard.healthy and not dashboard.nothing_to_show %}
+        <section class="banner banner-healthy" role="status" data-healthy-stripe>
+          <strong>All systems healthy.</strong>
+          <span>Every workable open task is classified; no failed reads, truncated frontier, or unresolved frontier disagreement.</span>
+        </section>
+      {% endif %}
+
       <section class="situation-grid" aria-label="Current situation">
-        {# Card links go through the preserved-filter helper (status replaced),
-           so clicking a count on an epic-scoped or tag-filtered board stays in
-           that view instead of silently widening to every task. #}
-        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-in_progress">
-          <span>In progress</span>
-          <strong>{{ dashboard.summary.in_progress }}</strong>
-          {# Claims on the rows counted above, not the Lithos-wide stat: the
-             two numbers on one card must describe the same set of tasks. #}
-          <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
-        </a>
-        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-ready">
-          <span>Ready</span>
-          <strong>{{ dashboard.summary.ready }}</strong>
-          <small>Unclaimed and workable now</small>
-        </a>
-        <a class="metric-card" href="{{ tasks_status_url(request, "open") }}#task-group-blocked">
-          <span>Blocked</span>
-          <strong>{{ dashboard.summary.blocked }}</strong>
-          <small>Waiting on predecessors or gates</small>
-        </a>
-        <a class="metric-card" href="{{ tasks_status_url(request, "completed") }}">
+        {# Keyed on open_flat, exactly like the sections below: the cards
+           describe the board that rendered. Keying them on graph_available
+           instead put Ready/Blocked zeros above a flat Open list during an
+           outage — three counts presented as facts about a frontier that
+           never answered, and no card for the list actually on screen. #}
+        {% if not dashboard.open_flat %}
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-in_progress') }}">
+            <span>In progress</span>
+            <strong>{{ dashboard.summary.in_progress }}</strong>
+            {# Claims on the rows counted above, not the Lithos-wide stat:
+               the two numbers on one card must describe the same set. #}
+            <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
+          </a>
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-ready') }}">
+            <span>Ready</span>
+            <strong>{{ dashboard.summary.ready }}</strong>
+            <small>Unclaimed and workable now</small>
+          </a>
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-blocked') }}">
+            <span>Blocked</span>
+            <strong>{{ dashboard.summary.blocked }}</strong>
+            <small>Waiting on predecessors or gates</small>
+          </a>
+        {% else %}
+          {# No usable frontier: Ready/Blocked counts would be zeros dressed as
+             facts, so the flat fallback shows the one count it can stand
+             behind. #}
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-open') }}">
+            <span>Open tasks</span>
+            <strong>{{ dashboard.summary.open_total }}</strong>
+            {# Claims on the rows counted above, not the Lithos-wide stat:
+               the two numbers on one card must describe the same set. #}
+            <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
+          </a>
+        {% endif %}
+        <a class="metric-card" href="{{ task_card_url(request, 'completed', dashboard.filters.since) }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
-          {# The since filter windows terminal rows by CREATED date (see
-             matches_filters); the label must say so. Resolved-time windowing
-             is T1-S10, which should push lithos_task_list's native
-             resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since }}</small>
+          {# The since filter windows terminal rows by RESOLVED date — it is
+             pushed upstream as lithos_task_list's native resolved_since param
+             (see frontier.load_dashboard) — so the label says so. #}
+          <small>Resolved since {{ dashboard.filters.since | display_date }}</small>
         </a>
-        <a class="metric-card" href="{{ tasks_status_url(request, "cancelled") }}">
+        <a class="metric-card" href="{{ task_card_url(request, 'cancelled', dashboard.filters.since) }}">
           <span>Recently cancelled</span>
           <strong>{{ dashboard.summary.recent_cancelled }}</strong>
-          {# The since filter windows terminal rows by CREATED date (see
-             matches_filters); the label must say so. Resolved-time windowing
-             is T1-S10, which should push lithos_task_list's native
-             resolved_since param instead of relabelling this one. #}
-          <small>Created since {{ dashboard.filters.since }}</small>
+          {# The since filter windows terminal rows by RESOLVED date — it is
+             pushed upstream as lithos_task_list's native resolved_since param
+             (see frontier.load_dashboard) — so the label says so. #}
+          <small>Resolved since {{ dashboard.filters.since | display_date }}</small>
         </a>
         <article class="metric-card">
           <span>Agents</span>
@@ -100,12 +134,25 @@
             </label>
           {% endfor %}
         </fieldset>
+        {# Project matches either convention (metadata.project or the
+           project:<slug> tag) per [tasks].project_convention; the datalist is
+           the union of slugs present in the loaded snapshot. Comma-separated
+           values select several projects (OR). #}
         <label>
-          Tag
-          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="project:influx">
+          Project
+          <input list="projects" name="project" value="{{ dashboard.filters.projects | join(',') }}" placeholder="Any project">
+          <datalist id="projects">
+            {% for project in dashboard.projects %}
+              <option value="{{ project }}"></option>
+            {% endfor %}
+          </datalist>
         </label>
         <label>
-          Creating agent
+          Tag
+          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="area:docs">
+        </label>
+        <label>
+          Agent (creator or claimer)
           <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
           <datalist id="agents">
             {% for agent in dashboard.agents %}
@@ -114,10 +161,10 @@
           </datalist>
         </label>
         <label>
-          Created since
+          Resolved since
           <span class="date-picker-control">
             <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
-            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose created since date">
+            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose resolved since date">
             <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
           </span>
         </label>
@@ -126,8 +173,16 @@
         {% if dashboard.epic_scope %}
           <input type="hidden" name="epic" value="{{ dashboard.epic_scope }}">
         {% endif %}
-        <button type="submit">Apply filters</button>
-        <a class="button-secondary" href="/tasks">Reset</a>
+        {# The two actions are ONE grid child. As independent items they were
+           laid out by the same auto-fit column count as the fields, so a field
+           count that doesn't divide evenly (7 items across 3 columns, ~768px)
+           orphaned Reset onto a row of its own where the eye expects another
+           filter. Wrapping keeps the pair together at every width, and survives
+           the next filter this bar grows. #}
+        <div class="filter-actions">
+          <button type="submit">Apply filters</button>
+          <a class="button-secondary" href="/tasks">Reset</a>
+        </div>
       </form>
 
       {#
@@ -185,6 +240,7 @@
         "Not classified" (frontier truncation) appear only when they have rows.
       #}
       {% set section_labels = {
+        "open": "Open",
         "in_progress": "In progress",
         "ready": "Ready",
         "blocked": "Blocked",
@@ -194,21 +250,57 @@
         "cancelled": "Cancelled",
       } %}
       {% set workable = ("in_progress", "ready", "blocked") %}
-      {% set section_order = workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
+      {% set section_order = ("open",) + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
       <section class="task-board" aria-label="Task sections">
         {# Skeleton strip for just-created tasks: a task.created event lands
            here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
            re-renders the board with the task in its real section — a fresh
            task's frontier membership is unknown until Lithos answers. #}
         <div class="task-list task-list-pending" data-task-list="pending" aria-label="Just created, awaiting sections"></div>
+        {% if dashboard.nothing_to_show %}
+          {# Nothing came back for this view, and no tag/agent/status filter is
+             narrowing it, so the per-section "no tasks match these filters"
+             lines would misdescribe the cause. The heading is scoped to the
+             one filter still in play: work resolved before the `since` window
+             is invisible here, so this must not claim the tracker is empty. #}
+          <article class="task-group task-board-empty" data-empty-state="window">
+            <h2>No tasks in this window</h2>
+            <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Resolved since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
+          </article>
+        {% else %}
+        {% if dashboard.rolled_up_only %}
+          {# Open rows came back, but every one of them rolls up rather than
+             rendering (epics; gates until they get their own section). Saying
+             nothing would leave a blank open side over a non-empty tracker —
+             and the healthy stripe is withheld for the same reason.
+
+             This replaces the OPEN sections only. It sits inside the loop's
+             else-branch rather than beside it, because a board whose open side
+             is all roll-ups still has completed and cancelled rows to show. #}
+          <article class="task-group task-board-empty" data-empty-state="rolled-up">
+            <h2>Nothing to work on here</h2>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+          </article>
+        {% endif %}
         {% for section in section_order %}
           {% set rows = dashboard.sections[section] %}
           {% if section in ("completed", "cancelled") %}
             {% set active = section in dashboard.filters.statuses %}
+          {% elif dashboard.rolled_up_only %}
+            {# The panel above already explains the empty open side once; three
+               "no tasks match these filters" groups would blame the filters
+               for it. #}
+            {% set active = false %}
           {% elif section in ("claims_unknown", "unclassified") %}
             {% set active = "open" in dashboard.filters.statuses and rows %}
+          {% elif section == "open" %}
+            {# The flat fallback's only open section — it replaces the workable
+               three rather than joining them. Keyed on open_flat, not on
+               graph_available: a frontier READ failure renders flat too, while
+               the server keeps its graph. #}
+            {% set active = "open" in dashboard.filters.statuses and dashboard.open_flat %}
           {% else %}
-            {% set active = "open" in dashboard.filters.statuses %}
+            {% set active = "open" in dashboard.filters.statuses and not dashboard.open_flat %}
           {% endif %}
           {% if active %}
             <article class="task-group" id="task-group-{{ section }}" data-task-group="{{ section }}">
@@ -229,6 +321,7 @@
             </article>
           {% endif %}
         {% endfor %}
+        {% endif %}
       </section>
     </div>
 

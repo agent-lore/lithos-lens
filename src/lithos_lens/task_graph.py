@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from lithos_lens.tasks import TaskRecord, normalize_task
+from lithos_lens.normalizers import normalize_task
+from lithos_lens.tasks import TaskRecord
 
 # Known blocker kinds emitted by lithos ``_compute_blockers``; transport
 # preserves the raw value, so this set is documentation, not validation.
