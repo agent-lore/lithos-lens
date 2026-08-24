@@ -23,7 +23,7 @@ from lithos_lens.config import (
 )
 from lithos_lens.frontier import classify_open_tasks
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
-from lithos_lens.tasks import ClaimRecord, SectionName, TaskRecord
+from lithos_lens.tasks import ClaimRecord, SectionName, SectionRow, TaskRecord
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -542,3 +542,82 @@ def test_promoted_gate_keeps_claims_unknown_when_claims_were_not_returned() -> N
     (row,) = sections["attention"]
     assert row.claims_unknown is True
     assert row.claim_state == "unknown"
+
+
+def test_claims_unknown_row_is_promoted_on_a_proven_dead_end() -> None:
+    """Regression: a cancelled blocker is proven whatever the claims say.
+
+    ``claims_unknown`` rows were excluded from promotion wholesale, so a task
+    that can NEVER become ready sat in the degraded group with no reason chip —
+    the frontier that proves it dead had answered fine; only the claim data was
+    missing. The row is promoted on rules 1-2 alone and KEEPS its
+    claims-unknown marker, so the board says both true things at once.
+    """
+    stuck = TaskRecord(
+        id="stuck",
+        title="Stuck task",
+        status="open",
+        created_by="planner",
+        created_at=_ago(minutes=5),
+        claims=None,
+    )
+    row = SectionRow(task=stuck, claims=(), claims_unknown=True)
+
+    sections = flag_attention(
+        {"in_progress": (), "ready": (), "blocked": (), "claims_unknown": (row,)},
+        [stuck],
+        blocked=[
+            BlockedTaskRecord(
+                task=stuck,
+                blockers=(
+                    BlockerRecord(
+                        kind="blocker_unsatisfiable",
+                        task_id="dead",
+                        message="blocker cancelled",
+                    ),
+                ),
+            )
+        ],
+        policy=AttentionPolicy(),
+        now=_NOW,
+        index={stuck.id: stuck},
+    )
+
+    # Single placement: it left the degraded group for the attention list…
+    assert sections["claims_unknown"] == ()
+    (promoted,) = sections["attention"]
+    assert [reason.rule for reason in promoted.attention] == ["unsatisfiable"]
+    # …without pretending the claims are known.
+    assert promoted.claims_unknown is True
+    assert promoted.claim_state == "unknown"
+
+
+def test_claims_unknown_row_is_not_promoted_on_the_claim_or_age_rules() -> None:
+    """The other half of the same rule: only the structural evidence carries.
+
+    An OLD claims-unknown row stays put. Rule 5 is claim-independent, but a
+    server that ignores ``with_claims`` puts every row in this group, and
+    flagging each old one would bury the dead ends that rules 1-2 find — the
+    list is a severity list, not an inventory.
+    """
+    ancient = TaskRecord(
+        id="ancient",
+        title="Ancient task",
+        status="open",
+        created_by="planner",
+        created_at=_ago(days=90),
+        claims=None,
+    )
+    row = SectionRow(task=ancient, claims=(), claims_unknown=True)
+
+    sections = flag_attention(
+        {"in_progress": (), "ready": (), "blocked": (), "claims_unknown": (row,)},
+        [ancient],
+        blocked=[],
+        policy=AttentionPolicy(),
+        now=_NOW,
+        index={ancient.id: ancient},
+    )
+
+    assert sections["attention"] == ()
+    assert [r.task.id for r in sections["claims_unknown"]] == ["ancient"]

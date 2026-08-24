@@ -17,11 +17,18 @@ rule), carrying one reason chip per rule that fired. Rules 1-2 are intrinsic;
 3-6 are threshold-driven by :class:`AttentionPolicy` (config-backed).
 
 Two deliberate never-fire policies keep the list trustworthy: a timestamp Lens
-cannot parse never triggers an age rule, and the degraded groups
-(``claims_unknown`` / ``unclassified``) are never promoted — flagging a row
-whose data Lens has already called incomplete would assert a problem it cannot
-support. ``flag_attention`` is pure; ``frontier.load_dashboard`` applies it as
-the last step of the join.
+cannot parse never triggers an age rule, and a degraded row is only ever
+promoted on evidence that its degradation cannot touch. A ``claims_unknown``
+row is eligible for the two STRUCTURAL rules (1-2) — a cancelled blocker or a
+cycle is a fact about the graph, proven by a frontier that answered, and
+withholding it would hide a dead end behind "we do not know who claimed this".
+It is not eligible for 4-6 (two read claims directly; the third would flood the
+list on a server that ignores ``with_claims``). ``unclassified`` rows are never
+promoted at all: they are in neither frontier, so there are no blocker records
+to prove anything with.
+
+``flag_attention`` is pure; ``frontier.load_dashboard`` applies it as the last
+step of the join.
 """
 
 from __future__ import annotations
@@ -41,14 +48,21 @@ from lithos_lens.tasks import (
     parse_timestamp,
 )
 
-# Sections a row can be promoted OUT of into Needs attention (the workable
-# three). The degraded groups are deliberately excluded — see the module
-# docstring.
+# Sections a row can be promoted OUT of into Needs attention under the FULL
+# rule set (the workable three) — see the module docstring for why the degraded
+# groups are not among them.
 ATTENTION_SOURCE_SECTIONS: tuple[SectionName, ...] = (
     "in_progress",
     "ready",
     "blocked",
 )
+
+# The degraded group that is still eligible for the STRUCTURAL rules (1-2).
+# Missing claims do not weaken a cancelled blocker or a dependency cycle: both
+# are read from the blocked frontier, which answered. ``unclassified`` is not
+# here because those rows are in NEITHER frontier — there are no blocker
+# records to prove anything with.
+STRUCTURAL_SOURCE_SECTIONS: tuple[SectionName, ...] = ("claims_unknown",)
 
 # The gate type whose waiting time escalates into Needs attention (rule 3):
 # only a HUMAN gate is waiting on a person. Timer/ci/pr/external gates resolve
@@ -122,21 +136,38 @@ def flag_attention(
             else:
                 kept.append(row)
         sections[section] = tuple(kept)
+    for section in STRUCTURAL_SOURCE_SECTIONS:
+        kept = []
+        for row in partition.get(section, ()):
+            # Structural rules only: a cancelled blocker or a cycle is proven
+            # by the frontier that answered, so missing claims cannot weaken
+            # it. The age and claim rules stay out — 4 and 6 read claims
+            # directly, and 5 would flood the list on a server that ignores
+            # ``with_claims`` (every row lands here), which is the opposite of
+            # what a severity list is for. The row keeps ``claims_unknown``, so
+            # it still says what Lens does not know about it.
+            reasons = _structural_reasons(blocked_map.get(row.task.id, ()), resolve)
+            if reasons:
+                promoted.append(replace(row, attention=reasons))
+            else:
+                kept.append(row)
+        sections[section] = tuple(kept)
     promoted.extend(_waiting_human_gates(visible_open, policy=policy, now=now))
     sections["attention"] = tuple(sorted(promoted, key=_attention_sort_key))
     return sections
 
 
-def _attention_reasons(
-    row: SectionRow,
-    section: SectionName,
+def _structural_reasons(
     blockers: Sequence[BlockerRecord],
     index: Mapping[str, TaskRecord],
-    *,
-    policy: AttentionPolicy,
-    now: datetime,
 ) -> tuple[AttentionReason, ...]:
-    """Rules 1, 2, 4, 5 and 6 for one workable row, in severity order."""
+    """Rules 1-2: the two dead ends, read purely from the blocked frontier.
+
+    Separate because they are the rules that hold whatever else is missing —
+    a cancelled blocker or a dependency cycle is a proven fact about the graph,
+    not an inference from claim data — which is what lets a ``claims_unknown``
+    row be promoted on them alone (see ``STRUCTURAL_SOURCE_SECTIONS``).
+    """
     reasons: list[AttentionReason] = []
     unsatisfiable = [b for b in blockers if b.kind == "blocker_unsatisfiable"]
     if unsatisfiable:
@@ -162,6 +193,20 @@ def _attention_reasons(
                 or f"Dependency cycle through {_blocker_name(cycles[0], index)}.",
             )
         )
+    return tuple(reasons)
+
+
+def _attention_reasons(
+    row: SectionRow,
+    section: SectionName,
+    blockers: Sequence[BlockerRecord],
+    index: Mapping[str, TaskRecord],
+    *,
+    policy: AttentionPolicy,
+    now: datetime,
+) -> tuple[AttentionReason, ...]:
+    """Rules 1, 2, 4, 5 and 6 for one workable row, in severity order."""
+    reasons: list[AttentionReason] = list(_structural_reasons(blockers, index))
     expiring = _expiring_claim(row.claims, policy=policy, now=now)
     if expiring is not None:
         claim, remaining = expiring

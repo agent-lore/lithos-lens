@@ -1142,6 +1142,50 @@ def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
     assert found.id == "open-claimed"
 
 
+def test_dead_end_surfaces_even_when_claims_are_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression, page level: a proven dead end is not hidden by missing claims.
+
+    The degraded groups were excluded from promotion wholesale, so a task whose
+    blocker was CANCELLED sat quietly in Claims unknown with no reason chip —
+    even though the frontier proving it dead had answered; only the claim data
+    was missing. It now renders in Needs attention with its ``unsatisfiable``
+    chip AND its claims-unknown chip: both statements are true at once.
+    """
+
+    class NoClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+            rows = await super().list_tasks(**kwargs)
+            return [replace(task, claims=None) for task in rows]
+
+    fake = NoClaimsClient()
+    fake.blocked = {
+        "open-old": (
+            BlockerRecord(
+                kind="blocker_unsatisfiable",
+                task_id="open-claimed",
+                type="blocks",
+                status="cancelled",
+                message="Blocking predecessor open-claimed was cancelled;",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    attention = _group(text, "attention")
+    assert 'data-task-id="open-old"' in attention
+    assert 'data-attention-rule="unsatisfiable"' in attention
+    # Promoted, but still honest about what Lens does not know.
+    assert "claims unknown" in attention
+    # Single placement holds across the group boundary.
+    assert 'data-task-id="open-old"' not in _group(text, "claims_unknown")
+
+
 def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
     lithos_lens_config_env: Path,
 ) -> None:
