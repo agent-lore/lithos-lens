@@ -14,32 +14,11 @@ failed read rather than diagnosing a version it has no reason to guess at.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Sequence
-from typing import Any, Protocol, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 from lithos_lens.task_graph import BlockedTaskRecord
 from lithos_lens.tasks import SectionName, SectionRow, TaskRecord
-
-
-class FrontierProbeClient(Protocol):
-    """The narrow client surface this module needs.
-
-    Declared here rather than imported from ``frontier`` so the dependency runs
-    one way: ``frontier`` imports the fallback, never the reverse. Its wider
-    ``FrontierLithosClient`` satisfies this structurally.
-    """
-
-    async def task_ready(
-        self,
-        *,
-        limit: int | None = None,
-        with_claims: bool = False,
-    ) -> list[TaskRecord]: ...
-
-    async def task_blocked(
-        self, *, limit: int | None = None
-    ) -> list[BlockedTaskRecord]: ...
-
 
 # A skewed read could not be re-read. Reported rather than swallowed: the
 # dashboard's affirmative "All systems healthy" stripe is gated on this error
@@ -76,18 +55,6 @@ def flat_open_sections(
         "claims_unknown": (),
         "unclassified": (),
     }
-
-
-def frontier_reads(
-    lithos: FrontierProbeClient,
-    *,
-    frontier_limit: int,
-) -> tuple[Awaitable[Any], Awaitable[Any]]:
-    """The ready/blocked awaitables for one generation of the assembly."""
-    return (
-        lithos.task_ready(limit=frontier_limit, with_claims=False),
-        lithos.task_blocked(limit=frontier_limit),
-    )
 
 
 def resolve_frontier(

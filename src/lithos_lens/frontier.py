@@ -47,7 +47,6 @@ from lithos_lens.epic_strip import (
 from lithos_lens.frontier_fallback import (
     RETRY_FAILED_ERROR,
     flat_open_sections,
-    frontier_reads,
     resolve_frontier,
 )
 from lithos_lens.frontier_join import (
@@ -186,7 +185,8 @@ async def load_dashboard(
             with_claims=bool(filters.agent),
         )
 
-    ready_read, blocked_read = frontier_reads(lithos, frontier_limit=frontier_limit)
+    ready_read = lithos.task_ready(limit=frontier_limit, with_claims=False)
+    blocked_read = lithos.task_blocked(limit=frontier_limit)
     (
         open_result,
         ready_result,

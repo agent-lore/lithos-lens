@@ -14,7 +14,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.attention` | M | 1 | 1 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
-| `lithos_lens.frontier_fallback` | S | 1 | 3 |
+| `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
@@ -36,9 +36,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `load_dashboard` — Assemble the dashboard from the parallel Lithos reads.
 
 ### `lithos_lens.frontier_fallback`
-- class `FrontierProbeClient` — The narrow client surface this module needs.
 - def `flat_open_sections` — Partition open tasks with no usable frontier: one flat ``open`` section.
-- def `frontier_reads` — The ready/blocked awaitables for one generation of the assembly.
 - def `resolve_frontier` — Read the two frontier responses into rows and error lines.
 
 ### `lithos_lens.frontier_join`

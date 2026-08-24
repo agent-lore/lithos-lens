@@ -30,8 +30,9 @@ SectionName = Literal[
 ]
 # Known task types from the Lithos 0.4 task graph: "task" (workable), "epic",
 # "gate". Transport records carry the raw server string so an unknown future
-# type survives round-trip; only a MISSING task_type defaults to "task" (legacy
-# payloads predate the field).
+# type survives round-trip; a MISSING task_type is malformed under the 0.4
+# contract and defaults to "task" so the row still renders (see
+# ``normalizers.normalize_task``).
 KNOWN_TASK_TYPES = frozenset({"task", "epic", "gate"})
 
 TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")

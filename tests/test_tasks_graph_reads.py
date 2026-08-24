@@ -128,8 +128,14 @@ def test_normalize_task_reads_task_type_and_resolved_at() -> None:
     assert task.resolved_at == "2026-04-27T09:00:00+00:00"
 
 
-def test_normalize_task_defaults_graph_fields_for_older_payloads() -> None:
-    task = normalize_task({"id": "t-1", "title": "Legacy"})
+def test_normalize_task_defaults_graph_fields_when_the_payload_omits_them() -> None:
+    """A malformed payload degrades; it is not a supported server shape.
+
+    Both fields are part of the 0.4 contract, and 0.4 is a floor rather than a
+    detected capability (REQUIREMENTS §5) — so this pins boundary robustness,
+    not back-compat. See ``normalize_task`` for why the default is "task".
+    """
+    task = normalize_task({"id": "t-1", "title": "Malformed"})
     assert task.task_type == "task"
     assert task.resolved_at == ""
 

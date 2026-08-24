@@ -21,6 +21,7 @@ from lithos_lens.epic_strip import EPIC_FANOUT_BATCH, build_epic_rollup
 from lithos_lens.frontier import classify_open_tasks, load_dashboard
 from lithos_lens.frontier_fallback import RETRY_FAILED_ERROR
 from lithos_lens.lithos_client import LithosToolError
+from lithos_lens.normalizers import normalize_task
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     TASK_STATUSES,
@@ -174,6 +175,21 @@ def test_epics_and_gates_never_enter_workable_sections(task_type: str) -> None:
     assert all(sections[key] == () for key in sections)
 
 
+def test_task_type_less_payload_still_reaches_a_workable_section() -> None:
+    """The missing-``task_type`` default is what keeps a malformed row visible.
+
+    ``task_type`` is required by the 0.4 contract, so a payload without it is
+    malformed rather than old (the pre-0.4 fallback was withdrawn). The
+    normalizer still defaults it to "task", and this is why: the workable
+    filter above drops every non-"task" type, so normalizing the absence to
+    an empty string would silently DELETE the task from the board instead of
+    degrading it.
+    """
+    task = normalize_task({"id": "m", "title": "No task_type", "claims": []})
+    sections = classify_open_tasks([task], ready_ids={"m"}, blocked=[])
+    assert _section_ids(sections, "ready") == ["m"]
+
+
 def test_claimed_but_blocked_is_flagged_in_progress() -> None:
     claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
     sections = classify_open_tasks(
@@ -251,8 +267,8 @@ class _FrontierFake:
         # Which ready call starts failing (0-based): scripts a first
         # generation that succeeds and a RETRY that does not.
         self._fail_ready_from = fail_ready_from
-        # Per-tool frontier failures: version-skew detection is anchored to the
-        # tool whose call failed, so the two are scripted separately.
+        # Per-tool frontier failures: each read reports its own error line
+        # ("ready" vs "blocked"), so the two are scripted separately.
         self._ready_error = ready_error
         self._blocked_error = blocked_error
         self.open_calls = 0
