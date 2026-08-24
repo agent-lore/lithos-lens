@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join and dashboard assembly built on them.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, and the dashboard assembly built on them.
 
 **Tier:** Foundation
 
@@ -11,6 +11,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.attention` | M | 1 | 1 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | S | 1 | 4 |
@@ -18,6 +19,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
+
+### `lithos_lens.attention`
+- class `AttentionPolicy` — Thresholds for the age-based Needs-attention rules (3-6).
+- def `flag_attention` — Evaluate the six-rule severity model over a classified partition.
 
 ### `lithos_lens.epic_strip`
 - class `EpicChildrenClient` — The narrow client surface the strip needs.

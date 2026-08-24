@@ -9,6 +9,8 @@ behind it — without needing a browser. The Playwright suite itself lives under
 from __future__ import annotations
 
 import asyncio
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -28,6 +30,7 @@ from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_PORT, resolve_port
 from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 
 
 @pytest.mark.parametrize(
@@ -388,6 +391,35 @@ def test_fake_client_defaults_to_the_demo_dataset() -> None:
     assert FakeLithosClient().dataset == demo_dataset()
 
 
+def test_demo_timestamps_keep_the_contracts_second_precision() -> None:
+    """Fixtures reproduce the canonical payloads, not approximations of them
+    (AGENTS.md): every vendored contract stamps whole seconds, so the demo's
+    now-relative timestamps must too. ``datetime.now(UTC)`` carries
+    microseconds, and the surfaces that render a timestamp verbatim — the task
+    detail page — would show a six-digit fraction no Lithos record can produce
+    (and wrap it mid-value at 320px)."""
+    dataset = demo_dataset()
+    stamps = [task.created_at for task in dataset.tasks]
+    stamps += [task.resolved_at for task in dataset.tasks if task.resolved_at]
+    stamps += [
+        claim.expires_at for claims in dataset.claims.values() for claim in claims
+    ]
+    stamps += [
+        finding.created_at
+        for findings in dataset.findings.values()
+        for finding in findings
+    ]
+    assert stamps, "no fixture timestamps found — the sweep would pass vacuously"
+
+    # Shape taken from the contract itself, so the pattern cannot drift from
+    # what the server actually emits.
+    canonical = load_contract("lithos_task_list")["responses"]["success"]["tasks"][0]
+    pattern = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}")
+    assert pattern.fullmatch(canonical["created_at"])
+    for value in stamps:
+        assert pattern.fullmatch(value), f"not contract-shaped: {value!r}"
+
+
 def test_demo_dataset_is_deterministic() -> None:
     assert demo_dataset() == demo_dataset()
 
@@ -443,23 +475,41 @@ async def test_fake_list_findings_since_uses_full_timestamp_strict_greater() -> 
     ISO datetime (naive == UTC, offsets normalized) and filters strictly
     created_at > since — not an inclusive calendar-date compare."""
     client = FakeLithosClient()
-    task = "influx-ingest-cutover"  # demo findings at 11:30Z and 12:15Z
+    task = "influx-ingest-cutover"
+    # Derived from the fixture, not restated: the demo timestamps are relative
+    # to the run (so the fixtures stay "recent" for the attention rules), and a
+    # hard-coded date here would pin them back into the past.
+    plan, orphan = demo_dataset().findings[task]
+    plan_at = datetime.fromisoformat(plan.created_at)
 
     async def ids(since: str) -> list[str]:
         return [f.id for f in await client.list_findings(task, since=since)]
 
-    # Same-day, between the two findings: only the later one passes.
-    assert await ids("2026-08-06T12:00:00+00:00") == ["finding-orphan"]
+    # Between the two findings: only the later one passes.
+    assert await ids((plan_at + timedelta(minutes=1)).isoformat()) == ["finding-orphan"]
     # Exactly equal to the earlier finding: strict >, so it is excluded.
-    assert await ids("2026-08-06T11:30:00+00:00") == ["finding-orphan"]
+    assert await ids(plan.created_at) == ["finding-orphan"]
     # Before both: both pass.
-    assert await ids("2026-08-06T10:00:00+00:00") == ["finding-plan", "finding-orphan"]
-    # Offset-aware: 13:15+02:00 is 11:15Z, before both.
-    assert await ids("2026-08-06T13:15:00+02:00") == ["finding-plan", "finding-orphan"]
+    assert await ids((plan_at - timedelta(minutes=1)).isoformat()) == [
+        "finding-plan",
+        "finding-orphan",
+    ]
+    # Offset-aware: the same instant expressed in +02:00 must compare equal
+    # (strict >, so the earlier finding is still excluded).
+    assert await ids(plan_at.astimezone(timezone(timedelta(hours=2))).isoformat()) == [
+        "finding-orphan"
+    ]
     # Naive values are treated as already-UTC (upstream normalize_datetime).
-    assert await ids("2026-08-06T12:00:00") == ["finding-orphan"]
+    assert await ids(plan_at.replace(tzinfo=None).isoformat()) == ["finding-orphan"]
     # After both: nothing.
-    assert await ids("2026-08-07T00:00:00+00:00") == []
+    assert (
+        await ids(
+            (
+                datetime.fromisoformat(orphan.created_at) + timedelta(minutes=1)
+            ).isoformat()
+        )
+        == []
+    )
 
 
 @pytest.mark.anyio
@@ -478,12 +528,19 @@ async def test_fake_list_tasks_since_compares_full_strings_inclusive() -> None:
     strings (inclusive, full precision — deliberately unlike findings' strict
     parsed >). A same-day-but-earlier task must therefore be excluded."""
     client = FakeLithosClient()
-    # influx-dashboards was created 2026-08-04T09:00:00+00:00.
-    after = {t.id for t in await client.list_tasks(since="2026-08-04T10:00:00+00:00")}
-    assert "influx-dashboards" not in after
-    boundary = {
-        t.id for t in await client.list_tasks(since="2026-08-04T09:00:00+00:00")
+    dashboards = next(
+        task for task in demo_dataset().tasks if task.id == "influx-dashboards"
+    )
+    created_at = datetime.fromisoformat(dashboards.created_at)
+    after = {
+        t.id
+        for t in await client.list_tasks(
+            since=(created_at + timedelta(seconds=1)).isoformat()
+        )
     }
+    assert "influx-dashboards" not in after
+    # Exactly equal: the compare is inclusive, so the row survives.
+    boundary = {t.id for t in await client.list_tasks(since=dashboards.created_at)}
     assert "influx-dashboards" in boundary
 
 

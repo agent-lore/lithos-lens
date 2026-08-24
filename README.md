@@ -155,6 +155,10 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_AGENT_ID` | `lithos-lens.lithos.agent_id` | Startup registration agent ID. |
 | `LITHOS_LENS_TASKS_VISIBLE_CAP` | `lithos-lens.tasks.visible_cap` | Must be a positive integer. **Deprecated** with `visible_cap`. |
 | `LITHOS_LENS_TASKS_FRONTIER_LIMIT` | `lithos-lens.tasks.frontier_limit` | Must be a positive integer. |
+| `LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS` | `lithos-lens.tasks.gate_waiting_attention_hours` | Integer 1-8760 (same bounds as the TOML key). Needs-attention rule 3. |
+| `LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES` | `lithos-lens.tasks.claim_expiring_soon_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 4. |
+| `LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS` | `lithos-lens.tasks.stale_open_age_days` | Integer 1-3650 (same bounds as the TOML key). Needs-attention rule 5. |
+| `LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES` | `lithos-lens.tasks.unclaimed_ready_age_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 6. |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |

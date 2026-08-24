@@ -26,7 +26,7 @@ from lithos_lens.fake_lithos import (
     FakeLithosClient,
     fake_lithos_enabled,
 )
-from lithos_lens.frontier import load_dashboard
+from lithos_lens.frontier import AttentionPolicy, load_dashboard
 from lithos_lens.knowledge import (
     ResolveOutcome,
     load_related_panel,
@@ -41,12 +41,14 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.state import GRAPH_REPROBE_INTERVAL_S, AppState
+from lithos_lens.task_detail import (
+    find_task,
+    load_task_detail,
+)
 from lithos_lens.tasks import (
     default_since,
-    find_task,
     format_display_date,
     format_tag,
-    load_task_detail,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -415,11 +417,18 @@ async def _render_tasks(
                 "frontier_limit": state.config.tasks.frontier_limit,
             },
         )
+        tasks_config = state.config.tasks
         probed_graph = state.graph_available
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
-            frontier_limit=state.config.tasks.frontier_limit,
+            frontier_limit=tasks_config.frontier_limit,
+            attention=AttentionPolicy(
+                gate_waiting_attention_hours=tasks_config.gate_waiting_attention_hours,
+                claim_expiring_soon_minutes=tasks_config.claim_expiring_soon_minutes,
+                stale_open_age_days=tasks_config.stale_open_age_days,
+                unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
+            ),
             graph_available=probed_graph,
         )
         if probed_graph and not dashboard.graph_available:
@@ -446,6 +455,7 @@ async def _render_tasks(
                 "epic_scope": dashboard.epic_scope,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,
+                "attention": dashboard.summary.attention,
                 "section_counts": {
                     section: len(rows) for section, rows in dashboard.sections.items()
                 },

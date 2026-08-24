@@ -26,6 +26,12 @@ agent_id = "lithos-lens"
 auto_refresh_interval_s = 120
 frontier_limit = 500   # cap pushed to the lithos ready/blocked frontier reads
 default_time_range_days = 30    # resolved-at window for the completed/cancelled sections (1-365)
+# Needs-attention thresholds (rules 3-6; unsatisfiable blockers and cycles are
+# intrinsic and always flagged).
+gate_waiting_attention_hours = 24   # human gate waiting on a person
+claim_expiring_soon_minutes = 10    # claim about to lapse (expired claims are unobservable)
+stale_open_age_days = 7             # workable open task nobody resolved
+unclaimed_ready_age_minutes = 60    # ready frontier row the fleet has not picked up
 default_status_groups = ["open", "completed", "cancelled"]
 project_convention = "both"   # metadata | tag | both — which project convention ?project= honours
 project_tag_key = "project"   # tag key reserved for the tag convention

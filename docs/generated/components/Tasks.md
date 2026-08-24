@@ -12,8 +12,9 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_filtering` | S | 0 | 7 |
-| `lithos_lens.tasks` | L | 17 | 12 |
+| `lithos_lens.task_detail` | S | 2 | 3 |
+| `lithos_lens.task_filtering` | S | 0 | 8 |
+| `lithos_lens.tasks` | M | 16 | 10 |
 
 ## Public API
 
@@ -25,6 +26,13 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_note`
 - def `normalize_note_summary`
 
+### `lithos_lens.task_detail`
+- class `FindingView`
+- class `TaskDetailData`
+- def `load_task_detail`
+- def `find_task`
+- def `resolve_finding_notes`
+
 ### `lithos_lens.task_filtering`
 - def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
 - def `task_projects` — Every project slug a task claims under ``convention`` (§5B.1).
@@ -32,6 +40,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `matches_agent` — Creator-OR-claimer agent match (§5.4.2).
 - def `matches_projects` — Multi-select project match: does the task belong to ANY selected project?
 - def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
+- def `filters_narrow_the_open_side` — True when these filters hide OPEN rows from the sections.
 - def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
 
 ### `lithos_lens.tasks`
@@ -44,24 +53,21 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `NoteRecord`
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
+- class `AttentionReason` — One fired Needs-attention rule on a promoted row.
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
 - class `EpicRollup` — One open epic's progress chip in the dashboard's epic strip.
 - class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
 - class `TaskSummary`
 - class `DashboardData`
-- class `FindingView`
-- class `TaskDetailData`
 - class `TaskLithosClientProtocol` — The subset of the Lithos client this module's loaders consume.
 - def `parse_filters`
-- def `load_task_detail`
-- def `find_task`
-- def `resolve_finding_notes`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`
 - def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
 - def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
 - def `format_display_date`
 - def `format_tag`
+- def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.
 - def `parse_date`
 - def `int_stat`
 

@@ -160,6 +160,10 @@ classDiagram
     +type str
     +last_seen_at str
   }
+  class AttentionReason {
+    +rule str
+    +detail str
+  }
   class BlockerChip {
     +label str
     +kind str
@@ -177,6 +181,7 @@ classDiagram
     +reconciliation_pending bool
     +truncated bool
     +filters_narrowed bool
+    +open_side_narrowed bool
     +graph_available bool
     +open_flat bool
     +rolled_up_open int
@@ -259,6 +264,7 @@ classDiagram
     +metadata dict[str, Any]
   }
   class TaskSummary {
+    +attention int
     +in_progress int
     +ready int
     +blocked int
@@ -277,6 +283,7 @@ classDiagram
   DashboardData "1" --> "1" TaskSummary : summary
   EpicRollup "1" --> "1" TaskRecord : task
   FindingView "1" --> "1" FindingRecord : finding
+  SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers
   SectionRow "1" --> "0..*" ClaimRecord : claims
   SectionRow "1" --> "1" TaskRecord : task

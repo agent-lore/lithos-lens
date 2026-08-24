@@ -12,6 +12,7 @@ import asyncio
 import weakref
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -44,16 +45,21 @@ def _task(
     task_type: str = "task",
     claims: Any = None,
     tags: tuple[str, ...] = (),
+    created_at: str = "",
     created_by: str = "",
     metadata: dict[str, Any] | None = None,
     status: TaskStatusName = "open",
 ) -> TaskRecord:
+    # ``created_at`` defaults to blank on purpose: the age-based attention
+    # rules never fire on a timestamp they cannot read, so join-only tests stay
+    # unaffected by them.
     return TaskRecord(
         id=task_id,
         title=f"Title {task_id}",
         status=status,
         task_type=task_type,
         tags=tags,
+        created_at=created_at,
         created_by=created_by,
         metadata=dict(metadata or {}),
         claims=claims,
@@ -2155,3 +2161,95 @@ def test_epic_strip_is_refetched_when_the_skew_retry_adopts_a_new_snapshot() -> 
         "epic-old",
         "epic-new",
     ]
+
+
+# --- Needs attention on the assembly path (T1-S3) --------------------------
+#
+# The rule model itself is covered by tests/test_attention.py; these pin that
+# load_dashboard applies it, scopes it by the filters, and counts it honestly.
+
+_NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+
+
+def _ago(**delta: float) -> str:
+    return (_NOW - timedelta(**delta)).isoformat()
+
+
+def test_load_dashboard_promotes_and_counts_attention() -> None:
+    """Assembly level: the promotion happens on the real dashboard path, the
+    header counter reports it, and open_total still counts every workable open
+    task exactly once (a promoted row only changed section)."""
+    stuck = _task("stuck", claims=(), created_at=_ago(hours=1))
+    ready = _task("r", claims=(), created_at=_ago(minutes=5))
+    gate = _task(
+        "gate-1",
+        task_type="gate",
+        claims=(),
+        created_at=_ago(days=3),
+        metadata={"gate_type": "human"},
+    )
+    fake = _FrontierFake(
+        open_tasks=[stuck, ready, gate],
+        ready=[ready],
+        blocked=[
+            _blocked(
+                stuck,
+                BlockerRecord(
+                    kind="blocker_unsatisfiable", task_id="dead", status="cancelled"
+                ),
+            )
+        ],
+    )
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+    )
+
+    assert _section_ids(data.sections, "attention") == ["stuck", "gate-1"]
+    assert _section_ids(data.sections, "blocked") == []
+    assert _section_ids(data.sections, "ready") == ["r"]
+    assert data.summary.attention == 2
+    assert data.summary.blocked == 0
+    # Two workable open tasks (the promoted one still counts); the promoted
+    # GATE never belonged to the workable partition, so it does not.
+    assert data.summary.open_total == 2
+
+
+def test_load_dashboard_attention_is_empty_when_only_terminal_statuses_show() -> None:
+    """The attention list is an OPEN-section surface: with `open` deselected it
+    renders empty rather than leaking rows into a terminal-only view."""
+    stuck = _task("stuck", claims=(), created_at=_ago(days=40))
+    fake = _FrontierFake(open_tasks=[stuck], ready=[], blocked=[])
+    filters = TaskFilters(statuses=("completed",), tags=(), agent="", since="")
+    data = asyncio.run(
+        load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
+    )
+    assert data.sections["attention"] == ()
+
+
+def test_load_dashboard_filters_scope_the_attention_list() -> None:
+    """Gate rows come from the filtered snapshot, so a gate outside the tag
+    filter must not appear in the attention list."""
+    mine = _task(
+        "gate-mine",
+        task_type="gate",
+        claims=(),
+        created_at=_ago(days=3),
+        tags=("project:mine",),
+        metadata={"gate_type": "human"},
+    )
+    theirs = _task(
+        "gate-theirs",
+        task_type="gate",
+        claims=(),
+        created_at=_ago(days=3),
+        tags=("project:other",),
+        metadata={"gate_type": "human"},
+    )
+    fake = _FrontierFake(open_tasks=[mine, theirs], ready=[], blocked=[])
+    filters = TaskFilters(
+        statuses=("open",), tags=("project:mine",), agent="", since=""
+    )
+    data = asyncio.run(
+        load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
+    )
+    assert _section_ids(data.sections, "attention") == ["gate-mine"]

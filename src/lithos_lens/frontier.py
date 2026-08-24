@@ -9,6 +9,10 @@ carries an inline claim, else *Ready* or *Blocked* by frontier membership, else
 gates are excluded from both frontiers upstream, so they never enter the
 workable partition; their dedicated sections arrive in later T1 slices.
 
+On top of that join sits the Needs-attention severity model
+(``attention.flag_attention``), applied last because it promotes rows OUT of
+the sections computed here.
+
 Open epics roll up instead: EVERY open epic gets a ``lithos_task_children``
 read and a progress chip (``build_epic_rollup``), issued in bounded batches
 (``EPIC_FANOUT_BATCH``) so the fan-out cannot flood the shared MCP session or
@@ -20,11 +24,11 @@ row's placement. The SCOPE does decide placement, and there the generation gap
 is ambiguous: an epic that closed between the two reads answers with an empty
 subtree (per the ``lithos_task_children`` contract) and so does a genuinely
 childless open epic, which must scope to an empty board. One authoritative
-``lithos_task_get`` breaks that tie — see ``_is_open_epic``.
+``lithos_task_get`` breaks that tie — see ``epic_strip._is_open_epic``.
 
 ``classify_open_tasks`` is the pure join; ``load_dashboard`` is the five-call
-assembly that feeds it. Both live here (not in ``tasks.py``) because they depend
-on the task-graph records in ``task_graph.py``.
+assembly that feeds it. Both live here (not in ``tasks.py``) because they
+depend on the task-graph records in ``task_graph.py``.
 """
 
 from __future__ import annotations
@@ -32,8 +36,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.epic_strip import (
     EpicStrip,
     epic_scope_ids,
@@ -53,6 +59,7 @@ from lithos_lens.frontier_join import (
 )
 from lithos_lens.task_filtering import (
     filters_narrow_the_board,
+    filters_narrow_the_open_side,
     invalid_project_metadata,
     matches_filters,
     project_convention_conflict,
@@ -61,6 +68,7 @@ from lithos_lens.task_filtering import (
 from lithos_lens.task_graph import BlockedTaskRecord
 from lithos_lens.tasks import (
     OPEN_SECTIONS,
+    WORKABLE_SECTIONS,
     AgentRecord,
     DashboardData,
     SectionName,
@@ -128,6 +136,8 @@ async def load_dashboard(
     *,
     filters: TaskFilters,
     frontier_limit: int,
+    attention: AttentionPolicy | None = None,
+    now: datetime | None = None,
     graph_available: bool = True,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
@@ -155,8 +165,15 @@ async def load_dashboard(
     classify conservatively as Blocked with the reconciliation-warning surface
     (wrongly-Ready invites wasted operator attention; wrongly-Blocked is safe)
     — the same explicit degraded-data pattern as ``claims_unknown``.
+
+    Once the partition settles, ``flag_attention`` promotes the rows that need
+    an operator into the Needs-attention section. ``attention`` carries the
+    rule thresholds (config-backed; defaults when omitted) and ``now`` is
+    injectable so the age-based rules are testable without freezing the clock.
     """
     errors: list[str] = []
+    policy = attention or AttentionPolicy()
+    evaluated_at = now or datetime.now(UTC)
 
     async def load_closed(status: TaskStatusName) -> list[TaskRecord]:
         # Terminal rows are windowed by RESOLUTION time, never creation time:
@@ -300,6 +317,7 @@ async def load_dashboard(
         return _FrontierState(
             snapshot,
             index,
+            visible,
             parts,
             effective_overlap,
             at_limit,
@@ -381,6 +399,21 @@ async def load_dashboard(
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
             partition = reclassify_conservative(partition, state.effective_overlap)
+        # Needs attention last: it promotes rows OUT of the sections above, so
+        # it must see their final (post-reconciliation) membership.
+        #
+        # Graph branch only. Every source section it promotes from
+        # (in_progress / ready / blocked) is empty in the flat fallback, so the
+        # call would be a no-op there — and the rules it could still evaluate
+        # are the ones whose inputs the fallback has already lost.
+        partition = flag_attention(
+            partition,
+            state.visible,
+            blocked=blocked_records,
+            policy=policy,
+            now=evaluated_at,
+            index=open_index,
+        )
     else:
         # Flat fallback — no usable frontier, whether because the tools are
         # absent (story 27) or because a read of them failed. Either way there
@@ -480,8 +513,26 @@ async def load_dashboard(
     else:
         agents = tuple(cast(list[AgentRecord], agents_result))
 
-    open_total = sum(len(partition.get(section, ())) for section in OPEN_SECTIONS)
+    # ``open_total`` counts the open WORKABLE tasks Lens classified. Promoted
+    # rows still count (they only changed section), but a promoted human gate
+    # does not — gates were never part of the workable partition. The flat
+    # fallback has no partition to read that from, so its one section counts
+    # whole: without the frontier there is no workable/not distinction to make.
+    open_total = (
+        sum(len(partition.get(section, ())) for section in WORKABLE_SECTIONS)
+        + len(partition.get("open", ()))
+        + len(partition.get("claims_unknown", ()))
+        + len(partition.get("unclassified", ()))
+        + sum(
+            1
+            for row in partition.get("attention", ())
+            if row.task.task_type == WORKABLE_TASK_TYPE
+        )
+    )
     filters_narrowed = filters_narrow_the_board(
+        filters, scope_applied=scope_ids is not None
+    )
+    open_side_narrowed = filters_narrow_the_open_side(
         filters, scope_applied=scope_ids is not None
     )
     nothing_to_show = _is_nothing_to_show(
@@ -491,17 +542,19 @@ async def load_dashboard(
         filters_narrowed=filters_narrowed,
     )
     summary = TaskSummary(
-        in_progress=len(partition["in_progress"]),
-        ready=len(partition["ready"]),
-        blocked=len(partition["blocked"]),
-        claims_unknown=len(partition["claims_unknown"]),
-        unclassified=len(partition["unclassified"]),
+        # ``.get`` throughout: the flat fallback's partition holds one section.
+        attention=len(partition.get("attention", ())),
+        in_progress=len(partition.get("in_progress", ())),
+        ready=len(partition.get("ready", ())),
+        blocked=len(partition.get("blocked", ())),
+        claims_unknown=len(partition.get("claims_unknown", ())),
+        unclassified=len(partition.get("unclassified", ())),
         open_total=open_total,
         # Claims on the rows actually rendered In progress — NOT the Lithos-wide
         # lithos_stats.open_claims. The card pairs this with the (filtered,
         # possibly epic-scoped) In-progress count, so a global stat there would
         # read "1 in progress / 10 active claims" on a scoped board.
-        active_claims=sum(len(row.claims) for row in partition["in_progress"]),
+        active_claims=sum(len(row.claims) for row in partition.get("in_progress", ())),
         recent_completed=len(closed["completed"]),
         recent_cancelled=len(closed["cancelled"]),
         agents=int_stat(stats, "agents", default=len(agents)),
@@ -519,9 +572,10 @@ async def load_dashboard(
         # from a failed frontier read are surfaced by the error banner, and a
         # below-limit gap is read-skew (handled by the retry + conservative
         # Blocked above) — neither is mislabelled as truncation.
-        truncated=frontier_ok and at_limit and bool(partition["unclassified"]),
+        truncated=frontier_ok and at_limit and bool(partition.get("unclassified")),
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
+        open_side_narrowed=open_side_narrowed,
         graph_available=graph_available,
         open_flat=open_flat,
         rolled_up_open=rolled_up_open,
@@ -663,6 +717,7 @@ class _FrontierState:
     __slots__ = (
         "snapshot",
         "index",
+        "visible",
         "partition",
         "effective_overlap",
         "at_limit",
@@ -674,6 +729,7 @@ class _FrontierState:
         self,
         snapshot: list[TaskRecord],
         index: Mapping[str, TaskRecord],
+        visible: list[TaskRecord],
         partition: dict[SectionName, tuple[SectionRow, ...]],
         effective_overlap: set[str],
         at_limit: bool,
@@ -682,6 +738,9 @@ class _FrontierState:
     ) -> None:
         self.snapshot = snapshot
         self.index = index
+        # The filter-scoped subset the sections render (the gate rule reads it;
+        # ``snapshot``/``index`` stay whole so blocker titles resolve).
+        self.visible = visible
         self.partition = partition
         self.effective_overlap = effective_overlap
         self.at_limit = at_limit

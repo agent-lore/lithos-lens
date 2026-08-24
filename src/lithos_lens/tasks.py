@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 # Sections of the graph-native dashboard. The three workable sections are
 # computed by joining the master open list against the Lithos ready/blocked
 # frontier (see ``frontier.py``); ``unclassified`` only fills under frontier
 # truncation. Completed/cancelled window recently-resolved work.
-# ``open`` is the flat-fallback section: it holds every open row when the
-# server has no ready/blocked frontier tools (pre-0.4 Lithos), in which case
-# the three workable sections stay empty. It is never populated alongside them.
+# ``attention`` is the severity-ordered Needs-attention list: rows promoted OUT
+# of the section they would otherwise occupy (single-placement rule).
+# ``open`` is the flat-fallback section: it holds every open row when there is
+# no usable ready/blocked frontier, in which case the three workable sections
+# stay empty. It is never populated alongside them.
 SectionName = Literal[
+    "attention",
     "open",
     "in_progress",
     "ready",
@@ -38,7 +40,13 @@ TASK_STATUSES: tuple[TaskStatusName, ...] = ("open", "completed", "cancelled")
 # the flat ``open`` list, or the workable three plus their degraded tails.
 # Canonical here so the render order, the open row count and the
 # "did anything render?" checks below cannot drift apart.
+# The three sections a workable open task can classify into. Needs attention
+# promotes rows OUT of these, so a row counted here is one no rule fired on.
+WORKABLE_SECTIONS: tuple[SectionName, ...] = ("in_progress", "ready", "blocked")
+
 OPEN_SECTIONS: tuple[SectionName, ...] = (
+    # Needs attention leads: its rows are promoted OUT of the three below.
+    "attention",
     "open",
     "in_progress",
     "ready",
@@ -191,6 +199,39 @@ class BlockerChip:
     target_id: str = ""
 
 
+# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug IS the
+# reason chip's text, so the vocabulary is fixed here and rendered verbatim.
+ATTENTION_RULES: tuple[str, ...] = (
+    "unsatisfiable",
+    "cycle",
+    "gate-waiting",
+    "claim-expiring",
+    "stale-open",
+    "ready-unclaimed",
+)
+
+
+@dataclass(frozen=True)
+class AttentionReason:
+    """One fired Needs-attention rule on a promoted row.
+
+    ``rule`` is a slug from :data:`ATTENTION_RULES` (also the chip text);
+    ``detail`` is the one-line supporting fact the chip carries (e.g. ``Blocker
+    "Design schema" was cancelled``), which the detail page's "Why this task is
+    here" block reuses.
+    """
+
+    rule: str
+    detail: str = ""
+
+    @property
+    def severity(self) -> int:
+        """Rule order — lower is more severe. Unknown slugs sort last."""
+        if self.rule in ATTENTION_RULES:
+            return ATTENTION_RULES.index(self.rule)
+        return len(ATTENTION_RULES)
+
+
 @dataclass(frozen=True)
 class SectionRow:
     """A task rendered in one dashboard section, with its display extras.
@@ -203,6 +244,10 @@ class SectionRow:
     ``None`` — claims were not returned even though requested — which is NOT
     the same as an empty tuple (no active claims); the chip reads
     "claims unknown" instead of a confident "unclaimed".
+
+    ``attention`` holds the Needs-attention reasons that fired for the row
+    (empty for every row outside that section): a flagged row is promoted OUT
+    of the section it would otherwise occupy, so the reasons travel with it.
     """
 
     task: TaskRecord
@@ -210,6 +255,7 @@ class SectionRow:
     blockers: tuple[BlockerChip, ...] = ()
     claimed_but_blocked: bool = False
     claims_unknown: bool = False
+    attention: tuple[AttentionReason, ...] = ()
     # The frontier reads are independent (no cross-call snapshot); when they
     # disagree even after the single retry, the row is classified
     # conservatively as Blocked and flagged so the template can render the
@@ -312,6 +358,9 @@ class TaskFilters:
 
 @dataclass(frozen=True)
 class TaskSummary:
+    # Rows in the Needs-attention list. They are promoted out of their home
+    # section, so this count never overlaps the section counts below.
+    attention: int = 0
     in_progress: int = 0
     ready: int = 0
     blocked: int = 0
@@ -348,6 +397,11 @@ class DashboardData:
     # every per-view signal below (truncation, reconciliation, claims-unknown,
     # emptiness) describes the filtered subset rather than the whole system.
     filters_narrowed: bool = False
+    # The subset of ``filters_narrowed`` that hides OPEN rows (tag/agent/
+    # project/epic, never status). The Needs-attention stripe reads this one:
+    # ``?status=open`` hides only terminal sections, so it cannot invalidate a
+    # claim about the open board.
+    open_side_narrowed: bool = False
     # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
     # the open rows render in the flat ``open`` section behind the
     # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
@@ -411,6 +465,12 @@ class DashboardData:
         with the needs-attention rules, whose emptiness is the other half of
         the same statement.
 
+        Since T1-S3 this is also the Needs-attention stripe's gate, so it
+        additionally requires an EMPTY attention list: rows the severity rules
+        promoted are precisely "something to report". It reads
+        ``open_side_narrowed`` rather than ``filters_narrowed`` because a
+        status filter hides no open row.
+
         Withheld when the open side rendered nothing but rolled-up rows exist
         (see :attr:`rolled_up_only`): the stripe would be the only thing on an
         empty board, asserting health over work the operator cannot see.
@@ -423,62 +483,15 @@ class DashboardData:
         statements and keep rendering under any filter.
         """
         return (
-            not self.filters_narrowed
+            not self.open_side_narrowed
             and not self.rolled_up_only
+            and not self.sections.get("attention")
             and self.graph_available
             and not self.errors
             and not self.truncated
             and not self.reconciliation_pending
             and not self.sections.get("claims_unknown")
         )
-
-
-@dataclass(frozen=True)
-class FindingView:
-    finding: FindingRecord
-    note_title: str = ""
-    note_error: str = ""
-
-    @property
-    def link_label(self) -> str:
-        return self.note_title or "View document"
-
-    @property
-    def is_reopen(self) -> bool:
-        """True for a ``[Reopened]`` finding — a reopen REPORT, not a verdict.
-
-        ``lithos_task_reopen`` posts this finding and leaves no other trace (it
-        clears ``resolved_at`` and ``outcome``), but any client can post the
-        same prefix under any agent name; see the trust note on
-        :data:`REOPENED_FINDING_PREFIX`. Both markers it drives are worded as
-        attributed reports for that reason.
-        """
-        return self.finding.summary.lstrip().startswith(REOPENED_FINDING_PREFIX)
-
-
-@dataclass(frozen=True)
-class TaskDetailData:
-    task: TaskRecord | None
-    task_status: TaskStatusRecord | None = None
-    findings: tuple[FindingView, ...] = ()
-    status_state: SectionState = SectionState.OK
-    findings_state: SectionState = SectionState.OK
-    not_found: bool = False
-    errors: tuple[str, ...] = ()
-
-    @property
-    def reopen_report(self) -> FindingView | None:
-        """The most recent reopen report on this task, if any.
-
-        Derived from the findings timeline (see ``FindingView.is_reopen``),
-        which is the only durable record of a reopen — and an unauthenticated
-        one, so the view carries the REPORTING AGENT and the header attributes
-        the claim to them instead of stating a lifecycle reversal as fact.
-        ``findings`` is ordered oldest-first by ``resolve_finding_notes``, so
-        the last match is the latest report. A findings load failure yields
-        None ("unknown"), never a false negative claim.
-        """
-        return next((view for view in reversed(self.findings) if view.is_reopen), None)
 
 
 class TaskLithosClientProtocol(Protocol):
@@ -557,94 +570,6 @@ def parse_filters(
     )
 
 
-async def load_task_detail(
-    lithos: TaskLithosClientProtocol,
-    task_id: str,
-) -> TaskDetailData:
-    errors: list[str] = []
-    task = await find_task(lithos, task_id)
-    if task is None:
-        return TaskDetailData(task=None, not_found=True)
-
-    status_result, findings_result = await asyncio.gather(
-        lithos.task_status(task_id),
-        lithos.list_findings(task_id),
-        return_exceptions=True,
-    )
-
-    task_status: TaskStatusRecord | None = None
-    status_state = SectionState.OK
-    if isinstance(status_result, BaseException):
-        status_state = SectionState.ERROR
-        errors.append("Could not load active claims.")
-    else:
-        task_status = cast(TaskStatusRecord | None, status_result)
-
-    finding_views: tuple[FindingView, ...] = ()
-    findings_state = SectionState.OK
-    if isinstance(findings_result, BaseException):
-        findings_state = SectionState.ERROR
-        errors.append("Could not load findings.")
-    else:
-        finding_views = await resolve_finding_notes(
-            lithos, cast(list[FindingRecord], findings_result)
-        )
-
-    return TaskDetailData(
-        task=task,
-        task_status=task_status,
-        findings=finding_views,
-        status_state=status_state,
-        findings_state=findings_state,
-        errors=tuple(errors),
-    )
-
-
-async def find_task(
-    lithos: TaskLithosClientProtocol,
-    task_id: str,
-) -> TaskRecord | None:
-    results = await asyncio.gather(
-        *(lithos.list_tasks(status=status) for status in TASK_STATUSES),
-        return_exceptions=True,
-    )
-    for result in results:
-        if isinstance(result, BaseException):
-            continue
-        for task in cast(list[TaskRecord], result):
-            if task.id == task_id:
-                return task
-    return None
-
-
-async def resolve_finding_notes(
-    lithos: TaskLithosClientProtocol,
-    findings: list[FindingRecord],
-) -> tuple[FindingView, ...]:
-    cache: dict[str, NoteRecord | None] = {}
-    views: list[FindingView] = []
-    for finding in sorted(findings, key=lambda item: item.created_at):
-        if not finding.knowledge_id:
-            views.append(FindingView(finding=finding))
-            continue
-        if finding.knowledge_id not in cache:
-            try:
-                cache[finding.knowledge_id] = await lithos.read_note(
-                    finding.knowledge_id
-                )
-            except Exception:
-                cache[finding.knowledge_id] = None
-        note = cache[finding.knowledge_id]
-        views.append(
-            FindingView(
-                finding=finding,
-                note_title=note.title if note else "",
-                note_error="" if note else "Could not resolve document title.",
-            )
-        )
-    return tuple(views)
-
-
 def note_updated_sort_key(updated: str) -> datetime:
     """Newest-first sort key for a note's ISO ``updated`` timestamp.
 
@@ -712,6 +637,31 @@ def format_tag(tag: str) -> str:
         return tag
     key, value = tag.split(":", 1)
     return f"{key}: {value}"
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    """Parse an ISO timestamp into an aware UTC datetime, or ``None``.
+
+    Shared by the age-based Needs-attention rules (``attention.py``). A blank or
+    malformed value returns ``None`` so a rule never fires on a timestamp it
+    could not read — a false "stale"/"expiring" flag is worse than a missed
+    one. Naive timestamps are treated as UTC, matching the server's own
+    normalization.
+
+    ``OverflowError`` is caught alongside ``ValueError`` because the UTC
+    conversion — not the parse — is what rejects an offset timestamp at the
+    edge of the datetime domain (``9999-12-31T23:59:59-05:00``). An upstream
+    record carrying one must degrade to "unreadable" like any other bad value:
+    letting it raise would take the whole dashboard down for every operator
+    until the record was fixed.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
 
 
 def parse_date(value: str) -> date | None:

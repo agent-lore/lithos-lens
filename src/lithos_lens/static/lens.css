@@ -662,6 +662,70 @@ button,
   font-weight: 700;
 }
 
+/* Needs-attention reason chips (T1-S3). Same pill language as the blocker
+   chips; severity is carried by TEXT (the rule slug) with colour only
+   reinforcing it, per the "never colour alone" chrome requirement. The two
+   structural failures (unsatisfiable, cycle) read as dead ends, the waiting
+   rules as warnings. */
+.attention-list {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  grid-column: 1 / -1;
+}
+
+.attention-label {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.attention-chip {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+}
+
+.attention-chip-unsatisfiable,
+.attention-chip-cycle {
+  background: rgba(189, 79, 43, 0.12);
+  border-color: rgba(189, 79, 43, 0.5);
+  color: var(--cancelled);
+}
+
+.attention-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+  grid-column: 1 / -1;
+  margin: 0.2rem 0 0;
+}
+
+/* Empty Needs attention: a thin reassurance stripe, deliberately NOT hidden —
+   or, when the reads behind it were incomplete, the same stripe in a warning
+   key that withholds the claim instead of making it. */
+.healthy-stripe {
+  background: rgba(53, 106, 77, 0.1);
+  border: 1px solid rgba(53, 106, 77, 0.35);
+  border-radius: 0.8rem;
+  color: var(--ok);
+  font-size: 0.85rem;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+}
+
+.healthy-stripe-unknown {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--ink);
+}
+
 /* Metadata chips + lede (§6.4). Neutral chips by default; the status chip is
    colour-coded so a quarantined note reads as quarantined at a glance. Only
    the known statuses below get colours — an UNKNOWN status renders as a

@@ -34,6 +34,25 @@ from lithos_lens.tasks import (
 )
 from lithos_lens.web import create_app
 
+# The Needs-attention rules (T1-S3) compare fixture timestamps against the real
+# clock, so the OPEN fixtures below are anchored to "now" — a static open row
+# would silently age into the stale-open rule and drift out of the section a
+# test is asserting on. Terminal rows keep their fixed dates: the `since`
+# window compares them against the suite's fixed 2026-04-01 filter, so both
+# sides of THAT comparison must stay static.
+# Whole seconds: these stamps reach rendered HTML (the detail page prints
+# ``created_at`` verbatim) and the vendored contracts and demo fixtures all use
+# second precision, so microseconds would make the fixtures the odd ones out.
+_NOW = datetime.now(UTC).replace(microsecond=0)
+
+
+def _ago(**delta: float) -> str:
+    return (_NOW - timedelta(**delta)).isoformat()
+
+
+def _ahead(**delta: float) -> str:
+    return (_NOW + timedelta(**delta)).isoformat()
+
 
 class TaskFakeLithosClient:
     def __init__(
@@ -74,7 +93,11 @@ class TaskFakeLithosClient:
                 ClaimRecord(
                     agent="worker-a",
                     aspect="implementation",
-                    expires_at="2026-04-26T11:00:00+00:00",
+                    # Relative, and comfortably outside
+                    # claim_expiring_soon_minutes: a fixed stamp would drift
+                    # into the past and silently promote this row into Needs
+                    # attention (T1-S3 rule 4) in every test that uses it.
+                    expires_at=_ahead(hours=6),
                 ),
             )
         }
@@ -118,7 +141,7 @@ class TaskFakeLithosClient:
                 description="Work in progress",
                 status="open",
                 created_by="planner",
-                created_at="2026-04-26T10:00:00+00:00",
+                created_at=_ago(hours=2),
                 tags=("project:influx", "area:docs"),
             ),
             TaskRecord(
@@ -126,7 +149,9 @@ class TaskFakeLithosClient:
                 title="Unclaimed open task",
                 status="open",
                 created_by="planner",
-                created_at="2026-04-25T10:00:00+00:00",
+                # Younger than unclaimed_ready_age_minutes: on the ready
+                # frontier and NOT flagged, so Ready-section assertions hold.
+                created_at=_ago(minutes=20),
                 tags=("project:influx",),
             ),
             TaskRecord(
@@ -134,6 +159,8 @@ class TaskFakeLithosClient:
                 title="Old open task",
                 status="open",
                 created_by="planner",
+                # Genuinely old on purpose: it is the fixture that fires the
+                # stale-open rule and lands in Needs attention.
                 created_at="2025-01-01T10:00:00+00:00",
             ),
             TaskRecord(
@@ -692,7 +719,7 @@ def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
             title="Blocked in project A",
             status="open",
             created_by="planner",
-            created_at="2026-04-26T10:00:00+00:00",
+            created_at=_ago(hours=2),
             tags=("project:a",),
         )
     )
@@ -702,7 +729,7 @@ def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
             title="Predecessor in project B",
             status="open",
             created_by="planner",
-            created_at="2026-04-26T09:00:00+00:00",
+            created_at=_ago(hours=3),
             tags=("project:b",),
         )
     )
@@ -749,7 +776,7 @@ def test_blocker_chip_resolves_older_predecessor_title_under_since_filter(
             title="Recent blocked work",
             status="open",
             created_by="planner",
-            created_at="2026-04-26T10:00:00+00:00",
+            created_at=_ago(hours=2),
         )
     )
     fake.tasks.append(
@@ -868,6 +895,166 @@ def test_claimed_but_blocked_row_is_decorated_in_progress(
     assert "data-claimed-but-blocked" in in_progress
 
 
+def test_cancelled_blocker_row_renders_only_in_needs_attention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-3 acceptance: a task whose blocker was cancelled renders ONLY in
+    Needs attention, carrying an ``unsatisfiable`` reason chip that names the
+    dead predecessor. Leaving it in Blocked would read as ordinary waiting."""
+    fake = TaskFakeLithosClient()
+    fake.ready_ids = {"open-unclaimed"}
+    fake.blocked = {
+        "open-old": (
+            BlockerRecord(
+                kind="blocker_unsatisfiable",
+                task_id="open-claimed",
+                type="blocks",
+                status="cancelled",
+                message="Blocking predecessor open-claimed was cancelled;",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    attention = text[text.index('data-task-group="attention"') :]
+    attention = attention[: attention.index("</article>")]
+    assert 'data-task-id="open-old"' in attention
+    assert 'data-attention-rule="unsatisfiable"' in attention
+    # The chip's supporting fact names the cancelled predecessor by title.
+    assert "Claimed open task" in unescape(attention)
+    # Single placement: the row is gone from Blocked, and that section is empty.
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert 'data-task-id="open-old"' not in blocked_group
+    assert "No blocked tasks match these filters" in blocked_group
+
+
+def test_fresh_blocked_unclaimed_row_stays_out_of_needs_attention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Slice-3 acceptance (the false-positive half): an ordinary open
+    predecessor is correct waiting, so a fresh blocked unclaimed row stays in
+    Blocked — and an empty attention list shows the healthy stripe rather than
+    being hidden."""
+    fake = TaskFakeLithosClient()
+    # Drop the deliberately-ancient fixture so nothing else is flagged.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.ready_ids = set()
+    fake.blocked = {
+        "open-unclaimed": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-claimed",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor open-claimed to complete.",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    blocked_group = text[text.index('data-task-group="blocked"') :]
+    blocked_group = blocked_group[: blocked_group.index("</article>")]
+    assert 'data-task-id="open-unclaimed"' in blocked_group
+    assert "data-attention-rule" not in text
+    attention = text[text.index('data-task-group="attention"') :]
+    attention = attention[: attention.index("</article>")]
+    assert "data-attention-healthy" in attention
+    assert "All systems healthy" in unescape(attention)
+
+
+def test_healthy_stripe_is_withheld_when_a_frontier_read_failed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Alerting integrity: rules 1 and 2 fire ONLY from the blocked frontier,
+    so when that read fails the empty attention list means "nothing was
+    examined", not "nothing is wrong". The stripe must withhold the claim."""
+    fake = TaskFakeLithosClient()
+    # Drop the ancient fixture so the list is genuinely empty.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+
+    async def failing_task_blocked(**_: Any) -> list[BlockedTaskRecord]:
+        raise RuntimeError("blocked frontier unavailable")
+
+    fake.task_blocked = failing_task_blocked  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "All systems healthy" not in text
+    assert "data-attention-healthy" not in text
+    assert "data-attention-unknown" in text
+    assert "Cannot assess" in unescape(text)
+    # The existing error banner still explains what went wrong.
+    assert "Some task data could not be loaded." in text
+
+
+def test_healthy_stripe_is_withheld_when_the_frontier_truncated(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same claim, other cause: a truncated frontier leaves rows unexamined in
+    the Not-classified tail, which is never promoted — so "0 issues" would be
+    asserting health over rows nobody looked at."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.tasks.append(
+        TaskRecord(
+            id="open-fresh",
+            title="Fresh ready task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=5),
+        )
+    )
+    fake.ready_ids = {"open-unclaimed", "open-fresh"}
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "1")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Section counts are approximate." in text  # truncation banner
+    assert "All systems healthy" not in text
+    assert "data-attention-unknown" in text
+
+
+def test_stale_open_row_is_flagged_with_its_reason_chip(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The age rules reach the page too: the ancient fixture is promoted out of
+    Ready with a ``stale-open`` chip and a supporting fact, and the header
+    counter agrees with the rendered list."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    attention = text[text.index('data-task-group="attention"') :]
+    attention = attention[: attention.index("</article>")]
+    assert 'data-task-id="open-old"' in attention
+    assert 'data-attention-rule="stale-open"' in attention
+    assert "with no resolution" in unescape(attention)
+    assert "<strong data-attention-count>1</strong>" in text
+    # It left Ready: only the fresh unclaimed fixture remains there.
+    ready_group = text[text.index('data-task-group="ready"') :]
+    ready_group = ready_group[: ready_group.index("</article>")]
+    assert 'data-task-id="open-old"' not in ready_group
+    assert 'data-task-id="open-unclaimed"' in ready_group
+
+
 def test_direct_task_detail_resolves_findings_and_note_links(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -953,6 +1140,50 @@ def test_fake_task_get_raises_coded_not_found_like_the_real_client() -> None:
 
     found = asyncio.run(fake.task_get("open-claimed"))
     assert found.id == "open-claimed"
+
+
+def test_dead_end_surfaces_even_when_claims_are_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression, page level: a proven dead end is not hidden by missing claims.
+
+    The degraded groups were excluded from promotion wholesale, so a task whose
+    blocker was CANCELLED sat quietly in Claims unknown with no reason chip —
+    even though the frontier proving it dead had answered; only the claim data
+    was missing. It now renders in Needs attention with its ``unsatisfiable``
+    chip AND its claims-unknown chip: both statements are true at once.
+    """
+
+    class NoClaimsClient(TaskFakeLithosClient):
+        async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+            rows = await super().list_tasks(**kwargs)
+            return [replace(task, claims=None) for task in rows]
+
+    fake = NoClaimsClient()
+    fake.blocked = {
+        "open-old": (
+            BlockerRecord(
+                kind="blocker_unsatisfiable",
+                task_id="open-claimed",
+                type="blocks",
+                status="cancelled",
+                message="Blocking predecessor open-claimed was cancelled;",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    attention = _group(text, "attention")
+    assert 'data-task-id="open-old"' in attention
+    assert 'data-attention-rule="unsatisfiable"' in attention
+    # Promoted, but still honest about what Lens does not know.
+    assert "claims unknown" in attention
+    # Single placement holds across the group boundary.
+    assert 'data-task-id="open-old"' not in _group(text, "claims_unknown")
 
 
 def test_dashboard_renders_claims_unknown_chip_when_claims_not_returned(
@@ -1143,10 +1374,12 @@ def test_terminal_rows_show_the_resolution_timestamp_they_are_windowed_on(
         "resolved 2026-08-08 00:00</time>" in response.text
     )
     assert "2020-01-01" not in response.text
-    # Open rows are unaffected — they are not windowed on resolution.
+    # Open rows are unaffected — they are not windowed on resolution. Asserted
+    # by KIND rather than by a literal stamp: T1-S3 moved the open fixtures to
+    # now-relative timestamps so its age rules read them the way it intends.
     assert (
-        '<time datetime="2026-04-26T10:00:00+00:00" data-timestamp-kind="created">'
-        "created 2026-04-26 10:00</time>" in response.text
+        '<time datetime="2025-01-01T10:00:00+00:00" data-timestamp-kind="created">'
+        "created 2025-01-01 10:00</time>" in response.text
     )
 
 
@@ -1508,8 +1741,12 @@ def test_dashboard_renders_healthy_stripe_when_nothing_is_degraded(
     lithos_lens_config_env: Path,
 ) -> None:
     """The positive branch: every read landed, the frontier was complete and
-    self-consistent, claims came back for every row."""
+    self-consistent, claims came back for every row — and, since T1-S3 moved
+    the stripe into the Needs-attention section, nothing needs attention."""
     fake = TaskFakeLithosClient()
+    # ``open-old`` exists precisely to fire the stale-open rule; drop it so the
+    # attention list is genuinely empty and the stripe can make its claim.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
 
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get("/tasks?since=2026-04-01")
@@ -1712,7 +1949,10 @@ def _with_epic(fake: TaskFakeLithosClient) -> TaskFakeLithosClient:
 
     The three open children are placed on the ready frontier (the fake is the
     readiness oracle) so they classify normally instead of tripping the
-    read-skew surface.
+    read-skew surface, and they are FRESH — younger than both T1-S3 age
+    thresholds (stale-open at 7 days, ready-unclaimed at 60 minutes). An older
+    child would be promoted into Needs attention, which is correct behaviour
+    but moves the rows these scoping tests are looking for.
     """
     fake.tasks.append(
         TaskRecord(
@@ -1730,7 +1970,7 @@ def _with_epic(fake: TaskFakeLithosClient) -> TaskFakeLithosClient:
             title=f"Epic child {n}",
             status="completed" if n <= 5 else "open",
             created_by="worker",
-            created_at="2026-04-24T10:00:00+00:00",
+            created_at="2026-04-24T10:00:00+00:00" if n <= 5 else _ago(minutes=5),
             resolved_at="2026-04-25T10:00:00+00:00" if n <= 5 else "",
         )
         for n in range(1, 9)
@@ -1741,8 +1981,16 @@ def _with_epic(fake: TaskFakeLithosClient) -> TaskFakeLithosClient:
 
 
 def _group(text: str, section: str) -> str:
+    """The rendered markup of one dashboard section.
+
+    Sliced to the NEXT section rather than to the first ``</article>``: rows
+    are articles themselves (row.html), so the old cut stopped after the first
+    row and silently hid the rest from every assertion built on this helper.
+    """
     start = text.index(f'data-task-group="{section}"')
-    return text[start:][: text[start:].index("</article>")]
+    rest = text[start + 1 :]
+    end = rest.find('data-task-group="')
+    return text[start:] if end == -1 else text[start : start + 1 + end]
 
 
 def test_epic_strip_chip_shows_recursive_subtree_progress(
@@ -1856,13 +2104,15 @@ def test_situation_cards_keep_the_active_epic_scope_and_filters(
     hrefs = [
         chunk.split('"')[0] for chunk in grid.split('class="metric-card" href="')[1:]
     ]
-    assert len(hrefs) == 5
+    # Six cards since T1-S3 added Needs attention; every one keeps the scope.
+    assert len(hrefs) == 6
     for href in hrefs:
         assert "epic=epic-1" in href
         assert "tag=project%3Ainflux" in href
         assert "since=2026-04-01" in href
-    # Each card still narrows to its own status.
-    assert sum("status=open" in href for href in hrefs) == 3
+    # Each card still narrows to its own status (four open-side cards now:
+    # Needs attention, In progress, Ready, Blocked).
+    assert sum("status=open" in href for href in hrefs) == 4
     assert sum("status=completed" in href for href in hrefs) == 1
     assert sum("status=cancelled" in href for href in hrefs) == 1
 

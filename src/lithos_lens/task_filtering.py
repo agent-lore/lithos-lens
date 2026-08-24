@@ -179,6 +179,31 @@ def matches_filters(
     return True
 
 
+def filters_narrow_the_open_side(
+    filters: TaskFilters, *, scope_applied: bool = False
+) -> bool:
+    """True when these filters hide OPEN rows from the sections.
+
+    The one list every open-side filter must join — tag, agent, project, and
+    the applied ``?epic=`` scope — plus the one status case that matters:
+    dropping ``open`` from the status set takes the whole open side off screen,
+    so a degraded row there (claims unknown, say) is hidden rather than absent.
+
+    Narrowing to ``?status=open`` is deliberately NOT narrowing here: it hides
+    only terminal sections, and no claim about the open board rests on those.
+    That asymmetry is the whole reason this is separate from
+    :func:`filters_narrow_the_board`, which adds any status subset for the
+    claims that cover the whole page (the empty-corpus panel).
+    """
+    return (
+        scope_applied
+        or bool(filters.tags)
+        or bool(filters.agent)
+        or bool(filters.projects)
+        or "open" not in filters.statuses
+    )
+
+
 def filters_narrow_the_board(
     filters: TaskFilters, *, scope_applied: bool = False
 ) -> bool:
@@ -204,10 +229,6 @@ def filters_narrow_the_board(
     completed/cancelled reads, which the empty-corpus copy names explicitly,
     and the open reads every degraded signal derives from ignore it.
     """
-    return (
-        scope_applied
-        or bool(filters.tags)
-        or bool(filters.agent)
-        or bool(filters.projects)
-        or set(filters.statuses) != set(TASK_STATUSES)
-    )
+    return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
+        filters.statuses
+    ) != set(TASK_STATUSES)

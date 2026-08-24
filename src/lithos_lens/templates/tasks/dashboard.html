@@ -42,17 +42,19 @@
         </section>
       {% endif %}
 
-      {# The positive counterpart of the banners above: every read landed, the
-         frontier was complete and self-consistent, claims came back for every
-         row. T1-S3 extends this with "nothing needs attention". #}
-      {% if dashboard.healthy and not dashboard.nothing_to_show %}
-        <section class="banner banner-healthy" role="status" data-healthy-stripe>
-          <strong>All systems healthy.</strong>
-          <span>Every workable open task is classified; no failed reads, truncated frontier, or unresolved frontier disagreement.</span>
-        </section>
-      {% endif %}
+      {# The healthy stripe used to live here as a page banner. REQUIREMENTS
+         §5.2.2 puts it INSIDE the Needs-attention section — an empty attention
+         list IS the reassurance — so it moves there with T1-S3 rather than
+         being claimed twice on one page. #}
 
       <section class="situation-grid" aria-label="Current situation">
+        {% if not dashboard.open_flat %}
+          <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-attention') }}">
+            <span>Needs attention</span>
+            <strong data-attention-count>{{ dashboard.summary.attention }}</strong>
+            <small>Promoted out of their section</small>
+          </a>
+        {% endif %}
         {# Keyed on open_flat, exactly like the sections below: the cards
            describe the board that rendered. Keying them on graph_available
            instead put Ready/Blocked zeros above a flat Open list during an
@@ -234,12 +236,16 @@
 
       {#
         Section order derives from the ready/blocked frontier, not claim-state
-        inference. The three workable sections show when the "open" status is
-        selected; "Claims unknown" (degraded data: claims not returned, so the
-        rows can't honestly count as Ready/Blocked/In progress) and
-        "Not classified" (frontier truncation) appear only when they have rows.
+        inference. "Needs attention" leads: its rows are promoted OUT of the
+        workable sections (single-placement rule), and it stays visible when
+        empty so the healthy stripe can reassure. The three workable sections
+        show when the "open" status is selected; "Claims unknown" (degraded
+        data: claims not returned, so the rows can't honestly count as
+        Ready/Blocked/In progress) and "Not classified" (frontier truncation)
+        appear only when they have rows.
       #}
       {% set section_labels = {
+        "attention": "Needs attention",
         "open": "Open",
         "in_progress": "In progress",
         "ready": "Ready",
@@ -250,7 +256,7 @@
         "cancelled": "Cancelled",
       } %}
       {% set workable = ("in_progress", "ready", "blocked") %}
-      {% set section_order = ("open",) + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
+      {% set section_order = ("attention", "open") + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
       <section class="task-board" aria-label="Task sections">
         {# Skeleton strip for just-created tasks: a task.created event lands
            here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
@@ -286,6 +292,11 @@
           {% set rows = dashboard.sections[section] %}
           {% if section in ("completed", "cancelled") %}
             {% set active = section in dashboard.filters.statuses %}
+          {% elif section == "attention" %}
+            {# Active whenever the open side is on screen, INCLUDING the flat
+               fallback: there the severity rules never ran, and the section's
+               "Cannot assess" line is the only place that says so. #}
+            {% set active = "open" in dashboard.filters.statuses %}
           {% elif dashboard.rolled_up_only %}
             {# The panel above already explains the empty open side once; three
                "no tasks match these filters" groups would blame the filters
@@ -314,6 +325,43 @@
                     {% include "tasks/row.html" %}
                   {% endfor %}
                 </div>
+              {% elif section == "attention" %}
+                <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                {# Kept visible on purpose (REQUIREMENTS §5.2.2): an empty
+                   attention list is reassurance, not noise to hide.
+
+                   But "0 issues" is a positive claim, and an empty list means
+                   nothing when the reads behind it were incomplete: rules 1-2
+                   fire only from the blocked frontier, so a failed frontier
+                   read, a truncated one, or an unreconciled disagreement can
+                   all leave the list empty with dead-end rows unexamined
+                   (they land in Not classified, which is never promoted). In
+                   those states say so instead of asserting health — the
+                   banners above carry the detail. #}
+                {% if dashboard.healthy %}
+                  {# ``healthy`` is the one gate: every read landed, the
+                     frontier was complete and self-consistent, claims came
+                     back, the graph is up, nothing was rolled out of sight,
+                     and no filter hid open rows. Anything less cannot support
+                     a SYSTEM-wide claim, which is what the two branches below
+                     are for. #}
+                  <p class="healthy-stripe" data-healthy-stripe data-attention-healthy>All systems healthy &mdash; 0 issues</p>
+                {% elif dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending or dashboard.open_flat or dashboard.sections["claims_unknown"] %}
+                  {# An empty list means nothing when the reads behind it were
+                     incomplete: rules 1-2 fire only from the blocked frontier,
+                     so a failed read, a truncated one, an unreconciled
+                     disagreement, a frontier that never answered, or rows
+                     whose claims are unknown all leave it empty with rows
+                     unexamined (they land in Not classified or the degraded
+                     groups, which are never promoted). #}
+                  <p class="healthy-stripe healthy-stripe-unknown" data-attention-unknown>Cannot assess &mdash; task data is incomplete; see the notice above.</p>
+                {% else %}
+                  {# Nothing is wrong and nothing went unexamined, but the
+                     board is a slice — a tag/agent/project filter, an epic
+                     scope, or a board holding only rolled-up rows — so the
+                     claim is scoped to what is on screen, not to the system. #}
+                  <p class="healthy-stripe" data-attention-scoped>Nothing needs attention in this view.</p>
+                {% endif %}
               {% else %}
                 <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                 <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>
