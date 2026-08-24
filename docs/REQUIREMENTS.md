@@ -388,18 +388,11 @@ lithos_agent_register(
 
 6. Start the shared Lithos `/events` subscriber if event streaming is enabled, passing a server-side `types=` filter for the consumed event set (§16.1.1).
 7. Start cached health probes for Lithos, events, and LLM.
-8. *(No graph feature detection at startup.)* Detection is **lazy and re-probed** — see below.
-9. Mount routers and serve HTTP. Write routes (§5C) are mounted **only** when `[writes] enabled = true`.
+8. Mount routers and serve HTTP. Write routes (§5C) are mounted **only** when `[writes] enabled = true`.
 
 Boot must succeed even when Lithos is unreachable. In that case Lens starts in degraded mode, `/health` reports `lithos="unreachable"`, and UI routes render degraded panels rather than crashing.
 
-**Graph feature detection** happens on the first dashboard load that needs it, not at startup, and the verdict expires:
-
-- It is triggered only when **both** frontier reads fail on one render — an already-degraded render, so the extra round trip is never on the happy path.
-- The verdict comes from the server's own `tools/list` (via a cursor-complete walk), **never** from error text. An MCP error result can quote the failing tool's payload, which is agent-authored task data; a planted string must not be able to retire the Ready/Blocked surface. A listing Lens could not complete, or an empty one, is not evidence of absence.
-- A "tools are missing" verdict is remembered for `GRAPH_REPROBE_INTERVAL_S` (300s) and then re-probed, so an upgrade — or a transient failure that merely looked like version skew — heals without a restart.
-
-Detecting at startup instead would contradict the boot rule above: a Lithos that is unreachable at boot would have to yield either a blocking startup or a false `graph_available=false` that survives until the next restart, which is exactly the inference from failure this rule forbids.
+There is **no graph-feature detection**: Lens targets Lithos ≥ 0.4 and does not probe for the task-graph tools. A server that does not serve them fails the frontier reads, which is an outage as far as Lens is concerned and degrades exactly like one (§14).
 
 ### 4.2 LiteLLM Configuration Contract
 
@@ -447,7 +440,7 @@ The Tasks View is a **graph-native** surface over the Lithos coordination layer 
 
 Project tracking conventions (§5B) are normative for both. The curated write actions (§5C) attach to both surfaces when enabled. Switching routes via the top-nav resets view-specific filter state — the views answer different questions and shouldn't co-mingle filters.
 
-**Graph features require Lithos ≥ 0.4** (the task-graph release). Against an older Lithos, Lens MUST degrade to a flat open/completed/cancelled list with a "graph features need Lithos ≥ 0.4" notice (§14) rather than erroring.
+**Graph features require Lithos ≥ 0.4** (the task-graph release) — the minimum supported server, not a runtime branch. Lens does not detect the version or carry a pre-0.4 mode; against a server without the frontier tools those reads simply fail, and the dashboard degrades as it does for any failed frontier read (§14).
 
 ---
 
@@ -1255,7 +1248,7 @@ Cross-cutting concerns and reference tables. Milestone sequencing lives in [`doc
 
 Read-only. Displays:
 
-- Lithos connection state: URL, MCP session status, detected capability set (`graph_available` — whether the connected Lithos serves the task-graph tools), SSE subscription state and last successful event time
+- Lithos connection state: URL, MCP session status, SSE subscription state and last successful event time
 - Effective Tasks-view tuning (`frontier_limit`, attention thresholds, `project_convention`, debounce, drawer size) with deprecation notices for any parsed-and-ignored legacy knobs (§4.4)
 - Graph page settings (`[graph]`) and Knowledge settings (`[knowledge]`)
 - **Writes posture:** whether `[writes]` is enabled, the current operator identity, and — when enabled — the explicit trusted-network security-boundary statement from §5C.1
@@ -1271,8 +1264,7 @@ Editing happens via TOML/env outside the container. Lens does not write to confi
 | Failure | Behaviour |
 |---------|-----------|
 | Lithos unreachable | Banner "Lithos is offline"; degraded panels; boot survives (§4.1); write affordances disabled; retry transparently |
-| **Lithos < 0.4 (frontier tools missing)** | Detect via the server's `tools/list` after both frontier reads fail (§4.1); set `graph_available=false` for the re-probe window; render the legacy flat open/completed/cancelled list with a **"graph features need Lithos ≥ 0.4"** notice, repeated on every render it applies to. No graph sections, no graph pages, no write actions that depend on graph context. |
-| `lithos_task_ready` / `lithos_task_blocked` errors (transient) | Dashboard renders the master open list flat with a warning banner naming the failed read; no silent classification — a half-answered frontier classifies nothing, and `graph_available` stays true (this is an outage, not a version story) |
+| `lithos_task_ready` / `lithos_task_blocked` errors | Dashboard renders the master open list flat with a warning banner naming the failed read; no silent classification — a half-answered frontier classifies nothing. This is the only frontier-loss path: a pre-0.4 server (no such tools) lands here too, and is reported as the read failure it is rather than diagnosed as a version |
 | Frontier re-read (skew retry) fails | Keep the first generation rather than mixing generations, and report the failure — the "all systems healthy" stripe is gated on that error channel |
 | `lithos_task_children` errors | Epic chip renders without a progress fraction; tooltip explains |
 | `lithos_task_get` → `task_not_found` | Not-found panel with a link back to `/tasks` (never HTTP 500) |
