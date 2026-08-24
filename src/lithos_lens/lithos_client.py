@@ -25,7 +25,6 @@ from lithos_lens.knowledge import (
     normalize_related,
     normalize_search_result,
 )
-from lithos_lens.lithos_tools import collect_tool_names
 from lithos_lens.normalizers import (
     normalize_agent,
     normalize_finding,
@@ -86,8 +85,6 @@ class LithosClientProtocol(Protocol):
     async def health(self) -> LithosHealth: ...
 
     async def register_agent(self) -> bool: ...
-
-    async def list_tool_names(self) -> set[str]: ...
 
     async def list_tasks(
         self,
@@ -661,20 +658,6 @@ class LithosClient:
         return [
             normalize_search_result(item) for item in rows if isinstance(item, dict)
         ]
-
-    async def list_tool_names(self) -> set[str]:
-        """Every tool name this server advertises (MCP ``tools/list``).
-
-        The authoritative answer to "does this Lithos have <tool>", for
-        task-graph feature detection — which must never be decided from error
-        TEXT, since a tool's error payload can quote task data written by an
-        agent far less privileged than the Lens operator.
-
-        Raises when no session is up (no throwaway fallback, unlike
-        ``_call_tool``, and no waiting): a listing Lens could not make says
-        nothing about the server, and failure is never absence.
-        """
-        return await collect_tool_names(await self._live_session(wait_s=0.0))
 
     async def _live_session(self, *, wait_s: float = _SESSION_WAIT_TIMEOUT_S) -> Any:
         """The worker's MCP session, waiting up to ``wait_s`` for startup.

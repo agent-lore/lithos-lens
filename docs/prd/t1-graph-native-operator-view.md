@@ -160,10 +160,13 @@ timeline. The event pipeline learns the new lifecycle events and
 26. As an operator, I want the Lens upstream subscription to resume from
     `Last-Event-ID` on reconnect with a full-refresh broadcast as backstop,
     so that brief disconnects don't drop events or thundering-rerender tabs.
-27. As an operator on a pre-task-graph Lithos, I want Lens to detect missing
+27. ~~As an operator on a pre-task-graph Lithos, I want Lens to detect missing
     frontier tools and fall back to the flat 0.1.0 dashboard with a "graph
-    features need Lithos ≥ 0.4" notice, so that version skew degrades rather
-    than breaks.
+    features need Lithos ≥ 0.4" notice.~~ **Withdrawn 2026-08-24.** Lithos ≥
+    0.4 is the minimum supported server and no pre-0.4 instance has ever
+    talked to Lens. A server without the frontier tools fails those reads and
+    degrades through the ordinary failed-read path (story 12) — the same flat
+    board, minus a version diagnosis Lens has no reason to make.
 28. As an operator, I want summary counters (attention / gates / in progress
     / ready / blocked) in the header, and a "Not classified" tail with an
     accuracy banner if the frontier `limit` ever truncates, so that counts
@@ -302,10 +305,9 @@ tail + banner) but should be rare.
 New client methods on `LithosClient` (+ protocol + fakes): `task_ready`,
 `task_blocked`, `task_get`, `task_children`, `task_edge_list`. New
 normalizers: `BlockerRecord` (all four kinds), `EdgeRecord` (all four types),
-`TaskRecord` gains `task_type` and `resolved_at`. Feature detection: if
-`lithos_task_ready` fails with a tool-not-found error, set a
-`graph_available=False` flag for the process and render the legacy flat
-dashboard with the version notice (story 27).
+`TaskRecord` gains `task_type` and `resolved_at`. No feature detection: a
+server that does not serve the frontier tools fails those reads, which the
+failed-read path already renders flat (story 27, withdrawn).
 
 SSE: consumed types become `task.created`, `task.claimed`, `task.released`,
 `task.completed`, `task.cancelled`, `task.updated`, `task.reopened`,
@@ -345,8 +347,8 @@ returns explicit ready/blocked sets.
   Completed within the debounce window; `agent.registered` forwarded with
   empty task_id and no dashboard refresh; `Last-Event-ID` sent on reconnect;
   reconnect broadcasts `lens.refresh`.
-- **Degraded**: frontier tools missing → flat fallback + notice; Lithos
-  unreachable → existing banner; empty corpus → empty states.
+- **Degraded**: a failed frontier read → flat board + the read-error banner;
+  Lithos unreachable → existing banner; empty corpus → empty states.
 
 Coverage ≥ 80% on `frontier.py` and the new normalizers.
 
@@ -389,8 +391,8 @@ Coverage ≥ 80% on `frontier.py` and the new normalizers.
 11. **Counters + truncation tail.** Header counts; Not-classified tail.
     Acceptance: with `frontier_limit=2` and 3 blocked tasks, one row lands in
     the tail with the banner.
-12. **Empty/degraded states.** No tasks; all healthy; Lithos unreachable;
-    frontier tools missing → flat-list fallback + "needs Lithos ≥ 0.4".
+12. **Empty/degraded states.** No tasks; all healthy; Lithos unreachable; a
+    failed frontier read → flat board + read-error banner.
     Acceptance: all four branches render.
 
 Slices 1–2 are foundational; 3–5 and 7 depend on them; 6, 9–12 are

@@ -31,16 +31,6 @@
         </section>
       {% endif %}
 
-      {# No ready/blocked frontier, so the board falls back to the flat 0.1.0
-         open list. Usually version skew — but the same symptom means an
-         outage or tools withheld from this client, so the copy says so and
-         the error banner above carries the machine-readable line. #}
-      {% if not dashboard.graph_available %}
-        <section class="banner banner-warning" role="status" data-graph-unavailable>
-          <strong>Graph features need Lithos 0.4 or newer.</strong>
-          <span>Lithos did not answer the ready/blocked frontier reads, so Lens is showing the flat open task list — no Ready, Blocked, gate, or blocker-chip detail. That usually means a server older than 0.4; it can also mean those tools are unavailable to this client. Lens re-checks periodically and the sections return with the frontier.</span>
-        </section>
-      {% endif %}
 
       {# The healthy stripe used to live here as a page banner. REQUIREMENTS
          §5.2.2 puts it INSIDE the Needs-attention section — an empty attention
@@ -56,10 +46,10 @@
           </a>
         {% endif %}
         {# Keyed on open_flat, exactly like the sections below: the cards
-           describe the board that rendered. Keying them on graph_available
-           instead put Ready/Blocked zeros above a flat Open list during an
-           outage — three counts presented as facts about a frontier that
-           never answered, and no card for the list actually on screen. #}
+           describe the board that rendered. Keying them on anything else put
+           Ready/Blocked zeros above a flat Open list during an outage — three
+           counts presented as facts about a frontier that never answered, and
+           no card for the list actually on screen. #}
         {% if not dashboard.open_flat %}
           <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-in_progress') }}">
             <span>In progress</span>
@@ -307,8 +297,8 @@
           {% elif section == "open" %}
             {# The flat fallback's only open section — it replaces the workable
                three rather than joining them. Keyed on open_flat, not on
-               graph_available: a frontier READ failure renders flat too, while
-               the server keeps its graph. #}
+               the section list: a frontier read that did not answer renders
+               the open rows flat. #}
             {% set active = "open" in dashboard.filters.statuses and dashboard.open_flat %}
           {% else %}
             {% set active = "open" in dashboard.filters.statuses and not dashboard.open_flat %}

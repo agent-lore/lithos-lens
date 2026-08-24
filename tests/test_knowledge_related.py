@@ -16,7 +16,6 @@ from lithos_lens.config import (
     LithosConfig,
     load_config,
 )
-from lithos_lens.fake_lithos import FAKE_TOOL_NAMES
 from lithos_lens.knowledge import (
     RELATED_RENDER_CAP,
     RelatedNeighborhood,
@@ -69,9 +68,6 @@ class KnowledgeFakeLithosClient:
 
     async def register_agent(self) -> bool:
         return True
-
-    async def list_tool_names(self) -> set[str]:
-        return set(FAKE_TOOL_NAMES)
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None

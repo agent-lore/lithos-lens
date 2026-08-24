@@ -28,8 +28,12 @@ from lithos_lens.tasks import (
 def normalize_task(raw: dict[str, Any]) -> TaskRecord:
     status_raw = str(raw.get("status") or "open")
     status: TaskStatusName = status_raw if status_raw in TASK_STATUSES else "open"  # type: ignore[assignment]
-    # Raw passthrough: only a MISSING/empty task_type defaults to "task"
-    # (legacy payloads); an unknown explicit value survives round-trip.
+    # Boundary robustness, NOT version compatibility: task_type is required
+    # by the 0.4 contract (tests/contracts/lithos_task_list.json), so a payload
+    # without it is malformed. It still defaults to "task" because the workable
+    # filter in ``frontier_join`` drops every other type — an empty string would
+    # silently delete the row rather than degrade it. An unknown EXPLICIT value
+    # survives round-trip untouched.
     task_type = str(raw.get("task_type") or "task")
     claims: tuple[ClaimRecord, ...] | None = None
     if "claims" in raw and raw["claims"] is not None:
