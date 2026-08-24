@@ -12,10 +12,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens import state
 from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
-from lithos_lens.fake_lithos import FAKE_TOOL_NAMES
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
@@ -66,10 +64,6 @@ class TaskFakeLithosClient:
         self.visible_failures = visible_failures
         self.ignore_tags = ignore_tags
         self.closed = False
-        # What a tools/list probe sees. Feature detection reads THIS, never
-        # error text, so a test models a pre-0.4 server by removing the two
-        # frontier tools from the set.
-        self.tool_names: set[str] = set(FAKE_TOOL_NAMES)
         self.register_calls = 0
         self.status_calls: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
@@ -198,10 +192,6 @@ class TaskFakeLithosClient:
     async def register_agent(self) -> bool:
         self.register_calls += 1
         return True
-
-    async def list_tool_names(self) -> set[str]:
-        """The graph-capable tool surface, unless a test narrows it."""
-        return set(self.tool_names)
 
     async def list_tasks(
         self,
@@ -1465,17 +1455,15 @@ def test_task_detail_without_a_reopen_finding_carries_no_marker(
 
 
 class NoFrontierClient(TaskFakeLithosClient):
-    """A pre-0.4 Lithos: the task-graph frontier tools do not exist.
+    """A server whose frontier calls fail the way a tool-less one does.
 
-    Both halves of that server are modelled: the calls fail (MCP answers an
-    unknown tool with an error result), and — the part detection actually
-    reads — ``tools/list`` does not name them.
+    MCP answers an unknown tool with an error result, which is all Lens ever
+    sees of a pre-0.4 server — and all it needs to render the flat board.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.frontier_calls = 0
-        self.tool_names -= {"lithos_task_ready", "lithos_task_blocked"}
 
     async def task_ready(self, **kwargs: Any) -> list[TaskRecord]:
         self.frontier_calls += 1
@@ -1505,9 +1493,9 @@ class FrontierOutageClient(TaskFakeLithosClient):
 def test_outage_cards_describe_the_flat_board_they_sit_above(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Regression: the summary cards follow the RENDER, not `graph_available`.
+    """Regression: the summary cards follow the RENDER, not the read verdict.
 
-    Keyed on the latter they showed Ready/Blocked zeros — three counts
+    Keyed on anything else they showed Ready/Blocked zeros — three counts
     presented as facts about a frontier that never answered — above a flat Open
     list that had no card of its own.
     """
@@ -1638,19 +1626,22 @@ def test_rolled_up_panel_replaces_the_open_side_not_the_whole_board(
     assert 'data-task-group="ready"' not in response.text
 
 
-def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
+def test_dashboard_renders_flat_when_the_frontier_reads_fail(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Story 27: version skew degrades instead of breaking — the flat 0.1.0
-    open list plus a notice naming the version that restores the graph."""
+    """Page level: no usable frontier degrades instead of breaking.
+
+    Covers the withdrawn pre-0.4 case too — this fake IS a server without the
+    tools, and Lens treats it as what it observes: two reads that did not
+    answer. The board falls back to the flat open list with the read errors on
+    screen; nothing diagnoses a version.
+    """
     fake = NoFrontierClient()
 
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get("/tasks?since=2026-04-01")
 
     assert response.status_code == 200
-    assert "Graph features need Lithos 0.4 or newer" in response.text
-    assert "data-graph-unavailable" in response.text
     # One flat Open section carrying every open row…
     assert 'data-task-group="open"' in response.text
     assert "Claimed open task" in response.text
@@ -1663,41 +1654,15 @@ def test_dashboard_falls_back_to_flat_list_when_frontier_tools_are_missing(
     # The counters follow: no Ready/Blocked cards, one Open tasks count.
     assert "#task-group-ready" not in response.text
     assert "Open tasks" in response.text
-    # The fallback is never silent: the same symptom is an outage or an
-    # authorization filter, so the condition stays on the error channel for the
-    # operator and for log-based monitoring (security f-001).
+    # Never silent, and never dressed up as a version story.
     assert "Some task data could not be loaded" in response.text
-    assert "frontier tools are unavailable" in response.text
+    assert "Could not load the ready frontier." in response.text
+    assert "Could not load the blocked frontier." in response.text
+    assert "Lithos 0.4" not in response.text
+    assert "data-graph-unavailable" not in response.text
     assert "data-healthy-stripe" not in response.text
-    # Terminal sections are unaffected (lithos_task_list predates the graph).
+    # Terminal sections are unaffected — a different read entirely.
     assert "Recently completed task" in response.text
-
-
-def test_flat_fallback_is_remembered_and_stops_probing_the_frontier(
-    lithos_lens_config_env: Path,
-) -> None:
-    """Feature detection is a fact about the server build, so it is answered
-    once per process: later renders skip both frontier calls rather than buying
-    two guaranteed failures each."""
-    fake = NoFrontierClient()
-
-    with _client(lithos_lens_config_env, fake) as client:
-        first = client.get("/tasks")
-        calls_after_first = fake.frontier_calls
-        second = client.get("/tasks")
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert calls_after_first > 0
-    assert fake.frontier_calls == calls_after_first
-    # The fallback still renders on the remembered answer…
-    assert "Graph features need Lithos 0.4 or newer" in second.text
-    assert 'data-task-group="open"' in second.text
-    # …and still reports itself (security f-001): a degraded state that shows
-    # its error only on the render that discovered it is invisible to most
-    # refreshes inside the re-probe window.
-    assert "frontier tools are unavailable" in first.text
-    assert "frontier tools are unavailable" in second.text
 
 
 def test_dashboard_renders_empty_state_when_lithos_has_no_tasks(
@@ -1795,14 +1760,17 @@ def test_dashboard_hides_the_board_when_lithos_is_unreachable(
     assert "data-healthy-stripe" not in response.text
 
 
-def test_missing_frontier_verdict_expires_and_is_re_probed(
-    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_graph_surface_returns_as_soon_as_the_frontier_answers(
+    lithos_lens_config_env: Path,
 ) -> None:
-    """Regression (security f-001): the fallback verdict is remembered, never
-    permanent. "The frontier tools are missing" is also what an outage or an
-    authorization filter looks like, so once the re-probe window lapses Lens
-    asks again and the graph sections come back with the frontier — no restart."""
-    monkeypatch.setattr(state, "GRAPH_REPROBE_INTERVAL_S", 0.0)
+    """A degraded render never sticks: every load attempts the frontier.
+
+    This used to be a property of the re-probe window that cached the
+    "tools are missing" verdict. With that detection withdrawn there is no
+    verdict to expire — the reads are simply made again — and the property it
+    protected still has to hold: the operator gets the graph back on the next
+    render, with no restart and nothing to reset.
+    """
 
     class RecoveringClient(NoFrontierClient):
         recovered = False
@@ -1819,24 +1787,24 @@ def test_missing_frontier_verdict_expires_and_is_re_probed(
                 return await TaskFakeLithosClient.task_blocked(self, **kwargs)
             return await super().task_blocked(**kwargs)
 
-        def upgrade(self) -> None:
-            """The server gains the task graph (upgraded, or access restored)."""
+        def recover(self) -> None:
+            """The frontier starts answering (restored, or the server upgraded)."""
             self.recovered = True
-            self.tool_names = set(FAKE_TOOL_NAMES)
 
     fake = RecoveringClient()
 
     with _client(lithos_lens_config_env, fake) as client:
         degraded = client.get("/tasks?since=2026-04-01")
-        calls_after_probe = fake.frontier_calls
-        fake.upgrade()
+        calls_while_degraded = fake.frontier_calls
+        fake.recover()
         healed = client.get("/tasks?since=2026-04-01")
 
-    assert "Graph features need Lithos 0.4 or newer" in degraded.text
-    # The lapsed window let the next render probe again…
-    assert fake.frontier_calls > calls_after_probe
-    # …and the graph surface returns without a restart.
-    assert "Graph features need Lithos 0.4 or newer" not in healed.text
+    assert 'data-task-group="open"' in degraded.text
+    assert "Could not load the ready frontier." in degraded.text
+    # The next render asked again, unconditionally…
+    assert fake.frontier_calls > calls_while_degraded
+    # …and the graph sections are back.
+    assert "Could not load the ready frontier." not in healed.text
     assert 'data-task-group="ready"' in healed.text
     assert 'data-task-group="open"' not in healed.text
 

@@ -41,7 +41,6 @@ from typing import Any, Protocol, cast
 
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.epic_strip import (
-    EpicStrip,
     epic_scope_ids,
     load_epic_rollups,
 )
@@ -49,7 +48,6 @@ from lithos_lens.frontier_fallback import (
     RETRY_FAILED_ERROR,
     flat_open_sections,
     frontier_reads,
-    frontier_tools_absent,
     resolve_frontier,
 )
 from lithos_lens.frontier_join import (
@@ -128,8 +126,6 @@ class FrontierLithosClient(Protocol):
 
     async def list_agents(self) -> list[AgentRecord]: ...
 
-    async def list_tool_names(self) -> set[str]: ...
-
 
 async def load_dashboard(
     lithos: FrontierLithosClient,
@@ -138,7 +134,6 @@ async def load_dashboard(
     frontier_limit: int,
     attention: AttentionPolicy | None = None,
     now: datetime | None = None,
-    graph_available: bool = True,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
 
@@ -149,13 +144,6 @@ async def load_dashboard(
     because its epic ids come from the open list; the only other extra
     round-trip is the read-skew retry below — and only when the first pair of
     frontier responses is inconsistent below the limit.
-
-    ``graph_available=False`` says the caller already learned this server has
-    no frontier tools (story 27): the two frontier calls are skipped and the
-    open rows render flat. Detection is the same either way — a frontier call
-    that fails because the TOOL is missing (never because the read failed)
-    switches this load to the flat fallback and reports
-    ``DashboardData.graph_available=False`` so the caller can remember it.
 
     The open/ready/blocked calls are independent reads, not a snapshot, so a
     workable open task can be missing from both frontier lists (or present in
@@ -198,9 +186,7 @@ async def load_dashboard(
             with_claims=bool(filters.agent),
         )
 
-    ready_read, blocked_read = frontier_reads(
-        lithos, frontier_limit=frontier_limit, graph_available=graph_available
-    )
+    ready_read, blocked_read = frontier_reads(lithos, frontier_limit=frontier_limit)
     (
         open_result,
         ready_result,
@@ -241,22 +227,9 @@ async def load_dashboard(
         "open", cast("list[TaskRecord] | BaseException", open_result), errors
     )
 
-    # Suspicion comes from the reads failing TOGETHER; the verdict comes from
-    # the server's tool list. Both frontier calls failing is already a degraded
-    # render, so the extra round-trip is cheap and never on the happy path.
-    tools_absent = False
-    if (
-        graph_available
-        and isinstance(ready_result, BaseException)
-        and isinstance(blocked_result, BaseException)
-    ):
-        tools_absent = await frontier_tools_absent(lithos)
-
-    graph_available, frontier_ok, ready_list, blocked_records = resolve_frontier(
+    frontier_ok, ready_list, blocked_records = resolve_frontier(
         ready_result,
         blocked_result,
-        graph_available=graph_available,
-        tools_absent=tools_absent,
         errors=errors,
     )
 
@@ -331,25 +304,14 @@ async def load_dashboard(
     # snapshot the sections were built from. The children reads themselves stay
     # independent reads (see the module docstring): counts can be a generation
     # newer, which is why only a non-empty subtree is allowed to scope.
-    #
-    # Skipped entirely when the server has no task graph: ``task_children`` is
-    # part of the same 0.4 surface as the frontier tools, so asking would buy
-    # one guaranteed failure per epic and an error banner for a server that
-    # simply predates the feature. A frontier OUTAGE is different — the tools
-    # exist, this is a different call, and it may well answer — so the strip is
-    # still attempted there.
-    strip = (
-        await load_epic_rollups(lithos, open_snapshot, selected=filters.epic)
-        if graph_available
-        else EpicStrip((), False)
-    )
+    strip = await load_epic_rollups(lithos, open_snapshot, selected=filters.epic)
     scope_ids = epic_scope_ids(strip.rollups)
 
-    # §14: a frontier READ failure renders the master open list flat too, not
-    # just a missing-tools verdict. Half a frontier is not a classification —
-    # rows would land in "Not classified", the tail whose banner explains it as
-    # frontier-limit overflow, and an outage would read as truncation.
-    if graph_available and frontier_ok:
+    # §14: a failed frontier read renders the master open list flat. Half a
+    # frontier is not a classification — rows would land in "Not classified",
+    # the tail whose banner explains it as frontier-limit overflow, so a failed
+    # read would present itself as truncation.
+    if frontier_ok:
         state = _partition_state(open_snapshot, ready_list, blocked_records, scope_ids)
 
         if frontier_ok and state.retry_worthy:
@@ -415,18 +377,14 @@ async def load_dashboard(
             index=open_index,
         )
     else:
-        # Flat fallback — no usable frontier, whether because the tools are
-        # absent (story 27) or because a read of them failed. Either way there
-        # is nothing to join, nothing to truncate, and no pair of reads that
-        # could disagree, so the skew machinery above is skipped outright
-        # rather than fed empty frontiers, which would read every open row as
-        # "unclassified" and raise a false reconciliation warning.
-        #
-        # The two causes stay distinguishable to the operator through the
-        # error lines (`FRONTIER_UNAVAILABLE_ERROR` vs "Could not load the
-        # ready frontier.") and through `graph_available`, which stays True
-        # for an outage: a transient failure must not be dressed up as "your
-        # Lithos is too old", nor cost the caller its graph verdict.
+        # Flat fallback — no usable frontier, because a read of it failed
+        # (a server that never had the tools fails the same way, and is
+        # reported as the failed read it is). There is nothing to join,
+        # nothing to truncate, and no pair of reads that could disagree, so
+        # the skew machinery above is skipped outright rather than fed empty
+        # frontiers, which would read every open row as "unclassified" and
+        # raise a false reconciliation warning. The error lines name which
+        # read did not answer.
         partition = flat_open_sections(
             [
                 task
@@ -443,7 +401,7 @@ async def load_dashboard(
     if strip.failed:
         errors.append("Could not load epic progress.")
 
-    open_flat = not (graph_available and frontier_ok)
+    open_flat = not frontier_ok
 
     # Rows the graph rolls up rather than rendering (epics, gates). Counted
     # over the SAME filtered set the sections are built from, and after the
@@ -576,7 +534,6 @@ async def load_dashboard(
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
         open_side_narrowed=open_side_narrowed,
-        graph_available=graph_available,
         open_flat=open_flat,
         rolled_up_open=rolled_up_open,
         nothing_to_show=nothing_to_show,

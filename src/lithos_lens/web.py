@@ -40,7 +40,7 @@ from lithos_lens.lithos_client import (
     LithosClientProtocol,
     LithosToolError,
 )
-from lithos_lens.state import GRAPH_REPROBE_INTERVAL_S, AppState
+from lithos_lens.state import AppState
 from lithos_lens.task_detail import (
     find_task,
     load_task_detail,
@@ -418,7 +418,6 @@ async def _render_tasks(
             },
         )
         tasks_config = state.config.tasks
-        probed_graph = state.graph_available
         dashboard = await load_dashboard(
             state.lithos_client,
             filters=filters,
@@ -429,20 +428,7 @@ async def _render_tasks(
                 stale_open_age_days=tasks_config.stale_open_age_days,
                 unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
             ),
-            graph_available=probed_graph,
         )
-        if probed_graph and not dashboard.graph_available:
-            # Only a render that actually PROBED may (re-)open the window;
-            # re-arming it from a cached verdict would make the fallback
-            # permanent again. The warning is per probe, not per request, so
-            # the log shows how long the frontier has really been gone.
-            logger.warning(
-                "Lithos did not answer the task-graph frontier reads; serving "
-                "the flat task list and re-probing in %ss (graph features need "
-                "Lithos >= 0.4, or the tools are unavailable to this client)",
-                GRAPH_REPROBE_INTERVAL_S,
-            )
-            state.note_graph_unavailable()
         logger.debug(
             "tasks dashboard loaded",
             extra={
@@ -460,7 +446,6 @@ async def _render_tasks(
                     section: len(rows) for section, rows in dashboard.sections.items()
                 },
                 "truncated": dashboard.truncated,
-                "graph_available": dashboard.graph_available,
                 "nothing_to_show": dashboard.nothing_to_show,
                 "errors": list(dashboard.errors),
             },

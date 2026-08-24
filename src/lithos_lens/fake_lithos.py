@@ -154,31 +154,6 @@ class FakeEventHub(EventHub):
         await self._stop.wait()
 
 
-# The tool surface the fake advertises to a ``tools/list`` probe: exactly the
-# Lithos tools this client serves, which is every tool the real client calls
-# (one vendored contract each, tests/contracts/). Fake mode therefore looks
-# like a 0.4-capable server and renders the graph sections.
-FAKE_TOOL_NAMES = frozenset(
-    {
-        "lithos_agent_list",
-        "lithos_agent_register",
-        "lithos_finding_list",
-        "lithos_list",
-        "lithos_read",
-        "lithos_related",
-        "lithos_search",
-        "lithos_stats",
-        "lithos_task_blocked",
-        "lithos_task_children",
-        "lithos_task_edge_list",
-        "lithos_task_get",
-        "lithos_task_list",
-        "lithos_task_ready",
-        "lithos_task_status",
-    }
-)
-
-
 class FakeLithosClient:
     """A protocol-complete Lithos client backed by an in-memory dataset.
 
@@ -213,9 +188,6 @@ class FakeLithosClient:
 
     async def close(self) -> None:
         self.closed = True
-
-    async def list_tool_names(self) -> set[str]:
-        return set(FAKE_TOOL_NAMES)
 
     # ── reads ──────────────────────────────────────────────────────────
 

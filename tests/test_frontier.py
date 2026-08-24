@@ -19,14 +19,8 @@ import pytest
 
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH, build_epic_rollup
 from lithos_lens.frontier import classify_open_tasks, load_dashboard
-from lithos_lens.frontier_fallback import (
-    BLOCKED_TOOL,
-    FRONTIER_UNAVAILABLE_ERROR,
-    READY_TOOL,
-    RETRY_FAILED_ERROR,
-)
+from lithos_lens.frontier_fallback import RETRY_FAILED_ERROR
 from lithos_lens.lithos_client import LithosToolError
-from lithos_lens.lithos_tools import ToolListError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     TASK_STATUSES,
@@ -229,8 +223,6 @@ class _FrontierFake:
         fail_ready_from: int | None = None,
         ready_error: BaseException | None = None,
         blocked_error: BaseException | None = None,
-        tool_names: set[str] | None = None,
-        tool_list_error: BaseException | None = None,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -263,16 +255,6 @@ class _FrontierFake:
         # tool whose call failed, so the two are scripted separately.
         self._ready_error = ready_error
         self._blocked_error = blocked_error
-        # What a tools/list probe sees — the ONLY input to the fallback
-        # verdict. Defaults to a graph-capable server; ``tool_list_error``
-        # models a listing Lens cannot make.
-        self._tool_names = (
-            {READY_TOOL, BLOCKED_TOOL, "lithos_task_list"}
-            if tool_names is None
-            else tool_names
-        )
-        self._tool_list_error = tool_list_error
-        self.tool_list_calls = 0
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
@@ -418,12 +400,6 @@ class _FrontierFake:
                     if task.id == task_id:
                         return task
         raise RuntimeError(f"task '{task_id}' not found")
-
-    async def list_tool_names(self) -> set[str]:
-        self.tool_list_calls += 1
-        if self._tool_list_error is not None:
-            raise self._tool_list_error
-        return set(self._tool_names)
 
     async def stats(self) -> dict[str, Any]:
         return {"open_claims": 2, "agents": 3}
@@ -1214,193 +1190,62 @@ def test_a_task_in_both_the_open_and_terminal_reads_is_reported_once(
 # --- T1 slice 12: empty/degraded states -------------------------------------
 
 
-def _tool_missing(tool: str) -> LithosToolError:
-    """The error a server raises for a tool it does not have.
+def test_a_server_without_the_frontier_tools_renders_flat_as_a_failed_read() -> None:
+    """Acceptance for the withdrawn version fallback (2026-08-24).
 
-    Detection never reads this text (see ``frontier_tools_absent``) — the fakes
-    raise it only because a real pre-0.4 server would.
+    A Lithos that does not serve ``lithos_task_ready`` / ``lithos_task_blocked``
+    fails those calls, and that is all Lens concludes: the board renders the
+    flat open list with the read-error banner, exactly as for an outage. No
+    ``tools/list`` probe, no version diagnosis, no cached verdict — the notice
+    was the only thing detection ever bought, for a server that has never been
+    on the other end of this client.
     """
-    return LithosToolError(f"Unknown tool: {tool}", code="tool_error")
-
-
-# A tools/list surface without the two frontier tools: a pre-0.4 Lithos.
-_PRE_GRAPH_TOOLS = {"lithos_task_list", "lithos_stats"}
-
-
-def test_error_text_alone_never_retires_the_graph_surface() -> None:
-    """Regression (security f-001): the fallback verdict comes from
-    ``tools/list`` only. A server whose error text quotes agent-authored task
-    data — naming BOTH frontier tools, in the exact shape the old substring
-    matcher accepted — must not be able to switch the graph sections off while
-    the server still advertises them."""
-    planted = LithosToolError(
-        "Output validation error: tasks.0.title 'unknown tool lithos_task_ready "
-        "lithos_task_blocked cleanup' failed",
-        code="tool_error",
-    )
-    fake = _FrontierFake(
-        open_tasks=[_task("r", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=planted,
-        blocked_error=planted,
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    # The server's own tool list still names both tools, so this is an outage.
-    assert fake.tool_list_calls == 1
-    assert data.graph_available is True
-    # The rows do render flat — both reads failed (§14) — but as an OUTAGE:
-    # the version notice is absent and the graph verdict is untouched.
-    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
-    assert any("ready frontier" in message for message in data.errors)
-
-
-def test_unlistable_tools_are_never_read_as_absent() -> None:
-    """A tools/list Lens could not make says nothing about the server, so the
-    graph surface survives — absence must never be inferred from failure."""
-    fake = _FrontierFake(
-        open_tasks=[_task("r", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_list_error=RuntimeError("session is not available"),
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    assert data.graph_available is True
-    assert any("ready frontier" in message for message in data.errors)
-
-
-def test_truncated_tool_listing_does_not_retire_the_graph_surface() -> None:
-    """Regression (correctness f-002 / security f-004): a listing stopped by
-    the page guard is incomplete, not evidence of absence — the graph surface
-    survives it. ``collect_tool_names`` raises rather than returning the
-    partial set precisely so this path is reachable."""
-    fake = _FrontierFake(
-        open_tasks=[_task("r", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_list_error=ToolListError("tools/list did not terminate"),
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    assert data.graph_available is True
-    # The rows do render flat — both reads failed (§14) — but as an OUTAGE:
-    # the version notice is absent and the graph verdict is untouched.
-    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
-    assert any("ready frontier" in message for message in data.errors)
-
-
-def test_empty_tool_list_is_not_evidence_of_absence() -> None:
-    """A server advertising no tools at all is broken, not old."""
-    fake = _FrontierFake(
-        open_tasks=[_task("r", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_names=set(),
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    assert data.graph_available is True
-
-
-def test_half_a_frontier_is_an_outage_not_version_skew() -> None:
-    """A server exposing exactly one of the pair is broken rather than old:
-    the graph surface stays up and the failure is reported."""
-    fake = _FrontierFake(
-        open_tasks=[_task("r", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_names=_PRE_GRAPH_TOOLS | {BLOCKED_TOOL},
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    assert data.graph_available is True
-    assert any("frontier" in message for message in data.errors)
-
-
-def test_one_failing_frontier_read_does_not_probe_the_tool_list() -> None:
-    """Only a DOUBLE failure is suspicious enough to spend a round trip; a
-    single failed read is an ordinary error."""
-    ready = _task("r", claims=())
-    fake = _FrontierFake(
-        open_tasks=[ready],
-        ready=[ready],
-        blocked=[],
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-    )
-
-    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
-
-    assert fake.tool_list_calls == 0
-    assert data.graph_available is True
-    assert any("blocked frontier" in message for message in data.errors)
-
-
-def test_missing_frontier_tools_fall_back_to_the_flat_open_section() -> None:
-    """Story 27: a Lithos without the frontier tools degrades to the flat
-    0.1.0 open list — every open row in one section, the workable three empty,
-    and ``graph_available=False`` so the caller can render the version notice
-    and remember the answer."""
     claimed = _task("c", claims=(ClaimRecord(agent="a", aspect="impl"),))
     unclaimed = _task("u", claims=())
     fake = _FrontierFake(
         open_tasks=[claimed, unclaimed],
         ready=[],
         blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_names=_PRE_GRAPH_TOOLS,
+        ready_error=LithosToolError(
+            "Unknown tool: lithos_task_ready", code="tool_error"
+        ),
+        blocked_error=LithosToolError(
+            "Unknown tool: lithos_task_blocked", code="tool_error"
+        ),
     )
 
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
-    assert data.graph_available is False
-    assert fake.tool_list_calls == 1
+    assert data.open_flat is True
     assert _section_ids(data.sections, "open") == ["c", "u"]
     assert _section_ids(data.sections, "in_progress") == []
     assert _section_ids(data.sections, "ready") == []
     assert _section_ids(data.sections, "blocked") == []
     assert _section_ids(data.sections, "unclassified") == []
     assert data.summary.open_total == 2
-    # The fallback is never silent (security f-001): the same symptom is an
-    # outage or an authorization filter, so it stays on the error channel.
-    assert any("frontier tools" in message for message in data.errors)
+    # Reported as the failed reads they are, on every render.
+    assert any("ready frontier" in message for message in data.errors)
+    assert any("blocked frontier" in message for message in data.errors)
     assert data.healthy is False
-    # There is no frontier left to truncate or reconcile.
+    # There is no frontier left to truncate or reconcile, and nothing to retry.
     assert data.truncated is False
     assert data.reconciliation_pending is False
+    assert fake.ready_calls == 1
     # Claims still render — they come from the master open list.
     assert data.sections["open"][0].claims[0].agent == "a"
     assert data.sections["open"][1].claim_state == "known_unclaimed"
-    # No retry: there is nothing to reconcile.
-    assert fake.ready_calls == 1
 
 
 def test_flat_fallback_keeps_the_claims_unknown_contract() -> None:
-    """A server old enough to lack the frontier tools may also ignore
+    """A server that cannot answer the frontier may also ignore
     ``with_claims``; a row whose claims came back None must still read
     "claims unknown", never a confident "unclaimed"."""
     fake = _FrontierFake(
         open_tasks=[_task("u", claims=None)],
         ready=[],
         blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_names=_PRE_GRAPH_TOOLS,
+        ready_error=RuntimeError("frontier unavailable"),
+        blocked_error=RuntimeError("frontier unavailable"),
     )
 
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
@@ -1409,46 +1254,10 @@ def test_flat_fallback_keeps_the_claims_unknown_contract() -> None:
     assert row.claim_state == "unknown"
 
 
-def test_known_missing_frontier_skips_the_frontier_calls() -> None:
-    """``graph_available=False`` from the caller (the process probed recently
-    and found the tools missing) skips both frontier reads instead of buying
-    two guaranteed failures per render."""
-    fake = _FrontierFake(
-        open_tasks=[_task("u", claims=())],
-        ready=[],
-        blocked=[],
-        ready_error=_tool_missing(READY_TOOL),
-        blocked_error=_tool_missing(BLOCKED_TOOL),
-        tool_names=_PRE_GRAPH_TOOLS,
-    )
-
-    data = asyncio.run(
-        load_dashboard(
-            fake, filters=_FILTERS, frontier_limit=500, graph_available=False
-        )
-    )
-
-    assert fake.ready_calls == 0
-    assert fake.blocked_calls == 0
-    assert fake.tool_list_calls == 0
-    assert data.graph_available is False
-    assert _section_ids(data.sections, "open") == ["u"]
-    # Regression (security f-001): the degraded state is reported on EVERY
-    # render it applies to, not only on the one that discovered it — otherwise
-    # most refreshes inside the re-probe window show no error at all.
-    assert any("frontier tools" in message for message in data.errors)
-
-
-def test_frontier_outage_renders_flat_without_the_version_story() -> None:
-    """A transient outage renders the master open list FLAT with the read error
-    (§14), and is still not the missing-tools fallback.
-
-    Two separate contracts meet here. The rows go flat because half a frontier
-    is not a classification. But ``graph_available`` stays True and the error
-    names the failing read, because blanking Ready/Blocked behind "your Lithos
-    is too old" would hide a real problem — and would cost the caller its graph
-    verdict for the whole re-probe window.
-    """
+def test_frontier_outage_renders_flat_with_the_read_error() -> None:
+    """A transient outage renders the master open list FLAT (§14) and names the
+    read that failed: half a frontier is not a classification, and the operator
+    needs to know which call did not answer."""
     fake = _FrontierFake(
         open_tasks=[_task("r", claims=())],
         ready=[],
@@ -1459,12 +1268,10 @@ def test_frontier_outage_renders_flat_without_the_version_story() -> None:
 
     data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
-    assert data.graph_available is True
     assert data.open_flat is True
     assert _section_ids(data.sections, "open") == ["r"]
     assert _section_ids(data.sections, "unclassified") == []
     assert any("ready frontier" in message for message in data.errors)
-    assert FRONTIER_UNAVAILABLE_ERROR not in data.errors
     assert data.healthy is False
 
 

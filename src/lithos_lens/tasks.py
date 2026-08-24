@@ -402,15 +402,9 @@ class DashboardData:
     # ``?status=open`` hides only terminal sections, so it cannot invalidate a
     # claim about the open board.
     open_side_narrowed: bool = False
-    # False when this Lithos has no ready/blocked frontier tools (pre-0.4):
-    # the open rows render in the flat ``open`` section behind the
-    # "graph features need Lithos >= 0.4" notice instead of Ready/Blocked.
-    graph_available: bool = True
     # True when the open rows render in the flat ``open`` section instead of
-    # the workable three. Distinct from ``graph_available``: BOTH a missing
-    # frontier (pre-0.4) and a failed frontier READ render flat (§14), but only
-    # the first is a version story, and only the first should be remembered by
-    # the caller. Half a frontier is not a classification.
+    # the workable three, because a frontier read did not answer (§14). Half a
+    # frontier is not a classification.
     open_flat: bool = False
     # Open rows the graph deliberately rolls up rather than rendering: epics
     # (they roll up to their children) and gates (§5.3 gives them their own
@@ -486,7 +480,7 @@ class DashboardData:
             not self.open_side_narrowed
             and not self.rolled_up_only
             and not self.sections.get("attention")
-            and self.graph_available
+            and not self.open_flat
             and not self.errors
             and not self.truncated
             and not self.reconciliation_pending

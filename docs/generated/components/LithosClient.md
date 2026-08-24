@@ -14,7 +14,6 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 | `lithos_lens.fake_dataset` | M | 1 | 1 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | L | 4 | 0 |
-| `lithos_lens.lithos_tools` | XS | 1 | 1 |
 
 ## Public API
 
@@ -32,10 +31,6 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 - class `RegistrationResult`
 - class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.
 - class `LithosClient` — Best-effort Lithos client used by the web app.
-
-### `lithos_lens.lithos_tools`
-- class `ToolListError` — Raised when a ``tools/list`` enumeration could not be completed.
-- def `collect_tool_names` — Collect tool names across every ``tools/list`` page.
 
 ## Dependencies
 
