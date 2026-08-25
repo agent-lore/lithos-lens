@@ -212,6 +212,24 @@ class Breadcrumb:
     truncated: bool = False
 
 
+def deadline_or_budget(deadline: float | None = None) -> float:
+    """The caller's deadline, or a fresh :data:`DETAIL_RENDER_BUDGET_S` one.
+
+    The single place a budget becomes a deadline, so every loader below is
+    bounded whether it is called as part of a page render or on its own — T1-S8
+    expanding one deeper level of the chain gets a budget by default, exactly
+    as it gets the page size and the gate.
+
+    Deadlines are ABSOLUTE, so this cannot be used to escape an outer one: a
+    default taken later is always later than the render's, so the render's
+    still fires first. Passing one down is what makes the waves SHARE a budget
+    instead of each getting its own.
+    """
+    if deadline is not None:
+        return deadline
+    return asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
+
+
 async def until[T](deadline: float, awaitable: Awaitable[T]) -> T:
     """Await ``awaitable`` until ``deadline``, then give up on it.
 
@@ -320,6 +338,7 @@ async def load_link_page(
     edges: Sequence[EdgeRecord],
     *,
     gate: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> LinkPage:
     """Resolve the first page of an edge set into links with live status.
 
@@ -332,10 +351,29 @@ async def load_link_page(
     edge count is), the remainder is reported by the tail, and at most
     :data:`DETAIL_FANOUT_CONCURRENCY` of the lookups are in flight at once.
 
+    All three bounds are applied HERE rather than by the caller — the count,
+    the gate, and the deadline (:func:`deadline_or_budget` when none is passed
+    down) — so a caller cannot get the page without them.
+
     A failed lookup degrades to an unresolved link rather than failing the
-    page: the operator still learns that the blocker exists.
+    page: the operator still learns that the blocker exists. A page that runs
+    out of budget degrades whole, to the state the section already renders as
+    "unavailable": a partial list would read as a complete one.
     """
-    gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+    return await until_or(
+        deadline_or_budget(deadline),
+        _resolve_page(
+            lithos, edges, gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+        ),
+        LinkPage(state=SectionState.ERROR),
+    )
+
+
+async def _resolve_page(
+    lithos: TaskLinkClientProtocol,
+    edges: Sequence[EdgeRecord],
+    gate: asyncio.Semaphore,
+) -> LinkPage:
     targets = linked_tasks(edges)
     page, remaining = first_page(tuple(targets))
     links = await asyncio.gather(
@@ -349,6 +387,7 @@ async def load_blocker_page(
     task_id: str,
     *,
     gate: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> LinkPage:
     """One task's level-1 blockers as a bounded page — at ANY level.
 
@@ -358,17 +397,27 @@ async def load_blocker_page(
     HTMX expander) is paged, bounded and tailed exactly like level 1 — by
     calling this, not by reimplementing it.
 
-    A failed edge read degrades the section to ERROR: an empty blocker list
-    would read as "nothing is blocking this task", which is a claim this call
-    cannot support.
+    That includes the wall clock. BOTH of its awaits are under one deadline —
+    the caller's when a render passes one down, otherwise a fresh budget — so
+    expanding a level standalone cannot spend a per-call timeout on the edge
+    read and another on the lookups behind it.
+
+    A failed or overrunning read degrades the section to ERROR: an empty
+    blocker list would read as "nothing is blocking this task", which is a
+    claim this call cannot support.
     """
+    deadline = deadline_or_budget(deadline)
     try:
-        edges = await lithos.task_edge_list(
-            task_id, direction="incoming", types=list(BLOCKER_EDGE_TYPES)
+        edges = await until(
+            deadline,
+            lithos.task_edge_list(
+                task_id, direction="incoming", types=list(BLOCKER_EDGE_TYPES)
+            ),
         )
     except Exception:
+        # TimeoutError included: an overrun is a read that did not answer.
         return LinkPage(state=SectionState.ERROR)
-    return await load_link_page(lithos, edges, gate=gate)
+    return await load_link_page(lithos, edges, gate=gate, deadline=deadline)
 
 
 async def load_parent_chain(
@@ -377,6 +426,7 @@ async def load_parent_chain(
     edges: Sequence[EdgeRecord],
     *,
     gate: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> Breadcrumb:
     """Walk incoming ``parent_child`` edges up to the root epic.
 
@@ -384,10 +434,27 @@ async def load_parent_chain(
     is a chain rather than a DAG walk: one parent per level, root last. It
     stops — and says so via ``truncated`` — at :data:`PARENT_CHAIN_MAX_DEPTH`,
     on a ``parent_child`` cycle (the visited set; the graph does not forbid
-    one), and on a failed read. Each level costs two SEQUENTIAL round trips,
-    which is why the depth bound is small.
+    one), on a failed read, and on the deadline. Each level costs two
+    SEQUENTIAL round trips, which is why the depth bound is small and why the
+    walk needs the wall-clock bound as well as the depth one.
     """
-    gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+    return await until_or(
+        deadline_or_budget(deadline),
+        _walk_parents(
+            lithos, task, edges, gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+        ),
+        # A walk that ran out of budget stopped early, exactly like one that hit
+        # the depth bound: say so rather than implying the task has no parent.
+        Breadcrumb(truncated=True),
+    )
+
+
+async def _walk_parents(
+    lithos: TaskLinkClientProtocol,
+    task: TaskRecord,
+    edges: Sequence[EdgeRecord],
+    gate: asyncio.Semaphore,
+) -> Breadcrumb:
     ancestors: list[TaskRecord] = []
     seen = {task.id}
     parent_id = _parent_id(edges)

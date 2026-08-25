@@ -18,7 +18,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_join` | S | 0 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 4 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
-| `lithos_lens.task_links` | M | 4 | 11 |
+| `lithos_lens.task_links` | M | 4 | 12 |
 
 ## Public API
 
@@ -68,6 +68,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `TaskLink` — One related task rendered on the detail page, with its LIVE status.
 - class `LinkPage` — One first-page-plus-tail slice of a related-task list.
 - class `Breadcrumb` — The parent chain above a task, root first.
+- def `deadline_or_budget` — The caller's deadline, or a fresh :data:`DETAIL_RENDER_BUDGET_S` one.
 - def `until` — Await ``awaitable`` until ``deadline``, then give up on it.
 - def `until_or` — :func:`until`, answering with ``degraded`` instead of raising.
 - def `first_page` — Split ``items`` into the first page and how many were left off.

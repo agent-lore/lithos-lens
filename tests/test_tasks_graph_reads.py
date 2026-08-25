@@ -256,6 +256,28 @@ def test_json_dict_result_decodes_to_payload() -> None:
     assert _run(client, client.stats()) == {"open_claims": 3}
 
 
+def test_an_absurd_payload_is_refused_before_it_is_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The count and deadline bounds elsewhere cover AWAITS. Parsing is
+    synchronous, so a response whose row count an agent controls would block
+    the event loop — every other request and the render deadline's own timer
+    included — for as long as it takes. The guard refuses it as an ordinary
+    coded read failure, which callers already degrade per section."""
+    monkeypatch.setattr(lithos_client, "MAX_TOOL_RESULT_CHARS", 100)
+    client = _CannedResultClient(_tool_result('{"rows": "' + "x" * 200 + '"}'))
+
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+
+    assert excinfo.value.code == "response_too_large"
+
+
+def test_a_payload_within_the_guard_still_decodes() -> None:
+    client = _CannedResultClient(_tool_result('{"open_claims": 3}'))
+    assert _run(client, client.stats()) == {"open_claims": 3}
+
+
 class _HangingClient(LithosClient):
     """A client whose tool call never answers (the wedged-session case)."""
 

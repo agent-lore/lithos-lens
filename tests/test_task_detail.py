@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens import task_detail
+from lithos_lens import task_links
 from lithos_lens.config import load_config
 from lithos_lens.task_detail import load_findings_timeline, load_task_detail
 from lithos_lens.task_graph import EdgeRecord
@@ -772,7 +772,7 @@ def test_a_stalled_lithos_renders_a_partial_page_instead_of_holding_the_request(
     budget the page renders what it has: the stalled section degrades to the
     state it already knows how to show, and the sections that answered survive.
     """
-    monkeypatch.setattr(task_detail, "DETAIL_RENDER_BUDGET_S", 0.05)
+    monkeypatch.setattr(task_links, "DETAIL_RENDER_BUDGET_S", 0.05)
     fake = _StallingLinkClient()
     _stage_blockers(fake, "open-claimed", 3)
 
@@ -800,7 +800,7 @@ def test_a_stalled_title_lookup_costs_only_the_titles(
         ) -> NoteRecord | None:
             await asyncio.Event().wait()
 
-    monkeypatch.setattr(task_detail, "DETAIL_RENDER_BUDGET_S", 0.05)
+    monkeypatch.setattr(task_links, "DETAIL_RENDER_BUDGET_S", 0.05)
 
     detail = _run(load_findings_timeline(StallingNoteClient(), "open-claimed"))
 
@@ -808,3 +808,72 @@ def test_a_stalled_title_lookup_costs_only_the_titles(
     assert [view.finding.id for view in detail.findings] == ["finding-1", "finding-2"]
     # Every row falls back to the label it already shows for an unreadable doc.
     assert {view.link_label for view in detail.findings} == {"View document"}
+
+
+def test_the_render_budget_covers_the_identifying_read_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget is the REQUEST's, not each wave's. Taken after wave 1 it
+    would only bound waves 2-3, so a wave-1 read that answers just inside the
+    per-call ceiling would still be followed by a full fresh budget — the page
+    would take the ceiling PLUS the budget, which is not the bound the module
+    advertises.
+
+    Structural, not timed: wave 1 answers slowly but successfully, then a
+    wave-2 read that is faster than a whole budget — and would therefore
+    succeed if the budget restarted — must NOT get one.
+    """
+    monkeypatch.setattr(task_links, "DETAIL_RENDER_BUDGET_S", 0.5)
+
+    class SlowStartClient(TaskFakeLithosClient):
+        async def task_get(self, task_id: str) -> TaskRecord:
+            await asyncio.sleep(0.4)  # nearly the whole budget, but it ANSWERS
+            return await super().task_get(task_id)
+
+        async def list_findings(self, task_id: str, **kwargs: Any) -> Any:
+            await asyncio.sleep(0.3)  # < one budget, > what wave 1 left
+            return await super().list_findings(task_id, **kwargs)
+
+    detail = _run(load_task_detail(SlowStartClient(), "open-claimed"))
+
+    # Wave 1 answered inside the budget, so the page still knows its task ...
+    assert detail.task is not None
+    # ... and wave 2 inherited what was LEFT of it, not a fresh one.
+    assert detail.findings_state == "error"
+
+
+def test_load_blocker_page_carries_a_budget_at_any_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T1-S8 expands deeper levels through this entry point, standalone — no
+    render around it to impose a deadline. Both of its awaits (the edge read
+    and the lookups behind it) must therefore be bounded by its own budget, or
+    one expansion could spend a per-call timeout on each in turn."""
+    monkeypatch.setattr(task_links, "DETAIL_RENDER_BUDGET_S", 0.05)
+
+    # (a) the per-blocker lookups stall
+    stalled_links = _StallingLinkClient()
+    _stage_blockers(stalled_links, "open-old", 3)
+    assert _run(load_blocker_page(stalled_links, "open-old")).state == "error"
+
+    # (b) the edge read itself stalls
+    class StalledEdgeClient(TaskFakeLithosClient):
+        async def task_edge_list(self, task_id: str, **kwargs: Any) -> Any:
+            await asyncio.Event().wait()
+
+    assert _run(load_blocker_page(StalledEdgeClient(), "open-old")).state == "error"
+
+
+def test_a_standalone_link_page_is_bounded_without_a_caller_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bounds live in the loader, not in the caller: a page requested with
+    no deadline still gets one rather than none."""
+    monkeypatch.setattr(task_links, "DETAIL_RENDER_BUDGET_S", 0.05)
+    fake = _StallingLinkClient()
+    _stage_blockers(fake, "open-old", 2)
+
+    page = _run(load_link_page(fake, fake.edges["open-old"]))
+
+    assert page.state == "error"
+    assert page.links == ()

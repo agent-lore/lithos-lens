@@ -43,9 +43,9 @@ from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     BLOCKER_EDGE_TYPES,
     DETAIL_FANOUT_CONCURRENCY,
-    DETAIL_RENDER_BUDGET_S,
     Breadcrumb,
     LinkPage,
+    deadline_or_budget,
     last_page,
     link_page_from_tasks,
     load_link_page,
@@ -223,9 +223,17 @@ async def load_task_detail(
     trips. One gate is shared by every wave-3 lookup, so the render — not each
     list — is what :data:`DETAIL_FANOUT_CONCURRENCY` bounds.
     """
+    # ONE deadline for the whole render, taken before the FIRST read: all three
+    # waves share it, so the page's wall clock is the budget — not the budget
+    # per wave, and not a per-call timeout spent identifying the task PLUS the
+    # budget. A read that overruns it lands in the same branch as a read that
+    # failed, so every section already knows what to render.
+    deadline = deadline_or_budget()
     try:
-        task = await lithos.task_get(task_id)
+        task = await until(deadline, lithos.task_get(task_id))
     except Exception as exc:
+        # TimeoutError included, and it is NOT a missing task: only the coded
+        # envelope may claim that.
         if getattr(exc, "code", "") == TASK_NOT_FOUND_CODE:
             return TaskDetailData(task=None, not_found=True)
         return TaskDetailData(
@@ -233,11 +241,6 @@ async def load_task_detail(
         )
 
     errors: list[str] = []
-    # One deadline for everything below, taken once: waves 2 and 3 SHARE the
-    # budget rather than each getting one. A read that overruns it lands in the
-    # same branch as a read that failed, so every section already knows what to
-    # render.
-    deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
     (
         status_result,
         edges_result,
@@ -292,49 +295,33 @@ async def load_task_detail(
         errors.append("Could not load task relations.")
     else:
         edges = cast(list[EdgeRecord], edges_result)
-        # Each list carries the deadline separately, so one slow list degrades
-        # alone instead of taking the sections that did answer down with it.
-        timed_out = LinkPage(state=SectionState.ERROR)
+        # Each loader applies the render's deadline itself and degrades to the
+        # state its section already renders, so one slow list degrades alone
+        # instead of taking the sections that did answer down with it.
         blockers, discovered_from, spawned, breadcrumb = await asyncio.gather(
-            until_or(
-                deadline,
-                load_link_page(
-                    lithos,
-                    select_edges(edges, direction="incoming", types=BLOCKER_EDGE_TYPES),
-                    gate=gate,
+            load_link_page(
+                lithos,
+                select_edges(edges, direction="incoming", types=BLOCKER_EDGE_TYPES),
+                gate=gate,
+                deadline=deadline,
+            ),
+            load_link_page(
+                lithos,
+                select_edges(
+                    edges, direction="incoming", types=(PROVENANCE_EDGE_TYPE,)
                 ),
-                timed_out,
+                gate=gate,
+                deadline=deadline,
             ),
-            until_or(
-                deadline,
-                load_link_page(
-                    lithos,
-                    select_edges(
-                        edges, direction="incoming", types=(PROVENANCE_EDGE_TYPE,)
-                    ),
-                    gate=gate,
+            load_link_page(
+                lithos,
+                select_edges(
+                    edges, direction="outgoing", types=(PROVENANCE_EDGE_TYPE,)
                 ),
-                timed_out,
+                gate=gate,
+                deadline=deadline,
             ),
-            until_or(
-                deadline,
-                load_link_page(
-                    lithos,
-                    select_edges(
-                        edges, direction="outgoing", types=(PROVENANCE_EDGE_TYPE,)
-                    ),
-                    gate=gate,
-                ),
-                timed_out,
-            ),
-            until_or(
-                deadline,
-                load_parent_chain(lithos, task, edges, gate=gate),
-                # A chain that ran out of budget stopped early, like one that
-                # hit the depth bound or a cycle: say so rather than implying
-                # the task has no parent.
-                Breadcrumb(truncated=True),
-            ),
+            load_parent_chain(lithos, task, edges, gate=gate, deadline=deadline),
         )
 
     return TaskDetailData(
@@ -373,7 +360,7 @@ async def load_findings_timeline(
     reason: the reconcile tick keeps asking, so a stalled Lithos must not leave
     a request per tick held open.
     """
-    deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
+    deadline = deadline_or_budget()
     try:
         findings = await until(deadline, lithos.list_findings(task_id))
     except (Exception, TimeoutError):
@@ -424,8 +411,7 @@ async def resolve_finding_notes(
     document" label it already shows for a document it could not read.
     """
     gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
-    if deadline is None:
-        deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
+    deadline = deadline_or_budget(deadline)
     page, older = last_page(sorted(findings, key=lambda item: item.created_at))
     # dict.fromkeys: de-duplicate the cited documents, keep first-cited order.
     cited = tuple(dict.fromkeys(f.knowledge_id for f in page if f.knowledge_id))
