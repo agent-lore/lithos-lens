@@ -61,6 +61,16 @@ LithosHealth = Literal["ok", "degraded", "unreachable"]
 # so we'd rather fail fast than block a page render.
 _SESSION_WAIT_TIMEOUT_S = 5.0
 
+# Deadline on ONE tool call, session wait included. Nothing else imposes one —
+# the MCP session has no per-request timeout, the httpx timeout covers only
+# /health, uvicorn sets no request timeout — so without it an unanswered call
+# wedges its request task forever, and on a fan-out surface a stalled lookup
+# holds a concurrency slot and stalls everything queued behind it: a bounded
+# call COUNT with an unbounded DURATION. A stop-loss well above any healthy
+# call, not a latency dial. Callers already degrade one failed read per row, so
+# timing a call out costs a row rather than a page.
+CALL_TIMEOUT_S = 15.0
+
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
@@ -680,6 +690,26 @@ class LithosClient:
         return session
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run one tool call under :data:`CALL_TIMEOUT_S`.
+
+        Enforced here, so every tool and both transport paths get it. A timeout
+        raises the ordinary coded error callers already treat as a failed read,
+        and cancelling the request releases the per-request state the shared
+        session holds for it.
+        """
+        try:
+            return await asyncio.wait_for(
+                self._invoke_tool(name, arguments), timeout=CALL_TIMEOUT_S
+            )
+        except TimeoutError as exc:
+            raise LithosToolError(
+                f"lithos tool '{name}' did not answer within {CALL_TIMEOUT_S}s",
+                code="timeout",
+            ) from exc
+
+    async def _invoke_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         if self._worker_task is None:
             # startup() was never called; fall back to a one-shot session so
             # we don't silently break callers that bypass the lifecycle.

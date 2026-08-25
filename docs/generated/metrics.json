@@ -105,10 +105,10 @@
         "qualname": "lithos_lens.frontier_join.classify_open_tasks"
       }
     ],
-    "total_functions": 320
+    "total_functions": 325
   },
   "domain": {
-    "associations": 38,
+    "associations": 39,
     "models": 36,
     "models_without_docstrings": 14
   },
@@ -258,13 +258,13 @@
       },
       "LithosClient": {
         "classes": 7,
-        "functions": 85,
+        "functions": 86,
         "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 811,
-        "lines": 1784,
+        "largest_module_lines": 841,
+        "lines": 1814,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1472
+        "sloc": 1491
       },
       "Logging": {
         "classes": 1,
@@ -288,13 +288,13 @@
       },
       "TaskGraph": {
         "classes": 14,
-        "functions": 77,
-        "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 751,
-        "lines": 2342,
+        "functions": 81,
+        "largest_module": "lithos_lens.task_detail",
+        "largest_module_lines": 774,
+        "lines": 2477,
         "modules": 7,
-        "public_symbols": 35,
-        "sloc": 1799
+        "public_symbols": 38,
+        "sloc": 1909
       },
       "Tasks": {
         "classes": 15,
@@ -320,25 +320,25 @@
         "classes": 0,
         "functions": 23,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 546,
-        "lines": 546,
+        "largest_module_lines": 548,
+        "lines": 548,
         "modules": 1,
         "public_symbols": 8,
         "sloc": 470
       }
     },
     "max_module": "lithos_lens.lithos_client",
-    "max_module_lines": 811,
+    "max_module_lines": 841,
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 8193,
+    "total_lines": 8360,
     "total_modules": 28,
-    "total_sloc": 6470
+    "total_sloc": 6599
   },
   "tests": {
-    "ratio": 1.76,
-    "src_lines": 8193,
-    "test_lines": 14402
+    "ratio": 1.75,
+    "src_lines": 8360,
+    "test_lines": 14649
   }
 }

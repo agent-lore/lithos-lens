@@ -840,7 +840,7 @@ button,
 }
 
 /* The shared related-task list: blockers, provenance, children (and, from
-   T1-S8, each expanded blocker level) all render through link_list.html. */
+   T1-S8, each expanded blocker level) all render through paging.html. */
 .link-list {
   display: grid;
   gap: 0.5rem;

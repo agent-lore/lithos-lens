@@ -41,7 +41,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.state import AppState
-from lithos_lens.task_detail import load_task_detail
+from lithos_lens.task_detail import load_findings_timeline, load_task_detail
 from lithos_lens.tasks import (
     default_since,
     format_display_date,
@@ -223,7 +223,9 @@ def create_app(
                     "offline": True,
                 },
             )
-        detail = await load_task_detail(state.lithos_client, task_id)
+        # The fragment renders the timeline only, so it loads the timeline
+        # only — never the whole detail page's graph fan-out (security/f-002).
+        detail = await load_findings_timeline(state.lithos_client, task_id)
         return templates.TemplateResponse(
             request,
             "tasks/findings.html",

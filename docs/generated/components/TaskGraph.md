@@ -16,7 +16,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 2 |
-| `lithos_lens.task_detail` | M | 6 | 10 |
+| `lithos_lens.task_detail` | L | 6 | 13 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 
 ## Public API
@@ -52,15 +52,18 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `Breadcrumb` — The parent chain above a task, root first.
 - class `TaskDetailData`
 - def `task_type_badge` — The header/type badge text: ``task``, ``epic``, or ``gate: human``.
+- def `latest_reopen_report` — The most recent reopen report on a task, if any.
 - def `first_page` — Split ``items`` into the first page and how many were left off.
+- def `last_page` — The LAST page of ``items`` (order preserved) and how many precede it.
 - def `select_edges` — The edges of ``types`` pointing ``direction`` relative to the focus task.
 - def `linked_tasks` — Far endpoint -> the edge type that first named it, in edge order.
 - def `link_page_from_tasks` — Page a list of ALREADY-LOADED tasks (the children table).
 - def `load_link_page` — Resolve the first page of an edge set into links with live status.
 - def `load_blocker_page` — One task's level-1 blockers as a bounded page — at ANY level.
 - def `load_parent_chain` — Walk incoming ``parent_child`` edges up to the root epic.
-- def `load_task_detail` — Load everything ``/tasks/{id}`` renders, in three bounded waves.
-- def `resolve_finding_notes`
+- def `load_task_detail` — Load everything ``/tasks/{id}`` renders, in three waves.
+- def `load_findings_timeline` — Just the findings timeline — what the ``/tasks/{id}/findings`` fragment renders, and nothing else.
+- def `resolve_finding_notes` — The newest page of the timeline, with its knowledge-link titles.
 
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.

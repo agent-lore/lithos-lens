@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from lithos_lens import lithos_client
 from lithos_lens.config import LithosConfig
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.normalizers import normalize_task
@@ -253,6 +254,38 @@ def test_empty_content_result_decodes_to_empty_payload() -> None:
 def test_json_dict_result_decodes_to_payload() -> None:
     client = _CannedResultClient(_tool_result('{"open_claims": 3}'))
     assert _run(client, client.stats()) == {"open_claims": 3}
+
+
+class _HangingClient(LithosClient):
+    """A client whose tool call never answers (the wedged-session case)."""
+
+    def __init__(self) -> None:
+        super().__init__(LithosConfig())
+        self.started = 0
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        self.started += 1
+        await asyncio.Event().wait()
+
+
+def test_a_tool_call_that_never_answers_times_out_instead_of_wedging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounding the CALL COUNT does not bound the render DURATION: nothing
+    under ``_call_tool`` imposes a deadline, so one unanswered call would
+    otherwise hold its request task — and, on a fan-out surface, one of the
+    render's concurrency slots — forever. It must fail as an ordinary coded
+    read error, which every caller already degrades gracefully."""
+    monkeypatch.setattr(lithos_client, "CALL_TIMEOUT_S", 0.05)
+    client = _HangingClient()
+
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+
+    assert client.started == 1
+    assert excinfo.value.code == "timeout"
 
 
 def test_list_tasks_always_sends_with_claims_so_default_false_is_pinned() -> None:

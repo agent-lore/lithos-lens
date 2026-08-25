@@ -81,8 +81,14 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # stop-loss returns to the god-module threshold and lithos_client is the one
 # module allowed to sit above it. The rest of the MCP transport (session
 # worker, tool-call decoding) is the next slice to lift out.
-modules_over_800_lines = 1    # lithos_client (811); no other module may join it
-max_module_lines       = 815  # stop-loss just above today's largest, lithos_client (811)
+# Raised 815 -> 845 for the per-call deadline (security/f-004): a tool call
+# with no timeout leaves a bounded call count with an unbounded render
+# duration, and the deadline belongs in the module that owns the session. The
+# standing plan is unchanged and this does not buy room for anything else —
+# lifting the MCP transport (session worker, tool-call decoding) out of
+# lithos_client is still the next slice, and it takes both numbers back down.
+modules_over_800_lines = 1    # lithos_client (841); no other module may join it
+max_module_lines       = 845  # stop-loss just above today's largest, lithos_client (841)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

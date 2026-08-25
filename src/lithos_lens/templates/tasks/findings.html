@@ -1,3 +1,4 @@
+{% from "tasks/paging.html" import overflow_tail with context %}
 <section>
   <h2>Findings</h2>
   {% if offline %}
@@ -5,6 +6,10 @@
   {% elif detail and detail.findings_state == "error" %}
     <p class="warning-text">Findings unavailable. Refresh this task to retry.</p>
   {% elif detail and detail.findings %}
+    {# The newest page of the timeline; older entries are collapsed and
+       counted (§5.6), never silently dropped. The tail leads the list because
+       what it stands for is OLDER than everything below it. #}
+    {{ overflow_tail(detail.findings | length, detail.findings_older, "findings", "most recent") }}
     <ol class="findings-timeline">
       {% for item in detail.findings %}
         <li{% if item.is_reopen %} class="finding-reopened" data-reopen-finding{% endif %}>

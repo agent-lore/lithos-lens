@@ -51,7 +51,7 @@ from lithos_lens.tasks import (
 # loop would otherwise turn one page render into one round trip per edge. It is
 # a PAGE SIZE, not a claim about how many blockers a task may legitimately
 # have — the remainder is counted and stated in the tail (see
-# ``templates/tasks/link_list.html``), never silently dropped: a truncated
+# ``templates/tasks/paging.html``), never silently dropped: a truncated
 # blocker list on a "why can't this task run?" page is worse than a slow one.
 DETAIL_PAGE_SIZE = 25
 
@@ -121,7 +121,9 @@ class TaskDetailClientProtocol(Protocol):
         self, task_id: str, *, since: str | None = None
     ) -> list[FindingRecord]: ...
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None: ...
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None: ...
 
 
 @dataclass(frozen=True)
@@ -199,7 +201,7 @@ class LinkPage:
     """One first-page-plus-tail slice of a related-task list.
 
     ``remaining`` is how many links the page left off — rendered as the tail
-    (``templates/tasks/link_list.html``) so an operator can see that more
+    (``templates/tasks/paging.html``) so an operator can see that more
     exist and how many, which a silent truncation would not. ``state`` is
     ERROR when the read behind the list failed, so the section says
     "unavailable" instead of showing an empty list as if it were a fact.
@@ -235,7 +237,15 @@ class Breadcrumb:
 class TaskDetailData:
     task: TaskRecord | None
     task_status: TaskStatusRecord | None = None
+    # The NEWEST page of the findings timeline, oldest-first within the page
+    # (§5.6). ``findings_older`` is how many older findings it collapses — the
+    # tail states it, exactly like every other list on this page.
     findings: tuple[FindingView, ...] = ()
+    findings_older: int = 0
+    # Derived from the WHOLE findings list, not from the page above: the marker
+    # needs no note lookup, so paging the timeline must not make a reopen
+    # invisible on a task with a long history.
+    reopen_report: FindingView | None = None
     # Level-1 blockers (§5.5.2 text baseline). T1-S8 hangs its per-level
     # expander off these rows and pages each deeper level the same way.
     blockers: LinkPage = LinkPage()
@@ -263,20 +273,6 @@ class TaskDetailData:
         """Whether there is anything to report under Resolution."""
         return bool(self.task and (self.task.resolved_at or self.task.outcome))
 
-    @property
-    def reopen_report(self) -> FindingView | None:
-        """The most recent reopen report on this task, if any.
-
-        Derived from the findings timeline (see ``FindingView.is_reopen``),
-        which is the only durable record of a reopen — and an unauthenticated
-        one, so the view carries the REPORTING AGENT and the header attributes
-        the claim to them instead of stating a lifecycle reversal as fact.
-        ``findings`` is ordered oldest-first by ``resolve_finding_notes``, so
-        the last match is the latest report. A findings load failure yields
-        None ("unknown"), never a false negative claim.
-        """
-        return next((view for view in reversed(self.findings) if view.is_reopen), None)
-
 
 def task_type_badge(task: TaskRecord | None) -> str:
     """The header/type badge text: ``task``, ``epic``, or ``gate: human``.
@@ -294,17 +290,54 @@ def task_type_badge(task: TaskRecord | None) -> str:
     return f"gate: {gate_type}" if gate_type else "gate"
 
 
-def first_page[T](
-    items: Sequence[T], *, page_size: int = DETAIL_PAGE_SIZE
-) -> tuple[tuple[T, ...], int]:
+def latest_reopen_report(findings: Sequence[FindingRecord]) -> FindingView | None:
+    """The most recent reopen report on a task, if any.
+
+    The ``[Reopened]`` finding is the only durable record of a reopen — and an
+    unauthenticated one, so the view carries the REPORTING AGENT and the header
+    attributes the claim to them instead of stating a lifecycle reversal as
+    fact (see :data:`~lithos_lens.tasks.REOPENED_FINDING_PREFIX`).
+
+    Scanned over EVERY finding rather than over the rendered page: the marker
+    costs no round trip, so the page bound must not turn a long timeline into a
+    false negative. A findings load failure yields None ("unknown"), never a
+    false negative claim.
+    """
+    for finding in sorted(findings, key=lambda item: item.created_at, reverse=True):
+        view = FindingView(finding=finding)
+        if view.is_reopen:
+            return view
+    return None
+
+
+def first_page[T](items: Sequence[T]) -> tuple[tuple[T, ...], int]:
     """Split ``items`` into the first page and how many were left off.
 
-    The single place the pagination decision lives: every related-task list on
-    this page (and every deeper blocker level T1-S8 expands) reaches its bound
-    through here, so the page size and the remainder count cannot drift apart
-    between call sites.
+    The single place the pagination decision lives: every list on this page
+    (and every deeper blocker level T1-S8 expands) reaches its bound through
+    here, so the page size and the remainder count cannot drift apart between
+    call sites.
+
+    The size is deliberately NOT a parameter — not here and not on the loaders
+    below. A bound that a caller can pass its way past is a default, not a
+    bound: T1-S8 could then page a deeper level at any size without touching
+    :data:`DETAIL_PAGE_SIZE` or failing any test of it. Changing the page size
+    means changing the constant, in one place, under review.
     """
-    return tuple(items[:page_size]), max(len(items) - page_size, 0)
+    return tuple(items[:DETAIL_PAGE_SIZE]), max(len(items) - DETAIL_PAGE_SIZE, 0)
+
+
+def last_page[T](items: Sequence[T]) -> tuple[tuple[T, ...], int]:
+    """The LAST page of ``items`` (order preserved) and how many precede it.
+
+    :func:`first_page` turned around, for the one list whose interesting end is
+    the newest: a findings timeline keeps its most recent entries and collapses
+    the older ones (§5.6), where a blocker list keeps the ones it can show
+    first. Both reach the same constant through the same function, so there is
+    still exactly one page-size decision.
+    """
+    page, remaining = first_page(tuple(reversed(items)))
+    return tuple(reversed(page)), remaining
 
 
 def select_edges(
@@ -341,9 +374,7 @@ def linked_tasks(edges: Sequence[EdgeRecord]) -> dict[str, str]:
     return targets
 
 
-def link_page_from_tasks(
-    tasks: Sequence[TaskRecord], *, page_size: int = DETAIL_PAGE_SIZE
-) -> LinkPage:
+def link_page_from_tasks(tasks: Sequence[TaskRecord]) -> LinkPage:
     """Page a list of ALREADY-LOADED tasks (the children table).
 
     ``lithos_task_children`` answers with whole records, so this page needs no
@@ -351,7 +382,7 @@ def link_page_from_tasks(
     number of children is as agent-controlled as the number of blockers and the
     tail must state the remainder either way.
     """
-    page, remaining = first_page(tasks, page_size=page_size)
+    page, remaining = first_page(tasks)
     return LinkPage(
         links=tuple(TaskLink(task_id=task.id, task=task) for task in page),
         remaining=remaining,
@@ -362,7 +393,6 @@ async def load_link_page(
     lithos: TaskDetailClientProtocol,
     edges: Sequence[EdgeRecord],
     *,
-    page_size: int = DETAIL_PAGE_SIZE,
     gate: asyncio.Semaphore | None = None,
 ) -> LinkPage:
     """Resolve the first page of an edge set into links with live status.
@@ -372,8 +402,8 @@ async def load_link_page(
     process-wide MCP session this page shares with every other request. That is
     categorically more than the ``lithos_task_edge_list`` call that produced
     ``edges`` — that is a single round trip returning N rows, plus O(N) local
-    parsing. So the count is capped at ``page_size`` (whatever the edge count
-    is), the remainder is reported by the tail, and at most
+    parsing. So the count is capped at :data:`DETAIL_PAGE_SIZE` (whatever the
+    edge count is), the remainder is reported by the tail, and at most
     :data:`DETAIL_FANOUT_CONCURRENCY` of the lookups are in flight at once.
 
     A failed lookup degrades to an unresolved link rather than failing the
@@ -381,7 +411,7 @@ async def load_link_page(
     """
     gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
     targets = linked_tasks(edges)
-    page, remaining = first_page(tuple(targets), page_size=page_size)
+    page, remaining = first_page(tuple(targets))
     links = await asyncio.gather(
         *(_resolve_link(lithos, task_id, targets[task_id], gate) for task_id in page)
     )
@@ -392,7 +422,6 @@ async def load_blocker_page(
     lithos: TaskDetailClientProtocol,
     task_id: str,
     *,
-    page_size: int = DETAIL_PAGE_SIZE,
     gate: asyncio.Semaphore | None = None,
 ) -> LinkPage:
     """One task's level-1 blockers as a bounded page — at ANY level.
@@ -413,7 +442,7 @@ async def load_blocker_page(
         )
     except Exception:
         return LinkPage(state=SectionState.ERROR)
-    return await load_link_page(lithos, edges, page_size=page_size, gate=gate)
+    return await load_link_page(lithos, edges, gate=gate)
 
 
 async def load_parent_chain(
@@ -460,15 +489,25 @@ async def load_task_detail(
     lithos: TaskDetailClientProtocol,
     task_id: str,
 ) -> TaskDetailData:
-    """Load everything ``/tasks/{id}`` renders, in three bounded waves.
+    """Load everything ``/tasks/{id}`` renders, in three waves.
 
     Wave 1 identifies the task (``lithos_task_get``) — an unknown id answers
     the ``task_not_found`` envelope, which becomes the not-found panel rather
     than an HTTP 500 (§5.5); any OTHER failure is reported as a failed read,
     not as a missing task. Wave 2 gathers the four independent per-task reads.
-    Wave 3 resolves the links the edge list named, sharing one concurrency gate
-    across every list so the whole render — not each list separately — is
-    bounded.
+    Wave 3 resolves what those reads named: the link lists, the breadcrumb and
+    the timeline's note titles.
+
+    EVERY per-row fan-out in wave 3 is bounded, because every list it feeds is
+    paged by :data:`DETAIL_PAGE_SIZE` before anything is looked up — blockers,
+    provenance both ways, children, and the findings timeline. Nothing here
+    scales with an agent-controlled count: the ceiling is four pages of
+    ``task_get`` plus one page of ``lithos_read``, plus the separately bounded
+    parent walk (:data:`PARENT_CHAIN_MAX_DEPTH`). The four wave-2 reads and the
+    ``list_findings`` behind the timeline are single round trips whose
+    responses can still be long; that cost is O(N) local parsing, not N round
+    trips. One gate is shared by every wave-3 lookup, so the render — not each
+    list — is what :data:`DETAIL_FANOUT_CONCURRENCY` bounds.
     """
     try:
         task = await lithos.task_get(task_id)
@@ -501,15 +540,23 @@ async def load_task_detail(
     else:
         task_status = cast(TaskStatusRecord | None, status_result)
 
+    # One gate for the whole render: the lists below are bounded individually
+    # by their page size, and jointly by this.
+    gate = asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+
     finding_views: tuple[FindingView, ...] = ()
+    findings_older = 0
+    reopen_report: FindingView | None = None
     findings_state = SectionState.OK
     if isinstance(findings_result, BaseException):
         findings_state = SectionState.ERROR
         errors.append("Could not load findings.")
     else:
-        finding_views = await resolve_finding_notes(
-            lithos, cast(list[FindingRecord], findings_result)
+        findings = cast(list[FindingRecord], findings_result)
+        finding_views, findings_older = await resolve_finding_notes(
+            lithos, findings, gate=gate
         )
+        reopen_report = latest_reopen_report(findings)
 
     if isinstance(children_result, BaseException):
         errors.append("Could not load child tasks.")
@@ -526,9 +573,6 @@ async def load_task_detail(
         errors.append("Could not load task relations.")
     else:
         edges = cast(list[EdgeRecord], edges_result)
-        # One gate for the whole render: the lists below are bounded
-        # individually by their page size, and jointly by this.
-        gate = asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
         blockers, discovered_from, spawned, breadcrumb = await asyncio.gather(
             load_link_page(
                 lithos,
@@ -556,6 +600,8 @@ async def load_task_detail(
         task=task,
         task_status=task_status,
         findings=finding_views,
+        findings_older=findings_older,
+        reopen_report=reopen_report,
         blockers=blockers,
         breadcrumb=breadcrumb,
         children=children,
@@ -567,32 +613,121 @@ async def load_task_detail(
     )
 
 
+async def load_findings_timeline(
+    lithos: TaskDetailClientProtocol,
+    task_id: str,
+) -> TaskDetailData:
+    """Just the findings timeline — what the ``/tasks/{id}/findings`` fragment
+    renders, and nothing else.
+
+    ``findings.html`` reads only ``findings``, ``findings_older`` and
+    ``findings_state``, so running the full :func:`load_task_detail` for it
+    would buy the whole graph fan-out — the edge list, the children, four pages
+    of ``task_get`` and the parent walk — and then discard every result
+    unrendered. A fragment is the cheapest thing to request and the easiest to
+    request in a loop (the reconcile tick refetches on every event), so it must
+    not be the most expensive thing to serve.
+    """
+    try:
+        findings = await lithos.list_findings(task_id)
+    except Exception:
+        return TaskDetailData(
+            task=None,
+            findings_state=SectionState.ERROR,
+            errors=("Could not load findings.",),
+        )
+    views, older = await resolve_finding_notes(lithos, findings)
+    return TaskDetailData(
+        task=None,
+        findings=views,
+        findings_older=older,
+        reopen_report=latest_reopen_report(findings),
+    )
+
+
 async def resolve_finding_notes(
     lithos: TaskDetailClientProtocol,
-    findings: list[FindingRecord],
-) -> tuple[FindingView, ...]:
-    cache: dict[str, NoteRecord | None] = {}
+    findings: Sequence[FindingRecord],
+    *,
+    gate: asyncio.Semaphore | None = None,
+) -> tuple[tuple[FindingView, ...], int]:
+    """The newest page of the timeline, with its knowledge-link titles.
+
+    The findings count is agent-controlled in exactly the way the edge count
+    is — ``lithos_finding_post`` takes ``{task_id, agent, summary,
+    knowledge_id}`` with no credential and no per-task cap, and
+    ``lithos_finding_list`` takes no limit — and each DISTINCT
+    ``knowledge_id`` costs one ``lithos_read`` ROUND TRIP on the shared MCP
+    session. So this list is bounded like every other one on the page: only
+    :data:`DETAIL_PAGE_SIZE` findings are rendered (the NEWEST ones — §5.6
+    collapses older history, and a reopen keeps its marker either way via
+    :func:`latest_reopen_report`), the remainder is returned for the tail to
+    state, and the title lookups for that page run concurrently under the
+    render's gate instead of one after another.
+
+    Two further economies on the lookups: ids are de-duplicated across the
+    page (one read serves every finding citing the same document), and the
+    read is ``max_length=1`` — frontmatter comes back complete (§6.3), so a
+    title never pulls a whole note body. Same call as the related panel's
+    title fan-out (``knowledge._resolve_titles``).
+    """
+    gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+    page, older = last_page(sorted(findings, key=lambda item: item.created_at))
+    # dict.fromkeys: de-duplicate the cited documents, keep first-cited order.
+    cited = tuple(dict.fromkeys(f.knowledge_id for f in page if f.knowledge_id))
+    titles = await _resolve_note_titles(lithos, cited, gate)
     views: list[FindingView] = []
-    for finding in sorted(findings, key=lambda item: item.created_at):
+    for finding in page:
         if not finding.knowledge_id:
             views.append(FindingView(finding=finding))
             continue
-        if finding.knowledge_id not in cache:
-            try:
-                cache[finding.knowledge_id] = await lithos.read_note(
-                    finding.knowledge_id
-                )
-            except Exception:
-                cache[finding.knowledge_id] = None
-        note = cache[finding.knowledge_id]
+        title = titles.get(finding.knowledge_id, "")
         views.append(
             FindingView(
                 finding=finding,
-                note_title=note.title if note else "",
-                note_error="" if note else "Could not resolve document title.",
+                note_title=title,
+                note_error="" if title else "Could not resolve document title.",
             )
         )
-    return tuple(views)
+    return tuple(views), older
+
+
+async def _resolve_note_titles(
+    lithos: TaskDetailClientProtocol,
+    knowledge_ids: Sequence[str],
+    gate: asyncio.Semaphore,
+) -> dict[str, str]:
+    """Title per readable knowledge id; missing when the read failed."""
+    titles = await asyncio.gather(
+        *(
+            _read_note_title(lithos, knowledge_id, gate)
+            for knowledge_id in knowledge_ids
+        )
+    )
+    return {
+        knowledge_id: title
+        for knowledge_id, title in zip(knowledge_ids, titles, strict=True)
+        if title
+    }
+
+
+async def _read_note_title(
+    lithos: TaskDetailClientProtocol,
+    knowledge_id: str,
+    gate: asyncio.Semaphore,
+) -> str:
+    """One gated, body-free title read; empty string for ANY failure.
+
+    A finding may cite a document that was never written, or that the reader
+    cannot see — the timeline says so per row (the "View document" fallback)
+    rather than failing the section.
+    """
+    try:
+        async with gate:
+            note = await lithos.read_note(knowledge_id, max_length=1)
+    except Exception:
+        return ""
+    return note.title if note else ""
 
 
 async def _resolve_link(

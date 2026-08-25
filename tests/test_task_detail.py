@@ -11,6 +11,7 @@ via ``load_blocker_page``.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +23,16 @@ from lithos_lens.task_detail import (
     DETAIL_PAGE_SIZE,
     Breadcrumb,
     first_page,
+    last_page,
+    link_page_from_tasks,
     load_blocker_page,
+    load_findings_timeline,
+    load_link_page,
     load_task_detail,
     task_type_badge,
 )
 from lithos_lens.task_graph import EdgeRecord
-from lithos_lens.tasks import TaskRecord
+from lithos_lens.tasks import FindingRecord, NoteRecord, TaskRecord
 from lithos_lens.web import create_app
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
@@ -189,7 +194,7 @@ def test_blocker_page_bounds_the_fan_out_and_states_the_remainder(
     # The rendered page still carries live status, not just titles.
     assert 'class="badge badge-open"' in text
     # The tail names the remainder rather than truncating silently.
-    assert 'data-link-tail="blockers"' in text
+    assert 'data-overflow-tail="blockers"' in text
     assert f"{overflow} more are not shown" in text
     assert f"of {DETAIL_PAGE_SIZE + overflow} blockers" in text
 
@@ -493,3 +498,212 @@ def test_open_task_renders_no_resolution_section(
 
 def test_empty_breadcrumb_is_not_truncated() -> None:
     assert Breadcrumb().truncated is False
+
+
+# --- the findings timeline is bounded the same way (security/f-001) --------
+
+
+class NoteProbeClient(TaskFakeLithosClient):
+    """Records every ``read_note`` — the timeline's title fan-out."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.note_calls: list[dict[str, Any]] = []
+        self.notes_in_flight = 0
+        self.peak_notes_in_flight = 0
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        self.note_calls.append({"id": knowledge_id, "max_length": max_length})
+        self.notes_in_flight += 1
+        self.peak_notes_in_flight = max(self.peak_notes_in_flight, self.notes_in_flight)
+        try:
+            await asyncio.sleep(0)
+            return NoteRecord(id=knowledge_id, title=f"Note {knowledge_id}", content="")
+        finally:
+            self.notes_in_flight -= 1
+
+
+def _stage_findings(
+    fake: TaskFakeLithosClient, task_id: str, count: int, *, first_index: int = 0
+) -> None:
+    """``count`` findings on ``task_id``, each citing a DISTINCT document."""
+    fake.findings[task_id] = [
+        FindingRecord(
+            id=f"finding-{index:03d}",
+            task_id=task_id,
+            agent="worker-a",
+            summary=f"Finding {index}",
+            knowledge_id=f"note-{index:03d}",
+            # Ascending, so "the newest page" is unambiguous.
+            created_at=f"2026-04-{(index % 28) + 1:02d}T{index % 24:02d}:00:00+00:00",
+        )
+        for index in range(first_index, first_index + count)
+    ]
+
+
+def test_findings_timeline_pages_the_newest_and_states_the_rest(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The findings count is agent-controlled exactly like the edge count —
+    ``lithos_finding_post`` is uncredentialed and ``lithos_finding_list`` takes
+    no limit — and each distinct ``knowledge_id`` costs a ``lithos_read`` round
+    trip. So the timeline is paged by the SAME constant, its title fan-out is
+    bounded by the page, and the collapsed remainder is stated rather than
+    silently dropped."""
+    fake = NoteProbeClient()
+    older = 7
+    _stage_findings(fake, "open-unclaimed", DETAIL_PAGE_SIZE + older)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    # One rendered row per page slot, and one lookup per rendered row.
+    assert text.count("<p>Finding ") == DETAIL_PAGE_SIZE
+    assert len(fake.note_calls) == DETAIL_PAGE_SIZE
+    # The page kept the NEWEST findings: the oldest ones are what collapsed.
+    assert f"Finding {DETAIL_PAGE_SIZE + older - 1}" in text
+    assert "Finding 0<" not in text
+    # ... and the tail says how many, in the shared overflow wording.
+    assert 'data-overflow-tail="findings"' in text
+    assert f"{older} more are not shown" in text
+    assert f"most recent {DETAIL_PAGE_SIZE}" in text
+
+
+def test_finding_title_lookups_are_gated_and_body_free(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The title fan-out shares the render's gate (it used to run ungated AND
+    sequentially), and reads only the frontmatter — a title never pulls a whole
+    note body, the same economy the related panel already makes."""
+    fake = NoteProbeClient()
+    _stage_findings(fake, "open-unclaimed", DETAIL_PAGE_SIZE)
+
+    _run(load_task_detail(fake, "open-unclaimed"))
+
+    assert [call["max_length"] for call in fake.note_calls] == [1] * DETAIL_PAGE_SIZE
+    assert fake.peak_notes_in_flight > 1  # concurrent, not the old serial loop
+    assert fake.peak_notes_in_flight <= DETAIL_FANOUT_CONCURRENCY
+    assert fake.peak_notes_in_flight < DETAIL_PAGE_SIZE
+
+
+def test_one_lookup_serves_every_finding_citing_the_same_document() -> None:
+    fake = NoteProbeClient()
+    fake.findings["open-unclaimed"] = [
+        FindingRecord(
+            id=f"finding-{index}",
+            task_id="open-unclaimed",
+            agent="worker-a",
+            summary=f"Finding {index}",
+            knowledge_id="note-shared",
+            created_at=f"2026-04-2{index}T10:00:00+00:00",
+        )
+        for index in range(3)
+    ]
+
+    detail = _run(load_task_detail(fake, "open-unclaimed"))
+
+    assert len(detail.findings) == 3
+    assert [call["id"] for call in fake.note_calls] == ["note-shared"]
+
+
+def test_reopen_marker_survives_a_paged_timeline(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The marker is derived from the whole findings list, not from the page:
+    it costs no round trip, so paging the timeline must not turn a reopened
+    task into an un-reopened-looking one."""
+    fake = NoteProbeClient()
+    _stage_findings(fake, "open-unclaimed", DETAIL_PAGE_SIZE, first_index=10)
+    fake.findings["open-unclaimed"].insert(
+        0,
+        FindingRecord(
+            id="finding-reopen",
+            task_id="open-unclaimed",
+            agent="operator",
+            summary="[Reopened] from completed by operator",
+            # Older than every finding on the page, so it is collapsed away.
+            created_at="2026-01-01T09:00:00+00:00",
+        ),
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    assert "data-reopened-marker" in response.text
+    assert "reopen reported by operator" in response.text
+    # The reopen finding itself is off the page — only the marker survives.
+    assert "data-reopen-finding" not in response.text
+
+
+# --- the findings fragment pays only for findings (security/f-002) ---------
+
+
+def test_findings_fragment_does_not_pay_for_the_graph_fan_out(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``/tasks/{id}/findings`` renders the timeline and nothing else, so it
+    must not issue the detail page's edge read, children read, link lookups or
+    parent walk — a fragment is the cheapest thing to request in a loop and
+    must not be the most expensive thing to serve."""
+    fake = NoteProbeClient()
+    fake.edges["open-claimed"] = [_blocks("open-unclaimed", "open-claimed")]
+    fake.children["open-claimed"] = ["open-unclaimed"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-claimed/findings")
+
+    assert response.status_code == 200
+    # It still renders what it is for.
+    assert "Important finding" in response.text
+    # ... and nothing else was read: no task_get, no edges, no children.
+    assert fake.get_calls == []
+    assert fake.edge_list_calls == []
+
+
+# --- the page size is not caller-supplied (security/f-003) -----------------
+
+
+def test_the_page_size_cannot_be_widened_by_a_caller() -> None:
+    """The bound is the constant, not a default argument. A ``page_size``
+    keyword would let T1-S8 page a deeper level at any size — reintroducing the
+    exact defect one level down — without touching ``DETAIL_PAGE_SIZE`` or
+    failing any test of it."""
+    for helper in (
+        first_page,
+        last_page,
+        link_page_from_tasks,
+        load_link_page,
+        load_blocker_page,
+    ):
+        params = set(inspect.signature(helper).parameters)
+        assert "page_size" not in params, helper.__name__
+
+    # And the primitive itself never yields more than the constant.
+    assert len(first_page(range(DETAIL_PAGE_SIZE * 4))[0]) == DETAIL_PAGE_SIZE
+    assert len(last_page(range(DETAIL_PAGE_SIZE * 4))[0]) == DETAIL_PAGE_SIZE
+
+
+def test_last_page_keeps_the_newest_and_counts_what_precedes_it() -> None:
+    items = list(range(DETAIL_PAGE_SIZE + 3))
+
+    page, older = last_page(items)
+
+    assert page == tuple(items[3:])
+    assert older == 3
+    assert last_page([1, 2]) == ((1, 2), 0)
+
+
+def test_findings_timeline_loader_reports_a_failed_read() -> None:
+    class BrokenFindingsClient(TaskFakeLithosClient):
+        async def list_findings(self, task_id: str, **kwargs: Any) -> Any:
+            raise RuntimeError("findings read failed")
+
+    detail = _run(load_findings_timeline(BrokenFindingsClient(), "open-claimed"))
+
+    assert detail.findings_state == "error"
+    assert detail.findings == ()

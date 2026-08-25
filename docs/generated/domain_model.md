@@ -156,6 +156,7 @@ classDiagram
     +state SectionState
   }
   class TaskDetailData {
+    +findings_older int
     +status_state SectionState
     +findings_state SectionState
     +not_found bool
@@ -178,6 +179,7 @@ classDiagram
   LinkPage "1" --> "0..*" TaskLink : links
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
+  TaskDetailData "1" --> "0..1" FindingView : reopen_report
   TaskDetailData "1" --> "1" LinkPage : blockers
   TaskDetailData "1" --> "1" LinkPage : children
   TaskDetailData "1" --> "1" LinkPage : discovered_from
