@@ -200,6 +200,38 @@ def test_blocker_page_bounds_the_fan_out_and_states_the_remainder(
     assert f"of {DETAIL_PAGE_SIZE + overflow} blockers" in text
 
 
+def test_a_runaway_edge_count_still_renders_a_page_and_the_true_remainder(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The bound is on the WORK, never on the input.
+
+    A buggy agent minting edges in a loop is the case this story exists to
+    handle, so the page must behave identically at any edge count: the same
+    first page with live statuses, the same page-size fan-out, and a tail
+    stating the REAL number left off — not a round number, and not an
+    "unavailable" section. Nothing on the path (transport, loader or template)
+    may impose a ceiling that turns this input into a failed read.
+    """
+    fake = TaskFakeLithosClient()
+    runaway = 5_000
+    _stage_blockers(fake, "open-unclaimed", runaway)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    assert text.count('data-link-id="blocker-') == DETAIL_PAGE_SIZE
+    assert len([call for call in fake.get_calls if call.startswith("blocker-")]) == (
+        DETAIL_PAGE_SIZE
+    )
+    assert 'class="badge badge-open"' in text
+    # The remainder is counted, not estimated.
+    assert f"{runaway - DETAIL_PAGE_SIZE} more are not shown" in text
+    assert f"of {runaway} blockers" in text
+    assert "Blockers unavailable" not in text
+
+
 def test_blocker_fan_out_is_also_concurrency_bounded(
     lithos_lens_config_env: Path,
 ) -> None:

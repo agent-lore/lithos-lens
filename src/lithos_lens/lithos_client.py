@@ -75,18 +75,6 @@ CALL_TIMEOUT_S = 15.0
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
 
-# Runaway guard on ONE decoded payload — a stop-loss, not a capacity claim, the
-# same shape as _RECENT_NOTES_MAX_PAGES. The reads behind the detail page take
-# no limit parameter, so an agent minting findings or edges in a loop controls
-# the ROW COUNT of a single response. Parsing it is SYNCHRONOUS: json.loads and
-# the per-row normalizers run on the event loop, which is the one part of a
-# render an async deadline cannot preempt — while they run, every other request
-# and the deadline's own timer are stopped. Refusing an absurd payload costs one
-# degraded section (callers already handle a coded error) instead of the
-# process. It bounds the PARSE, not the receipt: the transport has already built
-# the string by the time this sees it.
-MAX_TOOL_RESULT_CHARS = 8_000_000
-
 # recent_notes walks lithos_list in pages of this size (via offset) and sorts
 # client-side, because the tool has no ordering parameter — removed once
 # upstream lithos_list grows server-side ordering (task e0e31654).
@@ -824,8 +812,21 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     MCP-level error result (``isError``, plain text — e.g. the live server's
     FastMCP output-schema validation rejecting a tool's own error envelope);
     ``code="invalid_response"`` marks a success result whose body isn't a
-    JSON object; ``code="response_too_large"`` refuses a payload past
-    :data:`MAX_TOOL_RESULT_CHARS` BEFORE parsing it.
+    JSON object.
+
+    There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
+    must not be added. The graph reads take no limit parameter, so a single
+    response's row count is agent-controlled — the very input the task detail
+    page exists to survive: it renders a bounded first page of blockers plus a
+    tail stating the TRUE remainder, and it can only count that remainder from
+    a response it parsed. Refusing the oversized edge list would answer exactly
+    that case with "blockers unavailable", and any finite ceiling is a
+    deployment assumption dressed as an input-domain restriction. Cost is
+    bounded where the cost is instead — the per-row fan-out, its concurrency
+    and its wall clock (see ``task_links``). The residual is the SYNCHRONOUS
+    parse below, which no async deadline can preempt; its fix is an upstream
+    row limit on the graph reads, not a ceiling Lens invents for a response it
+    asked for.
     """
     blocks = getattr(result, "content", [])
     text = str(getattr(blocks[0], "text", "") or "") if blocks else ""
@@ -833,11 +834,6 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
         raise LithosToolError(text or "Lithos tool call failed", code="tool_error")
     if not text:
         return {}
-    if len(text) > MAX_TOOL_RESULT_CHARS:
-        raise LithosToolError(
-            f"Lithos tool result exceeds {MAX_TOOL_RESULT_CHARS} characters",
-            code="response_too_large",
-        )
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:

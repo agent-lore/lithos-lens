@@ -76,18 +76,20 @@ cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); 
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # lithos_client is the one module allowed above the 800 god-module threshold.
-# T1-S7 raised its stop-loss twice, for two security fixes that belong in the
-# module owning the MCP session: 815 -> 845 for the per-call deadline
-# (security/f-004), then -> 870 for the decoded-payload guard (security/f-007).
-# Neither is large, but two raises in three rounds is the ratchet slipping, so
-# this one is a genuine stop-loss (11 lines of headroom over today's 859)
-# rather than a hair above the high-water mark — and it is the last that should
-# be spent this way. Lifting the MCP transport (session worker, tool-call
-# decoding) out of lithos_client is still the next slice and takes both numbers
-# back down; it needs its own task, because it turns the module-private decode
-# helpers into a public surface across ~25 call sites.
-modules_over_800_lines = 1    # lithos_client (859); no other module may join it
-max_module_lines       = 870  # stop-loss above today's largest, lithos_client (859)
+# T1-S7 raised its stop-loss from 815 to 845 for the per-call deadline
+# (security/f-004), then to 870 for a decoded-payload ceiling — which review
+# then WITHDREW (correctness/f-002: a whole-response ceiling is an
+# input-domain restriction, and it broke the story's own runaway-edge case).
+# The ceiling is gone; what replaced it is the contract note in
+# _decode_tool_result saying why none belongs there, so the module did not
+# shrink back. 870 stays as a genuine stop-loss (15 lines over today's 855)
+# rather than a hair above the high-water mark. No further raise should be
+# spent this way: lifting the MCP transport (session worker, tool-call
+# decoding) out of lithos_client is the standing next slice and takes both
+# numbers back down. It needs its own task — it turns the module-private
+# decode helpers into a public surface across ~25 call sites.
+modules_over_800_lines = 1    # lithos_client (855); no other module may join it
+max_module_lines       = 870  # stop-loss above today's largest, lithos_client (855)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

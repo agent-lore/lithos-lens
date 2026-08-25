@@ -256,26 +256,34 @@ def test_json_dict_result_decodes_to_payload() -> None:
     assert _run(client, client.stats()) == {"open_claims": 3}
 
 
-def test_an_absurd_payload_is_refused_before_it_is_parsed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The count and deadline bounds elsewhere cover AWAITS. Parsing is
-    synchronous, so a response whose row count an agent controls would block
-    the event loop — every other request and the render deadline's own timer
-    included — for as long as it takes. The guard refuses it as an ordinary
-    coded read failure, which callers already degrade per section."""
-    monkeypatch.setattr(lithos_client, "MAX_TOOL_RESULT_CHARS", 100)
-    client = _CannedResultClient(_tool_result('{"rows": "' + "x" * 200 + '"}'))
+def test_a_huge_response_is_decoded_rather_than_refused() -> None:
+    """No ceiling on a response's size, at any value.
 
-    with pytest.raises(LithosToolError) as excinfo:
-        _run(client, client.stats())
+    The graph reads take no limit parameter, so a task's edge count — and
+    therefore the size of the one response carrying it — is agent-controlled.
+    That is the input the detail page is built to survive: it pages the
+    blockers and states the true remainder, which it can only count from a
+    parsed response. A whole-response ceiling would answer precisely that case
+    with "blockers unavailable", so an oversized payload must still decode,
+    with every row intact.
+    """
+    # Well past any ceiling that has been proposed here (~8.5M characters),
+    # built from few rows so the test stays cheap.
+    filler = "f" * 85_000
+    edges = ",".join(
+        f'''{{"from_task_id": "b{index}", "to_task_id": "t", "type": "blocks",
+             "direction": "incoming", "metadata": {{"note": "{filler}"}}}}'''
+        for index in range(100)
+    )
+    payload = f'{{"edges": [{edges}]}}'
+    assert len(payload) > 8_000_000
+    client = _CannedResultClient(_tool_result(payload))
 
-    assert excinfo.value.code == "response_too_large"
+    rows = _run(client, client.task_edge_list("t"))
 
-
-def test_a_payload_within_the_guard_still_decodes() -> None:
-    client = _CannedResultClient(_tool_result('{"open_claims": 3}'))
-    assert _run(client, client.stats()) == {"open_claims": 3}
+    assert len(rows) == 100
+    assert rows[0].from_task_id == "b0"
+    assert rows[-1].from_task_id == "b99"
 
 
 class _HangingClient(LithosClient):
