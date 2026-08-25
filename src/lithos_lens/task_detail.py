@@ -15,9 +15,21 @@ component (``docs/architecture.toml``) rather than Tasks: it consumes the graph
 records. The dependency still runs one way — this module imports the records,
 neither ``tasks.py`` nor ``task_graph.py`` imports back.
 
-Every list of RELATED tasks on the page (blockers, provenance both directions,
-children) is rendered as a bounded FIRST PAGE plus a tail; see
-:data:`DETAIL_PAGE_SIZE` and :func:`load_link_page`.
+The mechanism half — resolving related tasks from edges, and the three bounds
+that keep that fan-out safe — lives next door in ``task_links.py``, because
+T1-S8 expands the blocker chain through the SAME helper. What is left here is
+the page: its view models, the findings timeline, and the assembly that gathers
+the reads and decides what each section says when one of them does not answer.
+
+Every list on the page — blockers, provenance both directions, children, and
+the findings timeline — renders a bounded FIRST PAGE plus a tail
+(:data:`~lithos_lens.task_links.DETAIL_PAGE_SIZE`), every per-row lookup runs
+under one shared concurrency gate
+(:data:`~lithos_lens.task_links.DETAIL_FANOUT_CONCURRENCY`), and the whole set
+of reads runs under one wall-clock budget
+(:data:`~lithos_lens.task_links.DETAIL_RENDER_BUDGET_S`). Bounded work, bounded
+contention, bounded time: an agent-controlled count can make a section
+incomplete — which it says — but not a render expensive.
 """
 
 from __future__ import annotations
@@ -28,6 +40,21 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from lithos_lens.task_graph import EdgeRecord
+from lithos_lens.task_links import (
+    BLOCKER_EDGE_TYPES,
+    DETAIL_FANOUT_CONCURRENCY,
+    DETAIL_RENDER_BUDGET_S,
+    Breadcrumb,
+    LinkPage,
+    last_page,
+    link_page_from_tasks,
+    load_link_page,
+    load_parent_chain,
+    select_edges,
+    task_type_badge,
+    until,
+    until_or,
+)
 from lithos_lens.tasks import (
     REOPENED_FINDING_PREFIX,
     FindingRecord,
@@ -37,44 +64,6 @@ from lithos_lens.tasks import (
     TaskStatusRecord,
 )
 
-# How many related tasks each detail-page list RENDERS, and — for the lists
-# that resolve their rows one ``lithos_task_get`` at a time — how many of those
-# lookups a single render may issue.
-#
-# THE ONE page-size constant for this page. Every list goes through
-# :func:`first_page`, so blockers, provenance and children share this bound,
-# and T1-S8's deeper blocker levels get it by calling
-# :func:`load_blocker_page` rather than by copying a number.
-#
-# The bound exists because the edge count is agent-controlled: Lithos enforces
-# no maximum number of edges on a task, so a buggy agent minting blockers in a
-# loop would otherwise turn one page render into one round trip per edge. It is
-# a PAGE SIZE, not a claim about how many blockers a task may legitimately
-# have — the remainder is counted and stated in the tail (see
-# ``templates/tasks/paging.html``), never silently dropped: a truncated
-# blocker list on a "why can't this task run?" page is worse than a slow one.
-DETAIL_PAGE_SIZE = 25
-
-# How many of a render's per-task lookups may be in flight at once. The page
-# size bounds the TOTAL work; this bounds the CONTENTION — every call on this
-# page shares one process-wide MCP session, so a page's worth of concurrent
-# ``lithos_task_get`` calls would queue behind each other there anyway. One
-# gate is created per render and passed to every loader below, so the bound is
-# per rendered page, not per list. Same shape (and same reasoning) as
-# ``epic_strip.EPIC_FANOUT_BATCH``.
-DETAIL_FANOUT_CONCURRENCY = 8
-
-# How far the parent breadcrumb walks before it stops and says so. Hierarchy is
-# a single-parent forest, so the walk is a chain — but its length is
-# agent-controlled like everything else in the graph, and each step costs TWO
-# sequential round trips (``task_get`` + ``task_edge_list``), so it needs a
-# stop. A cycle is caught separately by the visited set.
-PARENT_CHAIN_MAX_DEPTH = 10
-
-# Incoming edge types that mean "this task cannot run yet" (§5.5.2): an
-# unfinished predecessor, or a gate it waits on.
-BLOCKER_EDGE_TYPES = ("blocks", "waits_on_gate")
-PARENT_EDGE_TYPE = "parent_child"
 PROVENANCE_EDGE_TYPE = "discovered_from"
 
 # Lithos answers a missing task with an error envelope whose ``code`` the
@@ -150,90 +139,6 @@ class FindingView:
 
 
 @dataclass(frozen=True)
-class TaskLink:
-    """One related task rendered on the detail page, with its LIVE status.
-
-    ``task`` is the record a per-link ``lithos_task_get`` resolved — ``None``
-    when that lookup failed, which the row renders as the bare id plus "status
-    unknown" rather than dropping the link (an unreadable blocker is still a
-    reason the task cannot run). ``edge_type`` is the raw graph edge that
-    produced the link, so the row can say HOW the two tasks relate; it is empty
-    for links that come from a non-edge read (the children table).
-    """
-
-    task_id: str
-    task: TaskRecord | None = None
-    edge_type: str = ""
-
-    @property
-    def title(self) -> str:
-        return self.task.title if self.task else self.task_id
-
-    @property
-    def status(self) -> str:
-        return self.task.status if self.task else ""
-
-    @property
-    def status_label(self) -> str:
-        return self.status or "status unknown"
-
-    @property
-    def resolved(self) -> bool:
-        """Whether the linked task itself could be read (not its lifecycle)."""
-        return self.task is not None
-
-    @property
-    def type_badge(self) -> str:
-        return task_type_badge(self.task) if self.task else ""
-
-    @property
-    def relation_label(self) -> str:
-        """The §5.5.2 text-baseline lead-in for a blocker line, else empty."""
-        if self.edge_type == "blocks":
-            return "blocked by"
-        if self.edge_type == "waits_on_gate":
-            return "waiting on gate"
-        return ""
-
-
-@dataclass(frozen=True)
-class LinkPage:
-    """One first-page-plus-tail slice of a related-task list.
-
-    ``remaining`` is how many links the page left off — rendered as the tail
-    (``templates/tasks/paging.html``) so an operator can see that more
-    exist and how many, which a silent truncation would not. ``state`` is
-    ERROR when the read behind the list failed, so the section says
-    "unavailable" instead of showing an empty list as if it were a fact.
-    """
-
-    links: tuple[TaskLink, ...] = ()
-    remaining: int = 0
-    state: SectionState = SectionState.OK
-
-    @property
-    def total(self) -> int:
-        return len(self.links) + self.remaining
-
-    @property
-    def is_empty(self) -> bool:
-        return not self.links and not self.remaining
-
-
-@dataclass(frozen=True)
-class Breadcrumb:
-    """The parent chain above a task, root first.
-
-    ``truncated`` marks a chain that stopped before the root — the depth bound,
-    a ``parent_child`` cycle, or a failed read — so the breadcrumb can render a
-    leading ellipsis instead of implying the first entry is the root.
-    """
-
-    ancestors: tuple[TaskRecord, ...] = ()
-    truncated: bool = False
-
-
-@dataclass(frozen=True)
 class TaskDetailData:
     task: TaskRecord | None
     task_status: TaskStatusRecord | None = None
@@ -274,22 +179,6 @@ class TaskDetailData:
         return bool(self.task and (self.task.resolved_at or self.task.outcome))
 
 
-def task_type_badge(task: TaskRecord | None) -> str:
-    """The header/type badge text: ``task``, ``epic``, or ``gate: human``.
-
-    ``task_type`` is a raw server string (an unknown future type survives
-    round-trip and is shown verbatim). Gates carry their kind in
-    ``metadata.gate_type`` — Lithos requires it on creation — and a gate whose
-    metadata omits it still reads as a gate rather than as a plain task.
-    """
-    if task is None:
-        return ""
-    if task.task_type != "gate":
-        return task.task_type
-    gate_type = str(task.metadata.get("gate_type") or "")
-    return f"gate: {gate_type}" if gate_type else "gate"
-
-
 def latest_reopen_report(findings: Sequence[FindingRecord]) -> FindingView | None:
     """The most recent reopen report on a task, if any.
 
@@ -308,181 +197,6 @@ def latest_reopen_report(findings: Sequence[FindingRecord]) -> FindingView | Non
         if view.is_reopen:
             return view
     return None
-
-
-def first_page[T](items: Sequence[T]) -> tuple[tuple[T, ...], int]:
-    """Split ``items`` into the first page and how many were left off.
-
-    The single place the pagination decision lives: every list on this page
-    (and every deeper blocker level T1-S8 expands) reaches its bound through
-    here, so the page size and the remainder count cannot drift apart between
-    call sites.
-
-    The size is deliberately NOT a parameter — not here and not on the loaders
-    below. A bound that a caller can pass its way past is a default, not a
-    bound: T1-S8 could then page a deeper level at any size without touching
-    :data:`DETAIL_PAGE_SIZE` or failing any test of it. Changing the page size
-    means changing the constant, in one place, under review.
-    """
-    return tuple(items[:DETAIL_PAGE_SIZE]), max(len(items) - DETAIL_PAGE_SIZE, 0)
-
-
-def last_page[T](items: Sequence[T]) -> tuple[tuple[T, ...], int]:
-    """The LAST page of ``items`` (order preserved) and how many precede it.
-
-    :func:`first_page` turned around, for the one list whose interesting end is
-    the newest: a findings timeline keeps its most recent entries and collapses
-    the older ones (§5.6), where a blocker list keeps the ones it can show
-    first. Both reach the same constant through the same function, so there is
-    still exactly one page-size decision.
-    """
-    page, remaining = first_page(tuple(reversed(items)))
-    return tuple(reversed(page)), remaining
-
-
-def select_edges(
-    edges: Sequence[EdgeRecord], *, direction: str, types: Sequence[str]
-) -> tuple[EdgeRecord, ...]:
-    """The edges of ``types`` pointing ``direction`` relative to the focus task.
-
-    Filtering happens Lens-side because the page fetches ``direction="both"``
-    once (§5.5) and splits it into the blocker / hierarchy / provenance
-    sections, rather than issuing one narrowed ``lithos_task_edge_list`` per
-    section.
-    """
-    return tuple(
-        edge for edge in edges if edge.direction == direction and edge.type in types
-    )
-
-
-def linked_tasks(edges: Sequence[EdgeRecord]) -> dict[str, str]:
-    """Far endpoint -> the edge type that first named it, in edge order.
-
-    The far endpoint is the OTHER task: the source of an incoming edge, the
-    target of an outgoing one. De-duplication is not cosmetic — two edges can
-    name the same task (a predecessor that both blocks a task and spawned it),
-    and each surviving id costs one ``lithos_task_get``. One pass over a dict
-    rather than a membership scan over a list: the edge count is
-    agent-controlled, so the local reduction has to stay linear in it even
-    though only a page of it is ever fetched.
-    """
-    targets: dict[str, str] = {}
-    for edge in edges:
-        far = edge.from_task_id if edge.direction == "incoming" else edge.to_task_id
-        if far and far not in targets:
-            targets[far] = edge.type
-    return targets
-
-
-def link_page_from_tasks(tasks: Sequence[TaskRecord]) -> LinkPage:
-    """Page a list of ALREADY-LOADED tasks (the children table).
-
-    ``lithos_task_children`` answers with whole records, so this page needs no
-    per-row lookup — but it still goes through :func:`first_page`, because the
-    number of children is as agent-controlled as the number of blockers and the
-    tail must state the remainder either way.
-    """
-    page, remaining = first_page(tasks)
-    return LinkPage(
-        links=tuple(TaskLink(task_id=task.id, task=task) for task in page),
-        remaining=remaining,
-    )
-
-
-async def load_link_page(
-    lithos: TaskDetailClientProtocol,
-    edges: Sequence[EdgeRecord],
-    *,
-    gate: asyncio.Semaphore | None = None,
-) -> LinkPage:
-    """Resolve the first page of an edge set into links with live status.
-
-    The fan-out this bounds is real work, not bookkeeping: ONE
-    ``lithos_task_get`` ROUND TRIP per rendered link, all of them queued on the
-    process-wide MCP session this page shares with every other request. That is
-    categorically more than the ``lithos_task_edge_list`` call that produced
-    ``edges`` — that is a single round trip returning N rows, plus O(N) local
-    parsing. So the count is capped at :data:`DETAIL_PAGE_SIZE` (whatever the
-    edge count is), the remainder is reported by the tail, and at most
-    :data:`DETAIL_FANOUT_CONCURRENCY` of the lookups are in flight at once.
-
-    A failed lookup degrades to an unresolved link rather than failing the
-    page: the operator still learns that the blocker exists.
-    """
-    gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
-    targets = linked_tasks(edges)
-    page, remaining = first_page(tuple(targets))
-    links = await asyncio.gather(
-        *(_resolve_link(lithos, task_id, targets[task_id], gate) for task_id in page)
-    )
-    return LinkPage(links=tuple(links), remaining=remaining)
-
-
-async def load_blocker_page(
-    lithos: TaskDetailClientProtocol,
-    task_id: str,
-    *,
-    gate: asyncio.Semaphore | None = None,
-) -> LinkPage:
-    """One task's level-1 blockers as a bounded page — at ANY level.
-
-    The entry point for a blocker set the caller does not already hold edges
-    for: it reads the incoming ``blocks``/``waits_on_gate`` edges and hands
-    them to :func:`load_link_page`, so a deeper level of the chain (T1-S8's
-    HTMX expander) is paged, bounded and tailed exactly like level 1 — by
-    calling this, not by reimplementing it.
-
-    A failed edge read degrades the section to ERROR: an empty blocker list
-    would read as "nothing is blocking this task", which is a claim this call
-    cannot support.
-    """
-    try:
-        edges = await lithos.task_edge_list(
-            task_id, direction="incoming", types=list(BLOCKER_EDGE_TYPES)
-        )
-    except Exception:
-        return LinkPage(state=SectionState.ERROR)
-    return await load_link_page(lithos, edges, gate=gate)
-
-
-async def load_parent_chain(
-    lithos: TaskDetailClientProtocol,
-    task: TaskRecord,
-    edges: Sequence[EdgeRecord],
-    *,
-    gate: asyncio.Semaphore | None = None,
-) -> Breadcrumb:
-    """Walk incoming ``parent_child`` edges up to the root epic.
-
-    Hierarchy is a single-parent forest (``parent_exists`` upstream), so this
-    is a chain rather than a DAG walk: one parent per level, root last. It
-    stops — and says so via ``truncated`` — at :data:`PARENT_CHAIN_MAX_DEPTH`,
-    on a ``parent_child`` cycle (the visited set; the graph does not forbid
-    one), and on a failed read. Each level costs two SEQUENTIAL round trips,
-    which is why the depth bound is small.
-    """
-    gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
-    ancestors: list[TaskRecord] = []
-    seen = {task.id}
-    parent_id = _parent_id(edges)
-    while parent_id and parent_id not in seen:
-        if len(ancestors) >= PARENT_CHAIN_MAX_DEPTH:
-            return Breadcrumb(_root_first(ancestors), truncated=True)
-        seen.add(parent_id)
-        parent = await _get_task(lithos, parent_id, gate)
-        if parent is None:
-            return Breadcrumb(_root_first(ancestors), truncated=True)
-        ancestors.append(parent)
-        try:
-            async with gate:
-                parent_edges = await lithos.task_edge_list(
-                    parent.id, direction="incoming", types=[PARENT_EDGE_TYPE]
-                )
-        except Exception:
-            return Breadcrumb(_root_first(ancestors), truncated=True)
-        parent_id = _parent_id(parent_edges)
-    # A non-empty id here means the loop stopped on the visited set: a cycle.
-    return Breadcrumb(_root_first(ancestors), truncated=bool(parent_id))
 
 
 async def load_task_detail(
@@ -519,16 +233,21 @@ async def load_task_detail(
         )
 
     errors: list[str] = []
+    # One deadline for everything below, taken once: waves 2 and 3 SHARE the
+    # budget rather than each getting one. A read that overruns it lands in the
+    # same branch as a read that failed, so every section already knows what to
+    # render.
+    deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
     (
         status_result,
         edges_result,
         findings_result,
         children_result,
     ) = await asyncio.gather(
-        lithos.task_status(task_id),
-        lithos.task_edge_list(task_id, direction="both"),
-        lithos.list_findings(task_id),
-        lithos.task_children(task_id, include_closed=True),
+        until(deadline, lithos.task_status(task_id)),
+        until(deadline, lithos.task_edge_list(task_id, direction="both")),
+        until(deadline, lithos.list_findings(task_id)),
+        until(deadline, lithos.task_children(task_id, include_closed=True)),
         return_exceptions=True,
     )
 
@@ -554,7 +273,7 @@ async def load_task_detail(
     else:
         findings = cast(list[FindingRecord], findings_result)
         finding_views, findings_older = await resolve_finding_notes(
-            lithos, findings, gate=gate
+            lithos, findings, gate=gate, deadline=deadline
         )
         reopen_report = latest_reopen_report(findings)
 
@@ -573,27 +292,49 @@ async def load_task_detail(
         errors.append("Could not load task relations.")
     else:
         edges = cast(list[EdgeRecord], edges_result)
+        # Each list carries the deadline separately, so one slow list degrades
+        # alone instead of taking the sections that did answer down with it.
+        timed_out = LinkPage(state=SectionState.ERROR)
         blockers, discovered_from, spawned, breadcrumb = await asyncio.gather(
-            load_link_page(
-                lithos,
-                select_edges(edges, direction="incoming", types=BLOCKER_EDGE_TYPES),
-                gate=gate,
-            ),
-            load_link_page(
-                lithos,
-                select_edges(
-                    edges, direction="incoming", types=(PROVENANCE_EDGE_TYPE,)
+            until_or(
+                deadline,
+                load_link_page(
+                    lithos,
+                    select_edges(edges, direction="incoming", types=BLOCKER_EDGE_TYPES),
+                    gate=gate,
                 ),
-                gate=gate,
+                timed_out,
             ),
-            load_link_page(
-                lithos,
-                select_edges(
-                    edges, direction="outgoing", types=(PROVENANCE_EDGE_TYPE,)
+            until_or(
+                deadline,
+                load_link_page(
+                    lithos,
+                    select_edges(
+                        edges, direction="incoming", types=(PROVENANCE_EDGE_TYPE,)
+                    ),
+                    gate=gate,
                 ),
-                gate=gate,
+                timed_out,
             ),
-            load_parent_chain(lithos, task, edges, gate=gate),
+            until_or(
+                deadline,
+                load_link_page(
+                    lithos,
+                    select_edges(
+                        edges, direction="outgoing", types=(PROVENANCE_EDGE_TYPE,)
+                    ),
+                    gate=gate,
+                ),
+                timed_out,
+            ),
+            until_or(
+                deadline,
+                load_parent_chain(lithos, task, edges, gate=gate),
+                # A chain that ran out of budget stopped early, like one that
+                # hit the depth bound or a cycle: say so rather than implying
+                # the task has no parent.
+                Breadcrumb(truncated=True),
+            ),
         )
 
     return TaskDetailData(
@@ -627,16 +368,21 @@ async def load_findings_timeline(
     unrendered. A fragment is the cheapest thing to request and the easiest to
     request in a loop (the reconcile tick refetches on every event), so it must
     not be the most expensive thing to serve.
+
+    It carries the same wall-clock budget as the full page, for the same
+    reason: the reconcile tick keeps asking, so a stalled Lithos must not leave
+    a request per tick held open.
     """
+    deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
     try:
-        findings = await lithos.list_findings(task_id)
-    except Exception:
+        findings = await until(deadline, lithos.list_findings(task_id))
+    except (Exception, TimeoutError):
         return TaskDetailData(
             task=None,
             findings_state=SectionState.ERROR,
             errors=("Could not load findings.",),
         )
-    views, older = await resolve_finding_notes(lithos, findings)
+    views, older = await resolve_finding_notes(lithos, findings, deadline=deadline)
     return TaskDetailData(
         task=None,
         findings=views,
@@ -650,6 +396,7 @@ async def resolve_finding_notes(
     findings: Sequence[FindingRecord],
     *,
     gate: asyncio.Semaphore | None = None,
+    deadline: float | None = None,
 ) -> tuple[tuple[FindingView, ...], int]:
     """The newest page of the timeline, with its knowledge-link titles.
 
@@ -670,12 +417,21 @@ async def resolve_finding_notes(
     read is ``max_length=1`` — frontmatter comes back complete (§6.3), so a
     title never pulls a whole note body. Same call as the related panel's
     title fan-out (``knowledge._resolve_titles``).
+
+    ``deadline`` is the render's shared budget (:data:`DETAIL_RENDER_BUDGET_S`
+    when called on its own). Overrunning it costs the TITLES only — the
+    timeline still renders, each unresolved row falling back to the "View
+    document" label it already shows for a document it could not read.
     """
     gate = gate or asyncio.Semaphore(DETAIL_FANOUT_CONCURRENCY)
+    if deadline is None:
+        deadline = asyncio.get_running_loop().time() + DETAIL_RENDER_BUDGET_S
     page, older = last_page(sorted(findings, key=lambda item: item.created_at))
     # dict.fromkeys: de-duplicate the cited documents, keep first-cited order.
     cited = tuple(dict.fromkeys(f.knowledge_id for f in page if f.knowledge_id))
-    titles = await _resolve_note_titles(lithos, cited, gate)
+    # Only the TITLES are given up when the budget runs out: the timeline
+    # itself is already in hand, and every row has a label to fall back on.
+    titles = await until_or(deadline, _resolve_note_titles(lithos, cited, gate), {})
     views: list[FindingView] = []
     for finding in page:
         if not finding.knowledge_id:
@@ -728,47 +484,3 @@ async def _read_note_title(
     except Exception:
         return ""
     return note.title if note else ""
-
-
-async def _resolve_link(
-    lithos: TaskDetailClientProtocol,
-    task_id: str,
-    edge_type: str,
-    gate: asyncio.Semaphore,
-) -> TaskLink:
-    task = await _get_task(lithos, task_id, gate)
-    return TaskLink(task_id=task_id, task=task, edge_type=edge_type)
-
-
-async def _get_task(
-    lithos: TaskDetailClientProtocol,
-    task_id: str,
-    gate: asyncio.Semaphore,
-) -> TaskRecord | None:
-    """One gated ``lithos_task_get``; ``None`` for ANY failure.
-
-    Not-found and transport failure are deliberately not told apart here: a
-    link Lens cannot read renders the same way either way (the id plus "status
-    unknown"), and Foundation cannot inspect the client's error codes.
-    """
-    try:
-        async with gate:
-            return await lithos.task_get(task_id)
-    except Exception:
-        return None
-
-
-def _parent_id(edges: Sequence[EdgeRecord]) -> str:
-    """The parent named by the first incoming ``parent_child`` edge, if any.
-
-    Single-parent forest: a second incoming ``parent_child`` edge would be an
-    upstream invariant violation, so the first is taken rather than branching
-    the breadcrumb into a tree the page cannot render.
-    """
-    parents = select_edges(edges, direction="incoming", types=(PARENT_EDGE_TYPE,))
-    return parents[0].from_task_id if parents else ""
-
-
-def _root_first(ancestors: Sequence[TaskRecord]) -> tuple[TaskRecord, ...]:
-    """The walk collects parent-first; the breadcrumb reads root-first."""
-    return tuple(reversed(ancestors))

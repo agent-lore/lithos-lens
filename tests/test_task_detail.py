@@ -15,10 +15,14 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from lithos_lens import task_detail
 from lithos_lens.config import load_config
-from lithos_lens.task_detail import (
+from lithos_lens.task_detail import load_findings_timeline, load_task_detail
+from lithos_lens.task_graph import EdgeRecord
+from lithos_lens.task_links import (
     DETAIL_FANOUT_CONCURRENCY,
     DETAIL_PAGE_SIZE,
     Breadcrumb,
@@ -26,14 +30,11 @@ from lithos_lens.task_detail import (
     last_page,
     link_page_from_tasks,
     load_blocker_page,
-    load_findings_timeline,
     load_link_page,
-    load_task_detail,
     task_type_badge,
 )
-from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.tasks import FindingRecord, NoteRecord, TaskRecord
-from lithos_lens.web import create_app
+from lithos_lens.web import create_app, note_url
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
 
@@ -707,3 +708,103 @@ def test_findings_timeline_loader_reports_a_failed_read() -> None:
 
     assert detail.findings_state == "error"
     assert detail.findings == ()
+
+
+# --- agent-controlled ids are encoded, not interpolated (security/f-005) ---
+
+
+def test_a_finding_cannot_aim_its_document_link_at_another_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``knowledge_id`` is a free-form agent string that Lithos never validates
+    and Lens never rewrites, so interpolating it raw lets whoever posted the
+    finding choose where "View document" actually goes: a browser normalizes
+    ``/note/../tasks/x`` to ``/tasks/x`` before it ever issues the request.
+    Encoding the id keeps the link pointing at the document it claims to."""
+    fake = TaskFakeLithosClient()
+    fake.findings["open-unclaimed"] = [
+        FindingRecord(
+            id="finding-traversal",
+            task_id="open-unclaimed",
+            agent="worker-a",
+            summary="Cites a document that is really a path",
+            knowledge_id="../tasks/open-claimed",
+            created_at="2026-04-27T09:00:00+00:00",
+        )
+    ]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    assert 'href="/note/../tasks/' not in response.text
+    assert "/note/..%2Ftasks%2Fopen-claimed" in response.text
+
+
+def test_note_url_encodes_the_whole_id_and_the_task_back_link() -> None:
+    """``safe=""`` is the point: the default ``quote`` leaves ``/`` alone, and
+    ``/`` is the character a traversal needs. The back-link is urlencoded so a
+    value carrying ``&`` cannot graft on a parameter."""
+    assert note_url("plain-id") == "/note/plain-id"
+    assert note_url("../../etc") == "/note/..%2F..%2Fetc"
+    assert note_url("a b&c") == "/note/a%20b%26c"
+    assert note_url("note-1", "task&x=1") == "/note/note-1?task=task%26x%3D1"
+
+
+# --- a stalled Lithos costs a partial page, not a held request (f-006) -----
+
+
+class _StallingLinkClient(TaskFakeLithosClient):
+    """Answers the identifying read, then stalls every per-link lookup."""
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        if task_id.startswith("blocker-"):
+            await asyncio.Event().wait()
+        return await super().task_get(task_id)
+
+
+def test_a_stalled_lithos_renders_a_partial_page_instead_of_holding_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The count bound caps how MUCH work a render does; it does not cap how
+    LONG the render takes when every call stalls to the per-call ceiling, and
+    ``/health`` is a separate endpoint so nothing upstream notices. Past the
+    budget the page renders what it has: the stalled section degrades to the
+    state it already knows how to show, and the sections that answered survive.
+    """
+    monkeypatch.setattr(task_detail, "DETAIL_RENDER_BUDGET_S", 0.05)
+    fake = _StallingLinkClient()
+    _stage_blockers(fake, "open-claimed", 3)
+
+    detail = _run(load_task_detail(fake, "open-claimed"))
+
+    # Wave 1 answered, so the page still identifies its task ...
+    assert detail.task is not None
+    assert detail.task.title == "Claimed open task"
+    # ... the stalled list says so rather than reading as "nothing blocks this"
+    assert detail.blockers.state == "error"
+    assert detail.blockers.links == ()
+    # ... and the sections that DID answer are not thrown away with it.
+    assert [view.finding.id for view in detail.findings] == ["finding-1", "finding-2"]
+
+
+def test_a_stalled_title_lookup_costs_only_the_titles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The timeline is already in hand when the titles are fetched, so running
+    out of budget there must cost the labels, not the findings."""
+
+    class StallingNoteClient(TaskFakeLithosClient):
+        async def read_note(
+            self, knowledge_id: str, *, max_length: int | None = None
+        ) -> NoteRecord | None:
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(task_detail, "DETAIL_RENDER_BUDGET_S", 0.05)
+
+    detail = _run(load_findings_timeline(StallingNoteClient(), "open-claimed"))
+
+    assert detail.findings_state == "ok"
+    assert [view.finding.id for view in detail.findings] == ["finding-1", "finding-2"]
+    # Every row falls back to the label it already shows for an unreadable doc.
+    assert {view.link_label for view in detail.findings} == {"View document"}

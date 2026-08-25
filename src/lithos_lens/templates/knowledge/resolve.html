@@ -15,7 +15,7 @@
       <ul class="resolve-candidates">
         {% for candidate in outcome.candidates %}
           <li>
-            <a href="/note/{{ candidate.id }}">{{ candidate.label }}</a>
+            <a href="{{ note_url(candidate.id) }}">{{ candidate.label }}</a>
             {% if candidate.path %}
               <span class="resolve-candidate-path">{{ candidate.path }}</span>
             {% endif %}

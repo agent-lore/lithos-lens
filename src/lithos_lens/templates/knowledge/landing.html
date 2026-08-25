@@ -43,7 +43,7 @@
         <ul class="knowledge-cards">
           {% for result in search_results %}
             <li class="knowledge-card">
-              <a class="knowledge-card-title" href="/note/{{ result.id }}">{{ result.label }}</a>
+              <a class="knowledge-card-title" href="{{ note_url(result.id) }}">{{ result.label }}</a>
               {% if result.path %}
                 <span class="knowledge-card-path">{{ result.path }}</span>
               {% endif %}
@@ -72,7 +72,7 @@
         <ul class="knowledge-results">
           {% for note in results %}
             <li>
-              <a href="/note/{{ note.id }}">{{ note.title or note.path or note.id }}</a>
+              <a href="{{ note_url(note.id) }}">{{ note.title or note.path or note.id }}</a>
               {% if note.path %}
                 <span class="knowledge-result-path">{{ note.path }}</span>
               {% endif %}

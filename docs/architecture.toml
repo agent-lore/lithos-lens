@@ -46,9 +46,10 @@ Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
-# ``task_detail`` sits here, not in Tasks: T1-S7 rebased /tasks/{id} onto the
-# task graph, so it consumes EdgeRecord and fans out over the graph reads.
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.task_detail"]
+# ``task_detail`` + ``task_links`` sit here, not in Tasks: T1-S7 rebased
+# /tasks/{id} onto the task graph, so they consume EdgeRecord and fan out over
+# the graph reads.
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.task_detail", "lithos_lens.task_links"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry"]
@@ -100,6 +101,7 @@ tests_private_imports     = 0  # tests use only the public surface; keep it that
 include_modules = [
     "lithos_lens.tasks",
     "lithos_lens.task_detail",
+    "lithos_lens.task_links",
     "lithos_lens.task_graph",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_metadata",

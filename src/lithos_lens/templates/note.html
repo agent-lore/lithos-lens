@@ -3,7 +3,7 @@
 {% block title %}Note | Lithos Lens{% endblock %}
 
 {% macro related_link(item) %}
-  <a href="/note/{{ item.id }}">{{ item.label }}</a>
+  <a href="{{ note_url(item.id) }}">{{ item.label }}</a>
 {%- endmacro %}
 
 {% macro related_section(heading, section, edges=False) %}
@@ -96,7 +96,7 @@
               <span class="chip note-confidence">confidence {{ note_meta.confidence }}</span>
             {% endif %}
             {% if note_meta.supersedes %}
-              <span class="chip note-supersedes">replaces: <a href="/note/{{ note_meta.supersedes }}">{{ note_meta.supersedes }}</a></span>
+              <span class="chip note-supersedes">replaces: <a href="{{ note_url(note_meta.supersedes) }}">{{ note_meta.supersedes }}</a></span>
             {% endif %}
           </div>
         {% endif %}

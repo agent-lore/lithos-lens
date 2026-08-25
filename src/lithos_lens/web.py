@@ -106,6 +106,7 @@ def create_app(
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
+    templates.env.globals["note_url"] = note_url
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -311,9 +312,7 @@ def create_app(
         else:
             outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
             if outcome.kind == "redirect":
-                return RedirectResponse(
-                    f"/note/{quote(outcome.target_id)}", status_code=302
-                )
+                return RedirectResponse(note_url(outcome.target_id), status_code=302)
         return templates.TemplateResponse(
             request,
             "knowledge/resolve.html",
@@ -493,6 +492,27 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id)}{suffix}"
+
+
+def note_url(knowledge_id: str, task_id: str = "") -> str:
+    """Link to a note, with the id ENCODED rather than interpolated.
+
+    A note id reaching this function is not necessarily a server-minted UUID:
+    ``lithos_finding_post`` declares ``knowledge_id`` as a bare string with no
+    pattern, Lithos does not require the cited document to exist, and
+    ``normalize_finding`` passes the value through verbatim. Interpolated raw,
+    an id of ``../tasks/<other>`` renders an href the browser normalizes to a
+    different Lens page BEFORE it requests it — so the "View document" link on
+    a findings timeline would claim to open the cited document and open
+    somewhere else, chosen by whichever agent posted the finding.
+
+    ``safe=""`` is the point: the default ``quote`` leaves ``/`` alone, which
+    is exactly the character the traversal needs. The ``?task=`` back-link is
+    built with ``urlencode`` for the same reason — so a value carrying ``&``
+    or ``#`` cannot graft extra parameters onto the URL.
+    """
+    suffix = f"?{urlencode({'task': task_id})}" if task_id else ""
+    return f"/note/{quote(knowledge_id, safe='')}{suffix}"
 
 
 def epic_scope_url(request: Request, epic_id: str) -> str:
