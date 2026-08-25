@@ -7,7 +7,8 @@ and, in later milestones, browsing Lithos knowledge. The current implementation
 contains the common-core web scaffold plus the Tasks MVP: TOML configuration,
 structured logging, Lithos health probing, startup agent registration,
 degraded-mode rendering, vendored static assets, operational task dashboard,
-claim enrichment, direct task detail pages, findings timelines, and a minimal
+claim enrichment, graph-native task detail pages (blocker chain, parent/child
+hierarchy, discovered-from provenance), findings timelines, and a minimal
 knowledge-note renderer for task finding links. The Tasks view also subscribes
 to Lithos task/finding SSE events, re-broadcasts them to browser tabs, applies
 optimistic row updates, and reconciles visible fragments without a full-page

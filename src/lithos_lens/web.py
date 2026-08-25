@@ -41,10 +41,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.state import AppState
-from lithos_lens.task_detail import (
-    find_task,
-    load_task_detail,
-)
+from lithos_lens.task_detail import load_task_detail
 from lithos_lens.tasks import (
     default_since,
     format_display_date,
@@ -364,8 +361,12 @@ def create_app(
                 produced_by = await load_produced_by(state.lithos_client, note_record)
             task_id = request.query_params.get("task", "")
             if task_id:
+                # One addressed read (T1-S7 retired the three-list scan that
+                # used to stand in for it). Any failure — the task_not_found
+                # envelope or a transport error — just drops the back-link;
+                # the note itself renders either way.
                 try:
-                    task = await find_task(state.lithos_client, task_id)
+                    task = await state.lithos_client.task_get(task_id)
                 except Exception:
                     task = None
         return templates.TemplateResponse(

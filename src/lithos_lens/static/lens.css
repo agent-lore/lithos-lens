@@ -828,6 +828,51 @@ button,
   gap: 0.75rem;
 }
 
+/* Parent breadcrumb (incoming parent_child, root first). A truncated walk
+   leads with an ellipsis, dimmed like the separators. */
+.breadcrumb {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  gap: 0.4rem;
+}
+
+/* The shared related-task list: blockers, provenance, children (and, from
+   T1-S8, each expanded blocker level) all render through link_list.html. */
+.link-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.link-list li {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.link-relation {
+  color: var(--muted);
+}
+
+/* The linked task could not be read, so the row shows its bare id: mark it as
+   an unresolved reference rather than letting it read like a title. */
+.link-unresolved {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.badge-type,
+.badge-unknown {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
 .metadata-table {
   display: grid;
   gap: 0.5rem 1rem;

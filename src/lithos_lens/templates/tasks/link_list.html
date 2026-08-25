@@ -1,0 +1,48 @@
+{#
+  THE one first-page-plus-tail render for every related-task list on the task
+  detail page: blockers, provenance (both directions) and the children table
+  all call this macro, and T1-S8's deeper blocker levels render their fragment
+  through it too. Paging is decided in `task_detail.first_page`
+  (DETAIL_PAGE_SIZE); this file is the matching single place the TAIL is
+  worded, so a list can never be trimmed in one surface and unlabelled in
+  another.
+
+  The tail is deliberately loud. The realistic cause of an overflowing list is
+  a buggy agent minting edges in a loop, and a silently truncated blocker list
+  on a "why can't this run?" page reads as a complete answer — so the tail
+  states how many more exist, in the same accuracy-banner idiom the dashboard
+  uses for its frontier-limit ("Not classified") tail.
+#}
+{% macro link_list(page, noun) %}
+  {# One argument, so a caller cannot label the list and its tail differently;
+     the hook attributes slugify it. #}
+  {% set slug = noun | replace(" ", "-") %}
+  {% if page.state == "error" %}
+    <p class="warning-text">{{ noun | capitalize }} unavailable. Refresh this task to retry.</p>
+  {% elif page.is_empty %}
+    <p class="empty">No {{ noun }}.</p>
+  {% else %}
+    <ul class="link-list" data-link-list="{{ slug }}">
+      {% for link in page.links %}
+        <li data-link-id="{{ link.task_id }}">
+          {% if link.relation_label %}<span class="link-relation">{{ link.relation_label }}</span>{% endif %}
+          {% if link.resolved %}
+            <a href="{{ task_detail_url(request, link.task_id) }}">{{ link.title }}</a>
+          {% else %}
+            {# The lookup failed: name the id rather than drop the row — an
+               unreadable blocker is still a reason the task cannot run. #}
+            <span class="link-unresolved">{{ link.task_id }}</span>
+          {% endif %}
+          <span class="badge badge-{{ link.status or 'unknown' }}">{{ link.status_label }}</span>
+          {% if link.type_badge %}<span class="badge badge-type">{{ link.type_badge }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+    {% if page.remaining %}
+      <p class="warning-text" data-link-tail="{{ slug }}">
+        This list is incomplete: showing the first {{ page.links | length }}
+        of {{ page.total }} {{ noun }} &mdash; {{ page.remaining }} more are not shown.
+      </p>
+    {% endif %}
+  {% endif %}
+{% endmacro %}

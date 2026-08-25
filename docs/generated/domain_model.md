@@ -135,6 +135,9 @@ classDiagram
     +status str
     +message str
   }
+  class Breadcrumb {
+    +truncated bool
+  }
   class EdgeRecord {
     +from_task_id str
     +to_task_id str
@@ -144,10 +147,44 @@ classDiagram
     +created_by str
     +created_at str
   }
+  class FindingView {
+    +note_title str
+    +note_error str
+  }
+  class LinkPage {
+    +remaining int
+    +state SectionState
+  }
+  class TaskDetailData {
+    +status_state SectionState
+    +findings_state SectionState
+    +not_found bool
+    +errors tuple[str, ...]
+  }
+  class TaskLink {
+    +task_id str
+    +edge_type str
+  }
+  class FindingRecord
+  <<Tasks>> FindingRecord
   class TaskRecord
   <<Tasks>> TaskRecord
+  class TaskStatusRecord
+  <<Tasks>> TaskStatusRecord
   BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
   BlockedTaskRecord "1" --> "1" TaskRecord : task
+  Breadcrumb "1" --> "0..*" TaskRecord : ancestors
+  FindingView "1" --> "1" FindingRecord : finding
+  LinkPage "1" --> "0..*" TaskLink : links
+  TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
+  TaskDetailData "1" --> "0..*" FindingView : findings
+  TaskDetailData "1" --> "1" LinkPage : blockers
+  TaskDetailData "1" --> "1" LinkPage : children
+  TaskDetailData "1" --> "1" LinkPage : discovered_from
+  TaskDetailData "1" --> "1" LinkPage : spawned
+  TaskDetailData "1" --> "0..1" TaskRecord : task
+  TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status
+  TaskLink "1" --> "0..1" TaskRecord : task
 ```
 
 ## Tasks
@@ -203,10 +240,6 @@ classDiagram
     +knowledge_id str
     +created_at str
   }
-  class FindingView {
-    +note_title str
-    +note_error str
-  }
   class NoteRecord {
     +id str
     +title str
@@ -225,12 +258,6 @@ classDiagram
     +claimed_but_blocked bool
     +claims_unknown bool
     +reconciliation_pending bool
-  }
-  class TaskDetailData {
-    +status_state SectionState
-    +findings_state SectionState
-    +not_found bool
-    +errors tuple[str, ...]
   }
   class TaskFilters {
     +statuses tuple[TaskStatusName, ...]
@@ -281,14 +308,10 @@ classDiagram
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
   EpicRollup "1" --> "1" TaskRecord : task
-  FindingView "1" --> "1" FindingRecord : finding
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers
   SectionRow "1" --> "0..*" ClaimRecord : claims
   SectionRow "1" --> "1" TaskRecord : task
-  TaskDetailData "1" --> "0..*" FindingView : findings
-  TaskDetailData "1" --> "0..1" TaskRecord : task
-  TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status
   TaskRecord "1" --> "0..*" ClaimRecord : claims
   TaskStatusRecord "1" --> "0..*" ClaimRecord : claims
 ```

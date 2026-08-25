@@ -12,9 +12,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_detail` | S | 2 | 3 |
 | `lithos_lens.task_filtering` | S | 0 | 8 |
-| `lithos_lens.tasks` | M | 16 | 10 |
+| `lithos_lens.tasks` | M | 15 | 10 |
 
 ## Public API
 
@@ -25,13 +24,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `normalize_agent`
 - def `normalize_note`
 - def `normalize_note_summary`
-
-### `lithos_lens.task_detail`
-- class `FindingView`
-- class `TaskDetailData`
-- def `load_task_detail`
-- def `find_task`
-- def `resolve_finding_notes`
 
 ### `lithos_lens.task_filtering`
 - def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
@@ -59,7 +51,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
 - class `TaskSummary`
 - class `DashboardData`
-- class `TaskLithosClientProtocol` — The subset of the Lithos client this module's loaders consume.
 - def `parse_filters`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`

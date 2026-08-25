@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "tasks/link_list.html" import link_list with context %}
 
 {% block title %}Task Detail | Lithos Lens{% endblock %}
 
@@ -21,9 +22,25 @@
     <article class="detail-panel" data-task-detail="{{ detail.task.id }}" data-refresh-fragment="detail">
       <header>
         <p class="eyebrow">Task detail</p>
+        {# Parent breadcrumb: incoming parent_child recursed to the root. A
+           truncated walk (depth bound, cycle, failed read) leads with an
+           ellipsis rather than implying the first entry is the root. #}
+        {% if detail.breadcrumb.ancestors or detail.breadcrumb.truncated %}
+          <nav class="breadcrumb" aria-label="Parent tasks" data-parent-breadcrumb>
+            {% if detail.breadcrumb.truncated %}
+              <span class="breadcrumb-truncated" title="The parent chain could not be followed all the way to the root.">&hellip;</span>
+              <span aria-hidden="true">/</span>
+            {% endif %}
+            {% for ancestor in detail.breadcrumb.ancestors %}
+              <a href="{{ task_detail_url(request, ancestor.id) }}">{{ ancestor.title }}</a>
+              <span aria-hidden="true">/</span>
+            {% endfor %}
+          </nav>
+        {% endif %}
         <h1>{{ detail.task.title }}</h1>
         <div class="detail-meta">
           <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+          {% if detail.type_badge %}<span class="badge badge-type" data-type-badge>{{ detail.type_badge }}</span>{% endif %}
           {# Attributed, not asserted: any client can post a [Reopened]
              finding, so the badge names who reported it (tasks.py trust
              note on REOPENED_FINDING_PREFIX). #}
@@ -39,6 +56,28 @@
           <span>{{ detail.errors | join(" ") }}</span>
         </section>
       {% endif %}
+
+      {# Level-1 blocker chain with live status (§5.5.2 text baseline). T1-S8
+         hangs a per-level expander off these rows. #}
+      <section data-detail-section="blockers">
+        <h2>Why can't this run</h2>
+        {{ link_list(detail.blockers, "blockers") }}
+      </section>
+
+      <section data-detail-section="children">
+        <h2>Children</h2>
+        {{ link_list(detail.children, "child tasks") }}
+      </section>
+
+      {# discovered_from provenance, both directions: incoming names the work
+         this task was spawned out of, outgoing the follow-ons it spawned. #}
+      <section data-detail-section="provenance">
+        <h2>Provenance</h2>
+        <h3>Discovered while working on</h3>
+        {{ link_list(detail.discovered_from, "source tasks") }}
+        <h3>Spawned follow-ons</h3>
+        {{ link_list(detail.spawned, "spawned tasks") }}
+      </section>
 
       {% if detail.task.tags %}
         <div class="tag-list">
@@ -82,8 +121,33 @@
         {% endif %}
       </section>
 
+      {% if detail.resolution %}
+        <section data-detail-section="resolution">
+          <h2>Resolution</h2>
+          <dl class="metadata-table">
+            {% if detail.task.resolved_at %}
+              <dt>{{ detail.task.status }}</dt>
+              <dd><time datetime="{{ detail.task.resolved_at }}">{{ detail.task.resolved_at }}</time></dd>
+            {% endif %}
+            {% if detail.task.outcome %}
+              <dt>outcome</dt>
+              <dd>{{ detail.task.outcome }}</dd>
+            {% endif %}
+          </dl>
+        </section>
+      {% endif %}
+
       {% include "tasks/findings.html" %}
     </article>
+  {% else %}
+    {# task_get failed for a reason other than task_not_found: the page must
+       not claim the task was deleted. #}
+    <section class="panel">
+      <p class="eyebrow">Task detail</p>
+      <h1>Task unavailable</h1>
+      <p class="warning-text">{{ detail.errors | join(" ") }} Lens is running and will retry on refresh.</p>
+      <a class="button-secondary" href="/tasks">Return to dashboard</a>
+    </section>
   {% endif %}
 {% endblock %}
 
