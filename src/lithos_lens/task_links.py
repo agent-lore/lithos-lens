@@ -112,54 +112,54 @@ BLOCKER_EDGE_TYPES = ("blocks", "waits_on_gate")
 PARENT_EDGE_TYPE = "parent_child"
 
 
-# The CLOSED server-side gate vocabulary: ``lithos_task_create`` requires a
-# gate's ``metadata.gate_type`` to be one of these (verified in
-# ``tests/contracts/_tools_snapshot.json``). Clamped for rendering the way
-# ``normalizers.normalize_task`` already clamps ``status`` to
-# ``TASK_STATUSES``, and for the same reason: ``lithos_task_update`` takes
-# ``{task_id, agent, metadata}`` with no credential and REPLACES the metadata
-# wholesale, so an unclamped gate kind is a free text field on the badge line
-# next to the real status badge — on the surface an operator reads to decide
-# whether a gate is waiting on a human.
+# The CLOSED server-side type vocabularies, clamped for RENDERING the way
+# ``normalizers.normalize_task`` already clamps ``status`` to ``TASK_STATUSES``.
+# ``lithos_task_create`` declares both: a task is ``task``/``epic``/``gate``,
+# and a gate REQUIRES ``metadata.gate_type`` in
+# human/timer/ci/pr/external_task (verified in
+# ``tests/contracts/_tools_snapshot.json``).
+#
+# Both halves are agent-controlled with no credential — ``lithos_task_create``
+# takes ``task_type`` as a bare string, and ``lithos_task_update`` merges
+# ``metadata`` per key, so ``gate_type`` can be set on any existing task with
+# one call that touches nothing else and leaves nothing missing for an operator
+# to notice. Clamping only one of them just moves the forgery: a task whose
+# ``task_type`` is the literal ``"gate: human"`` would otherwise render the
+# byte-identical badge a real human gate does, on the header AND on every
+# blocker row — i.e. on the surface an operator reads to decide why a task is
+# stuck and whether a human is holding it.
+TASK_TYPES = ("task", "epic", "gate")
+
 GATE_TYPES = ("human", "timer", "ci", "pr", "external_task")
 
-
-# How much of a raw ``task_type`` the badge will render. Unlike ``gate_type``
-# the type itself is deliberately NOT clamped — an unknown future server type
-# should survive round-trip and be shown verbatim — but "verbatim" must not
-# mean "as long as the writer likes": the value is agent-controlled with no
-# server-side length bound, and a badge is a few characters of chrome. Longer
-# values are shown truncated, with the ellipsis marking that the badge is not
-# the whole value.
-TASK_TYPE_BADGE_MAX_CHARS = 24
+# What the badge says for a type outside :data:`TASK_TYPES`. Neutral on
+# purpose: it must not be mistakable for a vocabulary value, and it must not be
+# the raw string, because a badge cannot be both verbatim and trustworthy.
+# ``TaskRecord.task_type`` keeps the raw value either way — normalization does
+# not rewrite it, so an unknown future type still round-trips through Lens.
+UNKNOWN_TASK_TYPE_BADGE = "unknown type"
 
 
 def task_type_badge(task: TaskRecord | None) -> str:
     """The header/type badge text: ``task``, ``epic``, or ``gate: human``.
 
-    ``task_type`` is a raw server string (an unknown future type survives
-    round-trip and is shown verbatim, bounded by
-    :data:`TASK_TYPE_BADGE_MAX_CHARS`). Gates carry their kind in
-    ``metadata.gate_type`` — Lithos requires it on creation, from the closed
-    :data:`GATE_TYPES` vocabulary — and a gate whose metadata omits it, or
-    carries a kind that is not in that vocabulary, still reads as a gate rather
-    than as a plain task or as whatever the metadata says. Autoescaping makes
-    the value safe to render; that is not the same as safe to BELIEVE, and this
-    badge sits beside the status badge on the "why can't this run" surface.
+    Every part of this string comes from a closed vocabulary, so no part of it
+    is chosen by whoever created the task: the type is clamped to
+    :data:`TASK_TYPES` and an unrecognized one reads as
+    :data:`UNKNOWN_TASK_TYPE_BADGE`; a gate's kind is clamped to
+    :data:`GATE_TYPES` and an unrecognized or missing one leaves a bare
+    ``gate``. Autoescaping makes an agent's value safe to RENDER; that is not
+    the same as safe to BELIEVE, and this badge sits beside the live status on
+    the "why can't this run" surface.
     """
     if task is None:
         return ""
+    if task.task_type not in TASK_TYPES:
+        return UNKNOWN_TASK_TYPE_BADGE
     if task.task_type != "gate":
-        return _clamped(task.task_type)
+        return task.task_type
     gate_type = str(task.metadata.get("gate_type") or "")
     return f"gate: {gate_type}" if gate_type in GATE_TYPES else "gate"
-
-
-def _clamped(value: str) -> str:
-    """``value``, truncated to a badge's worth of characters."""
-    if len(value) <= TASK_TYPE_BADGE_MAX_CHARS:
-        return value
-    return value[: TASK_TYPE_BADGE_MAX_CHARS - 1] + "\u2026"
 
 
 @dataclass(frozen=True)

@@ -4,25 +4,32 @@
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
   const detailTaskId = config.detailTaskId || "";
-  // The floor under the task DETAIL page's whole-page reconcile. That render is
-  // the most expensive response Lens serves (the graph fan-out behind
-  // /tasks/{id}), and every event type arrives with requires_refresh set, so
-  // without a floor the EVENT rate sets the RENDER rate — and events are posted
-  // by clients that need no access to Lens at all. Events keep coalescing into
-  // the pending reconcile while the floor holds them off, so nothing is lost;
-  // it lands later. Findings, the one thing a burst of events actually
-  // changes here, are not held off: they refresh through the cheap fragment
-  // below. The dashboard keeps its ~800ms cadence — its reconcile is a list
-  // render, not a fan-out.
+  // Two bounds on how often an EVENT STREAM may make this page render, because
+  // the stream is driven by clients that need no access to Lens at all
+  // (lithos_finding_post takes {task_id, agent, summary}, uncredentialed) and
+  // every event type carries requires_refresh.
+  //
+  // The FLOOR is per refresh path: never more than one run per interval, so
+  // the event rate cannot become the render rate. The detail page's whole-page
+  // reconcile is the expensive one (the graph fan-out behind /tasks/{id}), so
+  // it gets the long floor; the findings fragment is ~26 upstream calls, so it
+  // gets a short one. The dashboard keeps its ~800ms cadence — its reconcile
+  // is a list render, not a fan-out.
+  //
+  // The CEILING is the answer to the other direction: a debounce that re-arms
+  // on every event is starved by a stream faster than the debounce, so a
+  // pending refresh may be deferred, but never past this long from the FIRST
+  // event that deferred it. Without it "it lands later" would mean "it lands
+  // never, while the burst continues" — the board looking live and holding
+  // stale blockers, claims and statuses for as long as an agent keeps posting.
   const DETAIL_RECONCILE_MIN_INTERVAL_MS = 5000;
+  const FINDINGS_MIN_INTERVAL_MS = 1000;
+  const MAX_DEFER_MS = 5000;
   let eventSource = null;
-  let reconcileTimer = null;
-  let findingsTimer = null;
   let pollTimer = null;
   let reconnectRefreshPending = false;
   let latestRefreshToken = 0;
   let latestFindingsToken = 0;
-  let lastFullRefreshAt = 0;
   let currentLiveState = "paused";
   let currentLiveDetail = "Reconnecting; polling fallback is active";
 
@@ -38,29 +45,57 @@
     description.textContent = detail;
   }
 
-  function scheduleReconcile(delay) {
-    window.clearTimeout(reconcileTimer);
-    reconcileTimer = window.setTimeout(refreshFragments, reconcileDelay(delay || 800));
+  // One debounced refresh path: `run` at most once per `minIntervalMs`, and
+  // never deferred past MAX_DEFER_MS from the first event that deferred it.
+  // `lastRunAt` is stamped by the run itself, so a refresh issued any other
+  // way (the polling fallback, a reconnect) counts against the floor too.
+  const reconcile = {
+    run: refreshFragments,
+    // The floor is the DETAIL page's: on the dashboard this path is cheap.
+    minIntervalMs: detailTaskId ? DETAIL_RECONCILE_MIN_INTERVAL_MS : 0,
+    timer: null,
+    deferredSince: 0,
+    lastRunAt: 0
+  };
+  const findings = {
+    run: refreshFindings,
+    minIntervalMs: FINDINGS_MIN_INTERVAL_MS,
+    timer: null,
+    deferredSince: 0,
+    lastRunAt: 0
+  };
+
+  function scheduleRefresh(path, delay) {
+    const now = Date.now();
+    if (!path.deferredSince) path.deferredSince = now;
+    const at = Math.max(
+      path.lastRunAt + path.minIntervalMs,
+      Math.min(now + delay, path.deferredSince + MAX_DEFER_MS)
+    );
+    window.clearTimeout(path.timer);
+    path.timer = window.setTimeout(function () {
+      path.deferredSince = 0;
+      path.run();
+    }, Math.max(at - now, 0));
   }
 
-  function reconcileDelay(delay) {
-    if (!detailTaskId) return delay;
-    const sinceLast = Date.now() - lastFullRefreshAt;
-    return Math.max(delay, DETAIL_RECONCILE_MIN_INTERVAL_MS - sinceLast);
+  function scheduleReconcile(delay) {
+    scheduleRefresh(reconcile, delay || 800);
   }
 
   // The findings timeline on its own, from the endpoint built for exactly this
   // (/tasks/{id}/findings): one lithos_finding_list plus a bounded page of
   // title reads, instead of the whole page's blocker/provenance/children
   // fan-out. This is the path a finding.posted event takes, so a client
-  // posting findings in a loop drives the CHEAP render, not the expensive one.
+  // posting findings in a loop drives the CHEAP render, not the expensive one
+  // — and drives it at the floor above rather than at its own rate.
   function scheduleFindingsRefresh(delay) {
-    window.clearTimeout(findingsTimer);
-    findingsTimer = window.setTimeout(refreshFindings, delay || 800);
+    scheduleRefresh(findings, delay || 800);
   }
 
   async function refreshFindings() {
     if (!detailTaskId) return;
+    findings.lastRunAt = Date.now();
     const token = ++latestFindingsToken;
     const response = await fetch(`/tasks/${encodeURIComponent(detailTaskId)}/findings`, {
       headers: { "X-Lithos-Lens-Refresh": "findings" }
@@ -83,7 +118,7 @@
 
   async function refreshFragments() {
     const token = ++latestRefreshToken;
-    lastFullRefreshAt = Date.now();
+    reconcile.lastRunAt = Date.now();
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
@@ -121,8 +156,15 @@
     if (type === "task.released") updateClaim(message, false);
     if (type === "task.completed") closeTask(message, "completed");
     if (type === "task.cancelled") closeTask(message, "cancelled");
-    if (type === "finding.posted") handleFinding(message);
-    if (message.requires_refresh) scheduleReconcile();
+    // A handler that already refreshed the surface this event touches returns
+    // true, and the whole-page reconcile is then SKIPPED rather than merely
+    // floored: on the detail page a posted finding changes the timeline and
+    // nothing else the page shows, so re-rendering the graph fan-out for it
+    // would put the expensive path back on the one event rate an
+    // uncredentialed client sets.
+    let handled = false;
+    if (type === "finding.posted") handled = handleFinding(message);
+    if (message.requires_refresh && !handled) scheduleReconcile();
   }
 
   function rowFor(taskId) {
@@ -217,9 +259,12 @@
         chip.textContent = `${count} new finding${count === 1 ? "" : "s"}`;
       }
     }
-    if (detailTaskId && detailTaskId === message.task_id) {
-      scheduleFindingsRefresh(100);
-    }
+    if (!detailTaskId) return false;
+    // The detail page renders findings for ONE task and nothing about any
+    // other, so a finding event is fully handled here either way: it refreshes
+    // this task's timeline, or it concerns a task this page does not show.
+    if (detailTaskId === message.task_id) scheduleFindingsRefresh(100);
+    return true;
   }
 
   function connect() {

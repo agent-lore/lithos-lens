@@ -27,7 +27,7 @@ from lithos_lens.task_links import (
     DETAIL_FANOUT_CONCURRENCY,
     DETAIL_PAGE_SIZE,
     GATE_TYPES,
-    TASK_TYPE_BADGE_MAX_CHARS,
+    UNKNOWN_TASK_TYPE_BADGE,
     Breadcrumb,
     first_page,
     last_page,
@@ -497,22 +497,23 @@ def test_type_badge_names_the_task_type_and_a_gate_s_kind() -> None:
     assert task_type_badge(TaskRecord(id="g", title="g", task_type="gate")) == "gate"
 
 
-def test_a_gate_badge_cannot_be_used_as_a_free_text_field(
+def test_a_type_badge_cannot_be_forged_from_either_half(
     lithos_lens_config_env: Path,
 ) -> None:
-    """``lithos_task_update`` takes ``{task_id, agent, metadata}`` with no
-    credential and REPLACES the metadata wholesale, so ``gate_type`` is a value
-    any client can write. Autoescaped, it is not XSS — it is a SPOOFABLE badge
-    sitting beside the real status badge on the surface an operator reads to
-    decide whether a gate is waiting on a human. ``gate_type`` has a closed
-    server vocabulary, so it is clamped exactly as ``status`` already is, and
-    the raw ``task_type`` (kept verbatim, for unknown future types) is length
-    bounded so it cannot become a free text field either."""
-    spoof = "human — approved, safe to merge"
+    """Both halves of this badge are agent-controlled with no credential:
+    ``lithos_task_create`` takes ``task_type`` as a bare string, and
+    ``lithos_task_update`` MERGES ``metadata`` per key — so ``gate_type`` can
+    be set on any existing task with one call that touches nothing else
+    (``tests/contracts/_tools_snapshot.json``). Autoescaped, neither is XSS; it
+    is a SPOOFABLE badge sitting beside the live status on the surface an
+    operator reads to decide whether a human is holding a task. Clamping one
+    half only moves the forgery to the other, so both are clamped to their
+    closed server vocabularies, exactly as ``status`` already is."""
+    gate_spoof = "human — approved, safe to merge"
     assert (
         task_type_badge(
             TaskRecord(
-                id="g", title="g", task_type="gate", metadata={"gate_type": spoof}
+                id="g", title="g", task_type="gate", metadata={"gate_type": gate_spoof}
             )
         )
         == "gate"
@@ -530,12 +531,20 @@ def test_a_gate_badge_cannot_be_used_as_a_free_text_field(
             == f"gate: {gate_type}"
         )
 
-    long_type = "x" * (TASK_TYPE_BADGE_MAX_CHARS + 50)
-    badge = task_type_badge(TaskRecord(id="t", title="t", task_type=long_type))
-    assert len(badge) == TASK_TYPE_BADGE_MAX_CHARS
-    assert badge.endswith("\u2026")
+    # The mirror of the above, and the one the length bound never touched:
+    # "gate: human" is 11 characters, so a SHORT task_type impersonates a real
+    # human gate byte for byte unless the type itself is clamped.
+    real_gate = TaskRecord(
+        id="g", title="g", task_type="gate", metadata={"gate_type": "human"}
+    )
+    type_spoof = TaskRecord(id="t", title="t", task_type="gate: human")
+    assert task_type_badge(type_spoof) != task_type_badge(real_gate)
+    assert task_type_badge(type_spoof) == UNKNOWN_TASK_TYPE_BADGE
+    assert task_type_badge(TaskRecord(id="t", title="t", task_type="x" * 80)) == (
+        UNKNOWN_TASK_TYPE_BADGE
+    )
 
-    # And the page renders the clamped badge, not the metadata's claim.
+    # And the rendered page agrees, for both halves.
     fake = TaskFakeLithosClient()
     fake.tasks.append(
         TaskRecord(
@@ -543,15 +552,28 @@ def test_a_gate_badge_cannot_be_used_as_a_free_text_field(
             title="Waiting on something",
             status="open",
             task_type="gate",
-            metadata={"gate_type": spoof},
+            metadata={"gate_type": gate_spoof},
+            created_at="2026-04-20T10:00:00+00:00",
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="type-spoof",
+            title="Not a gate at all",
+            status="open",
+            task_type="gate: human",
             created_at="2026-04-20T10:00:00+00:00",
         )
     )
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/tasks/gate-spoof")
+        gate_page = client.get("/tasks/gate-spoof")
+        type_page = client.get("/tasks/type-spoof")
 
-    assert response.status_code == 200
-    assert "safe to merge" not in response.text.split("<h2>Metadata</h2>")[0]
+    assert gate_page.status_code == 200
+    assert "safe to merge" not in gate_page.text.split("<h2>Metadata</h2>")[0]
+    assert type_page.status_code == 200
+    assert "gate: human" not in type_page.text
+    assert UNKNOWN_TASK_TYPE_BADGE in type_page.text
 
 
 def test_detail_reports_the_outcome_and_resolution_time(
@@ -768,9 +790,12 @@ def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
     credential and no path to Lens, that let whoever posts findings set how
     often every open detail tab performed the most expensive render in the app.
 
-    So: the finding path targets the fragment endpoint, the swap target exists
-    on BOTH the fragment and the full page, and the whole-page reconcile is
-    floored on the detail surface so the event rate cannot set the render rate.
+    Asserted at the level the EVENT reaches, not at the handler: routing the
+    finding to the fragment means nothing if the same event goes on to schedule
+    the whole-page reconcile one line later in the caller (it did —
+    ``finding.posted`` is in ``SPARSE_EVENT_TYPES``, so ``requires_refresh`` is
+    always true for it). Both refresh paths are also floored, and neither can
+    be starved past a ceiling: see the bounds test below.
     """
     fake = NoteProbeClient()
     with _client(lithos_lens_config_env, fake) as client:
@@ -785,12 +810,48 @@ def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
     source = script.text
     assert "/findings" in source
     # A finding.posted event on the open task refreshes the timeline...
-    handle_finding = source.split("function handleFinding")[1].split("function ")[0]
+    handle_finding = _js_function(source, "handleFinding")
     assert "scheduleFindingsRefresh" in handle_finding
-    assert "scheduleReconcile" not in handle_finding
-    # ...and the whole-page render, which is what the fan-out costs, is floored
-    # rather than fired at the event rate.
-    assert "DETAIL_RECONCILE_MIN_INTERVAL_MS" in source
+    # ...and does NOT also fall through to the whole-page reconcile in the
+    # dispatcher: the handler reports the event handled, and the dispatcher
+    # skips the expensive path for handled events.
+    dispatch = _js_function(source, "handleEvent")
+    assert "handled = handleFinding(message)" in dispatch
+    assert "if (message.requires_refresh && !handled) scheduleReconcile();" in dispatch
+
+
+def test_both_refresh_paths_are_floored_and_neither_can_be_starved() -> None:
+    """The floor and the ceiling are one mechanism, and both paths use it: an
+    event stream no client needs Lens access to drive must not set the render
+    rate (the floor), and must not defer a pending refresh forever by re-arming
+    its debounce either (the ceiling — otherwise the board holds stale
+    blockers, claims and statuses for the whole burst while still reading
+    "Live updates connected")."""
+    source = (Path("src/lithos_lens/static/tasks.js")).read_text()
+    schedule = _js_function(source, "scheduleRefresh")
+
+    # One floor per path, applied by the shared scheduler...
+    assert "path.lastRunAt + path.minIntervalMs" in schedule
+    assert "minIntervalMs: DETAIL_RECONCILE_MIN_INTERVAL_MS" in source.replace(
+        "detailTaskId ? ", ""
+    )
+    assert "minIntervalMs: FINDINGS_MIN_INTERVAL_MS" in source
+    # ...and one ceiling on how long re-arming may defer a pending refresh,
+    # measured from the FIRST deferred event rather than the latest.
+    assert "path.deferredSince + MAX_DEFER_MS" in schedule
+    assert "if (!path.deferredSince) path.deferredSince = now;" in schedule
+
+
+def _js_function(source: str, name: str) -> str:
+    """The body of one top-level function in ``tasks.js``.
+
+    The refresh bounds are browser behaviour with no Python seam, and the JS is
+    exercised end to end by the Playwright suite rather than here; these
+    assertions pin the SHAPE that the security review turned on — which
+    function schedules what — so a later edit that quietly restores the
+    unbounded path fails in the fast suite instead of in review.
+    """
+    return source.split(f"function {name}")[1].split("\n  function ")[0]
 
 
 # --- the page size is not caller-supplied (security/f-003) -----------------

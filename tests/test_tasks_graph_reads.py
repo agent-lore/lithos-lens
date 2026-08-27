@@ -642,14 +642,25 @@ class _SlowText:
     and is observable from outside because it releases the GIL.
     """
 
-    def __init__(self, text: str, seen: list[Any]) -> None:
+    def __init__(self, text: str, seen: list[Any], hold_s: float = 0.15) -> None:
         self._text = text
         self._seen = seen
+        self._hold_s = hold_s
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
 
     @property
     def text(self) -> str:
-        self._seen.append(threading.current_thread())
-        time.sleep(0.15)
+        with self._lock:
+            self._seen.append(threading.current_thread())
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            time.sleep(self._hold_s)
+        finally:
+            with self._lock:
+                self.in_flight -= 1
         return self._text
 
 
@@ -687,3 +698,28 @@ def test_a_slow_decode_does_not_stall_every_other_request() -> None:
     # The loop kept serving while the decode ran; on the loop it would have
     # been blocked for the whole 0.15s and this would be 0.
     assert ticks >= 3
+
+
+def test_the_decode_is_bounded_by_the_same_gate_as_the_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decode is the CPU half of a tool call, so a gate that covers only
+    the round trip does not bound the call: released before the thread hop, it
+    let every concurrent request parse at once — the payloads resident in
+    memory and the GIL-holding scans both scaling with an unauthenticated
+    request rate rather than with the bound."""
+    monkeypatch.setattr(lithos_client, "MAX_CONCURRENT_TOOL_CALLS", 2)
+    decoded_on: list[Any] = []
+    block = _SlowText('{"open_claims": 3}', decoded_on, hold_s=0.05)
+    client = _CannedResultClient(SimpleNamespace(content=[block], isError=False))
+
+    async def _driver() -> None:
+        try:
+            await asyncio.gather(*(client.stats() for _ in range(8)))
+        finally:
+            await client.close()
+
+    asyncio.run(_driver())
+
+    assert len(decoded_on) == 8  # every call really did decode
+    assert block.peak_in_flight <= 2

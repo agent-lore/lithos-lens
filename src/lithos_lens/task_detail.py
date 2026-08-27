@@ -359,11 +359,13 @@ async def load_findings_timeline(
     ``static/tasks.js`` requests this endpoint whenever a ``finding.posted``
     event names the open task, and ``lithos_finding_post`` takes
     ``{task_id, agent, summary}`` with no credential — so whoever posts
-    findings sets how often this runs, from outside Lens entirely. That is
-    exactly why the finding event refreshes THIS and not the page: the rate a
-    client can set has to drive the cheap render. (Before T1-S7's convergence
-    round the reconcile refetched the whole page, and this docstring described
-    a mitigation the client did not have.)
+    findings sets how often this runs, from outside Lens entirely. Which is why
+    the event refreshes THIS and NOT the page: the client marks the event
+    handled and skips the whole-page reconcile, rather than firing both. What
+    this fragment still costs on each run — one ``lithos_finding_list`` plus up
+    to :data:`DETAIL_PAGE_SIZE` title reads — is why the client floors its rate
+    too (``FINDINGS_MIN_INTERVAL_MS``): cheaper than the page is not the same
+    as free, and only a floor stops an event rate from becoming a render rate.
 
     It carries the same wall-clock budget as the full page, for the same
     reason: the reconcile keeps asking, so a stalled Lithos must not leave a

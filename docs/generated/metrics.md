@@ -14,7 +14,7 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 27 | 27 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 870 | 870 | 0 |
+| `max_module_lines` | 886 | 895 | 9 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 1 | 1 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
@@ -39,24 +39,24 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
 | Events | 1 | 208 | 180 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
 | Knowledge | 3 | 1057 | 806 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
-| LithosClient | 3 | 1843 | 1511 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
+| LithosClient | 3 | 1859 | 1520 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 8 | 2740 | 2081 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 3 |
+| TaskGraph | 8 | 2742 | 2080 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 3 |
 | Tasks | 3 | 1007 | 734 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
 | Web | 1 | 587 | 500 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **29**, lines: **8704**, SLOC: **6823**
-- Largest module: `lithos_lens.lithos_client` (870 lines)
+- Modules: **29**, lines: **8722**, SLOC: **6831**
+- Largest module: `lithos_lens.lithos_client` (886 lines)
 - Modules over 800 lines: **1**
   - `lithos_lens.lithos_client`
 
 ## Complexity
 
-- Functions: **334**, cyclomatic > 10: **14**
+- Functions: **333**, cyclomatic > 10: **14**
 
 Top 10 most complex functions:
 
@@ -84,4 +84,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **36** (39 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.74** (15128 test lines / 8704 source lines)
+- Test-to-source line ratio: **1.75** (15225 test lines / 8722 source lines)
