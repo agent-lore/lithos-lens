@@ -3,11 +3,26 @@
   const eventsUrl = config.eventsUrl || "/tasks/events";
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
+  const detailTaskId = config.detailTaskId || "";
+  // The floor under the task DETAIL page's whole-page reconcile. That render is
+  // the most expensive response Lens serves (the graph fan-out behind
+  // /tasks/{id}), and every event type arrives with requires_refresh set, so
+  // without a floor the EVENT rate sets the RENDER rate — and events are posted
+  // by clients that need no access to Lens at all. Events keep coalescing into
+  // the pending reconcile while the floor holds them off, so nothing is lost;
+  // it lands later. Findings, the one thing a burst of events actually
+  // changes here, are not held off: they refresh through the cheap fragment
+  // below. The dashboard keeps its ~800ms cadence — its reconcile is a list
+  // render, not a fan-out.
+  const DETAIL_RECONCILE_MIN_INTERVAL_MS = 5000;
   let eventSource = null;
   let reconcileTimer = null;
+  let findingsTimer = null;
   let pollTimer = null;
   let reconnectRefreshPending = false;
   let latestRefreshToken = 0;
+  let latestFindingsToken = 0;
+  let lastFullRefreshAt = 0;
   let currentLiveState = "paused";
   let currentLiveDetail = "Reconnecting; polling fallback is active";
 
@@ -25,7 +40,35 @@
 
   function scheduleReconcile(delay) {
     window.clearTimeout(reconcileTimer);
-    reconcileTimer = window.setTimeout(refreshFragments, delay || 800);
+    reconcileTimer = window.setTimeout(refreshFragments, reconcileDelay(delay || 800));
+  }
+
+  function reconcileDelay(delay) {
+    if (!detailTaskId) return delay;
+    const sinceLast = Date.now() - lastFullRefreshAt;
+    return Math.max(delay, DETAIL_RECONCILE_MIN_INTERVAL_MS - sinceLast);
+  }
+
+  // The findings timeline on its own, from the endpoint built for exactly this
+  // (/tasks/{id}/findings): one lithos_finding_list plus a bounded page of
+  // title reads, instead of the whole page's blocker/provenance/children
+  // fan-out. This is the path a finding.posted event takes, so a client
+  // posting findings in a loop drives the CHEAP render, not the expensive one.
+  function scheduleFindingsRefresh(delay) {
+    window.clearTimeout(findingsTimer);
+    findingsTimer = window.setTimeout(refreshFindings, delay || 800);
+  }
+
+  async function refreshFindings() {
+    if (!detailTaskId) return;
+    const token = ++latestFindingsToken;
+    const response = await fetch(`/tasks/${encodeURIComponent(detailTaskId)}/findings`, {
+      headers: { "X-Lithos-Lens-Refresh": "findings" }
+    });
+    if (!response.ok || token !== latestFindingsToken) return;
+    const text = await response.text();
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    replaceFragment(doc, "findings");
   }
 
   function startPolling() {
@@ -40,6 +83,7 @@
 
   async function refreshFragments() {
     const token = ++latestRefreshToken;
+    lastFullRefreshAt = Date.now();
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
@@ -47,7 +91,7 @@
     const text = await response.text();
     const doc = new DOMParser().parseFromString(text, "text/html");
     replaceFragment(doc, "dashboard-data");
-    if (config.detailTaskId) {
+    if (detailTaskId) {
       replaceFragment(doc, "detail");
     }
     setupDatePickers();
@@ -173,8 +217,8 @@
         chip.textContent = `${count} new finding${count === 1 ? "" : "s"}`;
       }
     }
-    if (config.detailTaskId && config.detailTaskId === message.task_id) {
-      scheduleReconcile(100);
+    if (detailTaskId && detailTaskId === message.task_id) {
+      scheduleFindingsRefresh(100);
     }
   }
 

@@ -353,12 +353,21 @@ async def load_findings_timeline(
     would buy the whole graph fan-out — the edge list, the children, four pages
     of ``task_get`` and the parent walk — and then discard every result
     unrendered. A fragment is the cheapest thing to request and the easiest to
-    request in a loop (the reconcile tick refetches on every event), so it must
-    not be the most expensive thing to serve.
+    request in a loop, so it must not be the most expensive thing to serve.
+
+    The loop is real and it is named: ``refreshFindings`` in
+    ``static/tasks.js`` requests this endpoint whenever a ``finding.posted``
+    event names the open task, and ``lithos_finding_post`` takes
+    ``{task_id, agent, summary}`` with no credential — so whoever posts
+    findings sets how often this runs, from outside Lens entirely. That is
+    exactly why the finding event refreshes THIS and not the page: the rate a
+    client can set has to drive the cheap render. (Before T1-S7's convergence
+    round the reconcile refetched the whole page, and this docstring described
+    a mitigation the client did not have.)
 
     It carries the same wall-clock budget as the full page, for the same
-    reason: the reconcile tick keeps asking, so a stalled Lithos must not leave
-    a request per tick held open.
+    reason: the reconcile keeps asking, so a stalled Lithos must not leave a
+    request per tick held open.
     """
     deadline = deadline_or_budget()
     try:

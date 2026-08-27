@@ -34,6 +34,18 @@ def resolve_port() -> int:
     return port
 
 
+# The request-side half of the fan-out bound. ``LithosClient`` caps how many
+# tool calls this process may have in flight (``MAX_CONCURRENT_TOOL_CALLS``),
+# which protects the shared MCP session; this caps how many requests may be
+# waiting to make them. Lens takes unauthenticated requests across the
+# trusted-network boundary, so the arrival rate is not Lens's to choose, and a
+# request that only queues still costs a task, a socket and a render budget.
+# Past this, uvicorn answers 503 immediately — a fast, honest refusal in front
+# of a saturated backend, rather than a queue that grows until the process
+# does.
+MAX_CONCURRENT_REQUESTS = 128
+
+
 def main() -> None:
     """Load config and run the ASGI server."""
 
@@ -54,6 +66,7 @@ def main() -> None:
         host="0.0.0.0",  # nosec B104
         port=port,
         log_config=None,
+        limit_concurrency=MAX_CONCURRENT_REQUESTS,
     )
 
 

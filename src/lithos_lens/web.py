@@ -226,6 +226,10 @@ def create_app(
             )
         # The fragment renders the timeline only, so it loads the timeline
         # only — never the whole detail page's graph fan-out (security/f-002).
+        # This is the endpoint the detail page's finding.posted reconcile
+        # actually requests (``refreshFindings`` in ``static/tasks.js``, which
+        # swaps the ``data-refresh-fragment="findings"`` section); the whole
+        # page is re-rendered on a floor, not on the event rate.
         detail = await load_findings_timeline(state.lithos_client, task_id)
         return templates.TemplateResponse(
             request,
@@ -489,9 +493,24 @@ def task_tag_url(request: Request, tag: str) -> str:
 
 
 def task_detail_url(request: Request, task_id: str) -> str:
+    """Link to a task's detail page, with the id ENCODED like a note's.
+
+    ``safe=""`` for the same reason :func:`note_url` gives: the default
+    ``quote`` leaves ``/`` alone, and ``/`` is the character a traversal needs
+    — ``href="/tasks/../note/x"`` is normalized by the browser before it is
+    requested. Task ids reaching here are server-minted today
+    (``lithos_task_create`` has no id field, and ``lithos_task_edge_upsert``
+    rejects an endpoint that does not exist), so this is hardening, not a live
+    hole: it is the CLOSURE that is upstream, not the escaping. T1-S7 gave this
+    helper three new sinks whose contents an agent controls — every blocker,
+    provenance and children row, and every breadcrumb ancestor — so one
+    imported id, or an upstream that later accepts a caller-chosen one, must
+    not be what decides where these rows point. The two id-in-path helpers now
+    agree.
+    """
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
-    return f"/tasks/{quote(task_id)}{suffix}"
+    return f"/tasks/{quote(task_id, safe='')}{suffix}"
 
 
 def note_url(knowledge_id: str, task_id: str = "") -> str:

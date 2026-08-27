@@ -11,6 +11,8 @@ emits exactly ``{kind, task_id, type, status, message}``.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -576,3 +578,112 @@ def test_task_edge_list_sends_direction_and_types_and_normalizes() -> None:
         "lithos_task_edge_list",
         {"task_id": "g-1", "direction": "outgoing", "types": ["waits_on_gate"]},
     )
+
+
+# --- Process-wide call bounds (security/f-001, f-003) ----------------------
+
+
+class _CountingClient(LithosClient):
+    """Records how many tool calls are in flight on the shared session."""
+
+    def __init__(self) -> None:
+        super().__init__(LithosConfig())
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            # Yield, so calls that are allowed to overlap actually do.
+            await asyncio.sleep(0)
+            return _tool_result('{"open_claims": 1}')
+        finally:
+            self.in_flight -= 1
+
+
+def test_concurrent_renders_share_one_process_wide_call_bound() -> None:
+    """The per-render fan-out gates bound ONE page; the MCP session they are
+    documented to protect is shared by every page. Without a bound on the
+    client, N concurrent renders put N times a render's worth of calls on that
+    one session — and N is set by an unauthenticated request rate, not by Lens.
+    So the gate lives where the session lives."""
+    client = _CountingClient()
+    renders = 3
+    per_render = lithos_client.MAX_CONCURRENT_TOOL_CALLS
+
+    async def _driver() -> None:
+        try:
+            await asyncio.gather(
+                *(
+                    asyncio.gather(*(client.stats() for _ in range(per_render)))
+                    for _ in range(renders)
+                )
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(_driver())
+
+    assert client.peak_in_flight > 1  # still concurrent
+    assert client.peak_in_flight <= lithos_client.MAX_CONCURRENT_TOOL_CALLS
+    # Strictly fewer than the calls the "renders" issued together, so removing
+    # the gate fails here even if the constant itself is raised.
+    assert client.peak_in_flight < renders * per_render
+
+
+class _SlowText:
+    """A result block whose text takes real time to read.
+
+    Stands in for the parse of a multi-megabyte response WITHOUT building one:
+    the cost lands inside the decode, exactly where a big ``json.loads`` would,
+    and is observable from outside because it releases the GIL.
+    """
+
+    def __init__(self, text: str, seen: list[Any]) -> None:
+        self._text = text
+        self._seen = seen
+
+    @property
+    def text(self) -> str:
+        self._seen.append(threading.current_thread())
+        time.sleep(0.15)
+        return self._text
+
+
+def test_a_slow_decode_does_not_stall_every_other_request() -> None:
+    """The decode is the one SYNCHRONOUS step of a tool call, and a response's
+    row count is agent-controlled, so on the event loop it is the one step no
+    deadline can preempt: every other in-flight request waits it out. Run off
+    the loop, one oversized response costs the request that asked for it."""
+    decoded_on: list[Any] = []
+    result = SimpleNamespace(
+        content=[_SlowText('{"open_claims": 3}', decoded_on)], isError=False
+    )
+    client = _CannedResultClient(result)
+    ticks = 0
+
+    async def _driver() -> None:
+        nonlocal ticks
+
+        async def _other_request() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        ticker = asyncio.create_task(_other_request())
+        try:
+            assert await client.stats() == {"open_claims": 3}
+        finally:
+            ticker.cancel()
+            await client.close()
+
+    asyncio.run(_driver())
+
+    assert decoded_on and decoded_on[0] is not threading.main_thread()
+    # The loop kept serving while the decode ran; on the loop it would have
+    # been blocked for the whole 0.15s and this would be 0.
+    assert ticks >= 3

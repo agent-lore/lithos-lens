@@ -48,6 +48,19 @@
           {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
           {% if detail.task.created_at %}<time datetime="{{ detail.task.created_at }}">{{ detail.task.created_at }}</time>{% endif %}
         </div>
+        {# The tag chips belong to THIS task, so they stay inside the header,
+           under the meta line. Moved back here after the graph sections
+           (blockers / children / provenance) were inserted between the header
+           and the old position: the chips had not moved, but everything that
+           identified them as this task's had moved above them, so they read as
+           belonging to the spawned task listed just before. #}
+        {% if detail.task.tags %}
+          <div class="tag-list">
+            {% for tag in detail.task.tags %}
+              <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </header>
 
       {% if detail.errors %}
@@ -78,14 +91,6 @@
         <h3>Spawned follow-ons</h3>
         {{ link_list(detail.spawned, "spawned tasks") }}
       </section>
-
-      {% if detail.task.tags %}
-        <div class="tag-list">
-          {% for tag in detail.task.tags %}
-            <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag }}</a>
-          {% endfor %}
-        </div>
-      {% endif %}
 
       {% if detail.task.description %}
         <section>

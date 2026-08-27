@@ -1,5 +1,11 @@
 {% from "tasks/paging.html" import overflow_tail with context %}
-<section>
+{# `data-refresh-fragment="findings"` is what tasks.js swaps when a
+   finding.posted event arrives on the open task: the reconcile re-requests
+   THIS section from /tasks/{id}/findings rather than re-rendering the whole
+   detail page, so the event rate cannot drive the graph fan-out. The marker
+   has to live in the shared template, because the same file is both the
+   included section and the fragment response. #}
+<section data-refresh-fragment="findings">
   <h2>Findings</h2>
   {% if offline %}
     <p class="warning-text">Findings unavailable while Lithos is offline.</p>

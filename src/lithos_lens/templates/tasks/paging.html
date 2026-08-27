@@ -29,7 +29,12 @@
   {% if page.state == "error" %}
     <p class="warning-text">{{ noun | capitalize }} unavailable. Refresh this task to retry.</p>
   {% elif page.is_empty %}
-    <p class="empty">No {{ noun }}.</p>
+    {# `empty-inline`, not a bare `.empty`: the shared `.empty` carries the
+       panel inset, which on a detail SUB-list left the empty branch indented
+       past its populated siblings (`.link-list` has no padding) — the same
+       heading reading as two different left edges depending on whether the
+       list had rows. #}
+    <p class="empty empty-inline">No {{ noun }}.</p>
   {% else %}
     <ul class="link-list" data-link-list="{{ noun | replace(" ", "-") }}">
       {% for link in page.links %}

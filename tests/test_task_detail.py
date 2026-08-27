@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from lithos_lens import task_links
 from lithos_lens.config import load_config
@@ -25,6 +26,8 @@ from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     DETAIL_FANOUT_CONCURRENCY,
     DETAIL_PAGE_SIZE,
+    GATE_TYPES,
+    TASK_TYPE_BADGE_MAX_CHARS,
     Breadcrumb,
     first_page,
     last_page,
@@ -34,7 +37,7 @@ from lithos_lens.task_links import (
     task_type_badge,
 )
 from lithos_lens.tasks import FindingRecord, NoteRecord, TaskRecord
-from lithos_lens.web import create_app, note_url
+from lithos_lens.web import create_app, note_url, task_detail_url
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
 
@@ -494,6 +497,63 @@ def test_type_badge_names_the_task_type_and_a_gate_s_kind() -> None:
     assert task_type_badge(TaskRecord(id="g", title="g", task_type="gate")) == "gate"
 
 
+def test_a_gate_badge_cannot_be_used_as_a_free_text_field(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``lithos_task_update`` takes ``{task_id, agent, metadata}`` with no
+    credential and REPLACES the metadata wholesale, so ``gate_type`` is a value
+    any client can write. Autoescaped, it is not XSS — it is a SPOOFABLE badge
+    sitting beside the real status badge on the surface an operator reads to
+    decide whether a gate is waiting on a human. ``gate_type`` has a closed
+    server vocabulary, so it is clamped exactly as ``status`` already is, and
+    the raw ``task_type`` (kept verbatim, for unknown future types) is length
+    bounded so it cannot become a free text field either."""
+    spoof = "human — approved, safe to merge"
+    assert (
+        task_type_badge(
+            TaskRecord(
+                id="g", title="g", task_type="gate", metadata={"gate_type": spoof}
+            )
+        )
+        == "gate"
+    )
+    for gate_type in GATE_TYPES:
+        assert (
+            task_type_badge(
+                TaskRecord(
+                    id="g",
+                    title="g",
+                    task_type="gate",
+                    metadata={"gate_type": gate_type},
+                )
+            )
+            == f"gate: {gate_type}"
+        )
+
+    long_type = "x" * (TASK_TYPE_BADGE_MAX_CHARS + 50)
+    badge = task_type_badge(TaskRecord(id="t", title="t", task_type=long_type))
+    assert len(badge) == TASK_TYPE_BADGE_MAX_CHARS
+    assert badge.endswith("\u2026")
+
+    # And the page renders the clamped badge, not the metadata's claim.
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="gate-spoof",
+            title="Waiting on something",
+            status="open",
+            task_type="gate",
+            metadata={"gate_type": spoof},
+            created_at="2026-04-20T10:00:00+00:00",
+        )
+    )
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/gate-spoof")
+
+    assert response.status_code == 200
+    assert "safe to merge" not in response.text.split("<h2>Metadata</h2>")[0]
+
+
 def test_detail_reports_the_outcome_and_resolution_time(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -698,6 +758,41 @@ def test_findings_fragment_does_not_pay_for_the_graph_fan_out(
     assert fake.edge_list_calls == []
 
 
+def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The cheap loader above is only a mitigation if it is what the CLIENT
+    requests. It was not: ``refreshFragments`` refetched ``location.href`` —
+    the whole detail page, graph fan-out included — and nothing requested
+    ``/tasks/{id}/findings`` at all. Since ``lithos_finding_post`` needs no
+    credential and no path to Lens, that let whoever posts findings set how
+    often every open detail tab performed the most expensive render in the app.
+
+    So: the finding path targets the fragment endpoint, the swap target exists
+    on BOTH the fragment and the full page, and the whole-page reconcile is
+    floored on the detail surface so the event rate cannot set the render rate.
+    """
+    fake = NoteProbeClient()
+    with _client(lithos_lens_config_env, fake) as client:
+        fragment = client.get("/tasks/open-claimed/findings")
+        page = client.get("/tasks/open-claimed")
+        script = client.get("/static/tasks.js")
+
+    # The swap target the reconcile replaces, on both sides of the swap.
+    assert 'data-refresh-fragment="findings"' in fragment.text
+    assert 'data-refresh-fragment="findings"' in page.text
+
+    source = script.text
+    assert "/findings" in source
+    # A finding.posted event on the open task refreshes the timeline...
+    handle_finding = source.split("function handleFinding")[1].split("function ")[0]
+    assert "scheduleFindingsRefresh" in handle_finding
+    assert "scheduleReconcile" not in handle_finding
+    # ...and the whole-page render, which is what the fan-out costs, is floored
+    # rather than fired at the event rate.
+    assert "DETAIL_RECONCILE_MIN_INTERVAL_MS" in source
+
+
 # --- the page size is not caller-supplied (security/f-003) -----------------
 
 
@@ -776,11 +871,52 @@ def test_a_finding_cannot_aim_its_document_link_at_another_page(
 def test_note_url_encodes_the_whole_id_and_the_task_back_link() -> None:
     """``safe=""`` is the point: the default ``quote`` leaves ``/`` alone, and
     ``/`` is the character a traversal needs. The back-link is urlencoded so a
-    value carrying ``&`` cannot graft on a parameter."""
+    value carrying ``&`` cannot graft on a parameter.
+
+    ``task_detail_url`` is held to the SAME rule, on the same line: T1-S7 gave
+    it three new sinks whose contents an agent controls (every blocker,
+    provenance and children row, and every breadcrumb ancestor). Ids are
+    server-minted today, so this is the hardening that keeps the two helpers
+    from disagreeing about a traversal the moment an imported id — or an
+    upstream that accepts a caller-chosen one — arrives.
+    """
     assert note_url("plain-id") == "/note/plain-id"
     assert note_url("../../etc") == "/note/..%2F..%2Fetc"
     assert note_url("a b&c") == "/note/a%20b%26c"
     assert note_url("note-1", "task&x=1") == "/note/note-1?task=task%26x%3D1"
+
+    request = Request(
+        {"type": "http", "method": "GET", "query_string": b"", "headers": []}
+    )
+    assert task_detail_url(request, "plain-id") == "/tasks/plain-id"
+    assert task_detail_url(request, "../note/pwned") == "/tasks/..%2Fnote%2Fpwned"
+    assert task_detail_url(request, "a b&c") == "/tasks/a%20b%26c"
+
+
+def test_a_blocker_row_cannot_aim_its_link_at_another_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The rendered sink, not just the helper: a related-task row links to
+    whatever id the edge names, so an id carrying ``/`` would be an href the
+    browser normalizes to a different Lens page before requesting it."""
+    fake = TaskFakeLithosClient()
+    traversal_id = "../note/note-1"
+    fake.tasks.append(
+        TaskRecord(
+            id=traversal_id,
+            title="Blocker with a path for an id",
+            status="open",
+            created_at="2026-04-20T10:00:00+00:00",
+        )
+    )
+    fake.edges["open-unclaimed"] = [_blocks(traversal_id, "open-unclaimed")]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    assert 'href="/tasks/../' not in response.text
+    assert "/tasks/..%2Fnote%2Fnote-1" in response.text
 
 
 # --- a stalled Lithos costs a partial page, not a held request (f-006) -----

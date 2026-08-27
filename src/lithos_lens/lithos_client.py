@@ -71,6 +71,15 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 # timing a call out costs a row rather than a page.
 CALL_TIMEOUT_S = 15.0
 
+# How many tool calls this PROCESS may have in flight at once, over every
+# request and surface. The per-render fan-out gates
+# (``task_links.DETAIL_FANOUT_CONCURRENCY``, ``epic_strip.EPIC_FANOUT_BATCH``)
+# bound ONE page; the resource is the single MCP session below, shared by every
+# page and by every agent's coordination traffic. N concurrent renders put N
+# times a render's bound on it, and N is an unauthenticated request rate, not
+# something Lens chooses — so this bound lives with the session it protects.
+MAX_CONCURRENT_TOOL_CALLS = 16
+
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
@@ -230,6 +239,7 @@ class LithosClient:
         self._session_ready = asyncio.Event()
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
+        self._call_gate = asyncio.Semaphore(MAX_CONCURRENT_TOOL_CALLS)
 
     async def startup(self) -> None:
         """Spawn the long-lived MCP session worker task.
@@ -690,12 +700,14 @@ class LithosClient:
         return session
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Run one tool call under :data:`CALL_TIMEOUT_S`.
+        """Run one tool call under :data:`CALL_TIMEOUT_S`, around the
+        process-wide gate ``_invoke_tool`` holds.
 
-        Enforced here, so every tool and both transport paths get it. A timeout
-        raises the ordinary coded error callers already treat as a failed read,
-        and cancelling the request releases the per-request state the shared
-        session holds for it.
+        Both bounds cover every tool, both transport paths and every SURFACE —
+        a per-render bound is only as good as the number of concurrent renders,
+        which Lens does not choose. Queue time is inside the deadline on
+        purpose: a queued call has not answered yet, and callers already degrade
+        a read that did not answer.
         """
         try:
             return await asyncio.wait_for(
@@ -710,15 +722,16 @@ class LithosClient:
     async def _invoke_tool(
         self, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        if self._worker_task is None:
-            # startup() was never called; fall back to a one-shot session so
-            # we don't silently break callers that bypass the lifecycle.
-            result = await self._call_tool_oneshot(name, arguments)
-            return _decode_tool_result(result)
-
-        session = await self._live_session()
-        result = await session.call_tool(name, arguments)
-        return _decode_tool_result(result)
+        async with self._call_gate:
+            if self._worker_task is None:
+                # startup() was never called; fall back to a one-shot session
+                # so we don't silently break callers that bypass the lifecycle.
+                result = await self._call_tool_oneshot(name, arguments)
+            else:
+                session = await self._live_session()
+                result = await session.call_tool(name, arguments)
+        # Decoded OFF the loop: see the residual note on the decoder.
+        return await asyncio.to_thread(_decode_tool_result, result)
 
     async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call over a throwaway session.
@@ -823,10 +836,12 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     that case with "blockers unavailable", and any finite ceiling is a
     deployment assumption dressed as an input-domain restriction. Cost is
     bounded where the cost is instead — the per-row fan-out, its concurrency
-    and its wall clock (see ``task_links``). The residual is the SYNCHRONOUS
-    parse below, which no async deadline can preempt; its fix is an upstream
-    row limit on the graph reads, not a ceiling Lens invents for a response it
-    asked for.
+    and its wall clock (see ``task_links``).
+    The residual is this parse, which is synchronous: it runs off the loop
+    (``asyncio.to_thread``), stalling the request that asked for it rather than
+    every request in the process. What that leaves — the GIL the C JSON scanner
+    holds, the peak memory — is an ACCEPTED RISK owned upstream: it closes when
+    the graph reads grow a row limit.
     """
     blocks = getattr(result, "content", [])
     text = str(getattr(blocks[0], "text", "") or "") if blocks else ""

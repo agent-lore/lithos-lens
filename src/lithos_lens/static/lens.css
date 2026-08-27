@@ -804,6 +804,15 @@ button,
   padding: 1.25rem;
 }
 
+/* An empty list rendered INSIDE a panel section, where the panel inset above
+   would push it past the populated list it replaces (`.link-list` sits flush
+   with its heading). Same vertical rhythm as that list, so a section reads the
+   same whether or not it has rows. */
+.empty-inline {
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
 .detail-panel {
   display: grid;
   gap: 1.5rem;
