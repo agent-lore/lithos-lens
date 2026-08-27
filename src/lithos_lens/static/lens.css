@@ -804,11 +804,15 @@ button,
   padding: 1.25rem;
 }
 
-/* An empty list rendered INSIDE a panel section, where the panel inset above
-   would push it past the populated list it replaces (`.link-list` sits flush
-   with its heading). Same vertical rhythm as that list, so a section reads the
-   same whether or not it has rows. */
-.empty-inline {
+/* Empty states INSIDE the task detail panel, where the panel inset above would
+   push them past the content they stand in for (`.link-list` and the findings
+   timeline both sit flush with their heading). Keyed on the panel rather than
+   on a modifier class each empty branch has to remember: the first pass at
+   this added the modifier to the three lists it was looking at and left the
+   claims and findings branches indented, which just moved the mismatch from
+   inside one section to between sections. Anything empty in this panel is
+   flush now, including whatever gets added next. */
+.detail-panel .empty {
   margin: 0.5rem 0 0;
   padding: 0;
 }
@@ -841,11 +845,27 @@ button,
    leads with an ellipsis, dimmed like the separators. */
 .breadcrumb {
   align-items: center;
-  color: var(--muted);
   display: flex;
   flex-wrap: wrap;
   font-size: 0.85rem;
   gap: 0.4rem;
+}
+
+/* The SEPARATORS and the truncation ellipsis are the dimmed part — not the
+   ancestors, which are the only thing here you can click. Colouring the whole
+   breadcrumb muted (as this rule did) plus the shell's `nav a` suppression
+   below rendered the one link in exactly the treatment this page uses for text
+   you cannot click, while every other in-content link is ink-coloured and
+   underlined. `nav a` is written for the primary navigation in base.html and
+   catches this element only because a breadcrumb is also a <nav>; these two
+   rules take it back, at a specificity that does not depend on source order. */
+.breadcrumb > span {
+  color: var(--muted);
+}
+
+.breadcrumb a {
+  color: var(--ink);
+  text-decoration: underline;
 }
 
 /* The shared related-task list: blockers, provenance, children (and, from

@@ -29,12 +29,11 @@
   {% if page.state == "error" %}
     <p class="warning-text">{{ noun | capitalize }} unavailable. Refresh this task to retry.</p>
   {% elif page.is_empty %}
-    {# `empty-inline`, not a bare `.empty`: the shared `.empty` carries the
-       panel inset, which on a detail SUB-list left the empty branch indented
-       past its populated siblings (`.link-list` has no padding) — the same
-       heading reading as two different left edges depending on whether the
-       list had rows. #}
-    <p class="empty empty-inline">No {{ noun }}.</p>
+    {# A bare `.empty`: `.detail-panel .empty` in lens.css drops the panel
+       inset for every empty state in this panel, so an empty list sits at the
+       same left edge as the populated one it replaces — and so a new empty
+       branch cannot be added at the wrong edge by forgetting a class. #}
+    <p class="empty">No {{ noun }}.</p>
   {% else %}
     <ul class="link-list" data-link-list="{{ noun | replace(" ", "-") }}">
       {% for link in page.links %}

@@ -219,6 +219,73 @@ test("a finding event reconciles the whole detail page, not just its timeline", 
   expect(fragments.length).toBeGreaterThan(0);
 });
 
+test("the breadcrumb ancestor reads as a link, not as chrome", async ({ page }) => {
+  // The artifact pass measured the ancestor at the same ink as the text you
+  // cannot click, with no underline: `nav a` in the shell's stylesheet (written
+  // for the primary navigation in base.html) was catching the breadcrumb
+  // because a breadcrumb is also a <nav>. Asserted through computed style
+  // rather than by eye, and against the page's OTHER links rather than against
+  // a hard-coded colour, since "looks like the other links here" is the
+  // property that was broken.
+  await page.goto("/tasks/influx-ingest-cutover");
+
+  const ancestor = page.locator("[data-parent-breadcrumb] a").first();
+  await expect(ancestor).toBeVisible();
+
+  const style = (locator: ReturnType<typeof page.locator>) =>
+    locator.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { color: cs.color, decoration: cs.textDecorationLine };
+    });
+
+  const ancestorStyle = await style(ancestor);
+  const separatorStyle = await style(
+    page.locator("[data-parent-breadcrumb] span[aria-hidden]").first(),
+  );
+  const contentLinkStyle = await style(
+    page.locator(".link-list a").first(),
+  );
+
+  expect(ancestorStyle.decoration).toContain("underline");
+  // Same treatment as every other in-content link on this page...
+  expect(ancestorStyle.color).toBe(contentLinkStyle.color);
+  // ...and no longer the same as the separators it sits between.
+  expect(ancestorStyle.color).not.toBe(separatorStyle.color);
+});
+
+test("every empty state in the detail panel sits at the content edge", async ({
+  page,
+}) => {
+  // influx-dashboards is the fixture with no claims and no findings, so all
+  // five empty branches are on screen at once: three lists, the claims block
+  // and the findings timeline. The first pass at this reached the three lists
+  // only, which moved the left-edge split from inside one section to between
+  // sections — measured here across every empty state the panel renders.
+  await page.goto("/tasks/influx-dashboards");
+  await expect(page.locator('[data-task-detail="influx-dashboards"]')).toBeVisible();
+
+  // Where the TEXT starts, not where the element box does: a full-width <p>
+  // keeps its container's left edge whatever its padding is, which is why the
+  // inset was invisible to anything but a pixel measurement of the ink. The
+  // content edge (border box + padding) is that measurement, computed.
+  const edges = await page.evaluate(() => {
+    const contentLeft = (el: Element) =>
+      Math.round(
+        el.getBoundingClientRect().left +
+          parseFloat(getComputedStyle(el).paddingLeft),
+      );
+    const panel = document.querySelector(".detail-panel")!;
+    return {
+      heading: contentLeft(panel.querySelector("h2")!),
+      empties: [...panel.querySelectorAll(".empty")].map(contentLeft),
+    };
+  });
+
+  // Three lists, the claims block and the findings timeline.
+  expect(edges.empties).toHaveLength(5);
+  expect(edges.empties).toEqual(edges.empties.map(() => edges.heading));
+});
+
 test("knowledge note renders server-side markdown", async ({ page }) => {
   await page.goto("/note/note-influx-plan");
 

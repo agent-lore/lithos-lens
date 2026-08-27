@@ -60,6 +60,20 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The task-detail branch the demo task cannot show: no active claims and
+    // no findings, so every empty state in the panel is on screen at once
+    // (asked for by the round-3 artifact review, which could not confirm the
+    // empty-state alignment from a task that has both).
+    slug: "task-detail-empty",
+    url: "/tasks/influx-dashboards",
+    ready: async (page) => {
+      await expect(
+        page.locator('[data-task-detail="influx-dashboards"]'),
+      ).toBeVisible();
+      await expect(page.getByText("No active claims.")).toBeVisible();
+    },
+  },
+  {
     slug: "note",
     url: "/note/note-influx-plan",
     ready: async (page) => {
