@@ -164,6 +164,61 @@ test("clicking a task opens its detail page", async ({ page }) => {
   await expect(page.getByText("worker-a").first()).toBeVisible();
 });
 
+test("a finding event reconciles the whole detail page, not just its timeline", async ({
+  page,
+  request,
+}) => {
+  // The browser half of the reopened-marker lifecycle (T1-S7 review round 2,
+  // correctness/f-001). A reopen reaches an open page ONLY as finding.posted —
+  // `lithos_task_reopen` leaves no other trace and `task.reopened` is not a
+  // type Lens subscribes to yet — but the marker it produces renders in the
+  // header, outside the findings fragment. When the finding event refreshed
+  // that fragment ALONE, no request for the page itself ever followed, so the
+  // header kept a stale status, Resolution block and missing marker for as
+  // long as the tab stayed open. This asserts the requests the marker depends
+  // on actually happen: the fast fragment path AND the floored whole-page
+  // reconcile.
+  const detailPath = "/tasks/influx-ingest-cutover";
+  const reconciles: string[] = [];
+  const fragments: string[] = [];
+  page.on("request", (req) => {
+    // resourceType filters out the navigation itself: the reconcile refetches
+    // the same URL, but as a fetch.
+    if (req.resourceType() !== "fetch") return;
+    const path = new URL(req.url()).pathname;
+    if (path === detailPath) reconciles.push(path);
+    if (path === `${detailPath}/findings`) fragments.push(path);
+  });
+
+  await page.goto(detailPath);
+  await expect(page.locator(`[data-task-detail="influx-ingest-cutover"]`)).toBeVisible();
+
+  // The detail page carries no live-status chip, so there is nothing to wait
+  // on for the EventSource handshake: publish until one lands. Each publish
+  // re-arms the debounce, so the interval is wider than it (~800ms).
+  let published = 0;
+  await expect
+    .poll(
+      async () => {
+        const response = await request.post("/tasks/events/publish", {
+          data: {
+            id: `evt-e2e-finding-${Date.now()}-${published++}`,
+            type: "finding.posted",
+            task_id: "influx-ingest-cutover",
+            payload: {},
+          },
+        });
+        expect(response.status()).toBe(202);
+        return reconciles.length;
+      },
+      { timeout: 25000, intervals: [1500] },
+    )
+    .toBeGreaterThan(0);
+
+  // ...and the cheap path ran too: both, each on its own floor.
+  expect(fragments.length).toBeGreaterThan(0);
+});
+
 test("knowledge note renders server-side markdown", async ({ page }) => {
   await page.goto("/note/note-influx-plan");
 

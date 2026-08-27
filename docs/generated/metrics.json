@@ -291,10 +291,10 @@
         "functions": 88,
         "largest_module": "lithos_lens.frontier",
         "largest_module_lines": 751,
-        "lines": 2742,
+        "lines": 2749,
         "modules": 8,
         "public_symbols": 42,
-        "sloc": 2080
+        "sloc": 2086
       },
       "Tasks": {
         "classes": 15,
@@ -332,13 +332,13 @@
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 8722,
+    "total_lines": 8729,
     "total_modules": 29,
-    "total_sloc": 6831
+    "total_sloc": 6837
   },
   "tests": {
     "ratio": 1.75,
-    "src_lines": 8722,
-    "test_lines": 15225
+    "src_lines": 8729,
+    "test_lines": 15293
   }
 }

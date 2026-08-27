@@ -780,7 +780,7 @@ def test_findings_fragment_does_not_pay_for_the_graph_fan_out(
     assert fake.edge_list_calls == []
 
 
-def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
+def test_a_finding_event_takes_the_fragment_path_and_still_reconciles(
     lithos_lens_config_env: Path,
 ) -> None:
     """The cheap loader above is only a mitigation if it is what the CLIENT
@@ -790,12 +790,14 @@ def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
     credential and no path to Lens, that let whoever posts findings set how
     often every open detail tab performed the most expensive render in the app.
 
-    Asserted at the level the EVENT reaches, not at the handler: routing the
-    finding to the fragment means nothing if the same event goes on to schedule
-    the whole-page reconcile one line later in the caller (it did —
-    ``finding.posted`` is in ``SPARSE_EVENT_TYPES``, so ``requires_refresh`` is
-    always true for it). Both refresh paths are also floored, and neither can
-    be starved past a ceiling: see the bounds test below.
+    The fragment is the FAST path, not a replacement for the reconcile.
+    Round 2 made the finding event skip the reconcile outright and that broke
+    the reopen marker (correctness/f-001): the marker is derived from findings
+    but rendered in the header, OUTSIDE the fragment, so a task reopened under
+    an open page kept a ``completed`` badge and a deleted Resolution block
+    indefinitely. Both paths now run, each on its own floor — rate is bounded,
+    coverage is not reduced. Asserted at the level the EVENT reaches, because
+    the dispatcher is where the previous two defects both lived.
     """
     fake = NoteProbeClient()
     with _client(lithos_lens_config_env, fake) as client:
@@ -812,12 +814,78 @@ def test_a_finding_event_refreshes_the_fragment_not_the_whole_page(
     # A finding.posted event on the open task refreshes the timeline...
     handle_finding = _js_function(source, "handleFinding")
     assert "scheduleFindingsRefresh" in handle_finding
-    # ...and does NOT also fall through to the whole-page reconcile in the
-    # dispatcher: the handler reports the event handled, and the dispatcher
-    # skips the expensive path for handled events.
+    # ...and the dispatcher still reconciles the rest of the page for it: no
+    # "handled" short-circuit, no event class exempted from requires_refresh.
     dispatch = _js_function(source, "handleEvent")
-    assert "handled = handleFinding(message)" in dispatch
-    assert "if (message.requires_refresh && !handled) scheduleReconcile();" in dispatch
+    assert "if (message.requires_refresh) scheduleReconcile();" in dispatch
+    assert "handled" not in dispatch
+
+
+def test_the_reopen_marker_is_outside_the_fragment_so_findings_must_reconcile(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The server half of the lifecycle the skip broke: a ``[Reopened]``
+    finding is what MAKES the header marker, and the header is not what the
+    findings fragment carries.
+
+    ``lithos_task_reopen`` leaves no other trace — it clears ``resolved_at``
+    and ``outcome`` and posts the finding — and ``task.reopened`` is not a type
+    Lens subscribes to yet (``events.TASK_EVENT_TYPES``; PRD T1 S6 owns that),
+    so ``finding.posted`` is the ONLY way a reopen reaches an open page. If
+    that event refreshes the fragment alone, everything asserted below stays
+    stale until the tab is reloaded.
+    """
+    fake = NoteProbeClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="reopened-task",
+            title="Was completed, now reopened",
+            status="open",
+            created_at="2026-04-20T10:00:00+00:00",
+        )
+    )
+    fake.findings["reopened-task"] = [
+        FindingRecord(
+            id="finding-reopen",
+            task_id="reopened-task",
+            agent="operator",
+            summary="[Reopened] the fix did not hold",
+            created_at="2026-04-27T09:00:00+00:00",
+        )
+    ]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        page = client.get("/tasks/reopened-task")
+        fragment = client.get("/tasks/reopened-task/findings")
+
+    # The whole page carries the marker the acceptance criterion asks for...
+    assert "data-reopened-marker" in page.text
+    assert "reopen reported by operator" in page.text
+    # ...and the fragment that a finding event refreshes does not: it renders
+    # the timeline section only, so the header marker can ONLY arrive with a
+    # whole-page reconcile. Whoever moves the marker into the fragment may
+    # revisit the reconcile; until then this is why both paths run.
+    assert "data-reopened-marker" not in fragment.text
+    marker_in_header = page.text.split('data-refresh-fragment="findings"')[0]
+    assert "data-reopened-marker" in marker_in_header
+
+
+def test_the_findings_fetch_cannot_stack_up_against_a_slow_lithos() -> None:
+    """The floor bounds how often the fragment is REQUESTED; nothing bounded
+    how many requests were outstanding. Against a Lithos slow enough to sit on
+    the server's render budget, one tab could hold ~20 of them open — past the
+    browser's ~6-connection pool for the origin, so everything else the page
+    needs queues behind them. The response-ordering token discarded a stale
+    answer but never stopped the request being issued."""
+    source = (Path("src/lithos_lens/static/tasks.js")).read_text()
+    refresh = _js_function(source, "refreshFindings")
+
+    assert "if (findings.inFlight) findings.inFlight.abort();" in refresh
+    assert "signal: controller.signal" in refresh
+    # An aborted fetch is this function superseding itself, not an error...
+    assert 'if (error.name !== "AbortError") throw error;' in refresh
+    # ...and the slot is released whichever way the fetch ended.
+    assert "if (findings.inFlight === controller) findings.inFlight = null;" in refresh
 
 
 def test_both_refresh_paths_are_floored_and_neither_can_be_starved() -> None:

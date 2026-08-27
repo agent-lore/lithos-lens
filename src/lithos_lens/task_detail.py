@@ -360,12 +360,19 @@ async def load_findings_timeline(
     event names the open task, and ``lithos_finding_post`` takes
     ``{task_id, agent, summary}`` with no credential — so whoever posts
     findings sets how often this runs, from outside Lens entirely. Which is why
-    the event refreshes THIS and NOT the page: the client marks the event
-    handled and skips the whole-page reconcile, rather than firing both. What
-    this fragment still costs on each run — one ``lithos_finding_list`` plus up
-    to :data:`DETAIL_PAGE_SIZE` title reads — is why the client floors its rate
-    too (``FINDINGS_MIN_INTERVAL_MS``): cheaper than the page is not the same
-    as free, and only a floor stops an event rate from becoming a render rate.
+    it is the FAST path a finding event takes, and why it is floored too
+    (``FINDINGS_MIN_INTERVAL_MS``): one ``lithos_finding_list`` plus up to
+    :data:`DETAIL_PAGE_SIZE` title reads is cheaper than the page, which is not
+    the same as free.
+
+    It is NOT the only path that event takes. The whole-page reconcile still
+    runs on its own longer floor, because a finding is not confined to this
+    fragment: a ``[Reopened]`` finding drives
+    :func:`latest_reopen_report`, whose marker renders in the header, and the
+    reopen behind it clears the status, ``resolved_at`` and ``outcome`` the
+    page shows. Refreshing only the timeline for those left a page reading
+    ``completed``, with a Resolution block Lithos had already deleted, for as
+    long as the tab stayed open (T1-S7 review round 2, correctness/f-001).
 
     It carries the same wall-clock budget as the full page, for the same
     reason: the reconcile keeps asking, so a stalled Lithos must not leave a
