@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -83,6 +84,46 @@ REOPENED_FINDING_PREFIX = "[Reopened]"
 # raise it. A safety bound rather than an operator dial, the same shape as the
 # client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
 MAX_SINCE_LOOKBACK_DAYS = 365
+
+# Ceiling on the SIZE of the filter query string, in bytes — the ONE bound on
+# ``?tag=`` / ``?status=`` / ``?epic=`` / ``?since=`` / ``?project=`` /
+# ``?agent=``, applied to their total rather than per key.
+#
+# The bound is on the request, not on the filter's MEANING, because every
+# filter is carried forward into each generated URL — the summary cards, one
+# detail link per row, one tag link per tag per row. The response therefore
+# echoes the query string O(rows x tags) times: on a 400-row board a 58 KB
+# ``?status=`` rendered a 116 MB body (~2000x), and 34 KB of ``?tag=`` rendered
+# 499 MB. Bounding the input bounds every one of those echoes at once, which
+# per-key value ceilings did not.
+#
+# 1 KB is ~9x a rich real filter (status + project + agent + since + epic +
+# tag is ~110 bytes; a 129-character tag still fits with room to spare), so no
+# filter an operator or a bookmark can produce is affected.
+#
+# Deliberately REJECTED rather than trimmed (``web._filter_query_oversized``).
+# Silently dropping filter terms is the one response that is never safe: it
+# WIDENS the board, showing rows the operator's filter excluded, under chrome
+# claiming a scope that is not applied. The ``since`` clamp below is the
+# opposite shape and stays as it is — clamping a window narrows it, so it can
+# only ever show less.
+MAX_FILTER_QUERY_BYTES = 1024
+
+# How many active-filter chips the board draws before summarising the rest.
+# A RENDERING bound only: every tag still filters, and the strip says how many
+# it is not naming. The strip is quadratic in tag count (a chip per tag, each
+# re-emitting the others), so it needs a bound of its own even under the byte
+# ceiling above.
+MAX_FILTER_TAG_CHIPS = 12
+
+# The two query keys that carry tags. ``tag`` is the filter itself and is fully
+# literal; ``add_tag`` is the filter bar's text box, folded into the tag set at
+# parse time and never re-emitted. They are separate so that a blank text box —
+# which an HTML form submits on every search — cannot be confused with the
+# literal empty tag that ``?tag=`` names.
+TAG_FILTER_KEY = "tag"
+ADD_TAG_FILTER_KEY = "add_tag"
+TAG_FILTER_KEYS = (TAG_FILTER_KEY, ADD_TAG_FILTER_KEY)
 
 # Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
 # production corpus and their counts disagree: ``metadata.project = "<slug>"``
@@ -531,8 +572,18 @@ def parse_filters(
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
-        if value:
-            values.setdefault(key, []).extend(_split_values(value))
+        if key in TAG_FILTER_KEYS:
+            # Tags are literal (see ``honored_tags``): a comma is tag content,
+            # whitespace is significant, and the empty string is a tag — so
+            # nothing here is split, stripped, or dropped for being falsey.
+            # Every other key is a constrained vocabulary — statuses are an
+            # enum, project slugs are slugs — where the comma form is a
+            # documented convenience that cannot collide with a value.
+            values.setdefault(key, []).append(value)
+            continue
+        if not value:
+            continue
+        values.setdefault(key, []).extend(_split_values(value))
 
     requested_statuses = set(values.get("status", list(default_statuses)))
     status_items: list[TaskStatusName] = [
@@ -551,7 +602,10 @@ def parse_filters(
     )
     return TaskFilters(
         statuses=statuses,
-        tags=tuple(values.get("tag", [])),
+        tags=honored_tags(
+            values.get(TAG_FILTER_KEY, []),
+            added=values.get(ADD_TAG_FILTER_KEY, []),
+        ),
         agent=(values.get("agent") or [""])[0],
         since=since,
         # The epic strip scopes to ONE epic at a time (a chip click), so only
@@ -674,6 +728,49 @@ def parse_date(value: str) -> date | None:
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
     value = stats.get(key, default)
     return value if isinstance(value, int) else default
+
+
+def honored_tags(
+    values: Iterable[str], *, added: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """The ``?tag=`` values the board filters by, in the order written.
+
+    One ``tag`` parameter is one LITERAL tag, verbatim: repeat the parameter
+    (``?tag=a&tag=b``) to AND several together. Deliberately no comma-splitting,
+    no stripping and no dropping of falsey values, unlike ``project`` and
+    ``status``, because a tag is not a constrained vocabulary — the vendored
+    Lithos schema types it as a bare ``string`` with no pattern, length,
+    ``minLength`` or character exclusions. A comma, surrounding whitespace and
+    the empty string are all ordinary tag content, so ``?tag=`` is the
+    empty-tag scope and not the absence of a filter. Splitting made the real
+    tag ``customer,2`` unselectable, stripping rewrote `` urgent `` into a
+    filter that matched a DIFFERENT task, and treating blank as absence showed
+    the whole unfiltered board — three ways of quietly answering a question
+    nobody asked. An exact-match filter has to name every value the store can
+    hold.
+
+    ``added`` is the filter bar's "add a tag" box (``?add_tag=``), which is a
+    UI control rather than a filter term: an HTML text input submits on every
+    search whether or not it was typed in, so a blank one means "nothing
+    typed". It gets its OWN parameter precisely so that ambiguity cannot reach
+    ``tag``, whose blank value has to stay literal. It is folded in here and
+    never re-emitted — generated URLs carry the canonical ``tag`` list.
+
+    EVERY requested tag is then honoured: dropping a term would widen the board,
+    showing rows the operator excluded, so the request SIZE is bounded instead
+    (``MAX_FILTER_QUERY_BYTES``), which never removes a predicate.
+
+    Repeats collapse: ``all(tag in task.tags)`` is idempotent, so a duplicate is
+    a redundant chip and a wasted comparison per row, never a different result.
+    """
+    tags: list[str] = []
+    for value in values:
+        if value not in tags:
+            tags.append(value)
+    for value in added:
+        if value and value not in tags:
+            tags.append(value)
+    return tuple(tags)
 
 
 def _split_values(value: str) -> list[str]:

@@ -12,6 +12,15 @@ services:
       - "${LITHOS_LENS_HOST_PORT:-8000}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Bound the container log on disk. Docker's default json-file driver keeps
+    # every line forever, and a single request can write one (an oversized
+    # filter is refused with a warning line), so an unauthenticated GET would
+    # otherwise grow the host's disk at roughly 1:1 with attacker bandwidth.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
       - ${LITHOS_LENS_DATA_PATH:-./data}:/data
     environment:

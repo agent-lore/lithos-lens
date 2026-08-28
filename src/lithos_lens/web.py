@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio import CancelledError
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -48,9 +49,15 @@ from lithos_lens.task_detail import (
     load_task_detail,
 )
 from lithos_lens.tasks import (
+    ADD_TAG_FILTER_KEY,
+    MAX_FILTER_QUERY_BYTES,
+    MAX_FILTER_TAG_CHIPS,
+    TAG_FILTER_KEY,
+    TAG_FILTER_KEYS,
     default_since,
     format_display_date,
     format_tag,
+    honored_tags,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -158,6 +165,7 @@ def create_app(
     templates.env.filters["display_date"] = format_display_date
     templates.env.filters["render_markdown"] = render_markdown
     templates.env.globals["task_tag_url"] = task_tag_url
+    templates.env.globals["task_tag_clear_url"] = task_tag_clear_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
@@ -270,6 +278,10 @@ def create_app(
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
+        if _filter_query_oversized(request):
+            return await _reject_oversized_filters(
+                request, templates, state, "tasks/detail.html"
+            )
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
@@ -298,6 +310,10 @@ def create_app(
 
     @app.get("/tasks/{task_id}/findings", response_class=HTMLResponse)
     async def task_findings(request: Request, task_id: str) -> HTMLResponse:
+        if _filter_query_oversized(request):
+            return await _reject_oversized_filters(
+                request, templates, state, "tasks/findings.html"
+            )
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
@@ -472,11 +488,74 @@ def create_app(
     return app
 
 
+def _route_template(request: Request) -> str:
+    """The matched route's template (``/tasks/{task_id}``), not the concrete path.
+
+    ``task_id`` is a free path segment bounded only by the URL length limit and
+    NOT by ``MAX_FILTER_QUERY_BYTES``, which measures the query string. Logging
+    the concrete path let a 50 KB request write a 50 KB log line — a persistent
+    sink for a transient input, on a container whose json-file driver has no
+    size cap — while the response itself stayed correctly bounded at ~1.5 KB.
+
+    The template is also what the ``lens_route`` field name implies, and what
+    aggregates across requests.
+    """
+    template = getattr(request.scope.get("route"), "path", "")
+    return template if isinstance(template, str) and template else "<unmatched>"
+
+
+async def _reject_oversized_filters(
+    request: Request,
+    templates: Jinja2Templates,
+    state: AppState,
+    template: str,
+) -> HTMLResponse:
+    """Answer an over-budget filter query explicitly, before any Lithos read.
+
+    Shared by every route that re-emits the preserved filters into generated
+    URLs — the board and the detail pages alike — because the amplification
+    lives in that shared helper, not in one route.
+
+    The response deliberately does NOT echo the offending value: reflecting it
+    is the whole problem. And it refuses rather than trimming, because a
+    trimmed filter renders a WIDER board than the one requested, with chrome
+    claiming a scope that is not applied.
+    """
+    logger.warning(
+        "filter query rejected as oversized",
+        extra={
+            "lens_route": _route_template(request),
+            "query_bytes": len(request.url.query or ""),
+            "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
+        },
+    )
+    return templates.TemplateResponse(
+        request,
+        template,
+        {
+            "config": state.config,
+            "health": await state.refresh_health(),
+            "active_view": "tasks",
+            "dashboard": None,
+            "detail": None,
+            "offline": False,
+            "filter_query_rejected": True,
+            "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
+            "default_since": default_since(state.config.tasks.default_time_range_days),
+        },
+        status_code=400,
+    )
+
+
 async def _render_tasks(
     request: Request,
     templates: Jinja2Templates,
     state: AppState,
 ) -> HTMLResponse:
+    if _filter_query_oversized(request):
+        return await _reject_oversized_filters(
+            request, templates, state, "tasks/dashboard.html"
+        )
     snapshot = await state.refresh_health()
     dashboard = None
     if snapshot.lithos == "ok":
@@ -491,8 +570,17 @@ async def _render_tasks(
         logger.debug(
             "tasks dashboard filters parsed",
             extra={
-                "lens_route": str(request.url.path),
-                "query_items": query_items,
+                "lens_route": _route_template(request),
+                # Only the COUNT of raw pairs: params outside
+                # _PRESERVED_FILTER_KEYS score zero against
+                # MAX_FILTER_QUERY_BYTES, so the raw list is unbounded
+                # attacker-controlled data (a 47 KB junk query wrote 72 KB of
+                # log). Under the container's size-capped rotation that buys
+                # cheap eviction of the log history, which on a service with no
+                # authentication is the only forensic record there is. The
+                # parsed filters below carry the diagnostic value; the count
+                # keeps the "was there junk on this request?" signal.
+                "query_param_count": len(query_items),
                 "statuses": list(filters.statuses),
                 "projects": list(filters.projects),
                 "tags": list(filters.tags),
@@ -517,7 +605,7 @@ async def _render_tasks(
         logger.debug(
             "tasks dashboard loaded",
             extra={
-                "lens_route": str(request.url.path),
+                "lens_route": _route_template(request),
                 "statuses": list(filters.statuses),
                 "projects": list(filters.projects),
                 "tags": list(filters.tags),
@@ -543,6 +631,7 @@ async def _render_tasks(
             "health": snapshot,
             "active_view": "tasks",
             "dashboard": dashboard,
+            "max_tag_chips": MAX_FILTER_TAG_CHIPS,
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },
     )
@@ -552,16 +641,122 @@ async def _render_tasks(
 # query from this allowlist, so a retired param (e.g. the pre-T1
 # ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
 # of propagating through tag / detail / back-link navigation forever.
-_PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
+_PRESERVED_FILTER_KEYS = (
+    "status",
+    "project",
+    "agent",
+    "since",
+    TAG_FILTER_KEY,
+    ADD_TAG_FILTER_KEY,
+    "epic",
+)
+
+
+@dataclass(frozen=True)
+class _RequestFilters:
+    """This request's preserved filters, parsed once (see ``_request_filters``)."""
+
+    oversized: bool
+    params: tuple[tuple[str, str], ...]
+
+
+# Where the parsed filters hang off the request. The URL helpers below run once
+# per generated link — one per row, one per tag per row, plus the summary cards
+# and the epic chips — and each scan is O(every param on the request), not
+# O(the six preserved ones. Recomputing per link cost O(J x L) for J params and
+# L links, and J is bounded only by the URL length limit: an unrecognised key
+# scores nothing against the byte budget but still has to be walked. Parsed
+# once, a request costs O(J + L).
+_FILTER_STATE_ATTR = "lens_preserved_filters"
+
+
+def _parse_preserved_filters(request: Request) -> _RequestFilters:
+    """Scan the query string once: the preserved filters, and their emitted size.
+
+    The size is the length of the exact string that will go into the links —
+    ``urlencode`` run over the very pairs this returns — rather than any
+    estimate of it. Both ways of estimating have now been wrong: counting code
+    points ignored percent-encoding, where one character can cost 12 bytes (an
+    astral character becomes ``%F0%9F%98%80``), and letting a value at the
+    budget emit 12x it; and adding two separator bytes per pair over-counted by
+    one, because ``urlencode`` writes "=" per pair but "&" only BETWEEN them,
+    so a query of exactly ``MAX_FILTER_QUERY_BYTES`` was refused by a ceiling
+    documented — and displayed to the operator — as rejecting only what is
+    larger. Measuring the real thing cannot drift from it.
+
+    Measured over the request AS IT ARRIVED, then emitted in canonical form.
+    The two differ only for tags: ``add_tag`` (the filter bar's text box) is
+    folded into the ``tag`` list once and never re-emitted, so a tag added
+    through the form propagates through navigation as an ordinary ``tag`` pair
+    instead of an "add" that would re-apply on every click. Canonicalising can
+    only shrink the query — ``add_tag`` is four characters longer than ``tag``,
+    and de-duplication only removes — so measuring the arrival form keeps the
+    ceiling conservative.
+
+    Empty values are dropped for every key EXCEPT ``tag``, where the empty
+    string is a literal tag (``?tag=`` is the empty-tag scope) and dropping it
+    would silently widen the board to everything.
+    """
+    raw = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key in _PRESERVED_FILTER_KEYS
+    ]
+    params = [
+        (key, value) for key, value in raw if key not in TAG_FILTER_KEYS and value
+    ]
+    params.extend(
+        (TAG_FILTER_KEY, tag)
+        for tag in honored_tags(
+            [value for key, value in raw if key == TAG_FILTER_KEY],
+            added=[value for key, value in raw if key == ADD_TAG_FILTER_KEY],
+        )
+    )
+    if len(urlencode(raw)) > MAX_FILTER_QUERY_BYTES:
+        # An oversized request preserves NOTHING, so the guarantee holds at the
+        # choke point rather than per template: the refusal page still renders
+        # its own chrome (the "back to tasks" link), and every URL on it must
+        # come out unfiltered — otherwise the page refusing to reflect the
+        # value reflects it anyway, once per link.
+        return _RequestFilters(oversized=True, params=())
+    return _RequestFilters(oversized=False, params=tuple(params))
+
+
+def _request_filters(request: Request) -> _RequestFilters:
+    """This request's parsed filters, computed on first use and then reused."""
+    cached = getattr(request.state, _FILTER_STATE_ATTR, None)
+    if cached is None:
+        cached = _parse_preserved_filters(request)
+        setattr(request.state, _FILTER_STATE_ATTR, cached)
+    return cached
+
+
+def _filter_query_oversized(request: Request) -> bool:
+    """True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
+
+    Measured over the preserved keys only — they are the ones re-emitted into
+    every generated URL, and so the ones whose size the response multiplies.
+    An oversized request is answered explicitly rather than served as though
+    the offending filter had not been sent: see the constant for why trimming
+    is not an option.
+    """
+    return _request_filters(request).oversized
 
 
 def _preserved_filter_params(
     request: Request, *, exclude: str = ""
 ) -> list[tuple[str, str]]:
+    """The live filters of this request, ready to re-emit into a generated URL.
+
+    Echoed verbatim, every key alike — the routes refuse an over-budget query
+    before rendering, so there is nothing left here to trim, and trimming per
+    key was the wrong shape anyway: it dropped filter terms the board had been
+    asked for.
+    """
     return [
         (key, value)
-        for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
+        for key, value in _request_filters(request).params
+        if key != exclude
     ]
 
 
@@ -569,6 +764,38 @@ def task_tag_url(request: Request, tag: str) -> str:
     params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))
     return f"/tasks?{urlencode(params)}"
+
+
+def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
+    """Link an active-filter chip to the same board WITHOUT that one tag.
+
+    The chip is the only place the ``?tag=`` scope is named: a cross-project
+    tag (the monthly-roadmap convention) belongs to no project, so nothing else
+    on the board says what the slice is — the row chips name each row's own
+    tags, not the filter. Clearing one chip keeps the other tags rather than
+    dropping the whole filter.
+
+    ``tags`` is the HONOURED list (``TaskFilters.tags``) and NOT the raw query
+    string: the two spellings (repeated and comma-joined) both fold into it, so
+    rebuilding from the request would emit a tag twice or miss a duplicate it
+    had collapsed. It also keeps the link truthful — clearing one chip cannot
+    resurrect a tag the board is not filtering by.
+
+    One repeated ``tag`` pair per remaining tag — the same and only spelling the
+    request itself uses, now that tags are literal. That is what keeps the link
+    inside ``MAX_FILTER_QUERY_BYTES``, which matters because a chip that renders
+    but 400s when clicked is worse than no chip: encoding the output exactly as
+    the input was encoded makes this link a strict subset of the request that
+    was already accepted, so it cannot overflow a budget the request cleared.
+
+    Round 6 comma-joined them to solve that budget problem, which worked only
+    because tags were being split on commas — the very thing that made the real
+    tag ``customer,2`` unnameable. With literal tags the two are the same
+    representation and the budget property falls out for free.
+    """
+    params = _preserved_filter_params(request, exclude="tag")
+    params.extend(("tag", other) for other in tags if other != tag)
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
 def task_detail_url(request: Request, task_id: str) -> str:

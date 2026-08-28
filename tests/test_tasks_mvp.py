@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import QueryParams
 
 from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
+from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
+    MAX_FILTER_QUERY_BYTES,
+    MAX_FILTER_TAG_CHIPS,
     MAX_SINCE_LOOKBACK_DAYS,
     AgentRecord,
     ClaimRecord,
@@ -548,6 +554,43 @@ def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
     assert 'class="tag-chip tag-chip-project"' in text
 
 
+def test_task_detail_names_the_empty_tag_rather_than_drawing_a_blank_pill(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The detail page must honour the convention row.html and the active-filter
+    chip already state: a task really can carry the empty tag, so a blank pill
+    reads as a rendering bug rather than as a real scope.
+
+    Pinned because the rule was written down in two of the three places that
+    render a tag and omitted in the third, which is invisible on any task whose
+    tags happen to be non-empty.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="empty-tagged-detail",
+            title="Empty tagged detail task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("", "project:influx"),
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/empty-tagged-detail")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "(empty tag)" in text
+    # The non-empty tag alongside it still renders normally — the guard must not
+    # relabel every chip.
+    assert "project: influx" in text
+    # And no chip is drawn with nothing in it.
+    assert not re.search(r'class="tag-chip[^"]*" href="[^"]*"></a>', text)
+
+
 def test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -693,6 +736,953 @@ def test_project_filter_is_preserved_across_navigation(
         'href="/tasks/open-claimed?status=open&project=influx&since=2026-04-01"'
     ) in text
     assert "claimed_state" not in text.split("<main")[1]
+
+
+# ---------------------------------------------------------------------------
+# T1-S13 — the ``?tag=`` cross-project scope.
+#
+# The monthly-roadmap convention tags one committed set across every project it
+# touches (``roadmap-2026-08`` spans lithos-loom, lithos-lens, influx, …), and
+# the loom customer queue is the tag ``loom-candidate``. Neither is a project,
+# so ``?project=`` cannot render either as one screen — that is what the tag
+# scope is for.
+# ---------------------------------------------------------------------------
+
+
+def _roadmap_fake() -> TaskFakeLithosClient:
+    """A corpus where one tag spans two projects, with an untagged row in each.
+
+    Every pairing the sections need is present: ready/stale/completed rows both
+    inside and outside the tag, so a section that ignored the filter would show
+    a row this fixture can name.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks = [
+        TaskRecord(
+            id="loom-ready",
+            title="Loom roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-loom", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="lens-ready",
+            title="Lens roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-lens", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="loom-offscope",
+            title="Loom side quest",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-loom",),
+        ),
+        TaskRecord(
+            id="lens-stale",
+            title="Stale roadmap item",
+            status="open",
+            created_by="planner",
+            # Old enough to fire the stale-open rule: this row is how the
+            # Needs-attention section is observable under the tag filter.
+            created_at="2025-01-01T10:00:00+00:00",
+            tags=("project:lithos-lens", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="lens-stale-offscope",
+            title="Stale side quest",
+            status="open",
+            created_by="planner",
+            created_at="2025-01-01T10:00:00+00:00",
+            tags=("project:lithos-lens",),
+        ),
+        TaskRecord(
+            id="loom-done",
+            title="Done roadmap item",
+            status="completed",
+            created_by="worker",
+            created_at="2026-04-20T10:00:00+00:00",
+            resolved_at="2026-04-22T10:00:00+00:00",
+            tags=("project:lithos-loom", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="loom-done-offscope",
+            title="Done side quest",
+            status="completed",
+            created_by="worker",
+            created_at="2026-04-20T10:00:00+00:00",
+            resolved_at="2026-04-22T10:00:00+00:00",
+            tags=("project:lithos-loom",),
+        ),
+    ]
+    fake.ready_ids = {
+        "loom-ready",
+        "lens-ready",
+        "loom-offscope",
+        "lens-stale",
+        "lens-stale-offscope",
+    }
+    return fake
+
+
+def test_tag_filter_scopes_every_section_across_projects(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Acceptance: ``?tag=roadmap-2026-08`` shows tasks from at least two
+    different projects in ONE view, and every section respects it."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    # Two different projects, one screen — the whole point of the tag scope.
+    assert "Loom roadmap item" in text
+    assert "Lens roadmap item" in text
+    assert 'href="/tasks?since=2026-04-01&tag=project%3Alithos-loom"' in text
+    assert 'href="/tasks?since=2026-04-01&tag=project%3Alithos-lens"' in text
+    # Needs attention and Completed are scoped by the same predicate…
+    assert "Stale roadmap item" in text
+    assert "Done roadmap item" in text
+    # …and every untagged row is out of scope, in every section.
+    assert "Loom side quest" not in text
+    assert "Stale side quest" not in text
+    assert "Done side quest" not in text
+    # The board says it is a slice rather than claiming system-wide health.
+    assert "data-attention-scoped" not in text  # the attention list is non-empty
+    assert "All systems healthy" not in text
+
+
+def test_tag_filter_matches_tags_exactly(lithos_lens_config_env: Path) -> None:
+    """Exact match, not prefix: ``roadmap-2026-08`` must not drag in
+    ``roadmap-2026-08-stretch`` (a neighbouring month's convention would
+    otherwise leak into the committed set)."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="stretch",
+            title="Stretch roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", "roadmap-2026-08-stretch"),
+        )
+    )
+    fake.ready_ids.add("stretch")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Loom roadmap item" in response.text
+    assert "Stretch roadmap item" not in response.text
+
+
+def test_unknown_tag_renders_the_all_clear_empty_state_not_an_error(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Acceptance: a tag nothing carries is an empty view, not a failure. The
+    all-clear is the SCOPED one — every read landed, but the board is a slice,
+    so it must not make the system-wide "All systems healthy" claim."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=loom-candidate&since=2026-04-01")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "banner-warning" not in text
+    assert "data-attention-scoped" in text
+    assert "Nothing needs attention in this view." in text
+    assert "No ready tasks match these filters." in text
+    # The empty-corpus panel would misdescribe the cause: Lithos answered with
+    # rows, the filter hid them.
+    assert 'data-empty-state="window"' not in text
+    assert "Loom roadmap item" not in text
+
+
+def test_tag_filter_composes_with_project_agent_and_epic_scope(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The tag scope narrows an already-scoped board rather than replacing it:
+    tag AND project AND agent AND the ``?epic=`` descendants."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="epic-1",
+            title="Roadmap epic",
+            status="open",
+            created_by="planner",
+            created_at=_ago(hours=2),
+            task_type="epic",
+        )
+    )
+    fake.children["epic-1"] = ["loom-ready", "loom-offscope", "lens-ready"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        scoped = client.get("/tasks?epic=epic-1&tag=roadmap-2026-08&since=2026-04-01")
+        narrowed = client.get(
+            "/tasks?epic=epic-1&tag=roadmap-2026-08&project=lithos-loom"
+            "&agent=planner&since=2026-04-01"
+        )
+
+    assert scoped.status_code == 200
+    # Inside the epic AND carrying the tag.
+    assert "Loom roadmap item" in scoped.text
+    assert "Lens roadmap item" in scoped.text
+    # In the epic but untagged; tagged but outside the epic.
+    assert "Loom side quest" not in scoped.text
+    assert "Stale roadmap item" not in scoped.text
+
+    assert narrowed.status_code == 200
+    assert "Loom roadmap item" in narrowed.text
+    # Same epic and tag, wrong project.
+    assert "Lens roadmap item" not in narrowed.text
+
+
+def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The tag scope is otherwise invisible: a cross-project tag names no
+    project, and the row chips only name each row's own tags. The chip says
+    what the board is scoped to and links to the same board without it,
+    keeping every other filter."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?project=lithos-loom&tag=roadmap-2026-08&tag=loom-candidate"
+            "&agent=planner&since=01/04/2026"
+        )
+        css = client.get("/static/lens.css")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    chips = text.split("data-active-filters")[1].split("</section>")[0]
+    assert 'data-active-filter-tag="roadmap-2026-08"' in chips
+    assert 'data-active-filter-tag="loom-candidate"' in chips
+    # Clearing one chip keeps the other tag and every other live filter.
+    assert (
+        'href="/tasks?project=lithos-loom&agent=planner'
+        '&since=01%2F04%2F2026&tag=loom-candidate"'
+    ) in chips
+    assert (
+        'href="/tasks?project=lithos-loom&agent=planner'
+        '&since=01%2F04%2F2026&tag=roadmap-2026-08"'
+    ) in chips
+    # The chip sits with the filter surfaces, above the board it describes…
+    assert text.index("data-active-filters") < text.index('class="task-board"')
+    # …and reads as the interactive chip it is, rather than unstyled text.
+    assert ".active-filter-chip {" in css.text
+
+
+def test_long_tag_filters_the_board_instead_of_being_dropped(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-001): a tag longer than any ceiling Lens might
+    invent is still a VALID Lithos tag — the tool schema sets no ``maxLength``
+    — so ``?tag=<it>`` must filter to it.
+
+    A round-2 length ceiling dropped the term and rendered the whole unfiltered
+    board with no chip: strictly worse than an error, because the operator saw
+    unrelated rows under chrome that claimed a scope was applied.
+    """
+    long_tag = "roadmap-" + "x" * 200
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="long-tagged",
+            title="Long tagged item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", long_tag),
+        )
+    )
+    fake.ready_ids.add("long-tagged")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?tag={long_tag}&since=2026-04-01")
+
+    assert response.status_code == 200
+    # The predicate is applied, not discarded…
+    assert "Long tagged item" in response.text
+    assert "Loom roadmap item" not in response.text
+    # …and the board says it is scoped.
+    assert "data-active-filters" in response.text
+    assert "All systems healthy" not in response.text
+
+
+def test_every_requested_tag_term_narrows_the_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-001): a count ceiling weakened an N-term AND to
+    its first N-1 terms, so rows missing the dropped term showed as matches."""
+    terms = [f"term-{i}" for i in range(MAX_FILTER_TAG_CHIPS + 8)]
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="all-terms",
+            title="Carries every term",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=tuple(terms),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="missing-last",
+            title="Missing the last term",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            # Every term but the final one: a board that honoured only the
+            # first N would show this row as a match.
+            tags=tuple(terms[:-1]),
+        )
+    )
+    fake.ready_ids.update({"all-terms", "missing-last"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        query = urlencode([("tag", term) for term in terms] + [("since", "2026-04-01")])
+        response = client.get(f"/tasks?{query}")
+
+    assert response.status_code == 200
+    assert "Carries every term" in response.text
+    assert "Missing the last term" not in response.text
+
+
+def test_chip_strip_caps_what_it_draws_but_says_the_rest_still_apply(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The strip is quadratic in tag count, so it stops drawing chips — but the
+    tags it does not draw are still filtering, and the strip has to say so or
+    the board under-reports its own scope."""
+    terms = [f"term-{i}" for i in range(MAX_FILTER_TAG_CHIPS + 5)]
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        query = urlencode([("tag", term) for term in terms] + [("since", "2026-04-01")])
+        response = client.get(f"/tasks?{query}")
+
+    assert response.status_code == 200
+    assert response.text.count("data-active-filter-tag=") == MAX_FILTER_TAG_CHIPS
+    assert "and 5 more tags, also applied" in response.text
+    # Undrawn terms still filter: nothing carries them, so the board is empty.
+    assert "Loom roadmap item" not in response.text
+
+
+@pytest.mark.parametrize("key", ["tag", "status", "epic", "since", "project", "agent"])
+def test_oversized_filter_query_is_refused_not_silently_widened(
+    lithos_lens_config_env: Path, key: str
+) -> None:
+    """Regression (security/f-001, security/f-003): every filter is re-emitted
+    into each generated URL — the summary cards, a detail link per row, a tag
+    link per tag per row — so the response echoes the query string
+    O(rows x tags) times. On a 400-row board a 58 KB ``?status=`` rendered a
+    116 MB body (~2000x) and 34 KB of ``?tag=`` rendered 499 MB, against a
+    single-worker event loop.
+
+    Bounding the REQUEST bounds every echo at once. It is refused rather than
+    trimmed: dropping filter terms would widen the board (correctness/f-001).
+    """
+    fake = _roadmap_fake()
+    oversized = "x" * (MAX_FILTER_QUERY_BYTES + 1)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        baseline = client.get("/tasks?since=2026-04-01")
+        response = client.get("/tasks", params={key: oversized})
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert "Filter too large to apply" in response.text
+    # No board is rendered, so no row can leak past the filter that was refused.
+    assert "data-task-group" not in response.text
+    assert "Loom roadmap item" not in response.text
+    # The offending value is not echoed back — reflecting it is the whole bug.
+    assert oversized not in response.text
+    assert len(response.text) < len(baseline.text)
+
+
+@pytest.mark.parametrize(
+    ("label", "char", "encoded_per_char"),
+    [
+        # One character, several encoded sizes. urlencode emits quote_plus
+        # output, so the guard has to count THAT, not code points.
+        ("reserved-ascii", "%", 3),
+        ("cjk", "\u6f22", 9),
+        ("astral", "\U0001f600", 12),
+    ],
+)
+def test_oversized_filter_is_measured_in_the_bytes_it_emits(
+    lithos_lens_config_env: Path, label: str, char: str, encoded_per_char: int
+) -> None:
+    """Regression (security/f-004): the ceiling used to count CODE POINTS while
+    ``urlencode`` emits percent-encoded BYTES, so a value at the character
+    budget could emit up to 12x it and sail through.
+
+    Measured on a 400-row board: 1,018 astral characters scored 1,018 against a
+    1,024 budget, emitted 12,216 bytes into every generated link, and rendered
+    25 MB — 9.8x the ASCII worst case the budget was set for.
+    """
+    fake = _roadmap_fake()
+    # Comfortably inside the budget by character count, over it once encoded —
+    # exactly the shape that slipped through.
+    value = char * (MAX_FILTER_QUERY_BYTES // encoded_per_char + 10)
+    assert len(value) < MAX_FILTER_QUERY_BYTES, "must pass a code-point count"
+    assert len(quote_plus(value)) > MAX_FILTER_QUERY_BYTES
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"epic": value})
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert "data-task-group" not in response.text
+    assert value not in response.text
+
+
+def test_non_ascii_filter_within_the_budget_is_still_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The ceiling counts encoded bytes, which is stricter — so it has to be
+    checked from the other side too: a real non-ASCII tag is not collateral."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="accented",
+            title="Accented tag item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", "área:donn\u00e9es"),
+        )
+    )
+    fake.ready_ids.add("accented")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params={"tag": "área:donn\u00e9es", "since": "2026-04-01"}
+        )
+
+    assert response.status_code == 200
+    assert "data-active-filters" in response.text
+    assert "Accented tag item" in response.text
+
+
+def test_filters_are_parsed_once_per_request_not_once_per_link(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (security/f-005): the preserved-filter scan runs per generated
+    URL — one per row, one per tag per row, plus the cards and epic chips — and
+    each scan walks EVERY query param, including unrecognised ones that score
+    nothing against the byte budget. That made a request cost O(params x links):
+    5,000 junk params took 0.69s on a 400-row board against 0.04s clean.
+
+    Counted rather than timed, so it cannot go flaky: the query string is
+    scanned a fixed number of times per request, not once per link.
+    """
+    scans = 0
+    original = QueryParams.multi_items
+
+    def counting(self: QueryParams) -> Any:
+        nonlocal scans
+        scans += 1
+        return original(self)
+
+    monkeypatch.setattr(QueryParams, "multi_items", counting)
+
+    fake = _roadmap_fake()
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    assert response.status_code == 200
+    links = response.text.count('href="/tasks')
+    # The board really does render many filter-carrying links off this request…
+    assert links > 10
+    # …and they share one scan (plus the route's own parse_filters read).
+    assert scans <= 3, f"{scans} query-string scans for {links} generated links"
+
+
+@pytest.mark.parametrize(
+    "path", ["/tasks", "/tasks/open-claimed", "/tasks/open-claimed/findings"]
+)
+def test_oversized_filters_reflect_nowhere_on_any_tasks_route(
+    lithos_lens_config_env: Path, path: str
+) -> None:
+    """The amplification lives in ``_preserved_filter_params``, which every
+    tasks route shares — so the guard belongs there, not on one route. The
+    refusal page still renders its own links, and none of them may carry the
+    value the page is refusing to reflect."""
+    fake = TaskFakeLithosClient()
+    oversized = "x" * (MAX_FILTER_QUERY_BYTES + 1)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(path, params={"status": oversized})
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert oversized not in response.text
+
+
+def test_filter_query_at_the_exact_size_ceiling_is_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-002): the ceiling rejects only what is LARGER
+    than it — the banner tells the operator so — and a query of exactly
+    ``MAX_FILTER_QUERY_BYTES`` was being refused anyway.
+
+    The cause was estimating the separators: two bytes per pair, when
+    ``urlencode`` writes "=" per pair but "&" only BETWEEN pairs, so every
+    non-empty filter scored one byte high. The old boundary test hid it by
+    asserting on a 1,019-byte value — a 1,023-byte query it called "exactly at
+    the ceiling".
+
+    The arithmetic is pinned here as well as the behaviour, so this test cannot
+    quietly drift off the boundary again.
+    """
+    fake = _roadmap_fake()
+    at_ceiling = "x" * (MAX_FILTER_QUERY_BYTES - len("tag="))
+    over_ceiling = at_ceiling + "x"
+    assert len(urlencode([("tag", at_ceiling)])) == MAX_FILTER_QUERY_BYTES
+    assert len(urlencode([("tag", over_ceiling)])) == MAX_FILTER_QUERY_BYTES + 1
+
+    with _client(lithos_lens_config_env, fake) as client:
+        served = client.get("/tasks", params={"tag": at_ceiling})
+        refused = client.get("/tasks", params={"tag": over_ceiling})
+
+    assert served.status_code == 200
+    assert "data-filter-rejected" not in served.text
+    assert "data-active-filters" in served.text
+    assert refused.status_code == 400
+    assert "data-filter-rejected" in refused.text
+
+
+def test_multi_key_filter_query_at_the_exact_size_ceiling_is_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same boundary with two pairs, which is where the "&"-only-between
+    rule actually bites: an estimate that charged every pair for both
+    separators was over by one per additional pair."""
+    fake = _roadmap_fake()
+    # "agent=" + "&" + "tag=" + the two values == the ceiling exactly.
+    agent = "a" * 20
+    tag = "x" * (MAX_FILTER_QUERY_BYTES - len("agent=") - 1 - len("tag=") - len(agent))
+    pairs = [("agent", agent), ("tag", tag)]
+    assert len(urlencode(pairs)) == MAX_FILTER_QUERY_BYTES
+
+    with _client(lithos_lens_config_env, fake) as client:
+        over = [("agent", agent), ("tag", tag + "x")]
+        served = client.get(f"/tasks?{urlencode(pairs)}")
+        refused = client.get(f"/tasks?{urlencode(over)}")
+
+    assert served.status_code == 200
+    assert "data-filter-rejected" not in served.text
+    assert refused.status_code == 400
+
+
+def test_rejection_logs_the_route_template_not_the_raw_path(
+    lithos_lens_config_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression (security/f-006): ``task_id`` is a free path segment bounded
+    only by the URL length limit, and NOT by ``MAX_FILTER_QUERY_BYTES``, which
+    measures the query string. Logging the concrete path let a 50 KB request
+    write a 50,213-byte log line while the response stayed correctly bounded at
+    1,507 B — a persistent sink for a transient input, on a container whose
+    json-file driver has no size cap.
+    """
+    fake = TaskFakeLithosClient()
+    long_id = "A" * 20000
+
+    with (
+        _client(lithos_lens_config_env, fake) as client,
+        caplog.at_level(logging.WARNING, logger="lithos_lens.web"),
+    ):
+        response = client.get(
+            f"/tasks/{long_id}",
+            params={"epic": "y" * (MAX_FILTER_QUERY_BYTES + 1)},
+        )
+
+    assert response.status_code == 400
+    record = next(
+        item
+        for item in caplog.records
+        if item.getMessage() == "filter query rejected as oversized"
+    )
+    # The template, which is what the field name has always implied.
+    assert getattr(record, "lens_route", None) == "/tasks/{task_id}"
+    # And the emitted line is bounded, whatever the request length.
+    emitted = JsonFormatter().format(record)
+    assert long_id[:200] not in emitted
+    assert len(emitted) < 1000
+
+
+@pytest.mark.parametrize(
+    ("label", "literal"),
+    [
+        # The vendored Lithos schema types a tag as a bare "string" — no
+        # pattern, no length, no excluded characters — so all of these are
+        # ordinary tag content, and an exact-match filter has to name them.
+        ("comma", "customer,2"),
+        ("leading-and-trailing-space", " urgent "),
+        ("inner-space", "needs review"),
+        ("plus", "a+b"),
+        ("percent", "50%-done"),
+    ],
+)
+def test_literal_tags_are_selectable_end_to_end(
+    lithos_lens_config_env: Path, label: str, literal: str
+) -> None:
+    """Regression (correctness/f-004): ``?tag=`` claimed exact match but its URL
+    vocabulary could not represent the tag domain.
+
+    Every value was comma-split and stripped, so the real tag ``customer,2``
+    became ``customer`` AND ``2`` and matched nothing, and `` urgent `` was
+    rewritten to ``urgent`` — which matched a DIFFERENT task. A filter that
+    quietly answers a question nobody asked is worse than one that finds
+    nothing.
+
+    Follows the row's own tag link too, so the round trip is pinned end to end
+    rather than just the parse.
+    """
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="literal",
+            title="Literally tagged task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(literal,),
+        )
+    )
+    # The value the OLD splitting/stripping would have collapsed this to. When
+    # that differs from the literal, a task carrying it is the decoy: the old
+    # behaviour matched this one instead of the one that was asked for.
+    collapsed = tuple(part.strip() for part in literal.split(",") if part.strip())
+    fake.ready_ids.add("literal")
+    if collapsed != (literal,):
+        fake.tasks.append(
+            TaskRecord(
+                id="near-miss",
+                title="Near miss task",
+                status="open",
+                created_by="planner",
+                created_at=_ago(minutes=20),
+                tags=collapsed,
+            )
+        )
+        fake.ready_ids.add("near-miss")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"tag": literal})
+
+        assert response.status_code == 200
+        assert "Literally tagged task" in response.text
+        # The collapsed value must NOT drag its own task in.
+        if collapsed != (literal,):
+            assert "Near miss task" not in response.text
+
+        # The row's tag chip links back to this same filtered board.
+        text = unescape(response.text)
+        row = text.split("data-task-row")[1]
+        href = re.findall(r'class="tag-chip[^"]*" href="([^"]+)"', row)[0]
+        followed = client.get(href)
+
+    assert followed.status_code == 200
+    assert "Literally tagged task" in followed.text
+
+
+def test_empty_tag_is_a_literal_scope_end_to_end(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-004): ``""`` is a tag a task can validly carry —
+    the vendored schema sets no ``minLength`` — so ``?tag=`` is the empty-tag
+    scope, not the absence of a filter.
+
+    Reading blank as absence returned the whole unfiltered board for an
+    exact-match request. The decoys below are what makes that visible: an
+    ordinarily-tagged task and an untagged one, neither of which may appear.
+    """
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="empty-tagged",
+            title="Empty tagged task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("",),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="untagged",
+            title="Untagged decoy task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(),
+        )
+    )
+    fake.ready_ids.update({"empty-tagged", "untagged"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=")
+
+        assert response.status_code == 200
+        # Only the task carrying the empty tag — an unfiltered board would show
+        # every one of these.
+        assert "Empty tagged task" in response.text
+        assert "Untagged decoy task" not in response.text
+        assert "Loom roadmap item" not in response.text
+
+        text = unescape(response.text)
+        # The scope is named, not silently applied — and not drawn as a blank
+        # pill, which would read as a rendering bug.
+        assert 'data-active-filter-tag=""' in text
+        assert "(empty tag)" in text
+
+        # Round-trips through the row's own tag link…
+        row = text.split("data-task-row")[1]
+        row_href = re.findall(r'class="tag-chip[^"]*" href="([^"]+)"', row)[0]
+        followed = client.get(row_href)
+
+        # …and through the chip's clear link.
+        clear_href = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=""', text)[
+            0
+        ]
+        cleared = client.get(clear_href)
+
+    assert followed.status_code == 200
+    assert "Empty tagged task" in followed.text
+    assert "Untagged decoy task" not in followed.text
+
+    assert cleared.status_code == 200
+    assert "data-active-filters" not in cleared.text
+    # Clearing the only tag really does widen back to the whole board.
+    assert "Loom roadmap item" in cleared.text
+
+
+def test_blank_add_tag_box_does_not_become_an_empty_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The filter bar's box is a separate parameter, so the blank an HTML form
+    submits on every search cannot be read as the empty-tag scope — which is
+    what lets ``tag`` stay fully literal.
+
+    This is the ordinary UI path: submit the bar with nothing typed.
+    """
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("status", "open"), ("add_tag", ""), ("agent", "")]
+        )
+
+    assert response.status_code == 200
+    # No tag filter was applied…
+    assert "data-active-filters" not in response.text
+    # …so the board is the whole open board, not an empty-tag scope.
+    assert "Loom roadmap item" in response.text
+
+
+def test_add_tag_box_folds_into_the_tag_set_and_stops_propagating(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A tag added through the box becomes an ordinary ``tag`` on the way out.
+
+    Generated links carry the canonical list, so the "add" does not re-apply on
+    every subsequent click — and the empty tag survives navigation with it.
+    """
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("tag", ""), ("add_tag", "roadmap-2026-08")]
+        )
+
+    assert response.status_code == 200
+    text = unescape(response.text)
+    detail_href = re.findall(r'class="task-title" href="([^"]+)"', text)
+    chip_hrefs = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=', text)
+    # Both tags are active…
+    assert text.count("data-active-filter-tag=") == 2
+    # …and every generated link re-emits them as canonical `tag` pairs only.
+    for href in [*detail_href, *chip_hrefs]:
+        assert "add_tag" not in href
+
+
+def test_repeated_tag_params_and_together_and_commas_stay_literal(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The AND spelling is the repeated parameter. ``?tag=a,b`` is ONE tag —
+    the two must not be confusable, which is the whole point of dropping the
+    comma convenience for tags."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="two-tags",
+            title="Has a and b",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("a", "b"),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="one-tag",
+            title="Has the literal a,b",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("a,b",),
+        )
+    )
+    fake.ready_ids.update({"two-tags", "one-tag"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        both = client.get("/tasks", params=[("tag", "a"), ("tag", "b")])
+        literal = client.get("/tasks", params={"tag": "a,b"})
+
+    assert "Has a and b" in both.text
+    assert "Has the literal a,b" not in both.text
+
+    assert "Has the literal a,b" in literal.text
+    assert "Has a and b" not in literal.text
+
+
+def test_filter_bar_round_trips_multiple_tags_without_joining_them(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Submitting the filter bar must not collapse an active multi-tag scope
+    into one comma-joined literal. The active tags ride as hidden ``tag``
+    inputs — the same convention the epic scope already uses — so a plain
+    form submit re-sends exactly what was active."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("tag", "roadmap-2026-08"), ("tag", "loom-candidate")]
+        )
+
+    assert response.status_code == 200
+    bar = response.text.split('class="filter-bar"')[1].split("</form>")[0]
+    assert '<input type="hidden" name="tag" value="roadmap-2026-08">' in bar
+    assert '<input type="hidden" name="tag" value="loom-candidate">' in bar
+    # …and the visible box adds one more rather than re-submitting a join.
+    assert 'value="roadmap-2026-08,loom-candidate"' not in bar
+
+
+def test_chip_clear_link_from_a_near_budget_tag_query_still_works(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-003): every chip advertises itself as a clear
+    control, so following one has to work for any request the board accepted.
+
+    It did not: the clear link re-emitted the tags in a spelling that could be
+    larger than the accepted request, so a near-budget board rendered chips
+    that 400 when clicked. Tags now have ONE spelling, so a clear link is a
+    strict subset of the request that was already accepted.
+
+    Follows the link rather than inspecting it, which is the only way this
+    shows up: a small two-tag href cannot cross the ceiling.
+    """
+    tags = [f"roadmap-2026-{i:02d}" for i in range(51)]
+    query = urlencode([("tag", tag) for tag in tags])
+    # Near the budget and inside it: the request the board must accept, and
+    # whose clear links must therefore also be accepted.
+    assert 900 < len(query) <= MAX_FILTER_QUERY_BYTES
+
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="carries-all",
+            title="Carries every filter tag",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(*tags, "project:influx"),
+        )
+    )
+    fake.ready_ids.add("carries-all")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?{query}")
+        assert board.status_code == 200
+        assert "Carries every filter tag" in board.text
+
+        text = unescape(board.text)
+        href = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=', text)[0]
+        # The link the chip advertises is itself within the budget…
+        assert len(href.split("?", 1)[1]) <= MAX_FILTER_QUERY_BYTES
+        cleared = client.get(href)
+
+    # …and following it shows the same board minus that one tag.
+    assert cleared.status_code == 200
+    assert "data-filter-rejected" not in cleared.text
+    assert "Carries every filter tag" in cleared.text
+    remaining = re.findall(r'data-active-filter-tag="([^"]+)"', unescape(cleared.text))
+    assert tags[0] not in remaining
+    assert tags[1] in remaining
+
+
+def test_dashboard_debug_log_does_not_carry_the_raw_query_pairs(
+    lithos_lens_config_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression (security/f-007): params outside ``_PRESERVED_FILTER_KEYS``
+    score zero against ``MAX_FILTER_QUERY_BYTES``, so the raw pair list is
+    unbounded attacker-controlled data — a 47 KB junk query wrote 72 KB of log.
+    Under the container's size-capped rotation that is cheap eviction of the
+    log history, which on a service with no authentication is the only forensic
+    record there is.
+    """
+    fake = _roadmap_fake()
+    junk = [(f"j{i}", "x" * 5) for i in range(4000)]
+
+    with (
+        _client(lithos_lens_config_env, fake) as client,
+        caplog.at_level(logging.DEBUG, logger="lithos_lens.web"),
+    ):
+        response = client.get("/tasks", params=[*junk, ("tag", "roadmap-2026-08")])
+
+    assert response.status_code == 200
+    record = next(
+        item
+        for item in caplog.records
+        if item.getMessage() == "tasks dashboard filters parsed"
+    )
+    # The bounded count replaces the unbounded list…
+    assert getattr(record, "query_param_count", None) == len(junk) + 1
+    assert not hasattr(record, "query_items")
+    # …so the emitted line stays small whatever the request carried, and the
+    # junk never reaches it.
+    emitted = JsonFormatter().format(record)
+    assert "j3999" not in emitted
+    assert len(emitted) < 1000
+    # The diagnostic value — the PARSED filters — is still there.
+    assert getattr(record, "tags", None) == ["roadmap-2026-08"]
+
+
+def test_no_active_filter_chip_without_a_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?project=lithos-loom&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "data-active-filters" not in response.text
 
 
 def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
