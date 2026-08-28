@@ -114,28 +114,45 @@ def test_parse_filters_still_splits_the_constrained_vocabularies() -> None:
     assert filters.statuses == ("open", "completed")
 
 
-def test_parse_filters_ignores_a_blank_tag() -> None:
-    """The filter bar submits ``tag=`` on every search, so blank has to mean
-    "no tag filter" rather than "tasks carrying the empty tag" — which would
-    empty the board on the UI's most ordinary interaction. The empty tag is the
-    one value this vocabulary cannot name, and that is a deliberate trade."""
+def test_parse_filters_treats_the_empty_tag_as_a_literal_tag() -> None:
+    """Regression (correctness/f-004): the vendored Lithos schema types a tag as
+    a bare string with no ``minLength``, so ``""`` is a tag a task can validly
+    carry and ``?tag=`` is the empty-tag scope.
+
+    Reading it as "no filter" — which an earlier round did, and which its test
+    codified — silently returned the whole unfiltered board for an exact-match
+    request, the same class of failure as splitting ``customer,2``.
+    """
     filters = parse_filters(
         [("tag", ""), ("tag", "roadmap-2026-08")],
         default_days=30,
     )
 
-    assert filters.tags == ("roadmap-2026-08",)
+    assert filters.tags == ("", "roadmap-2026-08")
 
 
-def test_parse_filters_collapses_repeated_tags() -> None:
-    """``all(tag in task.tags …)`` is idempotent, so a repeat is a redundant
-    chip and a wasted comparison per row, never a different result."""
+def test_parse_filters_ignores_a_blank_add_tag_box() -> None:
+    """The filter bar's text input is its OWN parameter, so the blank it
+    submits on every search cannot be confused with the literal empty tag.
+
+    That separation is the whole reason ``tag`` can stay fully literal: one
+    control means "nothing typed", the other means a value.
+    """
     filters = parse_filters(
-        [("tag", "roadmap-2026-08"), ("tag", "roadmap-2026-08")],
+        [("tag", "roadmap-2026-08"), ("add_tag", "")],
         default_days=30,
     )
 
     assert filters.tags == ("roadmap-2026-08",)
+
+
+def test_parse_filters_folds_the_add_tag_box_into_the_tag_set() -> None:
+    filters = parse_filters(
+        [("tag", "roadmap-2026-08"), ("add_tag", "loom-candidate")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("roadmap-2026-08", "loom-candidate")
 
 
 def test_parse_filters_carries_the_configured_convention() -> None:

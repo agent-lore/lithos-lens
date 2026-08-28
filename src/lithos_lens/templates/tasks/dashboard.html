@@ -153,18 +153,24 @@
             {% endfor %}
           </datalist>
         </label>
-        {# One "tag" parameter is one LITERAL tag (a comma is tag content, not a
-           separator), so the active tags cannot be round-tripped through a
-           single comma-joined text value — "a,b" would come back as one tag
-           named "a,b". They ride as hidden inputs instead, the same way the
-           epic scope does below, and the box adds one more. What is active is
-           shown by the chip strip under this bar, which also removes them. #}
+        {# One "tag" parameter is one LITERAL tag — a comma is tag content, not a
+           separator, and "" is a real tag — so the active tags cannot be
+           round-tripped through a single comma-joined text value ("a,b" would
+           come back as one tag named "a,b"). They ride as hidden inputs
+           instead, the same way the epic scope does below.
+
+           The box that ADDS one is a separate parameter on purpose: an HTML
+           text input submits on every search whether or not it was typed in,
+           so a blank "tag" would be indistinguishable from the empty-tag
+           filter. Blank "add_tag" means "nothing typed"; blank "tag" means the
+           empty tag. What is active is shown by the chip strip under this bar,
+           which also removes them. #}
         {% for tag in dashboard.filters.tags %}
           <input type="hidden" name="tag" value="{{ tag }}">
         {% endfor %}
         <label>
           Tag
-          <input type="text" name="tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
+          <input type="text" name="add_tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
         </label>
         <label>
           Agent (creator or claimer)
@@ -217,7 +223,10 @@
                href="{{ task_tag_clear_url(request, dashboard.filters.tags, tag) }}"
                data-active-filter-tag="{{ tag }}"
                aria-label="Clear the {{ tag }} filter">
-              <span class="active-filter-chip-label">{{ tag | format_tag }}</span>
+              {# The empty tag is a valid Lithos tag and a real scope, but it
+                 has no characters to show — an unlabelled pill would read as a
+                 rendering bug. Named rather than drawn blank. #}
+              <span class="active-filter-chip-label">{{ tag | format_tag if tag else "(empty tag)" }}</span>
               <span class="active-filter-chip-clear" aria-hidden="true">&times;</span>
             </a>
           {% endfor %}

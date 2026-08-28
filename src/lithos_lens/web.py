@@ -47,11 +47,15 @@ from lithos_lens.task_detail import (
     load_task_detail,
 )
 from lithos_lens.tasks import (
+    ADD_TAG_FILTER_KEY,
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
+    TAG_FILTER_KEY,
+    TAG_FILTER_KEYS,
     default_since,
     format_display_date,
     format_tag,
+    honored_tags,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -552,7 +556,15 @@ async def _render_tasks(
 # query from this allowlist, so a retired param (e.g. the pre-T1
 # ``claimed_state``) carried by a legacy bookmark degrades on arrival instead
 # of propagating through tag / detail / back-link navigation forever.
-_PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
+_PRESERVED_FILTER_KEYS = (
+    "status",
+    "project",
+    "agent",
+    "since",
+    TAG_FILTER_KEY,
+    ADD_TAG_FILTER_KEY,
+    "epic",
+)
 
 
 @dataclass(frozen=True)
@@ -587,15 +599,35 @@ def _parse_preserved_filters(request: Request) -> _RequestFilters:
     documented — and displayed to the operator — as rejecting only what is
     larger. Measuring the real thing cannot drift from it.
 
-    Empty-valued keys cost nothing because they are not emitted: this is a
-    bound on what the response reflects, not on what the request said.
+    Measured over the request AS IT ARRIVED, then emitted in canonical form.
+    The two differ only for tags: ``add_tag`` (the filter bar's text box) is
+    folded into the ``tag`` list once and never re-emitted, so a tag added
+    through the form propagates through navigation as an ordinary ``tag`` pair
+    instead of an "add" that would re-apply on every click. Canonicalising can
+    only shrink the query — ``add_tag`` is four characters longer than ``tag``,
+    and de-duplication only removes — so measuring the arrival form keeps the
+    ceiling conservative.
+
+    Empty values are dropped for every key EXCEPT ``tag``, where the empty
+    string is a literal tag (``?tag=`` is the empty-tag scope) and dropping it
+    would silently widen the board to everything.
     """
-    params = [
+    raw = [
         (key, value)
         for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS and value
+        if key in _PRESERVED_FILTER_KEYS
     ]
-    if len(urlencode(params)) > MAX_FILTER_QUERY_BYTES:
+    params = [
+        (key, value) for key, value in raw if key not in TAG_FILTER_KEYS and value
+    ]
+    params.extend(
+        (TAG_FILTER_KEY, tag)
+        for tag in honored_tags(
+            [value for key, value in raw if key == TAG_FILTER_KEY],
+            added=[value for key, value in raw if key == ADD_TAG_FILTER_KEY],
+        )
+    )
+    if len(urlencode(raw)) > MAX_FILTER_QUERY_BYTES:
         # An oversized request preserves NOTHING, so the guarantee holds at the
         # choke point rather than per template: the refusal page still renders
         # its own chrome (the "back to tasks" link), and every URL on it must

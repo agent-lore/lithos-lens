@@ -1364,6 +1364,126 @@ def test_literal_tags_are_selectable_end_to_end(
     assert "Literally tagged task" in followed.text
 
 
+def test_empty_tag_is_a_literal_scope_end_to_end(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-004): ``""`` is a tag a task can validly carry —
+    the vendored schema sets no ``minLength`` — so ``?tag=`` is the empty-tag
+    scope, not the absence of a filter.
+
+    Reading blank as absence returned the whole unfiltered board for an
+    exact-match request. The decoys below are what makes that visible: an
+    ordinarily-tagged task and an untagged one, neither of which may appear.
+    """
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="empty-tagged",
+            title="Empty tagged task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("",),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="untagged",
+            title="Untagged decoy task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(),
+        )
+    )
+    fake.ready_ids.update({"empty-tagged", "untagged"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=")
+
+        assert response.status_code == 200
+        # Only the task carrying the empty tag — an unfiltered board would show
+        # every one of these.
+        assert "Empty tagged task" in response.text
+        assert "Untagged decoy task" not in response.text
+        assert "Loom roadmap item" not in response.text
+
+        text = unescape(response.text)
+        # The scope is named, not silently applied — and not drawn as a blank
+        # pill, which would read as a rendering bug.
+        assert 'data-active-filter-tag=""' in text
+        assert "(empty tag)" in text
+
+        # Round-trips through the row's own tag link…
+        row = text.split("data-task-row")[1]
+        row_href = re.findall(r'class="tag-chip[^"]*" href="([^"]+)"', row)[0]
+        followed = client.get(row_href)
+
+        # …and through the chip's clear link.
+        clear_href = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=""', text)[
+            0
+        ]
+        cleared = client.get(clear_href)
+
+    assert followed.status_code == 200
+    assert "Empty tagged task" in followed.text
+    assert "Untagged decoy task" not in followed.text
+
+    assert cleared.status_code == 200
+    assert "data-active-filters" not in cleared.text
+    # Clearing the only tag really does widen back to the whole board.
+    assert "Loom roadmap item" in cleared.text
+
+
+def test_blank_add_tag_box_does_not_become_an_empty_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The filter bar's box is a separate parameter, so the blank an HTML form
+    submits on every search cannot be read as the empty-tag scope — which is
+    what lets ``tag`` stay fully literal.
+
+    This is the ordinary UI path: submit the bar with nothing typed.
+    """
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("status", "open"), ("add_tag", ""), ("agent", "")]
+        )
+
+    assert response.status_code == 200
+    # No tag filter was applied…
+    assert "data-active-filters" not in response.text
+    # …so the board is the whole open board, not an empty-tag scope.
+    assert "Loom roadmap item" in response.text
+
+
+def test_add_tag_box_folds_into_the_tag_set_and_stops_propagating(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A tag added through the box becomes an ordinary ``tag`` on the way out.
+
+    Generated links carry the canonical list, so the "add" does not re-apply on
+    every subsequent click — and the empty tag survives navigation with it.
+    """
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("tag", ""), ("add_tag", "roadmap-2026-08")]
+        )
+
+    assert response.status_code == 200
+    text = unescape(response.text)
+    detail_href = re.findall(r'class="task-title" href="([^"]+)"', text)
+    chip_hrefs = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=', text)
+    # Both tags are active…
+    assert text.count("data-active-filter-tag=") == 2
+    # …and every generated link re-emits them as canonical `tag` pairs only.
+    for href in [*detail_href, *chip_hrefs]:
+        assert "add_tag" not in href
+
+
 def test_repeated_tag_params_and_together_and_commas_stay_literal(
     lithos_lens_config_env: Path,
 ) -> None:
