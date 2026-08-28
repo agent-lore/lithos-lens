@@ -5,7 +5,16 @@
 {% block content %}
   <p><a href="{{ tasks_url(request) }}">&larr; Back to tasks</a></p>
 
-  {% if offline %}
+  {% if filter_query_rejected %}
+    {# Refused, not trimmed — see the dashboard's banner for why. #}
+    <section class="banner banner-warning" role="alert" data-filter-rejected>
+      <strong>Filter too large to apply.</strong>
+      <span>
+        The filters in this link exceed the {{ max_filter_query_bytes }}-byte limit.
+        <a href="/tasks">Start again with no filters</a>.
+      </span>
+    </section>
+  {% elif offline %}
     <section class="banner banner-warning" role="status">
       <strong>Lithos is offline or degraded.</strong>
       <span>Task detail is unavailable. Lens is running and will retry on refresh.</span>

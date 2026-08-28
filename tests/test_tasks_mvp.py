@@ -18,7 +18,8 @@ from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
-    MAX_FILTER_TAGS,
+    MAX_FILTER_QUERY_BYTES,
+    MAX_FILTER_TAG_CHIPS,
     MAX_SINCE_LOOKBACK_DAYS,
     AgentRecord,
     ClaimRecord,
@@ -942,62 +943,169 @@ def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
     assert ".active-filter-chip {" in css.text
 
 
-def test_tag_ceiling_bounds_the_reflected_board(
+def test_long_tag_filters_the_board_instead_of_being_dropped(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Regression (security/f-001): ``?tag=`` is attacker-controlled on an
-    unauthenticated GET, and the chip strip reflects it QUADRATICALLY — a chip
-    per tag, each chip's clear link re-emitting every other tag. Unbounded,
-    2,000 tags (a 10 KB query string) rendered a 54 MB body in ~2.6s, blocking
-    single-worker uvicorn for every other operator.
+    """Regression (correctness/f-001): a tag longer than any ceiling Lens might
+    invent is still a VALID Lithos tag — the tool schema sets no ``maxLength``
+    — so ``?tag=<it>`` must filter to it.
 
-    The board must degrade rather than reject (the ``claimed_state``
-    convention): 200, capped chips, and a response that stays the same order of
-    magnitude as an unfiltered one.
+    A round-2 length ceiling dropped the term and rendered the whole unfiltered
+    board with no chip: strictly worse than an error, because the operator saw
+    unrelated rows under chrome that claimed a scope was applied.
+    """
+    long_tag = "roadmap-" + "x" * 200
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="long-tagged",
+            title="Long tagged item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", long_tag),
+        )
+    )
+    fake.ready_ids.add("long-tagged")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?tag={long_tag}&since=2026-04-01")
+
+    assert response.status_code == 200
+    # The predicate is applied, not discarded…
+    assert "Long tagged item" in response.text
+    assert "Loom roadmap item" not in response.text
+    # …and the board says it is scoped.
+    assert "data-active-filters" in response.text
+    assert "All systems healthy" not in response.text
+
+
+def test_every_requested_tag_term_narrows_the_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-001): a count ceiling weakened an N-term AND to
+    its first N-1 terms, so rows missing the dropped term showed as matches."""
+    terms = [f"term-{i}" for i in range(MAX_FILTER_TAG_CHIPS + 8)]
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="all-terms",
+            title="Carries every term",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=tuple(terms),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="missing-last",
+            title="Missing the last term",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            # Every term but the final one: a board that honoured only the
+            # first N would show this row as a match.
+            tags=tuple(terms[:-1]),
+        )
+    )
+    fake.ready_ids.update({"all-terms", "missing-last"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?tag={','.join(terms)}&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Carries every term" in response.text
+    assert "Missing the last term" not in response.text
+
+
+def test_chip_strip_caps_what_it_draws_but_says_the_rest_still_apply(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The strip is quadratic in tag count, so it stops drawing chips — but the
+    tags it does not draw are still filtering, and the strip has to say so or
+    the board under-reports its own scope."""
+    terms = [f"term-{i}" for i in range(MAX_FILTER_TAG_CHIPS + 5)]
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?tag={','.join(terms)}&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert response.text.count("data-active-filter-tag=") == MAX_FILTER_TAG_CHIPS
+    assert "and 5 more tags, also applied" in response.text
+    # Undrawn terms still filter: nothing carries them, so the board is empty.
+    assert "Loom roadmap item" not in response.text
+
+
+@pytest.mark.parametrize("key", ["tag", "status", "epic", "since", "project", "agent"])
+def test_oversized_filter_query_is_refused_not_silently_widened(
+    lithos_lens_config_env: Path, key: str
+) -> None:
+    """Regression (security/f-001, security/f-003): every filter is re-emitted
+    into each generated URL — the summary cards, a detail link per row, a tag
+    link per tag per row — so the response echoes the query string
+    O(rows x tags) times. On a 400-row board a 58 KB ``?status=`` rendered a
+    116 MB body (~2000x) and 34 KB of ``?tag=`` rendered 499 MB, against a
+    single-worker event loop.
+
+    Bounding the REQUEST bounds every echo at once. It is refused rather than
+    trimmed: dropping filter terms would widen the board (correctness/f-001).
     """
     fake = _roadmap_fake()
-    flood = ",".join(f"t{i}" for i in range(2000))
+    oversized = "x" * (MAX_FILTER_QUERY_BYTES + 1)
 
     with _client(lithos_lens_config_env, fake) as client:
         baseline = client.get("/tasks?since=2026-04-01")
-        response = client.get(f"/tasks?tag={flood}&since=2026-04-01")
+        response = client.get("/tasks", params={key: oversized})
 
-    assert response.status_code == 200
-    # One chip per HONOURED tag, and no more.
-    assert response.text.count("data-active-filter-tag=") == MAX_FILTER_TAGS
-    # Tags past the ceiling reach neither the chips nor any chip's clear link.
-    assert "t1999" not in response.text
-    assert "t500" not in response.text
-    # The amplification is gone: the strip's whole contribution is bounded, so
-    # the flooded board stays within a small constant of the unfiltered one
-    # (pre-fix this was ~3,800x).
-    assert len(response.text) < len(baseline.text) * 2
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert "Filter too large to apply" in response.text
+    # No board is rendered, so no row can leak past the filter that was refused.
+    assert "data-task-group" not in response.text
+    assert "Loom roadmap item" not in response.text
+    # The offending value is not echoed back — reflecting it is the whole bug.
+    assert oversized not in response.text
+    assert len(response.text) < len(baseline.text)
 
 
-def test_over_long_tag_is_not_reflected_onto_the_board(
-    lithos_lens_config_env: Path,
+@pytest.mark.parametrize(
+    "path", ["/tasks", "/tasks/open-claimed", "/tasks/open-claimed/findings"]
+)
+def test_oversized_filters_reflect_nowhere_on_any_tasks_route(
+    lithos_lens_config_env: Path, path: str
 ) -> None:
-    """Regression (security/f-002): the chip renders the tag as first-class
-    chrome in a "Scoped to" strip above every section, on a UI with no auth and
-    so no "signed in as" trust cue. An unbounded value let a crafted link paint
-    attacker-authored prose there (a fake outage banner) and displace the board.
-
-    The value is dropped at parse time rather than truncated — a truncated tag
-    is a filter nobody typed — so it is neither matched nor displayed.
-    """
-    fake = _roadmap_fake()
-    injected = "URGENT: agents halted; call +1-555-0100 " + "A" * 5000
+    """The amplification lives in ``_preserved_filter_params``, which every
+    tasks route shares — so the guard belongs there, not on one route. The
+    refusal page still renders its own links, and none of them may carry the
+    value the page is refusing to reflect."""
+    fake = TaskFakeLithosClient()
+    oversized = "x" * (MAX_FILTER_QUERY_BYTES + 1)
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/tasks", params={"tag": injected, "since": "2026-04-01"})
+        response = client.get(path, params={"status": oversized})
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert oversized not in response.text
+
+
+def test_filter_query_at_the_size_ceiling_is_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The bound is a safety ceiling ~9x a rich real filter, not a style rule:
+    a request at the limit is served normally."""
+    fake = _roadmap_fake()
+    # "tag=" plus the value, exactly at the ceiling.
+    tag = "x" * (MAX_FILTER_QUERY_BYTES - len("tag") - 2)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"tag": tag})
 
     assert response.status_code == 200
-    assert "URGENT: agents halted" not in response.text
-    assert "A" * 200 not in response.text
-    # Dropped, not honoured: no chip claims a scope the board is not applying…
-    assert "data-active-filters" not in response.text
-    # …and the board is genuinely unfiltered, which is what the absent chip says.
-    assert "Loom roadmap item" in response.text
+    assert "data-filter-rejected" not in response.text
+    assert "data-active-filters" in response.text
 
 
 def test_no_active_filter_chip_without_a_tag_filter(

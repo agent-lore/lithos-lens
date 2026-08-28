@@ -18,8 +18,6 @@ from lithos_lens.task_filtering import (
     task_projects,
 )
 from lithos_lens.tasks import (
-    MAX_FILTER_TAG_LENGTH,
-    MAX_FILTER_TAGS,
     ClaimRecord,
     TaskFilters,
     TaskRecord,
@@ -66,56 +64,47 @@ def test_parse_filters_collects_repeated_and_comma_separated_projects() -> None:
     assert filters.projects == ("lithos-loom", "ganglion", "influx")
 
 
-def test_parse_filters_caps_the_number_of_tags() -> None:
-    """The tag list is reflected quadratically by the active-filter strip (a
-    chip per tag, each re-emitting the others), so an unbounded ``?tag=`` on
-    this unauthenticated GET is a DoS primitive: 10 KB of query string rendered
-    a 54 MB body. The excess is dropped from the tail, not rejected."""
+def test_parse_filters_honors_every_requested_tag() -> None:
+    """``?tag=`` is an exact-match AND, and no term may be silently discarded:
+    dropping one WIDENS the board, showing rows the operator excluded. The
+    request size is bounded instead (``MAX_FILTER_QUERY_BYTES``), which cannot
+    remove a predicate."""
+    requested = tuple(f"t{i}" for i in range(40))
+
+    filters = parse_filters([("tag", ",".join(requested))], default_days=30)
+
+    assert filters.tags == requested
+
+
+def test_parse_filters_honors_a_tag_longer_than_any_lens_ceiling() -> None:
+    """Lithos' tool schema puts no ``maxLength`` on a tag, so a task can validly
+    carry a very long one. Filtering by that exact tag has to work — a length
+    ceiling here would render the whole unfiltered board instead."""
+    long_tag = "roadmap-" + "x" * 200
+
+    filters = parse_filters([("tag", long_tag)], default_days=30)
+
+    assert filters.tags == (long_tag,)
+
+
+def test_parse_filters_folds_both_tag_spellings_into_one_list() -> None:
     filters = parse_filters(
-        [("tag", ",".join(f"t{i}" for i in range(MAX_FILTER_TAGS + 40)))],
+        [("tag", "a,b"), ("tag", "c")],
         default_days=30,
     )
 
-    assert len(filters.tags) == MAX_FILTER_TAGS
-    # The tags written FIRST are the ones honoured.
-    assert filters.tags[0] == "t0"
-    assert f"t{MAX_FILTER_TAGS}" not in filters.tags
+    assert filters.tags == ("a", "b", "c")
 
 
-def test_parse_filters_caps_tags_across_the_repeated_form_too() -> None:
-    """Both spellings feed one list, so the ceiling cannot be sidestepped by
-    splitting the payload across repeated params."""
+def test_parse_filters_collapses_repeated_tags() -> None:
+    """``all(tag in task.tags …)`` is idempotent, so a repeat is a redundant
+    chip and a wasted comparison per row, never a different result."""
     filters = parse_filters(
-        [("tag", f"t{i}") for i in range(MAX_FILTER_TAGS + 40)],
-        default_days=30,
-    )
-
-    assert len(filters.tags) == MAX_FILTER_TAGS
-
-
-def test_parse_filters_drops_over_long_tags_rather_than_truncating() -> None:
-    """An over-long tag is DROPPED, never truncated: a truncated tag is a filter
-    value nobody typed, which would match the wrong thing and render a
-    fabricated chip label. Dropping keeps every surface consistent — the tag is
-    neither matched nor displayed as active."""
-    over_long = "x" * (MAX_FILTER_TAG_LENGTH + 1)
-    filters = parse_filters(
-        [("tag", over_long), ("tag", "roadmap-2026-08")],
+        [("tag", "roadmap-2026-08,roadmap-2026-08"), ("tag", "roadmap-2026-08")],
         default_days=30,
     )
 
     assert filters.tags == ("roadmap-2026-08",)
-    # Nothing derived from the dropped value survives, in whole or in part.
-    assert not any(tag.startswith("x") for tag in filters.tags)
-
-
-def test_parse_filters_keeps_a_tag_at_the_length_ceiling() -> None:
-    """The bound is a safety ceiling far above any real tag, not a style rule:
-    a value exactly at it is honoured."""
-    at_ceiling = "x" * MAX_FILTER_TAG_LENGTH
-    filters = parse_filters([("tag", at_ceiling)], default_days=30)
-
-    assert filters.tags == (at_ceiling,)
 
 
 def test_parse_filters_carries_the_configured_convention() -> None:

@@ -70,7 +70,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.
 - def `parse_date`
 - def `int_stat`
-- def `honored_tags` — The ``?tag=`` values the board honours — bounded (``MAX_FILTER_TAGS`` / ``MAX_FILTER_TAG_LENGTH``).
+- def `honored_tags` — The ``?tag=`` values the board filters by, in the order written.
 
 ## Dependencies
 

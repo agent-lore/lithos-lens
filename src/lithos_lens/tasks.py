@@ -85,25 +85,36 @@ REOPENED_FINDING_PREFIX = "[Reopened]"
 # client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
 MAX_SINCE_LOOKBACK_DAYS = 365
 
-# Ceilings on the ``?tag=`` filter, applied at parse time. Safety bounds rather
-# than operator dials — the same shape as MAX_SINCE_LOOKBACK_DAYS above, and
-# deliberately far above any real filter: the live conventions are one tag
-# (``roadmap-2026-08``, ``loom-candidate``) and the AND form runs to two or
-# three.
+# Ceiling on the SIZE of the filter query string, in bytes — the ONE bound on
+# ``?tag=`` / ``?status=`` / ``?epic=`` / ``?since=`` / ``?project=`` /
+# ``?agent=``, applied to their total rather than per key.
 #
-# They exist because the tag list is the one filter the board reflects
-# QUADRATICALLY: the active-filter strip renders a chip per tag, and each
-# chip's "clear" link re-emits every OTHER tag. Unbounded, a 10 KB query string
-# rendered a 54 MB body, and 34 KB rendered 499 MB in 27s — which on
-# single-worker uvicorn blocks the event loop for every other operator for the
-# duration. The pair also bounds the per-task ``all(tag in task.tags …)`` cost
-# in ``matches_filters``.
+# The bound is on the request, not on the filter's MEANING, because every
+# filter is carried forward into each generated URL — the summary cards, one
+# detail link per row, one tag link per tag per row. The response therefore
+# echoes the query string O(rows x tags) times: on a 400-row board a 58 KB
+# ``?status=`` rendered a 116 MB body (~2000x), and 34 KB of ``?tag=`` rendered
+# 499 MB. Bounding the input bounds every one of those echoes at once, which
+# per-key value ceilings did not.
 #
-# Both DEGRADE rather than reject, the same convention as the retired
-# ``claimed_state`` below: a query string nobody could have meant is honoured
-# as far as it is sane, never 400ed.
-MAX_FILTER_TAGS = 12
-MAX_FILTER_TAG_LENGTH = 128
+# 1 KB is ~9x a rich real filter (status + project + agent + since + epic +
+# tag is ~110 bytes; a 129-character tag still fits with room to spare), so no
+# filter an operator or a bookmark can produce is affected.
+#
+# Deliberately REJECTED rather than trimmed (``web._filter_query_oversized``).
+# Silently dropping filter terms is the one response that is never safe: it
+# WIDENS the board, showing rows the operator's filter excluded, under chrome
+# claiming a scope that is not applied. The ``since`` clamp below is the
+# opposite shape and stays as it is — clamping a window narrows it, so it can
+# only ever show less.
+MAX_FILTER_QUERY_BYTES = 1024
+
+# How many active-filter chips the board draws before summarising the rest.
+# A RENDERING bound only: every tag still filters, and the strip says how many
+# it is not naming. The strip is quadratic in tag count (a chip per tag, each
+# re-emitting the others), so it needs a bound of its own even under the byte
+# ceiling above.
+MAX_FILTER_TAG_CHIPS = 12
 
 # Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
 # production corpus and their counts disagree: ``metadata.project = "<slug>"``
@@ -698,34 +709,26 @@ def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
 
 
 def honored_tags(values: Iterable[str]) -> tuple[str, ...]:
-    """The ``?tag=`` values the board honours — bounded (``MAX_FILTER_TAGS`` /
-    ``MAX_FILTER_TAG_LENGTH``).
+    """The ``?tag=`` values the board filters by, in the order written.
 
-    Public because the ceiling has to hold at BOTH ends of the round trip: the
-    filters this parses, and every generated URL that carries the filters
-    forward (``web._preserved_filter_params``). A bound applied only on the way
-    in would leave the raw query string re-emitted into each summary-card, row
-    and tag link — which is most of the reflection it exists to stop. Either
-    spelling is accepted (repeated params, or one comma-joined value), so the
-    ceiling cannot be sidestepped by choosing a form.
+    EVERY requested tag is honoured: the ``?tag=`` contract is an exact-match
+    AND over task tags, and Lithos' schema puts no ceiling on a tag's length,
+    so a task can validly carry a tag longer than any bound Lens might invent.
+    Dropping a term here would widen the board — showing rows the operator
+    excluded — so the request size is bounded instead
+    (``MAX_FILTER_QUERY_BYTES``), which never removes a predicate.
 
-    Over-long values are DROPPED, never truncated: a truncated tag is a filter
-    value nobody typed, which would match the wrong thing and render a
-    fabricated chip label — the same refusal-to-coerce as
-    ``_metadata_project_slug``. Dropping rather than keeping-and-matching-
-    nothing keeps the board honest, because this one list drives BOTH the
-    matching and every surface that names the active filters: a tag that is not
-    honoured is never displayed as though it were.
-
-    The count ceiling drops from the TAIL, so the tags written first survive.
+    Both spellings fold into one list (repeated ``?tag=a&tag=b`` and the
+    comma-joined ``?tag=a,b``), and repeats collapse: ``all(tag in task.tags)``
+    is idempotent, so a duplicate is a redundant chip and a wasted comparison
+    per row, never a different result.
     """
-    tags = [
-        tag
-        for value in values
-        for tag in _split_values(value)
-        if len(tag) <= MAX_FILTER_TAG_LENGTH
-    ]
-    return tuple(tags[:MAX_FILTER_TAGS])
+    tags: list[str] = []
+    for value in values:
+        for tag in _split_values(value):
+            if tag not in tags:
+                tags.append(tag)
+    return tuple(tags)
 
 
 def _split_values(value: str) -> list[str]:

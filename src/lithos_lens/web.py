@@ -46,10 +46,11 @@ from lithos_lens.task_detail import (
     load_task_detail,
 )
 from lithos_lens.tasks import (
+    MAX_FILTER_QUERY_BYTES,
+    MAX_FILTER_TAG_CHIPS,
     default_since,
     format_display_date,
     format_tag,
-    honored_tags,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -187,6 +188,10 @@ def create_app(
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
+        if _filter_query_oversized(request):
+            return await _reject_oversized_filters(
+                request, templates, state, "tasks/detail.html"
+            )
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
@@ -215,6 +220,10 @@ def create_app(
 
     @app.get("/tasks/{task_id}/findings", response_class=HTMLResponse)
     async def task_findings(request: Request, task_id: str) -> HTMLResponse:
+        if _filter_query_oversized(request):
+            return await _reject_oversized_filters(
+                request, templates, state, "tasks/findings.html"
+            )
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
@@ -389,11 +398,58 @@ def create_app(
     return app
 
 
+async def _reject_oversized_filters(
+    request: Request,
+    templates: Jinja2Templates,
+    state: AppState,
+    template: str,
+) -> HTMLResponse:
+    """Answer an over-budget filter query explicitly, before any Lithos read.
+
+    Shared by every route that re-emits the preserved filters into generated
+    URLs — the board and the detail pages alike — because the amplification
+    lives in that shared helper, not in one route.
+
+    The response deliberately does NOT echo the offending value: reflecting it
+    is the whole problem. And it refuses rather than trimming, because a
+    trimmed filter renders a WIDER board than the one requested, with chrome
+    claiming a scope that is not applied.
+    """
+    logger.warning(
+        "filter query rejected as oversized",
+        extra={
+            "lens_route": str(request.url.path),
+            "query_bytes": len(request.url.query or ""),
+            "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
+        },
+    )
+    return templates.TemplateResponse(
+        request,
+        template,
+        {
+            "config": state.config,
+            "health": await state.refresh_health(),
+            "active_view": "tasks",
+            "dashboard": None,
+            "detail": None,
+            "offline": False,
+            "filter_query_rejected": True,
+            "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
+            "default_since": default_since(state.config.tasks.default_time_range_days),
+        },
+        status_code=400,
+    )
+
+
 async def _render_tasks(
     request: Request,
     templates: Jinja2Templates,
     state: AppState,
 ) -> HTMLResponse:
+    if _filter_query_oversized(request):
+        return await _reject_oversized_filters(
+            request, templates, state, "tasks/dashboard.html"
+        )
     snapshot = await state.refresh_health()
     dashboard = None
     if snapshot.lithos == "ok":
@@ -460,6 +516,7 @@ async def _render_tasks(
             "health": snapshot,
             "active_view": "tasks",
             "dashboard": dashboard,
+            "max_tag_chips": MAX_FILTER_TAG_CHIPS,
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },
     )
@@ -472,30 +529,46 @@ async def _render_tasks(
 _PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
 
 
+def _filter_query_oversized(request: Request) -> bool:
+    """True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
+
+    Measured over the preserved keys only — they are the ones re-emitted into
+    every generated URL, and so the ones whose size the response multiplies.
+    An oversized request is answered explicitly rather than served as though
+    the offending filter had not been sent: see the constant for why trimming
+    is not an option.
+    """
+    total = sum(
+        len(key) + len(value) + 2
+        for key, value in request.query_params.multi_items()
+        if key in _PRESERVED_FILTER_KEYS
+    )
+    return total > MAX_FILTER_QUERY_BYTES
+
+
 def _preserved_filter_params(
     request: Request, *, exclude: str = ""
 ) -> list[tuple[str, str]]:
     """The live filters of this request, ready to re-emit into a generated URL.
 
-    ``tag`` is rebuilt through ``honored_tags`` rather than echoed: the raw
-    ``?tag=`` is unbounded and attacker-controlled on an unauthenticated GET,
-    and this helper feeds EVERY generated tasks URL — the summary cards, each
-    row's detail link, each row's tag links. Echoing it raw re-emitted the
-    whole query string dozens of times per render, and left links carrying tags
-    the board itself had already dropped. Rebuilding here keeps every link both
-    bounded and truthful about what the board is filtering by.
+    Echoed verbatim, every key alike — the routes refuse an over-budget query
+    before rendering, so there is nothing left here to trim, and trimming per
+    key was the wrong shape anyway: it dropped filter terms the board had been
+    asked for.
+
+    An oversized request preserves NOTHING, which makes that guarantee hold at
+    the choke point rather than per template. The refusal page still renders
+    (its "back to tasks" link, its chrome), and every URL on it must come out
+    unfiltered — otherwise the page refusing to reflect the value reflects it
+    anyway, once per link.
     """
-    params: list[tuple[str, str]] = []
-    for key, value in request.query_params.multi_items():
-        if key not in _PRESERVED_FILTER_KEYS or key == exclude or not value:
-            continue
-        if key != "tag":
-            params.append((key, value))
-    if exclude != "tag":
-        params.extend(
-            ("tag", tag) for tag in honored_tags(request.query_params.getlist("tag"))
-        )
-    return params
+    if _filter_query_oversized(request):
+        return []
+    return [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
+    ]
 
 
 def task_tag_url(request: Request, tag: str) -> str:
