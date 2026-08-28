@@ -42,21 +42,21 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 3 | 1891 | 1536 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 60 | 48 | 1 | 1 | 0.50 | 5 (`lithos_lens.logging.JsonFormatter.format`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 8 | 2519 | 1928 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 4 |
+| TaskGraph | 8 | 2593 | 1976 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 4 |
 | Tasks | 3 | 1007 | 734 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 631 | 509 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
+| Web | 1 | 654 | 528 | 1 | 8 | 0.89 | 11 (`lithos_lens.web.create_app.note`) | 1 |
 
 ## Size
 
-- Modules: **29**, lines: **8562**, SLOC: **6702**
+- Modules: **29**, lines: **8659**, SLOC: **6769**
 - Largest module: `lithos_lens.lithos_client` (888 lines)
 - Modules over 800 lines: **1**
   - `lithos_lens.lithos_client`
 
 ## Complexity
 
-- Functions: **321**, cyclomatic > 10: **15**
+- Functions: **322**, cyclomatic > 10: **15**
 
 Top 10 most complex functions:
 
@@ -84,4 +84,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **38** (38 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.78** (15203 test lines / 8562 source lines)
+- Test-to-source line ratio: **1.78** (15452 test lines / 8659 source lines)

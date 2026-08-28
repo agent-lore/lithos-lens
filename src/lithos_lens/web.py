@@ -161,6 +161,7 @@ def create_app(
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
+    templates.env.globals["note_url"] = note_url
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -573,9 +574,31 @@ def task_tag_url(request: Request, tag: str) -> str:
 
 
 def task_detail_url(request: Request, task_id: str) -> str:
+    """Link a task id as ONE path segment, with every reserved character encoded.
+
+    ``normalize_task`` keeps ids as arbitrary non-empty strings — nothing
+    upstream excludes URL-reserved characters — so ``quote``'s default
+    ``safe="/"`` is the wrong default here: an id containing ``?`` or ``#``
+    would truncate the path and route somewhere else, and one containing ``/``
+    would invent a segment. ``safe=""`` matches the encoding
+    ``knowledge_produced_by.ProducedByChip.url`` already uses for the same
+    route, so the two agree on what a task link looks like.
+    """
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
-    return f"/tasks/{quote(task_id)}{suffix}"
+    return f"/tasks/{quote(task_id, safe='')}{suffix}"
+
+
+def note_url(knowledge_id: str, task_id: str = "") -> str:
+    """Link a finding's document, id-encoded, carrying the task back-link.
+
+    Findings' ``knowledge_id`` and ``task_id`` are free strings off an
+    agent-written payload (``tests/contracts/lithos_finding_list.json``), so
+    neither may be interpolated into a URL raw: Jinja's autoescaping makes the
+    attribute safe to EMBED but says nothing about what the URL then addresses.
+    """
+    task_suffix = f"?{urlencode({'task': task_id})}" if task_id else ""
+    return f"/note/{quote(knowledge_id, safe='')}{task_suffix}"
 
 
 def epic_scope_url(request: Request, epic_id: str) -> str:

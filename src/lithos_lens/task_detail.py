@@ -6,11 +6,12 @@ the records and the DASHBOARD view models, and everything that exists only for
 ``/tasks/{id}`` — the blocker chain, the hierarchy, the findings timeline, the
 reopen report, the per-section degraded states of a single task — lives here.
 
-Since T1-S7 the page is graph-native: one ``lithos_task_get`` (so a deep link
-to a deleted task gets a clean not-found envelope instead of the three-list
-scan ``find_task`` used to do), then ``lithos_task_status``,
+Since T1-S7 the page is graph-native: ``lithos_task_get`` (so a deep link to a
+deleted task gets a clean not-found envelope instead of the three-list scan
+``find_task`` used to do), ``lithos_task_status``,
 ``lithos_task_edge_list(direction="both")``, ``lithos_finding_list`` and
-``lithos_task_children`` in parallel.
+``lithos_task_children`` — all five gathered concurrently, as §5.5's data
+contract requires, and each carrying its own deadline.
 
 Nearly every set this page renders is agent-sized, and each of those is bounded
 by ``task_links.bounded_page`` and reports its remainder through the one tail
@@ -96,7 +97,9 @@ class TaskDetailClient(TaskLinkClient, Protocol):
         self, task_id: str, *, since: str | None = None
     ) -> list[FindingRecord]: ...
 
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None: ...
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None: ...
 
 
 @dataclass(frozen=True)
@@ -125,11 +128,6 @@ class FindingView:
 @dataclass(frozen=True)
 class TaskDetailData:
     task: TaskRecord | None
-    # ONE limiter for this render's whole fan-out — the neighbour pages AND the
-    # finding-note lookups. Per-call-site limiters would let a single render
-    # run several pages' worth of slots at once.
-    limiter = new_link_limiter()
-
     task_status: TaskStatusRecord | None = None
     findings: tuple[FindingView, ...] = ()
     # The level-1 blocker chain and the two provenance directions. Each is a
@@ -184,30 +182,50 @@ async def load_task_detail(
     task_id: str,
 ) -> TaskDetailData:
     errors: list[str] = []
-    try:
-        task = await lithos.task_get(task_id)
-    except Exception as exc:
-        # A missing task is an ANSWER (Lithos replies with the task_not_found
-        # envelope), so it renders the not-found panel; anything else is a
-        # failed read and must not be reported as "this task does not exist".
-        if getattr(exc, "code", "") == TASK_NOT_FOUND_CODE:
-            return TaskDetailData(task=None, not_found=True)
-        return TaskDetailData(
-            task=None, errors=("Could not load this task from Lithos.",)
-        )
-
+    # §5.5's data contract: task_get + task_status + task_edge_list +
+    # finding_list "gathered concurrently". task_get used to be awaited to
+    # completion first so a not-found could short-circuit the rest, which cost
+    # every successful render an extra serial round trip to save work only on
+    # the rendering path nobody waits for. The four extra reads a not-found
+    # discards are cheap; a second full latency on every real page view is not.
+    #
+    # Each read is deadlined here for the same reason ``task_links`` deadlines
+    # the neighbour reads: nothing below imposes one (``session.call_tool``
+    # takes no timeout, ``_SESSION_WAIT_TIMEOUT_S`` covers only session
+    # establishment, uvicorn sets no request deadline). These five are the
+    # GATING reads — the render cannot start without them — so leaving them
+    # bare while deadlining the fan-out behind them bounded the cheap half of
+    # the page and left the expensive half open.
     (
+        task_result,
         status_result,
         edges_result,
         findings_result,
         children_result,
     ) = await asyncio.gather(
-        lithos.task_status(task_id),
-        lithos.task_edge_list(task_id, direction="both"),
-        lithos.list_findings(task_id),
-        lithos.task_children(task_id, include_closed=True),
+        asyncio.wait_for(lithos.task_get(task_id), LINK_READ_TIMEOUT_S),
+        asyncio.wait_for(lithos.task_status(task_id), LINK_READ_TIMEOUT_S),
+        asyncio.wait_for(
+            lithos.task_edge_list(task_id, direction="both"), LINK_READ_TIMEOUT_S
+        ),
+        asyncio.wait_for(lithos.list_findings(task_id), LINK_READ_TIMEOUT_S),
+        asyncio.wait_for(
+            lithos.task_children(task_id, include_closed=True), LINK_READ_TIMEOUT_S
+        ),
         return_exceptions=True,
     )
+
+    if isinstance(task_result, BaseException):
+        # A missing task is an ANSWER (Lithos replies with the task_not_found
+        # envelope), so it renders the not-found panel; anything else — a
+        # failed read, or this call's own deadline — must not be reported as
+        # "this task does not exist".
+        if getattr(task_result, "code", "") == TASK_NOT_FOUND_CODE:
+            return TaskDetailData(task=None, not_found=True)
+        return TaskDetailData(
+            task=None, errors=("Could not load this task from Lithos.",)
+        )
+    task = cast(TaskRecord, task_result)
 
     # ONE limiter for this render's whole fan-out — the neighbour pages AND the
     # finding-note lookups. Per-call-site limiters would let a single render
@@ -286,6 +304,28 @@ async def _load_relations(
     That is why every one of these goes through ``task_links.load_link_page``
     rather than gathering the raw edge set, and why the render's limiter is
     threaded in rather than made per call site.
+
+    §5.5.2 names a PREFERRED source for the blocker chain — "the task's
+    ``task_blocked`` entry when available, else from incoming
+    ``blocks``/``waits_on_gate`` edges plus per-predecessor
+    ``lithos_task_get``" — and only the fallback is implemented. That is not an
+    omission: Lithos 0.4 has no per-task form of it. ``lithos_task_blocked``
+    takes ``{limit, project, tags, metadata_match}`` and no ``task_id`` (see
+    ``tests/contracts/_tools_snapshot.json``), so "this task's entry" could only
+    be had by listing blocked tasks store-wide and scanning for the id — a
+    whole-store read to answer a one-task question, and one that silently
+    returns nothing whenever the task falls outside the ``limit`` window. The
+    edge reconstruction is deterministic for the same task every time; the
+    "preferred" source would not be.
+
+    What that costs is the ``cycle`` case. Lithos computes the four blocker
+    kinds — ``task``, ``gate``, ``blocker_unsatisfiable``, ``cycle`` — and the
+    first three are all reconstructible from one task's incoming edges plus
+    each predecessor's status. A cycle is not: it is a property of the chain,
+    not of any one hop, so a page that only ever looks one level out cannot
+    see it. §5.5.2's ``cycle: A -> B -> A`` line therefore has no source here
+    and is not rendered. Closing it needs either a per-task ``task_blocked``
+    upstream or the T1-S8 multi-level walk, whichever lands first.
     """
     blockers, discovered_from, spawned = await asyncio.gather(
         load_link_page(
@@ -330,6 +370,14 @@ async def resolve_finding_notes(
     document title — a link the operator can still follow, not a dropped row —
     and deliberately carries no ``note_error``: that line is reserved for reads
     that actually failed, and claiming a failure here would be false.
+
+    WHICH ids get the page is a deliberate choice, not slice order. §5.6 makes
+    "View document" the read-FAILURE fallback, so every id outside the page
+    wears a label the spec reserves for something else — the page cannot avoid
+    that, only choose where it lands. That label lands on the OLDEST ids,
+    because §5.6 also says a long timeline MAY collapse older findings behind a
+    disclosure: the old end is the one the spec is already willing to lose, and
+    the newest findings are what an operator opening a task is reading.
     """
     ordered = sorted(findings, key=lambda item: item.created_at)
     # Order-preserving dedup in O(N). A ``not in <list>`` scan reads the same
@@ -338,9 +386,16 @@ async def resolve_finding_notes(
     # rather than merely slowing this render: every other in-flight request,
     # including the SSE stream and /health, stalls with it. ``bounded_page``
     # cannot rescue that; it slices the RESULT, so it never sees the scan.
+    #
+    # Iterated NEWEST first so ``bounded_page`` spends the page on the recent
+    # end (the docstring says why that end). Selection order only: the timeline
+    # itself renders oldest-first from ``ordered`` below, and ``reopen_report``
+    # still reads the last match as the latest.
     distinct = list(
         dict.fromkeys(
-            finding.knowledge_id for finding in ordered if finding.knowledge_id
+            finding.knowledge_id
+            for finding in reversed(ordered)
+            if finding.knowledge_id
         )
     )
     page, _tail = bounded_page(distinct)
@@ -348,8 +403,13 @@ async def resolve_finding_notes(
 
     async def read(knowledge_id: str) -> Any:
         async with gate:
+            # ``max_length=1`` per §5.6: this is the cheap TITLE fetch, and a
+            # truncated read still returns complete frontmatter, so the title
+            # arrives either way. Without it Lithos serialises each document's
+            # ENTIRE body — a page of whole documents per render — to populate
+            # one string.
             return await asyncio.wait_for(
-                lithos.read_note(knowledge_id), LINK_READ_TIMEOUT_S
+                lithos.read_note(knowledge_id, max_length=1), LINK_READ_TIMEOUT_S
             )
 
     results = await asyncio.gather(

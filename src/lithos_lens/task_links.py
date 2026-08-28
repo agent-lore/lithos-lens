@@ -175,7 +175,21 @@ class LinkedTask:
 
     @property
     def satisfied(self) -> bool:
-        """True when this BLOCKER no longer holds the task back."""
+        """True when this BLOCKER no longer holds the task back.
+
+        A ``blocks`` edge is not deleted when its predecessor completes — it
+        is the durable record that the dependency existed — so the incoming
+        edge set an unblocked task is reconstructed from still names every
+        predecessor it ever had. Rendered without this, a task whose blockers
+        have all finished answers "why can't this run?" with a list of things
+        that are no longer stopping it.
+
+        It marks rather than filters, deliberately. The edge set is what the
+        graph says and the tail counts against it, so dropping rows here would
+        make the remainder arithmetic describe a set the page never showed —
+        and would delete the evidence of what this task waited on, which is
+        most of what the section is read for once a task is unblocked.
+        """
         return self.blocking and self.status == "completed"
 
     @property

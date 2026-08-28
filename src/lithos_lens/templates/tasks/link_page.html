@@ -26,6 +26,14 @@
         {% endif %}
         {% if link.unsatisfiable %}
           <span class="blocker-chip blocker-chip-blocker_unsatisfiable" data-link-unsatisfiable>unsatisfiable</span>
+        {% elif link.satisfied %}
+          {# A completed predecessor keeps its `blocks` edge — the edge is the
+             durable record that the dependency existed — so it is still in the
+             set this section is reconstructed from. It renders, because what
+             this task waited on is most of what the section is read for once
+             the task is unblocked, but it must not be left looking like a
+             reason the task cannot run. #}
+          <span class="blocker-chip blocker-chip-satisfied" data-link-satisfied>satisfied</span>
         {% endif %}
       {% endif %}
     </li>

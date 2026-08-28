@@ -24,7 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
-from lithos_lens.task_detail import load_task_detail
+from lithos_lens.task_detail import TaskDetailData, load_task_detail
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     LINK_FANOUT_CONCURRENCY,
@@ -683,6 +683,7 @@ class _NoteCountingFake(TaskFakeLithosClient):
         super().__init__()
         self.delay = delay
         self.note_reads: list[str] = []
+        self.note_read_lengths: list[int | None] = []
         self.in_flight = 0
         self.peak_in_flight = 0
 
@@ -690,6 +691,7 @@ class _NoteCountingFake(TaskFakeLithosClient):
         self, knowledge_id: str, *, max_length: int | None = None
     ) -> NoteRecord | None:
         self.note_reads.append(knowledge_id)
+        self.note_read_lengths.append(max_length)
         self.in_flight += 1
         self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
         try:
@@ -828,16 +830,20 @@ def test_finding_note_dedup_is_not_quadratic() -> None:
     # Linear in N with generous headroom: the list scan costs ~N²/2 (~719k
     # here), a hash-based dedup costs collisions only.
     assert _CountingId.comparisons < 10 * count
-    # And the fix must not have cost the behaviour the dedup is there for.
+    # And the fix must not have cost the behaviour the dedup is there for:
+    # one read per distinct id, spent on the NEWEST page of them.
     assert len(fake.note_reads) == LINK_PAGE_SIZE
-    assert fake.note_reads == [f"note-{index:05d}" for index in range(LINK_PAGE_SIZE)]
+    assert fake.note_reads == [
+        f"note-{index:05d}"
+        for index in range(count - 1, count - 1 - LINK_PAGE_SIZE, -1)
+    ]
     assert len(detail.findings) == count
 
 
-def test_finding_note_dedup_keeps_first_seen_order_and_reads_each_id_once() -> None:
-    """The dedup exists to spend one ``lithos_read`` per DISTINCT id, in
-    timeline order — the page is taken from its head, so the order decides
-    which titles resolve."""
+def test_finding_note_dedup_reads_each_id_once_however_often_it_recurs() -> None:
+    """The dedup exists to spend one ``lithos_read`` per DISTINCT id, and every
+    finding carrying that id gets the title the single read returned — however
+    far apart in the timeline they sit."""
     fake = _NoteCountingFake()
     fake.findings["open-unclaimed"] = [
         _finding(0, knowledge_id="note-b"),
@@ -921,3 +927,246 @@ def test_the_unsatisfiable_verdict_still_fires_on_a_cancelled_blocker(
     # Both blocking edge types carry the verdict: a cancelled gate strands its
     # waiter exactly as a cancelled predecessor does.
     assert response.text.count("data-link-unsatisfiable") == 2
+
+
+# --- Review round 5 (lithos-loom develop review 53) ------------------------
+
+
+def test_finding_note_titles_use_the_cheap_truncated_read() -> None:
+    """security/f-002: the title lookup asked for whole documents.
+
+    §5.6 names the call: ``lithos_read(id=knowledge_id, max_length=1)``, "the
+    cheap title fetch" — a truncated read still returns complete frontmatter,
+    so the title arrives either way. Without ``max_length`` Lithos serialises
+    each document's entire body, up to a page of whole documents per render,
+    over the shared MCP session, to populate one string per row.
+    """
+    fake = _NoteCountingFake()
+    fake.findings["open-unclaimed"] = [_finding(index) for index in range(3)]
+
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    assert len(fake.note_reads) == 3
+    # Every one of them truncated — not "most", and not defaulted.
+    assert fake.note_read_lengths == [1, 1, 1]
+    # And the cheap read still yields the titles the page renders.
+    assert all(view.note_title for view in detail.findings)
+
+
+def test_the_note_lookup_page_is_spent_on_the_newest_findings() -> None:
+    """correctness/f-006: the bounded lookup resolved the OLDEST page of ids.
+
+    Some end has to go without: "View document" is §5.6's read-FAILURE
+    fallback, so whichever findings fall outside the page wear a label the
+    spec reserves for something else. §5.6 also says a long timeline MAY
+    collapse OLDER findings behind a disclosure — so the old end is the one
+    the spec is already willing to lose, and spending the page there puts the
+    borrowed label where it does least damage. Resolving the oldest instead
+    degraded exactly the rows an operator opening a task is reading.
+    """
+    extra = 7
+    total = LINK_PAGE_SIZE + extra
+    fake = _NoteCountingFake()
+    fake.findings["open-unclaimed"] = [_finding(index) for index in range(total)]
+
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    # Still exactly one page of reads: the bound is unchanged, only its aim.
+    assert len(fake.note_reads) == LINK_PAGE_SIZE
+    # The timeline still renders oldest-first and in full.
+    assert len(detail.findings) == total
+    titled = [bool(view.note_title) for view in detail.findings]
+    # The generic label lands on the oldest rows, the titles on the newest.
+    assert titled == [False] * extra + [True] * LINK_PAGE_SIZE
+
+
+def test_a_completed_blocker_is_marked_satisfied_rather_than_left_looking_current(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Completing a predecessor does not delete its ``blocks`` edge — the edge
+    is the durable record that the dependency existed — so it stays in the set
+    "Why can't this run" is reconstructed from. Rendered like any other
+    blocker, it answers that question with something that finished.
+
+    Marked, not filtered: the tail counts against the edge set, so dropping
+    rows here would make the remainder arithmetic describe a set the page
+    never showed, and would delete what this task waited on — most of what the
+    section is read for once the task is unblocked.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("pred-done", title="Finished predecessor", status="completed"),
+            _task("pred-live", title="Live predecessor"),
+        ]
+    )
+    _link(fake, "pred-done", "open-unclaimed", "blocks")
+    _link(fake, "pred-live", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    # Both rows survive — the completed one is evidence, not noise.
+    assert "Finished predecessor" in text and "Live predecessor" in text
+    # Exactly one of them is called out as no longer holding the task back.
+    assert text.count("data-link-satisfied") == 1
+    # And "satisfied" is not the same claim as "unsatisfiable": a completed
+    # blocker is resolved, a cancelled one is a dead end.
+    assert "data-link-unsatisfiable" not in text
+
+
+def test_a_satisfied_verdict_is_never_claimed_on_a_provenance_link(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The mirror of the unsatisfiable rule. One partial renders all three
+    neighbour lists, so a status-only rule would tag every completed source
+    task and follow-on "satisfied" — a dependency verdict on a section that
+    records no dependency."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("done-source", title="Finished source", status="completed"),
+            _task("done-follow-on", title="Finished follow-on", status="completed"),
+        ]
+    )
+    _link(fake, "done-source", "open-unclaimed", "discovered_from")
+    _link(fake, "open-unclaimed", "done-follow-on", "discovered_from")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Finished source" in text and "Finished follow-on" in text
+    assert "data-link-satisfied" not in text
+
+
+class _GatingReadRecorder(TaskFakeLithosClient):
+    """Records how many of the five gating reads overlap in flight."""
+
+    def __init__(self, *, delay: float = 0.01) -> None:
+        super().__init__()
+        self.delay = delay
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def _tick(self):
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+        finally:
+            self.in_flight -= 1
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        await self._tick()
+        return await super().task_get(task_id)
+
+    async def task_status(self, task_id: str):
+        await self._tick()
+        return await super().task_status(task_id)
+
+    async def task_edge_list(self, task_id: str, **kwargs):
+        await self._tick()
+        return await super().task_edge_list(task_id, **kwargs)
+
+    async def list_findings(self, task_id: str, **kwargs):
+        await self._tick()
+        return await super().list_findings(task_id, **kwargs)
+
+    async def task_children(self, task_id: str, **kwargs):
+        await self._tick()
+        return await super().task_children(task_id, **kwargs)
+
+
+def test_the_gating_reads_are_issued_concurrently() -> None:
+    """correctness/f-007: §5.5's data contract says ``task_get`` +
+    ``task_status`` + ``task_edge_list`` + ``finding_list`` are "gathered
+    concurrently"; ``task_get`` was awaited to completion first.
+
+    That bought a short-circuit on the one path nobody is waiting for — a
+    deleted task's 404 — and charged every real page view an extra serial
+    round trip for it. Asserted on overlap, not on elapsed time: the defect is
+    structural, and a clock threshold would be flaky on a shared box.
+    """
+    fake = _GatingReadRecorder()
+
+    asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    # All five in flight together, not one-then-four.
+    assert fake.peak_in_flight == 5
+
+
+def test_a_stalled_gating_read_cannot_hang_the_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """security/f-001: the same change that deadlined every neighbour read left
+    the five GATING reads bare.
+
+    Nothing under them imposes one — ``session.call_tool`` takes no timeout,
+    ``_SESSION_WAIT_TIMEOUT_S`` covers only session establishment, uvicorn
+    sets no request deadline — so a half-open session pinned the request task
+    on the reads the render cannot even start without, which is a strictly
+    worse place to be unbounded than the fan-out behind them.
+    """
+    monkeypatch.setattr("lithos_lens.task_detail.LINK_READ_TIMEOUT_S", 0.05)
+
+    class _StalledChildren(TaskFakeLithosClient):
+        async def task_children(self, task_id: str, **kwargs):
+            await asyncio.Event().wait()  # never answers
+            raise AssertionError("unreachable")
+
+    fake = _StalledChildren()
+
+    async def run() -> TaskDetailData:
+        async with asyncio.timeout(5):
+            return await load_task_detail(fake, "open-unclaimed")
+
+    detail = asyncio.run(run())
+
+    # The render completes, and degrades only the section that stalled.
+    assert detail.task is not None
+    assert detail.children_state.value == "error"
+    assert "Could not load child tasks." in detail.errors
+    # The rest of the page is intact — one stalled read is not a failed page.
+    assert detail.status_state.value == "ok"
+    assert detail.relations_state.value == "ok"
+
+
+def test_reserved_characters_in_ids_are_encoded_into_generated_links(
+    lithos_lens_config_env: Path,
+) -> None:
+    """security/f-005: task ids and knowledge ids are arbitrary non-empty
+    strings off agent-written payloads, and both were interpolated into hrefs
+    without full encoding — ``quote``'s default ``safe="/"`` for the task link,
+    nothing at all for the finding's document link.
+
+    Autoescaping makes the attribute safe to EMBED; it says nothing about what
+    the URL then addresses. A ``?`` or ``#`` truncates the path and routes
+    somewhere else; a ``/`` invents a segment.
+    """
+    fake = TaskFakeLithosClient()
+    # A slash is the character the two encodings actually disagree about:
+    # quote's default safe="/" passes it through, turning one id into two path
+    # segments and a link to somewhere else entirely.
+    fake.tasks.append(_task("team/pred", title="Awkward predecessor"))
+    _link(fake, "team/pred", "open-unclaimed", "blocks")
+    fake.findings["open-unclaimed"] = [
+        _finding(0, knowledge_id="doc?x#y"),
+    ]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    # The blocker link is ONE path segment naming the whole id.
+    assert "/tasks/team%2Fpred" in text
+    assert 'href="/tasks/team/pred' not in text
+    # The finding's document link addresses the document, not a prefix of it:
+    # unescaped, the "?" ends the path and "#" starts a fragment, so the href
+    # resolved to /note/doc with the rest of the id read as a query string.
+    assert "/note/doc%3Fx%23y?task=open-unclaimed" in text
+    assert 'href="/note/doc?x' not in text

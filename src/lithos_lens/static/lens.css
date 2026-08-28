@@ -604,6 +604,15 @@ button,
   color: var(--cancelled);
 }
 
+/* A blocker that has completed: still listed (the edge is the durable record
+   of the dependency) but explicitly no longer holding the task back, so the
+   row cannot be misread as a current reason it can't run. */
+.blocker-chip-satisfied {
+  background: rgba(53, 106, 77, 0.12);
+  border-color: rgba(53, 106, 77, 0.5);
+  color: var(--ok);
+}
+
 /* Epic rollup strip: one chip per open epic, each a link that scopes the whole
    board to that epic's descendants (?epic=). The selected chip is outlined and
    links back out, so it reads as a toggle. */
