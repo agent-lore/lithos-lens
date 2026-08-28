@@ -11,11 +11,14 @@ emits exactly ``{kind, task_id, type, status, message}``.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from lithos_lens import lithos_client
 from lithos_lens.config import LithosConfig
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.normalizers import normalize_task
@@ -253,6 +256,68 @@ def test_empty_content_result_decodes_to_empty_payload() -> None:
 def test_json_dict_result_decodes_to_payload() -> None:
     client = _CannedResultClient(_tool_result('{"open_claims": 3}'))
     assert _run(client, client.stats()) == {"open_claims": 3}
+
+
+def test_a_huge_response_is_decoded_rather_than_refused() -> None:
+    """No ceiling on a response's size, at any value.
+
+    The graph reads take no limit parameter, so a task's edge count — and
+    therefore the size of the one response carrying it — is agent-controlled.
+    That is the input the detail page is built to survive: it pages the
+    blockers and states the true remainder, which it can only count from a
+    parsed response. A whole-response ceiling would answer precisely that case
+    with "blockers unavailable", so an oversized payload must still decode,
+    with every row intact.
+    """
+    # Well past any ceiling that has been proposed here (~8.5M characters),
+    # built from few rows so the test stays cheap.
+    filler = "f" * 85_000
+    edges = ",".join(
+        f'''{{"from_task_id": "b{index}", "to_task_id": "t", "type": "blocks",
+             "direction": "incoming", "metadata": {{"note": "{filler}"}}}}'''
+        for index in range(100)
+    )
+    payload = f'{{"edges": [{edges}]}}'
+    assert len(payload) > 8_000_000
+    client = _CannedResultClient(_tool_result(payload))
+
+    rows = _run(client, client.task_edge_list("t"))
+
+    assert len(rows) == 100
+    assert rows[0].from_task_id == "b0"
+    assert rows[-1].from_task_id == "b99"
+
+
+class _HangingClient(LithosClient):
+    """A client whose tool call never answers (the wedged-session case)."""
+
+    def __init__(self) -> None:
+        super().__init__(LithosConfig())
+        self.started = 0
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        self.started += 1
+        await asyncio.Event().wait()
+
+
+def test_a_tool_call_that_never_answers_times_out_instead_of_wedging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounding the CALL COUNT does not bound the render DURATION: nothing
+    under ``_call_tool`` imposes a deadline, so one unanswered call would
+    otherwise hold its request task — and, on a fan-out surface, one of the
+    render's concurrency slots — forever. It must fail as an ordinary coded
+    read error, which every caller already degrades gracefully."""
+    monkeypatch.setattr(lithos_client, "CALL_TIMEOUT_S", 0.05)
+    client = _HangingClient()
+
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(client, client.stats())
+
+    assert client.started == 1
+    assert excinfo.value.code == "timeout"
 
 
 def test_list_tasks_always_sends_with_claims_so_default_false_is_pinned() -> None:
@@ -513,3 +578,122 @@ def test_task_edge_list_sends_direction_and_types_and_normalizes() -> None:
         "lithos_task_edge_list",
         {"task_id": "g-1", "direction": "outgoing", "types": ["waits_on_gate"]},
     )
+
+
+# --- Process-wide call bounds (security/f-001, f-003) ----------------------
+
+
+class _CountingClient(LithosClient):
+    """Records how many tool calls are in flight on the shared session."""
+
+    def __init__(self) -> None:
+        super().__init__(LithosConfig())
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            # Yield, so calls that are allowed to overlap actually do.
+            await asyncio.sleep(0)
+            return _tool_result('{"open_claims": 1}')
+        finally:
+            self.in_flight -= 1
+
+
+def test_concurrent_renders_share_one_process_wide_call_bound() -> None:
+    """The per-render fan-out gates bound ONE page; the MCP session they are
+    documented to protect is shared by every page. Without a bound on the
+    client, N concurrent renders put N times a render's worth of calls on that
+    one session — and N is set by an unauthenticated request rate, not by Lens.
+    So the gate lives where the session lives."""
+    client = _CountingClient()
+    renders = 3
+    per_render = lithos_client.MAX_CONCURRENT_TOOL_CALLS
+
+    async def _driver() -> None:
+        try:
+            await asyncio.gather(
+                *(
+                    asyncio.gather(*(client.stats() for _ in range(per_render)))
+                    for _ in range(renders)
+                )
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(_driver())
+
+    assert client.peak_in_flight > 1  # still concurrent
+    assert client.peak_in_flight <= lithos_client.MAX_CONCURRENT_TOOL_CALLS
+    # Strictly fewer than the calls the "renders" issued together, so removing
+    # the gate fails here even if the constant itself is raised.
+    assert client.peak_in_flight < renders * per_render
+
+
+class _SlowText:
+    """A result block whose text takes real time to read.
+
+    Stands in for the parse of a multi-megabyte response WITHOUT building one:
+    the cost lands inside the decode, exactly where a big ``json.loads`` would.
+
+    It is NOT a faithful model of that parse's effect on the process — it
+    sleeps, which releases the GIL, where ``json.loads`` holds it throughout.
+    So it can be used to observe WHERE and HOW MANY decodes happen, which is
+    what the test below does, and never to claim the loop stays responsive
+    through one (see the residual note in ``_decode_tool_result``).
+    """
+
+    def __init__(self, text: str, seen: list[Any], hold_s: float = 0.15) -> None:
+        self._text = text
+        self._seen = seen
+        self._hold_s = hold_s
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    @property
+    def text(self) -> str:
+        with self._lock:
+            self._seen.append(threading.current_thread())
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            time.sleep(self._hold_s)
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+        return self._text
+
+
+def test_the_decode_is_bounded_by_the_same_gate_as_the_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decode is inside the gate, so the gate bounds the whole call.
+
+    What that buys is memory: a decoded payload is resident for as long as its
+    slot is held, and the response size is agent-controlled, so releasing the
+    gate before the parse would let the number of payloads in memory at once
+    scale with an unauthenticated request rate instead of with the bound.
+
+    It buys nothing in latency, and this test does not claim otherwise — the
+    parse holds the GIL either way. That is the accepted residual recorded in
+    ``_decode_tool_result``, not something a bound here can fix."""
+    monkeypatch.setattr(lithos_client, "MAX_CONCURRENT_TOOL_CALLS", 2)
+    decoded_on: list[Any] = []
+    block = _SlowText('{"open_claims": 3}', decoded_on, hold_s=0.05)
+    client = _CannedResultClient(SimpleNamespace(content=[block], isError=False))
+
+    async def _driver() -> None:
+        try:
+            await asyncio.gather(*(client.stats() for _ in range(8)))
+        finally:
+            await client.close()
+
+    asyncio.run(_driver())
+
+    assert len(decoded_on) == 8  # every call really did decode
+    assert block.peak_in_flight <= 2
