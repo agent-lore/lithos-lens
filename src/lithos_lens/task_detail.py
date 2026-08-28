@@ -10,9 +10,15 @@ Since T1-S7 the page is graph-native: one ``lithos_task_get`` (so a deep link
 to a deleted task gets a clean not-found envelope instead of the three-list
 scan ``find_task`` used to do), then ``lithos_task_status``,
 ``lithos_task_edge_list(direction="both")``, ``lithos_finding_list`` and
-``lithos_task_children`` in parallel. Every read the EDGES then imply — blocker
-statuses, provenance, the parent walk — goes through ``task_links``, which is
-where their fan-out is bounded.
+``lithos_task_children`` in parallel.
+
+Every set this page renders is agent-sized, so every one of them is bounded by
+``task_links.bounded_page`` and reports its remainder through the one tail
+template. That covers both shapes the hazard takes: the reads the EDGES imply
+(blocker statuses, provenance, the parent walk, and the finding-note titles) —
+bounded in ROUND TRIPS, and sharing one limiter and one deadline across the
+render — and the child set, which costs one round trip but would otherwise be
+rendered in full on every auto-refresh, so it is bounded in ROWS.
 
 The dependency runs one way: this module imports the records and the graph
 helpers, ``tasks.py`` and ``task_links.py`` never import back.
@@ -22,15 +28,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     BLOCKER_EDGE_TYPES,
+    LINK_READ_TIMEOUT_S,
     PROVENANCE_EDGE_TYPE,
     Breadcrumb,
     LinkPage,
+    PageTail,
     TaskLinkClient,
+    bounded_page,
     gate_type_of,
     incoming_targets,
     load_link_page,
@@ -104,6 +113,11 @@ class FindingView:
 @dataclass(frozen=True)
 class TaskDetailData:
     task: TaskRecord | None
+    # ONE limiter for this render's whole fan-out — the neighbour pages AND the
+    # finding-note lookups. Per-call-site limiters would let a single render
+    # run several pages' worth of slots at once.
+    limiter = new_link_limiter()
+
     task_status: TaskStatusRecord | None = None
     findings: tuple[FindingView, ...] = ()
     # The level-1 blocker chain and the two provenance directions. Each is a
@@ -114,9 +128,14 @@ class TaskDetailData:
     spawned: LinkPage = LinkPage()
     breadcrumb: Breadcrumb = Breadcrumb()
     # Direct children, closed ones included so a child's status is legible.
-    # One ``lithos_task_children`` call — one round trip returning N rows, not
-    # N round trips — so this is not part of the fan-out bound above.
+    # ONE ``lithos_task_children`` call, so this costs no round-trip fan-out —
+    # but M is agent-chosen just like the edge count, and ``include_closed``
+    # maximises it, so what needs bounding here is the RENDER: an epic with a
+    # runaway child set would otherwise concatenate M rows into every response,
+    # on every auto-refresh. Sliced by the same ``bounded_page``, with
+    # ``children_tail`` naming the remainder through the same tail template.
     children: tuple[TaskRecord, ...] = ()
+    children_tail: PageTail = PageTail()
     status_state: SectionState = SectionState.OK
     findings_state: SectionState = SectionState.OK
     relations_state: SectionState = SectionState.OK
@@ -178,6 +197,11 @@ async def load_task_detail(
         return_exceptions=True,
     )
 
+    # ONE limiter for this render's whole fan-out — the neighbour pages AND the
+    # finding-note lookups. Per-call-site limiters would let a single render
+    # run several pages' worth of slots at once.
+    limiter = new_link_limiter()
+
     task_status: TaskStatusRecord | None = None
     status_state = SectionState.OK
     if isinstance(status_result, BaseException):
@@ -193,16 +217,17 @@ async def load_task_detail(
         errors.append("Could not load findings.")
     else:
         finding_views = await resolve_finding_notes(
-            lithos, cast(list[FindingRecord], findings_result)
+            lithos, cast(list[FindingRecord], findings_result), limiter=limiter
         )
 
     children: tuple[TaskRecord, ...] = ()
+    children_tail = PageTail()
     children_state = SectionState.OK
     if isinstance(children_result, BaseException):
         children_state = SectionState.ERROR
         errors.append("Could not load child tasks.")
     else:
-        children = tuple(cast(list[TaskRecord], children_result))
+        children, children_tail = bounded_page(cast(list[TaskRecord], children_result))
 
     edges: tuple[EdgeRecord, ...] = ()
     relations_state = SectionState.OK
@@ -213,7 +238,7 @@ async def load_task_detail(
         edges = tuple(cast(list[EdgeRecord], edges_result))
 
     blockers, discovered_from, spawned, breadcrumb = await _load_relations(
-        lithos, task_id, edges
+        lithos, task_id, edges, limiter=limiter
     )
 
     return TaskDetailData(
@@ -225,6 +250,7 @@ async def load_task_detail(
         spawned=spawned,
         breadcrumb=breadcrumb,
         children=children,
+        children_tail=children_tail,
         status_state=status_state,
         findings_state=findings_state,
         relations_state=relations_state,
@@ -237,16 +263,18 @@ async def _load_relations(
     lithos: TaskDetailClient,
     task_id: str,
     edges: tuple[EdgeRecord, ...],
+    *,
+    limiter: asyncio.Semaphore,
 ) -> tuple[LinkPage, LinkPage, LinkPage, Breadcrumb]:
     """Turn one edge list into the page's three link pages and its breadcrumb.
 
-    The edge list is one round trip returning N rows; resolving those rows'
-    live statuses is N round trips on the shared MCP session, which is why
-    every one of these goes through ``task_links.load_link_page`` rather than
-    gathering the raw edge set. The three pages share ONE limiter, so the
-    bound is on this render's whole fan-out and not on each page separately.
+    The edge list is one round trip returning N rows, parsed locally in O(N);
+    resolving those rows' live statuses is N round trips on the shared MCP
+    session, each with its own latency and its own share of the contention.
+    That is why every one of these goes through ``task_links.load_link_page``
+    rather than gathering the raw edge set, and why the render's limiter is
+    threaded in rather than made per call site.
     """
-    limiter = new_link_limiter()
     blockers, discovered_from, spawned = await asyncio.gather(
         load_link_page(
             lithos,
@@ -271,21 +299,55 @@ async def _load_relations(
 async def resolve_finding_notes(
     lithos: TaskDetailClient,
     findings: list[FindingRecord],
+    *,
+    limiter: asyncio.Semaphore | None = None,
 ) -> tuple[FindingView, ...]:
-    cache: dict[str, NoteRecord | None] = {}
+    """Attach each finding's document title, through a BOUNDED note fan-out.
+
+    One ``lithos_read`` per DISTINCT knowledge id, and that count is
+    agent-chosen — ``lithos_finding_list`` takes no ``limit`` — so this is the
+    same unbounded per-render fan-out the blocker chain has, and it used to be
+    worse: it ran sequentially, so N reads cost N latencies end to end. It is
+    bounded the same way and by the same mechanism: one ``bounded_page`` of
+    distinct ids, resolved concurrently under the render's shared limiter, each
+    deadlined.
+
+    EVERY finding still renders. One whose id fell outside the page shows the
+    generic link label instead of the document title — a link the operator can
+    still follow, not a dropped row — and deliberately carries no
+    ``note_error``: that line is reserved for reads that actually failed, and
+    claiming a failure here would be false.
+    """
+    ordered = sorted(findings, key=lambda item: item.created_at)
+    distinct: list[str] = []
+    for finding in ordered:
+        if finding.knowledge_id and finding.knowledge_id not in distinct:
+            distinct.append(finding.knowledge_id)
+    page, _tail = bounded_page(distinct)
+    gate = limiter or new_link_limiter()
+
+    async def read(knowledge_id: str) -> Any:
+        async with gate:
+            return await asyncio.wait_for(
+                lithos.read_note(knowledge_id), LINK_READ_TIMEOUT_S
+            )
+
+    results = await asyncio.gather(
+        *(read(knowledge_id) for knowledge_id in page), return_exceptions=True
+    )
+    notes: dict[str, NoteRecord | None] = {
+        knowledge_id: None
+        if isinstance(result, BaseException)
+        else cast(NoteRecord | None, result)
+        for knowledge_id, result in zip(page, results, strict=True)
+    }
+
     views: list[FindingView] = []
-    for finding in sorted(findings, key=lambda item: item.created_at):
-        if not finding.knowledge_id:
+    for finding in ordered:
+        if not finding.knowledge_id or finding.knowledge_id not in notes:
             views.append(FindingView(finding=finding))
             continue
-        if finding.knowledge_id not in cache:
-            try:
-                cache[finding.knowledge_id] = await lithos.read_note(
-                    finding.knowledge_id
-                )
-            except Exception:
-                cache[finding.knowledge_id] = None
-        note = cache[finding.knowledge_id]
+        note = notes[finding.knowledge_id]
         views.append(
             FindingView(
                 finding=finding,

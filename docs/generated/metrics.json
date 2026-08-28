@@ -42,7 +42,7 @@
         "max_function": "lithos_lens.state.AppState.__init__"
       },
       "TaskGraph": {
-        "functions_over_10": 3,
+        "functions_over_10": 4,
         "max_complexity": 42,
         "max_function": "lithos_lens.frontier.load_dashboard"
       },
@@ -62,7 +62,7 @@
         "max_function": "lithos_lens.web.create_app.note"
       }
     },
-    "functions_over_10": 14,
+    "functions_over_10": 15,
     "top_functions": [
       {
         "complexity": 42,
@@ -97,19 +97,19 @@
         "qualname": "lithos_lens.lithos_client.LithosClient.recent_notes"
       },
       {
-        "complexity": 12,
-        "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
+        "complexity": 13,
+        "qualname": "lithos_lens.task_detail.resolve_finding_notes"
       },
       {
         "complexity": 12,
-        "qualname": "lithos_lens.frontier_join.classify_open_tasks"
+        "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
       }
     ],
-    "total_functions": 313
+    "total_functions": 317
   },
   "domain": {
-    "associations": 37,
-    "models": 37,
+    "associations": 38,
+    "models": 38,
     "models_without_docstrings": 14
   },
   "graph": {
@@ -287,14 +287,14 @@
         "sloc": 56
       },
       "TaskGraph": {
-        "classes": 16,
-        "functions": 70,
+        "classes": 17,
+        "functions": 74,
         "largest_module": "lithos_lens.frontier",
         "largest_module_lines": 751,
-        "lines": 2340,
+        "lines": 2486,
         "modules": 8,
-        "public_symbols": 35,
-        "sloc": 1801
+        "public_symbols": 37,
+        "sloc": 1904
       },
       "Tasks": {
         "classes": 15,
@@ -332,13 +332,13 @@
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 8177,
+    "total_lines": 8323,
     "total_modules": 29,
-    "total_sloc": 6460
+    "total_sloc": 6563
   },
   "tests": {
     "ratio": 1.77,
-    "src_lines": 8177,
-    "test_lines": 14514
+    "src_lines": 8323,
+    "test_lines": 14707
   }
 }

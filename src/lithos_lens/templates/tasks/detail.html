@@ -135,6 +135,13 @@
                 {% endfor %}
               </tbody>
             </table>
+            {# Same tail path as the blocker chain: the child count is
+               agent-chosen and include_closed maximises it, so an epic with a
+               runaway subtree shows a bounded table plus a counted remainder
+               rather than concatenating every row into every refresh. #}
+            {% with tail = detail.children_tail, page_noun = "children", page_label = "children" %}
+              {% include "tasks/link_tail.html" %}
+            {% endwith %}
           {% endif %}
         </section>
       {% endif %}

@@ -33,7 +33,7 @@ from lithos_lens.task_links import (
     LinkTarget,
     load_link_page,
 )
-from lithos_lens.tasks import TaskRecord
+from lithos_lens.tasks import FindingRecord, NoteRecord, TaskRecord
 from lithos_lens.web import create_app
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
@@ -276,8 +276,8 @@ def test_load_link_page_bounds_a_blocker_set_at_any_level() -> None:
     assert len(page.links) == LINK_PAGE_SIZE
     assert len(lithos.get_calls) == LINK_PAGE_SIZE
     assert page.total == 60
-    assert page.remaining == 60 - LINK_PAGE_SIZE
-    assert page.truncated
+    assert page.tail.remaining == 60 - LINK_PAGE_SIZE
+    assert page.tail.truncated
     # Live status, resolved through the same path the level-1 chain uses.
     assert page.links[0].task_id == "deep-000"
     assert page.links[0].status == "open"
@@ -291,8 +291,8 @@ def test_load_link_page_leaves_a_short_set_whole() -> None:
     page = asyncio.run(load_link_page(lithos, targets))
 
     assert len(page.links) == 3
-    assert page.remaining == 0
-    assert not page.truncated
+    assert page.tail.remaining == 0
+    assert not page.tail.truncated
 
 
 # --- Acceptance (d): the concurrency bound is retained alongside the count --
@@ -582,3 +582,196 @@ def test_a_failed_edge_read_degrades_only_the_blocker_section(
     assert "Nothing is blocking this task." not in text
     # The rest of the page still renders.
     assert "Unclaimed open task" in text
+
+
+# --- Round 2: the bound holds for every agent-sized set on the page --------
+
+
+def test_load_link_page_takes_no_page_size_override() -> None:
+    """correctness/f-001: an overridable page size is a hole in the bound, not
+    a convenience — ``targets[:-1]`` is not a smaller page but almost the whole
+    set, and the tail copy would then claim a size nobody used.
+
+    ``LINK_PAGE_SIZE`` is authoritative for every caller at every level, so the
+    parameter does not exist and a caller that reaches for it fails loudly
+    without issuing a single lookup.
+    """
+    lithos = _CountingLinkClient()
+    targets = [LinkTarget(f"deep-{index:04d}", "blocks") for index in range(200)]
+
+    with pytest.raises(TypeError):
+        load_link_page(lithos, targets, page_size=-1)  # type: ignore[call-arg]
+
+    assert lithos.get_calls == []
+    # And the bound the constant states really is what a normal call applies.
+    page = asyncio.run(load_link_page(lithos, targets))
+    assert len(lithos.get_calls) == LINK_PAGE_SIZE
+    assert page.tail.page_size == LINK_PAGE_SIZE
+
+
+def test_a_runaway_child_set_renders_one_page_plus_a_counted_tail(
+    lithos_lens_config_env: Path,
+) -> None:
+    """security/f-001: ``lithos_task_children`` costs one round trip, but M is
+    agent-chosen and ``include_closed=True`` maximises it, so what needs
+    bounding is the RENDER — every row is otherwise concatenated into every
+    response, on every auto-refresh tick.
+
+    Bounded through the same page and the same tail path as the blockers, at no
+    extra lookup: the records are already in hand.
+    """
+    extra = 9
+    fake = TaskFakeLithosClient()
+    child_ids = []
+    for index in range(LINK_PAGE_SIZE + extra):
+        child_id = f"child-{index:03d}"
+        child_ids.append(child_id)
+        fake.tasks.append(_task(child_id, title=f"Child {index:03d}"))
+    fake.children["open-unclaimed"] = child_ids
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    assert text.count("data-child-id=") == LINK_PAGE_SIZE
+    assert 'data-child-id="child-000"' in text
+    assert f'data-child-id="child-{LINK_PAGE_SIZE:03d}"' not in text
+    # Visible, not silent — and through the one shared tail path.
+    assert 'data-link-tail="children"' in text
+    assert f"{extra} more children not shown." in text
+    assert f"This task has {LINK_PAGE_SIZE + extra} children in all" in text
+    # The bound is a RENDER bound: it costs no extra Lithos reads.
+    assert fake.get_calls == ["open-unclaimed"]
+
+
+def test_a_short_child_set_renders_whole_with_no_tail(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The ordinary case must not pay for the bound."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task("child-only", title="Only child"))
+    fake.children["open-unclaimed"] = ["child-only"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert "Only child" in response.text
+    assert 'data-link-tail="children"' not in response.text
+
+
+def _finding(index: int) -> FindingRecord:
+    return FindingRecord(
+        id=f"finding-{index:03d}",
+        task_id="open-unclaimed",
+        agent="worker-a",
+        summary=f"Finding {index:03d}",
+        knowledge_id=f"note-{index:03d}",
+        created_at=f"2026-08-01T10:{index:02d}:00+00:00",
+    )
+
+
+class _NoteCountingFake(TaskFakeLithosClient):
+    """Counts and times the finding-note lookups a render makes."""
+
+    def __init__(self, *, delay: float = 0.0) -> None:
+        super().__init__()
+        self.delay = delay
+        self.note_reads: list[str] = []
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        self.note_reads.append(knowledge_id)
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+        finally:
+            self.in_flight -= 1
+        return NoteRecord(id=knowledge_id, title=f"Doc {knowledge_id}", content="")
+
+
+def test_finding_note_lookups_are_bounded_and_concurrent() -> None:
+    """security/f-002: one ``lithos_read`` per distinct knowledge id, with the
+    id count agent-chosen and ``lithos_finding_list`` accepting no limit — the
+    same unbounded per-render fan-out as the blocker chain, and it used to run
+    SEQUENTIALLY, so N reads cost N latencies end to end.
+
+    Now: one page of lookups, under the render's shared limiter and deadline.
+    """
+    extra = 11
+    fake = _NoteCountingFake(delay=0.01)
+    fake.findings["open-unclaimed"] = [
+        _finding(index) for index in range(LINK_PAGE_SIZE + extra)
+    ]
+
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    assert len(fake.note_reads) == LINK_PAGE_SIZE
+    # Concurrent (not the old sequential walk), and still inside the bound.
+    assert 1 < fake.peak_in_flight <= LINK_FANOUT_CONCURRENCY
+    # EVERY finding still renders — the bound costs titles, never rows.
+    assert len(detail.findings) == LINK_PAGE_SIZE + extra
+    resolved = [view for view in detail.findings if view.note_title]
+    assert len(resolved) == LINK_PAGE_SIZE
+    # A finding outside the page shows the generic label and claims NO failure:
+    # "could not resolve" is reserved for reads that actually failed.
+    unresolved = [view for view in detail.findings if not view.note_title]
+    assert all(view.note_error == "" for view in unresolved)
+    assert all(view.link_label == "View document" for view in unresolved)
+
+
+def test_a_stalled_neighbour_read_cannot_pin_a_fan_out_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """security/f-004: count and concurrency were bounded; DURATION was not.
+
+    Nothing below this helper imposes a deadline — ``session.call_tool`` takes
+    no timeout and uvicorn sets no request deadline — so eight answerless reads
+    would pin every slot and the request task for as long as the session stays
+    half-open, and the rest of the page would never run.
+    """
+    monkeypatch.setattr("lithos_lens.task_links.LINK_READ_TIMEOUT_S", 0.05)
+
+    class StalledClient(_CountingLinkClient):
+        async def task_get(self, task_id: str) -> TaskRecord:
+            self.get_calls.append(task_id)
+            await asyncio.sleep(30)
+            raise AssertionError("unreachable")
+
+    lithos = StalledClient()
+    targets = [LinkTarget(f"deep-{index:03d}", "blocks") for index in range(10)]
+
+    page = asyncio.run(load_link_page(lithos, targets))
+
+    # The page still answers, every line rendered, none of them claiming a
+    # status it never read.
+    assert len(page.links) == 10
+    assert all(link.unresolved for link in page.links)
+
+
+def test_a_stalled_parent_read_does_not_stall_the_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The breadcrumb walk is sequential, so one answerless read there stalls
+    the whole render rather than one slot of it."""
+    monkeypatch.setattr("lithos_lens.task_links.LINK_READ_TIMEOUT_S", 0.05)
+
+    class StalledParentFake(TaskFakeLithosClient):
+        async def task_get(self, task_id: str) -> TaskRecord:
+            if task_id == "slow-parent":
+                await asyncio.sleep(30)
+            return await super().task_get(task_id)
+
+    fake = StalledParentFake()
+    fake.tasks.append(_task("slow-parent", title="Slow parent"))
+    _link(fake, "slow-parent", "open-unclaimed", "parent_child")
+
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    assert detail.task is not None
+    assert detail.breadcrumb.ancestors == ()
+    assert detail.breadcrumb.incomplete

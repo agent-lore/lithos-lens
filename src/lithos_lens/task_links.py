@@ -20,19 +20,36 @@ establishment, and uvicorn sets no request deadline. So the fan-out is bounded
 here, twice over:
 
 - **Count** — only the first :data:`LINK_PAGE_SIZE` neighbours are resolved,
-  and the remainder renders as a tail (``templates/tasks/link_page.html``)
-  that SAYS how many more there are. A silently clipped "why can't this run?"
-  list is worse than a slow one, so the tail follows the dashboard's
-  frontier-truncation precedent: an accuracy banner, not a disappearance.
+  and the remainder renders as a tail that SAYS how many more there are
+  (``templates/tasks/link_tail.html``, the one path that renders one). A
+  silently clipped "why can't this run?" list is worse than a slow one, so
+  the tail follows the dashboard's frontier-truncation precedent: an accuracy
+  banner, not a disappearance.
 - **Concurrency** — at most :data:`LINK_FANOUT_CONCURRENCY` of those reads are
   in flight at once. The two cover different dimensions and neither replaces
   the other: a count bound alone still lets one render dump a whole page onto
   the session in a single gather, and a concurrency bound alone leaves the
   TOTAL work — and so the render's duration — unbounded.
+- **Duration** — each of those reads carries :data:`LINK_READ_TIMEOUT_S` as a
+  deadline. A slot held by a call that never answers is worse than an
+  unbounded count: it pins one of the few slots (and the request task) for as
+  long as the session stays half-open, and nothing below imposes a deadline of
+  its own.
 
-Together they make one detail render's neighbour fan-out statically bounded:
-at most ``LINK_PAGE_SIZE`` reads per page loaded, plus at most
-``2 * PARENT_BREADCRUMB_MAX_DEPTH`` for the breadcrumb walk.
+What that bounds, precisely, is the number and duration of ROUND TRIPS one
+render makes over a task's neighbours: at most ``LINK_PAGE_SIZE`` reads per
+page loaded, plus at most ``2 * PARENT_BREADCRUMB_MAX_DEPTH`` for the
+breadcrumb walk, each deadlined.
+
+What it does NOT bound is the SIZE of the one ``lithos_task_edge_list``
+response those pages are sliced from. That call takes no ``limit`` (see
+``tests/contracts/_tools_snapshot.json``), so a task with M agent-written
+edges is parsed and normalised in full inside the client before this module
+sees a single record. A ceiling applied here would be theatre — the O(M) parse
+has already happened by then — so the honest statement is that the round-trip
+fan-out is bounded and the edge-list ingestion is not. Render size is bounded
+separately, by the same page: see :func:`bounded_page`, which every rendered
+neighbour list and the children table share.
 
 T1-S8 expands an unfinished blocker one level deeper on demand. It resolves
 each new level through :func:`load_link_page` too, so the page size, the
@@ -80,6 +97,14 @@ LINK_PAGE_SIZE = 25
 # Deliberately BELOW the page size, so it actually binds instead of being a
 # formality the page bound already covers.
 LINK_FANOUT_CONCURRENCY = 8
+
+# Deadline on a single neighbour read. Lens tool calls are user-facing and
+# short-lived, so failing fast beats blocking a page render — the same call
+# ``lithos_client._SESSION_WAIT_TIMEOUT_S`` makes, and the same figure, because
+# nothing under this module imposes one: ``session.call_tool`` takes no
+# timeout, and uvicorn sets no request deadline. A read that trips this renders
+# as an unresolved line rather than failing the page.
+LINK_READ_TIMEOUT_S = 5.0
 
 # How far the parent walk climbs before it stops and says so. The forest is
 # shallow in practice (epic -> task); this bounds the SEQUENTIAL read chain the
@@ -147,27 +172,65 @@ class LinkedTask:
 
 
 @dataclass(frozen=True)
+class PageTail:
+    """What a bounded page did NOT render, and how much of it there was.
+
+    The single input to the tail template (``templates/tasks/link_tail.html``),
+    so every bounded surface on the detail page — the blocker chain, both
+    provenance directions, the children table — states its overflow in one
+    voice. Carrying ``total`` rather than a bare truncation flag is the point:
+    the operator gets to see how many more there are.
+
+    ``page_size`` is a property, not a field: :data:`LINK_PAGE_SIZE` is the one
+    authoritative page size and no caller may state a different one in the copy
+    an operator reads.
+    """
+
+    shown: int = 0
+    total: int = 0
+
+    @property
+    def page_size(self) -> int:
+        return LINK_PAGE_SIZE
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.total - self.shown)
+
+    @property
+    def truncated(self) -> bool:
+        return self.remaining > 0
+
+
+def bounded_page[T](items: Sequence[T]) -> tuple[tuple[T, ...], PageTail]:
+    """Take the first :data:`LINK_PAGE_SIZE` items and COUNT the rest.
+
+    The one place a set decides how much of itself to render, whatever it holds
+    — neighbour targets awaiting a ``task_get`` (:func:`load_link_page`), or
+    records already in hand (the children table). Deliberately takes no page
+    size: an overridable one is a hole in exactly the bound this exists to be,
+    since ``items[:-1]`` is not a smaller page but almost the whole set.
+    """
+    shown = tuple(items[:LINK_PAGE_SIZE])
+    return shown, PageTail(shown=len(shown), total=len(items))
+
+
+@dataclass(frozen=True)
 class LinkPage:
     """One bounded page of a task's neighbours, plus the size of its tail.
 
     ``links`` are the neighbours whose live status was read; ``total`` is how
     many the edge list reported. The two differ exactly when the edge set is
-    larger than ``page_size``, which is what :attr:`remaining` reports and the
-    tail renders. Keeping ``total`` (rather than a bare truncation flag) is the
-    point: the operator gets to see how many more blockers exist.
+    larger than :data:`LINK_PAGE_SIZE`, which is what :attr:`tail` reports and
+    the tail template renders.
     """
 
     links: tuple[LinkedTask, ...] = ()
     total: int = 0
-    page_size: int = LINK_PAGE_SIZE
 
     @property
-    def remaining(self) -> int:
-        return max(0, self.total - len(self.links))
-
-    @property
-    def truncated(self) -> bool:
-        return self.remaining > 0
+    def tail(self) -> PageTail:
+        return PageTail(shown=len(self.links), total=self.total)
 
 
 @dataclass(frozen=True)
@@ -243,28 +306,39 @@ async def load_link_page(
     lithos: TaskLinkClient,
     targets: Sequence[LinkTarget],
     *,
-    page_size: int = LINK_PAGE_SIZE,
     limiter: asyncio.Semaphore | None = None,
 ) -> LinkPage:
-    """Read the live status of the first ``page_size`` targets; count the rest.
+    """Read the live status of one page of targets; count the rest.
 
     THE bounded fan-out, and the only place a neighbour list decides how much
-    of itself to resolve. It issues at most ``page_size`` ``lithos_task_get``
-    calls whatever ``targets`` holds, at most :data:`LINK_FANOUT_CONCURRENCY`
-    of them at a time, and reports ``total`` so the caller's tail can name the
-    remainder instead of hiding it.
+    of itself to resolve. It issues at most :data:`LINK_PAGE_SIZE`
+    ``lithos_task_get`` calls whatever ``targets`` holds, at most
+    :data:`LINK_FANOUT_CONCURRENCY` of them at a time, each deadlined at
+    :data:`LINK_READ_TIMEOUT_S`, and reports ``total`` so the caller's tail can
+    name the remainder instead of hiding it.
+
+    There is NO page-size parameter, by design. An override would be a hole in
+    the bound rather than a convenience — a negative one selects nearly the
+    whole set through Python's slice, restoring the unbounded fan-out while
+    the tail copy claims otherwise — so :data:`LINK_PAGE_SIZE` is authoritative
+    for every caller at every level.
 
     Callable for a blocker set at any level: T1-S8 passes the blockers of an
     expanded blocker and gets the same page, the same bound and the same tail.
     """
     if not targets:
-        return LinkPage(total=0, page_size=page_size)
+        return LinkPage()
     gate = limiter or new_link_limiter()
-    page = tuple(targets[:page_size])
+    page, tail = bounded_page(targets)
 
     async def resolve(target: LinkTarget) -> Any:
         async with gate:
-            return await lithos.task_get(target.task_id)
+            # Deadlined INSIDE the gate: an answerless read would otherwise
+            # hold one of the few slots for as long as the session stays
+            # half-open, starving the rest of the page behind it.
+            return await asyncio.wait_for(
+                lithos.task_get(target.task_id), LINK_READ_TIMEOUT_S
+            )
 
     results = await asyncio.gather(
         *(resolve(target) for target in page), return_exceptions=True
@@ -274,8 +348,7 @@ async def load_link_page(
             _linked_task(target, result)
             for target, result in zip(page, results, strict=True)
         ),
-        total=len(targets),
-        page_size=page_size,
+        total=tail.total,
     )
 
 
@@ -295,8 +368,12 @@ async def load_parent_breadcrumb(
     load-bearing, but this walk is driven by agent-written edges and a cycle
     here would be an unbounded request loop rather than a wrong picture.
 
-    Any of those stops (and a failed read) sets ``incomplete``, so the trail
-    never implies its first entry is the root when it is not.
+    Each read carries :data:`LINK_READ_TIMEOUT_S` too — a walk this shape has
+    no concurrency to lose, but every one of its reads is on the render's
+    critical path.
+
+    Any of those stops (and a failed or timed-out read) sets ``incomplete``, so
+    the trail never implies its first entry is the root when it is not.
     """
     ancestors: list[TaskRecord] = []
     seen = {task_id}
@@ -312,9 +389,16 @@ async def load_parent_breadcrumb(
             break
         seen.add(parent_id)
         try:
-            parent = await lithos.task_get(parent_id)
-            parent_edges = await lithos.task_edge_list(
-                parent_id, direction="incoming", types=[PARENT_EDGE_TYPE]
+            # Deadlined for the same reason the page reads are: this walk is
+            # SEQUENTIAL, so one answerless read stalls the whole render.
+            parent = await asyncio.wait_for(
+                lithos.task_get(parent_id), LINK_READ_TIMEOUT_S
+            )
+            parent_edges = await asyncio.wait_for(
+                lithos.task_edge_list(
+                    parent_id, direction="incoming", types=[PARENT_EDGE_TYPE]
+                ),
+                LINK_READ_TIMEOUT_S,
             )
         except Exception:
             incomplete = True

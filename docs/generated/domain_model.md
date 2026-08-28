@@ -153,7 +153,6 @@ classDiagram
   }
   class LinkPage {
     +total int
-    +page_size int
   }
   class LinkedTask {
     +task_id str
@@ -163,6 +162,10 @@ classDiagram
     +task_type str
     +gate_type str
     +unresolved bool
+  }
+  class PageTail {
+    +shown int
+    +total int
   }
   class TaskDetailClient
   class TaskDetailData {
@@ -189,6 +192,7 @@ classDiagram
   TaskDetailData "1" --> "1" LinkPage : blockers
   TaskDetailData "1" --> "1" LinkPage : discovered_from
   TaskDetailData "1" --> "1" LinkPage : spawned
+  TaskDetailData "1" --> "1" PageTail : children_tail
   TaskDetailData "1" --> "0..*" TaskRecord : children
   TaskDetailData "1" --> "0..1" TaskRecord : task
   TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status

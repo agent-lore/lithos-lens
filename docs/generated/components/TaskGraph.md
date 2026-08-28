@@ -16,9 +16,9 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 2 |
-| `lithos_lens.task_detail` | S | 3 | 2 |
+| `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
-| `lithos_lens.task_links` | M | 5 | 6 |
+| `lithos_lens.task_links` | M | 6 | 7 |
 
 ## Public API
 
@@ -50,7 +50,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `FindingView`
 - class `TaskDetailData`
 - def `load_task_detail`
-- def `resolve_finding_notes`
+- def `resolve_finding_notes` — Attach each finding's document title, through a BOUNDED note fan-out.
 
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.
@@ -64,13 +64,15 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `TaskLinkClient` — The narrow client surface the neighbour reads need.
 - class `LinkTarget` — One neighbour id to resolve, with the edge type that named it.
 - class `LinkedTask` — One neighbour of a task, carrying the live status actually read for it.
+- class `PageTail` — What a bounded page did NOT render, and how much of it there was.
+- def `bounded_page` — Take the first :data:`LINK_PAGE_SIZE` items and COUNT the rest.
 - class `LinkPage` — One bounded page of a task's neighbours, plus the size of its tail.
 - class `Breadcrumb` — The parent chain above a task, root FIRST.
 - def `gate_type_of` — The ``metadata.gate_type`` of a gate (human/timer/ci/pr/external_task).
 - def `incoming_targets` — Neighbours on edges pointing AT ``task_id`` (``other -> task_id``).
 - def `outgoing_targets` — Neighbours on edges pointing AWAY from ``task_id`` (``task_id -> other``).
 - def `new_link_limiter` — A fan-out limiter for ONE render.
-- def `load_link_page` — Read the live status of the first ``page_size`` targets; count the rest.
+- def `load_link_page` — Read the live status of one page of targets; count the rest.
 - def `load_parent_breadcrumb` — Walk ``parent_child`` upward from a task towards its root.
 
 ## Dependencies
