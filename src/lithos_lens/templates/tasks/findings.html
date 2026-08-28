@@ -1,10 +1,20 @@
-<section>
+{# `data-refresh-fragment="findings"` is what tasks.js swaps when a
+   finding.posted event arrives on the open task: the reconcile re-requests
+   THIS section from /tasks/{id}/findings rather than re-rendering the whole
+   detail page, so the event rate cannot drive the graph fan-out. The marker
+   has to live in the shared template, because the same file is both the
+   included section and the fragment response. #}
+<section data-refresh-fragment="findings">
   <h2>Findings</h2>
   {% if offline %}
     <p class="warning-text">Findings unavailable while Lithos is offline.</p>
   {% elif detail and detail.findings_state == "error" %}
     <p class="warning-text">Findings unavailable. Refresh this task to retry.</p>
   {% elif detail and detail.findings %}
+    {# The WHOLE timeline: §5.6 has no paging controls, and unlike the
+       related-task lists there is no per-row read to bound — the summaries
+       arrive in one call. The bounded part is the note-title fan-out, and a
+       row without a resolved title still renders with the plain label. #}
     <ol class="findings-timeline">
       {% for item in detail.findings %}
         <li{% if item.is_reopen %} class="finding-reopened" data-reopen-finding{% endif %}>
@@ -17,7 +27,7 @@
           </header>
           <p>{{ item.finding.summary }}</p>
           {% if item.finding.knowledge_id %}
-            <a href="/note/{{ item.finding.knowledge_id }}?task={{ item.finding.task_id }}">{{ item.link_label }}</a>
+            <a href="{{ note_url(item.finding.knowledge_id, item.finding.task_id) }}">{{ item.link_label }}</a>
             {% if item.note_error %}
               <small class="warning-text">{{ item.note_error }}</small>
             {% endif %}

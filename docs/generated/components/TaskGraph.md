@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, and the dashboard assembly built on them.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, and the dashboard and task-detail assemblies built on them.
 
 **Tier:** Foundation
 
@@ -16,7 +16,9 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 2 |
+| `lithos_lens.task_detail` | M | 3 | 4 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
+| `lithos_lens.task_links` | M | 4 | 12 |
 
 ## Public API
 
@@ -43,6 +45,15 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
 
+### `lithos_lens.task_detail`
+- class `TaskDetailClientProtocol` — The subset of the Lithos client this page's loaders consume.
+- class `FindingView`
+- class `TaskDetailData`
+- def `latest_reopen_report` — The most recent reopen report on a task, if any.
+- def `load_task_detail` — Load everything ``/tasks/{id}`` renders, in three waves.
+- def `load_findings_timeline` — Just the findings timeline — what the ``/tasks/{id}/findings`` fragment renders, and nothing else.
+- def `resolve_finding_notes` — The WHOLE timeline, with knowledge-link titles for its newest page.
+
 ### `lithos_lens.task_graph`
 - class `BlockerRecord` — One structured reason a task is blocked, from a lithos_task_blocked row.
 - class `EdgeRecord` — A task-graph edge as returned by lithos_task_edge_list.
@@ -50,6 +61,24 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `normalize_blocker`
 - def `normalize_blocked_task`
 - def `normalize_edge`
+
+### `lithos_lens.task_links`
+- class `TaskLinkClientProtocol` — The narrow client surface the link loaders need.
+- def `task_type_badge` — The header/type badge text: ``task``, ``epic``, or ``gate: human``.
+- class `TaskLink` — One related task rendered on the detail page, with its LIVE status.
+- class `LinkPage` — One first-page-plus-tail slice of a related-task list.
+- class `Breadcrumb` — The parent chain above a task, root first.
+- def `deadline_or_budget` — The caller's deadline, or a fresh :data:`DETAIL_RENDER_BUDGET_S` one.
+- def `until` — Await ``awaitable`` until ``deadline``, then give up on it.
+- def `until_or` — :func:`until`, answering with ``degraded`` instead of raising.
+- def `first_page` — Split ``items`` into the first page and how many were left off.
+- def `last_page` — The LAST page of ``items`` (order preserved) and how many precede it.
+- def `select_edges` — The edges of ``types`` pointing ``direction`` relative to the focus task.
+- def `linked_tasks` — Far endpoint -> the edge type that first named it, in edge order.
+- def `link_page_from_tasks` — Page a list of ALREADY-LOADED tasks (the children table).
+- def `load_link_page` — Resolve the first page of an edge set into links with live status.
+- def `load_blocker_page` — One task's level-1 blockers as a bounded page — at ANY level.
+- def `load_parent_chain` — Walk incoming ``parent_child`` edges up to the root epic.
 
 ## Dependencies
 

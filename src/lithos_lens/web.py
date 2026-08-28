@@ -41,10 +41,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.state import AppState
-from lithos_lens.task_detail import (
-    find_task,
-    load_task_detail,
-)
+from lithos_lens.task_detail import load_findings_timeline, load_task_detail
 from lithos_lens.tasks import (
     default_since,
     format_display_date,
@@ -109,6 +106,7 @@ def create_app(
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
+    templates.env.globals["note_url"] = note_url
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -226,7 +224,13 @@ def create_app(
                     "offline": True,
                 },
             )
-        detail = await load_task_detail(state.lithos_client, task_id)
+        # The fragment renders the timeline only, so it loads the timeline
+        # only — never the whole detail page's graph fan-out (security/f-002).
+        # This is the endpoint the detail page's finding.posted reconcile
+        # actually requests (``refreshFindings`` in ``static/tasks.js``, which
+        # swaps the ``data-refresh-fragment="findings"`` section); the whole
+        # page is re-rendered on a floor, not on the event rate.
+        detail = await load_findings_timeline(state.lithos_client, task_id)
         return templates.TemplateResponse(
             request,
             "tasks/findings.html",
@@ -312,9 +316,7 @@ def create_app(
         else:
             outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
             if outcome.kind == "redirect":
-                return RedirectResponse(
-                    f"/note/{quote(outcome.target_id)}", status_code=302
-                )
+                return RedirectResponse(note_url(outcome.target_id), status_code=302)
         return templates.TemplateResponse(
             request,
             "knowledge/resolve.html",
@@ -364,8 +366,12 @@ def create_app(
                 produced_by = await load_produced_by(state.lithos_client, note_record)
             task_id = request.query_params.get("task", "")
             if task_id:
+                # One addressed read (T1-S7 retired the three-list scan that
+                # used to stand in for it). Any failure — the task_not_found
+                # envelope or a transport error — just drops the back-link;
+                # the note itself renders either way.
                 try:
-                    task = await find_task(state.lithos_client, task_id)
+                    task = await state.lithos_client.task_get(task_id)
                 except Exception:
                     task = None
         return templates.TemplateResponse(
@@ -487,9 +493,45 @@ def task_tag_url(request: Request, tag: str) -> str:
 
 
 def task_detail_url(request: Request, task_id: str) -> str:
+    """Link to a task's detail page, with the id ENCODED like a note's.
+
+    ``safe=""`` for the same reason :func:`note_url` gives: the default
+    ``quote`` leaves ``/`` alone, and ``/`` is the character a traversal needs
+    — ``href="/tasks/../note/x"`` is normalized by the browser before it is
+    requested. Task ids reaching here are server-minted today
+    (``lithos_task_create`` has no id field, and ``lithos_task_edge_upsert``
+    rejects an endpoint that does not exist), so this is hardening, not a live
+    hole: it is the CLOSURE that is upstream, not the escaping. T1-S7 gave this
+    helper three new sinks whose contents an agent controls — every blocker,
+    provenance and children row, and every breadcrumb ancestor — so one
+    imported id, or an upstream that later accepts a caller-chosen one, must
+    not be what decides where these rows point. The two id-in-path helpers now
+    agree.
+    """
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
-    return f"/tasks/{quote(task_id)}{suffix}"
+    return f"/tasks/{quote(task_id, safe='')}{suffix}"
+
+
+def note_url(knowledge_id: str, task_id: str = "") -> str:
+    """Link to a note, with the id ENCODED rather than interpolated.
+
+    A note id reaching this function is not necessarily a server-minted UUID:
+    ``lithos_finding_post`` declares ``knowledge_id`` as a bare string with no
+    pattern, Lithos does not require the cited document to exist, and
+    ``normalize_finding`` passes the value through verbatim. Interpolated raw,
+    an id of ``../tasks/<other>`` renders an href the browser normalizes to a
+    different Lens page BEFORE it requests it — so the "View document" link on
+    a findings timeline would claim to open the cited document and open
+    somewhere else, chosen by whichever agent posted the finding.
+
+    ``safe=""`` is the point: the default ``quote`` leaves ``/`` alone, which
+    is exactly the character the traversal needs. The ``?task=`` back-link is
+    built with ``urlencode`` for the same reason — so a value carrying ``&``
+    or ``#`` cannot graft extra parameters onto the URL.
+    """
+    suffix = f"?{urlencode({'task': task_id})}" if task_id else ""
+    return f"/note/{quote(knowledge_id, safe='')}{suffix}"
 
 
 def epic_scope_url(request: Request, epic_id: str) -> str:

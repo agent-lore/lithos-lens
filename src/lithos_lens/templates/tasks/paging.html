@@ -1,0 +1,56 @@
+{#
+  Paging chrome for the task detail page: the ONE tail wording, and the ONE
+  first-page-plus-tail list render built on it.
+
+  `overflow_tail` is used by every list on the page that can overflow — the
+  related-task lists below (blockers, provenance both ways, children) and the
+  findings timeline in `findings.html`. Paging itself is decided in
+  `task_detail.first_page` / `last_page` (DETAIL_PAGE_SIZE); this file is the
+  matching single place the remainder is WORDED, so a list can never be
+  trimmed on one surface and unlabelled on another. T1-S8's deeper blocker
+  levels render through `link_list` too.
+
+  The tail is deliberately loud. The realistic cause of an overflowing list is
+  a buggy agent minting edges or findings in a loop, and a silently truncated
+  blocker list on a "why can't this run?" page reads as a complete answer — so
+  the tail states how many more exist, in the same accuracy-banner idiom the
+  dashboard uses for its frontier-limit ("Not classified") tail.
+#}
+{% macro overflow_tail(shown, remaining, noun, kept="first") %}
+  {% if remaining %}
+    <p class="warning-text" data-overflow-tail="{{ noun | replace(" ", "-") }}">
+      This list is incomplete: showing the {{ kept }} {{ shown }}
+      of {{ shown + remaining }} {{ noun }} &mdash; {{ remaining }} more are not shown.
+    </p>
+  {% endif %}
+{% endmacro %}
+
+{% macro link_list(page, noun) %}
+  {% if page.state == "error" %}
+    <p class="warning-text">{{ noun | capitalize }} unavailable. Refresh this task to retry.</p>
+  {% elif page.is_empty %}
+    {# A bare `.empty`: `.detail-panel .empty` in lens.css drops the panel
+       inset for every empty state in this panel, so an empty list sits at the
+       same left edge as the populated one it replaces — and so a new empty
+       branch cannot be added at the wrong edge by forgetting a class. #}
+    <p class="empty">No {{ noun }}.</p>
+  {% else %}
+    <ul class="link-list" data-link-list="{{ noun | replace(" ", "-") }}">
+      {% for link in page.links %}
+        <li data-link-id="{{ link.task_id }}">
+          {% if link.relation_label %}<span class="link-relation">{{ link.relation_label }}</span>{% endif %}
+          {% if link.resolved %}
+            <a href="{{ task_detail_url(request, link.task_id) }}">{{ link.title }}</a>
+          {% else %}
+            {# The lookup failed: name the id rather than drop the row — an
+               unreadable blocker is still a reason the task cannot run. #}
+            <span class="link-unresolved">{{ link.task_id }}</span>
+          {% endif %}
+          <span class="badge badge-{{ link.status or 'unknown' }}">{{ link.status_label }}</span>
+          {% if link.type_badge %}<span class="badge badge-type">{{ link.type_badge }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+    {{ overflow_tail(page.links | length, page.remaining, noun) }}
+  {% endif %}
+{% endmacro %}

@@ -164,6 +164,128 @@ test("clicking a task opens its detail page", async ({ page }) => {
   await expect(page.getByText("worker-a").first()).toBeVisible();
 });
 
+test("a finding event reconciles the whole detail page, not just its timeline", async ({
+  page,
+  request,
+}) => {
+  // The browser half of the reopened-marker lifecycle (T1-S7 review round 2,
+  // correctness/f-001). A reopen reaches an open page ONLY as finding.posted —
+  // `lithos_task_reopen` leaves no other trace and `task.reopened` is not a
+  // type Lens subscribes to yet — but the marker it produces renders in the
+  // header, outside the findings fragment. When the finding event refreshed
+  // that fragment ALONE, no request for the page itself ever followed, so the
+  // header kept a stale status, Resolution block and missing marker for as
+  // long as the tab stayed open. This asserts the requests the marker depends
+  // on actually happen: the fast fragment path AND the floored whole-page
+  // reconcile.
+  const detailPath = "/tasks/influx-ingest-cutover";
+  const reconciles: string[] = [];
+  const fragments: string[] = [];
+  page.on("request", (req) => {
+    // resourceType filters out the navigation itself: the reconcile refetches
+    // the same URL, but as a fetch.
+    if (req.resourceType() !== "fetch") return;
+    const path = new URL(req.url()).pathname;
+    if (path === detailPath) reconciles.push(path);
+    if (path === `${detailPath}/findings`) fragments.push(path);
+  });
+
+  await page.goto(detailPath);
+  await expect(page.locator(`[data-task-detail="influx-ingest-cutover"]`)).toBeVisible();
+
+  // The detail page carries no live-status chip, so there is nothing to wait
+  // on for the EventSource handshake: publish until one lands. Each publish
+  // re-arms the debounce, so the interval is wider than it (~800ms).
+  let published = 0;
+  await expect
+    .poll(
+      async () => {
+        const response = await request.post("/tasks/events/publish", {
+          data: {
+            id: `evt-e2e-finding-${Date.now()}-${published++}`,
+            type: "finding.posted",
+            task_id: "influx-ingest-cutover",
+            payload: {},
+          },
+        });
+        expect(response.status()).toBe(202);
+        return reconciles.length;
+      },
+      { timeout: 25000, intervals: [1500] },
+    )
+    .toBeGreaterThan(0);
+
+  // ...and the cheap path ran too: both, each on its own floor.
+  expect(fragments.length).toBeGreaterThan(0);
+});
+
+test("the breadcrumb ancestor reads as a link, not as chrome", async ({ page }) => {
+  // The artifact pass measured the ancestor at the same ink as the text you
+  // cannot click, with no underline: `nav a` in the shell's stylesheet (written
+  // for the primary navigation in base.html) was catching the breadcrumb
+  // because a breadcrumb is also a <nav>. Asserted through computed style
+  // rather than by eye, and against the page's OTHER links rather than against
+  // a hard-coded colour, since "looks like the other links here" is the
+  // property that was broken.
+  await page.goto("/tasks/influx-ingest-cutover");
+
+  const ancestor = page.locator("[data-parent-breadcrumb] a").first();
+  await expect(ancestor).toBeVisible();
+
+  const style = (locator: ReturnType<typeof page.locator>) =>
+    locator.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { color: cs.color, decoration: cs.textDecorationLine };
+    });
+
+  const ancestorStyle = await style(ancestor);
+  const separatorStyle = await style(
+    page.locator("[data-parent-breadcrumb] span[aria-hidden]").first(),
+  );
+  const contentLinkStyle = await style(
+    page.locator(".link-list a").first(),
+  );
+
+  expect(ancestorStyle.decoration).toContain("underline");
+  // Same treatment as every other in-content link on this page...
+  expect(ancestorStyle.color).toBe(contentLinkStyle.color);
+  // ...and no longer the same as the separators it sits between.
+  expect(ancestorStyle.color).not.toBe(separatorStyle.color);
+});
+
+test("every empty state in the detail panel sits at the content edge", async ({
+  page,
+}) => {
+  // influx-dashboards is the fixture with no claims and no findings, so all
+  // five empty branches are on screen at once: three lists, the claims block
+  // and the findings timeline. The first pass at this reached the three lists
+  // only, which moved the left-edge split from inside one section to between
+  // sections — measured here across every empty state the panel renders.
+  await page.goto("/tasks/influx-dashboards");
+  await expect(page.locator('[data-task-detail="influx-dashboards"]')).toBeVisible();
+
+  // Where the TEXT starts, not where the element box does: a full-width <p>
+  // keeps its container's left edge whatever its padding is, which is why the
+  // inset was invisible to anything but a pixel measurement of the ink. The
+  // content edge (border box + padding) is that measurement, computed.
+  const edges = await page.evaluate(() => {
+    const contentLeft = (el: Element) =>
+      Math.round(
+        el.getBoundingClientRect().left +
+          parseFloat(getComputedStyle(el).paddingLeft),
+      );
+    const panel = document.querySelector(".detail-panel")!;
+    return {
+      heading: contentLeft(panel.querySelector("h2")!),
+      empties: [...panel.querySelectorAll(".empty")].map(contentLeft),
+    };
+  });
+
+  // Three lists, the claims block and the findings timeline.
+  expect(edges.empties).toHaveLength(5);
+  expect(edges.empties).toEqual(edges.empties.map(() => edges.heading));
+});
+
 test("knowledge note renders server-side markdown", async ({ page }) => {
   await page.goto("/note/note-influx-plan");
 

@@ -374,12 +374,45 @@ def demo_dataset() -> FakeLithosDataset:
                 "influx-spike",
             ),
         },
+        # Edges are keyed by the task the edge list was fetched FOR, and each
+        # edge appears under both of its endpoints with the direction relative
+        # to that key — exactly what lithos_task_edge_list returns. The demo
+        # carries one of each type the detail page reads: `blocks` (the
+        # backfill's blocker chain), `parent_child` (its breadcrumb up to the
+        # epic) and `discovered_from` (the dashboards task was spawned out of
+        # the cutover).
         edges={
+            "influx-epic": (
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-ingest-cutover",
+                    type="parent_child",
+                    direction="outgoing",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-backfill",
+                    type="parent_child",
+                    direction="outgoing",
+                ),
+            ),
             "influx-ingest-cutover": (
                 EdgeRecord(
                     from_task_id="influx-ingest-cutover",
                     to_task_id="influx-backfill",
                     type="blocks",
+                    direction="outgoing",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-ingest-cutover",
+                    type="parent_child",
+                    direction="incoming",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-ingest-cutover",
+                    to_task_id="influx-dashboards",
+                    type="discovered_from",
                     direction="outgoing",
                 ),
             ),
@@ -388,6 +421,20 @@ def demo_dataset() -> FakeLithosDataset:
                     from_task_id="influx-ingest-cutover",
                     to_task_id="influx-backfill",
                     type="blocks",
+                    direction="incoming",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-backfill",
+                    type="parent_child",
+                    direction="incoming",
+                ),
+            ),
+            "influx-dashboards": (
+                EdgeRecord(
+                    from_task_id="influx-ingest-cutover",
+                    to_task_id="influx-dashboards",
+                    type="discovered_from",
                     direction="incoming",
                 ),
             ),

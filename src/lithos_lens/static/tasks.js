@@ -3,8 +3,32 @@
   const eventsUrl = config.eventsUrl || "/tasks/events";
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
+  const detailTaskId = config.detailTaskId || "";
+  // Two bounds on how often an EVENT STREAM may make this page render, because
+  // the stream is driven by clients that need no access to Lens at all
+  // (lithos_finding_post takes {task_id, agent, summary}, uncredentialed) and
+  // every event type carries requires_refresh.
+  //
+  // The FLOOR is per refresh path: never more than one run per interval, so
+  // the event rate cannot become the render rate. The detail page's whole-page
+  // reconcile is the expensive one (the graph fan-out behind /tasks/{id}), so
+  // it gets the long floor; the findings fragment is ~26 upstream calls, so it
+  // gets a short one. The dashboard keeps its ~800ms cadence — its reconcile
+  // is a list render, not a fan-out. Rate is the ONLY thing bounded: no event
+  // is dropped and no refresh path is skipped, because deciding that a given
+  // event "changes nothing else on this page" is a claim about every element
+  // the page renders, and this file is the wrong place to make it.
+  //
+  // The CEILING is the answer to the other direction: a debounce that re-arms
+  // on every event is starved by a stream faster than the debounce, so a
+  // pending refresh may be deferred, but never past this long from the FIRST
+  // event that deferred it. Without it "it lands later" would mean "it lands
+  // never, while the burst continues" — the board looking live and holding
+  // stale blockers, claims and statuses for as long as an agent keeps posting.
+  const DETAIL_RECONCILE_MIN_INTERVAL_MS = 5000;
+  const FINDINGS_MIN_INTERVAL_MS = 1000;
+  const MAX_DEFER_MS = 5000;
   let eventSource = null;
-  let reconcileTimer = null;
   let pollTimer = null;
   let reconnectRefreshPending = false;
   let latestRefreshToken = 0;
@@ -23,9 +47,83 @@
     description.textContent = detail;
   }
 
+  // One debounced refresh path: `run` at most once per `minIntervalMs`, and
+  // never deferred past MAX_DEFER_MS from the first event that deferred it.
+  // `lastRunAt` is stamped by the run itself, so a refresh issued any other
+  // way (the polling fallback, a reconnect) counts against the floor too.
+  const reconcile = {
+    run: refreshFragments,
+    // The floor is the DETAIL page's: on the dashboard this path is cheap.
+    minIntervalMs: detailTaskId ? DETAIL_RECONCILE_MIN_INTERVAL_MS : 0,
+    timer: null,
+    deferredSince: 0,
+    lastRunAt: 0
+  };
+  const findings = {
+    run: refreshFindings,
+    minIntervalMs: FINDINGS_MIN_INTERVAL_MS,
+    timer: null,
+    deferredSince: 0,
+    lastRunAt: 0,
+    inFlight: null
+  };
+
+  function scheduleRefresh(path, delay) {
+    const now = Date.now();
+    if (!path.deferredSince) path.deferredSince = now;
+    const at = Math.max(
+      path.lastRunAt + path.minIntervalMs,
+      Math.min(now + delay, path.deferredSince + MAX_DEFER_MS)
+    );
+    window.clearTimeout(path.timer);
+    path.timer = window.setTimeout(function () {
+      path.deferredSince = 0;
+      path.run();
+    }, Math.max(at - now, 0));
+  }
+
   function scheduleReconcile(delay) {
-    window.clearTimeout(reconcileTimer);
-    reconcileTimer = window.setTimeout(refreshFragments, delay || 800);
+    scheduleRefresh(reconcile, delay || 800);
+  }
+
+  // The findings timeline on its own, from the endpoint built for exactly this
+  // (/tasks/{id}/findings): one lithos_finding_list plus a bounded page of
+  // title reads, instead of the whole page's blocker/provenance/children
+  // fan-out. A finding event takes this path AND the reconcile, so the
+  // timeline lands on the short floor while the rest of the page — header
+  // badges, Resolution, the reopen marker — lands on the long one. What the
+  // cheap render buys is prompt timeline updates, not permission to skip.
+  function scheduleFindingsRefresh(delay) {
+    scheduleRefresh(findings, delay || 800);
+  }
+
+  async function refreshFindings() {
+    if (!detailTaskId) return;
+    findings.lastRunAt = Date.now();
+    // One findings fetch in flight per tab. The floor bounds how often this is
+    // ISSUED; without an abort nothing bounded how many were OUTSTANDING — a
+    // slow Lithos (up to the server's 20s render budget) let a tab stack
+    // fetches past the browser's ~6-connection pool for the origin and queue
+    // everything else the page needs behind them. Superseding the request also
+    // makes the response-ordering guard unnecessary: at most one can answer.
+    if (findings.inFlight) findings.inFlight.abort();
+    const controller = new AbortController();
+    findings.inFlight = controller;
+    try {
+      const response = await fetch(`/tasks/${encodeURIComponent(detailTaskId)}/findings`, {
+        headers: { "X-Lithos-Lens-Refresh": "findings" },
+        signal: controller.signal
+      });
+      if (!response.ok) return;
+      const text = await response.text();
+      const doc = new DOMParser().parseFromString(text, "text/html");
+      replaceFragment(doc, "findings");
+    } catch (error) {
+      // An abort is this function superseding itself, not a failure.
+      if (error.name !== "AbortError") throw error;
+    } finally {
+      if (findings.inFlight === controller) findings.inFlight = null;
+    }
   }
 
   function startPolling() {
@@ -40,6 +138,7 @@
 
   async function refreshFragments() {
     const token = ++latestRefreshToken;
+    reconcile.lastRunAt = Date.now();
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
@@ -47,7 +146,7 @@
     const text = await response.text();
     const doc = new DOMParser().parseFromString(text, "text/html");
     replaceFragment(doc, "dashboard-data");
-    if (config.detailTaskId) {
+    if (detailTaskId) {
       replaceFragment(doc, "detail");
     }
     setupDatePickers();
@@ -78,6 +177,16 @@
     if (type === "task.completed") closeTask(message, "completed");
     if (type === "task.cancelled") closeTask(message, "cancelled");
     if (type === "finding.posted") handleFinding(message);
+    // Every event with requires_refresh reconciles, findings included. A
+    // finding is NOT confined to the timeline fragment: `[Reopened]` findings
+    // drive `detail.reopen_report`, whose marker renders in the header's
+    // detail-meta, and a reopen also clears the status, resolved_at and
+    // outcome the page shows — none of which the fragment swaps. Skipping the
+    // reconcile here (T1-S7 round 2) left an open detail page reading
+    // "completed" with a stale Resolution block indefinitely, while its
+    // timeline showed the reopen and the live chip read connected. The FLOOR
+    // above is what bounds the cost; the skip was one step further than that
+    // needed, and it cost correctness.
     if (message.requires_refresh) scheduleReconcile();
   }
 
@@ -173,8 +282,11 @@
         chip.textContent = `${count} new finding${count === 1 ? "" : "s"}`;
       }
     }
-    if (config.detailTaskId && config.detailTaskId === message.task_id) {
-      scheduleReconcile(100);
+    // The timeline of the open task gets the fast path (its own floor, ~26
+    // upstream calls); everything else a finding can change on this page rides
+    // the reconcile the caller schedules.
+    if (detailTaskId && detailTaskId === message.task_id) {
+      scheduleFindingsRefresh(100);
     }
   }
 

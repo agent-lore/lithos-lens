@@ -11,14 +11,15 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.web` | M | 0 | 8 |
+| `lithos_lens.web` | M | 0 | 9 |
 
 ## Public API
 
 ### `lithos_lens.web`
 - def `create_app` — Create the Lithos Lens ASGI app.
 - def `task_tag_url`
-- def `task_detail_url`
+- def `task_detail_url` — Link to a task's detail page, with the id ENCODED like a note's.
+- def `note_url` — Link to a note, with the id ENCODED rather than interpolated.
 - def `epic_scope_url` — Link an epic chip to the dashboard scoped to that epic — or unscoped.
 - def `task_card_url` — Link a summary card to the board it actually counts.
 - def `tasks_url`
