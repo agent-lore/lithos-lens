@@ -123,10 +123,16 @@ test("blocked row renders styled blocker chips with a visible label", async ({ p
   expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
 });
 
-test("task.created event inserts a skeleton row in the pending strip", async ({ page, request }) => {
+test("task.created event inserts a skeleton row on an unfiltered board", async ({ page, request }) => {
   // Drives the REAL SSE path via the fake-mode publish seam: publish ->
   // in-process hub -> /tasks/events -> EventSource -> tasks.js skeleton.
-  await page.goto("/tasks?since=2026-08-01");
+  //
+  // Deliberately an UNFILTERED board. The optimistic row is suppressed on a
+  // narrowed one (see the next test), so `/tasks` is now the case where it is
+  // supposed to appear. This test doubles as the positive control for that
+  // one: it proves the publish seam and the client's event path work, so the
+  // absence asserted there is a real suppression and not a dead pipeline.
+  await page.goto("/tasks");
   await expect(page.locator('[data-live-state="live"]')).toBeVisible();
 
   const publish = await request.post("/tasks/events/publish", {
@@ -147,6 +153,60 @@ test("task.created event inserts a skeleton row in the pending strip", async ({ 
   );
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toContainText("Freshly created task");
+  // The link carries the board's query string, the way every other detail
+  // link on the page does.
+  await expect(skeleton.locator("a.task-title")).toHaveAttribute(
+    "href",
+    "/tasks/e2e-just-created",
+  );
+});
+
+test("the optimistic skeleton is suppressed on a filtered board", async ({ page, request }) => {
+  // a3fd5f01: `task.created` carries no tags, no project and no creator, so
+  // the client cannot evaluate the new task against the active scope. It used
+  // to insert the row anyway — asserting membership on a board that never
+  // checked it, and persisting if the ~800ms reconcile failed.
+  await page.goto("/tasks?tag=area%3Adata");
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+
+  const stamp = Date.now();
+  const created = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-created-${stamp}`,
+      type: "task.created",
+      task_id: "e2e-out-of-scope",
+      payload: { title: "Out of scope task" },
+      requires_refresh: false,
+    },
+  });
+  expect(created.status()).toBe(202);
+
+  // POSITIVE CONTROL, and the reason this absence assertion means something.
+  // A second event, published AFTER the first, whose effect IS visible on this
+  // board. One EventSource delivers both in order through one queue, so once
+  // the claim chip appears the `task.created` above has demonstrably been
+  // processed and declined — rather than still being in flight, or dropped by
+  // a broken pipeline, which is how an absence assertion passes for the wrong
+  // reason.
+  const claimed = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-claimed-${stamp}`,
+      type: "task.claimed",
+      task_id: "influx-ingest-cutover",
+      payload: { aspect: "e2e-probe", agent: "e2e-runner" },
+      requires_refresh: false,
+    },
+  });
+  expect(claimed.status()).toBe(202);
+
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-ingest-cutover"] [data-claim-aspect="e2e-probe"]'),
+  ).toHaveCount(1);
+
+  // Only now is this meaningful.
+  await expect(
+    page.locator('[data-task-row][data-task-id="e2e-out-of-scope"]'),
+  ).toHaveCount(0);
 });
 
 test("clicking a task opens its detail page", async ({ page }) => {
@@ -259,4 +319,63 @@ test("missing knowledge note shows the not-found banner", async ({ page }) => {
 test("live-updates status banner is present on the dashboard", async ({ page }) => {
   await page.goto("/tasks?since=2026-08-01");
   await expect(page.locator("[data-live-status]")).toBeVisible();
+});
+
+test("a slow render does not let the next reconcile overlap it", async ({ page, request }) => {
+  // 7e2a1ed1: `refreshFragments` had a `latestRefreshToken` guard that
+  // discarded a stale RESULT — after the server had already rendered it. Every
+  // per-request bound on the server is per-INVOCATION, so two overlapping
+  // reconciles each get their own full fan-out allowance, and LithosClient
+  // holds ONE MCP session for the whole process, so that contention degrades
+  // every surface rather than just this page.
+  //
+  // Asserted on REQUESTS ISSUED, which is the thing that costs a render.
+  // Determinism comes from HOLDING the first refresh open for the whole test,
+  // not from racing it: while it is held, a second request either was issued
+  // or was not. The waits below only have to exceed the 800ms reconcile
+  // debounce, so they are a bound, not a race.
+  await page.goto("/tasks");
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+
+  let issued = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await page.route("**/tasks**", async (route) => {
+    if (route.request().headers()["x-lithos-lens-refresh"] !== "tasks") {
+      await route.continue();
+      return;
+    }
+    issued += 1;
+    if (issued === 1) await held;
+    await route.continue();
+  });
+
+  const nudge = async (n: number) => {
+    const response = await request.post("/tasks/events/publish", {
+      data: {
+        id: `evt-e2e-reconcile-${Date.now()}-${n}`,
+        type: "finding.posted",
+        task_id: "influx-ingest-cutover",
+        payload: {},
+        requires_refresh: true,
+      },
+    });
+    expect(response.status()).toBe(202);
+  };
+
+  try {
+    await nudge(1);
+    await page.waitForTimeout(1600);
+    // The first render is still held open here. Without the in-flight guard
+    // this second reconcile fires its own fetch alongside it.
+    await nudge(2);
+    await page.waitForTimeout(1600);
+
+    expect(issued).toBe(1);
+  } finally {
+    release();
+  }
 });

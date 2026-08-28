@@ -165,6 +165,29 @@ def _preserved_filter_params(
     ]
 
 
+def board_is_filtered(request: Request) -> bool:
+    """True when this request narrows the board to a subset of tasks.
+
+    Exists so the optimistic skeleton row can be suppressed on a narrowed
+    board. The client cannot answer this itself: a ``task.created`` payload
+    carries no tags, no project and no creator, so there is nothing to evaluate
+    a new task against even if it wanted to.
+
+    Deliberately answered HERE rather than by the browser reading its own query
+    string, so the set of keys that count as narrowing has exactly one
+    definition — :data:`_PRESERVED_FILTER_KEYS` — instead of a second copy in
+    JavaScript that drifts the next time a filter is added.
+
+    Every preserved key counts, ``since`` included. A just-created task is
+    inside any past-anchored window, so ``since`` alone will rarely exclude it
+    — but "rarely" is the wrong bar for a row that ASSERTS membership and
+    persists if reconciliation fails, and a future ``since`` excludes it
+    outright. The conservative reading costs an optimistic row on a narrowed
+    board and buys a board that never claims something it has not checked.
+    """
+    return bool(_preserved_filter_params(request))
+
+
 def task_tag_url(request: Request, tag: str) -> str:
     params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))

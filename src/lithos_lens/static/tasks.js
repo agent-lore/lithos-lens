@@ -7,7 +7,8 @@
   let reconcileTimer = null;
   let pollTimer = null;
   let reconnectRefreshPending = false;
-  let latestRefreshToken = 0;
+  let refreshInFlight = false;
+  let refreshQueued = false;
   let currentLiveState = "paused";
   let currentLiveDetail = "Reconnecting; polling fallback is active";
 
@@ -38,12 +39,49 @@
     pollTimer = null;
   }
 
+  // ONE render in flight per tab, ever.
+  //
+  // This used to be a `latestRefreshToken` guard, which discarded a stale
+  // RESULT — after the server had already rendered it. That is not the same
+  // property. Every per-request bound on the server is per-INVOCATION, so two
+  // overlapping reconciles each get their own full allowance: on the task
+  // detail page a 25-slot fan-out becomes 25 x overlapping renders, capped in
+  // practice only by the browser's ~6 connections per origin. LithosClient
+  // holds ONE MCP session for the whole process, so that contention degrades
+  // every surface — the dashboard, /knowledge, /health — not just the page
+  // being viewed. Discarding the response afterwards saves none of it.
+  //
+  // An AbortController was the other option the finding offered. It is weaker
+  // here: cancelling the fetch tears down the client side, but a server-side
+  // render already in progress runs to completion — Starlette only notices a
+  // disconnect when it writes. Not issuing the second request is what actually
+  // bounds the work.
+  //
+  // Coalesced rather than dropped: a refresh asked for while one is running
+  // sets a flag and gets exactly ONE more pass afterwards, however many
+  // arrived. So the board still converges on the latest state, and a burst of
+  // events costs two renders rather than N.
   async function refreshFragments() {
-    const token = ++latestRefreshToken;
+    if (refreshInFlight) {
+      refreshQueued = true;
+      return;
+    }
+    refreshInFlight = true;
+    try {
+      do {
+        refreshQueued = false;
+        await runRefresh();
+      } while (refreshQueued);
+    } finally {
+      refreshInFlight = false;
+    }
+  }
+
+  async function runRefresh() {
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
-    if (!response.ok || token !== latestRefreshToken) return;
+    if (!response.ok) return;
     const text = await response.text();
     const doc = new DOMParser().parseFromString(text, "text/html");
     replaceFragment(doc, "dashboard-data");
@@ -88,6 +126,15 @@
   function insertSkeletonRow(message) {
     const taskId = message.task_id;
     if (!taskId || rowFor(taskId)) return;
+    // Not on a narrowed board. The `task.created` payload carries no tags, no
+    // project and no creator, so there is nothing here to evaluate the new
+    // task against the active scope — inserting anyway puts a row that ASSERTS
+    // membership onto a board that never checked it, and if the ~800ms
+    // reconcile then fails, it persists with nothing to say it is wrong. A
+    // cross-project tag board is exactly where an unrelated task appearing is
+    // both likely and confusing. `boardFiltered` is decided server-side so the
+    // preserved-key list has one definition (request_filters.board_is_filtered).
+    if (config.boardFiltered) return;
     // A just-created task has no known section yet (its frontier membership
     // arrives with the ~800ms reconciliation), so the skeleton lands in the
     // dedicated pending strip at the top of the board; the reconcile's
@@ -102,7 +149,7 @@
     row.dataset.taskId = taskId;
     row.dataset.taskStatus = "open";
     row.innerHTML = `
-      <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
+      <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}${escapeHtml(window.location.search)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
       <div class="task-row-meta"><span class="badge badge-open">open</span><span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span></div>
       <div class="claim-list" data-claim-list hidden></div>
     `;
