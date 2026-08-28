@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from asyncio import CancelledError
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -49,6 +49,7 @@ from lithos_lens.tasks import (
     default_since,
     format_display_date,
     format_tag,
+    honored_tags,
     parse_filters,
 )
 from lithos_lens.telemetry import install_request_middleware
@@ -474,11 +475,27 @@ _PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
 def _preserved_filter_params(
     request: Request, *, exclude: str = ""
 ) -> list[tuple[str, str]]:
-    return [
-        (key, value)
-        for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
-    ]
+    """The live filters of this request, ready to re-emit into a generated URL.
+
+    ``tag`` is rebuilt through ``honored_tags`` rather than echoed: the raw
+    ``?tag=`` is unbounded and attacker-controlled on an unauthenticated GET,
+    and this helper feeds EVERY generated tasks URL — the summary cards, each
+    row's detail link, each row's tag links. Echoing it raw re-emitted the
+    whole query string dozens of times per render, and left links carrying tags
+    the board itself had already dropped. Rebuilding here keeps every link both
+    bounded and truthful about what the board is filtering by.
+    """
+    params: list[tuple[str, str]] = []
+    for key, value in request.query_params.multi_items():
+        if key not in _PRESERVED_FILTER_KEYS or key == exclude or not value:
+            continue
+        if key != "tag":
+            params.append((key, value))
+    if exclude != "tag":
+        params.extend(
+            ("tag", tag) for tag in honored_tags(request.query_params.getlist("tag"))
+        )
+    return params
 
 
 def task_tag_url(request: Request, tag: str) -> str:
@@ -487,29 +504,25 @@ def task_tag_url(request: Request, tag: str) -> str:
     return f"/tasks?{urlencode(params)}"
 
 
-def task_tag_clear_url(request: Request, tag: str) -> str:
+def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     """Link an active-filter chip to the same board WITHOUT that one tag.
 
     The chip is the only place the ``?tag=`` scope is named: a cross-project
     tag (the monthly-roadmap convention) belongs to no project, so nothing else
     on the board says what the slice is — the row chips name each row's own
-    tags, not the filter.
+    tags, not the filter. Clearing one chip keeps the other tags rather than
+    dropping the whole filter.
 
-    Tags arrive repeated (``?tag=a&tag=b``) or comma-joined (``?tag=a,b``);
-    both forms are re-emitted as repeated params minus the cleared one, so
-    clearing one chip of a multi-tag scope keeps the rest rather than dropping
-    the whole filter.
+    ``tags`` is the HONOURED list (``TaskFilters.tags``) and NOT the raw query
+    string, which is what makes this link safe to render once per chip. The raw
+    ``?tag=`` is unbounded and arrives in two forms (repeated and comma-joined),
+    so rebuilding from it would re-emit the whole query string per chip — the
+    quadratic reflection ``MAX_FILTER_TAGS`` / ``MAX_FILTER_TAG_LENGTH`` exist
+    to stop. Rebuilding from the honoured list also keeps the link truthful:
+    clearing one chip cannot resurrect a tag the board is not filtering by.
     """
-    params: list[tuple[str, str]] = []
-    for key, value in _preserved_filter_params(request):
-        if key != "tag":
-            params.append((key, value))
-            continue
-        params.extend(
-            ("tag", part)
-            for part in (item.strip() for item in value.split(","))
-            if part and part != tag
-        )
+    params = _preserved_filter_params(request, exclude="tag")
+    params.extend(("tag", other) for other in tags if other != tag)
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 

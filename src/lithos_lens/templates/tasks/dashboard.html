@@ -191,10 +191,10 @@
           <span class="active-filters-label">Scoped to</span>
           {% for tag in dashboard.filters.tags %}
             <a class="active-filter-chip"
-               href="{{ task_tag_clear_url(request, tag) }}"
+               href="{{ task_tag_clear_url(request, dashboard.filters.tags, tag) }}"
                data-active-filter-tag="{{ tag }}"
                aria-label="Clear the {{ tag }} filter">
-              <span>{{ tag | format_tag }}</span>
+              <span class="active-filter-chip-label">{{ tag | format_tag }}</span>
               <span class="active-filter-chip-clear" aria-hidden="true">&times;</span>
             </a>
           {% endfor %}

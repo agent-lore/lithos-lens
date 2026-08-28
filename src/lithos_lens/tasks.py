@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -83,6 +84,26 @@ REOPENED_FINDING_PREFIX = "[Reopened]"
 # raise it. A safety bound rather than an operator dial, the same shape as the
 # client's ``_RECENT_NOTES_MAX_PAGES`` runaway guard.
 MAX_SINCE_LOOKBACK_DAYS = 365
+
+# Ceilings on the ``?tag=`` filter, applied at parse time. Safety bounds rather
+# than operator dials — the same shape as MAX_SINCE_LOOKBACK_DAYS above, and
+# deliberately far above any real filter: the live conventions are one tag
+# (``roadmap-2026-08``, ``loom-candidate``) and the AND form runs to two or
+# three.
+#
+# They exist because the tag list is the one filter the board reflects
+# QUADRATICALLY: the active-filter strip renders a chip per tag, and each
+# chip's "clear" link re-emits every OTHER tag. Unbounded, a 10 KB query string
+# rendered a 54 MB body, and 34 KB rendered 499 MB in 27s — which on
+# single-worker uvicorn blocks the event loop for every other operator for the
+# duration. The pair also bounds the per-task ``all(tag in task.tags …)`` cost
+# in ``matches_filters``.
+#
+# Both DEGRADE rather than reject, the same convention as the retired
+# ``claimed_state`` below: a query string nobody could have meant is honoured
+# as far as it is sane, never 400ed.
+MAX_FILTER_TAGS = 12
+MAX_FILTER_TAG_LENGTH = 128
 
 # Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
 # production corpus and their counts disagree: ``metadata.project = "<slug>"``
@@ -551,7 +572,7 @@ def parse_filters(
     )
     return TaskFilters(
         statuses=statuses,
-        tags=tuple(values.get("tag", [])),
+        tags=honored_tags(values.get("tag", [])),
         agent=(values.get("agent") or [""])[0],
         since=since,
         # The epic strip scopes to ONE epic at a time (a chip click), so only
@@ -674,6 +695,37 @@ def parse_date(value: str) -> date | None:
 def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
     value = stats.get(key, default)
     return value if isinstance(value, int) else default
+
+
+def honored_tags(values: Iterable[str]) -> tuple[str, ...]:
+    """The ``?tag=`` values the board honours — bounded (``MAX_FILTER_TAGS`` /
+    ``MAX_FILTER_TAG_LENGTH``).
+
+    Public because the ceiling has to hold at BOTH ends of the round trip: the
+    filters this parses, and every generated URL that carries the filters
+    forward (``web._preserved_filter_params``). A bound applied only on the way
+    in would leave the raw query string re-emitted into each summary-card, row
+    and tag link — which is most of the reflection it exists to stop. Either
+    spelling is accepted (repeated params, or one comma-joined value), so the
+    ceiling cannot be sidestepped by choosing a form.
+
+    Over-long values are DROPPED, never truncated: a truncated tag is a filter
+    value nobody typed, which would match the wrong thing and render a
+    fabricated chip label — the same refusal-to-coerce as
+    ``_metadata_project_slug``. Dropping rather than keeping-and-matching-
+    nothing keeps the board honest, because this one list drives BOTH the
+    matching and every surface that names the active filters: a tag that is not
+    honoured is never displayed as though it were.
+
+    The count ceiling drops from the TAIL, so the tags written first survive.
+    """
+    tags = [
+        tag
+        for value in values
+        for tag in _split_values(value)
+        if len(tag) <= MAX_FILTER_TAG_LENGTH
+    ]
+    return tuple(tags[:MAX_FILTER_TAGS])
 
 
 def _split_values(value: str) -> list[str]:

@@ -18,6 +18,7 @@ from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
+    MAX_FILTER_TAGS,
     MAX_SINCE_LOOKBACK_DAYS,
     AgentRecord,
     ClaimRecord,
@@ -928,17 +929,75 @@ def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
     assert 'data-active-filter-tag="loom-candidate"' in chips
     # Clearing one chip keeps the other tag and every other live filter.
     assert (
-        'href="/tasks?project=lithos-loom&tag=loom-candidate&agent=planner'
-        '&since=01%2F04%2F2026"'
+        'href="/tasks?project=lithos-loom&agent=planner'
+        '&since=01%2F04%2F2026&tag=loom-candidate"'
     ) in chips
     assert (
-        'href="/tasks?project=lithos-loom&tag=roadmap-2026-08&agent=planner'
-        '&since=01%2F04%2F2026"'
+        'href="/tasks?project=lithos-loom&agent=planner'
+        '&since=01%2F04%2F2026&tag=roadmap-2026-08"'
     ) in chips
     # The chip sits with the filter surfaces, above the board it describes…
     assert text.index("data-active-filters") < text.index('class="task-board"')
     # …and reads as the interactive chip it is, rather than unstyled text.
     assert ".active-filter-chip {" in css.text
+
+
+def test_tag_ceiling_bounds_the_reflected_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (security/f-001): ``?tag=`` is attacker-controlled on an
+    unauthenticated GET, and the chip strip reflects it QUADRATICALLY — a chip
+    per tag, each chip's clear link re-emitting every other tag. Unbounded,
+    2,000 tags (a 10 KB query string) rendered a 54 MB body in ~2.6s, blocking
+    single-worker uvicorn for every other operator.
+
+    The board must degrade rather than reject (the ``claimed_state``
+    convention): 200, capped chips, and a response that stays the same order of
+    magnitude as an unfiltered one.
+    """
+    fake = _roadmap_fake()
+    flood = ",".join(f"t{i}" for i in range(2000))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        baseline = client.get("/tasks?since=2026-04-01")
+        response = client.get(f"/tasks?tag={flood}&since=2026-04-01")
+
+    assert response.status_code == 200
+    # One chip per HONOURED tag, and no more.
+    assert response.text.count("data-active-filter-tag=") == MAX_FILTER_TAGS
+    # Tags past the ceiling reach neither the chips nor any chip's clear link.
+    assert "t1999" not in response.text
+    assert "t500" not in response.text
+    # The amplification is gone: the strip's whole contribution is bounded, so
+    # the flooded board stays within a small constant of the unfiltered one
+    # (pre-fix this was ~3,800x).
+    assert len(response.text) < len(baseline.text) * 2
+
+
+def test_over_long_tag_is_not_reflected_onto_the_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (security/f-002): the chip renders the tag as first-class
+    chrome in a "Scoped to" strip above every section, on a UI with no auth and
+    so no "signed in as" trust cue. An unbounded value let a crafted link paint
+    attacker-authored prose there (a fake outage banner) and displace the board.
+
+    The value is dropped at parse time rather than truncated — a truncated tag
+    is a filter nobody typed — so it is neither matched nor displayed.
+    """
+    fake = _roadmap_fake()
+    injected = "URGENT: agents halted; call +1-555-0100 " + "A" * 5000
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"tag": injected, "since": "2026-04-01"})
+
+    assert response.status_code == 200
+    assert "URGENT: agents halted" not in response.text
+    assert "A" * 200 not in response.text
+    # Dropped, not honoured: no chip claims a scope the board is not applying…
+    assert "data-active-filters" not in response.text
+    # …and the board is genuinely unfiltered, which is what the absent chip says.
+    assert "Loom roadmap item" in response.text
 
 
 def test_no_active_filter_chip_without_a_tag_filter(

@@ -626,6 +626,12 @@ button,
 
 .active-filter-chip {
   align-items: center;
+  /* The tag is attacker-controlled text (anyone can send the operator a
+     /tasks?tag=… link) rendered as first-class chrome at the top of the board,
+     so it must not be able to displace the layout it sits above: the label
+     ellipsises rather than growing. parse_filters caps the value's LENGTH; this
+     caps how much of the board it can occupy. */
+  max-width: 18rem;
   background: rgba(189, 79, 43, 0.08);
   border: 1px solid rgba(189, 79, 43, 0.3);
   border-radius: 999px;
@@ -642,8 +648,15 @@ button,
   border-color: var(--accent);
 }
 
+.active-filter-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .active-filter-chip-clear {
   color: var(--muted);
+  flex-shrink: 0;
   font-weight: 700;
 }
 
