@@ -72,15 +72,22 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
-# Back to the plain 800 ceiling. The allowance raised for T1-S12's tools/list
-# probe is spent: withdrawing the pre-0.4 fallback (2026-08-24) took
-# list_tool_names off LithosClient, which is now 811 — still the largest
-# module, but the exception no longer buys anything the split did not, so the
-# stop-loss returns to the god-module threshold and lithos_client is the one
-# module allowed to sit above it. The rest of the MCP transport (session
-# worker, tool-call decoding) is the next slice to lift out.
-modules_over_800_lines = 1    # lithos_client (811); no other module may join it
-max_module_lines       = 815  # stop-loss just above today's largest, lithos_client (811)
+# lithos_client is the ONE module allowed above the 800 god-module threshold.
+# This PR raises its stop-loss 815 -> 895 for the transport hardening: the
+# per-call deadline, the process-wide call gate, the off-loop decode pool, and
+# the decoder's note recording that a whole-response size ceiling was
+# considered and REJECTED (it is an input-domain restriction dressed as a
+# bound, and it would answer a runaway edge list with "blockers unavailable").
+# The raise bought bounds and the reasoning for them, not prose.
+#
+# The raise is granted against a TASK this time, not a promise in a comment:
+# 8b8a5888-0ef1-4368-916c-d63fd34676f8 lifts the MCP transport (session worker,
+# reconnect, call gate, tool-call decoding) out into its own module and hands
+# the allowance back. Three consecutive raises have each been individually
+# defensible; the cumulative 95 lines over threshold is why the extraction is
+# now overdue rather than optional. No further raise should be spent here.
+modules_over_800_lines = 1    # lithos_client (886); no other module may join it
+max_module_lines       = 895  # stop-loss, 9 lines over today's largest (886)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

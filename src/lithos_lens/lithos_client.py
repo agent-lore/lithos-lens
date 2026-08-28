@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -60,6 +61,33 @@ LithosHealth = Literal["ok", "degraded", "unreachable"]
 # session before failing. Tool calls in lens are user-facing and short-lived,
 # so we'd rather fail fast than block a page render.
 _SESSION_WAIT_TIMEOUT_S = 5.0
+
+# Deadline on ONE tool call, session wait included. Nothing else imposes one —
+# the MCP session has no per-request timeout, the httpx timeout covers only
+# /health, uvicorn sets no request timeout — so without it an unanswered call
+# wedges its request task forever, and on a fan-out surface a stalled lookup
+# holds a concurrency slot and stalls everything queued behind it: a bounded
+# call COUNT with an unbounded DURATION. A stop-loss well above any healthy
+# call, not a latency dial. Callers already degrade one failed read per row, so
+# timing a call out costs a row rather than a page.
+CALL_TIMEOUT_S = 15.0
+
+# How many tool calls this PROCESS may have in flight at once, over every
+# request and surface — the round trip AND the decode behind it. The per-render
+# fan-out gates (``task_links.DETAIL_FANOUT_CONCURRENCY``,
+# ``epic_strip.EPIC_FANOUT_BATCH``) bound ONE page; the resource is the single
+# MCP session below, shared by every page and by every agent's coordination
+# traffic, and N concurrent renders is an unauthenticated request rate, not
+# something Lens chooses. So this bound lives with the session it protects.
+MAX_CONCURRENT_TOOL_CALLS = 16
+
+# Decodes run here, not on the loop's default executor: one worker per callable
+# in-flight call, so work a timed-out caller abandoned QUEUES rather than
+# running beside the live decodes (a thread work item cannot be cancelled, so
+# width is the only bound available).
+_DECODE_POOL = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_TOOL_CALLS, thread_name_prefix="lens-decode"
+)
 
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
@@ -220,6 +248,7 @@ class LithosClient:
         self._session_ready = asyncio.Event()
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
+        self._call_gate = asyncio.Semaphore(MAX_CONCURRENT_TOOL_CALLS)
 
     async def startup(self) -> None:
         """Spawn the long-lived MCP session worker task.
@@ -680,21 +709,44 @@ class LithosClient:
         return session
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if self._worker_task is None:
-            # startup() was never called; fall back to a one-shot session so
-            # we don't silently break callers that bypass the lifecycle.
-            result = await self._call_tool_oneshot(name, arguments)
-            return _decode_tool_result(result)
+        """Run one tool call under :data:`CALL_TIMEOUT_S`, around the
+        process-wide gate ``_invoke_tool`` holds — so both bounds cover every
+        tool, both transport paths and every SURFACE. Queue time is inside the
+        deadline on purpose: a queued call has not answered yet. The deadline
+        sheds the CALLER's wait, not the work (see the decoder's note).
+        """
+        try:
+            return await asyncio.wait_for(
+                self._invoke_tool(name, arguments), timeout=CALL_TIMEOUT_S
+            )
+        except TimeoutError as exc:
+            raise LithosToolError(
+                f"lithos tool '{name}' did not answer within {CALL_TIMEOUT_S}s",
+                code="timeout",
+            ) from exc
 
-        session = await self._live_session()
-        result = await session.call_tool(name, arguments)
-        return _decode_tool_result(result)
+    async def _invoke_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        async with self._call_gate:
+            if self._worker_task is None:
+                # startup() was never called; fall back to a one-shot session
+                # so we don't silently break callers that bypass the lifecycle.
+                result = await self._call_tool_oneshot(name, arguments)
+            else:
+                session = await self._live_session()
+                result = await session.call_tool(name, arguments)
+            # Off the loop, but inside the SAME gate slot as the round trip:
+            # the parse is the CPU half of a call, so a bound that ends at the
+            # network half is not a bound on the call.
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(_DECODE_POOL, _decode_tool_result, result)
 
     async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call over a throwaway session.
 
-        Returns the RAW MCP result; decoding stays in ``_call_tool`` so both
-        transport paths share the same error handling.
+        Returns the RAW MCP result; decoding stays in ``_invoke_tool`` so both
+        transport paths share the same bounds and error handling.
         """
         from mcp import ClientSession
         from mcp.client.sse import sse_client
@@ -783,6 +835,29 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     FastMCP output-schema validation rejecting a tool's own error envelope);
     ``code="invalid_response"`` marks a success result whose body isn't a
     JSON object.
+
+    There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
+    must not be added. The graph reads take no limit parameter, so a single
+    response's row count is agent-controlled — the very input the task detail
+    page exists to survive: it renders a bounded first page of blockers plus a
+    tail stating the TRUE remainder, and it can only count that remainder from
+    a response it parsed. Refusing the oversized edge list would answer exactly
+    that case with "blockers unavailable", and any finite ceiling is a
+    deployment assumption dressed as an input-domain restriction. Cost is
+    bounded where the cost is instead — the per-row fan-out, its concurrency
+    and its wall clock (see ``task_links``).
+
+    The residual is this parse, which is synchronous. It runs on
+    :data:`_DECODE_POOL`: off the loop, so it stalls the request that asked for
+    it rather than every request in the process, and inside the caller's
+    :data:`MAX_CONCURRENT_TOOL_CALLS` slot, so it is bounded like the round
+    trip. What that leaves — stated plainly, so it is not read as covered — is
+    that a thread work item CANNOT be cancelled: a parse outrunning
+    :data:`CALL_TIMEOUT_S` finishes anyway, the deadline freeing the caller
+    rather than the CPU or the bytes, and the pool's queue absorbs it. Bounded
+    in width, not reclaimable, and a parsed response's peak memory is unbounded
+    either way: an ACCEPTED RISK owned upstream, closing when the graph reads
+    grow a row limit.
     """
     blocks = getattr(result, "content", [])
     text = str(getattr(blocks[0], "text", "") or "") if blocks else ""
