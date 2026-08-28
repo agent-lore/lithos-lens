@@ -61,6 +61,26 @@ LithosHealth = Literal["ok", "degraded", "unreachable"]
 # so we'd rather fail fast than block a page render.
 _SESSION_WAIT_TIMEOUT_S = 5.0
 
+# Deadline on ONE tool call, session wait included. Nothing else imposes one —
+# the MCP session has no per-request timeout, the httpx timeout covers only
+# /health, uvicorn sets no request timeout — so without it an unanswered call
+# wedges its request task forever, and on a fan-out surface a stalled lookup
+# holds a concurrency slot and stalls everything queued behind it: a bounded
+# call COUNT with an unbounded DURATION. A stop-loss well above any healthy
+# call, not a latency dial. Callers already degrade one failed read per row, so
+# timing a call out costs a row rather than a page.
+CALL_TIMEOUT_S = 15.0
+
+# How many tool calls this PROCESS may have in flight at once, over every
+# request and surface — the round trip AND the decode behind it, so the
+# number of decoded payloads resident at once is bounded too. The per-render
+# fan-out gates (``task_links.DETAIL_FANOUT_CONCURRENCY``,
+# ``epic_strip.EPIC_FANOUT_BATCH``) bound ONE page; the resource is the single
+# MCP session below, shared by every page and by every agent's coordination
+# traffic, and N concurrent renders is an unauthenticated request rate, not
+# something Lens chooses. So this bound lives with the session it protects.
+MAX_CONCURRENT_TOOL_CALLS = 16
+
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
 _RECONNECT_BACKOFF_MAX_S = 30.0
@@ -220,6 +240,7 @@ class LithosClient:
         self._session_ready = asyncio.Event()
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
+        self._call_gate = asyncio.Semaphore(MAX_CONCURRENT_TOOL_CALLS)
 
     async def startup(self) -> None:
         """Spawn the long-lived MCP session worker task.
@@ -680,21 +701,45 @@ class LithosClient:
         return session
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if self._worker_task is None:
-            # startup() was never called; fall back to a one-shot session so
-            # we don't silently break callers that bypass the lifecycle.
-            result = await self._call_tool_oneshot(name, arguments)
-            return _decode_tool_result(result)
+        """Run one tool call under :data:`CALL_TIMEOUT_S`, around the
+        process-wide gate ``_invoke_tool`` holds — so both bounds cover every
+        tool, both transport paths and every SURFACE. Queue time is inside the
+        deadline on purpose: a queued call has not answered yet. The deadline
+        sheds the CALLER's wait, not the work (see the decoder's note).
+        """
+        try:
+            return await asyncio.wait_for(
+                self._invoke_tool(name, arguments), timeout=CALL_TIMEOUT_S
+            )
+        except TimeoutError as exc:
+            raise LithosToolError(
+                f"lithos tool '{name}' did not answer within {CALL_TIMEOUT_S}s",
+                code="timeout",
+            ) from exc
 
-        session = await self._live_session()
-        result = await session.call_tool(name, arguments)
-        return _decode_tool_result(result)
+    async def _invoke_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        async with self._call_gate:
+            if self._worker_task is None:
+                # startup() was never called; fall back to a one-shot session
+                # so we don't silently break callers that bypass the lifecycle.
+                result = await self._call_tool_oneshot(name, arguments)
+            else:
+                session = await self._live_session()
+                result = await session.call_tool(name, arguments)
+            # Inside the SAME gate slot as the round trip: the parse is the
+            # CPU half of a call, so a bound that ends at the network half is
+            # not a bound on the call. It is NOT moved off the loop — see the
+            # residual note in _decode_tool_result for why that would not buy
+            # what it looks like it buys.
+            return _decode_tool_result(result)
 
     async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call over a throwaway session.
 
-        Returns the RAW MCP result; decoding stays in ``_call_tool`` so both
-        transport paths share the same error handling.
+        Returns the RAW MCP result; decoding stays in ``_invoke_tool`` so both
+        transport paths share the same bounds and error handling.
         """
         from mcp import ClientSession
         from mcp.client.sse import sse_client
@@ -783,6 +828,38 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     FastMCP output-schema validation rejecting a tool's own error envelope);
     ``code="invalid_response"`` marks a success result whose body isn't a
     JSON object.
+
+    There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
+    must not be added. The graph reads take no limit parameter, so a single
+    response's row count is agent-controlled — the very input the task detail
+    page exists to survive: it renders a bounded first page of blockers plus a
+    tail stating the TRUE remainder, and it can only count that remainder from
+    a response it parsed. Refusing the oversized edge list would answer exactly
+    that case with "blockers unavailable", and any finite ceiling is a
+    deployment assumption dressed as an input-domain restriction. Cost is
+    bounded where the cost is instead — the per-row fan-out, its concurrency
+    and its wall clock (see ``task_links``).
+
+    THE RESIDUAL, stated plainly because it is not covered: this parse is
+    synchronous AND it holds the GIL for its whole duration. ``json.loads``
+    runs one C call with no bytecode boundaries in it, so while it runs NO
+    other Python in this process runs — not another request, not the event
+    loop, not the deadline in ``_call_tool``, which cannot fire until the parse
+    it would interrupt has finished. Measured on this project's Python 3.12: a
+    26MB response parses in ~130ms, during which a 1ms ticker thread advanced
+    TWICE (it advances ~123 times over the same span of ``time.sleep``).
+
+    An earlier revision ran this on a ThreadPoolExecutor and claimed the loop
+    stayed responsive. It does not: a thread hop moves where the GIL is held,
+    not whether it is held, so the pool bought a bound on width and nothing on
+    latency, plus 16 threads and an uncancellable work item. It was removed
+    rather than re-documented (PR #50 review). Real isolation would need
+    process separation or a GIL-releasing decoder, and neither is worth its
+    complexity for the sizes a healthy Lithos returns.
+
+    So: an ACCEPTED RISK, owned upstream, closing when the graph reads grow a
+    row limit. What bounds it today is that Lens is behind a trusted-network
+    boundary and the responses are as large as the graph an agent built.
     """
     blocks = getattr(result, "content", [])
     text = str(getattr(blocks[0], "text", "") or "") if blocks else ""

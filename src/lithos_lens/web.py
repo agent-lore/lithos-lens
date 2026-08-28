@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from asyncio import CancelledError
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -80,6 +82,59 @@ def _default_lithos_client(config: LithosLensConfig) -> LithosClientProtocol:
     return LithosClient(config.lithos)
 
 
+# How many concurrent RENDERS this process admits before refusing. The
+# expensive half of a request is the Lithos fan-out and the template render,
+# both finished before the response object exists, so this brackets the work
+# rather than the socket. Past it Lens answers 503 immediately — a fast, honest
+# refusal in front of a saturated backend, rather than a queue that grows until
+# the process does. Lens takes unauthenticated requests across the
+# trusted-network boundary, so the arrival rate is not Lens's to choose.
+MAX_CONCURRENT_RENDERS = 128
+
+# What admission control deliberately does NOT meter. Each of these would be
+# made WORSE by refusing it under load, not better:
+#
+# ``/tasks/events`` — an SSE connection is not a render. It does no Lithos work
+# and is held open for as long as a tab is. Metering it spends the render
+# budget on parked browsers and refuses real requests while the backend sits
+# idle, with N open tabs consuming N slots permanently. This is why the bound
+# lives here rather than in uvicorn's ``limit_concurrency``, which counts
+# connections and cannot tell the two apart.
+#
+# ``/health`` — REQUIREMENTS §4 makes this the container health check. A 503
+# under load tells the orchestrator the container is unhealthy, so it restarts
+# a process that was merely busy: a load spike becomes a restart loop, and the
+# saturation the cap exists to survive is converted into an outage. The probe
+# must be able to say "busy but alive", which it cannot do if it never runs.
+#
+# ``/static/*`` — served from disk, no Lithos call, and needed BY the pages
+# that were admitted. Refusing assets to a page whose HTML got through renders
+# it unstyled and inert, spending a slot to produce a broken result.
+_UNMETERED_EXACT = frozenset({"/health", "/tasks/events"})
+_UNMETERED_PREFIXES = ("/static/",)
+
+
+def _is_metered(path: str) -> bool:
+    """Whether admission control applies to ``path``.
+
+    Default-metered: a new route is bounded unless it is deliberately listed
+    above, which is the safe direction for a bound whose job is to survive
+    saturation.
+    """
+    if path in _UNMETERED_EXACT:
+        return False
+    return not path.startswith(_UNMETERED_PREFIXES)
+
+
+# How long the event stream waits for an event before emitting a comment frame.
+# The stream otherwise blocks on ``queue.get()`` forever and only discovers a
+# departed client when it next WRITES — which, in a quiet period, is never. A
+# slept laptop or a dropped NAT mapping would then park a subscriber and its
+# queue for the life of the process. The keepalive is what makes a dead peer
+# surface: the write fails, the generator unwinds, and ``unsubscribe`` runs.
+SSE_KEEPALIVE_S = 20.0
+
+
 def create_app(
     config: LithosLensConfig,
     *,
@@ -117,6 +172,28 @@ def create_app(
             await state.shutdown()
 
     app = FastAPI(title="Lithos Lens", lifespan=lifespan)
+
+    render_gate = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
+
+    @app.middleware("http")
+    async def limit_concurrent_renders(request: Request, call_next):
+        """Refuse past :data:`MAX_CONCURRENT_RENDERS`, never queue.
+
+        ``Semaphore.acquire`` takes a fast path when a slot is free and does
+        not yield, so nothing interleaves between the check and the acquire.
+        The slot is released when ``call_next`` returns, which is after the
+        reads and the template render and before the body is streamed — the
+        expensive half, which is the half worth bounding.
+        """
+        if not _is_metered(request.url.path):
+            return await call_next(request)
+        if render_gate.locked():
+            return PlainTextResponse(
+                "Lens is at capacity. Retry shortly.", status_code=503
+            )
+        async with render_gate:
+            return await call_next(request)
+
     app.state.lens = state
     install_request_middleware(app, config.telemetry)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -147,7 +224,15 @@ def create_app(
             try:
                 yield 'event: lens.status\ndata: {"status":"connected"}\n\n'
                 while True:
-                    event = await queue.get()
+                    try:
+                        event = await asyncio.wait_for(
+                            queue.get(), timeout=SSE_KEEPALIVE_S
+                        )
+                    except TimeoutError:
+                        # A comment frame: ignored by EventSource, but a WRITE,
+                        # which is the only way this end learns the peer left.
+                        yield ": keepalive\n\n"
+                        continue
                     yield event.as_sse()
             except CancelledError:
                 raise
