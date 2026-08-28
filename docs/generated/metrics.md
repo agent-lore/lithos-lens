@@ -16,12 +16,12 @@ lower a budget after improving the code to lock in the gain.
 | `cross_module_private_refs` | 0 | 0 | 0 |
 | `max_module_lines` | 888 | 895 | 7 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 2 | 2 | 0 |
+| `modules_over_800_lines` | 1 | 1 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **27** (54 module-level)
+- Cross-component edges: **27** (55 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 8 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Web -> Config, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -45,15 +45,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 8 | 2626 | 2004 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 4 |
 | Tasks | 3 | 1104 | 784 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 1 | 881 | 704 | 1 | 8 | 0.89 | 12 (`lithos_lens.web._parse_preserved_filters`) | 2 |
+| Web | 2 | 936 | 749 | 1 | 8 | 0.89 | 12 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **29**, lines: **9059**, SLOC: **7043**
+- Modules: **30**, lines: **9114**, SLOC: **7088**
 - Largest module: `lithos_lens.lithos_client` (888 lines)
-- Modules over 800 lines: **2**
+- Modules over 800 lines: **1**
   - `lithos_lens.lithos_client`
-  - `lithos_lens.web`
 
 ## Complexity
 
@@ -85,4 +84,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **38** (38 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.85** (16768 test lines / 9059 source lines)
+- Test-to-source line ratio: **1.84** (16768 test lines / 9114 source lines)
