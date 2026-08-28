@@ -103,6 +103,7 @@ def create_app(
     templates.env.filters["display_date"] = format_display_date
     templates.env.filters["render_markdown"] = render_markdown
     templates.env.globals["task_tag_url"] = task_tag_url
+    templates.env.globals["task_tag_clear_url"] = task_tag_clear_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
@@ -484,6 +485,32 @@ def task_tag_url(request: Request, tag: str) -> str:
     params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))
     return f"/tasks?{urlencode(params)}"
+
+
+def task_tag_clear_url(request: Request, tag: str) -> str:
+    """Link an active-filter chip to the same board WITHOUT that one tag.
+
+    The chip is the only place the ``?tag=`` scope is named: a cross-project
+    tag (the monthly-roadmap convention) belongs to no project, so nothing else
+    on the board says what the slice is — the row chips name each row's own
+    tags, not the filter.
+
+    Tags arrive repeated (``?tag=a&tag=b``) or comma-joined (``?tag=a,b``);
+    both forms are re-emitted as repeated params minus the cleared one, so
+    clearing one chip of a multi-tag scope keeps the rest rather than dropping
+    the whole filter.
+    """
+    params: list[tuple[str, str]] = []
+    for key, value in _preserved_filter_params(request):
+        if key != "tag":
+            params.append((key, value))
+            continue
+        params.extend(
+            ("tag", part)
+            for part in (item.strip() for item in value.split(","))
+            if part and part != tag
+        )
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
 def task_detail_url(request: Request, task_id: str) -> str:

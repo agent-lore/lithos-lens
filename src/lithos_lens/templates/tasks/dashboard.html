@@ -178,6 +178,30 @@
       </form>
 
       {#
+        Active-filter chips (T1-S13). The ``?tag=`` scope is the one filter
+        nothing else on the board names: a cross-project tag — the monthly
+        roadmap convention tags one committed set across every project it
+        touches — belongs to no project, so the project chip on each row
+        describes the row, never the slice. Each chip links to the same board
+        minus that one tag, so it doubles as the clear control while the other
+        tags and filters stay put.
+      #}
+      {% if dashboard.filters.tags %}
+        <section class="active-filters" aria-label="Active tag filters" data-active-filters>
+          <span class="active-filters-label">Scoped to</span>
+          {% for tag in dashboard.filters.tags %}
+            <a class="active-filter-chip"
+               href="{{ task_tag_clear_url(request, tag) }}"
+               data-active-filter-tag="{{ tag }}"
+               aria-label="Clear the {{ tag }} filter">
+              <span>{{ tag | format_tag }}</span>
+              <span class="active-filter-chip-clear" aria-hidden="true">&times;</span>
+            </a>
+          {% endfor %}
+        </section>
+      {% endif %}
+
+      {#
         Epic rollup strip: one progress chip per open epic, counted over its
         RECURSIVE subtree (lithos_task_children), so epics roll up instead of
         polluting the open sections. A chip links to ?epic=<id>, which scopes

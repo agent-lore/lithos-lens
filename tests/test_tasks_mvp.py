@@ -695,6 +695,264 @@ def test_project_filter_is_preserved_across_navigation(
     assert "claimed_state" not in text.split("<main")[1]
 
 
+# ---------------------------------------------------------------------------
+# T1-S13 — the ``?tag=`` cross-project scope.
+#
+# The monthly-roadmap convention tags one committed set across every project it
+# touches (``roadmap-2026-08`` spans lithos-loom, lithos-lens, influx, …), and
+# the loom customer queue is the tag ``loom-candidate``. Neither is a project,
+# so ``?project=`` cannot render either as one screen — that is what the tag
+# scope is for.
+# ---------------------------------------------------------------------------
+
+
+def _roadmap_fake() -> TaskFakeLithosClient:
+    """A corpus where one tag spans two projects, with an untagged row in each.
+
+    Every pairing the sections need is present: ready/stale/completed rows both
+    inside and outside the tag, so a section that ignored the filter would show
+    a row this fixture can name.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks = [
+        TaskRecord(
+            id="loom-ready",
+            title="Loom roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-loom", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="lens-ready",
+            title="Lens roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-lens", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="loom-offscope",
+            title="Loom side quest",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-loom",),
+        ),
+        TaskRecord(
+            id="lens-stale",
+            title="Stale roadmap item",
+            status="open",
+            created_by="planner",
+            # Old enough to fire the stale-open rule: this row is how the
+            # Needs-attention section is observable under the tag filter.
+            created_at="2025-01-01T10:00:00+00:00",
+            tags=("project:lithos-lens", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="lens-stale-offscope",
+            title="Stale side quest",
+            status="open",
+            created_by="planner",
+            created_at="2025-01-01T10:00:00+00:00",
+            tags=("project:lithos-lens",),
+        ),
+        TaskRecord(
+            id="loom-done",
+            title="Done roadmap item",
+            status="completed",
+            created_by="worker",
+            created_at="2026-04-20T10:00:00+00:00",
+            resolved_at="2026-04-22T10:00:00+00:00",
+            tags=("project:lithos-loom", "roadmap-2026-08"),
+        ),
+        TaskRecord(
+            id="loom-done-offscope",
+            title="Done side quest",
+            status="completed",
+            created_by="worker",
+            created_at="2026-04-20T10:00:00+00:00",
+            resolved_at="2026-04-22T10:00:00+00:00",
+            tags=("project:lithos-loom",),
+        ),
+    ]
+    fake.ready_ids = {
+        "loom-ready",
+        "lens-ready",
+        "loom-offscope",
+        "lens-stale",
+        "lens-stale-offscope",
+    }
+    return fake
+
+
+def test_tag_filter_scopes_every_section_across_projects(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Acceptance: ``?tag=roadmap-2026-08`` shows tasks from at least two
+    different projects in ONE view, and every section respects it."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    # Two different projects, one screen — the whole point of the tag scope.
+    assert "Loom roadmap item" in text
+    assert "Lens roadmap item" in text
+    assert 'href="/tasks?since=2026-04-01&tag=project%3Alithos-loom"' in text
+    assert 'href="/tasks?since=2026-04-01&tag=project%3Alithos-lens"' in text
+    # Needs attention and Completed are scoped by the same predicate…
+    assert "Stale roadmap item" in text
+    assert "Done roadmap item" in text
+    # …and every untagged row is out of scope, in every section.
+    assert "Loom side quest" not in text
+    assert "Stale side quest" not in text
+    assert "Done side quest" not in text
+    # The board says it is a slice rather than claiming system-wide health.
+    assert "data-attention-scoped" not in text  # the attention list is non-empty
+    assert "All systems healthy" not in text
+
+
+def test_tag_filter_matches_tags_exactly(lithos_lens_config_env: Path) -> None:
+    """Exact match, not prefix: ``roadmap-2026-08`` must not drag in
+    ``roadmap-2026-08-stretch`` (a neighbouring month's convention would
+    otherwise leak into the committed set)."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="stretch",
+            title="Stretch roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", "roadmap-2026-08-stretch"),
+        )
+    )
+    fake.ready_ids.add("stretch")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "Loom roadmap item" in response.text
+    assert "Stretch roadmap item" not in response.text
+
+
+def test_unknown_tag_renders_the_all_clear_empty_state_not_an_error(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Acceptance: a tag nothing carries is an empty view, not a failure. The
+    all-clear is the SCOPED one — every read landed, but the board is a slice,
+    so it must not make the system-wide "All systems healthy" claim."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=loom-candidate&since=2026-04-01")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "banner-warning" not in text
+    assert "data-attention-scoped" in text
+    assert "Nothing needs attention in this view." in text
+    assert "No ready tasks match these filters." in text
+    # The empty-corpus panel would misdescribe the cause: Lithos answered with
+    # rows, the filter hid them.
+    assert 'data-empty-state="window"' not in text
+    assert "Loom roadmap item" not in text
+
+
+def test_tag_filter_composes_with_project_agent_and_epic_scope(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The tag scope narrows an already-scoped board rather than replacing it:
+    tag AND project AND agent AND the ``?epic=`` descendants."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="epic-1",
+            title="Roadmap epic",
+            status="open",
+            created_by="planner",
+            created_at=_ago(hours=2),
+            task_type="epic",
+        )
+    )
+    fake.children["epic-1"] = ["loom-ready", "loom-offscope", "lens-ready"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        scoped = client.get("/tasks?epic=epic-1&tag=roadmap-2026-08&since=2026-04-01")
+        narrowed = client.get(
+            "/tasks?epic=epic-1&tag=roadmap-2026-08&project=lithos-loom"
+            "&agent=planner&since=2026-04-01"
+        )
+
+    assert scoped.status_code == 200
+    # Inside the epic AND carrying the tag.
+    assert "Loom roadmap item" in scoped.text
+    assert "Lens roadmap item" in scoped.text
+    # In the epic but untagged; tagged but outside the epic.
+    assert "Loom side quest" not in scoped.text
+    assert "Stale roadmap item" not in scoped.text
+
+    assert narrowed.status_code == 200
+    assert "Loom roadmap item" in narrowed.text
+    # Same epic and tag, wrong project.
+    assert "Lens roadmap item" not in narrowed.text
+
+
+def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The tag scope is otherwise invisible: a cross-project tag names no
+    project, and the row chips only name each row's own tags. The chip says
+    what the board is scoped to and links to the same board without it,
+    keeping every other filter."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?project=lithos-loom&tag=roadmap-2026-08,loom-candidate"
+            "&agent=planner&since=01/04/2026"
+        )
+        css = client.get("/static/lens.css")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    chips = text.split("data-active-filters")[1].split("</section>")[0]
+    assert 'data-active-filter-tag="roadmap-2026-08"' in chips
+    assert 'data-active-filter-tag="loom-candidate"' in chips
+    # Clearing one chip keeps the other tag and every other live filter.
+    assert (
+        'href="/tasks?project=lithos-loom&tag=loom-candidate&agent=planner'
+        '&since=01%2F04%2F2026"'
+    ) in chips
+    assert (
+        'href="/tasks?project=lithos-loom&tag=roadmap-2026-08&agent=planner'
+        '&since=01%2F04%2F2026"'
+    ) in chips
+    # The chip sits with the filter surfaces, above the board it describes…
+    assert text.index("data-active-filters") < text.index('class="task-board"')
+    # …and reads as the interactive chip it is, rather than unstyled text.
+    assert ".active-filter-chip {" in css.text
+
+
+def test_no_active_filter_chip_without_a_tag_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?project=lithos-loom&since=2026-04-01")
+
+    assert response.status_code == 200
+    assert "data-active-filters" not in response.text
+
+
 def test_blocker_chip_resolves_predecessor_title_under_tag_filter(
     lithos_lens_config_env: Path,
 ) -> None:
