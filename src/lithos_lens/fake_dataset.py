@@ -374,12 +374,31 @@ def demo_dataset() -> FakeLithosDataset:
                 "influx-spike",
             ),
         },
+        # Task-graph edges, listed from BOTH endpoints (lithos_task_edge_list
+        # reports `direction` relative to the task asked about). Enough shape
+        # for every task-detail surface to light up: a blocks edge for the
+        # level-1 blocker chain, a parent_child edge for the breadcrumb, and a
+        # discovered_from edge for spawn provenance in both directions.
         edges={
+            "influx-epic": (
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-backfill",
+                    type="parent_child",
+                    direction="outgoing",
+                ),
+            ),
             "influx-ingest-cutover": (
                 EdgeRecord(
                     from_task_id="influx-ingest-cutover",
                     to_task_id="influx-backfill",
                     type="blocks",
+                    direction="outgoing",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-ingest-cutover",
+                    to_task_id="influx-spike",
+                    type="discovered_from",
                     direction="outgoing",
                 ),
             ),
@@ -388,6 +407,20 @@ def demo_dataset() -> FakeLithosDataset:
                     from_task_id="influx-ingest-cutover",
                     to_task_id="influx-backfill",
                     type="blocks",
+                    direction="incoming",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-epic",
+                    to_task_id="influx-backfill",
+                    type="parent_child",
+                    direction="incoming",
+                ),
+            ),
+            "influx-spike": (
+                EdgeRecord(
+                    from_task_id="influx-ingest-cutover",
+                    to_task_id="influx-spike",
+                    type="discovered_from",
                     direction="incoming",
                 ),
             ),

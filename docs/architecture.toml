@@ -32,7 +32,7 @@ Events       = "Shared Lithos event subscription and browser fan-out over SSE (L
 LithosClient = "Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode."
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
-TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, and the dashboard assembly built on them."
+TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads."
 Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "Optional OpenTelemetry hooks and request middleware."
@@ -45,8 +45,8 @@ State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
-Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.task_detail"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention"]
+Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.task_detail", "lithos_lens.task_links"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry"]
@@ -92,6 +92,7 @@ tests_private_imports     = 0  # tests use only the public surface; keep it that
 include_modules = [
     "lithos_lens.tasks",
     "lithos_lens.task_detail",
+    "lithos_lens.task_links",
     "lithos_lens.task_graph",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_metadata",

@@ -828,6 +828,76 @@ button,
   gap: 0.75rem;
 }
 
+/* Task-detail graph surfaces (T1-S7): the parent breadcrumb, the level-1
+   blocker chain / provenance link lists, and the children table. The link list
+   is the shared rendering for every bounded neighbour page (link_page.html),
+   so its tail banner reuses the warning banner styling the dashboard's
+   frontier-truncation notice already uses — an overflow the operator can see. */
+.detail-breadcrumb {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  gap: 0.4rem;
+}
+
+.detail-breadcrumb > * + *::before {
+  color: var(--line);
+  content: "/";
+  padding-right: 0.4rem;
+}
+
+.badge-type {
+  background: var(--panel-strong);
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.badge-unknown {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.link-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.link-list li {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.link-page-tail {
+  margin-top: 0.75rem;
+}
+
+.children-table {
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+.children-table th,
+.children-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.5rem 0.4rem;
+  text-align: left;
+}
+
+.children-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .metadata-table {
   display: grid;
   gap: 0.5rem 1rem;

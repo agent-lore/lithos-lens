@@ -1,0 +1,44 @@
+{#
+  ONE page of a task's linked tasks, plus its tail.
+
+  This is the single tail-rendering path (T1-S7). The level-1 blocker chain and
+  both provenance directions render through it, and when T1-S8 expands an
+  unfinished blocker one level deeper that level renders through it too — so the
+  page-size claim, the remainder count and the tail's wording have exactly one
+  definition however deep the chain goes.
+
+  The tail is deliberately loud rather than a silent clip: a "why can't this
+  run?" list that quietly drops blockers is worse than a slow one, so it follows
+  the dashboard's frontier-truncation precedent (an accuracy banner that names
+  the number it is not showing).
+
+  Context: `page` (a task_links.LinkPage), `page_noun` (plural noun for the tail
+  copy) and `page_label` (the data-attribute hook).
+#}
+<ul class="link-list" data-link-list="{{ page_label }}">
+  {% for link in page.links %}
+    <li data-link-target="{{ link.task_id }}" data-link-edge="{{ link.edge_type }}">
+      <a href="{{ task_detail_url(request, link.task_id) }}">{{ link.label }}</a>
+      {% if link.unresolved %}
+        {# The edge says this neighbour exists but its task_get did not answer,
+           so the line stays (dropping it would understate the set) and makes no
+           status claim. #}
+        <span class="badge badge-unknown" data-link-unresolved>status unknown</span>
+      {% else %}
+        <span class="badge badge-{{ link.status }}">{{ link.status }}</span>
+        {% if link.task_type != "task" %}
+          <span class="badge badge-type" data-link-type="{{ link.task_type }}">{{ link.task_type }}{% if link.gate_type %}: {{ link.gate_type }}{% endif %}</span>
+        {% endif %}
+        {% if link.unsatisfiable %}
+          <span class="blocker-chip blocker-chip-blocker_unsatisfiable" data-link-unsatisfiable>unsatisfiable</span>
+        {% endif %}
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{% if page.truncated %}
+  <p class="banner banner-warning link-page-tail" role="status" data-link-tail="{{ page_label }}" data-link-remaining="{{ page.remaining }}">
+    <strong>{{ page.remaining }} more {{ page_noun }} not shown.</strong>
+    <span>This task has {{ page.total }} {{ page_noun }} in all; the first {{ page.page_size }} are listed above with their live status. The rest are counted, not hidden &mdash; a list this long usually means an agent is writing runaway edges.</span>
+  </p>
+{% endif %}

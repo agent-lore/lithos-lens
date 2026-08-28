@@ -1066,13 +1066,19 @@ def test_direct_task_detail_resolves_findings_and_note_links(
 def test_unknown_task_renders_not_found_panel(
     lithos_lens_config_env: Path,
 ) -> None:
+    """T1-S7: a deep link to a deleted task is answered by Lithos's own
+    ``task_not_found`` envelope, not by failing to find it in three scanned
+    lists — so the panel says so, and no ``lithos_task_list`` call is made."""
     fake = TaskFakeLithosClient()
 
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get("/tasks/no-such-task")
 
     assert response.status_code == 200
-    assert "Task not found in current Lithos task lists" in response.text
+    assert "Lithos has no task with this id" in response.text
+    # `find_task` is deleted: the page addresses the one task directly.
+    assert fake.get_calls == ["no-such-task"]
+    assert fake.list_calls == []
 
 
 def test_note_renderer_loads_linked_knowledge(lithos_lens_config_env: Path) -> None:

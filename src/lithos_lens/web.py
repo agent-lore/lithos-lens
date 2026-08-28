@@ -41,10 +41,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.state import AppState
-from lithos_lens.task_detail import (
-    find_task,
-    load_task_detail,
-)
+from lithos_lens.task_detail import load_task_detail
 from lithos_lens.tasks import (
     default_since,
     format_display_date,
@@ -365,7 +362,11 @@ def create_app(
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:
-                    task = await find_task(state.lithos_client, task_id)
+                    # Addressed directly, like the detail page since T1-S7:
+                    # the three-list scan `find_task` did is gone. A dead
+                    # ?task= link answers task_not_found and drops the
+                    # back-link rather than failing the document render.
+                    task = await state.lithos_client.task_get(task_id)
                 except Exception:
                     task = None
         return templates.TemplateResponse(
