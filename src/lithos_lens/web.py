@@ -482,7 +482,16 @@ async def _render_tasks(
             "tasks dashboard filters parsed",
             extra={
                 "lens_route": _route_template(request),
-                "query_items": query_items,
+                # Only the COUNT of raw pairs: params outside
+                # _PRESERVED_FILTER_KEYS score zero against
+                # MAX_FILTER_QUERY_BYTES, so the raw list is unbounded
+                # attacker-controlled data (a 47 KB junk query wrote 72 KB of
+                # log). Under the container's size-capped rotation that buys
+                # cheap eviction of the log history, which on a service with no
+                # authentication is the only forensic record there is. The
+                # parsed filters below carry the diagnostic value; the count
+                # keeps the "was there junk on this request?" signal.
+                "query_param_count": len(query_items),
                 "statuses": list(filters.statuses),
                 "projects": list(filters.projects),
                 "tags": list(filters.tags),
@@ -654,9 +663,23 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     rebuilding from the request would emit a tag twice or miss a duplicate it
     had collapsed. It also keeps the link truthful — clearing one chip cannot
     resurrect a tag the board is not filtering by.
+
+    The remaining tags go out COMMA-JOINED, in one pair, because this link has
+    to stay inside ``MAX_FILTER_QUERY_BYTES`` — a chip that renders but 400s
+    when clicked is worse than no chip. The repeated form costs ``len("tag=")``
+    plus a separator per tag where the comma form costs one encoded comma, so
+    it can be materially LARGER than the request that was accepted: 170 tags
+    arrive comma-joined as 911 bytes and went back out as 1,250. Comma-joined
+    is never larger than either spelling of the input for two or more tags, and
+    equal for one, so a link generated from an accepted request is always
+    itself accepted. The two forms parse identically (``honored_tags`` splits
+    on commas), and a tag containing a comma is already unrepresentable in this
+    vocabulary, so nothing is lost.
     """
     params = _preserved_filter_params(request, exclude="tag")
-    params.extend(("tag", other) for other in tags if other != tag)
+    remaining = [other for other in tags if other != tag]
+    if remaining:
+        params.append(("tag", ",".join(remaining)))
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 

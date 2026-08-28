@@ -1286,6 +1286,99 @@ def test_rejection_logs_the_route_template_not_the_raw_path(
     assert len(emitted) < 1000
 
 
+def test_chip_clear_link_from_a_near_budget_tag_query_still_works(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (correctness/f-003): every chip advertises itself as a clear
+    control, so following one has to work for any request the board accepted.
+
+    It did not. ``parse_filters`` expands the comma form, and the clear link
+    re-emitted each remaining tag as its own ``tag=`` pair — which costs
+    ``len("tag=")`` plus a separator per tag where the comma form costs one
+    encoded comma. 170 tags arrived comma-joined as 911 bytes, rendered fine,
+    and generated a 1,250-byte clear href that 400s when clicked.
+
+    Follows the link rather than inspecting it, which is the only way this
+    shows up: the old two-tag href was far too small to cross the ceiling.
+    """
+    tags = [str(i) for i in range(170)]
+    comma_form = ",".join(tags)
+    # Near the budget and inside it: the request the board must accept, and
+    # whose clear links must therefore also be accepted.
+    accepted_size = len(urlencode([("tag", comma_form)]))
+    assert 900 < accepted_size <= MAX_FILTER_QUERY_BYTES
+
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="carries-all",
+            title="Carries every filter tag",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(*tags, "project:influx"),
+        )
+    )
+    fake.ready_ids.add("carries-all")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?{urlencode([('tag', comma_form)])}")
+        assert board.status_code == 200
+        assert "Carries every filter tag" in board.text
+
+        text = unescape(board.text)
+        href = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=', text)[0]
+        # The link the chip advertises is itself within the budget…
+        query = href.split("?", 1)[1] if "?" in href else ""
+        assert len(query) <= MAX_FILTER_QUERY_BYTES
+        cleared = client.get(href)
+
+    # …and following it shows the same board minus that one tag.
+    assert cleared.status_code == 200
+    assert "data-filter-rejected" not in cleared.text
+    assert "Carries every filter tag" in cleared.text
+    remaining = re.findall(r'data-active-filter-tag="([^"]+)"', unescape(cleared.text))
+    assert "0" not in remaining
+    assert "1" in remaining
+
+
+def test_dashboard_debug_log_does_not_carry_the_raw_query_pairs(
+    lithos_lens_config_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression (security/f-007): params outside ``_PRESERVED_FILTER_KEYS``
+    score zero against ``MAX_FILTER_QUERY_BYTES``, so the raw pair list is
+    unbounded attacker-controlled data — a 47 KB junk query wrote 72 KB of log.
+    Under the container's size-capped rotation that is cheap eviction of the
+    log history, which on a service with no authentication is the only forensic
+    record there is.
+    """
+    fake = _roadmap_fake()
+    junk = [(f"j{i}", "x" * 5) for i in range(4000)]
+
+    with (
+        _client(lithos_lens_config_env, fake) as client,
+        caplog.at_level(logging.DEBUG, logger="lithos_lens.web"),
+    ):
+        response = client.get("/tasks", params=[*junk, ("tag", "roadmap-2026-08")])
+
+    assert response.status_code == 200
+    record = next(
+        item
+        for item in caplog.records
+        if item.getMessage() == "tasks dashboard filters parsed"
+    )
+    # The bounded count replaces the unbounded list…
+    assert getattr(record, "query_param_count", None) == len(junk) + 1
+    assert not hasattr(record, "query_items")
+    # …so the emitted line stays small whatever the request carried, and the
+    # junk never reaches it.
+    emitted = JsonFormatter().format(record)
+    assert "j3999" not in emitted
+    assert len(emitted) < 1000
+    # The diagnostic value — the PARSED filters — is still there.
+    assert getattr(record, "tags", None) == ["roadmap-2026-08"]
+
+
 def test_no_active_filter_chip_without_a_tag_filter(
     lithos_lens_config_env: Path,
 ) -> None:
