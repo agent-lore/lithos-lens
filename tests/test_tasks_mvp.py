@@ -554,6 +554,43 @@ def test_task_detail_tag_links_replace_tag_and_preserve_active_filters(
     assert 'class="tag-chip tag-chip-project"' in text
 
 
+def test_task_detail_names_the_empty_tag_rather_than_drawing_a_blank_pill(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The detail page must honour the convention row.html and the active-filter
+    chip already state: a task really can carry the empty tag, so a blank pill
+    reads as a rendering bug rather than as a real scope.
+
+    Pinned because the rule was written down in two of the three places that
+    render a tag and omitted in the third, which is invisible on any task whose
+    tags happen to be non-empty.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="empty-tagged-detail",
+            title="Empty tagged detail task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("", "project:influx"),
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/empty-tagged-detail")
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "(empty tag)" in text
+    # The non-empty tag alongside it still renders normally — the guard must not
+    # relabel every chip.
+    assert "project: influx" in text
+    # And no chip is drawn with nothing in it.
+    assert not re.search(r'class="tag-chip[^"]*" href="[^"]*"></a>', text)
+
+
 def test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation(
     lithos_lens_config_env: Path,
 ) -> None:

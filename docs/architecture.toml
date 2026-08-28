@@ -91,8 +91,11 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # added 85 lines to it and T1-S13 added 227, from 545 on the common base, and the
 # sum crosses the line at 857. Neither PR breached the budget alone, so there was
 # no point at which a reviewer could have been asked. Raised to 2 here so the
-# decision is visible in the PR that causes it. web.py now wants the same
-# extraction treatment lithos_client is getting; it has no task yet.
+# decision is visible in the PR that causes it. 538e2f3d owns the remediation —
+# extracting the request-filter plumbing, the growth driver on both sides — so
+# this exception has an owner rather than a promise, the same way 8b8a5888 owns
+# the lithos_client half. If both land, the count returns to 0 and the
+# max_module_lines allowance can be given back.
 modules_over_800_lines = 2    # lithos_client (888), web.py (857); no third may join
 max_module_lines       = 895  # stop-loss, 7 lines over today's largest (888)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
