@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets).
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation.
 
 **Tier:** Entrypoints
 
@@ -11,12 +11,13 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.web` | L | 0 | 10 |
+| `lithos_lens.request_filters` | S | 0 | 10 |
+| `lithos_lens.web` | M | 0 | 1 |
 
 ## Public API
 
-### `lithos_lens.web`
-- def `create_app` — Create the Lithos Lens ASGI app.
+### `lithos_lens.request_filters`
+- def `filter_query_oversized` — True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
 - def `task_tag_url`
 - def `task_tag_clear_url` — Link an active-filter chip to the same board WITHOUT that one tag.
 - def `task_detail_url` — Link a task id as ONE path segment, with every reserved character encoded.
@@ -26,6 +27,9 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `tasks_url`
 - def `knowledge_tag_url` — Link a note-page tag chip to the ``/knowledge`` list filtered by it (§6.4).
 - def `tag_chip_class`
+
+### `lithos_lens.web`
+- def `create_app` — Create the Lithos Lens ASGI app.
 
 ## Dependencies
 
