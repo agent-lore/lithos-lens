@@ -259,6 +259,39 @@ class LinkPage:
     def tail(self) -> PageTail:
         return PageTail(shown=len(self.links), total=self.total)
 
+    @property
+    def unsatisfied(self) -> tuple[LinkedTask, ...]:
+        """The blocking links on this page NOT read as completed.
+
+        Everything that is still a reason the task cannot run: live
+        predecessors and gates, cancelled ones (``unsatisfiable`` — a dead end
+        is not a satisfied dependency), and links whose ``task_get`` never
+        answered. An unresolved link counts because the page does not KNOW it
+        is satisfied, and the whole point of the distinction is to stop the
+        page asserting more than it read.
+        """
+        return tuple(
+            link for link in self.links if link.blocking and not link.satisfied
+        )
+
+    @property
+    def still_blocking(self) -> bool:
+        """True when this page holds — or may hold — a live blocker.
+
+        What the section heading turns on: "Blocked by" is a claim about the
+        present, and a set of finished predecessors does not support it.
+
+        A tail makes the answer "may". The remainder's statuses were never
+        read, so a truncated page cannot claim the set behind it is clear, and
+        the conservative reading is the safe one — under-claiming blockage on a
+        "why can't this run?" page is the failure this section exists to
+        prevent. Qualified on the page actually holding blocking links: a
+        truncated PROVENANCE page says nothing about whether the task can run.
+        """
+        if self.unsatisfied:
+            return True
+        return self.tail.truncated and any(link.blocking for link in self.links)
+
 
 @dataclass(frozen=True)
 class Breadcrumb:

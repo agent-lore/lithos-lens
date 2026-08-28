@@ -30,6 +30,8 @@ from lithos_lens.task_links import (
     LINK_FANOUT_CONCURRENCY,
     LINK_PAGE_SIZE,
     PARENT_BREADCRUMB_MAX_DEPTH,
+    LinkedTask,
+    LinkPage,
     LinkTarget,
     load_link_page,
 )
@@ -1170,3 +1172,161 @@ def test_reserved_characters_in_ids_are_encoded_into_generated_links(
     # resolved to /note/doc with the rest of the id read as a query string.
     assert "/note/doc%3Fx%23y?task=open-unclaimed" in text
     assert 'href="/note/doc?x' not in text
+
+
+# --- The heading is a claim about the present ------------------------------
+
+
+def _blocker_heading(text: str) -> str:
+    """The <h2> the blocker section actually rendered."""
+    section = text.split("data-blocker-chain", 1)[1]
+    return section.split("<h2>", 1)[1].split("</h2>", 1)[0].strip()
+
+
+def test_a_task_whose_blockers_have_all_completed_is_not_headed_blocked_by(
+    lithos_lens_config_env: Path,
+) -> None:
+    """ "Blocked by" is a claim about the PRESENT, and a completed predecessor
+    keeps its ``blocks`` edge — so the section's set outlives the blockage it
+    records. Heading a list of finished dependencies "Blocked by" states the
+    opposite of what its own rows say."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("pred-done-a", title="First predecessor", status="completed"),
+            _task("pred-done-b", title="Second predecessor", status="completed"),
+        ]
+    )
+    _link(fake, "pred-done-a", "open-unclaimed", "blocks")
+    _link(fake, "pred-done-b", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    assert _blocker_heading(text) == "Dependencies"
+    # The rows are still there, and still say what they are.
+    assert "First predecessor" in text and "Second predecessor" in text
+    assert text.count("data-link-satisfied") == 2
+
+
+def test_one_live_blocker_among_completed_ones_still_heads_the_section_blocked_by(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half of the rule: the heading must not soften just because
+    MOST of the set has finished."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("pred-done", title="Finished predecessor", status="completed"),
+            _task("pred-live", title="Live predecessor"),
+        ]
+    )
+    _link(fake, "pred-done", "open-unclaimed", "blocks")
+    _link(fake, "pred-live", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert _blocker_heading(response.text) == "Blocked by"
+
+
+def test_a_cancelled_blocker_still_heads_the_section_blocked_by(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A dead end is not a satisfied dependency. "unsatisfiable" is the
+    strongest form of "this cannot run", so it must not read as cleared."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task("pred-dead", title="Cancelled spike", status="cancelled"))
+    _link(fake, "pred-dead", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    text = response.text
+    assert _blocker_heading(text) == "Blocked by"
+    assert "data-link-unsatisfiable" in text
+
+
+def test_a_blocker_whose_status_never_arrived_is_not_read_as_cleared(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An unresolved row means the page does not KNOW the blocker is done.
+
+    Silence is the one answer that must not be optimistic here: "Dependencies"
+    over a row whose status could not be read would tell the operator the task
+    is free to run on the strength of a failed request.
+    """
+    fake = TaskFakeLithosClient()
+    # The edge names a predecessor the task list has no record of, so its
+    # task_get raises and the row renders with no status claim.
+    _link(fake, "pred-missing", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    text = response.text
+    assert "data-link-unresolved" in text
+    assert _blocker_heading(text) == "Blocked by"
+
+
+def test_a_truncated_blocker_page_is_never_read_as_cleared(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Every RENDERED blocker completed, but the page truncated — so the
+    statuses behind the tail were never read.
+
+    Under-claiming blockage on a "why can't this run?" page is the failure the
+    section exists to prevent, so "may be blocked" resolves to "Blocked by".
+    The tail's own copy ("N more blockers not shown") then stays consistent
+    with the heading for free.
+    """
+    overflow = 4
+    fake = TaskFakeLithosClient()
+    for index in range(LINK_PAGE_SIZE + overflow):
+        blocker_id = f"pred-{index:03d}"
+        fake.tasks.append(_task(blocker_id, status="completed"))
+        _link(fake, blocker_id, "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    text = response.text
+    assert text.count("data-link-satisfied") == LINK_PAGE_SIZE
+    assert f'data-link-remaining="{overflow}"' in text
+    assert _blocker_heading(text) == "Blocked by"
+
+
+def test_a_task_with_no_blocker_edges_is_not_headed_blocked_by(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The empty case obeys the same rule — the heading claimed blockage the
+    body immediately denied."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    text = response.text
+    assert _blocker_heading(text) == "Dependencies"
+    assert "Nothing is blocking this task." in text
+
+
+def test_a_truncated_provenance_page_says_nothing_about_being_blocked() -> None:
+    """``still_blocking``'s tail clause is qualified on the page holding
+    BLOCKING links. One helper builds all three neighbour lists, so an
+    unqualified "a tail means maybe" would let a task with a runaway set of
+    spawned follow-ons — and no blockers at all — report itself blocked.
+    """
+    spawned = LinkPage(
+        links=tuple(
+            LinkedTask(task_id=f"follow-{index}", edge_type="discovered_from")
+            for index in range(LINK_PAGE_SIZE)
+        ),
+        total=LINK_PAGE_SIZE + 10,
+    )
+
+    assert spawned.tail.truncated
+    assert spawned.unsatisfied == ()
+    assert spawned.still_blocking is False

@@ -96,7 +96,15 @@
 
       {% if detail.task.status == "open" or detail.blockers.total %}
         <section data-blocker-chain>
-          <h2>Blocked by</h2>
+          {# "Blocked by" is a claim about the PRESENT. A completed predecessor
+             keeps its `blocks` edge, so this section's set outlives the
+             blockage it records, and heading a list of finished dependencies
+             "Blocked by" states the opposite of what its own rows say. The
+             heading follows what was actually read; `still_blocking` treats an
+             unresolved row or a tail as "may be", so it never under-claims.
+             The tail's "blockers" wording stays consistent with the heading for
+             free: a truncated page is always still_blocking. #}
+          <h2>{% if detail.blockers.still_blocking %}Blocked by{% else %}Dependencies{% endif %}</h2>
           {% if detail.relations_state == "error" %}
             <p class="warning-text">Blockers unavailable. Refresh this task to retry.</p>
           {% elif detail.blockers.total %}
