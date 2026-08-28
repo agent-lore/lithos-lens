@@ -660,14 +660,19 @@ def test_a_short_child_set_renders_whole_with_no_tail(
     assert 'data-link-tail="children"' not in response.text
 
 
-def _finding(index: int) -> FindingRecord:
+def _finding(index: int, *, knowledge_id: str | None = None) -> FindingRecord:
     return FindingRecord(
         id=f"finding-{index:03d}",
         task_id="open-unclaimed",
         agent="worker-a",
         summary=f"Finding {index:03d}",
-        knowledge_id=f"note-{index:03d}",
-        created_at=f"2026-08-01T10:{index:02d}:00+00:00",
+        knowledge_id=f"note-{index:03d}" if knowledge_id is None else knowledge_id,
+        # Timeline order is a plain string sort on created_at, so the stamps
+        # have to stay lexicographically ordered for any index the tests use.
+        created_at=(
+            f"2026-08-01T{10 + index // 3600:02d}"
+            f":{(index // 60) % 60:02d}:{index % 60:02d}+00:00"
+        ),
     )
 
 
@@ -713,7 +718,10 @@ def test_finding_note_lookups_are_bounded_and_concurrent() -> None:
     assert len(fake.note_reads) == LINK_PAGE_SIZE
     # Concurrent (not the old sequential walk), and still inside the bound.
     assert 1 < fake.peak_in_flight <= LINK_FANOUT_CONCURRENCY
-    # EVERY finding still renders — the bound costs titles, never rows.
+    # EVERY finding still renders — the bound costs titles, never rows. The
+    # timeline's own row count is the one agent-sized set on this page left
+    # unbounded ON PURPOSE (task_detail's module docstring names it and says
+    # why), so this assertion pins that choice rather than overlooking it.
     assert len(detail.findings) == LINK_PAGE_SIZE + extra
     resolved = [view for view in detail.findings if view.note_title]
     assert len(resolved) == LINK_PAGE_SIZE
@@ -775,3 +783,75 @@ def test_a_stalled_parent_read_does_not_stall_the_render(
     assert detail.task is not None
     assert detail.breadcrumb.ancestors == ()
     assert detail.breadcrumb.incomplete
+
+
+class _CountingId(str):
+    """A knowledge id that counts how often it is compared for equality.
+
+    Turns the dedup's COMPLEXITY into something a test can assert without a
+    stopwatch — timing thresholds are flaky on a shared CI box, and the
+    difference here is algorithmic, not constant-factor. A ``not in <list>``
+    scan compares each id against every id kept so far (Θ(N²)); a hash-based
+    dedup compares only when two ids collide in the table (≈0).
+    """
+
+    comparisons = 0
+
+    def __eq__(self, other: object) -> bool:
+        type(self).comparisons += 1
+        return str.__eq__(self, other)
+
+    def __hash__(self) -> int:
+        return str.__hash__(self)
+
+
+def test_finding_note_dedup_is_not_quadratic() -> None:
+    """security/f-005: the round-2 note bound deduped ids with a linear list
+    scan, making the loop Θ(N²) over an agent-chosen N.
+
+    The loop holds no ``await``, so that is not a slow render — it blocks the
+    single event loop for the whole worker, stalling every other in-flight
+    request (the dashboard, the SSE stream, /health) with it, on every
+    auto-refresh tick of one open tab. ``bounded_page`` cannot rescue it: it
+    slices the RESULT, so the scan runs at full N first.
+    """
+    count = 1200
+    fake = _NoteCountingFake()
+    fake.findings["open-unclaimed"] = [
+        _finding(index, knowledge_id=_CountingId(f"note-{index:05d}"))
+        for index in range(count)
+    ]
+
+    _CountingId.comparisons = 0
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    # Linear in N with generous headroom: the list scan costs ~N²/2 (~719k
+    # here), a hash-based dedup costs collisions only.
+    assert _CountingId.comparisons < 10 * count
+    # And the fix must not have cost the behaviour the dedup is there for.
+    assert len(fake.note_reads) == LINK_PAGE_SIZE
+    assert fake.note_reads == [f"note-{index:05d}" for index in range(LINK_PAGE_SIZE)]
+    assert len(detail.findings) == count
+
+
+def test_finding_note_dedup_keeps_first_seen_order_and_reads_each_id_once() -> None:
+    """The dedup exists to spend one ``lithos_read`` per DISTINCT id, in
+    timeline order — the page is taken from its head, so the order decides
+    which titles resolve."""
+    fake = _NoteCountingFake()
+    fake.findings["open-unclaimed"] = [
+        _finding(0, knowledge_id="note-b"),
+        _finding(1, knowledge_id="note-a"),
+        _finding(2, knowledge_id="note-b"),
+        _finding(3, knowledge_id=""),
+    ]
+
+    detail = asyncio.run(load_task_detail(fake, "open-unclaimed"))
+
+    assert fake.note_reads == ["note-b", "note-a"]
+    assert [view.note_title for view in detail.findings] == [
+        "Doc note-b",
+        "Doc note-a",
+        "Doc note-b",
+        "",
+    ]

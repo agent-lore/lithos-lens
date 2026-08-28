@@ -12,13 +12,25 @@ scan ``find_task`` used to do), then ``lithos_task_status``,
 ``lithos_task_edge_list(direction="both")``, ``lithos_finding_list`` and
 ``lithos_task_children`` in parallel.
 
-Every set this page renders is agent-sized, so every one of them is bounded by
-``task_links.bounded_page`` and reports its remainder through the one tail
+Nearly every set this page renders is agent-sized, and each of those is bounded
+by ``task_links.bounded_page`` and reports its remainder through the one tail
 template. That covers both shapes the hazard takes: the reads the EDGES imply
 (blocker statuses, provenance, the parent walk, and the finding-note titles) —
 bounded in ROUND TRIPS, and sharing one limiter and one deadline across the
 render — and the child set, which costs one round trip but would otherwise be
 rendered in full on every auto-refresh, so it is bounded in ROWS.
+
+There is exactly ONE exception, and it is deliberate rather than an oversight:
+the findings TIMELINE. ``resolve_finding_notes`` builds a view for every
+finding and ``templates/tasks/findings.html`` renders all of them, so its
+response size is O(sum of the agent-written summary lengths) with the row count
+agent-chosen. The note-title FAN-OUT behind it is bounded; the row count is
+not. That predates T1-S7, which changed neither file, and bounding it is a
+product decision this slice does not get to make — nor a free one. The timeline
+is the task's audit record, so a page of it needs a choice about which END to
+keep, and :attr:`TaskDetailData.reopen_report` is derived from the same set: it
+is the only evidence a reopen ever happened, so a page that dropped the wrong
+end would silently retract the reopened marker the story requires.
 
 The dependency runs one way: this module imports the records and the graph
 helpers, ``tasks.py`` and ``task_links.py`` never import back.
@@ -312,17 +324,25 @@ async def resolve_finding_notes(
     distinct ids, resolved concurrently under the render's shared limiter, each
     deadlined.
 
-    EVERY finding still renders. One whose id fell outside the page shows the
-    generic link label instead of the document title — a link the operator can
-    still follow, not a dropped row — and deliberately carries no
-    ``note_error``: that line is reserved for reads that actually failed, and
-    claiming a failure here would be false.
+    EVERY finding still renders — the fan-out is bounded, the timeline it feeds
+    deliberately is not (see the module docstring's named exception). A finding
+    whose id fell outside the page shows the generic link label instead of the
+    document title — a link the operator can still follow, not a dropped row —
+    and deliberately carries no ``note_error``: that line is reserved for reads
+    that actually failed, and claiming a failure here would be false.
     """
     ordered = sorted(findings, key=lambda item: item.created_at)
-    distinct: list[str] = []
-    for finding in ordered:
-        if finding.knowledge_id and finding.knowledge_id not in distinct:
-            distinct.append(finding.knowledge_id)
+    # Order-preserving dedup in O(N). A ``not in <list>`` scan reads the same
+    # but is Θ(N²) string comparisons over an agent-chosen N, and — having no
+    # ``await`` in it — would block the single event loop for the whole worker
+    # rather than merely slowing this render: every other in-flight request,
+    # including the SSE stream and /health, stalls with it. ``bounded_page``
+    # cannot rescue that; it slices the RESULT, so it never sees the scan.
+    distinct = list(
+        dict.fromkeys(
+            finding.knowledge_id for finding in ordered if finding.knowledge_id
+        )
+    )
     page, _tail = bounded_page(distinct)
     gate = limiter or new_link_limiter()
 
