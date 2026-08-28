@@ -161,14 +161,27 @@ class LinkedTask:
         return self.title or self.task_id
 
     @property
+    def blocking(self) -> bool:
+        """True when this link is a reason the task cannot run.
+
+        The two verdicts below only MEAN anything on a blocking link, and one
+        partial renders every neighbour list, so both are gated on this rather
+        than on status alone. A cancelled ``discovered_from`` source or
+        follow-on is merely cancelled — nothing waits on it — so calling it
+        unsatisfiable would assert a dependency that does not exist, in the
+        page's loudest treatment, on a section that is purely historical.
+        """
+        return self.edge_type in BLOCKER_EDGE_TYPES
+
+    @property
     def satisfied(self) -> bool:
-        """True when this neighbour no longer holds the task back."""
-        return self.status == "completed"
+        """True when this BLOCKER no longer holds the task back."""
+        return self.blocking and self.status == "completed"
 
     @property
     def unsatisfiable(self) -> bool:
-        """A cancelled predecessor can never complete — a dead end."""
-        return self.status == "cancelled"
+        """A cancelled PREDECESSOR can never complete — a dead end."""
+        return self.blocking and self.status == "cancelled"
 
 
 @dataclass(frozen=True)

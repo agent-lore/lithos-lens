@@ -226,6 +226,33 @@ def demo_dataset() -> FakeLithosDataset:
         ),
     }
 
+    # A deliberately RUNAWAY subtree, and the only fixture in the demo that
+    # reaches T1-S7's overflow tail: 30 children against a page of 25, so the
+    # detail page renders the first page plus "5 more children not shown". The
+    # operator requirement on that tail is that the overflow be VISIBLE rather
+    # than a silent truncation, and nothing can review "visible" without a set
+    # that actually overflows. The tail markup is shared
+    # (``templates/tasks/link_tail.html``), so seeing it here is seeing it on
+    # the blocker chain too.
+    #
+    # Deliberately inert on the dashboard: every row is completed and resolved
+    # far outside any demo since-window, and the epic itself is closed, so it
+    # never enters the rollup strip (built from OPEN epics) nor the Completed
+    # section. It shows up on its own detail page and nowhere else.
+    shard_children: tuple[TaskRecord, ...] = tuple(
+        TaskRecord(
+            id=f"influx-shard-{index:02d}",
+            title=f"Migrate Influx shard {index:02d}",
+            status="completed",
+            outcome="Shard migrated and verified.",
+            created_by="worker-a",
+            created_at=_ago(days=200),
+            resolved_at=_ago(days=180 - index),
+            tags=("project:influx", "area:data"),
+        )
+        for index in range(30)
+    )
+
     tasks: tuple[TaskRecord, ...] = (
         # The rollup epic: never a section row (epics are excluded from both
         # frontiers), it renders as the epic strip's progress chip over its
@@ -324,7 +351,21 @@ def demo_dataset() -> FakeLithosDataset:
             resolved_at="2026-08-04T12:00:00+00:00",
             tags=("project:influx",),
         ),
-    )
+        # Parent of the runaway subtree above; closed, so it is invisible
+        # everywhere except its own detail page.
+        TaskRecord(
+            id="influx-shard-epic",
+            title="Migrate every Influx shard",
+            description="One task per shard; kept as history after the cutover.",
+            status="completed",
+            outcome="All shards migrated.",
+            task_type="epic",
+            created_by="planner",
+            created_at=_ago(days=210),
+            resolved_at=_ago(days=150),
+            tags=("project:influx",),
+        ),
+    ) + shard_children
 
     return FakeLithosDataset(
         tasks=tasks,
@@ -373,6 +414,9 @@ def demo_dataset() -> FakeLithosDataset:
                 "influx-ingest-old",
                 "influx-spike",
             ),
+            # 30 children against a page of 25: the demo's only overflow-tail
+            # fixture (see shard_children above).
+            "influx-shard-epic": tuple(task.id for task in shard_children),
         },
         # Task-graph edges, listed from BOTH endpoints (lithos_task_edge_list
         # reports `direction` relative to the task asked about). Enough shape

@@ -855,3 +855,69 @@ def test_finding_note_dedup_keeps_first_seen_order_and_reads_each_id_once() -> N
         "Doc note-b",
         "",
     ]
+
+
+def test_a_cancelled_provenance_link_is_not_called_unsatisfiable(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness/f-002, security/f-007: "unsatisfiable" is a BLOCKER verdict
+    — this dependency can never be met, so the task can never run.
+
+    One partial renders all three neighbour lists, so a status-only rule leaked
+    the verdict into both provenance directions: a cancelled follow-on came out
+    carrying the page's loudest treatment on a section that is purely
+    historical, on a page that otherwise said nothing was blocking the task.
+    A cancelled source or follow-on is merely cancelled — nothing waits on it.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("dead-source", title="Cancelled source", status="cancelled"),
+            _task("dead-follow-on", title="Cancelled follow-on", status="cancelled"),
+        ]
+    )
+    _link(fake, "dead-source", "open-unclaimed", "discovered_from")
+    _link(fake, "open-unclaimed", "dead-follow-on", "discovered_from")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    text = response.text
+    # Both still render, and still say they were cancelled.
+    assert "Cancelled source" in text and "Cancelled follow-on" in text
+    assert text.count('class="badge badge-cancelled">cancelled</span>') == 2
+    # But neither claims to make this task impossible to run — the page says
+    # nothing is blocking it, and the chips must not contradict that.
+    assert "data-link-unsatisfiable" not in text
+    assert "Nothing is blocking this task." in text
+
+
+def test_the_unsatisfiable_verdict_still_fires_on_a_cancelled_blocker(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half of the same rule: gating it on the edge type must not
+    cost the call-out on the list where it is the whole point."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("dead-pred", title="Cancelled predecessor", status="cancelled"),
+            _task(
+                "dead-gate",
+                title="Cancelled gate",
+                status="cancelled",
+                task_type="gate",
+                metadata={"gate_type": "human"},
+            ),
+        ]
+    )
+    _link(fake, "dead-pred", "open-unclaimed", "blocks")
+    _link(fake, "dead-gate", "open-unclaimed", "waits_on_gate")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert response.status_code == 200
+    # Both blocking edge types carry the verdict: a cancelled gate strands its
+    # waiter exactly as a cancelled predecessor does.
+    assert response.text.count("data-link-unsatisfiable") == 2
