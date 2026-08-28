@@ -26,7 +26,7 @@
           </header>
           <p>{{ item.finding.summary }}</p>
           {% if item.finding.knowledge_id %}
-            <a href="/note/{{ item.finding.knowledge_id }}?task={{ item.finding.task_id }}">{{ item.link_label }}</a>
+            <a href="{{ note_url(item.finding.knowledge_id, item.finding.task_id) }}">{{ item.link_label }}</a>
             {% if item.note_error %}
               <small class="warning-text">{{ item.note_error }}</small>
             {% endif %}

@@ -1,0 +1,44 @@
+{#
+  ONE page of a task's linked tasks, plus its tail.
+
+  The level-1 blocker chain and both provenance directions render through this,
+  and when T1-S8 expands an unfinished blocker one level deeper that level
+  renders through it too — so a resolved neighbour list looks the same however
+  deep the chain goes. The tail itself is delegated to `link_tail.html`, the one
+  tail-rendering path, which the children table shares.
+
+  Context: `page` (a task_links.LinkPage), `page_noun` (plural noun for the tail
+  copy) and `page_label` (the data-attribute hook).
+#}
+<ul class="link-list" data-link-list="{{ page_label }}">
+  {% for link in page.links %}
+    <li data-link-target="{{ link.task_id }}" data-link-edge="{{ link.edge_type }}">
+      <a href="{{ task_detail_url(request, link.task_id) }}">{{ link.label }}</a>
+      {% if link.unresolved %}
+        {# The edge says this neighbour exists but its task_get did not answer,
+           so the line stays (dropping it would understate the set) and makes no
+           status claim. #}
+        <span class="badge badge-unknown" data-link-unresolved>status unknown</span>
+      {% else %}
+        <span class="badge badge-{{ link.status }}">{{ link.status }}</span>
+        {% if link.task_type != "task" %}
+          <span class="badge badge-type" data-link-type="{{ link.task_type }}">{{ link.task_type }}{% if link.gate_type %}: {{ link.gate_type }}{% endif %}</span>
+        {% endif %}
+        {% if link.unsatisfiable %}
+          <span class="blocker-chip blocker-chip-blocker_unsatisfiable" data-link-unsatisfiable>unsatisfiable</span>
+        {% elif link.satisfied %}
+          {# A completed predecessor keeps its `blocks` edge — the edge is the
+             durable record that the dependency existed — so it is still in the
+             set this section is reconstructed from. It renders, because what
+             this task waited on is most of what the section is read for once
+             the task is unblocked, but it must not be left looking like a
+             reason the task cannot run. #}
+          <span class="blocker-chip blocker-chip-satisfied" data-link-satisfied>satisfied</span>
+        {% endif %}
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{% with tail = page.tail %}
+  {% include "tasks/link_tail.html" %}
+{% endwith %}

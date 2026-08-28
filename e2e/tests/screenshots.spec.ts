@@ -60,6 +60,43 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The story's two headline surfaces in one page: the level-1 blocker chain
+    // with live status, and the parent breadcrumb. `influx-ingest-cutover`
+    // (captured above) has only OUTGOING edges, so it can never render either.
+    slug: "task-detail-blocked",
+    url: "/tasks/influx-backfill",
+    ready: async (page) => {
+      await expect(
+        page.locator('[data-link-list="blockers"] li').first(),
+      ).toBeVisible();
+      await expect(page.locator("[data-parent-breadcrumb]")).toBeVisible();
+    },
+  },
+  {
+    // The children table and the `epic` type badge.
+    slug: "task-detail-children",
+    url: "/tasks/influx-epic",
+    ready: async (page) => {
+      await expect(
+        page.locator(".children-table tbody tr").first(),
+      ).toBeVisible();
+    },
+  },
+  {
+    // The overflow tail (T1-S7). The operator requirement is that an
+    // agent-sized set degrade VISIBLY rather than truncate silently, which is
+    // a claim about appearance and so cannot be settled by the HTML-substring
+    // assertions in the pytest suite. `influx-shard-epic` is the demo's only
+    // fixture that overflows a page (30 children against 25); the tail markup
+    // is shared with the blocker chain and both provenance lists, so reviewing
+    // it here reviews it everywhere.
+    slug: "task-detail-overflow",
+    url: "/tasks/influx-shard-epic",
+    ready: async (page) => {
+      await expect(page.locator('[data-link-tail="children"]')).toBeVisible();
+    },
+  },
+  {
     slug: "note",
     url: "/note/note-influx-plan",
     ready: async (page) => {

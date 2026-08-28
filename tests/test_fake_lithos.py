@@ -114,6 +114,23 @@ def test_fake_mode_task_detail_renders(
     assert 'data-task-detail="influx-ingest-cutover"' in response.text
     # The claimed fixture surfaces an active claim on the detail page.
     assert "worker-a" in response.text
+    # T1-S7 graph surfaces: the demo dataset carries a discovered_from edge, so
+    # the spawn provenance section lights up in fake mode too.
+    assert 'data-link-list="spawned"' in response.text
+
+
+def test_fake_mode_task_detail_renders_the_blocker_chain_and_breadcrumb(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The demo's blocked fixture exercises the other two T1-S7 graph surfaces:
+    a level-1 blocker with live status, and the parent breadcrumb."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/tasks/influx-backfill")
+    assert response.status_code == 200
+    assert 'data-link-target="influx-ingest-cutover"' in response.text
+    assert "data-parent-breadcrumb" in response.text
 
 
 def test_fake_mode_note_renders(

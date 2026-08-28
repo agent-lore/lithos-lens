@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 # Sections of the graph-native dashboard. The three workable sections are
@@ -528,38 +528,6 @@ class DashboardData:
             and not self.reconciliation_pending
             and not self.sections.get("claims_unknown")
         )
-
-
-class TaskLithosClientProtocol(Protocol):
-    """The subset of the Lithos client this module's loaders consume.
-
-    The full client surface (including the task-graph reads) lives on
-    ``lithos_lens.lithos_client.LithosClientProtocol``; graph view models
-    belong to ``lithos_lens.task_graph``.
-    """
-
-    async def list_tasks(
-        self,
-        *,
-        agent: str | None = None,
-        status: str | None = None,
-        tags: list[str] | None = None,
-        since: str | None = None,
-        resolved_since: str | None = None,
-        with_claims: bool = False,
-    ) -> list[TaskRecord]: ...
-
-    async def task_status(self, task_id: str) -> TaskStatusRecord | None: ...
-
-    async def list_findings(
-        self, task_id: str, *, since: str | None = None
-    ) -> list[FindingRecord]: ...
-
-    async def stats(self) -> dict[str, Any]: ...
-
-    async def list_agents(self) -> list[AgentRecord]: ...
-
-    async def read_note(self, knowledge_id: str) -> NoteRecord | None: ...
 
 
 def parse_filters(

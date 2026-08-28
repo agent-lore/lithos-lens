@@ -1,0 +1,21 @@
+{#
+  THE tail-rendering path. Every bounded surface on the detail page states its
+  overflow through this one file — the level-1 blocker chain, both provenance
+  directions, the children table, and (T1-S8) every deeper level of the blocker
+  chain — so the remainder wording and the page-size claim have exactly one
+  definition.
+
+  Deliberately loud rather than a silent clip: a "why can't this run?" list that
+  quietly drops blockers is worse than a slow one, so it follows the dashboard's
+  frontier-truncation precedent — an accuracy banner that names the number it is
+  not showing.
+
+  Context: `tail` (a task_links.PageTail), `page_noun` (plural noun for the copy)
+  and `page_label` (the data-attribute hook).
+#}
+{% if tail.truncated %}
+  <p class="banner banner-warning link-page-tail" role="status" data-link-tail="{{ page_label }}" data-link-remaining="{{ tail.remaining }}">
+    <strong>{{ tail.remaining }} more {{ page_noun }} not shown.</strong>
+    <span>This task has {{ tail.total }} {{ page_noun }} in all; the first {{ tail.page_size }} are listed above. The rest are counted, not hidden &mdash; a list this long usually means an agent is writing runaway edges.</span>
+  </p>
+{% endif %}

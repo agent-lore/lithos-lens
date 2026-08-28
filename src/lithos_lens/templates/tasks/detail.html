@@ -20,25 +20,52 @@
       <span>Task detail is unavailable. Lens is running and will retry on refresh.</span>
     </section>
   {% elif detail.not_found %}
+    {# Since T1-S7 this is Lithos's own answer (the task_not_found envelope from
+       lithos_task_get), not the absence of a match in three scanned lists. #}
     <section class="panel">
       <p class="eyebrow">Task not found</p>
       <h1>Unknown task</h1>
-      <p>Task not found in current Lithos task lists.</p>
+      <p>Lithos has no task with this id.</p>
       <a class="button-secondary" href="/tasks">Return to dashboard</a>
     </section>
-  {% elif detail.task %}
+  {% elif not detail.task %}
+    {# The read failed, which is NOT the same as "this task does not exist". #}
+    <section class="panel">
+      <p class="eyebrow">Task detail</p>
+      <h1>Task unavailable</h1>
+      <p class="warning-text">{{ detail.errors | join(" ") or "Could not load this task from Lithos." }}</p>
+      <a class="button-secondary" href="/tasks">Return to dashboard</a>
+    </section>
+  {% else %}
     <article class="detail-panel" data-task-detail="{{ detail.task.id }}" data-refresh-fragment="detail">
       <header>
         <p class="eyebrow">Task detail</p>
+        {% if detail.breadcrumb.ancestors or detail.breadcrumb.incomplete %}
+          {# Single-parent forest, so the trail up to the root is a chain. A
+             walk that stopped early (depth bound, failed read, or a cycle in
+             what should be a forest) leads with an ellipsis rather than
+             implying its first entry is the root. #}
+          <nav class="detail-breadcrumb" data-parent-breadcrumb aria-label="Parent tasks">
+            {% if detail.breadcrumb.incomplete %}<span data-breadcrumb-incomplete title="The chain above could not be walked to a root">&hellip;</span>{% endif %}
+            {% for parent in detail.breadcrumb.ancestors %}
+              <a href="{{ task_detail_url(request, parent.id) }}">{{ parent.title }}</a>
+            {% endfor %}
+            <span aria-current="page">{{ detail.task.title }}</span>
+          </nav>
+        {% endif %}
         <h1>{{ detail.task.title }}</h1>
         <div class="detail-meta">
           <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+          <span class="badge badge-type" data-task-type="{{ detail.task.task_type }}">{{ detail.task.task_type }}</span>
+          {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
           {# Attributed, not asserted: any client can post a [Reopened]
              finding, so the badge names who reported it (tasks.py trust
              note on REOPENED_FINDING_PREFIX). #}
           {% if detail.reopen_report %}<span class="badge badge-reopened" data-reopened-marker>reopen reported by {{ detail.reopen_report.finding.agent or "unknown agent" }}</span>{% endif %}
           {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
           {% if detail.task.created_at %}<time datetime="{{ detail.task.created_at }}">{{ detail.task.created_at }}</time>{% endif %}
+          {% if detail.task.resolved_at %}<span data-resolved-at>Resolved <time datetime="{{ detail.task.resolved_at }}">{{ detail.task.resolved_at }}</time></span>{% endif %}
+          {% if detail.task.outcome %}<span data-outcome>Outcome: {{ detail.task.outcome }}</span>{% endif %}
         </div>
       </header>
 
@@ -64,6 +91,78 @@
         <section>
           <h2>Description</h2>
           <p>{{ detail.task.description }}</p>
+        </section>
+      {% endif %}
+
+      {% if detail.task.status == "open" or detail.blockers.total %}
+        <section data-blocker-chain>
+          {# "Blocked by" is a claim about the PRESENT. A completed predecessor
+             keeps its `blocks` edge, so this section's set outlives the
+             blockage it records, and heading a list of finished dependencies
+             "Blocked by" states the opposite of what its own rows say. The
+             heading follows what was actually read; `still_blocking` treats an
+             unresolved row or a tail as "may be", so it never under-claims.
+             The tail's "blockers" wording stays consistent with the heading for
+             free: a truncated page is always still_blocking. #}
+          <h2>{% if detail.blockers.still_blocking %}Blocked by{% else %}Dependencies{% endif %}</h2>
+          {% if detail.relations_state == "error" %}
+            <p class="warning-text">Blockers unavailable. Refresh this task to retry.</p>
+          {% elif detail.blockers.total %}
+            {% with page = detail.blockers, page_noun = "blockers", page_label = "blockers" %}
+              {% include "tasks/link_page.html" %}
+            {% endwith %}
+          {% else %}
+            <p class="empty">Nothing is blocking this task.</p>
+          {% endif %}
+        </section>
+      {% endif %}
+
+      {% if detail.has_provenance %}
+        <section data-provenance>
+          <h2>Provenance</h2>
+          {% if detail.discovered_from.total %}
+            <p class="eyebrow">Discovered while working on</p>
+            {% with page = detail.discovered_from, page_noun = "source tasks", page_label = "discovered-from" %}
+              {% include "tasks/link_page.html" %}
+            {% endwith %}
+          {% endif %}
+          {% if detail.spawned.total %}
+            <p class="eyebrow">Spawned follow-ons</p>
+            {% with page = detail.spawned, page_noun = "follow-ons", page_label = "spawned" %}
+              {% include "tasks/link_page.html" %}
+            {% endwith %}
+          {% endif %}
+        </section>
+      {% endif %}
+
+      {% if detail.children or detail.children_state == "error" %}
+        <section data-children>
+          <h2>Children</h2>
+          {% if detail.children_state == "error" %}
+            <p class="warning-text">Child tasks unavailable. Refresh this task to retry.</p>
+          {% else %}
+            <table class="children-table">
+              <thead>
+                <tr><th scope="col">Task</th><th scope="col">Type</th><th scope="col">Status</th></tr>
+              </thead>
+              <tbody>
+                {% for child in detail.children %}
+                  <tr data-child-id="{{ child.id }}">
+                    <td><a href="{{ task_detail_url(request, child.id) }}">{{ child.title }}</a></td>
+                    <td>{{ child.task_type }}</td>
+                    <td><span class="badge badge-{{ child.status }}">{{ child.status }}</span></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {# Same tail path as the blocker chain: the child count is
+               agent-chosen and include_closed maximises it, so an epic with a
+               runaway subtree shows a bounded table plus a counted remainder
+               rather than concatenating every row into every refresh. #}
+            {% with tail = detail.children_tail, page_noun = "children", page_label = "children" %}
+              {% include "tasks/link_tail.html" %}
+            {% endwith %}
+          {% endif %}
         </section>
       {% endif %}
 
