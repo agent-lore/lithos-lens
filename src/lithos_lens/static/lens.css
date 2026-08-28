@@ -28,20 +28,21 @@
 
 body {
   margin: 0;
-  /* One wash, not a tiled one: without no-repeat the gradients repeat to fill
-     the canvas, and without min-height a short page (e.g. the note not-found
-     panel) makes the positioning area shorter than the viewport, so the seams
-     land mid-screen. */
+  /* One wash, not a tiled one. The body background propagates to the canvas,
+     and a gradient's positioning area is the body box — so on a page shorter
+     than the viewport (a not-found panel, an empty state) it sizes to that
+     short box and then TILES down the rest, drawing hard horizontal seams that
+     read as a half-loaded page. `no-repeat` stops the repeat; `min-height`
+     keeps the positioning area from being shorter than the viewport, which
+     would otherwise leave the single wash ending mid-screen. Both are needed.
+
+     T1-S10 (#44) and T1-S5 (#46) fixed this independently on concurrent
+     branches and the merge kept both copies; this is the deduplicated form. */
   min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(189, 79, 43, 0.14), transparent 28rem),
     linear-gradient(135deg, #f7f3ea 0%, #efe8d8 100%);
-  /* The body background propagates to the canvas: on a page shorter than the
-     viewport (a not-found panel, an empty state) the gradient sizes to the
-     short body box and then TILES down the rest, drawing hard seams that read
-     as a half-loaded page. Fill the viewport and never repeat. */
   background-repeat: no-repeat;
-  min-height: 100vh;
   color: var(--ink);
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }
