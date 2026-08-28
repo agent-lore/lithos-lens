@@ -94,14 +94,40 @@ def _default_lithos_client(config: LithosLensConfig) -> LithosClientProtocol:
 # trusted-network boundary, so the arrival rate is not Lens's to choose.
 MAX_CONCURRENT_RENDERS = 128
 
-# Admission control deliberately does NOT meter the event stream. An SSE
-# connection is not a render: it does no Lithos work, and it is held open for
-# as long as a tab is open. Metering it would spend the render budget on parked
-# browsers and refuse real requests while the backend sat idle — with N open
-# tabs consuming N slots permanently. This is why the bound lives here rather
-# than in uvicorn's ``limit_concurrency``, which counts connections and cannot
-# tell the two apart.
-_UNMETERED_PATHS = frozenset({"/tasks/events"})
+# What admission control deliberately does NOT meter. Each of these would be
+# made WORSE by refusing it under load, not better:
+#
+# ``/tasks/events`` — an SSE connection is not a render. It does no Lithos work
+# and is held open for as long as a tab is. Metering it spends the render
+# budget on parked browsers and refuses real requests while the backend sits
+# idle, with N open tabs consuming N slots permanently. This is why the bound
+# lives here rather than in uvicorn's ``limit_concurrency``, which counts
+# connections and cannot tell the two apart.
+#
+# ``/health`` — REQUIREMENTS §4 makes this the container health check. A 503
+# under load tells the orchestrator the container is unhealthy, so it restarts
+# a process that was merely busy: a load spike becomes a restart loop, and the
+# saturation the cap exists to survive is converted into an outage. The probe
+# must be able to say "busy but alive", which it cannot do if it never runs.
+#
+# ``/static/*`` — served from disk, no Lithos call, and needed BY the pages
+# that were admitted. Refusing assets to a page whose HTML got through renders
+# it unstyled and inert, spending a slot to produce a broken result.
+_UNMETERED_EXACT = frozenset({"/health", "/tasks/events"})
+_UNMETERED_PREFIXES = ("/static/",)
+
+
+def _is_metered(path: str) -> bool:
+    """Whether admission control applies to ``path``.
+
+    Default-metered: a new route is bounded unless it is deliberately listed
+    above, which is the safe direction for a bound whose job is to survive
+    saturation.
+    """
+    if path in _UNMETERED_EXACT:
+        return False
+    return not path.startswith(_UNMETERED_PREFIXES)
+
 
 # How long the event stream waits for an event before emitting a comment frame.
 # The stream otherwise blocks on ``queue.get()`` forever and only discovers a
@@ -161,7 +187,7 @@ def create_app(
         reads and the template render and before the body is streamed — the
         expensive half, which is the half worth bounding.
         """
-        if request.url.path in _UNMETERED_PATHS:
+        if not _is_metered(request.url.path):
             return await call_next(request)
         if render_gate.locked():
             return PlainTextResponse(

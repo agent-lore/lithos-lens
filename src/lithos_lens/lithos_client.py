@@ -12,7 +12,6 @@ import asyncio
 import contextlib
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -73,21 +72,14 @@ _SESSION_WAIT_TIMEOUT_S = 5.0
 CALL_TIMEOUT_S = 15.0
 
 # How many tool calls this PROCESS may have in flight at once, over every
-# request and surface — the round trip AND the decode behind it. The per-render
+# request and surface — the round trip AND the decode behind it, so the
+# number of decoded payloads resident at once is bounded too. The per-render
 # fan-out gates (``task_links.DETAIL_FANOUT_CONCURRENCY``,
 # ``epic_strip.EPIC_FANOUT_BATCH``) bound ONE page; the resource is the single
 # MCP session below, shared by every page and by every agent's coordination
 # traffic, and N concurrent renders is an unauthenticated request rate, not
 # something Lens chooses. So this bound lives with the session it protects.
 MAX_CONCURRENT_TOOL_CALLS = 16
-
-# Decodes run here, not on the loop's default executor: one worker per callable
-# in-flight call, so work a timed-out caller abandoned QUEUES rather than
-# running beside the live decodes (a thread work item cannot be cancelled, so
-# width is the only bound available).
-_DECODE_POOL = ThreadPoolExecutor(
-    max_workers=MAX_CONCURRENT_TOOL_CALLS, thread_name_prefix="lens-decode"
-)
 
 # Backoff bounds used by the worker when reconnecting after a transport drop.
 _RECONNECT_BACKOFF_INITIAL_S = 1.0
@@ -736,11 +728,12 @@ class LithosClient:
             else:
                 session = await self._live_session()
                 result = await session.call_tool(name, arguments)
-            # Off the loop, but inside the SAME gate slot as the round trip:
-            # the parse is the CPU half of a call, so a bound that ends at the
-            # network half is not a bound on the call.
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(_DECODE_POOL, _decode_tool_result, result)
+            # Inside the SAME gate slot as the round trip: the parse is the
+            # CPU half of a call, so a bound that ends at the network half is
+            # not a bound on the call. It is NOT moved off the loop — see the
+            # residual note in _decode_tool_result for why that would not buy
+            # what it looks like it buys.
+            return _decode_tool_result(result)
 
     async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call over a throwaway session.
@@ -847,17 +840,26 @@ def _decode_tool_result(result: Any) -> dict[str, Any]:
     bounded where the cost is instead — the per-row fan-out, its concurrency
     and its wall clock (see ``task_links``).
 
-    The residual is this parse, which is synchronous. It runs on
-    :data:`_DECODE_POOL`: off the loop, so it stalls the request that asked for
-    it rather than every request in the process, and inside the caller's
-    :data:`MAX_CONCURRENT_TOOL_CALLS` slot, so it is bounded like the round
-    trip. What that leaves — stated plainly, so it is not read as covered — is
-    that a thread work item CANNOT be cancelled: a parse outrunning
-    :data:`CALL_TIMEOUT_S` finishes anyway, the deadline freeing the caller
-    rather than the CPU or the bytes, and the pool's queue absorbs it. Bounded
-    in width, not reclaimable, and a parsed response's peak memory is unbounded
-    either way: an ACCEPTED RISK owned upstream, closing when the graph reads
-    grow a row limit.
+    THE RESIDUAL, stated plainly because it is not covered: this parse is
+    synchronous AND it holds the GIL for its whole duration. ``json.loads``
+    runs one C call with no bytecode boundaries in it, so while it runs NO
+    other Python in this process runs — not another request, not the event
+    loop, not the deadline in ``_call_tool``, which cannot fire until the parse
+    it would interrupt has finished. Measured on this project's Python 3.12: a
+    26MB response parses in ~130ms, during which a 1ms ticker thread advanced
+    TWICE (it advances ~123 times over the same span of ``time.sleep``).
+
+    An earlier revision ran this on a ThreadPoolExecutor and claimed the loop
+    stayed responsive. It does not: a thread hop moves where the GIL is held,
+    not whether it is held, so the pool bought a bound on width and nothing on
+    latency, plus 16 threads and an uncancellable work item. It was removed
+    rather than re-documented (PR #50 review). Real isolation would need
+    process separation or a GIL-releasing decoder, and neither is worth its
+    complexity for the sizes a healthy Lithos returns.
+
+    So: an ACCEPTED RISK, owned upstream, closing when the graph reads grow a
+    row limit. What bounds it today is that Lens is behind a trusted-network
+    boundary and the responses are as large as the graph an agent built.
     """
     blocks = getattr(result, "content", [])
     text = str(getattr(blocks[0], "text", "") or "") if blocks else ""

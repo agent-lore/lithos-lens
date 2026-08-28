@@ -94,6 +94,35 @@ def test_a_saturated_process_refuses_a_render_rather_than_queueing_it(
     assert "capacity" in response.text.lower()
 
 
+@pytest.mark.parametrize(
+    ("path", "why"),
+    [
+        ("/health", "REQUIREMENTS §4 makes this the container health check"),
+        ("/static/lens.css", "the admitted page needs its own assets"),
+    ],
+)
+def test_saturation_does_not_take_out_the_probe_or_the_assets(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    why: str,
+) -> None:
+    """Refusing either of these makes saturation worse rather than survivable.
+
+    A 503 on /health tells the orchestrator a merely-busy container is
+    unhealthy, so it restarts it: the load spike the cap exists to survive
+    becomes a restart loop. A 503 on /static leaves a page whose HTML was
+    admitted unstyled and inert — a slot spent to produce a broken result.
+    Neither does any Lithos work, which is what the budget is for.
+    """
+    monkeypatch.setattr(web, "MAX_CONCURRENT_RENDERS", 0)
+    app = create_app(load_config(lithos_lens_config_env))
+
+    with TestClient(app) as client:
+        assert client.get("/tasks").status_code == 503, "the cap is in force"
+        assert client.get(path).status_code == 200, why
+
+
 @pytest.mark.anyio
 async def test_the_event_stream_is_never_metered_by_admission_control(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch

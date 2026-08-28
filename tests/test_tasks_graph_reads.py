@@ -638,8 +638,13 @@ class _SlowText:
     """A result block whose text takes real time to read.
 
     Stands in for the parse of a multi-megabyte response WITHOUT building one:
-    the cost lands inside the decode, exactly where a big ``json.loads`` would,
-    and is observable from outside because it releases the GIL.
+    the cost lands inside the decode, exactly where a big ``json.loads`` would.
+
+    It is NOT a faithful model of that parse's effect on the process — it
+    sleeps, which releases the GIL, where ``json.loads`` holds it throughout.
+    So it can be used to observe WHERE and HOW MANY decodes happen, which is
+    what the test below does, and never to claim the loop stays responsive
+    through one (see the residual note in ``_decode_tool_result``).
     """
 
     def __init__(self, text: str, seen: list[Any], hold_s: float = 0.15) -> None:
@@ -664,50 +669,19 @@ class _SlowText:
         return self._text
 
 
-def test_a_slow_decode_does_not_stall_every_other_request() -> None:
-    """The decode is the one SYNCHRONOUS step of a tool call, and a response's
-    row count is agent-controlled, so on the event loop it is the one step no
-    deadline can preempt: every other in-flight request waits it out. Run off
-    the loop, one oversized response costs the request that asked for it."""
-    decoded_on: list[Any] = []
-    result = SimpleNamespace(
-        content=[_SlowText('{"open_claims": 3}', decoded_on)], isError=False
-    )
-    client = _CannedResultClient(result)
-    ticks = 0
-
-    async def _driver() -> None:
-        nonlocal ticks
-
-        async def _other_request() -> None:
-            nonlocal ticks
-            while True:
-                await asyncio.sleep(0.01)
-                ticks += 1
-
-        ticker = asyncio.create_task(_other_request())
-        try:
-            assert await client.stats() == {"open_claims": 3}
-        finally:
-            ticker.cancel()
-            await client.close()
-
-    asyncio.run(_driver())
-
-    assert decoded_on and decoded_on[0] is not threading.main_thread()
-    # The loop kept serving while the decode ran; on the loop it would have
-    # been blocked for the whole 0.15s and this would be 0.
-    assert ticks >= 3
-
-
 def test_the_decode_is_bounded_by_the_same_gate_as_the_round_trip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The decode is the CPU half of a tool call, so a gate that covers only
-    the round trip does not bound the call: released before the thread hop, it
-    let every concurrent request parse at once — the payloads resident in
-    memory and the GIL-holding scans both scaling with an unauthenticated
-    request rate rather than with the bound."""
+    """The decode is inside the gate, so the gate bounds the whole call.
+
+    What that buys is memory: a decoded payload is resident for as long as its
+    slot is held, and the response size is agent-controlled, so releasing the
+    gate before the parse would let the number of payloads in memory at once
+    scale with an unauthenticated request rate instead of with the bound.
+
+    It buys nothing in latency, and this test does not claim otherwise — the
+    parse holds the GIL either way. That is the accepted residual recorded in
+    ``_decode_tool_result``, not something a bound here can fix."""
     monkeypatch.setattr(lithos_client, "MAX_CONCURRENT_TOOL_CALLS", 2)
     decoded_on: list[Any] = []
     block = _SlowText('{"open_claims": 3}', decoded_on, hold_s=0.05)

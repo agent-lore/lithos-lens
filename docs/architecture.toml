@@ -74,11 +74,12 @@ component_cycles       = 0    # no component-level cycles today; keep it that wa
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # lithos_client is the ONE module allowed above the 800 god-module threshold.
 # This PR raises its stop-loss 815 -> 895 for the transport hardening: the
-# per-call deadline, the process-wide call gate, the off-loop decode pool, and
-# the decoder's note recording that a whole-response size ceiling was
-# considered and REJECTED (it is an input-domain restriction dressed as a
-# bound, and it would answer a runaway edge list with "blockers unavailable").
-# The raise bought bounds and the reasoning for them, not prose.
+# per-call deadline, the process-wide call gate, and the decoder's notes —
+# that a whole-response size ceiling was considered and REJECTED (an
+# input-domain restriction dressed as a bound, which would answer a runaway
+# edge list with "blockers unavailable"), and that the parse holds the GIL, an
+# accepted residual a thread pool was found not to fix. The raise bought
+# bounds and the reasoning for them, not prose.
 #
 # The raise is granted against a TASK this time, not a promise in a comment:
 # 8b8a5888-0ef1-4368-916c-d63fd34676f8 lifts the MCP transport (session worker,
@@ -86,8 +87,8 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # the allowance back. Three consecutive raises have each been individually
 # defensible; the cumulative 95 lines over threshold is why the extraction is
 # now overdue rather than optional. No further raise should be spent here.
-modules_over_800_lines = 1    # lithos_client (886); no other module may join it
-max_module_lines       = 895  # stop-loss, 9 lines over today's largest (886)
+modules_over_800_lines = 1    # lithos_client (888); no other module may join it
+max_module_lines       = 895  # stop-loss, 7 lines over today's largest (888)
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 
