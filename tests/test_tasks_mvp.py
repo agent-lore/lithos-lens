@@ -8,9 +8,11 @@ from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import QueryParams
 
 from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
@@ -1068,6 +1070,105 @@ def test_oversized_filter_query_is_refused_not_silently_widened(
     # The offending value is not echoed back — reflecting it is the whole bug.
     assert oversized not in response.text
     assert len(response.text) < len(baseline.text)
+
+
+@pytest.mark.parametrize(
+    ("label", "char", "encoded_per_char"),
+    [
+        # One character, several encoded sizes. urlencode emits quote_plus
+        # output, so the guard has to count THAT, not code points.
+        ("reserved-ascii", "%", 3),
+        ("cjk", "\u6f22", 9),
+        ("astral", "\U0001f600", 12),
+    ],
+)
+def test_oversized_filter_is_measured_in_the_bytes_it_emits(
+    lithos_lens_config_env: Path, label: str, char: str, encoded_per_char: int
+) -> None:
+    """Regression (security/f-004): the ceiling used to count CODE POINTS while
+    ``urlencode`` emits percent-encoded BYTES, so a value at the character
+    budget could emit up to 12x it and sail through.
+
+    Measured on a 400-row board: 1,018 astral characters scored 1,018 against a
+    1,024 budget, emitted 12,216 bytes into every generated link, and rendered
+    25 MB — 9.8x the ASCII worst case the budget was set for.
+    """
+    fake = _roadmap_fake()
+    # Comfortably inside the budget by character count, over it once encoded —
+    # exactly the shape that slipped through.
+    value = char * (MAX_FILTER_QUERY_BYTES // encoded_per_char + 10)
+    assert len(value) < MAX_FILTER_QUERY_BYTES, "must pass a code-point count"
+    assert len(quote_plus(value)) > MAX_FILTER_QUERY_BYTES
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"epic": value})
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    assert "data-task-group" not in response.text
+    assert value not in response.text
+
+
+def test_non_ascii_filter_within_the_budget_is_still_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The ceiling counts encoded bytes, which is stricter — so it has to be
+    checked from the other side too: a real non-ASCII tag is not collateral."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="accented",
+            title="Accented tag item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:influx", "área:donn\u00e9es"),
+        )
+    )
+    fake.ready_ids.add("accented")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params={"tag": "área:donn\u00e9es", "since": "2026-04-01"}
+        )
+
+    assert response.status_code == 200
+    assert "data-active-filters" in response.text
+    assert "Accented tag item" in response.text
+
+
+def test_filters_are_parsed_once_per_request_not_once_per_link(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (security/f-005): the preserved-filter scan runs per generated
+    URL — one per row, one per tag per row, plus the cards and epic chips — and
+    each scan walks EVERY query param, including unrecognised ones that score
+    nothing against the byte budget. That made a request cost O(params x links):
+    5,000 junk params took 0.69s on a 400-row board against 0.04s clean.
+
+    Counted rather than timed, so it cannot go flaky: the query string is
+    scanned a fixed number of times per request, not once per link.
+    """
+    scans = 0
+    original = QueryParams.multi_items
+
+    def counting(self: QueryParams) -> Any:
+        nonlocal scans
+        scans += 1
+        return original(self)
+
+    monkeypatch.setattr(QueryParams, "multi_items", counting)
+
+    fake = _roadmap_fake()
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    assert response.status_code == 200
+    links = response.text.count('href="/tasks')
+    # The board really does render many filter-carrying links off this request…
+    assert links > 10
+    # …and they share one scan (plus the route's own parse_filters read).
+    assert scans <= 3, f"{scans} query-string scans for {links} generated links"
 
 
 @pytest.mark.parametrize(

@@ -6,8 +6,9 @@ import logging
 from asyncio import CancelledError
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -529,6 +530,63 @@ async def _render_tasks(
 _PRESERVED_FILTER_KEYS = ("status", "project", "agent", "since", "tag", "epic")
 
 
+@dataclass(frozen=True)
+class _RequestFilters:
+    """This request's preserved filters, parsed once (see ``_request_filters``)."""
+
+    oversized: bool
+    params: tuple[tuple[str, str], ...]
+
+
+# Where the parsed filters hang off the request. The URL helpers below run once
+# per generated link — one per row, one per tag per row, plus the summary cards
+# and the epic chips — and each scan is O(every param on the request), not
+# O(the six preserved ones. Recomputing per link cost O(J x L) for J params and
+# L links, and J is bounded only by the URL length limit: an unrecognised key
+# scores nothing against the byte budget but still has to be walked. Parsed
+# once, a request costs O(J + L).
+_FILTER_STATE_ATTR = "lens_preserved_filters"
+
+
+def _parse_preserved_filters(request: Request) -> _RequestFilters:
+    """Scan the query string once: the preserved filters, and their emitted size.
+
+    The size is measured in the unit it is EMITTED in — what ``urlencode`` will
+    put in the links — and NOT in code points. ``urlencode`` percent-encodes via
+    ``quote_plus``, where one character can cost up to 12 bytes (an astral
+    character becomes ``%F0%9F%98%80``), so counting ``len(value)`` let a value
+    at the budget emit ~12x it: 1,018 emoji measured 1,018 here but 12,216 in
+    the links, rendering 25 MB where the ASCII worst case renders 2.5 MB.
+    ``len(value.encode())`` would still understate it threefold.
+    """
+    params: list[tuple[str, str]] = []
+    total = 0
+    for key, value in request.query_params.multi_items():
+        if key not in _PRESERVED_FILTER_KEYS:
+            continue
+        # +2 for the "=" and "&" urlencode puts around each pair.
+        total += len(quote_plus(key)) + len(quote_plus(value)) + 2
+        if value:
+            params.append((key, value))
+    if total > MAX_FILTER_QUERY_BYTES:
+        # An oversized request preserves NOTHING, so the guarantee holds at the
+        # choke point rather than per template: the refusal page still renders
+        # its own chrome (the "back to tasks" link), and every URL on it must
+        # come out unfiltered — otherwise the page refusing to reflect the
+        # value reflects it anyway, once per link.
+        return _RequestFilters(oversized=True, params=())
+    return _RequestFilters(oversized=False, params=tuple(params))
+
+
+def _request_filters(request: Request) -> _RequestFilters:
+    """This request's parsed filters, computed on first use and then reused."""
+    cached = getattr(request.state, _FILTER_STATE_ATTR, None)
+    if cached is None:
+        cached = _parse_preserved_filters(request)
+        setattr(request.state, _FILTER_STATE_ATTR, cached)
+    return cached
+
+
 def _filter_query_oversized(request: Request) -> bool:
     """True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
 
@@ -538,12 +596,7 @@ def _filter_query_oversized(request: Request) -> bool:
     the offending filter had not been sent: see the constant for why trimming
     is not an option.
     """
-    total = sum(
-        len(key) + len(value) + 2
-        for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS
-    )
-    return total > MAX_FILTER_QUERY_BYTES
+    return _request_filters(request).oversized
 
 
 def _preserved_filter_params(
@@ -555,19 +608,11 @@ def _preserved_filter_params(
     before rendering, so there is nothing left here to trim, and trimming per
     key was the wrong shape anyway: it dropped filter terms the board had been
     asked for.
-
-    An oversized request preserves NOTHING, which makes that guarantee hold at
-    the choke point rather than per template. The refusal page still renders
-    (its "back to tasks" link, its chrome), and every URL on it must come out
-    unfiltered — otherwise the page refusing to reflect the value reflects it
-    anyway, once per link.
     """
-    if _filter_query_oversized(request):
-        return []
     return [
         (key, value)
-        for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS and key != exclude and value
+        for key, value in _request_filters(request).params
+        if key != exclude
     ]
 
 
@@ -587,12 +632,10 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     dropping the whole filter.
 
     ``tags`` is the HONOURED list (``TaskFilters.tags``) and NOT the raw query
-    string, which is what makes this link safe to render once per chip. The raw
-    ``?tag=`` is unbounded and arrives in two forms (repeated and comma-joined),
-    so rebuilding from it would re-emit the whole query string per chip — the
-    quadratic reflection ``MAX_FILTER_TAGS`` / ``MAX_FILTER_TAG_LENGTH`` exist
-    to stop. Rebuilding from the honoured list also keeps the link truthful:
-    clearing one chip cannot resurrect a tag the board is not filtering by.
+    string: the two spellings (repeated and comma-joined) both fold into it, so
+    rebuilding from the request would emit a tag twice or miss a duplicate it
+    had collapsed. It also keeps the link truthful — clearing one chip cannot
+    resurrect a tag the board is not filtering by.
     """
     params = _preserved_filter_params(request, exclude="tag")
     params.extend(("tag", other) for other in tags if other != tag)
