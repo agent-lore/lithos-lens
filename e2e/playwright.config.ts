@@ -28,8 +28,36 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
+      // Everything that DRIVES the application. Defined by exclusion, not by
+      // filename: a new spec file must land in a project automatically, or it
+      // is silently absent from CI rather than failing loudly. The only file
+      // held out is the capture phase below.
+      name: "app",
+      testIgnore: /screenshots\.spec\.ts/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // Sequenced AFTER the app phase, not merely isolated from it.
+      //
+      // There is ONE `webServer` for the whole run, and `EventHub.publish`
+      // fans every event to every connected browser. So while the app phase's
+      // `task.created` test is running, any other open tab receives that
+      // synthetic event too — and a capture tab that receives it photographs
+      // a row the application never rendered from its own data ("Freshly
+      // created task", stuck loading). That is fabricated UI state inside a
+      // required visual gate: it can manufacture a false difference, or mask
+      // a real regression behind one, non-deterministically at whichever
+      // width happened to have a tab open.
+      //
+      // `dependencies` is what makes this deterministic. `fullyParallel` and
+      // this file's own `mode: "default"` order tests only WITHIN a project;
+      // neither keeps the two PHASES apart. The cost is that captures do not
+      // run when the app phase fails, which is the right trade for a gate whose
+      // entire value is that its images can be trusted.
+      name: "screenshots",
+      testMatch: /screenshots\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+      dependencies: ["app"],
     },
   ],
   webServer: {

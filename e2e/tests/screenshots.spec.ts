@@ -129,6 +129,18 @@ for (const { slug, url, ready } of PAGES) {
       await page.goto(url);
       await ready(page);
 
+      // Nothing here may have come from another spec's synthetic event. One
+      // `webServer` serves the whole run and `EventHub.publish` fans to every
+      // connected browser, so before the projects were sequenced (see
+      // playwright.config.ts) smoke's `task.created` publish landed in THIS
+      // tab and got photographed — a row the app never rendered from its own
+      // data, inside a required visual gate. The config keeps the two files
+      // apart; this asserts the result, so a later config change cannot
+      // quietly reopen the hole. Deliberately matched on the skeleton CLASS
+      // rather than smoke's task id: the fixtures never produce a skeleton, so
+      // any skeleton here is a leak, whatever published it.
+      await expect(page.locator(".task-row-skeleton")).toHaveCount(0);
+
       // No horizontal overflow: a page wider than the viewport would yield a
       // wider-than-stated PNG and a broken responsive layout.
       const scrollWidth = await page.evaluate(
