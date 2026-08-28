@@ -71,7 +71,7 @@ def test_parse_filters_honors_every_requested_tag() -> None:
     remove a predicate."""
     requested = tuple(f"t{i}" for i in range(40))
 
-    filters = parse_filters([("tag", ",".join(requested))], default_days=30)
+    filters = parse_filters([("tag", tag) for tag in requested], default_days=30)
 
     assert filters.tags == requested
 
@@ -87,20 +87,51 @@ def test_parse_filters_honors_a_tag_longer_than_any_lens_ceiling() -> None:
     assert filters.tags == (long_tag,)
 
 
-def test_parse_filters_folds_both_tag_spellings_into_one_list() -> None:
+def test_parse_filters_keeps_tag_values_literal() -> None:
+    """One ``tag`` parameter is one tag, verbatim. Unlike ``project`` and
+    ``status``, a tag is not a constrained vocabulary — the vendored Lithos
+    schema types it as a bare string — so a comma is tag content and
+    surrounding whitespace is significant. Splitting made ``customer,2``
+    unselectable and rewrote `` urgent `` into a filter that matched a
+    different task."""
     filters = parse_filters(
-        [("tag", "a,b"), ("tag", "c")],
+        [("tag", "customer,2"), ("tag", " urgent "), ("tag", "needs review")],
         default_days=30,
     )
 
-    assert filters.tags == ("a", "b", "c")
+    assert filters.tags == ("customer,2", " urgent ", "needs review")
+
+
+def test_parse_filters_still_splits_the_constrained_vocabularies() -> None:
+    """``project`` and ``status`` keep the documented comma convenience: their
+    values are slugs and an enum, where a comma cannot be part of a value."""
+    filters = parse_filters(
+        [("project", "lithos-loom,influx"), ("status", "open,completed")],
+        default_days=30,
+    )
+
+    assert filters.projects == ("lithos-loom", "influx")
+    assert filters.statuses == ("open", "completed")
+
+
+def test_parse_filters_ignores_a_blank_tag() -> None:
+    """The filter bar submits ``tag=`` on every search, so blank has to mean
+    "no tag filter" rather than "tasks carrying the empty tag" — which would
+    empty the board on the UI's most ordinary interaction. The empty tag is the
+    one value this vocabulary cannot name, and that is a deliberate trade."""
+    filters = parse_filters(
+        [("tag", ""), ("tag", "roadmap-2026-08")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("roadmap-2026-08",)
 
 
 def test_parse_filters_collapses_repeated_tags() -> None:
     """``all(tag in task.tags …)`` is idempotent, so a repeat is a redundant
     chip and a wasted comparison per row, never a different result."""
     filters = parse_filters(
-        [("tag", "roadmap-2026-08,roadmap-2026-08"), ("tag", "roadmap-2026-08")],
+        [("tag", "roadmap-2026-08"), ("tag", "roadmap-2026-08")],
         default_days=30,
     )
 

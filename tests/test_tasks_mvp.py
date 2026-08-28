@@ -921,7 +921,7 @@ def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
 
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get(
-            "/tasks?project=lithos-loom&tag=roadmap-2026-08,loom-candidate"
+            "/tasks?project=lithos-loom&tag=roadmap-2026-08&tag=loom-candidate"
             "&agent=planner&since=01/04/2026"
         )
         css = client.get("/static/lens.css")
@@ -1016,7 +1016,8 @@ def test_every_requested_tag_term_narrows_the_board(
     fake.ready_ids.update({"all-terms", "missing-last"})
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get(f"/tasks?tag={','.join(terms)}&since=2026-04-01")
+        query = urlencode([("tag", term) for term in terms] + [("since", "2026-04-01")])
+        response = client.get(f"/tasks?{query}")
 
     assert response.status_code == 200
     assert "Carries every term" in response.text
@@ -1033,7 +1034,8 @@ def test_chip_strip_caps_what_it_draws_but_says_the_rest_still_apply(
     fake = _roadmap_fake()
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get(f"/tasks?tag={','.join(terms)}&since=2026-04-01")
+        query = urlencode([("tag", term) for term in terms] + [("since", "2026-04-01")])
+        response = client.get(f"/tasks?{query}")
 
     assert response.status_code == 200
     assert response.text.count("data-active-filter-tag=") == MAX_FILTER_TAG_CHIPS
@@ -1286,27 +1288,163 @@ def test_rejection_logs_the_route_template_not_the_raw_path(
     assert len(emitted) < 1000
 
 
+@pytest.mark.parametrize(
+    ("label", "literal"),
+    [
+        # The vendored Lithos schema types a tag as a bare "string" — no
+        # pattern, no length, no excluded characters — so all of these are
+        # ordinary tag content, and an exact-match filter has to name them.
+        ("comma", "customer,2"),
+        ("leading-and-trailing-space", " urgent "),
+        ("inner-space", "needs review"),
+        ("plus", "a+b"),
+        ("percent", "50%-done"),
+    ],
+)
+def test_literal_tags_are_selectable_end_to_end(
+    lithos_lens_config_env: Path, label: str, literal: str
+) -> None:
+    """Regression (correctness/f-004): ``?tag=`` claimed exact match but its URL
+    vocabulary could not represent the tag domain.
+
+    Every value was comma-split and stripped, so the real tag ``customer,2``
+    became ``customer`` AND ``2`` and matched nothing, and `` urgent `` was
+    rewritten to ``urgent`` — which matched a DIFFERENT task. A filter that
+    quietly answers a question nobody asked is worse than one that finds
+    nothing.
+
+    Follows the row's own tag link too, so the round trip is pinned end to end
+    rather than just the parse.
+    """
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="literal",
+            title="Literally tagged task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=(literal,),
+        )
+    )
+    # The value the OLD splitting/stripping would have collapsed this to. When
+    # that differs from the literal, a task carrying it is the decoy: the old
+    # behaviour matched this one instead of the one that was asked for.
+    collapsed = tuple(part.strip() for part in literal.split(",") if part.strip())
+    fake.ready_ids.add("literal")
+    if collapsed != (literal,):
+        fake.tasks.append(
+            TaskRecord(
+                id="near-miss",
+                title="Near miss task",
+                status="open",
+                created_by="planner",
+                created_at=_ago(minutes=20),
+                tags=collapsed,
+            )
+        )
+        fake.ready_ids.add("near-miss")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks", params={"tag": literal})
+
+        assert response.status_code == 200
+        assert "Literally tagged task" in response.text
+        # The collapsed value must NOT drag its own task in.
+        if collapsed != (literal,):
+            assert "Near miss task" not in response.text
+
+        # The row's tag chip links back to this same filtered board.
+        text = unescape(response.text)
+        row = text.split("data-task-row")[1]
+        href = re.findall(r'class="tag-chip[^"]*" href="([^"]+)"', row)[0]
+        followed = client.get(href)
+
+    assert followed.status_code == 200
+    assert "Literally tagged task" in followed.text
+
+
+def test_repeated_tag_params_and_together_and_commas_stay_literal(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The AND spelling is the repeated parameter. ``?tag=a,b`` is ONE tag —
+    the two must not be confusable, which is the whole point of dropping the
+    comma convenience for tags."""
+    fake = _roadmap_fake()
+    fake.tasks.append(
+        TaskRecord(
+            id="two-tags",
+            title="Has a and b",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("a", "b"),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="one-tag",
+            title="Has the literal a,b",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("a,b",),
+        )
+    )
+    fake.ready_ids.update({"two-tags", "one-tag"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        both = client.get("/tasks", params=[("tag", "a"), ("tag", "b")])
+        literal = client.get("/tasks", params={"tag": "a,b"})
+
+    assert "Has a and b" in both.text
+    assert "Has the literal a,b" not in both.text
+
+    assert "Has the literal a,b" in literal.text
+    assert "Has a and b" not in literal.text
+
+
+def test_filter_bar_round_trips_multiple_tags_without_joining_them(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Submitting the filter bar must not collapse an active multi-tag scope
+    into one comma-joined literal. The active tags ride as hidden ``tag``
+    inputs — the same convention the epic scope already uses — so a plain
+    form submit re-sends exactly what was active."""
+    fake = _roadmap_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks", params=[("tag", "roadmap-2026-08"), ("tag", "loom-candidate")]
+        )
+
+    assert response.status_code == 200
+    bar = response.text.split('class="filter-bar"')[1].split("</form>")[0]
+    assert '<input type="hidden" name="tag" value="roadmap-2026-08">' in bar
+    assert '<input type="hidden" name="tag" value="loom-candidate">' in bar
+    # …and the visible box adds one more rather than re-submitting a join.
+    assert 'value="roadmap-2026-08,loom-candidate"' not in bar
+
+
 def test_chip_clear_link_from_a_near_budget_tag_query_still_works(
     lithos_lens_config_env: Path,
 ) -> None:
     """Regression (correctness/f-003): every chip advertises itself as a clear
     control, so following one has to work for any request the board accepted.
 
-    It did not. ``parse_filters`` expands the comma form, and the clear link
-    re-emitted each remaining tag as its own ``tag=`` pair — which costs
-    ``len("tag=")`` plus a separator per tag where the comma form costs one
-    encoded comma. 170 tags arrived comma-joined as 911 bytes, rendered fine,
-    and generated a 1,250-byte clear href that 400s when clicked.
+    It did not: the clear link re-emitted the tags in a spelling that could be
+    larger than the accepted request, so a near-budget board rendered chips
+    that 400 when clicked. Tags now have ONE spelling, so a clear link is a
+    strict subset of the request that was already accepted.
 
     Follows the link rather than inspecting it, which is the only way this
-    shows up: the old two-tag href was far too small to cross the ceiling.
+    shows up: a small two-tag href cannot cross the ceiling.
     """
-    tags = [str(i) for i in range(170)]
-    comma_form = ",".join(tags)
+    tags = [f"roadmap-2026-{i:02d}" for i in range(51)]
+    query = urlencode([("tag", tag) for tag in tags])
     # Near the budget and inside it: the request the board must accept, and
     # whose clear links must therefore also be accepted.
-    accepted_size = len(urlencode([("tag", comma_form)]))
-    assert 900 < accepted_size <= MAX_FILTER_QUERY_BYTES
+    assert 900 < len(query) <= MAX_FILTER_QUERY_BYTES
 
     fake = _roadmap_fake()
     fake.tasks.append(
@@ -1322,15 +1460,14 @@ def test_chip_clear_link_from_a_near_budget_tag_query_still_works(
     fake.ready_ids.add("carries-all")
 
     with _client(lithos_lens_config_env, fake) as client:
-        board = client.get(f"/tasks?{urlencode([('tag', comma_form)])}")
+        board = client.get(f"/tasks?{query}")
         assert board.status_code == 200
         assert "Carries every filter tag" in board.text
 
         text = unescape(board.text)
         href = re.findall(r'href="([^"]+)"[^>]*data-active-filter-tag=', text)[0]
         # The link the chip advertises is itself within the budget…
-        query = href.split("?", 1)[1] if "?" in href else ""
-        assert len(query) <= MAX_FILTER_QUERY_BYTES
+        assert len(href.split("?", 1)[1]) <= MAX_FILTER_QUERY_BYTES
         cleared = client.get(href)
 
     # …and following it shows the same board minus that one tag.
@@ -1338,8 +1475,8 @@ def test_chip_clear_link_from_a_near_budget_tag_query_still_works(
     assert "data-filter-rejected" not in cleared.text
     assert "Carries every filter tag" in cleared.text
     remaining = re.findall(r'data-active-filter-tag="([^"]+)"', unescape(cleared.text))
-    assert "0" not in remaining
-    assert "1" in remaining
+    assert tags[0] not in remaining
+    assert tags[1] in remaining
 
 
 def test_dashboard_debug_log_does_not_carry_the_raw_query_pairs(

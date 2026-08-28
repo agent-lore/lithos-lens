@@ -664,22 +664,20 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     had collapsed. It also keeps the link truthful — clearing one chip cannot
     resurrect a tag the board is not filtering by.
 
-    The remaining tags go out COMMA-JOINED, in one pair, because this link has
-    to stay inside ``MAX_FILTER_QUERY_BYTES`` — a chip that renders but 400s
-    when clicked is worse than no chip. The repeated form costs ``len("tag=")``
-    plus a separator per tag where the comma form costs one encoded comma, so
-    it can be materially LARGER than the request that was accepted: 170 tags
-    arrive comma-joined as 911 bytes and went back out as 1,250. Comma-joined
-    is never larger than either spelling of the input for two or more tags, and
-    equal for one, so a link generated from an accepted request is always
-    itself accepted. The two forms parse identically (``honored_tags`` splits
-    on commas), and a tag containing a comma is already unrepresentable in this
-    vocabulary, so nothing is lost.
+    One repeated ``tag`` pair per remaining tag — the same and only spelling the
+    request itself uses, now that tags are literal. That is what keeps the link
+    inside ``MAX_FILTER_QUERY_BYTES``, which matters because a chip that renders
+    but 400s when clicked is worse than no chip: encoding the output exactly as
+    the input was encoded makes this link a strict subset of the request that
+    was already accepted, so it cannot overflow a budget the request cleared.
+
+    Round 6 comma-joined them to solve that budget problem, which worked only
+    because tags were being split on commas — the very thing that made the real
+    tag ``customer,2`` unnameable. With literal tags the two are the same
+    representation and the budget property falls out for free.
     """
     params = _preserved_filter_params(request, exclude="tag")
-    remaining = [other for other in tags if other != tag]
-    if remaining:
-        params.append(("tag", ",".join(remaining)))
+    params.extend(("tag", other) for other in tags if other != tag)
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 

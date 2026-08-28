@@ -563,8 +563,16 @@ def parse_filters(
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
     for key, value in query_items:
-        if value:
-            values.setdefault(key, []).extend(_split_values(value))
+        if not value:
+            continue
+        if key == "tag":
+            # Tags are literal (see ``honored_tags``): a comma is tag content,
+            # not a separator. Every other key is a constrained vocabulary —
+            # statuses are an enum, project slugs are slugs — where the comma
+            # form is a documented convenience that cannot collide with a value.
+            values.setdefault(key, []).append(value)
+            continue
+        values.setdefault(key, []).extend(_split_values(value))
 
     requested_statuses = set(values.get("status", list(default_statuses)))
     status_items: list[TaskStatusName] = [
@@ -711,23 +719,35 @@ def int_stat(stats: dict[str, Any], key: str, *, default: int = 0) -> int:
 def honored_tags(values: Iterable[str]) -> tuple[str, ...]:
     """The ``?tag=`` values the board filters by, in the order written.
 
-    EVERY requested tag is honoured: the ``?tag=`` contract is an exact-match
-    AND over task tags, and Lithos' schema puts no ceiling on a tag's length,
-    so a task can validly carry a tag longer than any bound Lens might invent.
-    Dropping a term here would widen the board — showing rows the operator
-    excluded — so the request size is bounded instead
+    One ``tag`` parameter is one LITERAL tag, verbatim: repeat the parameter
+    (``?tag=a&tag=b``) to AND several together. Deliberately no comma-splitting
+    and no stripping, unlike ``project`` and ``status`` below, because a tag is
+    not a constrained vocabulary — the vendored Lithos schema types it as a
+    bare ``string`` with no pattern, length or character exclusions, so a comma
+    and surrounding whitespace are both ordinary tag content. Splitting made
+    the real tag ``customer,2`` unselectable (it became ``customer`` AND ``2``,
+    matching nothing) and silently rewrote `` urgent `` to ``urgent``, which
+    matched a DIFFERENT task — a filter quietly answering a question nobody
+    asked. An exact-match filter has to be able to name every value the store
+    can hold.
+
+    EVERY requested tag is then honoured: dropping a term would widen the board,
+    showing rows the operator excluded, so the request SIZE is bounded instead
     (``MAX_FILTER_QUERY_BYTES``), which never removes a predicate.
 
-    Both spellings fold into one list (repeated ``?tag=a&tag=b`` and the
-    comma-joined ``?tag=a,b``), and repeats collapse: ``all(tag in task.tags)``
-    is idempotent, so a duplicate is a redundant chip and a wasted comparison
-    per row, never a different result.
+    Repeats collapse: ``all(tag in task.tags)`` is idempotent, so a duplicate is
+    a redundant chip and a wasted comparison per row, never a different result.
+
+    An EMPTY value is not a filter. The schema would permit an empty-string tag,
+    but the filter bar's text input submits ``tag=`` on every search, so reading
+    that as "show me tasks carrying the empty tag" would empty the board on the
+    UI's most ordinary interaction. Blank means "no tag filter", and the empty
+    tag is the one value this vocabulary cannot name.
     """
     tags: list[str] = []
     for value in values:
-        for tag in _split_values(value):
-            if tag not in tags:
-                tags.append(tag)
+        if value and value not in tags:
+            tags.append(value)
     return tuple(tags)
 
 

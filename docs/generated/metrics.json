@@ -33,8 +33,8 @@
       },
       "Logging": {
         "functions_over_10": 0,
-        "max_complexity": 5,
-        "max_function": "lithos_lens.logging.JsonFormatter.format"
+        "max_complexity": 7,
+        "max_function": "lithos_lens.logging._json_safe"
       },
       "State": {
         "functions_over_10": 0,
@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.frontier_join.classify_open_tasks"
       }
     ],
-    "total_functions": 305
+    "total_functions": 306
   },
   "domain": {
     "associations": 30,
@@ -268,13 +268,13 @@
       },
       "Logging": {
         "classes": 1,
-        "functions": 3,
+        "functions": 4,
         "largest_module": "lithos_lens.logging",
-        "largest_module_lines": 60,
-        "lines": 60,
+        "largest_module_lines": 103,
+        "lines": 103,
         "modules": 1,
         "public_symbols": 2,
-        "sloc": 48
+        "sloc": 68
       },
       "State": {
         "classes": 2,
@@ -300,11 +300,11 @@
         "classes": 18,
         "functions": 48,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 735,
-        "lines": 1258,
+        "largest_module_lines": 755,
+        "lines": 1278,
         "modules": 4,
         "public_symbols": 46,
-        "sloc": 919
+        "sloc": 933
       },
       "Telemetry": {
         "classes": 0,
@@ -320,11 +320,11 @@
         "classes": 1,
         "functions": 29,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 742,
-        "lines": 742,
+        "largest_module_lines": 740,
+        "lines": 740,
         "modules": 1,
         "public_symbols": 9,
-        "sloc": 621
+        "sloc": 618
       }
     },
     "max_module": "lithos_lens.lithos_client",
@@ -332,13 +332,13 @@
     "modules_over_800": [
       "lithos_lens.lithos_client"
     ],
-    "total_lines": 7954,
+    "total_lines": 8015,
     "total_modules": 28,
-    "total_sloc": 6273
+    "total_sloc": 6304
   },
   "tests": {
-    "ratio": 1.84,
-    "src_lines": 7954,
-    "test_lines": 14646
+    "ratio": 1.86,
+    "src_lines": 8015,
+    "test_lines": 14889
   }
 }

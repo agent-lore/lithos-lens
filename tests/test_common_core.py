@@ -14,7 +14,7 @@ from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
-from lithos_lens.logging import JsonFormatter
+from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS, JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
     MAX_SINCE_LOOKBACK_DAYS,
@@ -189,6 +189,81 @@ def test_json_formatter_preserves_structured_extra_fields() -> None:
     assert payload["message"] == "tasks dashboard filters parsed"
     assert payload["tags"] == ["project:influx"]
     assert payload["group_counts"] == {"completed": 0}
+
+
+def test_json_formatter_truncates_over_long_messages() -> None:
+    """Regression (security/f-008): ``uvicorn.access`` logs the whole request
+    line, query string included, and propagates to the root handler
+    ``configure_logging`` installs — so a 47 KB query string wrote a 47 KB log
+    line at the SHIPPED default level, which no per-field fix in this package
+    could cover.
+
+    The container log is size-capped and rotated, so unbounded lines are cheap
+    eviction of the log history — and on a service with no authentication that
+    history is the only forensic record there is. Bounding it in the formatter
+    covers every logger, including ones added later.
+    """
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='127.0.0.1 - "GET /tasks?%s HTTP/1.1" 200',
+        args=("j=" + "x" * 60000,),
+        exc_info=None,
+    )
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert len(payload["message"]) < MAX_LOGGED_VALUE_CHARS + 100
+    # Truncation is announced, with the original size: silently shortening
+    # evidence is its own problem.
+    assert "truncated" in payload["message"]
+    assert "x" * 5000 not in payload["message"]
+
+
+def test_json_formatter_truncates_strings_inside_extra_fields() -> None:
+    """The same ceiling has to hold for ``extra=`` values and the containers
+    they arrive in, or the volume just moves one field across."""
+    record = logging.LogRecord(
+        name="lithos_lens.web",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg="tasks dashboard filters parsed",
+        args=(),
+        exc_info=None,
+    )
+    record.epic = "e" * 60000
+    record.tags = ["t" * 60000]
+    record.nested = {"k": "n" * 60000}
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert len(payload["epic"]) < MAX_LOGGED_VALUE_CHARS + 100
+    assert len(payload["tags"][0]) < MAX_LOGGED_VALUE_CHARS + 100
+    assert len(payload["nested"]["k"]) < MAX_LOGGED_VALUE_CHARS + 100
+
+
+def test_json_formatter_leaves_normal_lines_untouched() -> None:
+    """The ceiling is a safety bound far above any real line, not a style rule."""
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='127.0.0.1 - "GET /tasks?tag=roadmap-2026-08 HTTP/1.1" 200',
+        args=(),
+        exc_info=None,
+    )
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert (
+        payload["message"]
+        == '127.0.0.1 - "GET /tasks?tag=roadmap-2026-08 HTTP/1.1" 200'
+    )
+    assert "truncated" not in payload["message"]
 
 
 def test_app_degrades_when_lithos_is_unreachable(lithos_lens_config_env: Path) -> None:

@@ -153,9 +153,18 @@
             {% endfor %}
           </datalist>
         </label>
+        {# One "tag" parameter is one LITERAL tag (a comma is tag content, not a
+           separator), so the active tags cannot be round-tripped through a
+           single comma-joined text value — "a,b" would come back as one tag
+           named "a,b". They ride as hidden inputs instead, the same way the
+           epic scope does below, and the box adds one more. What is active is
+           shown by the chip strip under this bar, which also removes them. #}
+        {% for tag in dashboard.filters.tags %}
+          <input type="hidden" name="tag" value="{{ tag }}">
+        {% endfor %}
         <label>
           Tag
-          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="area:docs">
+          <input type="text" name="tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
         </label>
         <label>
           Agent (creator or claimer)
