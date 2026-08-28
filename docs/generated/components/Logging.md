@@ -11,7 +11,7 @@ Structured JSON logging setup (JsonFormatter).
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.logging` | XS | 1 | 1 |
+| `lithos_lens.logging` | S | 1 | 1 |
 
 ## Public API
 

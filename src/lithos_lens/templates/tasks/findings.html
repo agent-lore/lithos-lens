@@ -1,6 +1,15 @@
 <section>
   <h2>Findings</h2>
-  {% if offline %}
+  {% if filter_query_rejected %}
+    {# Refused, not trimmed — see the dashboard's banner for why. #}
+    <section class="banner banner-warning" role="alert" data-filter-rejected>
+      <strong>Filter too large to apply.</strong>
+      <span>
+        The filters in this link exceed the {{ max_filter_query_bytes }}-byte limit.
+        <a href="/tasks">Start again with no filters</a>.
+      </span>
+    </section>
+  {% elif offline %}
     <p class="warning-text">Findings unavailable while Lithos is offline.</p>
   {% elif detail and detail.findings_state == "error" %}
     <p class="warning-text">Findings unavailable. Refresh this task to retry.</p>

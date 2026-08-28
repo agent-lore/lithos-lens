@@ -13,7 +13,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | S | 0 | 8 |
-| `lithos_lens.tasks` | M | 15 | 10 |
+| `lithos_lens.tasks` | L | 15 | 11 |
 
 ## Public API
 
@@ -61,6 +61,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.
 - def `parse_date`
 - def `int_stat`
+- def `honored_tags` — The ``?tag=`` values the board filters by, in the order written.
 
 ## Dependencies
 

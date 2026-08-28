@@ -5,7 +5,16 @@
 {% block content %}
   <p><a href="{{ tasks_url(request) }}">&larr; Back to tasks</a></p>
 
-  {% if offline %}
+  {% if filter_query_rejected %}
+    {# Refused, not trimmed — see the dashboard's banner for why. #}
+    <section class="banner banner-warning" role="alert" data-filter-rejected>
+      <strong>Filter too large to apply.</strong>
+      <span>
+        The filters in this link exceed the {{ max_filter_query_bytes }}-byte limit.
+        <a href="/tasks">Start again with no filters</a>.
+      </span>
+    </section>
+  {% elif offline %}
     <section class="banner banner-warning" role="status">
       <strong>Lithos is offline or degraded.</strong>
       <span>Task detail is unavailable. Lens is running and will retry on refresh.</span>
@@ -70,7 +79,10 @@
       {% if detail.task.tags %}
         <div class="tag-list">
           {% for tag in detail.task.tags %}
-            <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag }}</a>
+            {# "(empty tag)" for the same reason row.html and the active-filter
+               chip name it: a task really can carry the empty tag, and a blank
+               pill reads as a rendering bug rather than as a real scope. #}
+            <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag if tag else "(empty tag)" }}</a>
           {% endfor %}
         </div>
       {% endif %}

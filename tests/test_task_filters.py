@@ -64,6 +64,97 @@ def test_parse_filters_collects_repeated_and_comma_separated_projects() -> None:
     assert filters.projects == ("lithos-loom", "ganglion", "influx")
 
 
+def test_parse_filters_honors_every_requested_tag() -> None:
+    """``?tag=`` is an exact-match AND, and no term may be silently discarded:
+    dropping one WIDENS the board, showing rows the operator excluded. The
+    request size is bounded instead (``MAX_FILTER_QUERY_BYTES``), which cannot
+    remove a predicate."""
+    requested = tuple(f"t{i}" for i in range(40))
+
+    filters = parse_filters([("tag", tag) for tag in requested], default_days=30)
+
+    assert filters.tags == requested
+
+
+def test_parse_filters_honors_a_tag_longer_than_any_lens_ceiling() -> None:
+    """Lithos' tool schema puts no ``maxLength`` on a tag, so a task can validly
+    carry a very long one. Filtering by that exact tag has to work — a length
+    ceiling here would render the whole unfiltered board instead."""
+    long_tag = "roadmap-" + "x" * 200
+
+    filters = parse_filters([("tag", long_tag)], default_days=30)
+
+    assert filters.tags == (long_tag,)
+
+
+def test_parse_filters_keeps_tag_values_literal() -> None:
+    """One ``tag`` parameter is one tag, verbatim. Unlike ``project`` and
+    ``status``, a tag is not a constrained vocabulary — the vendored Lithos
+    schema types it as a bare string — so a comma is tag content and
+    surrounding whitespace is significant. Splitting made ``customer,2``
+    unselectable and rewrote `` urgent `` into a filter that matched a
+    different task."""
+    filters = parse_filters(
+        [("tag", "customer,2"), ("tag", " urgent "), ("tag", "needs review")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("customer,2", " urgent ", "needs review")
+
+
+def test_parse_filters_still_splits_the_constrained_vocabularies() -> None:
+    """``project`` and ``status`` keep the documented comma convenience: their
+    values are slugs and an enum, where a comma cannot be part of a value."""
+    filters = parse_filters(
+        [("project", "lithos-loom,influx"), ("status", "open,completed")],
+        default_days=30,
+    )
+
+    assert filters.projects == ("lithos-loom", "influx")
+    assert filters.statuses == ("open", "completed")
+
+
+def test_parse_filters_treats_the_empty_tag_as_a_literal_tag() -> None:
+    """Regression (correctness/f-004): the vendored Lithos schema types a tag as
+    a bare string with no ``minLength``, so ``""`` is a tag a task can validly
+    carry and ``?tag=`` is the empty-tag scope.
+
+    Reading it as "no filter" — which an earlier round did, and which its test
+    codified — silently returned the whole unfiltered board for an exact-match
+    request, the same class of failure as splitting ``customer,2``.
+    """
+    filters = parse_filters(
+        [("tag", ""), ("tag", "roadmap-2026-08")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("", "roadmap-2026-08")
+
+
+def test_parse_filters_ignores_a_blank_add_tag_box() -> None:
+    """The filter bar's text input is its OWN parameter, so the blank it
+    submits on every search cannot be confused with the literal empty tag.
+
+    That separation is the whole reason ``tag`` can stay fully literal: one
+    control means "nothing typed", the other means a value.
+    """
+    filters = parse_filters(
+        [("tag", "roadmap-2026-08"), ("add_tag", "")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("roadmap-2026-08",)
+
+
+def test_parse_filters_folds_the_add_tag_box_into_the_tag_set() -> None:
+    filters = parse_filters(
+        [("tag", "roadmap-2026-08"), ("add_tag", "loom-candidate")],
+        default_days=30,
+    )
+
+    assert filters.tags == ("roadmap-2026-08", "loom-candidate")
+
+
 def test_parse_filters_carries_the_configured_convention() -> None:
     filters = parse_filters(
         [],

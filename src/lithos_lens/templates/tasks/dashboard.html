@@ -16,7 +16,21 @@
     </section>
   {% endif %}
 
-  {% if dashboard %}
+  {% if filter_query_rejected %}
+    {# An oversized filter is refused outright rather than trimmed: dropping
+       filter terms would render a WIDER board than the one requested, with
+       chrome claiming a scope that is not applied. The offending value is
+       deliberately NOT echoed — every generated URL on this page would carry
+       it, which is exactly the amplification the ceiling exists to stop. #}
+    <section class="banner banner-warning" role="alert" data-filter-rejected>
+      <strong>Filter too large to apply.</strong>
+      <span>
+        These filters exceed the {{ max_filter_query_bytes }}-byte limit, so no board is shown —
+        Lens will not quietly drop part of a filter and show you more tasks than you asked for.
+        <a href="/tasks">Start again with no filters</a>.
+      </span>
+    </section>
+  {% elif dashboard %}
     <div data-refresh-fragment="dashboard-data">
       <section class="live-status" data-live-status data-live-state="{{ "live" if health.events == "live" else "paused" }}">
         <span class="live-dot"></span>
@@ -139,9 +153,24 @@
             {% endfor %}
           </datalist>
         </label>
+        {# One "tag" parameter is one LITERAL tag — a comma is tag content, not a
+           separator, and "" is a real tag — so the active tags cannot be
+           round-tripped through a single comma-joined text value ("a,b" would
+           come back as one tag named "a,b"). They ride as hidden inputs
+           instead, the same way the epic scope does below.
+
+           The box that ADDS one is a separate parameter on purpose: an HTML
+           text input submits on every search whether or not it was typed in,
+           so a blank "tag" would be indistinguishable from the empty-tag
+           filter. Blank "add_tag" means "nothing typed"; blank "tag" means the
+           empty tag. What is active is shown by the chip strip under this bar,
+           which also removes them. #}
+        {% for tag in dashboard.filters.tags %}
+          <input type="hidden" name="tag" value="{{ tag }}">
+        {% endfor %}
         <label>
           Tag
-          <input type="text" name="tag" value="{{ dashboard.filters.tags | join(',') }}" placeholder="area:docs">
+          <input type="text" name="add_tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
         </label>
         <label>
           Agent (creator or claimer)
@@ -176,6 +205,40 @@
           <a class="button-secondary" href="/tasks">Reset</a>
         </div>
       </form>
+
+      {#
+        Active-filter chips (T1-S13). The ``?tag=`` scope is the one filter
+        nothing else on the board names: a cross-project tag — the monthly
+        roadmap convention tags one committed set across every project it
+        touches — belongs to no project, so the project chip on each row
+        describes the row, never the slice. Each chip links to the same board
+        minus that one tag, so it doubles as the clear control while the other
+        tags and filters stay put.
+      #}
+      {% if dashboard.filters.tags %}
+        <section class="active-filters" aria-label="Active tag filters" data-active-filters>
+          <span class="active-filters-label">Scoped to</span>
+          {% for tag in dashboard.filters.tags[:max_tag_chips] %}
+            <a class="active-filter-chip"
+               href="{{ task_tag_clear_url(request, dashboard.filters.tags, tag) }}"
+               data-active-filter-tag="{{ tag }}"
+               aria-label="Clear the {{ tag }} filter">
+              {# The empty tag is a valid Lithos tag and a real scope, but it
+                 has no characters to show — an unlabelled pill would read as a
+                 rendering bug. Named rather than drawn blank. #}
+              <span class="active-filter-chip-label">{{ tag | format_tag if tag else "(empty tag)" }}</span>
+              <span class="active-filter-chip-clear" aria-hidden="true">&times;</span>
+            </a>
+          {% endfor %}
+          {% set undrawn = dashboard.filters.tags | length - max_tag_chips %}
+          {% if undrawn > 0 %}
+            {# Every one of those tags IS filtering the board below — the strip
+               just stops drawing chips. Saying so is the difference between a
+               bounded strip and a board that under-reports its own scope. #}
+            <span class="active-filters-label" data-active-filters-overflow>and {{ undrawn }} more {{ "tag" if undrawn == 1 else "tags" }}, also applied</span>
+          {% endif %}
+        </section>
+      {% endif %}
 
       {#
         Epic rollup strip: one progress chip per open epic, counted over its
