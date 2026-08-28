@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, quote_plus, urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
@@ -399,6 +399,22 @@ def create_app(
     return app
 
 
+def _route_template(request: Request) -> str:
+    """The matched route's template (``/tasks/{task_id}``), not the concrete path.
+
+    ``task_id`` is a free path segment bounded only by the URL length limit and
+    NOT by ``MAX_FILTER_QUERY_BYTES``, which measures the query string. Logging
+    the concrete path let a 50 KB request write a 50 KB log line — a persistent
+    sink for a transient input, on a container whose json-file driver has no
+    size cap — while the response itself stayed correctly bounded at ~1.5 KB.
+
+    The template is also what the ``lens_route`` field name implies, and what
+    aggregates across requests.
+    """
+    template = getattr(request.scope.get("route"), "path", "")
+    return template if isinstance(template, str) and template else "<unmatched>"
+
+
 async def _reject_oversized_filters(
     request: Request,
     templates: Jinja2Templates,
@@ -419,7 +435,7 @@ async def _reject_oversized_filters(
     logger.warning(
         "filter query rejected as oversized",
         extra={
-            "lens_route": str(request.url.path),
+            "lens_route": _route_template(request),
             "query_bytes": len(request.url.query or ""),
             "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
         },
@@ -465,7 +481,7 @@ async def _render_tasks(
         logger.debug(
             "tasks dashboard filters parsed",
             extra={
-                "lens_route": str(request.url.path),
+                "lens_route": _route_template(request),
                 "query_items": query_items,
                 "statuses": list(filters.statuses),
                 "projects": list(filters.projects),
@@ -491,7 +507,7 @@ async def _render_tasks(
         logger.debug(
             "tasks dashboard loaded",
             extra={
-                "lens_route": str(request.url.path),
+                "lens_route": _route_template(request),
                 "statuses": list(filters.statuses),
                 "projects": list(filters.projects),
                 "tags": list(filters.tags),
@@ -551,24 +567,26 @@ _FILTER_STATE_ATTR = "lens_preserved_filters"
 def _parse_preserved_filters(request: Request) -> _RequestFilters:
     """Scan the query string once: the preserved filters, and their emitted size.
 
-    The size is measured in the unit it is EMITTED in — what ``urlencode`` will
-    put in the links — and NOT in code points. ``urlencode`` percent-encodes via
-    ``quote_plus``, where one character can cost up to 12 bytes (an astral
-    character becomes ``%F0%9F%98%80``), so counting ``len(value)`` let a value
-    at the budget emit ~12x it: 1,018 emoji measured 1,018 here but 12,216 in
-    the links, rendering 25 MB where the ASCII worst case renders 2.5 MB.
-    ``len(value.encode())`` would still understate it threefold.
+    The size is the length of the exact string that will go into the links —
+    ``urlencode`` run over the very pairs this returns — rather than any
+    estimate of it. Both ways of estimating have now been wrong: counting code
+    points ignored percent-encoding, where one character can cost 12 bytes (an
+    astral character becomes ``%F0%9F%98%80``), and letting a value at the
+    budget emit 12x it; and adding two separator bytes per pair over-counted by
+    one, because ``urlencode`` writes "=" per pair but "&" only BETWEEN them,
+    so a query of exactly ``MAX_FILTER_QUERY_BYTES`` was refused by a ceiling
+    documented — and displayed to the operator — as rejecting only what is
+    larger. Measuring the real thing cannot drift from it.
+
+    Empty-valued keys cost nothing because they are not emitted: this is a
+    bound on what the response reflects, not on what the request said.
     """
-    params: list[tuple[str, str]] = []
-    total = 0
-    for key, value in request.query_params.multi_items():
-        if key not in _PRESERVED_FILTER_KEYS:
-            continue
-        # +2 for the "=" and "&" urlencode puts around each pair.
-        total += len(quote_plus(key)) + len(quote_plus(value)) + 2
-        if value:
-            params.append((key, value))
-    if total > MAX_FILTER_QUERY_BYTES:
+    params = [
+        (key, value)
+        for key, value in request.query_params.multi_items()
+        if key in _PRESERVED_FILTER_KEYS and value
+    ]
+    if len(urlencode(params)) > MAX_FILTER_QUERY_BYTES:
         # An oversized request preserves NOTHING, so the guarantee holds at the
         # choke point rather than per template: the refusal page still renders
         # its own chrome (the "back to tasks" link), and every URL on it must

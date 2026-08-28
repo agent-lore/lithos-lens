@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
+from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
@@ -1192,21 +1194,96 @@ def test_oversized_filters_reflect_nowhere_on_any_tasks_route(
     assert oversized not in response.text
 
 
-def test_filter_query_at_the_size_ceiling_is_served(
+def test_filter_query_at_the_exact_size_ceiling_is_served(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The bound is a safety ceiling ~9x a rich real filter, not a style rule:
-    a request at the limit is served normally."""
+    """Regression (correctness/f-002): the ceiling rejects only what is LARGER
+    than it — the banner tells the operator so — and a query of exactly
+    ``MAX_FILTER_QUERY_BYTES`` was being refused anyway.
+
+    The cause was estimating the separators: two bytes per pair, when
+    ``urlencode`` writes "=" per pair but "&" only BETWEEN pairs, so every
+    non-empty filter scored one byte high. The old boundary test hid it by
+    asserting on a 1,019-byte value — a 1,023-byte query it called "exactly at
+    the ceiling".
+
+    The arithmetic is pinned here as well as the behaviour, so this test cannot
+    quietly drift off the boundary again.
+    """
     fake = _roadmap_fake()
-    # "tag=" plus the value, exactly at the ceiling.
-    tag = "x" * (MAX_FILTER_QUERY_BYTES - len("tag") - 2)
+    at_ceiling = "x" * (MAX_FILTER_QUERY_BYTES - len("tag="))
+    over_ceiling = at_ceiling + "x"
+    assert len(urlencode([("tag", at_ceiling)])) == MAX_FILTER_QUERY_BYTES
+    assert len(urlencode([("tag", over_ceiling)])) == MAX_FILTER_QUERY_BYTES + 1
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/tasks", params={"tag": tag})
+        served = client.get("/tasks", params={"tag": at_ceiling})
+        refused = client.get("/tasks", params={"tag": over_ceiling})
 
-    assert response.status_code == 200
-    assert "data-filter-rejected" not in response.text
-    assert "data-active-filters" in response.text
+    assert served.status_code == 200
+    assert "data-filter-rejected" not in served.text
+    assert "data-active-filters" in served.text
+    assert refused.status_code == 400
+    assert "data-filter-rejected" in refused.text
+
+
+def test_multi_key_filter_query_at_the_exact_size_ceiling_is_served(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same boundary with two pairs, which is where the "&"-only-between
+    rule actually bites: an estimate that charged every pair for both
+    separators was over by one per additional pair."""
+    fake = _roadmap_fake()
+    # "agent=" + "&" + "tag=" + the two values == the ceiling exactly.
+    agent = "a" * 20
+    tag = "x" * (MAX_FILTER_QUERY_BYTES - len("agent=") - 1 - len("tag=") - len(agent))
+    pairs = [("agent", agent), ("tag", tag)]
+    assert len(urlencode(pairs)) == MAX_FILTER_QUERY_BYTES
+
+    with _client(lithos_lens_config_env, fake) as client:
+        over = [("agent", agent), ("tag", tag + "x")]
+        served = client.get(f"/tasks?{urlencode(pairs)}")
+        refused = client.get(f"/tasks?{urlencode(over)}")
+
+    assert served.status_code == 200
+    assert "data-filter-rejected" not in served.text
+    assert refused.status_code == 400
+
+
+def test_rejection_logs_the_route_template_not_the_raw_path(
+    lithos_lens_config_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression (security/f-006): ``task_id`` is a free path segment bounded
+    only by the URL length limit, and NOT by ``MAX_FILTER_QUERY_BYTES``, which
+    measures the query string. Logging the concrete path let a 50 KB request
+    write a 50,213-byte log line while the response stayed correctly bounded at
+    1,507 B — a persistent sink for a transient input, on a container whose
+    json-file driver has no size cap.
+    """
+    fake = TaskFakeLithosClient()
+    long_id = "A" * 20000
+
+    with (
+        _client(lithos_lens_config_env, fake) as client,
+        caplog.at_level(logging.WARNING, logger="lithos_lens.web"),
+    ):
+        response = client.get(
+            f"/tasks/{long_id}",
+            params={"epic": "y" * (MAX_FILTER_QUERY_BYTES + 1)},
+        )
+
+    assert response.status_code == 400
+    record = next(
+        item
+        for item in caplog.records
+        if item.getMessage() == "filter query rejected as oversized"
+    )
+    # The template, which is what the field name has always implied.
+    assert getattr(record, "lens_route", None) == "/tasks/{task_id}"
+    # And the emitted line is bounded, whatever the request length.
+    emitted = JsonFormatter().format(record)
+    assert long_id[:200] not in emitted
+    assert len(emitted) < 1000
 
 
 def test_no_active_filter_chip_without_a_tag_filter(
