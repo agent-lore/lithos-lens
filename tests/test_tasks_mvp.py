@@ -3549,3 +3549,41 @@ def test_gates_section_says_so_when_no_gate_matches(
 
     assert "No open gates match these filters." in response.text
     assert "<strong data-gate-count>0</strong>" in response.text
+
+
+def test_a_browser_parseable_only_ready_at_renders_without_a_countdown_hook(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The rendered half of the same contract as
+    ``test_a_stamp_only_the_browser_can_parse_drives_no_countdown``: the row
+    still SHOWS the stamp Lens could not parse, but publishes no
+    ``data-gate-ready-at``, which is the only thing tasks.js ticks from.
+
+    Asserted here rather than only on the model because the defect was in the
+    template — the attribute was emitted from the display field, so every value
+    that survived as text became a countdown the browser drove on its own.
+    """
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "timer-browser-only",
+        gate_type="timer",
+        metadata={"ready_at": "2026/09/01"},
+    )
+    _add_gate(
+        fake,
+        "timer-real",
+        gate_type="timer",
+        metadata={"ready_at": _ahead(hours=3)},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        text = client.get("/tasks?since=2026-04-01").text
+
+    hooks = re.findall(r'data-gate-ready-at="([^"]*)"', text)
+    # Exactly one countdown hook: the gate whose stamp both sides parse.
+    assert len(hooks) == 1
+    assert "2026/09/01" not in hooks[0]
+    # The unparseable one is still on the page, as static text.
+    assert "2026/09/01" in text
+    assert "data-gate-ready-unparsed" in text

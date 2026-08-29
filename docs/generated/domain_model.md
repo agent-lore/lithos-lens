@@ -174,6 +174,7 @@ classDiagram
   class GateRow {
     +gate_type str
     +ready_at str
+    +ready_instant str
     +waiters_state GateWaiterState
     +advisory tuple[tuple[str, str], ...]
     +advisory_more int

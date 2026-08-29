@@ -28,7 +28,17 @@
   <div class="task-row-meta">
     <span class="badge badge-gate badge-gate-{{ gate.type_slug }}" data-gate-type-badge>{{ gate.type_label }}</span>
     {% if gate.is_timer and gate.ready_at %}
-      <time class="gate-chip gate-countdown" datetime="{{ gate.ready_at }}" data-gate-ready-at="{{ gate.ready_at }}">ready at {{ gate.ready_at[:16].replace("T", " ") }}</time>
+      {# The countdown attribute carries `ready_instant`, which is empty unless
+         the stamp parsed SERVER-side. The browser's Date.parse is the more
+         permissive of the two, so publishing the display text would tick a
+         countdown down to an instant Lens refused to schedule a refresh for.
+         An unparseable stamp still renders — as static text, which is what it
+         is. #}
+      {% if gate.ready_instant %}
+        <time class="gate-chip gate-countdown" datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">ready at {{ gate.ready_at[:16].replace("T", " ") }}</time>
+      {% else %}
+        <span class="gate-chip" data-gate-ready-unparsed>ready at {{ gate.ready_at[:16].replace("T", " ") }}</span>
+      {% endif %}
     {% endif %}
     {% if gate.task.created_by %}
       <span>{{ gate.task.created_by }}</span>

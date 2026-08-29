@@ -38,15 +38,22 @@ HARNESS = """
 const fs = require("fs");
 const vm = require("vm");
 
-const [sourcePath, nowRaw, readyAt, pollMs] = process.argv.slice(1);
+const [sourcePath, nowRaw, readyAt, pollMs, readyAtAfter] = process.argv.slice(1);
 let currentNow = Number(nowRaw);
 const timers = [];
 const fetches = [];
 
-const board = { dataset: { gatesNextReadyAt: readyAt } };
+// The board's stamp is READ each time, not captured: a refresh replaces the
+// fragment, so the next schedule sees whatever the fresh board names. When
+// `readyAtAfter` is supplied it stands for the next timer gate down the queue.
+const currentReadyAt = () =>
+  fetches.length && readyAtAfter !== undefined ? readyAtAfter : readyAt;
+const board = { dataset: { get gatesNextReadyAt() { return currentReadyAt(); } } };
 const document = {
   querySelector(selector) {
-    if (selector === "[data-gates-next-ready-at]") return readyAt ? board : null;
+    if (selector === "[data-gates-next-ready-at]") {
+      return currentReadyAt() ? board : null;
+    }
     return null;
   },
   querySelectorAll() { return { length: 0, forEach() {} }; },
@@ -93,10 +100,14 @@ if (fireIndex >= 0) {
   timers[fireIndex].fn();
 }
 
-console.log(JSON.stringify({
-  delays: timers.map((timer) => timer.delay),
-  fetches: fetches.length,
-}));
+// The re-arm after a refresh is a promise continuation, so report only once
+// the microtask queue has drained — otherwise the chained schedule is invisible.
+setImmediate(() => {
+  console.log(JSON.stringify({
+    delays: timers.map((timer) => timer.delay),
+    fetches: fetches.length,
+  }));
+});
 """
 
 MAX_TIMER_DELAY_MS = 2147483647
@@ -105,11 +116,18 @@ POLL_MS = 30000
 NOW_MS = 1_800_000_000_000
 
 
-def _run(ready_at: str) -> dict:
-    """Load tasks.js against a board carrying ``ready_at``; fire the last timer."""
+def _run(ready_at: str, ready_at_after: str | None = None) -> dict:
+    """Load tasks.js against a board carrying ``ready_at``; fire the last timer.
+
+    ``ready_at_after`` is what the board names once a refresh has happened —
+    the next timer gate in the queue, which the refreshed fragment carries.
+    """
     assert NODE is not None
+    argv = [str(TASKS_JS), str(NOW_MS), ready_at, str(POLL_MS)]
+    if ready_at_after is not None:
+        argv.append(ready_at_after)
     result = subprocess.run(
-        [NODE, "-e", HARNESS, "--", str(TASKS_JS), str(NOW_MS), ready_at, str(POLL_MS)],
+        [NODE, "-e", HARNESS, "--", *argv],
         capture_output=True,
         text=True,
         check=True,
@@ -128,8 +146,12 @@ def test_near_timer_gate_arms_one_refresh_at_the_instant() -> None:
     two_hours = 2 * 60 * 60 * 1000
     result = _run(_iso(two_hours))
 
-    assert result["delays"] == [two_hours + GRACE_MS]
-    # Firing it refreshes the board (one fetch), rather than re-arming.
+    # Two entries, not one: firing the first refreshes the board (one fetch)
+    # and then re-arms. The board here still names the same stamp, now in the
+    # past, so the re-arm takes the poll-interval backoff. That second entry
+    # was always there — the harness used to report before the promise
+    # continuation ran, so it could not see it.
+    assert result["delays"] == [two_hours + GRACE_MS, POLL_MS]
     assert result["fetches"] == 1
 
 
@@ -156,7 +178,9 @@ def test_stamp_already_past_on_arrival_backs_off_to_the_poll_interval() -> None:
     skew window."""
     result = _run(_iso(-60_000))
 
-    assert result["delays"] == [POLL_MS]
+    # And the re-arm after the refresh backs off the same way, for the same
+    # reason — a stamp that is still past is not something to be on time for.
+    assert result["delays"] == [POLL_MS, POLL_MS]
 
 
 def test_no_timer_gate_arms_no_refresh() -> None:
@@ -164,3 +188,33 @@ def test_no_timer_gate_arms_no_refresh() -> None:
 
     assert result["delays"] == []
     assert result["fetches"] == 0
+
+
+def test_a_second_gate_due_soon_is_not_delayed_to_the_poll_interval() -> None:
+    """The floor bounds the refresh RATE; it must not swallow the next deadline.
+
+    Gates fall due one after another, and each refresh re-reads the board for
+    the next one. `lastGateRefreshAt` is stamped at the START of every refresh,
+    so the re-arm that follows sees `sinceLast` ~= 0 and lifts ANY delay to a
+    whole poll interval — including a fresh, authoritative, still-future stamp
+    the server just published. A gate due 3.5s after the one that triggered the
+    refresh then ticks down to "ready now" and sits there for the rest of the
+    interval, which is exactly the staleness the one-shot refresh exists to
+    prevent.
+
+    Rate-limiting is still right — a server value must not be able to make a
+    tab hammer /tasks — so the floor stays; it just has to be a bound on the
+    rate rather than the polling cadence borrowed for the purpose.
+    """
+    first = 2 * 60 * 60 * 1000
+    result = _run(_iso(first), _iso(first + 3_500))
+
+    assert result["delays"][0] == first + GRACE_MS
+    assert result["fetches"] == 1
+    # The re-arm is for the SECOND gate, not a poll interval. The harness clock
+    # advances by the delay it fires, so GRACE_MS of the 3.5s gap is already
+    # spent by the time the re-arm computes its own — it lands on the same
+    # absolute instant (the stamp plus one grace).
+    assert result["delays"][1] == 3_500, (
+        f"second gate was scheduled {result['delays'][1]}ms out, not 3500ms"
+    )

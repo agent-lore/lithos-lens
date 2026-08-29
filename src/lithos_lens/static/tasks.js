@@ -16,6 +16,13 @@
   // and fires (near) immediately, so a gate more than ~24.8 days out must be
   // reached by chaining sleeps rather than by one oversized timeout.
   const MAX_TIMER_DELAY_MS = 2147483647;
+  // Floor on the gap between two SELF-TRIGGERED refreshes. A hard bound is
+  // needed — the instant is server-written, and a stream of near-now stamps
+  // must not let a tab hammer /tasks — but it is a rate bound, not the polling
+  // cadence: at 30s it also delayed every legitimately consecutive gate. Worst
+  // case here is one self-triggered refresh per tab per 2s, reachable only from
+  // a server publishing gates that close that fast.
+  const GATE_REFRESH_MIN_SPACING_MS = 2000;
   // Refresh a beat AFTER the instant, so a slightly fast browser clock does
   // not ask Lithos before the gate has lapsed there.
   const GATE_REFRESH_GRACE_MS = 500;
@@ -342,10 +349,27 @@
     const readyAt = Date.parse(board.dataset.gatesNextReadyAt);
     if (!readyAt) return;
     const remaining = readyAt - Date.now();
-    let delay = remaining > 0 ? remaining + GATE_REFRESH_GRACE_MS : autoRefreshIntervalMs;
-    if (lastGateRefreshAt) {
-      const sinceLast = Date.now() - lastGateRefreshAt;
-      delay = Math.max(delay, autoRefreshIntervalMs - sinceLast);
+    let delay;
+    if (remaining > 0) {
+      // A still-future deadline the server just published. Honour it, floored
+      // only by the minimum SPACING between self-triggered refreshes — the
+      // floor's job is to bound the rate, and borrowing the poll interval for
+      // it swallowed the next real deadline: gates fall due one after another,
+      // and a second gate 3.5s behind the first was pushed out a full 30s,
+      // ticking "ready now" for the rest of it.
+      delay = remaining + GATE_REFRESH_GRACE_MS;
+      if (lastGateRefreshAt) {
+        delay = Math.max(delay, lastGateRefreshAt + GATE_REFRESH_MIN_SPACING_MS - Date.now());
+      }
+    } else {
+      // Past on arrival: the server only publishes future stamps, so either the
+      // clocks disagree or the refresh did not clear the gate. Nothing to be
+      // on time for, and re-requesting immediately would spin — back off to the
+      // poll interval, which is what that bound is actually for.
+      delay = autoRefreshIntervalMs;
+      if (lastGateRefreshAt) {
+        delay = Math.max(delay, lastGateRefreshAt + autoRefreshIntervalMs - Date.now());
+      }
     }
     if (delay > MAX_TIMER_DELAY_MS) {
       gateRefreshTimer = window.setTimeout(scheduleGateRefresh, MAX_TIMER_DELAY_MS);

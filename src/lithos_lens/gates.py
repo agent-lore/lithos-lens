@@ -35,6 +35,10 @@ GATE_TASK_TYPE = "gate"
 # The edge type linking a gate to the tasks waiting on it (gate -> waiter).
 WAITS_ON_GATE_EDGE = "waits_on_gate"
 
+# The blocker kind Lithos emits for a gate wait, the same relation seen from
+# the blocked frontier instead of the edge list.
+GATE_BLOCKER_KIND = "gate"
+
 # Gate types Lithos accepts in ``metadata.gate_type`` on a ``gate`` task. The
 # raw server string is kept (an unknown future type still renders its badge
 # TEXT); only ``human`` (the work waiting on a person, sorted first) and
@@ -129,15 +133,23 @@ class GateRow:
     summarized verbatim on the row, with ``advisory_more`` counting the keys
     left for the detail page's full table.
 
-    ``ready_at`` is a timer gate's ``metadata.ready_at`` normalized to a UTC
-    ISO stamp — the browser countdown parses it, and a naive stamp read as
-    local time there would count down to the wrong instant. An unparseable
-    value passes through verbatim rather than being dropped.
+    ``ready_at`` is what the row DISPLAYS: a timer gate's ``metadata.ready_at``
+    normalized to a UTC ISO stamp when it parses, and the bounded raw text when
+    it does not — an unparseable value stays visible rather than being dropped.
+
+    ``ready_instant`` is what the row SCHEDULES on, and is empty unless the
+    stamp actually parsed. The two are separate because the browser's
+    ``Date.parse`` is more permissive than Python's: ``2026/09/01`` is rejected
+    here and accepted there, so publishing the display text as the countdown
+    attribute would have the browser tick down to a LOCAL-time instant this
+    module refused to schedule a refresh for. Only a stamp both sides agree on
+    drives a countdown.
     """
 
     task: TaskRecord
     gate_type: str = ""
     ready_at: str = ""
+    ready_instant: str = ""
     waiters: tuple[TaskRecord, ...] = ()
     waiters_state: GateWaiterState = GateWaiterState.KNOWN
     advisory: tuple[tuple[str, str], ...] = ()
@@ -327,13 +339,13 @@ def collect_gates(
         if task.task_type != GATE_TASK_TYPE or task.id in placed_ids:
             continue
         advisory, advisory_more = _advisory_metadata(task.metadata)
+        raw_ready_at = _chrome_text(task.metadata.get("ready_at"))
         rows.append(
             GateRow(
                 task=task,
                 gate_type=_chrome_text(task.metadata.get("gate_type")),
-                ready_at=_normalized_instant(
-                    _chrome_text(task.metadata.get("ready_at"))
-                ),
+                ready_at=_normalized_instant(raw_ready_at),
+                ready_instant=_schedulable_instant(raw_ready_at),
                 advisory=advisory,
                 advisory_more=advisory_more,
             )
@@ -476,7 +488,9 @@ def next_gate_ready_at(gates: Sequence[GateRow], *, now: datetime) -> str:
     upcoming = [
         parsed
         for gate in gates
-        if gate.is_timer and (parsed := parse_timestamp(gate.ready_at)) and parsed > now
+        if gate.is_timer
+        and (parsed := parse_timestamp(gate.ready_instant))
+        and parsed > now
     ]
     return min(upcoming).isoformat() if upcoming else ""
 
@@ -545,16 +559,29 @@ def _resolve_asserted_waiters(
 def _blocked_waiter_ids(
     blocked: Sequence[BlockedTaskRecord],
 ) -> dict[str, set[str]]:
-    """Waiter ids per blocking node id, read off the blocked frontier.
+    """Waiter ids per gate id, read off the blocked frontier.
 
-    Only gate ids are ever looked up, so plain predecessors in the same map are
-    harmless.
+    Only GATE relations count. Restricting to gate ids on lookup is not enough:
+    a gate can also sit on the other end of an ordinary ``blocks`` edge, and
+    that task is blocked BY the gate task without waiting ON the gate. Counting
+    it inflates "blocks N tasks" with rows the gate does not gate — worst on a
+    timer gate, where the section's promise is that everything counted here
+    comes free at ``ready_at``, and an ordinary ``blocks`` relation does not.
+
+    Either signal is accepted, because they are two views of one relation and a
+    server that renames one should not silently zero the counts: Lithos emits
+    ``kind="gate"`` with ``type="waits_on_gate"`` for a gate wait, and both are
+    raw passthrough strings (see ``task_graph.KNOWN_BLOCKER_KINDS``). A blocker
+    asserting NEITHER is not a gate relation.
     """
     waiting: dict[str, set[str]] = {}
     for record in blocked:
         for blocker in record.blockers:
-            if blocker.task_id:
-                waiting.setdefault(blocker.task_id, set()).add(record.task.id)
+            if not blocker.task_id:
+                continue
+            if blocker.kind != GATE_BLOCKER_KIND and blocker.type != WAITS_ON_GATE_EDGE:
+                continue
+            waiting.setdefault(blocker.task_id, set()).add(record.task.id)
     return waiting
 
 
@@ -623,6 +650,21 @@ def _summarize_value(value: Any) -> str:
     except ValueError:
         # int -> str beyond CPython's digit limit; the detail page can show it.
         return "…"
+
+
+def _schedulable_instant(value: str) -> str:
+    """The UTC ISO stamp a countdown may be driven from, or "" when there is none.
+
+    Deliberately NOT the same as the displayed text. Whatever reaches
+    ``data-gate-ready-at`` is re-parsed by the browser, whose ``Date.parse``
+    accepts formats Python's parser rejects (``2026/09/01`` becomes local
+    midnight there and nothing here) — so a value only this side rejected would
+    still produce a moving, timezone-dependent countdown toward an instant no
+    refresh is scheduled for. Publishing only what parsed keeps the two sides
+    agreeing on what a timer gate is.
+    """
+    parsed = parse_timestamp(value)
+    return parsed.isoformat() if parsed is not None else ""
 
 
 def _normalized_instant(value: str) -> str:

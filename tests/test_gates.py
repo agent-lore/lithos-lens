@@ -425,6 +425,124 @@ def test_overflowing_ready_at_renders_verbatim_and_drives_no_countdown() -> None
     assert next_gate_ready_at([overflowing, malformed], now=_NOW) == ""
 
 
+def test_an_ordinary_blocks_relation_from_a_gate_is_not_a_gate_waiter() -> None:
+    """ "blocks N tasks" counts tasks waiting ON the gate, not tasks blocked BY
+    the gate task through an ordinary edge.
+
+    A gate is a task, so nothing stops it also sitting on the far end of a
+    plain ``blocks`` relation — and the blocked frontier reports both through
+    the same shape. Bucketing every blocker by ``task_id`` and trusting that
+    only gate ids get looked up is not enough: the id IS the gate's, and the
+    relation is not. The count is worst-wrong on a timer gate, where the whole
+    claim is that what it blocks comes free at ``ready_at``; an ordinary
+    ``blocks`` predecessor does not resolve then.
+    """
+    gate = _gate("gate-1")
+    waiter = _task("real-waiter")
+    other = _task("blocked-by-the-gate-task")
+    index = {row.id: row for row in (gate, waiter, other)}
+    blocked = [
+        BlockedTaskRecord(
+            task=waiter,
+            blockers=(
+                BlockerRecord(
+                    kind="gate",
+                    task_id="gate-1",
+                    type="waits_on_gate",
+                    status="open",
+                    message="waiting on gate",
+                ),
+            ),
+        ),
+        BlockedTaskRecord(
+            task=other,
+            blockers=(
+                BlockerRecord(
+                    kind="task",
+                    task_id="gate-1",
+                    type="blocks",
+                    status="open",
+                    message="blocked by predecessor",
+                ),
+            ),
+        ),
+    ]
+
+    row = asyncio.run(
+        attach_gate_waiters(
+            _EdgeFake({}),
+            collect_gates([gate]),
+            index=index,
+            blocked=blocked,
+            blocked_available=True,
+            blocked_truncated=False,
+        )
+    )[0]
+
+    assert [waiter.id for waiter in row.waiters] == ["real-waiter"]
+    assert row.waiters_label == "blocks 1 task"
+
+
+def test_either_gate_signal_is_enough_to_count_a_waiter() -> None:
+    """The kind and the edge type are two views of one relation, and both are
+    raw passthrough strings. Requiring BOTH would zero every count the day
+    Lithos renames one, which is a worse failure than the one being fixed —
+    the section would confidently report "blocks 0 tasks"."""
+    gate = _gate("gate-1")
+    by_kind = _task("kind-only")
+    by_type = _task("type-only")
+    index = {row.id: row for row in (gate, by_kind, by_type)}
+    blocked = [
+        BlockedTaskRecord(
+            task=by_kind,
+            blockers=(BlockerRecord(kind="gate", task_id="gate-1", type=""),),
+        ),
+        BlockedTaskRecord(
+            task=by_type,
+            blockers=(BlockerRecord(kind="", task_id="gate-1", type="waits_on_gate"),),
+        ),
+    ]
+
+    row = asyncio.run(
+        attach_gate_waiters(
+            _EdgeFake({}),
+            collect_gates([gate]),
+            index=index,
+            blocked=blocked,
+            blocked_available=True,
+            blocked_truncated=False,
+        )
+    )[0]
+
+    assert sorted(waiter.id for waiter in row.waiters) == ["kind-only", "type-only"]
+
+
+def test_a_stamp_only_the_browser_can_parse_drives_no_countdown() -> None:
+    """``Date.parse`` is more permissive than Python's parser: ``2026/09/01`` is
+    rejected here and accepted there as LOCAL midnight. Publishing the display
+    text as the countdown attribute would leave the browser ticking toward an
+    instant this module refused to schedule a refresh for — a moving,
+    timezone-dependent countdown for a gate the server does not believe in.
+
+    So the row keeps two fields: what it shows, and what it may schedule on.
+    """
+    browser_only = collect_gates(
+        [_gate("g", gate_type="timer", ready_at="2026/09/01")]
+    )[0]
+    parseable = collect_gates(
+        [_gate("h", gate_type="timer", ready_at="2026-09-01T00:00:00+00:00")]
+    )[0]
+
+    # Still displayed — an unparseable stamp must not vanish from the row.
+    assert browser_only.ready_at == "2026/09/01"
+    # But not schedulable, so the template publishes no countdown attribute.
+    assert browser_only.ready_instant == ""
+    assert next_gate_ready_at([browser_only], now=_NOW) == ""
+
+    assert parseable.ready_instant == "2026-09-01T00:00:00+00:00"
+    assert next_gate_ready_at([parseable], now=_NOW) == "2026-09-01T00:00:00+00:00"
+
+
 def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
     """``lithos_task_edge_upsert`` will link a gate to ANY existing task, so on
     the degraded paths every edge target is checked against what Lithos itself
