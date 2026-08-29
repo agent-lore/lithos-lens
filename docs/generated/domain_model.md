@@ -132,8 +132,7 @@ classDiagram
   class BlockedTaskRecord
   class BlockerExpansion {
     +expandable bool
-    +cycle_path tuple[str, ...]
-    +cycle_elided bool
+    +revisits_chain bool
   }
   class BlockerLevel {
     +task_id str

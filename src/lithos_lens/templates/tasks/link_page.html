@@ -44,19 +44,17 @@
            (blocker_chain.blocker_expansion) rather than here, so the
            four-state rule and the depth bound have one testable home. #}
         {% set expansion = blocker_expansion(link, chain) %}
-        {% if expansion.cycle_path %}
-          {# §5.5.2's `cycle: A -> B -> A`, in place of recursing into it.
-             Named rather than merely flagged: which tasks close the loop is
-             the whole answer, and the chip carries no expander, which is what
-             actually stops the walk.
-
-             Only ids this render READ are named — the blocker off this level's
-             edge list, and the task whose edges were read. A longer walk
-             between them shows an ellipsis rather than trail entries taken
-             from the query string, which would let a hand-written URL put its
-             own text on the page and forge a cycle through tasks Lens never
-             looked at (blocker_chain.blocker_expansion says more). #}
-          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}"{% if expansion.cycle_elided %} data-blocker-cycle-elided{% endif %}>cycle: {{ expansion.cycle_path[0] }} → {% if expansion.cycle_elided %}&hellip; → {% endif %}{{ expansion.cycle_path[1:] | join(" → ") }}</span>
+        {% if expansion.revisits_chain %}
+          {# The cycle case, stated as what this render KNOWS. §5.5.2 words it
+             `cycle: A -> B -> A`, which asserts two edges; this level read one
+             of them (that this line blocks the task above). The other — that
+             the chain got here from this line — is in the query string, and a
+             hand-written one produced that exact arrow form over a graph with
+             no cycle in it. So the chip carries no ids, no arrows and no
+             request-derived text at all: it reports the chain, which is the
+             thing it can see, and the line's own link is right beside it to
+             open a fresh chain from. blocker_chain.blocker_expansion says more. #}
+          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}" title="This expansion chain has already been through this task, so expanding it again would repeat the walk. Open the task itself to start a fresh chain from there.">cycle: already on this chain</span>
         {% elif expansion.expandable %}
           <span class="blocker-expand" data-blocker-expand="{{ link.task_id }}">
             <button

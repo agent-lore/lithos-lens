@@ -29,9 +29,27 @@ EVERY level, not just the first, and each of them already exists exactly once:
 
 The chain itself — root first, ending at the task whose blockers this level
 lists — is what makes the walk cycle-safe. ``blocks`` edges are agent-written
-and Lithos does not forbid a cycle, so a blocker that is already an ancestor
-renders §5.5.2's ``cycle: A -> B -> A`` callout and stops. It carries no
-expander, which is what stops the walk rather than merely labelling it.
+and Lithos does not forbid a cycle, so a blocker already on the chain renders
+the cycle callout and carries no expander, which is what stops the walk rather
+than merely labelling it.
+
+WHAT THAT CALLOUT MAY CLAIM is narrower than it first looks, and the narrowing
+is the whole of it. §5.5.2 words the case as ``cycle: A -> B -> A``, which
+asserts two edges. A level reads ONE of them: its own edge list proves that the
+line blocks the task this level is about. The closing edge — that the chain
+reached this task FROM that line — is in the URL, and the URL is anonymous
+client input, so a hand-written ``?chain=`` produced that exact wording over a
+graph with no cycle in it at all. The callout therefore says what this render
+knows: the line is already on the chain being expanded. True whether the chain
+was walked or hand-built, at every length, so there is no shape of it a crafted
+link can forge into something stronger.
+
+That leaves the arrow form unrendered, and deliberately so. It is Lithos's own
+verdict to make — ``lithos_task_blocked`` computes a ``cycle`` kind — and it is
+not reachable per task in Lithos 0.4 (the tool takes no ``task_id``; see
+``task_detail._load_relations``). Reconstructing it from the trail is not a
+cheaper route to the same fact, it is an unverified claim wearing a verified
+claim's words, on the page whose whole job is "why can't this task run?".
 
 Carrying the chain in the URL rather than in server state is deliberate: the
 fragment is an ordinary stateless GET, so it survives an auto-refresh, a
@@ -75,13 +93,18 @@ class BlockerExpansion:
     "this line ends here" case). Computed in Python rather than decided in the
     template so the four-state rule below has one testable home; the partial
     asks and renders.
+
+    Both are plain flags carrying no text. Everything the callout and the
+    expander render comes from the LINK — a record read from Lithos — and
+    nothing from the chain, which is why no shape of either can be forged by a
+    hand-written URL.
     """
 
     expandable: bool = False
-    cycle_path: tuple[str, ...] = ()
-    # True when the walk between the two named tasks ran through others. They
-    # are deliberately NOT named: see :func:`blocker_expansion`.
-    cycle_elided: bool = False
+    # The line is already on the chain being expanded, so expanding it again
+    # would repeat the walk. A statement about the chain, NOT about the graph:
+    # see :func:`blocker_expansion` for why that distinction is the fix.
+    revisits_chain: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,10 +163,10 @@ def blocker_expansion(link: LinkedTask, chain: Sequence[str] = ()) -> BlockerExp
     1. **Non-blocking links get nothing.** One partial renders the blocker
        chain and both provenance directions, so this is what keeps an expander
        off a spawned follow-on.
-    2. **A cycle is called out even at the depth bound.** It is information
-       about the graph, not a walk, and suppressing it there would replace a
-       precise "these two tasks block each other" with a generic "depth limit
-       reached".
+    2. **A revisit is called out even at the depth bound.** It is the more
+       specific answer — "you have already been here" rather than "the walk
+       stops after five levels" — and it is the one that tells the operator
+       going deeper would not help.
     3. **The depth bound is checked before expandability.** At the bound no
        line carries an expander, whatever its state — which is what makes the
        next level's fetch never happen rather than merely be refused.
@@ -151,33 +174,35 @@ def blocker_expansion(link: LinkedTask, chain: Sequence[str] = ()) -> BlockerExp
        (:attr:`~lithos_lens.task_links.LinkedTask.expandable`), which states
        what each of the four link states decides and why.
 
-    The callout NAMES only ids this render read from Lithos: ``link.task_id``
-    came off the level's own edge list, and ``trail[-1]`` is the task whose
-    edges were read. The trail between them arrived in the query string, so
-    ``cycle_elided`` replaces it with an ellipsis rather than printing it. That
-    matters because ``chain`` is anonymous client input: splicing it into the
-    path let a hand-written URL put arbitrary text on the page in Lens's own
-    vocabulary, and made the page assert a cycle through tasks it never read —
-    a forged answer on the page whose whole job is "why can't this run?". What
-    the elision costs is nothing an operator cannot see: the intermediate
-    levels are still rendered on screen above this one.
+    WHAT THE CALLOUT ASSERTS is the point of the second test, and it is
+    narrower than §5.5.2's ``cycle: A -> B -> A``. That wording asserts two
+    edges; this level read one of them. Its edge list proves the LINE blocks
+    the task this level is about. That the chain arrived at this task from that
+    line is the URL's claim, not Lithos's — and the URL is anonymous client
+    input, so ``?chain=B&chain=A`` on A's level rendered exactly that arrow
+    form over a graph containing only ``B -> A``: a deadlock asserted between
+    two real tasks that do not deadlock, on the page an operator opens to find
+    out why work is stuck, with the expander suppressed so they could not walk
+    it to check.
+
+    So the verdict is stated as what the render knows: this line is ALREADY ON
+    the chain being expanded. That is true of a walked chain and of a
+    hand-built one alike, at every length, which is what makes it unforgeable —
+    a crafted link can only make the page describe the crafted link. The
+    suppressed expander is honest on the same terms: it is the chain that has
+    been here before, and the line's own task link is still there to open a
+    fresh chain from.
+
+    Terminating the walk never depended on this being a graph fact anyway.
+    :data:`BLOCKER_MAX_DEPTH` bounds it absolutely and independently; the
+    revisit check is what stops a genuine loop EARLY, and stopping early on a
+    chain someone hand-built stops only that person's own walk.
     """
     if not chain or not link.blocking:
         return BlockerExpansion()
-    trail = tuple(chain)
-    here = trail[-1]
-    if link.task_id in trail:
-        # Read as "is blocked by": this line blocks the task we are on, and the
-        # walk reached that task from this line. Self-blocking collapses to one
-        # hop rather than naming the same task three times.
-        path = (
-            (here, here) if link.task_id == here else (link.task_id, here, link.task_id)
-        )
-        return BlockerExpansion(
-            cycle_path=path,
-            cycle_elided=trail.index(link.task_id) < len(trail) - 2,
-        )
-    if len(trail) >= BLOCKER_MAX_DEPTH or not _walkable(link, trail):
+    if link.task_id in tuple(chain):
+        return BlockerExpansion(revisits_chain=True)
+    if len(chain) >= BLOCKER_MAX_DEPTH or not _walkable(link, chain):
         return BlockerExpansion()
     return BlockerExpansion(expandable=True)
 

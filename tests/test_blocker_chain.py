@@ -253,9 +253,9 @@ def test_a_cycle_renders_the_callout_instead_of_recursing(
 ) -> None:
     """``blocks`` edges are agent-written and Lithos does not forbid a cycle.
 
-    Expanding into one must terminate the walk — the offending line carries
-    §5.5.2's ``cycle: A -> B -> A`` callout and, crucially, NO expander, which
-    is what stops it rather than merely labelling it."""
+    Expanding into one must terminate the walk — the offending line carries the
+    cycle callout and, crucially, NO expander, which is what stops it rather
+    than merely labelling it."""
     fake = TaskFakeLithosClient()
     fake.tasks.append(_task("loop-b", title="Loop partner"))
     _link(fake, "loop-b", "open-unclaimed", "blocks")
@@ -267,9 +267,9 @@ def test_a_cycle_renders_the_callout_instead_of_recursing(
 
     assert level.status_code == 200
     text = level.text
-    # The line that closes the loop is named, and the loop is spelled out.
+    # The line the chain has been through before is called out, on that line.
     assert 'data-blocker-cycle="open-unclaimed"' in text
-    assert "cycle: open-unclaimed → loop-b → open-unclaimed" in text
+    assert "cycle: already on this chain" in text
     # The walk terminates: nothing on this level offers to go deeper.
     assert _expander_urls(text) == {}
 
@@ -301,60 +301,108 @@ def test_a_cycle_stops_only_the_line_that_closes_it(
     assert list(_expander_urls(level.text)) == ["side-c"]
 
 
-def test_the_cycle_callout_names_only_tasks_this_render_read() -> None:
-    """security/f-002: the callout used to splice the query-supplied trail
-    straight into the path it printed.
+def test_a_deeper_cycle_still_terminates_the_walk(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The three-task loop, walked the way an operator walks it. The callout
+    fires where the chain comes back round, and the walk stops there rather
+    than running on to the depth bound."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend([_task("loop-b", title="Second"), _task("loop-c", title="Third")])
+    _link(fake, "loop-b", "open-unclaimed", "blocks")
+    _link(fake, "loop-c", "loop-b", "blocks")
+    _link(fake, "open-unclaimed", "loop-c", "blocks")
 
-    The two ends are verified — the line came off this level's edge list and
-    the trail's last entry is the task whose edges were read — but the walk
-    BETWEEN them arrived in the URL, so it is elided rather than named. That
-    keeps a hand-written chain from putting its own text on the page, and from
-    making the page assert a loop through tasks Lens never looked at."""
-    expansion = blocker_expansion(
-        LinkedTask(task_id="alpha", edge_type="blocks"),
-        ("alpha", "middle", "beta"),
+    with _client(lithos_lens_config_env, fake) as client:
+        page = client.get("/tasks/open-unclaimed")
+        second = client.get(_expander_urls(page.text)["loop-b"])
+        third = client.get(_expander_urls(second.text)["loop-c"])
+
+    assert 'data-link-target="open-unclaimed"' in third.text
+    assert 'data-blocker-cycle="open-unclaimed"' in third.text
+    assert _expander_urls(third.text) == {}
+    # Stopped by the loop, not by running out of depth.
+    assert "data-blocker-depth-limit" not in third.text
+
+
+# --- correctness/f-002, security/f-002: the callout claims only what it read
+
+
+def test_the_callout_never_asserts_an_edge_this_render_did_not_read(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The defect both reviewers landed on. §5.5.2's ``cycle: A -> B -> A``
+    asserts TWO edges; a level reads one — its edge list proves the line blocks
+    the task above. That the chain arrived here FROM that line is the URL's
+    claim, and the URL is anonymous client input.
+
+    So over a graph with no cycle anywhere, a hand-built ``?chain=`` used to
+    render that arrow form in its most credible shape (no elision marker),
+    telling an operator that two real tasks deadlock — on the page they opened
+    to find out why work is stuck — and suppressing the expander so they could
+    not walk it to check.
+
+    The callout now reports the CHAIN, which is the thing this render can see.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [_task("level-b", title="Level B"), _task("other-c", title="Other C")]
     )
+    # other-c -> level-b -> open-unclaimed. No edge closes any loop.
+    _link(fake, "level-b", "open-unclaimed", "blocks")
+    _link(fake, "other-c", "level-b", "blocks")
 
-    assert expansion.cycle_path == ("alpha", "beta", "alpha")
-    assert expansion.cycle_elided
-    assert "middle" not in expansion.cycle_path
-    assert not expansion.expandable
+    with _client(lithos_lens_config_env, fake) as client:
+        honest = client.get("/tasks/open-unclaimed")
+        forged = client.get(
+            "/tasks/open-unclaimed/blockers?chain=level-b&chain=open-unclaimed"
+        )
+
+    # The honest page never claimed a cycle, and still does not.
+    assert "blocker-chip-cycle" not in honest.text
+    # The crafted link cannot make the page assert one either: no arrow form,
+    # and no pair of task ids presented as blocking each other.
+    chip = forged.text.split('class="blocker-chip blocker-chip-cycle"', 1)[1]
+    chip = chip.split("</span>", 1)[0]
+    assert "→" not in chip
+    assert "level-b" not in chip.split(">", 1)[1]
+    assert "open-unclaimed" not in chip.split(">", 1)[1]
+    # What it says instead is true of the chain it was handed.
+    assert "cycle: already on this chain" in chip
 
 
-def test_a_direct_cycle_is_named_in_full_with_nothing_elided() -> None:
-    """§5.5.2's ``cycle: A -> B -> A`` unchanged for the ordinary case: with no
-    walk between the two tasks there is nothing unverified to leave out."""
-    expansion = blocker_expansion(
-        LinkedTask(task_id="alpha", edge_type="blocks"),
-        ("alpha", "beta"),
+def test_the_callout_carries_no_request_derived_text_at_all() -> None:
+    """Stated without a page around it: the verdict is a flag, so there is no
+    field for a crafted chain to write into. Whatever the trail holds and
+    however long it is, the answer is the same shape."""
+    link = LinkedTask(task_id="alpha", edge_type="blocks")
+
+    assert blocker_expansion(link, ("alpha", "beta")) == BlockerExpansion(
+        revisits_chain=True
     )
-
-    assert expansion.cycle_path == ("alpha", "beta", "alpha")
-    assert not expansion.cycle_elided
-
-
-def test_a_task_that_blocks_itself_is_named_once_not_three_times() -> None:
-    """The degenerate loop: a self-blocking edge is one hop, and printing the
-    same id three times would read as three tasks."""
-    expansion = blocker_expansion(
-        LinkedTask(task_id="solo", edge_type="blocks"), ("root", "solo")
+    assert blocker_expansion(link, ("alpha", "middle", "beta")) == BlockerExpansion(
+        revisits_chain=True
     )
-
-    assert expansion.cycle_path == ("solo", "solo")
-    assert not expansion.cycle_elided
+    # The degenerate loop — a task blocking itself — is the same answer.
+    assert blocker_expansion(link, ("alpha",)) == BlockerExpansion(revisits_chain=True)
+    # And a line the chain has not been through is offered a walk, not a verdict.
+    assert blocker_expansion(link, ("beta",)) == BlockerExpansion(expandable=True)
 
 
 def test_a_forged_chain_cannot_put_its_own_text_into_the_cycle_callout(
     lithos_lens_config_env: Path,
 ) -> None:
-    """security/f-002, end to end. ``chain`` is anonymous client input and the
+    """security/f-002's first half. ``chain`` is anonymous client input and the
     fragment is served as HTML from Lens's own origin, so a trail entry spliced
     into the callout was attacker text presented in Lens's vocabulary as a task
     id — content spoofing today, and one hand-built attribute or ``|safe``
     away from live injection.
 
-    Nothing from the query string reaches the rendered text at all now: the
-    entry appears NOWHERE in the body, escaped or otherwise."""
+    The fixture holds only ``level-b -> open-unclaimed``: the request below is
+    hand-built and the chain it describes was never walked, which is exactly
+    why the callout may not speak for the graph. Nothing from the query string
+    reaches the body at all — the entry appears NOWHERE in it, escaped or
+    otherwise."""
     forged = "<img src=x onerror=alert(1)>"
     fake = TaskFakeLithosClient()
     _chain_fixture(fake, ["open-unclaimed", "level-b"])
@@ -365,11 +413,10 @@ def test_a_forged_chain_cannot_put_its_own_text_into_the_cycle_callout(
         )
 
     assert response.status_code == 200
-    # The cycle is still reported — the walk really did return to level-b.
+    # The chain it was handed has been through level-b, and that is all it says.
     assert 'data-blocker-cycle="level-b"' in response.text
-    assert "data-blocker-cycle-elided" in response.text
-    assert "cycle: level-b" in response.text
-    # But the forged entry is absent from the body in every form.
+    assert "cycle: already on this chain" in response.text
+    # The forged entry is absent from the body in every form.
     assert "onerror" not in response.text
     assert "img src" not in response.text
     assert "alert(1)" not in response.text
