@@ -17,6 +17,7 @@ from starlette.datastructures import QueryParams
 
 from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
+from lithos_lens.events import EventHub
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
@@ -3299,6 +3300,41 @@ def test_a_reopened_row_is_scoped_by_status_alone_not_by_every_filter(
     assert "boardAdmitsOpen: false" in completed_only.text
     assert "boardAdmitsOpen: true" in both_pairs.text
     assert "boardAdmitsOpen: true" in both_comma.text
+
+
+def test_the_stamped_marker_is_the_one_the_snapshot_was_READ_under(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker has to be sampled at the snapshot, not at the render.
+
+    A stream can open while `load_dashboard` is still in flight. Evaluated
+    during template rendering — after the read — the page would be stamped with
+    the generation of a stream that never saw its data, and because that is
+    also the CURRENT generation when the browser attaches, `subscribe` would
+    conclude the tab is covered and seed nothing. Precisely the tab the marker
+    exists to catch.
+
+    The fake opens the stream from inside the read, which is the interleaving
+    a real dial in flight produces, and the assertion is that the page carries
+    the generation from BEFORE it. Sampling early can only over-report
+    staleness, which costs one reconcile; sampling late loses the tab.
+    """
+    generation = [0]
+    monkeypatch.setattr(
+        EventHub, "snapshot_marker", lambda self: generation[0], raising=True
+    )
+
+    class _OpensDuringTheRead(TaskFakeLithosClient):
+        async def list_tasks(self, *args: Any, **kwargs: Any) -> Any:
+            generation[0] = 1
+            return await super().list_tasks(*args, **kwargs)
+
+    with _client(lithos_lens_config_env, _OpensDuringTheRead()) as client:
+        response = client.get("/tasks")
+
+    assert generation[0] == 1, "the fake must actually have opened a stream"
+    assert 'eventsUrl: "/tasks/events?since=0"' in response.text
 
 
 def test_the_page_stamps_the_stream_its_snapshot_was_taken_under(

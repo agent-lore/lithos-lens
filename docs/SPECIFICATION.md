@@ -273,7 +273,13 @@ stream its snapshot was taken under and hands that marker back on
 `GET /tasks/events?since=…`, so a snapshot read before an open (a `/tasks`
 response cannot be subscribed to until it has finished, by which time the open
 has been and gone) is refreshed on attach, while one the current stream already
-covers attaches silently. Delivery of a refresh is guaranteed
+covers attaches silently. The marker is sampled by the route BEFORE it reads
+the snapshot, never during rendering: a stream that opens while the read is in
+flight would otherwise be stamped onto data it never saw, and the browser would
+hand back a marker matching the current one. Sampling early can only
+over-report staleness, which costs one reconcile. An unparseable marker is
+treated as no snapshot at all — the connection attaches and nothing is
+seeded. Delivery of a refresh is guaranteed
 rather than best-effort: where an ordinary event is skipped for a subscriber
 whose queue is full, a refresh displaces the oldest queued event instead —
 sound because the reconcile it triggers re-derives that event's effect from the

@@ -205,7 +205,7 @@
         autoRefreshIntervalMs: {{ config.tasks.auto_refresh_interval_s * 1000 }},
         detailTaskId: "{{ detail.task.id }}",
         {# See dashboard.html: the stream this snapshot was taken under. #}
-        eventsUrl: "/tasks/events?since={{ events_snapshot_marker() | tojson }}"
+        eventsUrl: "/tasks/events?since={{ events_since | tojson }}"
       };
     </script>
     <script src="{{ url_for('static', path='tasks.js') }}" defer></script>

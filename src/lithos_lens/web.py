@@ -185,10 +185,6 @@ def create_app(
     templates.env.globals["note_url"] = note_url
     templates.env.globals["board_is_filtered"] = board_is_filtered
     templates.env.globals["board_admits_open"] = board_admits_open
-    # Stamps each rendered page with the upstream stream its snapshot was taken
-    # under; the page hands it back on the SSE attach so the hub can tell a
-    # snapshot that predates the current stream from one it covers.
-    templates.env.globals["events_snapshot_marker"] = state.events.snapshot_marker
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -249,16 +245,26 @@ def create_app(
         # stream this connection joins is refreshed on attach. Absent or
         # unparseable means no snapshot to be stale about (see `subscribe`);
         # the path stays unmetered because `_is_metered` reads `url.path`, to
-        # which a query string is invisible. Length-bounded before `int()`
-        # because this is an unauthenticated caller's string and parsing a
-        # million-digit one is real work for a value that is a small counter.
+        # which a query string is invisible.
+        #
+        # `int()` IS the predicate, rather than something that approximates it:
+        # a hand-written guard cannot be checked against CPython's parser and
+        # will drift from it. Two ways it already had — `lstrip("-")` strips
+        # EVERY leading hyphen, so `--1` reduced to a digit string `int()` then
+        # refused; and `str.isdigit()` admits Unicode `No` (SUPERSCRIPT TWO)
+        # which `int()` does not. Either raised out of the handler AFTER the
+        # response had started, which uvicorn logs with a full traceback —
+        # unbounded attacker-driven writes into the operator's log sink on the
+        # one path deliberately exempt from admission control. The length cap
+        # stays in front, doing its own job: parsing a million-digit integer is
+        # real work for a value that is a small counter.
         raw_since = request.query_params.get("since", "")
-        since = (
-            int(raw_since)
-            if 0 < len(raw_since) <= _SNAPSHOT_MARKER_MAX_DIGITS
-            and raw_since.lstrip("-").isdigit()
-            else None
-        )
+        since = None
+        if 0 < len(raw_since) <= _SNAPSHOT_MARKER_MAX_DIGITS:
+            try:
+                since = int(raw_since)
+            except ValueError:
+                since = None
         queue = state.events.subscribe(since=since)
 
         async def stream():
@@ -313,6 +319,8 @@ def create_app(
             return await _reject_oversized_filters(
                 request, templates, state, "tasks/detail.html"
             )
+        # See `_render_tasks`: read before the data it describes, never after.
+        events_since = state.events.snapshot_marker()
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
@@ -324,6 +332,7 @@ def create_app(
                     "active_view": "tasks",
                     "detail": None,
                     "offline": True,
+                    "events_since": events_since,
                 },
             )
         detail = await load_task_detail(state.lithos_client, task_id)
@@ -336,6 +345,7 @@ def create_app(
                 "active_view": "tasks",
                 "detail": detail,
                 "offline": False,
+                "events_since": events_since,
             },
         )
 
@@ -591,6 +601,16 @@ async def _render_tasks(
         return await _reject_oversized_filters(
             request, templates, state, "tasks/dashboard.html"
         )
+    # Read BEFORE the Lithos calls below, and carried through as context rather
+    # than looked up from the template. The marker names the upstream stream
+    # this page's snapshot was taken under, so it has to be sampled at the
+    # snapshot, not at the render: a stream that opens while `load_dashboard`
+    # is in flight would otherwise be stamped onto data read before it existed,
+    # and the browser would hand back a marker matching the current one —
+    # telling the hub this tab is covered by a stream that never saw its data.
+    # Sampling early can only over-report staleness (one extra reconcile),
+    # which is the safe direction.
+    events_since = state.events.snapshot_marker()
     snapshot = await state.refresh_health()
     dashboard = None
     if snapshot.lithos == "ok":
@@ -668,6 +688,7 @@ async def _render_tasks(
             "dashboard": dashboard,
             "max_tag_chips": MAX_FILTER_TAG_CHIPS,
             "default_since": default_since(state.config.tasks.default_time_range_days),
+            "events_since": events_since,
         },
     )
 

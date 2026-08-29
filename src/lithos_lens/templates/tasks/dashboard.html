@@ -461,11 +461,13 @@
            narrower question a REOPEN asks, since the row already passed
            every filter and only its status changed. #}
         boardAdmitsOpen: {{ board_admits_open(request) | tojson }},
-        {# The stream this snapshot was taken under. Handed back on the SSE
-           attach — which cannot happen until this response has finished — so
-           a snapshot read before the stream opened is refreshed rather than
-           left stale. #}
-        eventsUrl: "/tasks/events?since={{ events_snapshot_marker() | tojson }}"
+        {# The stream this snapshot was taken under, sampled by the route
+           BEFORE it read the data (never here — a stream that opened during
+           the read would be stamped onto data it never saw). Handed back on
+           the SSE attach, which cannot happen until this response has
+           finished, so a snapshot read before an open is refreshed rather
+           than left stale. #}
+        eventsUrl: "/tasks/events?since={{ events_since | tojson }}"
       };
     </script>
     <script src="{{ url_for('static', path='tasks.js') }}" defer></script>

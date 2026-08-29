@@ -936,3 +936,43 @@ async def test_the_event_stream_reads_the_snapshot_marker_off_the_url(
     # The current one is owed nothing, so the next write is the keepalive.
     assert b"lens.status" in current[0]
     assert current[1] == b": keepalive\n\n"
+
+
+@pytest.mark.parametrize(
+    ("query", "description"),
+    [
+        ("since=--1", "`lstrip('-')` strips EVERY hyphen; `int()` accepts one"),
+        ("since=%C2%B2", "SUPERSCRIPT TWO: Unicode `No`, `isdigit()` yes, `int()` no"),
+        ("since=%E2%91%A0", "CIRCLED DIGIT ONE: same category, same divergence"),
+        ("since=-%C2%B2", "and signed, which took a different branch"),
+        ("since=" + "9" * 400, "past the length cap, refused before it is parsed"),
+        ("since=", "present but empty"),
+        ("since=fnord", "not a number at all"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_marker_lens_cannot_parse_attaches_instead_of_failing(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+    description: str,
+) -> None:
+    """A guard written to approximate `int()` will drift from it.
+
+    `?since=` is an unauthenticated caller's string on the one path
+    deliberately exempt from admission control, so a value that satisfies the
+    guard and then fails the parse raises out of the handler AFTER the response
+    has begun — which uvicorn logs with a full traceback, an unbounded
+    attacker-driven write into the operator's log sink. `int()` is therefore
+    its own predicate now, and every one of these attaches normally: the
+    handler's contract is that an unusable marker means nothing to be stale
+    about, not a 500.
+    """
+    monkeypatch.setattr(web, "SSE_KEEPALIVE_S", 0.05)
+    app = create_app(load_config(lithos_lens_config_env))
+
+    frames = await stream_frames(app, "/tasks/events", 2, query=query)
+
+    assert b"lens.status" in frames[0], description
+    # Unusable, so treated as no snapshot at all — attached, nothing seeded.
+    assert frames[1] == b": keepalive\n\n", description
