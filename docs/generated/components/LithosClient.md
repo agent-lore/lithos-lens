@@ -3,7 +3,7 @@
 
 # LithosClient
 
-Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode.
+Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode.
 
 **Tier:** Core
 
@@ -13,7 +13,8 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 |---|---|---:|---:|
 | `lithos_lens.fake_dataset` | M | 1 | 1 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
-| `lithos_lens.lithos_client` | L | 4 | 0 |
+| `lithos_lens.lithos_client` | M | 3 | 0 |
+| `lithos_lens.mcp_transport` | M | 2 | 2 |
 
 ## Public API
 
@@ -29,8 +30,13 @@ Lithos server clients — the real MCP-over-SSE client (health, registration, to
 ### `lithos_lens.lithos_client`
 - class `LithosClientProtocol` — Subset of Lithos operations required by the common core.
 - class `RegistrationResult`
-- class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.
 - class `LithosClient` — Best-effort Lithos client used by the web app.
+
+### `lithos_lens.mcp_transport`
+- class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.
+- class `MCPTransport` — One long-lived MCP-over-SSE session, plus the bounds on calls over it.
+- def `decode_tool_result` — Decode an MCP tool result into the Lithos payload dict.
+- def `raise_for_error` — Raise the coded :class:`LithosToolError` a Lithos error envelope names.
 
 ## Dependencies
 

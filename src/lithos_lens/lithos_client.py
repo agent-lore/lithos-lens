@@ -1,20 +1,19 @@
-"""Lithos connectivity helpers.
+"""The typed Lithos method surface, plus the HTTP health probe.
 
-Milestone 0 only needs health probing and startup registration semantics. Tool
-calls are kept behind a small interface so later milestones can replace the
-placeholder MCP path with full request/response tool support without changing
-the web layer.
+One method per Lithos tool: build the arguments, place the call, raise on the
+error envelope, normalize the payload into Lens records. Everything below a
+call — the shared MCP session, the deadline and concurrency gate on it, the
+reconnect, and the decode of a raw MCP result — belongs to
+:mod:`lithos_lens.mcp_transport`, which this module owns one instance of.
+``health()`` is the exception that stays here: it probes the plain HTTP
+``/health`` endpoint, not an MCP tool.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import json
 import logging
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -24,6 +23,13 @@ from lithos_lens.knowledge import (
     SearchResult,
     normalize_related,
     normalize_search_result,
+)
+from lithos_lens.mcp_transport import (
+    CALL_TIMEOUT_S,
+    MAX_CONCURRENT_TOOL_CALLS,
+    LithosToolError,
+    MCPTransport,
+    raise_for_error,
 )
 from lithos_lens.normalizers import (
     normalize_agent,
@@ -49,41 +55,9 @@ from lithos_lens.tasks import (
     note_updated_sort_key,
 )
 
-if TYPE_CHECKING:
-    from mcp import ClientSession
-
 logger = logging.getLogger(__name__)
 
 LithosHealth = Literal["ok", "degraded", "unreachable"]
-
-# Maximum time _call_tool waits for the worker to (re)establish the MCP
-# session before failing. Tool calls in lens are user-facing and short-lived,
-# so we'd rather fail fast than block a page render.
-_SESSION_WAIT_TIMEOUT_S = 5.0
-
-# Deadline on ONE tool call, session wait included. Nothing else imposes one —
-# the MCP session has no per-request timeout, the httpx timeout covers only
-# /health, uvicorn sets no request timeout — so without it an unanswered call
-# wedges its request task forever, and on a fan-out surface a stalled lookup
-# holds a concurrency slot and stalls everything queued behind it: a bounded
-# call COUNT with an unbounded DURATION. A stop-loss well above any healthy
-# call, not a latency dial. Callers already degrade one failed read per row, so
-# timing a call out costs a row rather than a page.
-CALL_TIMEOUT_S = 15.0
-
-# How many tool calls this PROCESS may have in flight at once, over every
-# request and surface — the round trip AND the decode behind it, so the
-# number of decoded payloads resident at once is bounded too. The per-render
-# fan-out gates (``task_links.DETAIL_FANOUT_CONCURRENCY``,
-# ``epic_strip.EPIC_FANOUT_BATCH``) bound ONE page; the resource is the single
-# MCP session below, shared by every page and by every agent's coordination
-# traffic, and N concurrent renders is an unauthenticated request rate, not
-# something Lens chooses. So this bound lives with the session it protects.
-MAX_CONCURRENT_TOOL_CALLS = 16
-
-# Backoff bounds used by the worker when reconnecting after a transport drop.
-_RECONNECT_BACKOFF_INITIAL_S = 1.0
-_RECONNECT_BACKOFF_MAX_S = 30.0
 
 # recent_notes walks lithos_list in pages of this size (via offset) and sorts
 # client-side, because the tool has no ordering parameter — removed once
@@ -202,28 +176,15 @@ class RegistrationResult:
     message: str = ""
 
 
-class LithosToolError(RuntimeError):
-    """Raised when Lithos returns an error envelope from a tool call.
-
-    ``code`` carries the Lithos 0.4 error code (e.g. ``task_not_found``) when
-    the envelope supplies one, so callers can distinguish a missing task from a
-    missing tool without matching on message text.
-    """
-
-    def __init__(self, message: str, *, code: str = "") -> None:
-        super().__init__(message)
-        self.code = code
-
-
 class LithosClient:
     """Best-effort Lithos client used by the web app.
 
-    Maintains a single, long-lived MCP-over-SSE session that is reused
-    across all tool calls. The session is opened and closed by a dedicated
-    worker task spawned in :meth:`startup` so that anyio's "cancel scope
-    must be exited from the same task that entered it" rule is satisfied.
-    Individual ``call_tool`` invocations are cross-task safe because they
-    only push JSON-RPC messages onto the session's memory streams.
+    Owns one :class:`~lithos_lens.mcp_transport.MCPTransport` — a single,
+    long-lived MCP-over-SSE session shared by every tool call — and adds the
+    typed methods over it. Best-effort in the sense that no method here
+    protects the page: a failed read raises a coded
+    :class:`~lithos_lens.mcp_transport.LithosToolError` that callers degrade
+    per row.
     """
 
     def __init__(
@@ -236,37 +197,29 @@ class LithosClient:
         self._config = config
         self._owns_http_client = http_client is None
         self._http = http_client or httpx.AsyncClient(timeout=timeout_s)
-        self._session: ClientSession | None = None
-        self._session_ready = asyncio.Event()
-        self._stop_event = asyncio.Event()
-        self._worker_task: asyncio.Task[None] | None = None
-        self._call_gate = asyncio.Semaphore(MAX_CONCURRENT_TOOL_CALLS)
+        self._transport = MCPTransport(
+            config,
+            # A BOUND method, resolved once: a subclass overriding the escape
+            # hatch is honoured (that is how the test doubles feed canned MCP
+            # results through the real gate, deadline and decoder), a later
+            # reassignment on the instance is not.
+            oneshot=self._call_tool_oneshot,
+            # The bounds are the transport's to APPLY but this module's to
+            # SET: it owns the session they protect and it is the name other
+            # components' comments cite. Read here, so setting them here (or
+            # patching them in a test) is what sets them.
+            call_timeout_s=CALL_TIMEOUT_S,
+            max_concurrent_calls=MAX_CONCURRENT_TOOL_CALLS,
+        )
 
     async def startup(self) -> None:
-        """Spawn the long-lived MCP session worker task.
+        """Open the long-lived MCP session; see :meth:`MCPTransport.startup`.
 
-        Returns once either the first session is established or the
-        configured wait timeout elapses. A failure here does not raise:
-        ``health()`` and the per-call session-not-available paths handle
-        the degraded case.
+        Does not raise on failure: ``health()`` and the per-call
+        session-not-available paths handle the degraded case.
         """
 
-        if self._worker_task is not None:
-            return
-        self._stop_event = asyncio.Event()
-        self._session_ready = asyncio.Event()
-        self._worker_task = asyncio.create_task(
-            self._mcp_worker(), name="lithos-mcp-session"
-        )
-        try:
-            await asyncio.wait_for(
-                self._session_ready.wait(), timeout=_SESSION_WAIT_TIMEOUT_S
-            )
-        except TimeoutError:
-            logger.info(
-                "lithos MCP session not yet established at startup; "
-                "will retry in background"
-            )
+        await self._transport.startup()
 
     async def health(self) -> LithosHealth:
         """Probe Lithos's HTTP health endpoint."""
@@ -334,7 +287,7 @@ class LithosClient:
             # Terminal window: resolved_at >= value, NULL-resolved dropped.
             arguments["resolved_since"] = resolved_since
         payload = await self._call_tool("lithos_task_list", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_task(task)
             for task in payload.get("tasks", [])
@@ -366,7 +319,7 @@ class LithosClient:
         if tags:
             arguments["tags"] = tags
         payload = await self._call_tool("lithos_task_ready", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_task(task)
             for task in payload.get("tasks", [])
@@ -388,7 +341,7 @@ class LithosClient:
         if tags:
             arguments["tags"] = tags
         payload = await self._call_tool("lithos_task_blocked", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_blocked_task(task)
             for task in payload.get("tasks", [])
@@ -399,7 +352,7 @@ class LithosClient:
         """Fetch a single task via ``lithos_task_get``.
 
         Never returns None: Lithos answers a missing task with an error
-        envelope (code ``task_not_found``), surfaced by ``_raise_for_error``
+        envelope (code ``task_not_found``), surfaced by ``raise_for_error``
         as a coded :class:`LithosToolError`. A success payload that carries
         neither a valid task (a dict with a non-empty string ``id``) nor a
         supported legacy ``tasks`` list envelope is a broken response and
@@ -407,7 +360,7 @@ class LithosClient:
         callers can't tell apart from "absent".
         """
         payload = await self._call_tool("lithos_task_get", {"task_id": task_id})
-        _raise_for_error(payload)
+        raise_for_error(payload)
         raw = payload.get("task")
         if raw is None:
             # Supported legacy envelope is strictly {"tasks": [<task>, ...]};
@@ -436,7 +389,7 @@ class LithosClient:
         if include_closed:
             arguments["include_closed"] = True
         payload = await self._call_tool("lithos_task_children", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_task(task)
             for task in payload.get("tasks", [])
@@ -454,7 +407,7 @@ class LithosClient:
         if types:
             arguments["types"] = types
         payload = await self._call_tool("lithos_task_edge_list", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_edge(edge)
             for edge in payload.get("edges", [])
@@ -463,7 +416,7 @@ class LithosClient:
 
     async def task_status(self, task_id: str) -> TaskStatusRecord | None:
         payload = await self._call_tool("lithos_task_status", {"task_id": task_id})
-        _raise_for_error(payload)
+        raise_for_error(payload)
         tasks = payload.get("tasks", [])
         if not tasks:
             return None
@@ -477,7 +430,7 @@ class LithosClient:
         if since:
             arguments["since"] = since
         payload = await self._call_tool("lithos_finding_list", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_finding(finding, task_id)
             for finding in payload.get("findings", [])
@@ -486,12 +439,12 @@ class LithosClient:
 
     async def stats(self) -> dict[str, Any]:
         payload = await self._call_tool("lithos_stats", {})
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return payload
 
     async def list_agents(self) -> list[AgentRecord]:
         payload = await self._call_tool("lithos_agent_list", {})
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return [
             normalize_agent(agent)
             for agent in payload.get("agents", [])
@@ -508,7 +461,7 @@ class LithosClient:
         if max_length is not None:
             arguments["max_length"] = max_length
         payload = await self._call_tool("lithos_read", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return normalize_note(payload)
 
     async def read_note_by_path(self, path: str) -> NoteRecord | None:
@@ -527,7 +480,7 @@ class LithosClient:
         }
         try:
             payload = await self._call_tool("lithos_read", arguments)
-            _raise_for_error(payload)
+            raise_for_error(payload)
         except LithosToolError as exc:
             if exc.code == "doc_not_found":
                 return None
@@ -545,7 +498,7 @@ class LithosClient:
             "lithos_related",
             {"id": knowledge_id, "depth": 1},
         )
-        _raise_for_error(payload)
+        raise_for_error(payload)
         return normalize_related(payload)
 
     async def list_notes(
@@ -569,7 +522,7 @@ class LithosClient:
         if limit is not None:
             arguments["limit"] = limit
         payload = await self._call_tool("lithos_list", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         # lithos_list returns {"items": [...], "total": ...} — "items" has been
         # its one and only container key since the very first implementation
         # (verified against the Lithos source and its full git history; the
@@ -613,7 +566,7 @@ class LithosClient:
             arguments["limit"] = RECENT_NOTES_FETCH_PAGE
             arguments["offset"] = offset
             payload = await self._call_tool("lithos_list", arguments)
-            _raise_for_error(payload)
+            raise_for_error(payload)
             items: Any = payload.get("items") or []
             page_rows = [
                 normalize_note_summary(item) for item in items if isinstance(item, dict)
@@ -674,215 +627,46 @@ class LithosClient:
         if limit is not None:
             arguments["limit"] = limit
         payload = await self._call_tool("lithos_search", arguments)
-        _raise_for_error(payload)
+        raise_for_error(payload)
         rows: Any = payload.get("results") or []
         return [
             normalize_search_result(item) for item in rows if isinstance(item, dict)
         ]
 
-    async def _live_session(self, *, wait_s: float = _SESSION_WAIT_TIMEOUT_S) -> Any:
-        """The worker's MCP session, waiting up to ``wait_s`` for startup.
-
-        ``wait_s=0`` asks only whether a session exists right now: the probe
-        runs after other reads already failed, so waiting again buys nothing
-        and doubles an unauthenticated request's hold during an outage.
-        """
-        if not self._session_ready.is_set():
-            if wait_s <= 0:
-                raise LithosToolError("Lithos MCP session is not available")
-            try:
-                await asyncio.wait_for(self._session_ready.wait(), timeout=wait_s)
-            except TimeoutError as exc:
-                raise LithosToolError("Lithos MCP session is not available") from exc
-
-        session = self._session
-        if session is None:
-            raise LithosToolError("Lithos MCP session is not available")
-        return session
-
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Run one tool call under :data:`CALL_TIMEOUT_S`, around the
-        process-wide gate ``_invoke_tool`` holds — so both bounds cover every
-        tool, both transport paths and every SURFACE. Queue time is inside the
-        deadline on purpose: a queued call has not answered yet. The deadline
-        sheds the CALLER's wait, not the work (see the decoder's note).
-        """
-        try:
-            return await asyncio.wait_for(
-                self._invoke_tool(name, arguments), timeout=CALL_TIMEOUT_S
-            )
-        except TimeoutError as exc:
-            raise LithosToolError(
-                f"lithos tool '{name}' did not answer within {CALL_TIMEOUT_S}s",
-                code="timeout",
-            ) from exc
+        """Place one tool call on the transport, which bounds and decodes it.
 
-    async def _invoke_tool(
-        self, name: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        async with self._call_gate:
-            if self._worker_task is None:
-                # startup() was never called; fall back to a one-shot session
-                # so we don't silently break callers that bypass the lifecycle.
-                result = await self._call_tool_oneshot(name, arguments)
-            else:
-                session = await self._live_session()
-                result = await session.call_tool(name, arguments)
-            # Inside the SAME gate slot as the round trip: the parse is the
-            # CPU half of a call, so a bound that ends at the network half is
-            # not a bound on the call. It is NOT moved off the loop — see the
-            # residual note in _decode_tool_result for why that would not buy
-            # what it looks like it buys.
-            return _decode_tool_result(result)
+        Kept as a method (rather than callers reaching for the transport) so
+        the deadline, the process-wide gate and the decode sit behind ONE name
+        for every typed method above — and so the contract guardrail in
+        ``tests/test_lithos_contracts.py`` can find every tool this client
+        calls by scanning for ``self._call_tool("<literal>")``.
+        """
+        return await self._transport.call_tool(name, arguments)
 
     async def _call_tool_oneshot(self, name: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call over a throwaway session.
 
-        Returns the RAW MCP result; decoding stays in ``_invoke_tool`` so both
-        transport paths share the same bounds and error handling.
+        The lifecycle escape hatch: taken only when ``startup()`` was never
+        called, so callers that bypass the lifecycle don't silently break.
+        Returns the RAW MCP result — the transport bounds and decodes both
+        paths alike, so this one gets the same treatment as the shared session.
         """
         from mcp import ClientSession
         from mcp.client.sse import sse_client
 
-        endpoint = self._mcp_endpoint()
         async with (
-            sse_client(endpoint) as (reader, writer),
+            sse_client(self._transport.endpoint) as (reader, writer),
             ClientSession(reader, writer) as session,
         ):
             await session.initialize()
             return await session.call_tool(name, arguments)
 
-    async def _mcp_worker(self) -> None:
-        """Hold a single MCP session open for the lifetime of the client.
-
-        Reconnects with exponential backoff if the session drops. All
-        ``async with`` lifecycle for the session lives inside this task,
-        so anyio's cancel-scope-task-affinity rule is satisfied even
-        though tool calls are awaited from arbitrary request tasks.
-        """
-
-        from mcp import ClientSession
-        from mcp.client.sse import sse_client
-
-        endpoint = self._mcp_endpoint()
-        backoff = _RECONNECT_BACKOFF_INITIAL_S
-        while not self._stop_event.is_set():
-            try:
-                async with AsyncExitStack() as stack:
-                    reader, writer = await stack.enter_async_context(
-                        sse_client(endpoint)
-                    )
-                    session = await stack.enter_async_context(
-                        ClientSession(reader, writer)
-                    )
-                    await session.initialize()
-                    self._session = session
-                    self._session_ready.set()
-                    backoff = _RECONNECT_BACKOFF_INITIAL_S
-                    await self._stop_event.wait()
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("lithos MCP session lost; reconnecting", exc_info=True)
-            finally:
-                self._session = None
-                self._session_ready.clear()
-
-            if self._stop_event.is_set():
-                return
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
-                return
-            except TimeoutError:
-                pass
-            backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX_S)
-
-    def _mcp_endpoint(self) -> str:
-        return f"{self._config.url.rstrip('/')}/{self._config.mcp_sse_path.strip('/')}"
-
     async def close(self) -> None:
-        self._stop_event.set()
-        if self._worker_task is not None:
-            try:
-                await asyncio.wait_for(self._worker_task, timeout=5.0)
-            except TimeoutError:
-                self._worker_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await self._worker_task
-            self._worker_task = None
+        await self._transport.close()
         if self._owns_http_client:
             await self._http.aclose()
 
 
 def _is_nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
-
-
-def _decode_tool_result(result: Any) -> dict[str, Any]:
-    """Decode an MCP tool result into the Lithos payload dict.
-
-    Every failure mode surfaces as a coded :class:`LithosToolError` — callers
-    must never see a raw ``JSONDecodeError``. ``code="tool_error"`` marks an
-    MCP-level error result (``isError``, plain text — e.g. the live server's
-    FastMCP output-schema validation rejecting a tool's own error envelope);
-    ``code="invalid_response"`` marks a success result whose body isn't a
-    JSON object.
-
-    There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
-    must not be added. The graph reads take no limit parameter, so a single
-    response's row count is agent-controlled — the very input the task detail
-    page exists to survive: it renders a bounded first page of blockers plus a
-    tail stating the TRUE remainder, and it can only count that remainder from
-    a response it parsed. Refusing the oversized edge list would answer exactly
-    that case with "blockers unavailable", and any finite ceiling is a
-    deployment assumption dressed as an input-domain restriction. Cost is
-    bounded where the cost is instead — the per-row fan-out, its concurrency
-    and its wall clock (see ``task_links``).
-
-    THE RESIDUAL, stated plainly because it is not covered: this parse is
-    synchronous AND it holds the GIL for its whole duration. ``json.loads``
-    runs one C call with no bytecode boundaries in it, so while it runs NO
-    other Python in this process runs — not another request, not the event
-    loop, not the deadline in ``_call_tool``, which cannot fire until the parse
-    it would interrupt has finished. Measured on this project's Python 3.12: a
-    26MB response parses in ~130ms, during which a 1ms ticker thread advanced
-    TWICE (it advances ~123 times over the same span of ``time.sleep``).
-
-    An earlier revision ran this on a ThreadPoolExecutor and claimed the loop
-    stayed responsive. It does not: a thread hop moves where the GIL is held,
-    not whether it is held, so the pool bought a bound on width and nothing on
-    latency, plus 16 threads and an uncancellable work item. It was removed
-    rather than re-documented (PR #50 review). Real isolation would need
-    process separation or a GIL-releasing decoder, and neither is worth its
-    complexity for the sizes a healthy Lithos returns.
-
-    So: an ACCEPTED RISK, owned upstream, closing when the graph reads grow a
-    row limit. What bounds it today is that Lens is behind a trusted-network
-    boundary and the responses are as large as the graph an agent built.
-    """
-    blocks = getattr(result, "content", [])
-    text = str(getattr(blocks[0], "text", "") or "") if blocks else ""
-    if getattr(result, "isError", False):
-        raise LithosToolError(text or "Lithos tool call failed", code="tool_error")
-    if not text:
-        return {}
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise LithosToolError(
-            f"Lithos returned a non-JSON tool result: {text[:200]}",
-            code="invalid_response",
-        ) from exc
-    if not isinstance(payload, dict):
-        raise LithosToolError(
-            "Lithos returned a non-object tool result", code="invalid_response"
-        )
-    return payload
-
-
-def _raise_for_error(payload: dict[str, Any]) -> None:
-    if payload.get("status") == "error":
-        code = str(payload.get("code") or "")
-        message = str(payload.get("message") or code or "Lithos error")
-        raise LithosToolError(message, code=code)
