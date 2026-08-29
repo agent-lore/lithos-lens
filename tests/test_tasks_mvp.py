@@ -3296,8 +3296,8 @@ def test_board_admits_open_matches_the_statuses_the_board_actually_renders(
     It is read off the statuses THIS RENDER parsed, so it cannot disagree with
     the board around it. Re-deriving it from the raw query string did: a
     string compare against "open" reads `status=open,completed` as excluding
-    open, and gets the repeated form right or wrong depending on which value
-    happens to come first.
+    open, and on the repeated form is right or wrong purely by ordering, since
+    QueryParams.get collapses it to a single value (the LAST one).
 
     So the assertion is deliberately doubled: the flag must match what the
     board RENDERS, not merely what a second parser thinks the query said.
