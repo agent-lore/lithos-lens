@@ -368,18 +368,39 @@ def test_overflowing_ready_at_renders_verbatim_and_drives_no_countdown() -> None
 
 
 def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
-    """An edge is a peer-written assertion and outlives the wait, so a waiter id
-    absent from the open snapshot is dropped rather than counted — and a
-    repeated edge counts once."""
+    """``lithos_task_edge_upsert`` will link a gate to ANY existing task, so on
+    the degraded paths every edge target is checked against what Lithos itself
+    said elsewhere in this render. Everything the computed source could never
+    report as waiting is dropped, and a repeated edge counts once."""
     gate = _gate("g")
     real = _task("real")
+    ready = _task("ready-victim")
+    epic = TaskRecord(id="an-epic", title="Epic", status="open", task_type="epic")
+    other_gate = _gate("other-gate")
     fake = _EdgeFake(
         {
             "g": [
                 EdgeRecord(from_task_id="g", to_task_id="real", type="waits_on_gate"),
+                # A repeated edge must not double-count the same waiter.
                 EdgeRecord(from_task_id="g", to_task_id="real", type="waits_on_gate"),
+                # Names nothing in the open snapshot.
                 EdgeRecord(from_task_id="g", to_task_id="ghost", type="waits_on_gate"),
                 EdgeRecord(from_task_id="g", to_task_id="", type="waits_on_gate"),
+                # Lithos calls this one READY — its own statement that nothing
+                # blocks it, which refutes the edge outright.
+                EdgeRecord(
+                    from_task_id="g", to_task_id="ready-victim", type="waits_on_gate"
+                ),
+                # Not workable: lithos_task_blocked returns ``task``-typed rows
+                # only, so neither could ever be reported as waiting.
+                EdgeRecord(
+                    from_task_id="g", to_task_id="an-epic", type="waits_on_gate"
+                ),
+                EdgeRecord(
+                    from_task_id="g", to_task_id="other-gate", type="waits_on_gate"
+                ),
+                # The edge outlives the wait: a finished waiter still has one.
+                EdgeRecord(from_task_id="g", to_task_id="done", type="waits_on_gate"),
             ]
         }
     )
@@ -387,15 +408,48 @@ def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
         attach_gate_waiters(
             fake,
             collect_gates([gate]),
-            index=_index(gate, real),
+            index=_index(gate, real, ready, epic, other_gate),
             blocked=[],
             blocked_available=True,
             blocked_truncated=True,
+            ready_ids=frozenset({"ready-victim"}),
         )
     )
 
     assert [waiter.id for waiter in rows[0].waiters] == ["real"]
     assert rows[0].waiters_label == "blocks 1 task (unverified)"
+
+
+def test_edge_asserted_waiters_are_refuted_on_the_failed_blocked_path_too() -> None:
+    """The same admission checks apply when the blocked read is DOWN, not just
+    truncated — that path reaches the identical fan-out."""
+    gate = _gate("g")
+    ready = _task("ready-victim")
+    fake = _EdgeFake(
+        {
+            "g": [
+                EdgeRecord(
+                    from_task_id="g", to_task_id="ready-victim", type="waits_on_gate"
+                )
+            ]
+        }
+    )
+    rows = asyncio.run(
+        attach_gate_waiters(
+            fake,
+            collect_gates([gate]),
+            index=_index(gate, ready),
+            blocked=[],
+            blocked_available=False,
+            blocked_truncated=False,
+            ready_ids=frozenset({"ready-victim"}),
+        )
+    )
+
+    assert rows[0].waiters == ()
+    # Refuting the only asserted waiter leaves an honest zero from a source
+    # that DID answer — not the "unavailable" of a source that did not.
+    assert rows[0].waiters_label == "blocks 0 tasks (unverified)"
 
 
 def test_advisory_metadata_is_bounded_on_every_axis() -> None:
@@ -427,6 +481,45 @@ def test_advisory_metadata_is_bounded_on_every_axis() -> None:
     # Containers are labelled, never stringified: str() on a megabyte-deep
     # value would allocate the whole thing on every render for 80 bytes.
     assert values[2] == "{…}"
+
+
+def test_chrome_metadata_is_bounded_like_every_other_axis() -> None:
+    """``gate_type`` and ``ready_at`` are peer-written like any other metadata
+    key, and ``ready_at`` reaches the markup TWICE (``datetime=`` and
+    ``data-gate-ready-at=``, neither truncated) before a once-a-second browser
+    loop re-reads it — so both are capped, and a container is labelled rather
+    than materialised to keep 80 bytes of it."""
+    long_value = collect_gates(
+        [
+            _gate(
+                "g",
+                gate_type="timer",
+                metadata={"ready_at": "x" * 1_000_000},
+            )
+        ]
+    )[0]
+    # Same 80-character bound the advisory chips get.
+    assert len(long_value.ready_at) <= 80
+
+    container = collect_gates(
+        [
+            TaskRecord(
+                id="c",
+                title="Gate c",
+                status="open",
+                task_type="gate",
+                metadata={
+                    "gate_type": {"nested": ["y" * 100] * 10_000},
+                    "ready_at": [["z" * 100] * 10_000],
+                },
+            )
+        ]
+    )[0]
+    assert container.ready_at == "[…]"
+    assert container.gate_type == "{…}"
+    assert container.type_slug == "unknown"
+    # Still no countdown and no 500 — an unreadable stamp schedules nothing.
+    assert next_gate_ready_at([long_value, container], now=_NOW) == ""
 
 
 def test_chrome_metadata_keys_are_not_repeated_as_advisory_chips() -> None:

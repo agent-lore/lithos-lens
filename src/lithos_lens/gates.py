@@ -23,6 +23,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from lithos_lens.frontier_join import WORKABLE_TASK_TYPE
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import TaskRecord, parse_timestamp
 
@@ -205,13 +206,13 @@ class GateRow:
 
     @property
     def type_label(self) -> str:
-        """The badge TEXT: the raw type, length-capped, "gate" when unset.
+        """The badge TEXT: the raw type as text, "gate" when unset.
 
-        Capped for the same reason advisory values are — ``metadata`` is
-        peer-written and unbounded, and a megabyte-long ``gate_type`` would be
-        pasted into every render of the board.
+        Already bounded — ``collect_gates`` passes ``gate_type`` through
+        ``_chrome_text`` — so this only supplies the wording for a gate whose
+        ``metadata.gate_type`` is missing.
         """
-        return _summarize_text(self.gate_type) if self.gate_type else "gate"
+        return self.gate_type or "gate"
 
     @property
     def type_slug(self) -> str:
@@ -238,7 +239,7 @@ class GateGroup:
 
     @property
     def label(self) -> str:
-        return _summarize_text(self.gate_type) if self.gate_type else "unspecified"
+        return self.gate_type or "unspecified"
 
     @property
     def type_slug(self) -> str:
@@ -275,6 +276,7 @@ async def load_gates(
     blocked: Sequence[BlockedTaskRecord],
     blocked_available: bool,
     blocked_truncated: bool,
+    ready_ids: frozenset[str] = frozenset(),
     placed_ids: frozenset[str] = frozenset(),
     now: datetime,
 ) -> GateSection:
@@ -283,6 +285,8 @@ async def load_gates(
     ``visible_open`` is the filtered open snapshot the sections render, so the
     board's scope decides WHICH gates appear; ``index`` is the WHOLE open
     snapshot, so a gate's waiter count is never narrowed by that same scope.
+    ``ready_ids`` is the ready frontier, which the degraded waiter paths use to
+    refute edge-asserted waiters (see ``_resolve_asserted_waiters``).
     ``placed_ids`` are rows some other section already rendered (Needs
     attention promotes a long-waiting human gate out of here) — the
     single-placement rule, enforced at the one point that can see both.
@@ -297,6 +301,7 @@ async def load_gates(
         blocked=blocked,
         blocked_available=blocked_available,
         blocked_truncated=blocked_truncated,
+        ready_ids=ready_ids,
     )
     return GateSection(
         groups=group_gates(gates),
@@ -329,8 +334,10 @@ def collect_gates(
         rows.append(
             GateRow(
                 task=task,
-                gate_type=str(task.metadata.get("gate_type") or ""),
-                ready_at=_normalized_instant(str(task.metadata.get("ready_at") or "")),
+                gate_type=_chrome_text(task.metadata.get("gate_type")),
+                ready_at=_normalized_instant(
+                    _chrome_text(task.metadata.get("ready_at"))
+                ),
                 advisory=advisory,
                 advisory_more=advisory_more,
             )
@@ -368,6 +375,7 @@ async def attach_gate_waiters(
     blocked: Sequence[BlockedTaskRecord],
     blocked_available: bool,
     blocked_truncated: bool,
+    ready_ids: frozenset[str] = frozenset(),
     fanout_cap: int = GATE_WAITER_FANOUT_CAP,
 ) -> tuple[GateRow, ...]:
     """Fill each gate's waiter list, preferring the Lithos-computed source.
@@ -378,8 +386,12 @@ async def attach_gate_waiters(
     complete and authoritative — waiters are read straight off it and NO
     per-gate call is made at all. A ``waits_on_gate`` edge, by contrast, is a
     peer-written assertion that some task waits; it is unbounded (so it is the
-    only source that survives frontier truncation) but nothing cross-checks it,
-    which is why edge-derived counts render as ``UNVERIFIED``.
+    only source that survives frontier truncation) and nothing CONFIRMS it,
+    which is why edge-derived counts render as ``UNVERIFIED``. What it is
+    checked against is whatever this render already read — see
+    ``_resolve_asserted_waiters``, which drops every edge target Lithos has
+    itself contradicted (``ready_ids`` is the ready frontier: a task on it is
+    blocked by nothing at all).
 
     So the per-gate edge fan-out happens ONLY on the degraded paths (blocked
     truncated or unavailable), and even then it is bounded twice: at most
@@ -432,7 +444,9 @@ async def attach_gate_waiters(
         attached.append(
             replace(
                 gate,
-                waiters=_resolve_waiters(waiter_ids, index),
+                waiters=_resolve_asserted_waiters(
+                    waiter_ids, index=index, ready_ids=ready_ids
+                ),
                 waiters_state=GateWaiterState.UNVERIFIED,
             )
         )
@@ -462,14 +476,55 @@ def _resolve_waiters(
     waiter_ids: Iterable[str],
     index: Mapping[str, TaskRecord],
 ) -> tuple[TaskRecord, ...]:
-    """Resolve waiter ids against the master open snapshot.
+    """Resolve COMPUTED waiter ids against the master open snapshot.
 
-    Ids absent from the snapshot are dropped: the edge outlives the wait, so a
-    completed waiter still has one, and a fabricated edge must not surface a
-    task the operator could not otherwise see — nor inflate the count.
+    These come off ``lithos_task_blocked``, which derives blockers itself, so
+    the only thing to check is that the row is still visible: an id absent from
+    the snapshot (it closed between the two independent reads) is dropped
+    rather than surfaced as a row the operator cannot see.
     """
     return tuple(
         task for task_id in waiter_ids if (task := index.get(task_id)) is not None
+    )
+
+
+def _resolve_asserted_waiters(
+    waiter_ids: Iterable[str],
+    *,
+    index: Mapping[str, TaskRecord],
+    ready_ids: frozenset[str],
+) -> tuple[TaskRecord, ...]:
+    """Resolve EDGE-asserted waiter ids, dropping the ones Lithos contradicts.
+
+    A ``waits_on_gate`` edge is a peer-written assertion and
+    ``lithos_task_edge_upsert`` accepts one between any two existing tasks, so
+    on the degraded paths this is the one waiter source nothing computed. Three
+    admission checks apply, each of them something Lithos itself said on a read
+    THIS render already holds — so none of them costs a call, and the fan-out
+    stays capped where criterion 5 put it:
+
+    - the id must be in the open snapshot. An edge outlives the wait, so a
+      completed or cancelled waiter still carries one, and an id naming nothing
+      must not surface a row the operator cannot see;
+    - the row must be WORKABLE. ``lithos_task_blocked`` returns ``task``-typed
+      rows only, so an edge naming an epic or another gate names something the
+      authoritative source could never report as waiting on anything;
+    - the row must NOT be on the ready frontier. Ready is Lithos's own
+      statement that a task is blocked by nothing at all, which refutes the
+      edge outright.
+
+    That leaves exactly the rows Lithos's own reads agree could be waiting: an
+    open workable task it has not called ready. It is still labelled
+    ``UNVERIFIED``, because "nothing contradicts it" is not "confirmed" — and
+    the checks can only ever REMOVE a waiter, so a degraded count errs low
+    rather than inventing one.
+    """
+    return tuple(
+        task
+        for task_id in waiter_ids
+        if (task := index.get(task_id)) is not None
+        and task.task_type == WORKABLE_TASK_TYPE
+        and task_id not in ready_ids
     )
 
 
@@ -514,6 +569,21 @@ def _advisory_metadata(
     return shown, len(keys) - len(shown)
 
 
+def _chrome_text(value: Any) -> str:
+    """A chrome metadata value (``gate_type``, ``ready_at``) as bounded text.
+
+    ``metadata`` is peer-written whatever the key, so the two keys that drive
+    dedicated row chrome get the same bounding contract as the advisory chips
+    — applied BEFORE the value is interpreted, since both end up in the markup
+    (the badge; the countdown's two attributes). ``_summarize_value`` is reused
+    rather than ``str()`` so that a container is labelled instead of
+    materialised: neither key can be a container meaningfully, and stringifying
+    a nested megabyte to keep 80 bytes of it is the allocation this module
+    refuses everywhere else. A falsy value is the absent case and reads as "".
+    """
+    return _summarize_value(value) if value else ""
+
+
 def _summarize_text(text: str) -> str:
     if len(text) <= _ADVISORY_VALUE_CAP:
         return text
@@ -545,9 +615,18 @@ def _normalized_instant(value: str) -> str:
     """Normalize a gate's ``ready_at`` to a UTC ISO stamp for the browser.
 
     An unparseable value (including one whose UTC shift overflows the datetime
-    domain, ``9999-12-31T23:59:59-01:00``) passes through verbatim: the
+    domain, ``9999-12-31T23:59:59-01:00``) passes through as bounded TEXT: the
     countdown ignores it, but the raw metadata stays visible rather than
     silently disappearing — and the page renders instead of 500ing.
+
+    Bounded, not verbatim, because this is the one gate field that reaches the
+    row markup TWICE (``datetime=`` and ``data-gate-ready-at=``, neither of
+    them the truncated visible text) and is then re-read by the browser's
+    once-a-second countdown loop. A real instant is ~25 characters; anything
+    longer is not one, and the summarised form says so without pasting a
+    peer-sized string into every render of every open tab. Callers pass a value
+    that ``_chrome_text`` has already bounded — this keeps the guarantee local
+    to the function that publishes the attribute.
     """
     parsed = parse_timestamp(value)
-    return parsed.isoformat() if parsed is not None else value
+    return parsed.isoformat() if parsed is not None else _summarize_text(value)

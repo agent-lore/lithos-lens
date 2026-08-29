@@ -444,6 +444,11 @@ async def load_dashboard(
             # The gate counts care about the BLOCKED response specifically; a
             # truncated ready read says nothing about who waits on a gate.
             blocked_truncated=len(blocked_records) >= frontier_limit,
+            # The ready frontier refutes edge-asserted waiters on the degraded
+            # paths: Lithos calling a task ready IS its statement that nothing
+            # blocks it, so a `waits_on_gate` edge pointing at one is contra-
+            # dicted by a read this render already made.
+            ready_ids=frozenset(task.id for task in ready_list),
             placed_ids=frozenset(row.task.id for row in partition.get("attention", ())),
             now=evaluated_at,
         )
