@@ -44,6 +44,7 @@ from lithos_lens.tasks import (
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
+    split_filter_values,
 )
 
 _PRESERVED_FILTER_KEYS = (
@@ -186,6 +187,36 @@ def board_is_filtered(request: Request) -> bool:
     board and buys a board that never claims something it has not checked.
     """
     return bool(_preserved_filter_params(request))
+
+
+def board_admits_open(request: Request) -> bool:
+    """True when a task that is now ``open`` still belongs on this board.
+
+    The sibling question to :func:`board_is_filtered`, and deliberately a
+    narrower one. That predicate counts EVERY preserved key, because a
+    just-created task has no attributes the client can check against any of
+    them. This one is asked about a row the server ALREADY rendered here — it
+    passed every filter — so the only thing that can evict it is the one
+    attribute reopening actually changes: its status. Project, agent, tag,
+    epic and ``since`` are all unmoved by a reopen (``created_at`` does not
+    change), and suppressing on those would hide a row from the board it still
+    belongs to.
+
+    Answered here rather than by the browser reading its own query string, for
+    the same reason as :func:`board_is_filtered`: one definition of what the
+    status filter's values mean. Which is why the values go through
+    :func:`split_filter_values` and every ``status`` pair is read, not just the
+    first — ``?status=completed,open`` and a two-box form submit are both boards
+    that DO admit open rows, and reading either as "completed" would drop a
+    reopened row from a board it still belongs to.
+    """
+    statuses = [
+        status
+        for key, value in _request_filters(request).params
+        if key == "status"
+        for status in split_filter_values(value)
+    ]
+    return not statuses or "open" in statuses
 
 
 def task_tag_url(request: Request, tag: str) -> str:

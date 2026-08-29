@@ -31,6 +31,29 @@ npm run install-browsers   # playwright install --with-deps chromium (falls back
 npm test
 ```
 
+## Three phases: read-only, then live events, then captures
+
+The suite runs `fullyParallel`, and every tab it opens holds a live
+`/tasks/events` subscription — so an event published through the fake-mode
+`/tasks/events/publish` seam is fanned out to *all* of them, not just the page
+that asked for it. A test that moves a **fixture** row therefore moves it under
+every dashboard the suite happens to have open, and any tab that receives a
+synthetic event photographs state the app never rendered from its own data.
+
+So the config declares three projects, each sequenced behind the last with
+`dependencies` — which is what actually orders them, since `fullyParallel` and
+a file's own `mode` order tests only *within* a project:
+
+| Project | Files | Runs |
+|---|---|---|
+| `app` | everything else (by exclusion, so a new spec file is never silently absent) | first, in parallel |
+| `live-events` | `tests/live-events.spec.ts`, serial | after `app` |
+| `screenshots` | `tests/screenshots.spec.ts` | after both |
+
+An event test that only *adds* a row under a synthetic id — like
+`task.created`'s skeleton — can stay in `smoke.spec.ts`; one that moves a
+fixture row belongs in `live-events.spec.ts`.
+
 Playwright's `webServer` (see [`playwright.config.ts`](./playwright.config.ts))
 boots the app itself with:
 

@@ -13,7 +13,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | S | 0 | 8 |
-| `lithos_lens.tasks` | L | 15 | 11 |
+| `lithos_lens.tasks` | L | 15 | 12 |
 
 ## Public API
 
@@ -62,6 +62,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `parse_date`
 - def `int_stat`
 - def `honored_tags` — The ``?tag=`` values the board filters by, in the order written.
+- def `split_filter_values` — One non-tag filter param, split into the values it carries.
 
 ## Dependencies
 

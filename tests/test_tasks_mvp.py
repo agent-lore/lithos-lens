@@ -3257,3 +3257,45 @@ def test_an_unrecognised_query_param_does_not_narrow_the_board(
         response = client.get("/tasks?utm_source=slack")
 
     assert "boardFiltered: false" in response.text
+
+
+def test_a_reopened_row_is_scoped_by_status_alone_not_by_every_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """T1-S6: the reopen handler asks a NARROWER question than the skeleton row.
+
+    ``task.reopened`` moves a row the server already rendered on this board, so
+    it has passed every filter already and only its status has changed. Scoping
+    it on ``boardFiltered`` would hide a reopened row from a ``since``, ``tag``
+    or ``project`` board it still belongs to; scoping it on nothing would park
+    it in the pending strip — which renders on EVERY board — under a status
+    filter that no longer admits it.
+    """
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unfiltered = client.get("/tasks")
+        by_since = client.get("/tasks?since=2026-08-01")
+        by_tag = client.get("/tasks?tag=area%3Adata")
+        open_only = client.get("/tasks?status=open")
+        completed_only = client.get("/tasks?status=completed")
+        # Every `status` pair is read, and each is comma-split the way
+        # `parse_filters` reads it — the checkbox group posts one pair per
+        # ticked box, and the comma form is a documented equivalent. Reading
+        # only the first value called both of these `completed`.
+        both_pairs = client.get("/tasks?status=completed&status=open")
+        both_comma = client.get("/tasks?status=completed,open")
+
+    # Narrowed by something a reopen cannot change: the row still belongs here.
+    assert "boardAdmitsOpen: true" in unfiltered.text
+    assert "boardAdmitsOpen: true" in by_since.text
+    assert "boardAdmitsOpen: true" in by_tag.text
+    # ...whereas `boardFiltered` — the skeleton row's question — says these
+    # three are narrowed. The two flags are deliberately not the same answer.
+    assert "boardFiltered: true" in by_since.text
+    assert "boardFiltered: true" in by_tag.text
+
+    assert "boardAdmitsOpen: true" in open_only.text
+    assert "boardAdmitsOpen: false" in completed_only.text
+    assert "boardAdmitsOpen: true" in both_pairs.text
+    assert "boardAdmitsOpen: true" in both_comma.text

@@ -76,6 +76,40 @@ test("elements marked hidden stay hidden", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("nothing marked hidden is painted, anywhere on the page", async ({ page }) => {
+  // The generic complement to the test above, which names two elements. This
+  // one sweeps EVERY `[hidden]` element, so a future component rule that sets
+  // `display` on a class is caught wherever it lands rather than only on the
+  // two the reset was written for. From T1-S6, which found the original bug.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const painted = await page.locator("[hidden]").evaluateAll((elements) =>
+    elements
+      .filter((element) => getComputedStyle(element).display !== "none")
+      .map((element) => element.outerHTML.slice(0, 80)),
+  );
+
+  expect(painted).toEqual([]);
+});
+
+test("a page shorter than the viewport still fills it", async ({ page }) => {
+  // Browser truth for the body background fix (#44/#46, deduplicated in #54),
+  // which until now had no guard but a reviewer's eye on a screenshot: the
+  // background propagates to the canvas while staying sized to the BODY box,
+  // so a page shorter than the viewport tiled the gradient into hard bands.
+  // Assert the box covers the viewport rather than that the rule is present.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/note/missing-note");
+  await expect(page.getByText("Document not found.")).toBeVisible();
+
+  const { body, viewport } = await page.evaluate(() => ({
+    body: document.body.getBoundingClientRect().height,
+    viewport: window.innerHeight,
+  }));
+
+  expect(body).toBeGreaterThanOrEqual(viewport);
+});
+
 test("epic strip rolls the subtree up and scopes the board", async ({ page }) => {
   // T1-S5 item: the demo epic covers six subtree tasks — one completed, one
   // cancelled (cancelled work leaves the denominator), so the chip reads 1/5.

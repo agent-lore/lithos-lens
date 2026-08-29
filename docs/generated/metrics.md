@@ -37,25 +37,25 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Config | 3 | 997 | 822 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 15 | 9 | 2 | 0 | 0.00 | - | 0 |
-| Events | 1 | 208 | 180 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.parse_lithos_sse_frame`) | 0 |
+| Events | 1 | 415 | 322 | 3 | 1 | 0.25 | 10 (`lithos_lens.events.EventHub._run`) | 0 |
 | Knowledge | 3 | 1057 | 806 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
 | LithosClient | 4 | 2012 | 1624 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 103 | 68 | 1 | 1 | 0.50 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 8 | 2626 | 2004 | 2 | 1 | 0.33 | 42 (`lithos_lens.frontier.load_dashboard`) | 4 |
-| Tasks | 3 | 1104 | 784 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
+| Tasks | 3 | 1110 | 789 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 1 | 29 | 20 | 1 | 1 | 0.50 | 2 (`lithos_lens.telemetry.install_request_middleware.lens_request`) | 0 |
-| Web | 2 | 961 | 769 | 1 | 8 | 0.89 | 12 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 2 | 994 | 798 | 1 | 8 | 0.89 | 12 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **31**, lines: **9260**, SLOC: **7196**
+- Modules: **31**, lines: **9506**, SLOC: **7372**
 - Largest module: `lithos_lens.knowledge` (781 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **337**, cyclomatic > 10: **16**
+- Functions: **347**, cyclomatic > 10: **16**
 
 Top 10 most complex functions:
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **38** (38 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.83** (16925 test lines / 9260 source lines)
+- Test-to-source line ratio: **1.84** (17521 test lines / 9506 source lines)

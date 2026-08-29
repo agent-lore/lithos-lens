@@ -128,7 +128,11 @@
     if (type === "task.released") updateClaim(message, false);
     if (type === "task.completed") closeTask(message, "completed");
     if (type === "task.cancelled") closeTask(message, "cancelled");
+    if (type === "task.reopened") reopenTask(message);
     if (type === "finding.posted") handleFinding(message);
+    // task.updated carries only a task_id and lens.refresh carries nothing at
+    // all, so both are served by the requires_refresh reconcile below - as is
+    // any type this build does not know yet.
     if (message.requires_refresh) scheduleReconcile();
   }
 
@@ -231,6 +235,38 @@
     if (!target) row.remove();
   }
 
+  function reopenTask(message) {
+    const row = rowFor(message.task_id);
+    if (!row) return;
+    row.dataset.taskStatus = "open";
+    const badge = row.querySelector(".badge");
+    if (badge) {
+      badge.className = "badge badge-open";
+      badge.textContent = "open";
+    }
+    // Which workable section the task belongs to now is the frontier's answer,
+    // not ours, so the row waits in the pending strip until the reconcile
+    // re-renders the board - the same reason a just-created task lands there.
+    //
+    // But NOT onto a board whose status filter excludes open rows. The pending
+    // strip renders on EVERY board, so parking the row there puts it back on
+    // screen under a filter that no longer admits it - and if the ~800ms
+    // reconcile then fails, it persists with nothing to say it is wrong. Drop
+    // it instead: a row missing for ~800ms is recoverable, one stuck out of
+    // scope is not. `closeTask` above is conservative the same way, removing a
+    // row whose new status has no list on this board rather than parking it.
+    //
+    // `boardAdmitsOpen`, not `boardFiltered`: this row was SERVER-RENDERED
+    // here, so it already passed every filter, and reopening changes only its
+    // status. A `since` or `tag` board still holds it (see
+    // request_filters.board_admits_open).
+    const list = config.boardAdmitsOpen
+      ? document.querySelector('[data-task-list="pending"]')
+      : null;
+    if (list) list.prepend(row);
+    if (!list) row.remove();
+  }
+
   function handleFinding(message) {
     const row = rowFor(message.task_id);
     if (row) {
@@ -263,7 +299,9 @@
       reconnectRefreshPending = true;
       startPolling();
     });
-    ["task.created", "task.claimed", "task.released", "task.completed", "task.cancelled", "finding.posted"].forEach(function (type) {
+    // agent.registered is deliberately absent: it is system-scoped, carries
+    // requires_refresh=false, and must not move the board.
+    ["task.created", "task.claimed", "task.released", "task.completed", "task.cancelled", "task.updated", "task.reopened", "finding.posted", "lens.refresh"].forEach(function (type) {
       eventSource.addEventListener(type, handleEvent);
     });
   }

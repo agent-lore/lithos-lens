@@ -551,7 +551,7 @@ def parse_filters(
             continue
         if not value:
             continue
-        values.setdefault(key, []).extend(_split_values(value))
+        values.setdefault(key, []).extend(split_filter_values(value))
 
     requested_statuses = set(values.get("status", list(default_statuses)))
     status_items: list[TaskStatusName] = [
@@ -741,5 +741,11 @@ def honored_tags(
     return tuple(tags)
 
 
-def _split_values(value: str) -> list[str]:
+def split_filter_values(value: str) -> list[str]:
+    """One non-tag filter param, split into the values it carries.
+
+    The comma form is a documented convenience for the constrained-vocabulary
+    keys (see :func:`parse_filters`), so anything asking what a filter param
+    MEANS has to go through here rather than reading the raw string.
+    """
     return [part.strip() for part in value.split(",") if part.strip()]
