@@ -74,6 +74,19 @@
       } while (refreshQueued);
     } finally {
       refreshInFlight = false;
+      // A REJECTED render jumps straight here, past the `while (refreshQueued)`
+      // check — so a reconcile asked for during a render that then failed was
+      // dropped, and the board sat stale until the 30s poll. Coalescing has to
+      // survive failure or it is only half a guarantee.
+      //
+      // Handed back to the DEBOUNCED path rather than retried inline: an
+      // inline retry against a server that is failing fast would spin at
+      // whatever rate events arrive, which is the shape of problem this whole
+      // function exists to prevent.
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleReconcile();
+      }
     }
   }
 
@@ -135,6 +148,15 @@
     // both likely and confusing. `boardFiltered` is decided server-side so the
     // preserved-key list has one definition (request_filters.board_is_filtered).
     if (config.boardFiltered) return;
+    // Which is also why the link below carries NO query string. Every other
+    // detail link goes through `task_detail_url`, which re-emits the preserved
+    // filters through an allowlist — so a retired param like `claimed_state`
+    // stops at the link rather than propagating (pinned by
+    // test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation).
+    // Appending `window.location.search` raw would have made this the one link
+    // that leaks it. And the allowlisted set is necessarily EMPTY here: the
+    // guard above means no preserved filter is active when this row renders.
+    // So "preserve the filters" and "emit a bare task URL" are the same link.
     // A just-created task has no known section yet (its frontier membership
     // arrives with the ~800ms reconciliation), so the skeleton lands in the
     // dedicated pending strip at the top of the board; the reconcile's
@@ -149,7 +171,7 @@
     row.dataset.taskId = taskId;
     row.dataset.taskStatus = "open";
     row.innerHTML = `
-      <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}${escapeHtml(window.location.search)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
+      <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
       <div class="task-row-meta"><span class="badge badge-open">open</span><span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span></div>
       <div class="claim-list" data-claim-list hidden></div>
     `;

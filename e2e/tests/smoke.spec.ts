@@ -349,7 +349,13 @@ test("a slow render does not let the next reconcile overlap it", async ({ page, 
       return;
     }
     issued += 1;
-    if (issued === 1) await held;
+    if (issued === 1) {
+      // Held open for the first half of the test, then FAILED — a rejected
+      // render is the case where coalescing is easiest to get wrong.
+      await held;
+      await route.abort();
+      return;
+    }
     await route.continue();
   });
 
@@ -375,7 +381,44 @@ test("a slow render does not let the next reconcile overlap it", async ({ page, 
     await page.waitForTimeout(1600);
 
     expect(issued).toBe(1);
+
+    // Now fail the held render. The reconcile that was queued behind it must
+    // still happen: coalescing that only survives SUCCESS is half a guarantee,
+    // and the board would otherwise sit stale until the 30s poll.
+    release();
+    await expect.poll(() => issued, { timeout: 5000 }).toBe(2);
   } finally {
     release();
   }
+});
+
+test("a skeleton link does not propagate a retired query param", async ({ page, request }) => {
+  // `claimed_state` is parsed away and never read, so it is NOT a preserved
+  // filter — the board is unfiltered and the optimistic row is allowed. Its
+  // link must still come out bare: every other detail link re-emits filters
+  // through an allowlist, so a retired param stops at the link rather than
+  // propagating (test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation).
+  // This row must not be the one exception.
+  await page.goto("/tasks?claimed_state=legacy");
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+
+  const publish = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-retired-${Date.now()}`,
+      type: "task.created",
+      task_id: "e2e-retired-param",
+      payload: { title: "Created under a legacy bookmark" },
+      requires_refresh: false,
+    },
+  });
+  expect(publish.status()).toBe(202);
+
+  const skeleton = page.locator(
+    '[data-task-list="pending"] [data-task-row][data-task-id="e2e-retired-param"]',
+  );
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton.locator("a.task-title")).toHaveAttribute(
+    "href",
+    "/tasks/e2e-retired-param",
+  );
 });
