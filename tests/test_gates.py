@@ -145,6 +145,64 @@ def test_gate_rows_lead_with_human_gates_then_group_oldest_first() -> None:
     ]
 
 
+def test_a_gate_with_no_created_at_sorts_last_rather_than_oldest() -> None:
+    """`normalize_task` defaults a missing `created_at` to `""`, and the empty
+    string sorts BEFORE every real timestamp — so a gate the server never
+    stamped would read as the one that has waited longest.
+
+    Two places it lands, and the second is the one that matters. Within a group
+    the unstamped row leads. Across groups a group is placed by its oldest
+    member, so ONE unstamped gate promotes its whole type ahead of a type that
+    has genuinely been waiting since January. "Oldest first" is the section's
+    only ordering claim, and this is a field a peer writes; unknown must sort
+    last, not first.
+    """
+    rows = collect_gates(
+        [
+            _gate("ci-jan", gate_type="ci", created_at="2026-01-01T09:00:00+00:00"),
+            _gate("pr-aug", gate_type="pr", created_at="2026-08-28T09:00:00+00:00"),
+            _gate("pr-unstamped", gate_type="pr", created_at=""),
+            _gate("human-mar", created_at="2026-03-01T09:00:00+00:00"),
+            _gate("human-unstamped", created_at=""),
+        ]
+    )
+
+    # Within its group: known stamps first, oldest to newest, unknown last.
+    assert [row.task.id for row in rows] == [
+        "human-mar",
+        "human-unstamped",
+        "ci-jan",
+        "pr-aug",
+        "pr-unstamped",
+    ]
+    groups = group_gates(rows)
+    assert [
+        (group.gate_type, [row.task.id for row in group.rows]) for group in groups
+    ] == [
+        ("human", ["human-mar", "human-unstamped"]),
+        # ci leads pr on January vs August. The unstamped pr gate must not
+        # place its group by an absent stamp and jump the queue.
+        ("ci", ["ci-jan"]),
+        ("pr", ["pr-aug", "pr-unstamped"]),
+    ]
+
+
+def test_a_group_of_only_unstamped_gates_still_sorts_last() -> None:
+    """The degenerate case the fix must not special-case its way past: with no
+    known stamp anywhere in a group there is nothing to place it by, and it
+    belongs after every group that does know when it started waiting."""
+    groups = group_gates(
+        collect_gates(
+            [
+                _gate("pr-unstamped", gate_type="pr", created_at=""),
+                _gate("ci-jan", gate_type="ci", created_at="2026-01-01T09:00:00+00:00"),
+            ]
+        )
+    )
+
+    assert [group.gate_type for group in groups] == ["ci", "pr"]
+
+
 def test_workable_tasks_and_already_placed_gates_are_not_collected() -> None:
     """Single placement (criterion 7): a gate the severity rules promoted into
     Needs attention must not ALSO render here."""

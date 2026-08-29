@@ -338,7 +338,20 @@ def collect_gates(
                 advisory_more=advisory_more,
             )
         )
-    return tuple(sorted(rows, key=lambda row: (not row.is_human, row.task.created_at)))
+    return tuple(sorted(rows, key=lambda row: (not row.is_human, _age_key(row.task))))
+
+
+def _age_key(task: TaskRecord) -> tuple[bool, str]:
+    """Sort key for "oldest first" that puts an UNKNOWN stamp last.
+
+    ``normalize_task`` defaults a missing ``created_at`` to ``""``, and the
+    empty string sorts before every real timestamp — so sorting on the raw
+    field reads a gate the server never stamped as the one that has waited
+    longest. ``created_at`` is peer-written like every other field this section
+    renders, and "oldest first" is the only ordering claim it makes, so an
+    absent stamp must not be able to take the front of the queue.
+    """
+    return (not task.created_at, task.created_at)
 
 
 def group_gates(gates: Sequence[GateRow]) -> tuple[GateGroup, ...]:
@@ -355,11 +368,14 @@ def group_gates(gates: Sequence[GateRow]) -> tuple[GateGroup, ...]:
     ordered = [
         GateGroup(
             gate_type=gate_type,
-            rows=tuple(sorted(rows, key=lambda row: row.task.created_at)),
+            rows=tuple(sorted(rows, key=lambda row: _age_key(row.task))),
         )
         for gate_type, rows in groups.items()
     ]
-    ordered.sort(key=lambda group: (not group.is_human, group.rows[0].task.created_at))
+    # `rows[0]` is now the group's oldest KNOWN stamp when it has one, so a
+    # group with a mix places by the gate that really has been waiting; a group
+    # with none at all still sorts last, which is the honest answer.
+    ordered.sort(key=lambda group: (not group.is_human, _age_key(group.rows[0].task)))
     return tuple(ordered)
 
 
