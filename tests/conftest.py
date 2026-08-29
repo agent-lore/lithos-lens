@@ -1,11 +1,14 @@
 """Shared pytest fixtures and helpers."""
 
 import json
+from collections.abc import MutableMapping
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+import anyio
 import pytest
+from fastapi import FastAPI
 
 CONTRACTS_DIR = Path(__file__).resolve().parent / "contracts"
 
@@ -20,6 +23,61 @@ def load_contract(tool: str) -> dict[str, Any]:
     payload = json.loads((CONTRACTS_DIR / f"{tool}.json").read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+class _Enough(Exception):
+    """Stop the stream once the frames under test have been observed."""
+
+
+async def stream_frames(
+    app: FastAPI, path: str, count: int, *, query: str = ""
+) -> list[bytes]:
+    """The first ``count`` body frames the ASGI app writes for ``path``.
+
+    Driven against the ASGI interface directly rather than through a test
+    client: both TestClient and httpx's ASGITransport read a response to
+    completion, which never happens for a stream that stays open. What these
+    tests are about is what the stream writes WHILE it is open.
+    """
+    frames: list[bytes] = []
+    scope: dict[str, Any] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": query.encode(),
+        "root_path": "",
+        "scheme": "http",
+        "headers": [(b"host", b"lens")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("lens", 80),
+    }
+
+    async def receive() -> dict[str, Any]:
+        # The client never disconnects and never sends more: this is a GET
+        # whose response is the long-lived half.
+        await anyio.sleep_forever()
+        raise AssertionError("unreachable")
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            frames.append(message["body"])
+            if len(frames) >= count:
+                raise _Enough
+
+    try:
+        with anyio.fail_after(5):
+            await app(scope, receive, send)
+    except _Enough:
+        pass
+    except BaseExceptionGroup as group:
+        # Starlette runs the response in a task group, so the sentinel arrives
+        # wrapped. Anything else is a real failure and must not be swallowed.
+        if not all(isinstance(exc, _Enough) for exc in group.exceptions):
+            raise
+    return frames
 
 
 @pytest.fixture

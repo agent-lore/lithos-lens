@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -13,7 +14,8 @@ import httpx
 import pytest
 
 from lithos_lens import events as events_module
-from lithos_lens.config import EventsConfig, LithosConfig
+from lithos_lens import web
+from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.events import (
     CONSUMED_EVENT_TYPES,
     EVENT_ID_MAX_LENGTH,
@@ -24,6 +26,8 @@ from lithos_lens.events import (
     is_replay_cursor,
     parse_lithos_sse_frame,
 )
+from lithos_lens.web import create_app
+from tests.conftest import stream_frames
 
 
 @pytest.fixture
@@ -824,3 +828,111 @@ async def test_the_backstop_reaches_a_subscriber_whose_queue_is_full(
     # dropped, rather than displacing the refresh that had just been
     # guaranteed its slot.
     assert delivered == ["stale-1", f"{LENS_REFRESH_EVENT}:1"]
+
+
+@pytest.mark.anyio
+async def test_a_snapshot_taken_before_the_open_refreshes_when_it_finally_attaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ordering `_gap_since_last_open` alone cannot reach.
+
+    A `/tasks` render reads its Lithos snapshot while the first handshake is
+    still in flight; the task changes; the stream opens with NO subscriber
+    (that response has not finished, so its script cannot have run yet), so the
+    gap is discharged to nobody; only then does the browser attach. Keying on
+    "was anyone attached at the instant of the open" treats an in-flight
+    response as proof that no stale tab is being created, and it is not.
+
+    The marker settles it without guessing at timings: the snapshot was taken
+    under no stream, the attach happens under stream 1, and an open between the
+    two is exactly the interval whose changes reached neither.
+    """
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx, "AsyncClient", _recording_httpx_client(requests, [])
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+
+    await hub.start()
+    try:
+        # (1) The render reads its snapshot. `start()` only scheduled the dial,
+        # so no stream covers it — and nothing is attached.
+        marker = hub.snapshot_marker()
+        assert marker == 0
+        # (2)+(3) The stream opens. The refresh it owes reaches nobody.
+        async with asyncio.timeout(2):
+            while hub.status != "live":
+                await asyncio.sleep(0.005)
+        # (4)+(5) Only now can the response finish and its EventSource attach.
+        subscriber = hub.subscribe(since=marker)
+    finally:
+        await hub.stop()
+
+    assert hub.snapshot_marker() == 1
+    seeded = subscriber.get_nowait()
+    assert seeded.type == LENS_REFRESH_EVENT
+    assert seeded.requires_refresh is True
+    assert subscriber.empty()
+
+
+@pytest.mark.anyio
+async def test_a_snapshot_taken_under_the_live_stream_attaches_without_a_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive control, and what keeps the marker from costing a refetch
+    on every page load: a snapshot read while the stream that is still open was
+    already open has missed nothing, so its tab attaches silently.
+
+    Without this, "refresh every new subscriber" would pass the test above just
+    as well while doubling the fetches of every navigation.
+    """
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx, "AsyncClient", _recording_httpx_client(requests, [])
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+
+    await hub.start()
+    try:
+        async with asyncio.timeout(2):
+            while hub.status != "live":
+                await asyncio.sleep(0.005)
+        # Rendered under the open stream, and attaching under the same one.
+        subscriber = hub.subscribe(since=hub.snapshot_marker())
+    finally:
+        await hub.stop()
+
+    assert subscriber.empty()
+
+
+@pytest.mark.anyio
+async def test_the_event_stream_reads_the_snapshot_marker_off_the_url(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint half of the wiring: `?since=` reaches `subscribe`.
+
+    The hub logic above is only reachable if the endpoint actually reads what
+    the page stamped, so the hop is pinned rather than assumed. Driven against
+    the ASGI app directly, with no lifespan: the hub never dials, so no stream
+    is open and every snapshot this process rendered is stamped `0` — a browser
+    handing back anything else was rendered under a stream that is gone.
+    """
+    monkeypatch.setattr(web, "SSE_KEEPALIVE_S", 0.05)
+    app = create_app(load_config(lithos_lens_config_env))
+
+    stale = await stream_frames(app, "/tasks/events", 2, query="since=7")
+    current = await stream_frames(app, "/tasks/events", 2, query="since=0")
+
+    # A marker from a stream that is gone: refreshed on attach, immediately
+    # behind the connected frame.
+    assert b"lens.status" in stale[0]
+    assert b"event: lens.refresh" in stale[1]
+    # The current one is owed nothing, so the next write is the keepalive.
+    assert b"lens.status" in current[0]
+    assert current[1] == b": keepalive\n\n"

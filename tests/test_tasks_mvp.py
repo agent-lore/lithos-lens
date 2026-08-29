@@ -3299,3 +3299,30 @@ def test_a_reopened_row_is_scoped_by_status_alone_not_by_every_filter(
     assert "boardAdmitsOpen: false" in completed_only.text
     assert "boardAdmitsOpen: true" in both_pairs.text
     assert "boardAdmitsOpen: true" in both_comma.text
+
+
+def test_the_page_stamps_the_stream_its_snapshot_was_taken_under(
+    lithos_lens_config_env: Path,
+) -> None:
+    """T1-S6: the template half of the snapshot marker.
+
+    The browser cannot subscribe until the response carrying this script has
+    completed, so a snapshot read before the upstream stream opened attaches
+    AFTER the open it missed — and finds the reconnect backstop already
+    discharged. The marker is what lets the hub tell that tab from one whose
+    snapshot the current stream covers, so the page has to carry it.
+
+    Zero here because no upstream stream is open in this process; the value is
+    the hub's to choose, and what matters is that it reaches the EventSource
+    URL rather than what it happens to be.
+    """
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        dashboard = client.get("/tasks")
+        detail = client.get("/tasks/open-claimed")
+
+    assert 'eventsUrl: "/tasks/events?since=0"' in dashboard.text
+    # The detail view runs the same tasks.js against the same hub, so its
+    # snapshot is stale in exactly the same way.
+    assert 'eventsUrl: "/tasks/events?since=0"' in detail.text

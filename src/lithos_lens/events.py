@@ -179,6 +179,8 @@ class EventHub:
         # and that is the subscriber question `_publish_refresh` asks.
         self._gap_since_last_open = True
         self._reconnects = 0
+        self._attach_refreshes = 0
+        self._open_generation = 0
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
@@ -209,9 +211,57 @@ class EventHub:
         for queue in list(self._subscribers):
             self._subscribers.discard(queue)
 
-    def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
+    def snapshot_marker(self) -> int:
+        """Identifies the upstream stream a server-rendered snapshot was taken under.
+
+        Rendered into the page and handed back on `subscribe`, so the two ends
+        of a page load — the snapshot, and the SSE attach that happens only
+        after the response carrying the script has completed — can be compared.
+
+        Zero whenever no stream is open, which is the honest answer: a snapshot
+        taken while Lens is receiving nothing is not covered by any stream.
+        """
+
+        return self._open_generation if self._stream_open else 0
+
+    def subscribe(
+        self, *, maxsize: int = 100, since: int | None = None
+    ) -> asyncio.Queue[LensEvent]:
+        """Attach a browser subscriber, refreshing it if its snapshot predates
+        the current stream.
+
+        The gap bookkeeping in `_on_stream_open` reaches subscribers that were
+        ALREADY attached. It cannot reach the one that matters most at startup:
+        a `/tasks` render that read its snapshot while the first handshake was
+        still in flight cannot subscribe until its own response has completed,
+        so it attaches AFTER the open that its snapshot missed — and finds the
+        gap already discharged (to nobody, if it was the only page loading).
+
+        `since` closes that by comparing markers rather than guessing at
+        timings: a snapshot taken under the stream that is still open needs
+        nothing, and any other combination — no stream then, a different stream
+        now — means an open happened between the two and whatever changed
+        across it reached neither.
+
+        `None` means the caller rendered no snapshot (the tests, and any client
+        that constructed the URL itself); there is nothing to be stale, so
+        nothing is seeded.
+        """
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
         self._subscribers.add(queue)
+        if since is not None and since != self.snapshot_marker():
+            # Deliberately outside the flap rate limit, which bounds a fan-out
+            # to EVERY tab driven by an upstream Lens does not control. This is
+            # one event into one brand-new queue, bounded by page loads.
+            self._attach_refreshes += 1
+            queue.put_nowait(
+                LensEvent(
+                    id=f"{LENS_REFRESH_EVENT}:attach:{self._attach_refreshes}",
+                    type=LENS_REFRESH_EVENT,
+                    task_id="",
+                    payload={"reason": "snapshot-predates-stream"},
+                )
+            )
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
@@ -277,6 +327,7 @@ class EventHub:
         `_publish_refresh` broadcasts only to subscribers that exist.
         """
         self._stream_open = True
+        self._open_generation += 1
         self.status = "live"
         if self._gap_since_last_open:
             await self._schedule_refresh()
@@ -310,6 +361,11 @@ class EventHub:
         # cooldown window (or a sequence number) that a real recipient is owed
         # moments later. This is what makes refreshing on the FIRST open free —
         # at process start there are no dashboards to refetch.
+        #
+        # Skipping is only SOUND because a tab that attaches after this open
+        # is caught by the snapshot marker (see `subscribe`). "Nobody attached
+        # at the instant of the open" is not by itself proof that no stale tab
+        # is being created: a `/tasks` response can already be in flight.
         if not self._subscribers:
             return
         self._last_refresh_at = _now()

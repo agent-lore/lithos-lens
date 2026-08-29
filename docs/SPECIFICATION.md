@@ -267,7 +267,13 @@ results in a refresh. The interval before the FIRST open counts: Lens serves
 dashboards while that connect is in flight, so a tab can attach and report
 `live` before Lens is receiving anything, and the first open pays that gap off
 like any other. A refresh with no subscribers is not broadcast at all, which is
-what makes that free at process start. Delivery of a refresh is guaranteed
+what makes that free at process start — sound only because the *next* tab to
+attach is covered separately: each rendered page is stamped with the upstream
+stream its snapshot was taken under and hands that marker back on
+`GET /tasks/events?since=…`, so a snapshot read before an open (a `/tasks`
+response cannot be subscribed to until it has finished, by which time the open
+has been and gone) is refreshed on attach, while one the current stream already
+covers attaches silently. Delivery of a refresh is guaranteed
 rather than best-effort: where an ordinary event is skipped for a subscriber
 whose queue is full, a refresh displaces the oldest queued event instead —
 sound because the reconcile it triggers re-derives that event's effect from the

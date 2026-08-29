@@ -127,6 +127,10 @@ MAX_CONCURRENT_RENDERS = 128
 # that were admitted. Refusing assets to a page whose HTML got through renders
 # it unstyled and inert, spending a slot to produce a broken result.
 _UNMETERED_EXACT = frozenset({"/health", "/tasks/events"})
+
+# Longest ``?since=`` a browser can hand back on the event stream. The marker
+# is a small counter of upstream stream opens, so anything longer is not one.
+_SNAPSHOT_MARKER_MAX_DIGITS = 20
 _UNMETERED_PREFIXES = ("/static/",)
 
 
@@ -181,6 +185,10 @@ def create_app(
     templates.env.globals["note_url"] = note_url
     templates.env.globals["board_is_filtered"] = board_is_filtered
     templates.env.globals["board_admits_open"] = board_admits_open
+    # Stamps each rendered page with the upstream stream its snapshot was taken
+    # under; the page hands it back on the SSE attach so the hub can tell a
+    # snapshot that predates the current stream from one it covers.
+    templates.env.globals["events_snapshot_marker"] = state.events.snapshot_marker
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -236,8 +244,22 @@ def create_app(
         return await _render_tasks(request, templates, state)
 
     @app.get("/tasks/events")
-    async def task_events() -> StreamingResponse:
-        queue = state.events.subscribe()
+    async def task_events(request: Request) -> StreamingResponse:
+        # The marker the page was rendered with, so a snapshot taken before the
+        # stream this connection joins is refreshed on attach. Absent or
+        # unparseable means no snapshot to be stale about (see `subscribe`);
+        # the path stays unmetered because `_is_metered` reads `url.path`, to
+        # which a query string is invisible. Length-bounded before `int()`
+        # because this is an unauthenticated caller's string and parsing a
+        # million-digit one is real work for a value that is a small counter.
+        raw_since = request.query_params.get("since", "")
+        since = (
+            int(raw_since)
+            if 0 < len(raw_since) <= _SNAPSHOT_MARKER_MAX_DIGITS
+            and raw_since.lstrip("-").isdigit()
+            else None
+        )
+        queue = state.events.subscribe(since=since)
 
         async def stream():
             try:
