@@ -33,6 +33,14 @@
      expander at the bound, so this is only reachable by a hand-edited URL — it
      answers rather than 500s, and costs nothing to answer. #}
   {{ depth_limit_banner() }}
+{% elif level and level.bad_chain %}
+  {# The trail did not describe a walk ending at this task, so there is nothing
+     honest to render from it — refused before any read, and named as a broken
+     link rather than dressed up as an empty chain. #}
+  <p class="banner banner-warning" role="status" data-blocker-bad-chain>
+    <strong>This expansion link is not valid.</strong>
+    <span>Reload the task page and expand the chain again from there.</span>
+  </p>
 {% elif level and level.state == "error" %}
   <p class="warning-text" data-blocker-level-error>Blockers unavailable. Refresh this task to retry.</p>
 {% elif level and level.page.total %}

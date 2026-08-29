@@ -133,12 +133,14 @@ classDiagram
   class BlockerExpansion {
     +expandable bool
     +cycle_path tuple[str, ...]
+    +cycle_elided bool
   }
   class BlockerLevel {
     +task_id str
     +chain tuple[str, ...]
     +state SectionState
     +over_depth bool
+    +bad_chain bool
   }
   class BlockerRecord {
     +kind str

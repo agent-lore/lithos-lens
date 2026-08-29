@@ -48,8 +48,15 @@
           {# §5.5.2's `cycle: A -> B -> A`, in place of recursing into it.
              Named rather than merely flagged: which tasks close the loop is
              the whole answer, and the chip carries no expander, which is what
-             actually stops the walk. #}
-          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}">cycle: {{ expansion.cycle_path | join(" → ") }}</span>
+             actually stops the walk.
+
+             Only ids this render READ are named — the blocker off this level's
+             edge list, and the task whose edges were read. A longer walk
+             between them shows an ellipsis rather than trail entries taken
+             from the query string, which would let a hand-written URL put its
+             own text on the page and forge a cycle through tasks Lens never
+             looked at (blocker_chain.blocker_expansion says more). #}
+          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}"{% if expansion.cycle_elided %} data-blocker-cycle-elided{% endif %}>cycle: {{ expansion.cycle_path[0] }} → {% if expansion.cycle_elided %}&hellip; → {% endif %}{{ expansion.cycle_path[1:] | join(" → ") }}</span>
         {% elif expansion.expandable %}
           <span class="blocker-expand" data-blocker-expand="{{ link.task_id }}">
             <button

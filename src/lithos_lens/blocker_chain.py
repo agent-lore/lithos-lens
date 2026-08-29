@@ -79,6 +79,9 @@ class BlockerExpansion:
 
     expandable: bool = False
     cycle_path: tuple[str, ...] = ()
+    # True when the walk between the two named tasks ran through others. They
+    # are deliberately NOT named: see :func:`blocker_expansion`.
+    cycle_elided: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,8 +90,12 @@ class BlockerLevel:
 
     ``chain`` is the ancestor trail, root first, INCLUDING ``task_id`` as its
     last entry — so :attr:`depth` is just its length and the two cannot drift
-    apart. ``over_depth`` marks a level that was asked for past the bound and
-    refused before any read.
+    apart.
+
+    The two refusal flags mark a level answered from the request alone, before
+    any read: ``over_depth`` for a trail past the bound, ``bad_chain`` for one
+    that does not describe a walk ending at this task. Both leave ``chain``
+    empty — there is no coherent trail to report.
     """
 
     task_id: str
@@ -96,6 +103,7 @@ class BlockerLevel:
     page: LinkPage = LinkPage()
     state: SectionState = SectionState.OK
     over_depth: bool = False
+    bad_chain: bool = False
 
     @property
     def depth(self) -> int:
@@ -134,7 +142,7 @@ def blocker_expansion(link: LinkedTask, chain: Sequence[str] = ()) -> BlockerExp
        off a spawned follow-on.
     2. **A cycle is called out even at the depth bound.** It is information
        about the graph, not a walk, and suppressing it there would replace a
-       precise "these three tasks block each other" with a generic "depth limit
+       precise "these two tasks block each other" with a generic "depth limit
        reached".
     3. **The depth bound is checked before expandability.** At the bound no
        line carries an expander, whatever its state — which is what makes the
@@ -142,15 +150,33 @@ def blocker_expansion(link: LinkedTask, chain: Sequence[str] = ()) -> BlockerExp
     4. **Expandability comes from the verdicts**
        (:attr:`~lithos_lens.task_links.LinkedTask.expandable`), which states
        what each of the four link states decides and why.
+
+    The callout NAMES only ids this render read from Lithos: ``link.task_id``
+    came off the level's own edge list, and ``trail[-1]`` is the task whose
+    edges were read. The trail between them arrived in the query string, so
+    ``cycle_elided`` replaces it with an ellipsis rather than printing it. That
+    matters because ``chain`` is anonymous client input: splicing it into the
+    path let a hand-written URL put arbitrary text on the page in Lens's own
+    vocabulary, and made the page assert a cycle through tasks it never read —
+    a forged answer on the page whose whole job is "why can't this run?". What
+    the elision costs is nothing an operator cannot see: the intermediate
+    levels are still rendered on screen above this one.
     """
     if not chain or not link.blocking:
         return BlockerExpansion()
     trail = tuple(chain)
+    here = trail[-1]
     if link.task_id in trail:
-        # The cycle as an operator reads it: from the ancestor this line points
-        # back at, down the trail we walked, and round to it again.
-        start = trail.index(link.task_id)
-        return BlockerExpansion(cycle_path=(*trail[start:], link.task_id))
+        # Read as "is blocked by": this line blocks the task we are on, and the
+        # walk reached that task from this line. Self-blocking collapses to one
+        # hop rather than naming the same task three times.
+        path = (
+            (here, here) if link.task_id == here else (link.task_id, here, link.task_id)
+        )
+        return BlockerExpansion(
+            cycle_path=path,
+            cycle_elided=trail.index(link.task_id) < len(trail) - 2,
+        )
     if len(trail) >= BLOCKER_MAX_DEPTH or not _walkable(link, trail):
         return BlockerExpansion()
     return BlockerExpansion(expandable=True)
@@ -189,6 +215,8 @@ async def load_blocker_level(
     if len(chain) > BLOCKER_MAX_DEPTH:
         return BlockerLevel(task_id=task_id, chain=(), over_depth=True)
     trail = _walked_chain(chain, task_id)
+    if not trail:
+        return BlockerLevel(task_id=task_id, chain=(), bad_chain=True)
     if len(trail) > BLOCKER_MAX_DEPTH:
         return BlockerLevel(task_id=task_id, chain=(), over_depth=True)
     try:
@@ -216,17 +244,32 @@ async def load_blocker_level(
 
 
 def _walked_chain(chain: Sequence[str], task_id: str) -> tuple[str, ...]:
-    """The ancestor trail as walked, with ``task_id`` guaranteed to end it.
+    """The ancestor trail as walked, ending at ``task_id`` — or ``()`` if it cannot.
 
-    The URL builder always appends the expanded id, so the append below is for
-    a hand-written URL that omitted it: without it the level would not count
-    itself against the depth bound, and a blocker pointing back at this very
-    task would miss the cycle callout.
+    Everything downstream reads ``chain[-1]`` as "the task this level is
+    about": the depth count, the cycle test and the deeper expander URLs all
+    proceed from it. So a trail that does not END at ``task_id`` is not a
+    walk this level can describe, and returning it unchanged made the page
+    speak from a trail whose last node was somewhere else —
+    ``?chain=A&chain=B&chain=X`` on B's level reported a cycle running through
+    X, which was never walked.
+
+    Two shapes are accepted and one is refused:
+
+    - ``task_id`` already ends the trail — the URL builder's own output, used
+      as is;
+    - ``task_id`` is absent — appended, so a hand-written URL that named only
+      the ancestors still counts this level against the depth bound and still
+      sees a blocker pointing back at this very task;
+    - ``task_id`` appears EARLIER in the trail — refused (``()``), because
+      there is no honest reading of it. Truncating at that point would invent a
+      walk the client did not describe, and the caller can say "this expansion
+      link is not valid" for the cost of saying nothing at all.
 
     Empty values are dropped — an id cannot be empty (``normalize_task``
     guarantees it), so ``?chain=`` is noise that would otherwise inflate depth.
     """
     trail = tuple(ancestor for ancestor in chain if ancestor)
-    if task_id in trail:
-        return trail
-    return (*trail, task_id)
+    if not trail or trail[-1] != task_id:
+        return () if task_id in trail else (*trail, task_id)
+    return trail

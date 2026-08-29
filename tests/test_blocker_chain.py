@@ -199,6 +199,52 @@ def test_an_over_deep_chain_is_refused_before_any_lithos_read(
     assert fake.edge_list_calls == []
 
 
+def test_a_chain_that_does_not_end_at_this_task_is_refused(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness/f-001: everything downstream reads the trail's LAST entry as
+    "the task this level is about" — the depth count, the cycle test and the
+    deeper expander URLs all proceed from it.
+
+    A trail naming this task earlier and something else last describes no walk
+    this level can speak from: ``?chain=A&chain=B&chain=X`` on B's level used
+    to report a cycle running through X, asserting that X had been walked and
+    was part of the loop. It is refused instead, before any read."""
+    fake = TaskFakeLithosClient()
+    _chain_fixture(fake, ["open-unclaimed", "level-b"])
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks/open-unclaimed/blockers"
+            "?chain=level-b&chain=open-unclaimed&chain=forged-x"
+        )
+
+    assert response.status_code == 200
+    assert "data-blocker-bad-chain" in response.text
+    # No forged loop, and the entry that was never walked is not named at all.
+    assert "data-blocker-cycle" not in response.text
+    assert "forged-x" not in response.text
+    # Refused from the request alone: no edge read, no fan-out.
+    assert fake.get_calls == []
+    assert fake.edge_list_calls == []
+
+
+def test_a_chain_that_omits_this_task_still_walks_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half of the rule. A trail naming only the ancestors is a
+    coherent walk — this level appends itself, so it still counts against the
+    depth bound and still sees a blocker pointing back at itself."""
+    fake = TaskFakeLithosClient()
+    _chain_fixture(fake, ["open-unclaimed", "level-b", "level-c"])
+
+    level = asyncio.run(load_blocker_level(fake, "level-b", ["open-unclaimed"]))
+
+    assert level.chain == ("open-unclaimed", "level-b")
+    assert not level.bad_chain
+    assert [link.task_id for link in level.page.links] == ["level-c"]
+
+
 # --- Criterion 3: a cycle renders the callout instead of recursing ---------
 
 
@@ -255,17 +301,78 @@ def test_a_cycle_stops_only_the_line_that_closes_it(
     assert list(_expander_urls(level.text)) == ["side-c"]
 
 
-def test_the_cycle_callout_names_the_whole_loop_not_just_the_repeat() -> None:
-    """The trail is what makes the callout useful: which tasks block each other
-    is the answer, so the path runs from the ancestor the line points back at,
-    down the walk, and round to it again."""
+def test_the_cycle_callout_names_only_tasks_this_render_read() -> None:
+    """security/f-002: the callout used to splice the query-supplied trail
+    straight into the path it printed.
+
+    The two ends are verified — the line came off this level's edge list and
+    the trail's last entry is the task whose edges were read — but the walk
+    BETWEEN them arrived in the URL, so it is elided rather than named. That
+    keeps a hand-written chain from putting its own text on the page, and from
+    making the page assert a loop through tasks Lens never looked at."""
     expansion = blocker_expansion(
         LinkedTask(task_id="alpha", edge_type="blocks"),
-        ("root", "alpha", "beta"),
+        ("alpha", "middle", "beta"),
     )
 
     assert expansion.cycle_path == ("alpha", "beta", "alpha")
+    assert expansion.cycle_elided
+    assert "middle" not in expansion.cycle_path
     assert not expansion.expandable
+
+
+def test_a_direct_cycle_is_named_in_full_with_nothing_elided() -> None:
+    """§5.5.2's ``cycle: A -> B -> A`` unchanged for the ordinary case: with no
+    walk between the two tasks there is nothing unverified to leave out."""
+    expansion = blocker_expansion(
+        LinkedTask(task_id="alpha", edge_type="blocks"),
+        ("alpha", "beta"),
+    )
+
+    assert expansion.cycle_path == ("alpha", "beta", "alpha")
+    assert not expansion.cycle_elided
+
+
+def test_a_task_that_blocks_itself_is_named_once_not_three_times() -> None:
+    """The degenerate loop: a self-blocking edge is one hop, and printing the
+    same id three times would read as three tasks."""
+    expansion = blocker_expansion(
+        LinkedTask(task_id="solo", edge_type="blocks"), ("root", "solo")
+    )
+
+    assert expansion.cycle_path == ("solo", "solo")
+    assert not expansion.cycle_elided
+
+
+def test_a_forged_chain_cannot_put_its_own_text_into_the_cycle_callout(
+    lithos_lens_config_env: Path,
+) -> None:
+    """security/f-002, end to end. ``chain`` is anonymous client input and the
+    fragment is served as HTML from Lens's own origin, so a trail entry spliced
+    into the callout was attacker text presented in Lens's vocabulary as a task
+    id — content spoofing today, and one hand-built attribute or ``|safe``
+    away from live injection.
+
+    Nothing from the query string reaches the rendered text at all now: the
+    entry appears NOWHERE in the body, escaped or otherwise."""
+    forged = "<img src=x onerror=alert(1)>"
+    fake = TaskFakeLithosClient()
+    _chain_fixture(fake, ["open-unclaimed", "level-b"])
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/open-unclaimed/blockers?chain=level-b&chain={forged}"
+        )
+
+    assert response.status_code == 200
+    # The cycle is still reported — the walk really did return to level-b.
+    assert 'data-blocker-cycle="level-b"' in response.text
+    assert "data-blocker-cycle-elided" in response.text
+    assert "cycle: level-b" in response.text
+    # But the forged entry is absent from the body in every form.
+    assert "onerror" not in response.text
+    assert "img src" not in response.text
+    assert "alert(1)" not in response.text
 
 
 # --- Criterion 4 + 5: every level pages its breadth, and says so -----------
@@ -585,6 +692,79 @@ def test_the_fragment_refuses_an_oversized_filter_query_before_reading(
     assert oversized not in response.text
     assert fake.get_calls == []
     assert fake.edge_list_calls == []
+
+
+def test_an_oversized_chain_is_measured_by_the_same_query_budget(
+    lithos_lens_config_env: Path,
+) -> None:
+    """security/f-001: ``chain`` is re-emitted into the ``hx-get`` of every
+    expandable line, so one fragment copies it up to ``LINK_PAGE_SIZE`` times —
+    the same multiplication ``MAX_FILTER_QUERY_BYTES`` exists to bound. It was
+    exempt from that budget because the budget measured only the PRESERVED
+    keys, so an anonymous client picked both the input size and how many times
+    the render copied it out: a 39 KB chain rendered a 992 KB fragment (~25x).
+
+    Now measured with the rest, so it takes the existing refusal path before
+    any Lithos read."""
+    fake = TaskFakeLithosClient()
+    for index in range(30):
+        blocker_id = f"pred-{index:03d}"
+        fake.tasks.append(_task(blocker_id))
+        _link(fake, blocker_id, "open-unclaimed", "blocks")
+    oversized = "A" * MAX_FILTER_QUERY_BYTES
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/open-unclaimed/blockers?chain={oversized}&chain=open-unclaimed"
+        )
+
+    assert response.status_code == 400
+    assert "data-filter-rejected" in response.text
+    # Refused, not rendered: no reads, and the response cannot be inflated by
+    # the request — it is smaller than the query that asked for it.
+    assert fake.get_calls == []
+    assert fake.edge_list_calls == []
+    assert len(response.text) < len(oversized)
+
+
+def test_a_chain_inside_the_budget_still_expands(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The bound must not cost the ordinary case: real ids are short, and a
+    full-depth trail of them is nowhere near the budget."""
+    ids = ["open-unclaimed"] + [f"deep-{index}" for index in range(1, 6)]
+    fake = TaskFakeLithosClient()
+    _chain_fixture(fake, ids)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        text = client.get("/tasks/open-unclaimed").text
+        depth = 1
+        while urls := _expander_urls(text):
+            response = client.get(urls[ids[depth]])
+            assert response.status_code == 200
+            text = response.text
+            depth += 1
+
+    assert depth == BLOCKER_MAX_DEPTH
+
+
+def test_the_chain_never_rides_along_on_ordinary_navigation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Measured is not the same as preserved. ``chain`` describes one expansion
+    walk, so the board, tag and detail links a level renders must not carry it
+    — only the one builder that owns it emits it."""
+    fake = TaskFakeLithosClient()
+    _chain_fixture(fake, ["open-unclaimed", "level-b", "level-c"])
+
+    with _client(lithos_lens_config_env, fake) as client:
+        page = client.get("/tasks/open-unclaimed?project=influx")
+        level = client.get(_expander_urls(page.text)["level-b"])
+
+    # The level's own detail links carry the filter and NOT the trail.
+    assert "/tasks/level-c?project=influx" in level.text
+    assert "/tasks/level-c?chain" not in level.text
+    assert "/tasks/level-c?project=influx&amp;chain" not in level.text
 
 
 def test_the_fragment_stays_metered_by_admission_control(
