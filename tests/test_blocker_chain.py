@@ -19,6 +19,7 @@ same edge-writing vocabulary, and the same page under test one level down.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
@@ -900,6 +901,45 @@ def test_an_id_with_reserved_characters_stays_one_path_segment(
     assert urlsplit(expander).path == f"/tasks/{quote('team/pred', safe='')}/blockers"
     assert f'href="/tasks/{quote("team/pred", safe="")}"' in page.text
     assert "/tasks/team/pred" not in page.text
+
+
+# --- The expander sits on a shared row, so it shares the row's metrics -----
+
+
+def _declaration(selector: str, prop: str) -> str:
+    """One declaration's value from a lens.css rule, or "" if it has none.
+
+    Same shape as the stylesheet assertions in ``tests/test_knowledge.py``:
+    the rule itself is what a reviewer can point at, and browser truth for the
+    rendered result lives in the Playwright suite.
+    """
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    rule = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+    assert rule is not None, f"lens.css lost the {selector} rule"
+    found = re.search(rf"(?:^|;)\s*{prop}\s*:\s*([^;]+)", rule.group(1))
+    return found.group(1).strip() if found else ""
+
+
+@pytest.mark.parametrize("prop", ["padding", "font-size", "line-height"])
+def test_the_expander_matches_the_pill_metrics_of_the_row_it_sits_on(
+    prop: str,
+) -> None:
+    """security/f-003: the expander was 2px shorter than the status badge beside
+    it, so the two pills lined up on neither edge.
+
+    It shares one centred flex line (``.link-list li``) with ``.badge`` and
+    ``.blocker-chip``, which is why the box metrics have to agree; the one
+    dimension that differed was vertical padding (0.3rem against 0.35rem —
+    0.05rem a side, measured in the browser as a 1.6px height delta at both
+    1440px and 1024px). Everything the expander is SUPPOSED to differ in is
+    what marks it as the interactive pill — dashed border, muted colour,
+    pointer cursor — and none of those change its box.
+    """
+    expander = _declaration(".link-expander", prop)
+    assert expander, f".link-expander stopped declaring {prop}"
+    assert expander == _declaration(".blocker-chip", prop)
 
 
 # --- The T1-S7 contracts this slice must not disturb ----------------------
