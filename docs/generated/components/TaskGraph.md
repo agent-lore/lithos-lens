@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain.
 
 **Tier:** Foundation
 
@@ -12,6 +12,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.attention` | M | 1 | 1 |
+| `lithos_lens.blocker_chain` | M | 2 | 2 |
 | `lithos_lens.dashboard` | S | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
@@ -27,6 +28,12 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ### `lithos_lens.attention`
 - class `AttentionPolicy` — Thresholds for the age-based Needs-attention rules (3-6).
 - def `flag_attention` — Evaluate the six-rule severity model over a classified partition.
+
+### `lithos_lens.blocker_chain`
+- class `BlockerExpansion` — What one rendered blocker line offers below itself.
+- class `BlockerLevel` — One level of the chain: the task walked to, and its bounded blockers.
+- def `blocker_expansion` — Decide what a blocker line offers: an expander, a cycle callout, or neither.
+- def `load_blocker_level` — Read ONE deeper level of the chain: ``task_id``'s own bounded blockers.
 
 ### `lithos_lens.dashboard`
 - class `TaskSummary`
