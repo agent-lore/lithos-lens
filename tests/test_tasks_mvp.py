@@ -3068,15 +3068,16 @@ def test_situation_cards_keep_the_active_epic_scope_and_filters(
     hrefs = [
         chunk.split('"')[0] for chunk in grid.split('class="metric-card" href="')[1:]
     ]
-    # Six cards since T1-S3 added Needs attention; every one keeps the scope.
-    assert len(hrefs) == 6
+    # Seven cards since T1-S4 added Gates (T1-S3 added Needs attention); every
+    # one keeps the scope.
+    assert len(hrefs) == 7
     for href in hrefs:
         assert "epic=epic-1" in href
         assert "tag=project%3Ainflux" in href
         assert "since=2026-04-01" in href
-    # Each card still narrows to its own status (four open-side cards now:
-    # Needs attention, In progress, Ready, Blocked).
-    assert sum("status=open" in href for href in hrefs) == 4
+    # Each card still narrows to its own status (five open-side cards now:
+    # Needs attention, In progress, Ready, Blocked, Gates).
+    assert sum("status=open" in href for href in hrefs) == 5
     assert sum("status=completed" in href for href in hrefs) == 1
     assert sum("status=cancelled" in href for href in hrefs) == 1
 
@@ -3313,3 +3314,276 @@ def test_board_admits_open_matches_the_statuses_the_board_actually_renders(
     # The board's own rows are the oracle: an open fixture row renders exactly
     # when the flag says open is admitted.
     assert ("Unclaimed open task" in text) is admits_open
+
+
+# --- T1-S4: the Gates section, as rendered -------------------------------
+
+
+def _add_gate(
+    fake: TaskFakeLithosClient,
+    task_id: str,
+    *,
+    gate_type: str = "human",
+    created_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    title: str | None = None,
+    tags: tuple[str, ...] = (),
+) -> None:
+    meta: dict[str, Any] = {"gate_type": gate_type}
+    meta.update(metadata or {})
+    fake.tasks.append(
+        TaskRecord(
+            id=task_id,
+            title=title or f"Gate {task_id}",
+            status="open",
+            task_type="gate",
+            created_by="planner",
+            # Young by default: a human gate past gate_waiting_attention_hours
+            # is promoted into Needs attention and leaves this section.
+            created_at=created_at or _ago(hours=1),
+            tags=tags,
+            metadata=meta,
+        )
+    )
+
+
+def _waits_on(fake: TaskFakeLithosClient, waiter_id: str, *gate_ids: str) -> None:
+    fake.blocked[waiter_id] = fake.blocked.get(waiter_id, ()) + tuple(
+        BlockerRecord(kind="gate", task_id=gate_id, type="waits_on_gate")
+        for gate_id in gate_ids
+    )
+    fake.ready_ids.discard(waiter_id)
+
+
+def test_gates_section_renders_type_badges_with_human_gates_first(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5.2.3: one group per gate type, human first — the operator's own queue
+    leads — and the badge carries the type. The markup hook is the closed
+    vocabulary slug, never the raw metadata string."""
+    fake = TaskFakeLithosClient()
+    _add_gate(fake, "gate-ci", gate_type="ci", created_at=_ago(hours=5))
+    _add_gate(fake, "gate-human", gate_type="human", created_at=_ago(hours=2))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    body = response.text
+    assert 'id="task-group-gates"' in body
+    human = body.index('data-gate-group="human"')
+    ci = body.index('data-gate-group="ci"')
+    assert human < ci
+    assert (
+        '<span class="badge badge-gate badge-gate-human" data-gate-type-badge>human'
+        in body
+    )
+    assert "<strong data-gate-count>2</strong>" in body
+
+
+def test_human_gate_row_says_how_many_tasks_it_blocks(
+    lithos_lens_config_env: Path,
+) -> None:
+    """PRD acceptance: a human gate lists "blocks N tasks", counted from the
+    tasks Lithos reports as waiting on it, and the count expands into the list
+    of those tasks."""
+    fake = TaskFakeLithosClient()
+    _add_gate(fake, "gate-human")
+    _waits_on(fake, "open-unclaimed", "gate-human")
+    _waits_on(fake, "open-old", "gate-human")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert 'data-gate-waiters-state="known"' in body
+    assert '<summary data-gate-waiting="2">blocks 2 tasks</summary>' in body
+    assert "Unclaimed open task" in body
+
+
+def test_single_waiter_reads_in_the_singular(lithos_lens_config_env: Path) -> None:
+    fake = TaskFakeLithosClient()
+    _add_gate(fake, "gate-human")
+    _waits_on(fake, "open-unclaimed", "gate-human")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert '<summary data-gate-waiting="1">blocks 1 task</summary>' in response.text
+
+
+def test_gate_waiter_count_survives_a_narrowed_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The waiter source is the whole frontier whatever the board is scoped to:
+    filtering to one project must not make a gate that blocks two tasks read
+    "blocks 1 task"."""
+    fake = TaskFakeLithosClient()
+    # The gate is inside the narrowed scope; one of its two waiters is not.
+    _add_gate(fake, "gate-human", tags=("project:influx",))
+    _waits_on(fake, "open-unclaimed", "gate-human")  # tagged project:influx
+    _waits_on(fake, "open-old", "gate-human")  # tagged project:lithos-lens
+
+    with _client(lithos_lens_config_env, fake) as client:
+        wide = client.get("/tasks?since=2026-04-01")
+        narrow = client.get("/tasks?since=2026-04-01&tag=project%3Ainflux")
+
+    assert '<summary data-gate-waiting="2">blocks 2 tasks</summary>' in wide.text
+    assert '<summary data-gate-waiting="2">blocks 2 tasks</summary>' in narrow.text
+    # The board itself IS narrowed — the out-of-scope waiter has no ROW…
+    assert 'id="task-row-open-old"' in wide.text
+    assert 'id="task-row-open-old"' not in narrow.text
+    # …while the gate's waiter list still names it, because both the count and
+    # the list come off the unfiltered blocked frontier.
+    assert "Old open task" in narrow.text
+
+
+def test_timer_gate_renders_a_countdown_and_one_self_refresh_instant(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Lithos emits no event when a timer lapses, so the board publishes the
+    earliest still-future ready_at once and tasks.js schedules a single refresh
+    against it. The row itself carries the absolute stamp as the no-JS
+    baseline, which the countdown replaces."""
+    fake = TaskFakeLithosClient()
+    soon = _ahead(hours=3)
+    _add_gate(fake, "gate-soon", gate_type="timer", metadata={"ready_at": soon})
+    _add_gate(
+        fake, "gate-later", gate_type="timer", metadata={"ready_at": _ahead(days=4)}
+    )
+    _add_gate(
+        fake, "gate-lapsed", gate_type="timer", metadata={"ready_at": _ago(hours=1)}
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert f'data-gates-next-ready-at="{soon}"' in body
+    assert body.count("data-gates-next-ready-at") == 1
+    assert f'data-gate-ready-at="{soon}"' in body
+    # A lapsed timer gate still renders — it stays open until someone completes
+    # it — it just does not schedule anything.
+    assert body.count("data-gate-ready-at") == 3
+
+
+def test_malformed_timer_ready_at_renders_the_row_instead_of_a_500(
+    lithos_lens_config_env: Path,
+) -> None:
+    """``metadata`` is peer-written: an unparseable stamp, and one whose UTC
+    shift overflows the datetime domain, must both degrade to "no countdown"
+    rather than taking the dashboard down for every operator."""
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "gate-overflow",
+        gate_type="timer",
+        metadata={"ready_at": "9999-12-31T23:59:59-01:00"},
+    )
+    _add_gate(fake, "gate-garbage", gate_type="timer", metadata={"ready_at": "soon"})
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "data-gates-next-ready-at" not in body
+    assert "Gate gate-overflow" in body
+    assert "Gate gate-garbage" in body
+
+
+def test_hostile_gate_metadata_renders_as_text_not_markup(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An unknown gate_type must not become an injected class token, and the
+    advisory chips are escaped like any other peer-written string."""
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "gate-hostile",
+        gate_type='human" data-gate-type-badge="',
+        metadata={"note": "<script>alert(1)</script>"},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert response.status_code == 200
+    assert 'data-gate-group="unknown"' in body
+    assert 'class="badge badge-gate badge-gate-unknown"' in body
+    assert "badge-gate-human" not in body
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+
+def test_open_gate_renders_exactly_once_on_the_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Single placement: gates never enter the workable sections (Lithos
+    excludes them from both frontiers), and a gate promoted into Needs
+    attention leaves the Gates section rather than appearing twice."""
+    fake = TaskFakeLithosClient()
+    _add_gate(fake, "gate-fresh", title="Fresh gate")
+    _add_gate(fake, "gate-stale", title="Stale gate", created_at=_ago(days=4))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert body.count('id="task-row-gate-fresh"') == 1
+    assert body.count('id="task-row-gate-stale"') == 1
+    # The stale one was promoted, so it renders as an attention TASK row and
+    # not as a gate row; the fresh one is the other way round.
+    assert 'data-gate-row data-task-id="gate-fresh"' in body
+    assert 'data-gate-row data-task-id="gate-stale"' not in body
+
+
+def test_gates_section_says_so_when_no_gate_matches(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert "No open gates match these filters." in response.text
+    assert "<strong data-gate-count>0</strong>" in response.text
+
+
+def test_a_browser_parseable_only_ready_at_renders_without_a_countdown_hook(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The rendered half of the same contract as
+    ``test_a_stamp_only_the_browser_can_parse_drives_no_countdown``: the row
+    still SHOWS the stamp Lens could not parse, but publishes no
+    ``data-gate-ready-at``, which is the only thing tasks.js ticks from.
+
+    Asserted here rather than only on the model because the defect was in the
+    template — the attribute was emitted from the display field, so every value
+    that survived as text became a countdown the browser drove on its own.
+    """
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "timer-browser-only",
+        gate_type="timer",
+        metadata={"ready_at": "2026/09/01"},
+    )
+    _add_gate(
+        fake,
+        "timer-real",
+        gate_type="timer",
+        metadata={"ready_at": _ahead(hours=3)},
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        text = client.get("/tasks?since=2026-04-01").text
+
+    hooks = re.findall(r'data-gate-ready-at="([^"]*)"', text)
+    # Exactly one countdown hook: the gate whose stamp both sides parse.
+    assert len(hooks) == 1
+    assert "2026/09/01" not in hooks[0]
+    # The unparseable one is still on the page, as static text.
+    assert "2026/09/01" in text
+    assert "data-gate-ready-unparsed" in text

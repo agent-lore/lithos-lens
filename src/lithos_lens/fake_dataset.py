@@ -304,6 +304,57 @@ def demo_dataset() -> FakeLithosDataset:
             created_at=_ago(minutes=20),
             tags=("project:lithos-lens", "milestone:t1"),
         ),
+        # The Gates section's two fixtures (T1-S4). Both are `gate` tasks, so
+        # Lithos keeps them out of BOTH frontiers and Lens renders them in the
+        # Gates section only. The human gate leads (human gates sort first);
+        # the timer gate is what gives the demo a live countdown and the
+        # one-shot self-refresh, which is why its `ready_at` is RELATIVE — a
+        # fixed stamp would drift into the past and the demo would ship a
+        # countdown that has already expired.
+        TaskRecord(
+            id="influx-read-swap-approval",
+            title="Approve the Influx read swap",
+            description="Operator sign-off before reads move to the new store.",
+            status="open",
+            task_type="gate",
+            created_by="planner",
+            # Younger than gate_waiting_attention_hours, so the gate stays in
+            # the Gates section instead of being promoted into Needs attention
+            # (rule 3) and disappearing from the surface it demonstrates.
+            created_at=_ago(hours=4),
+            # `gate_type` is what Lithos requires on a gate task and what the
+            # Gates section badges. The remaining keys are ADVISORY — Lithos
+            # does not interpret them and neither does Lens — and there are
+            # four of them against a row cap of three, so the demo also shows
+            # the "+1 more" overflow link.
+            metadata={
+                "project": "influx",
+                "gate_type": "human",
+                "approval_required_from": "operator-on-call",
+                "change_window": "2026-08-30 02:00 UTC",
+                "runbook": "runbooks/influx-rollback.md",
+                "risk": "medium",
+            },
+            tags=("project:influx", "area:data"),
+        ),
+        TaskRecord(
+            id="influx-replica-cooldown",
+            title="Wait out the replica cooldown",
+            description="The new store needs a settling window before backfill.",
+            status="open",
+            task_type="gate",
+            created_by="planner",
+            created_at=_ago(hours=1),
+            metadata={
+                "project": "influx",
+                "gate_type": "timer",
+                # Relative and comfortably in the future: the dashboard renders
+                # a live countdown against it and schedules ONE self-refresh at
+                # this instant (Lithos emits no event when a timer lapses).
+                "ready_at": _ahead(hours=6),
+            },
+            tags=("project:influx", "area:data"),
+        ),
         TaskRecord(
             id="influx-ingest-old",
             title="Retire legacy Influx ingest shim",
@@ -382,7 +433,10 @@ def demo_dataset() -> FakeLithosDataset:
         # the ready, claimed, in-flight task (the only one carrying claims), so
         # it must sit on the ready frontier too; `influx-dashboards` /
         # `lens-graph-view` / `influx-ingest-old` are ready and unclaimed;
-        # `influx-backfill` is blocked on the cutover.
+        # `influx-backfill` is blocked on the cutover AND on both gates.
+        # The two gates are `gate` tasks: Lithos excludes them from both
+        # frontiers, so they belong in neither set here and reach the board
+        # only through the Gates section.
         ready_ids=frozenset(
             {
                 "influx-ingest-cutover",
@@ -399,6 +453,24 @@ def demo_dataset() -> FakeLithosDataset:
                     type="blocks",
                     status="open",
                     message="Waiting on the ingest cutover to land.",
+                ),
+                # The two gate blockers are what the Gates section counts:
+                # `waits_on_gate` blockers on the COMPUTED blocked frontier are
+                # the healthy waiter source, so each gate row reads
+                # "blocks 1 task" with no per-gate edge read at all.
+                BlockerRecord(
+                    kind="gate",
+                    task_id="influx-read-swap-approval",
+                    type="waits_on_gate",
+                    status="open",
+                    message="Waiting on human gate influx-read-swap-approval.",
+                ),
+                BlockerRecord(
+                    kind="gate",
+                    task_id="influx-replica-cooldown",
+                    type="waits_on_gate",
+                    status="open",
+                    message="Waiting on timer gate influx-replica-cooldown.",
                 ),
             ),
         },
@@ -432,6 +504,26 @@ def demo_dataset() -> FakeLithosDataset:
                     direction="outgoing",
                 ),
             ),
+            # The gates' OUTGOING waits_on_gate edges. The healthy dashboard
+            # never reads them (waiters come off the blocked frontier); they
+            # are the DEGRADED source Lens falls back to when that frontier is
+            # truncated or down, and the gate detail page's waiter list.
+            "influx-read-swap-approval": (
+                EdgeRecord(
+                    from_task_id="influx-read-swap-approval",
+                    to_task_id="influx-backfill",
+                    type="waits_on_gate",
+                    direction="outgoing",
+                ),
+            ),
+            "influx-replica-cooldown": (
+                EdgeRecord(
+                    from_task_id="influx-replica-cooldown",
+                    to_task_id="influx-backfill",
+                    type="waits_on_gate",
+                    direction="outgoing",
+                ),
+            ),
             "influx-ingest-cutover": (
                 EdgeRecord(
                     from_task_id="influx-ingest-cutover",
@@ -451,6 +543,18 @@ def demo_dataset() -> FakeLithosDataset:
                     from_task_id="influx-ingest-cutover",
                     to_task_id="influx-backfill",
                     type="blocks",
+                    direction="incoming",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-read-swap-approval",
+                    to_task_id="influx-backfill",
+                    type="waits_on_gate",
+                    direction="incoming",
+                ),
+                EdgeRecord(
+                    from_task_id="influx-replica-cooldown",
+                    to_task_id="influx-backfill",
+                    type="waits_on_gate",
                     direction="incoming",
                 ),
                 EdgeRecord(

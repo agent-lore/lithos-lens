@@ -20,9 +20,10 @@ import pytest
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH, build_epic_rollup
 from lithos_lens.frontier import classify_open_tasks, load_dashboard
 from lithos_lens.frontier_fallback import RETRY_FAILED_ERROR
+from lithos_lens.gates import GATE_WAITER_FANOUT_CAP
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.normalizers import normalize_task
-from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
+from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
     TASK_STATUSES,
     AgentRecord,
@@ -239,6 +240,9 @@ class _FrontierFake:
         fail_ready_from: int | None = None,
         ready_error: BaseException | None = None,
         blocked_error: BaseException | None = None,
+        edges: dict[str, list[EdgeRecord]] | None = None,
+        late_edges: dict[str, list[EdgeRecord]] | None = None,
+        fail_edges: bool = False,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -260,6 +264,15 @@ class _FrontierFake:
         self._responses: list[weakref.ref[_Response]] = []
         self.max_live_responses = 0
         self.get_calls: list[str] = []
+        self._edges = edges or {}
+        # Edges that come into existence only AFTER the ready frontier was
+        # read. ``task_ready`` is awaited in the opening gather and
+        # ``task_edge_list`` strictly later, so this scripts the real ordering:
+        # an edge created in between is the NEWER fact, and no frontier
+        # response from before it can speak to it.
+        self._late_edges = late_edges or {}
+        self._fail_edges = fail_edges
+        self.edge_list_calls: list[dict[str, Any]] = []
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
@@ -405,6 +418,25 @@ class _FrontierFake:
             return rows
         finally:
             self._inflight -= 1
+
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]:
+        # Recorded rather than answered: every assertion below is about
+        # WHETHER the Gates section reaches for edges at all.
+        self.edge_list_calls.append(
+            {"task_id": task_id, "direction": direction, "types": types}
+        )
+        if self._fail_edges:
+            raise RuntimeError(f"edges unavailable for {task_id}")
+        edges = list(self._edges.get(task_id, []))
+        if self.ready_calls:
+            edges.extend(self._late_edges.get(task_id, []))
+        return edges
 
     async def task_get(self, task_id: str) -> TaskRecord:
         self.get_calls.append(task_id)
@@ -1998,6 +2030,10 @@ def _ago(**delta: float) -> str:
     return (_NOW - timedelta(**delta)).isoformat()
 
 
+def _ahead(**delta: float) -> str:
+    return (_NOW + timedelta(**delta)).isoformat()
+
+
 def test_load_dashboard_promotes_and_counts_attention() -> None:
     """Assembly level: the promotion happens on the real dashboard path, the
     header counter reports it, and open_total still counts every workable open
@@ -2076,3 +2112,297 @@ def test_load_dashboard_filters_scope_the_attention_list() -> None:
         load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
     )
     assert _section_ids(data.sections, "attention") == ["gate-mine"]
+
+
+# --- T1-S4: the Gates section on the assembly path -----------------------
+
+
+def _gate_task(
+    task_id: str,
+    *,
+    gate_type: str = "human",
+    created_at: str = "",
+    tags: tuple[str, ...] = (),
+    metadata: dict[str, Any] | None = None,
+) -> TaskRecord:
+    # Young by default: a human gate older than gate_waiting_attention_hours is
+    # promoted into Needs attention (rule 3) and leaves the Gates section, so a
+    # stale default would silently empty the surface under test.
+    created_at = created_at or _ago(hours=1)
+    meta: dict[str, Any] = {"gate_type": gate_type}
+    meta.update(metadata or {})
+    return _task(
+        task_id,
+        task_type="gate",
+        claims=(),
+        created_at=created_at,
+        tags=tags,
+        metadata=meta,
+    )
+
+
+def _gate_row(data: Any, gate_id: str) -> Any:
+    return next(row for row in data.gates if row.task.id == gate_id)
+
+
+def test_load_dashboard_renders_gates_in_their_own_section() -> None:
+    """Gates are excluded from both frontiers upstream, so they reach the board
+    only through this section — and the header counter reports them apart from
+    the workable three."""
+    gate = _gate_task("gate-1")
+    work = _task("w", claims=())
+    fake = _FrontierFake(open_tasks=[gate, work], ready=[work], blocked=[])
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+    )
+
+    assert [row.task.id for row in data.gates] == ["gate-1"]
+    assert data.summary.gates == 1
+    assert data.summary.ready == 1
+    # …and a gate is not counted as a rolled-up row any more: it renders.
+    assert data.rolled_up_open == 0
+
+
+def test_open_gate_appears_in_exactly_one_place_on_the_board() -> None:
+    """Single placement: a gate the severity rules promoted into Needs
+    attention is NOT also listed under Gates, and an unpromoted one is in the
+    Gates section and no partition section."""
+    fresh = _gate_task("gate-fresh", created_at=_ago(hours=1))
+    stale = _gate_task("gate-stale", created_at=_ago(days=9))
+    fake = _FrontierFake(open_tasks=[fresh, stale], ready=[], blocked=[])
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+    )
+
+    placements = {
+        gate_id: sum(
+            1
+            for rows in data.sections.values()
+            for row in rows
+            if row.task.id == gate_id
+        )
+        + sum(1 for row in data.gates if row.task.id == gate_id)
+        for gate_id in ("gate-fresh", "gate-stale")
+    }
+    assert placements == {"gate-fresh": 1, "gate-stale": 1}
+    assert _section_ids(data.sections, "attention") == ["gate-stale"]
+    assert [row.task.id for row in data.gates] == ["gate-fresh"]
+
+
+def test_gate_waiter_count_is_not_narrowed_by_the_boards_filters() -> None:
+    """Both ``task_blocked`` call sites pass only ``limit`` — no project, tag or
+    agent filter — so a gate that blocks three tasks still reads "blocks 3
+    tasks" on a board scoped to one of them."""
+    gate = _gate_task("gate-1", tags=("project:mine",))
+    waiters = [
+        _task("w1", claims=(), tags=("project:mine",)),
+        _task("w2", claims=(), tags=("project:other",)),
+        _task("w3", claims=(), tags=("project:other",)),
+    ]
+    blocked = [
+        _blocked(
+            waiter,
+            BlockerRecord(kind="gate", task_id="gate-1", type="waits_on_gate"),
+        )
+        for waiter in waiters
+    ]
+    filtered = TaskFilters(
+        statuses=("open",), tags=("project:mine",), agent="", since=""
+    )
+
+    def _load(filters: TaskFilters) -> Any:
+        fake = _FrontierFake(
+            open_tasks=[gate, *waiters], ready=[], blocked=list(blocked)
+        )
+        data = asyncio.run(
+            load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
+        )
+        # No filter is pushed to the blocked read on either call site.
+        return data, fake
+
+    wide, _ = _load(_FILTERS)
+    narrow, narrow_fake = _load(filtered)
+
+    assert _gate_row(wide, "gate-1").waiters_label == "blocks 3 tasks"
+    assert _gate_row(narrow, "gate-1").waiters_label == "blocks 3 tasks"
+    # The board itself IS scoped — only one waiter renders as a row…
+    assert _section_ids(narrow.sections, "blocked") == ["w1"]
+    # …and the waiter list still names every one of them.
+    assert [w.id for w in _gate_row(narrow, "gate-1").waiters] == ["w1", "w2", "w3"]
+    assert narrow_fake.edge_list_calls == []
+
+
+def test_healthy_board_derives_gate_waiters_without_a_single_edge_read() -> None:
+    """The blocked frontier already names every waiter, so the normal render
+    costs zero extra calls however many gates the corpus holds."""
+    gates = [_gate_task(f"gate-{index:03d}") for index in range(60)]
+    fake = _FrontierFake(open_tasks=list(gates), ready=[], blocked=[])
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+    )
+
+    assert data.summary.gates == 60
+    assert fake.edge_list_calls == []
+
+
+def test_truncated_blocked_read_caps_the_gate_edge_fanout() -> None:
+    """Degraded path: the blocked response hit the limit, so waiters fall back
+    to the gates' own edges — bounded, because the gate count is
+    peer-controlled and this runs on every render."""
+    gates = [_gate_task(f"gate-{index:03d}") for index in range(60)]
+    waiter = _task("w1", claims=())
+    fake = _FrontierFake(
+        open_tasks=[*gates, waiter],
+        ready=[],
+        blocked=[
+            _blocked(waiter, BlockerRecord(kind="gate", task_id="gate-000")),
+        ],
+        edges={
+            "gate-000": [
+                EdgeRecord(
+                    from_task_id="gate-000", to_task_id="w1", type="waits_on_gate"
+                )
+            ]
+        },
+    )
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=1, now=_NOW)
+    )
+
+    assert len(fake.edge_list_calls) == GATE_WAITER_FANOUT_CAP
+    assert _gate_row(data, "gate-000").waiters_label == "blocks 1 task (unverified)"
+    # Past the cap the row degrades rather than reporting an unread zero.
+    assert _gate_row(data, "gate-059").waiters_label == "blocks at least 0 tasks"
+
+
+def test_gates_render_when_the_frontier_read_fails_and_stay_out_of_the_flat_list() -> (
+    None
+):
+    """A gate's PLACEMENT never came from the frontier — only its waiter count
+    did. So a frontier outage keeps the operator's own queue on screen, with
+    the count honestly reported as unavailable, and the gate does not also
+    appear in the flat open list."""
+    gate = _gate_task("gate-1")
+    work = _task("w", claims=())
+
+    def _load(**kwargs: Any) -> tuple[Any, Any]:
+        fake = _FrontierFake(
+            open_tasks=[gate, work],
+            ready=[],
+            blocked=[],
+            blocked_error=RuntimeError("blocked frontier unavailable"),
+            **kwargs,
+        )
+        return (
+            asyncio.run(
+                load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+            ),
+            fake,
+        )
+
+    # The gate's own edges still answer: an unverified count, not a silent one.
+    data, fake = _load(
+        edges={
+            "gate-1": [
+                EdgeRecord(from_task_id="gate-1", to_task_id="w", type="waits_on_gate")
+            ]
+        }
+    )
+    assert data.open_flat is True
+    # The flat list holds the workable row and NOT the gate — which renders in
+    # the Gates section, so single placement survives the outage.
+    assert _section_ids(data.sections, "open") == ["w"]
+    assert [row.task.id for row in data.gates] == ["gate-1"]
+    assert _gate_row(data, "gate-1").waiters_label == "blocks 1 task (unverified)"
+    assert len(fake.edge_list_calls) == 1
+
+    # Neither source answered: the row says the count is unavailable rather
+    # than presenting an unread zero, and the page says so too.
+    data, _ = _load(fail_edges=True)
+    assert _gate_row(data, "gate-1").waiters_label == "waiter count unavailable"
+    assert (
+        "Could not load waiter counts for some gates; "
+        "their counts are shown as unavailable." in data.errors
+    )
+
+
+def test_gates_and_their_edge_reads_are_skipped_when_the_open_side_is_hidden() -> None:
+    """``?status=completed`` hides the open sections by choice; the Gates
+    section follows them, and the degraded fan-out never runs."""
+    gate = _gate_task("gate-1")
+    fake = _FrontierFake(open_tasks=[gate], ready=[], blocked=[])
+    filters = TaskFilters(statuses=("completed",), tags=(), agent="", since="")
+    data = asyncio.run(
+        load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
+    )
+
+    assert data.gates == ()
+    assert data.summary.gates == 0
+    assert fake.edge_list_calls == []
+
+
+def test_next_gate_ready_at_is_the_earliest_visible_future_timer() -> None:
+    """The board publishes ONE instant for the browser's one-shot refresh."""
+    soon = _gate_task(
+        "timer-soon", gate_type="timer", metadata={"ready_at": _ahead(hours=2)}
+    )
+    later = _gate_task(
+        "timer-later", gate_type="timer", metadata={"ready_at": _ahead(days=2)}
+    )
+    lapsed = _gate_task(
+        "timer-lapsed", gate_type="timer", metadata={"ready_at": _ago(hours=2)}
+    )
+    fake = _FrontierFake(open_tasks=[later, lapsed, soon], ready=[], blocked=[])
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=500, now=_NOW)
+    )
+
+    assert data.next_gate_ready_at == (
+        datetime.fromisoformat(_ahead(hours=2)).astimezone(UTC).isoformat()
+    )
+
+
+def test_an_edge_created_after_the_ready_read_still_counts_as_a_waiter() -> None:
+    """Reviewer repro (correctness f-002): the reads are independent
+    generations, and the edge list is the LATER one.
+
+    Sequence: ``task_ready`` answers first and calls `victim` ready; another
+    actor then creates `gate-1 -waits_on_gate-> victim`, which per the
+    ``lithos_task_edge_upsert`` contract makes `victim` wait from that moment;
+    the degraded edge read then returns it. The earlier ready response cannot
+    refute the newer edge, so `victim` must be counted — a round-2 cross-check
+    against `ready_ids` dropped it and rendered "blocks 0 tasks (unverified)".
+
+    The other two targets are still dropped, and neither drop is a refutation
+    of an edge: an epic is not a unit of work the count is over, and `ghost`
+    names nothing the section could draw a row for."""
+    gate = _gate_task("gate-1")
+    victim = _task("victim", claims=())
+    epic = _task("an-epic", task_type="epic", claims=())
+    # One unrelated blocked row, so the blocked response HITS frontier_limit
+    # below — truncation is what routes the waiter counts to the edge read.
+    filler = _task("filler", claims=())
+    fake = _FrontierFake(
+        open_tasks=[gate, victim, epic, filler],
+        # `victim` was ready when the frontier answered…
+        ready=[victim],
+        blocked=[_blocked(filler, BlockerRecord(kind="task", task_id="elsewhere"))],
+        late_edges={
+            # …and only afterwards did the gate come to hold it.
+            "gate-1": [
+                EdgeRecord(
+                    from_task_id="gate-1", to_task_id=target, type="waits_on_gate"
+                )
+                for target in ("victim", "an-epic", "ghost")
+            ]
+        },
+    )
+    # frontier_limit=1 truncates the blocked read, which is what sends the
+    # waiter counts down the edge fallback in the first place.
+    data = asyncio.run(
+        load_dashboard(fake, filters=_FILTERS, frontier_limit=1, now=_NOW)
+    )
+
+    row = _gate_row(data, "gate-1")
+    assert [waiter.id for waiter in row.waiters] == ["victim"]
+    assert row.waiters_label == "blocks 1 task (unverified)"

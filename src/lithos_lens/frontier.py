@@ -7,7 +7,8 @@ against the master open list: a workable open task is *In progress* when it
 carries an inline claim, else *Ready* or *Blocked* by frontier membership, else
 *Not classified* (only reachable under frontier-limit truncation). Epics and
 gates are excluded from both frontiers upstream, so they never enter the
-workable partition; their dedicated sections arrive in later T1 slices.
+workable partition: open gates get their own section instead, assembled in
+``gates.py`` (which also owns the waiter counts and the timer self-refresh).
 
 On top of that join sits the Needs-attention severity model
 (``attention.flag_attention``), applied last because it promotes rows OUT of
@@ -35,11 +36,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from lithos_lens.attention import AttentionPolicy, flag_attention
+from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.epic_strip import (
     epic_scope_ids,
     load_epic_rollups,
@@ -54,26 +56,25 @@ from lithos_lens.frontier_join import (
     classify_open_tasks,
     reclassify_conservative,
 )
+from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
     filters_narrow_the_board,
     filters_narrow_the_open_side,
-    invalid_project_metadata,
+    loaded_task_rows,
+    log_project_data_quality,
     matches_filters,
-    project_convention_conflict,
-    task_projects,
+    project_universe,
 )
-from lithos_lens.task_graph import BlockedTaskRecord
+from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
     OPEN_SECTIONS,
     WORKABLE_SECTIONS,
     AgentRecord,
-    DashboardData,
     SectionName,
     SectionRow,
     TaskFilters,
     TaskRecord,
     TaskStatusName,
-    TaskSummary,
     int_stat,
 )
 
@@ -120,6 +121,17 @@ class FrontierLithosClient(Protocol):
     ) -> list[TaskRecord]: ...
 
     async def task_get(self, task_id: str) -> TaskRecord: ...
+
+    # Read by the Gates section, and ONLY on its degraded waiter paths — the
+    # healthy board derives every waiter count from the blocked frontier above
+    # and issues no call here at all (``gates.attach_gate_waiters``).
+    async def task_edge_list(
+        self,
+        task_id: str,
+        *,
+        direction: str = "both",
+        types: list[str] | None = None,
+    ) -> list[EdgeRecord]: ...
 
     async def stats(self) -> dict[str, Any]: ...
 
@@ -232,6 +244,11 @@ async def load_dashboard(
         blocked_result,
         errors=errors,
     )
+    # Tracked apart from ``frontier_ok`` (which is ready AND blocked): the gate
+    # waiter counts depend on the blocked read alone, so a ready-only outage
+    # must not degrade them — and "0 waiters" built on a blocked read that
+    # never answered would be a fabricated fact rather than a degraded one.
+    blocked_ok = not isinstance(blocked_result, BaseException)
 
     # Raw terminal ids (pre-filter): a task appearing in BOTH the open
     # snapshot and a terminal result is freshness skew worth a retry, whether
@@ -345,6 +362,7 @@ async def load_dashboard(
                 )
                 ready_list = cast(list[TaskRecord], retry_ready)
                 blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
+                blocked_ok = True
                 # Re-read the strip against the adopted snapshot, so the chips
                 # list the epics of the generation the sections were built from.
                 strip = await load_epic_rollups(
@@ -358,6 +376,7 @@ async def load_dashboard(
         partition = state.partition
         at_limit = state.at_limit
         open_index = state.index
+        visible_open = state.visible
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
             partition = reclassify_conservative(partition, state.effective_overlap)
@@ -385,14 +404,21 @@ async def load_dashboard(
         # frontiers, which would read every open row as "unclassified" and
         # raise a false reconciliation warning. The error lines name which
         # read did not answer.
+        visible_open = [
+            task
+            for task in open_snapshot
+            if matches_filters(
+                task, filters=filters, status="open", scope_ids=scope_ids
+            )
+        ]
+        # Gates are held back from the flat list because they still get their
+        # own section below. Nothing about a gate's PLACEMENT came from the
+        # frontier — only its waiter count did, and that count says so — so
+        # dropping the operator's own queue here would lose a surface the
+        # failed read never touched, and rendering it in both places would
+        # break single placement.
         partition = flat_open_sections(
-            [
-                task
-                for task in open_snapshot
-                if matches_filters(
-                    task, filters=filters, status="open", scope_ids=scope_ids
-                )
-            ]
+            [task for task in visible_open if task.task_type != GATE_TASK_TYPE]
         )
         at_limit = False
         open_index = {task.id: task for task in open_snapshot}
@@ -401,12 +427,39 @@ async def load_dashboard(
     if strip.failed:
         errors.append("Could not load epic progress.")
 
+    # The Gates section is open work, so it follows the open sections' switch —
+    # and the degraded per-gate waiter reads are skipped entirely when it is
+    # hidden. It is assembled AFTER ``flag_attention`` so it can see which
+    # gates that step already promoted (single placement), and it reads the
+    # WHOLE open index rather than ``visible_open`` for waiter identities, so
+    # scoping the board never shrinks a gate's "blocks N tasks".
+    show_open = "open" in filters.statuses
+    gate_section = (
+        await load_gates(
+            lithos,
+            visible_open=visible_open,
+            index=open_index,
+            blocked=blocked_records,
+            blocked_available=blocked_ok,
+            # The gate counts care about the BLOCKED response specifically; a
+            # truncated ready read says nothing about who waits on a gate.
+            blocked_truncated=len(blocked_records) >= frontier_limit,
+            placed_ids=frozenset(row.task.id for row in partition.get("attention", ())),
+            now=evaluated_at,
+        )
+        if show_open
+        else GateSection()
+    )
+    errors.extend(gate_section.errors)
+
     open_flat = not frontier_ok
 
-    # Rows the graph rolls up rather than rendering (epics, gates). Counted
-    # over the SAME filtered set the sections are built from, and after the
-    # skew retry may have replaced the snapshot, so the number describes what
-    # this render actually withheld.
+    # Rows the graph rolls up rather than rendering. Epics only since T1-S4:
+    # a gate renders in the Gates section (or, once it has waited too long, in
+    # Needs attention), so counting it here would report visible work as
+    # withheld. Counted over the SAME filtered set the sections are built from,
+    # and after the skew retry may have replaced the snapshot, so the number
+    # describes what this render actually withheld.
     # Zero unless the open side is actually on screen: with ``?status=completed``
     # the open sections are emptied by choice, and an epic in the snapshot must
     # not turn that into "nothing to work on here".
@@ -415,11 +468,8 @@ async def load_dashboard(
         if open_flat or "open" not in filters.statuses
         else sum(
             1
-            for task in open_snapshot
-            if task.task_type != WORKABLE_TASK_TYPE
-            and matches_filters(
-                task, filters=filters, status="open", scope_ids=scope_ids
-            )
+            for task in visible_open
+            if task.task_type not in (WORKABLE_TASK_TYPE, GATE_TASK_TYPE)
         )
     )
 
@@ -437,7 +487,7 @@ async def load_dashboard(
     # resolved — from the UNFILTERED reads, deduped by id: selecting one
     # project must not collapse the list of projects you can switch to, and a
     # convention conflict is a property of the task, not of its status.
-    loaded_tasks = _loaded_task_rows(
+    loaded_tasks = loaded_task_rows(
         open_snapshot,
         [
             cast("list[TaskRecord]", result)
@@ -445,10 +495,9 @@ async def load_dashboard(
             if not isinstance(result, BaseException)
         ],
     )
-    _log_project_data_quality(loaded_tasks, filters)
-    projects = _project_universe(loaded_tasks, filters)
+    log_project_data_quality(loaded_tasks, filters)
+    projects = project_universe(loaded_tasks, filters)
 
-    show_open = "open" in filters.statuses
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
     for section in OPEN_SECTIONS:
         sections[section] = partition.get(section, ()) if show_open else ()
@@ -475,7 +524,9 @@ async def load_dashboard(
     # rows still count (they only changed section), but a promoted human gate
     # does not — gates were never part of the workable partition. The flat
     # fallback has no partition to read that from, so its one section counts
-    # whole: without the frontier there is no workable/not distinction to make.
+    # whole: without the frontier there is no workable/not distinction to make
+    # among the rows it holds (gates are held out of it — they render in the
+    # Gates section — so they are not counted there either).
     open_total = (
         sum(len(partition.get(section, ())) for section in WORKABLE_SECTIONS)
         + len(partition.get("open", ()))
@@ -505,6 +556,7 @@ async def load_dashboard(
         in_progress=len(partition.get("in_progress", ())),
         ready=len(partition.get("ready", ())),
         blocked=len(partition.get("blocked", ())),
+        gates=gate_section.count,
         claims_unknown=len(partition.get("claims_unknown", ())),
         unclassified=len(partition.get("unclassified", ())),
         open_total=open_total,
@@ -525,6 +577,8 @@ async def load_dashboard(
         frontier_limit=frontier_limit,
         open_total=open_total,
         projects=projects,
+        gate_groups=gate_section.groups,
+        next_gate_ready_at=gate_section.next_ready_at,
         # Truncation means a frontier response actually HIT frontier_limit,
         # leaving otherwise-classifiable rows in the tail. Unclassified rows
         # from a failed frontier read are surfaced by the error banner, and a
@@ -577,89 +631,6 @@ def _is_nothing_to_show(
         not isinstance(result, BaseException) and bool(result)
         for result in closed_results
     )
-
-
-def _loaded_task_rows(
-    open_snapshot: Sequence[TaskRecord],
-    closed_groups: Iterable[Sequence[TaskRecord]],
-) -> tuple[TaskRecord, ...]:
-    """Every task row this load fetched, deduped by id (open snapshot wins).
-
-    Read skew can return the same id in both the open snapshot and a terminal
-    window; the open snapshot is the authority on the row, and dedup keeps
-    per-load reporting counted once.
-    """
-    rows: list[TaskRecord] = list(open_snapshot)
-    seen = {task.id for task in rows}
-    for group in closed_groups:
-        for task in group:
-            if task.id not in seen:
-                seen.add(task.id)
-                rows.append(task)
-    return tuple(rows)
-
-
-def _project_universe(
-    tasks: Sequence[TaskRecord],
-    filters: TaskFilters,
-) -> tuple[str, ...]:
-    """Every project slug present in the loaded rows, sorted (§5B.1).
-
-    The universe is the union of BOTH conventions' slugs regardless of the
-    active posture — §5B.1 is explicit that no project may be invisible to its
-    own view — even though matching under a single-convention posture honours
-    only that convention. Only the tag KEY follows configuration (§5B.9).
-    """
-    slugs: set[str] = set()
-    for task in tasks:
-        slugs.update(
-            task_projects(task, convention="both", tag_key=filters.project_tag_key)
-        )
-    return tuple(sorted(slugs))
-
-
-def _log_project_data_quality(
-    tasks: Sequence[TaskRecord],
-    filters: TaskFilters,
-) -> None:
-    """Report this load's project data-quality signals, once each (§5B.1).
-
-    Two independent signals over every loaded row — resolved rows carry their
-    conventions too:
-
-    - the two conventions are present and DISAGREE. Reported in every posture:
-      §5B.1 makes the warning a property of the data, not of the matching
-      posture Lens happens to run (both values are read for the universe
-      regardless). Neither value is dropped — the task matches under both slugs.
-    - ``metadata.project`` is present but is not a string. Lens cannot read a
-      project out of it, so the task is invisible to its project view; the
-      value is ignored rather than coerced into a fabricated slug.
-    """
-    conflicts: list[str] = []
-    malformed: list[str] = []
-    for task in tasks:
-        if project_convention_conflict(task, tag_key=filters.project_tag_key):
-            conflicts.append(task.id)
-        if invalid_project_metadata(task):
-            malformed.append(task.id)
-    if conflicts:
-        logger.warning(
-            "task project conventions disagree",
-            extra={
-                "lens_event": "lens.tasks.project_convention_conflict",
-                "conflict_count": len(conflicts),
-                "conflicting_task_ids": conflicts[:20],
-            },
-        )
-    if malformed:
-        logger.warning(
-            "task metadata.project is not a string slug",
-            extra={
-                "lens_event": "lens.tasks.project_metadata_invalid",
-                "invalid_count": len(malformed),
-                "invalid_task_ids": malformed[:20],
-            },
-        )
 
 
 class _FrontierState:

@@ -140,6 +140,21 @@ classDiagram
   class Breadcrumb {
     +incomplete bool
   }
+  class DashboardData {
+    +frontier_limit int
+    +open_total int
+    +projects tuple[str, ...]
+    +next_gate_ready_at str
+    +reconciliation_pending bool
+    +truncated bool
+    +filters_narrowed bool
+    +open_side_narrowed bool
+    +open_flat bool
+    +rolled_up_open int
+    +nothing_to_show bool
+    +errors tuple[str, ...]
+    +epic_scope str
+  }
   class EdgeRecord {
     +from_task_id str
     +to_task_id str
@@ -152,6 +167,21 @@ classDiagram
   class FindingView {
     +note_title str
     +note_error str
+  }
+  class GateGroup {
+    +gate_type str
+  }
+  class GateRow {
+    +gate_type str
+    +ready_at str
+    +ready_instant str
+    +waiters_state GateWaiterState
+    +advisory tuple[tuple[str, str], ...]
+    +advisory_more int
+  }
+  class GateSection {
+    +next_ready_at str
+    +errors tuple[str, ...]
   }
   class LinkPage {
     +total int
@@ -178,8 +208,30 @@ classDiagram
     +not_found bool
     +errors tuple[str, ...]
   }
+  class TaskSummary {
+    +attention int
+    +in_progress int
+    +ready int
+    +blocked int
+    +gates int
+    +claims_unknown int
+    +unclassified int
+    +open_total int
+    +active_claims int
+    +recent_completed int
+    +recent_cancelled int
+    +agents int
+  }
+  class AgentRecord
+  <<Tasks>> AgentRecord
+  class EpicRollup
+  <<Tasks>> EpicRollup
   class FindingRecord
   <<Tasks>> FindingRecord
+  class SectionRow
+  <<Tasks>> SectionRow
+  class TaskFilters
+  <<Tasks>> TaskFilters
   class TaskRecord
   <<Tasks>> TaskRecord
   class TaskStatusRecord
@@ -187,7 +239,17 @@ classDiagram
   BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
   BlockedTaskRecord "1" --> "1" TaskRecord : task
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
+  DashboardData "1" --> "0..*" AgentRecord : agents
+  DashboardData "1" --> "0..*" EpicRollup : epics
+  DashboardData "1" --> "0..*" GateGroup : gate_groups
+  DashboardData "1" --> "0..*" SectionRow : sections
+  DashboardData "1" --> "1" TaskFilters : filters
+  DashboardData "1" --> "1" TaskSummary : summary
   FindingView "1" --> "1" FindingRecord : finding
+  GateGroup "1" --> "0..*" GateRow : rows
+  GateRow "1" --> "1" TaskRecord : task
+  GateRow "1" --> "0..*" TaskRecord : waiters
+  GateSection "1" --> "0..*" GateGroup : groups
   LinkPage "1" --> "0..*" LinkedTask : links
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
@@ -223,20 +285,6 @@ classDiagram
     +agent str
     +aspect str
     +expires_at str
-  }
-  class DashboardData {
-    +frontier_limit int
-    +open_total int
-    +projects tuple[str, ...]
-    +reconciliation_pending bool
-    +truncated bool
-    +filters_narrowed bool
-    +open_side_narrowed bool
-    +open_flat bool
-    +rolled_up_open int
-    +nothing_to_show bool
-    +errors tuple[str, ...]
-    +epic_scope str
   }
   class EpicRollup {
     +done int
@@ -302,24 +350,6 @@ classDiagram
     +status str
     +metadata dict[str, Any]
   }
-  class TaskSummary {
-    +attention int
-    +in_progress int
-    +ready int
-    +blocked int
-    +claims_unknown int
-    +unclassified int
-    +open_total int
-    +active_claims int
-    +recent_completed int
-    +recent_cancelled int
-    +agents int
-  }
-  DashboardData "1" --> "0..*" AgentRecord : agents
-  DashboardData "1" --> "0..*" EpicRollup : epics
-  DashboardData "1" --> "0..*" SectionRow : sections
-  DashboardData "1" --> "1" TaskFilters : filters
-  DashboardData "1" --> "1" TaskSummary : summary
   EpicRollup "1" --> "1" TaskRecord : task
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers

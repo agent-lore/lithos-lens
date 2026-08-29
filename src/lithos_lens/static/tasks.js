@@ -9,6 +9,23 @@
   let reconnectRefreshPending = false;
   let refreshInFlight = false;
   let refreshQueued = false;
+  let gateRefreshTimer = null;
+  let gateCountdownTimer = null;
+  let lastGateRefreshAt = 0;
+  // setTimeout stores its delay in a signed 32-bit int: anything larger wraps
+  // and fires (near) immediately, so a gate more than ~24.8 days out must be
+  // reached by chaining sleeps rather than by one oversized timeout.
+  const MAX_TIMER_DELAY_MS = 2147483647;
+  // Floor on the gap between two SELF-TRIGGERED refreshes. A hard bound is
+  // needed — the instant is server-written, and a stream of near-now stamps
+  // must not let a tab hammer /tasks — but it is a rate bound, not the polling
+  // cadence: at 30s it also delayed every legitimately consecutive gate. Worst
+  // case here is one self-triggered refresh per tab per 2s, reachable only from
+  // a server publishing gates that close that fast.
+  const GATE_REFRESH_MIN_SPACING_MS = 2000;
+  // Refresh a beat AFTER the instant, so a slightly fast browser clock does
+  // not ask Lithos before the gate has lapsed there.
+  const GATE_REFRESH_GRACE_MS = 500;
   let currentLiveState = "paused";
   let currentLiveDetail = "Reconnecting; polling fallback is active";
 
@@ -102,6 +119,11 @@
       replaceFragment(doc, "detail");
     }
     setupDatePickers();
+    // The replaced fragment carries a fresh board (new gate rows, a new
+    // ready_at, or none), so the countdown text and the one-shot timer are
+    // re-armed against it rather than left pointing at the discarded DOM.
+    renderGateCountdowns();
+    scheduleGateRefresh();
     setLiveStatus(currentLiveState, currentLiveDetail);
   }
 
@@ -306,6 +328,103 @@
     });
   }
 
+  // Timer gates: Lithos resolves them at query time and emits NO event when
+  // one lapses, so the board schedules its own single refresh at the earliest
+  // still-future ready_at the server put on the task board.
+  //
+  // Two guards keep this a one-shot rather than a refresh loop, because
+  // ready_at is server metadata any Lithos writer can set:
+  //   - a delay beyond the 32-bit timer range is CHAINED, not truncated (an
+  //     oversized setTimeout fires immediately and would re-arm every render);
+  //   - a stamp already in the past on arrival means the browser and Lens
+  //     clocks disagree — the server only publishes future stamps — so it
+  //     backs off to the poll interval instead of hammering /tasks.
+  // Whatever the board says, self-triggered refreshes stay at least one poll
+  // interval apart: no server value can make a tab outpace its own polling.
+  function scheduleGateRefresh() {
+    window.clearTimeout(gateRefreshTimer);
+    gateRefreshTimer = null;
+    const board = document.querySelector("[data-gates-next-ready-at]");
+    if (!board) return;
+    const readyAt = Date.parse(board.dataset.gatesNextReadyAt);
+    if (!readyAt) return;
+    const remaining = readyAt - Date.now();
+    let delay;
+    if (remaining > 0) {
+      // A still-future deadline the server just published. Honour it, floored
+      // only by the minimum SPACING between self-triggered refreshes — the
+      // floor's job is to bound the rate, and borrowing the poll interval for
+      // it swallowed the next real deadline: gates fall due one after another,
+      // and a second gate 3.5s behind the first was pushed out a full 30s,
+      // ticking "ready now" for the rest of it.
+      delay = remaining + GATE_REFRESH_GRACE_MS;
+      if (lastGateRefreshAt) {
+        delay = Math.max(delay, lastGateRefreshAt + GATE_REFRESH_MIN_SPACING_MS - Date.now());
+      }
+    } else {
+      // Past on arrival: the server only publishes future stamps, so either the
+      // clocks disagree or the refresh did not clear the gate. Nothing to be
+      // on time for, and re-requesting immediately would spin — back off to the
+      // poll interval, which is what that bound is actually for.
+      delay = autoRefreshIntervalMs;
+      if (lastGateRefreshAt) {
+        delay = Math.max(delay, lastGateRefreshAt + autoRefreshIntervalMs - Date.now());
+      }
+    }
+    if (delay > MAX_TIMER_DELAY_MS) {
+      gateRefreshTimer = window.setTimeout(scheduleGateRefresh, MAX_TIMER_DELAY_MS);
+      return;
+    }
+    gateRefreshTimer = window.setTimeout(runGateRefresh, delay);
+  }
+
+  function runGateRefresh() {
+    lastGateRefreshAt = Date.now();
+    // Re-armed on BOTH outcomes: a render that succeeded already re-armed
+    // itself from the fresh fragment (scheduleGateRefresh clears first, so the
+    // second call is idempotent), and one that failed must not leave the board
+    // with no schedule at all — the lapsed gate would sit there until an event
+    // or the poll fallback happened along.
+    const rearm = function () { scheduleGateRefresh(); };
+    refreshFragments().then(rearm, rearm);
+  }
+
+  function renderGateCountdowns() {
+    const nodes = document.querySelectorAll("[data-gate-ready-at]");
+    if (!nodes.length) {
+      // The refreshed board has no timer gate left to tick.
+      window.clearInterval(gateCountdownTimer);
+      gateCountdownTimer = null;
+      return;
+    }
+    nodes.forEach(function (node) {
+      const readyAt = Date.parse(node.dataset.gateReadyAt);
+      // Unparseable server metadata keeps the server-rendered absolute stamp
+      // rather than being blanked into an empty chip.
+      if (!readyAt) return;
+      node.textContent = formatCountdown(readyAt - Date.now());
+    });
+    if (!gateCountdownTimer) {
+      gateCountdownTimer = window.setInterval(renderGateCountdowns, 1000);
+    }
+  }
+
+  function formatCountdown(remainingMs) {
+    if (remainingMs <= 0) return "ready now";
+    const seconds = Math.floor(remainingMs / 1000);
+    const parts = [
+      [Math.floor(seconds / 86400), "d"],
+      [Math.floor((seconds % 86400) / 3600), "h"],
+      [Math.floor((seconds % 3600) / 60), "m"],
+      [seconds % 60, "s"]
+    ];
+    // Two units are enough to read at a glance ("2d 3h", "4m 20s"); leading
+    // zero units are dropped so a short wait doesn't render as "0d 0h".
+    const shown = parts.filter(function (part) { return part[0] > 0; }).slice(0, 2);
+    if (!shown.length) return "ready now";
+    return "ready in " + shown.map(function (part) { return part[0] + part[1]; }).join(" ");
+  }
+
   function cssEscape(value) {
     if (window.CSS && window.CSS.escape) return window.CSS.escape(value);
     return String(value).replace(/"/g, '\\"');
@@ -361,5 +480,7 @@
     currentLiveState = liveRoot.dataset.liveState || currentLiveState;
   }
   setupDatePickers();
+  renderGateCountdowns();
+  scheduleGateRefresh();
   connect();
 })();

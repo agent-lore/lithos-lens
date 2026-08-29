@@ -48,6 +48,14 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.locator('[data-task-group="blocked"] .blocker-chip').first(),
       ).toBeVisible();
+      // …and the Gates section with a LIVE countdown. The server renders the
+      // timer gate's absolute stamp ("ready at …") as the no-JS baseline and
+      // tasks.js rewrites it to "ready in …", so waiting on that wording is
+      // what makes the artifact show the countdown rather than the fallback.
+      await expect(
+        page.locator('[data-task-group="gates"] [data-gate-type-badge]').first(),
+      ).toBeVisible();
+      await expect(page.locator(".gate-countdown")).toContainText(/ready in /);
     },
   },
   {

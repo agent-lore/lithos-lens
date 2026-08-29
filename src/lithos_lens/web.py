@@ -629,6 +629,9 @@ async def _render_tasks(
                 "section_counts": {
                     section: len(rows) for section, rows in dashboard.sections.items()
                 },
+                # Gates are their own section, outside the workable partition.
+                "gates": dashboard.summary.gates,
+                "next_gate_ready_at": dashboard.next_gate_ready_at,
                 "truncated": dashboard.truncated,
                 "nothing_to_show": dashboard.nothing_to_show,
                 "errors": list(dashboard.errors),

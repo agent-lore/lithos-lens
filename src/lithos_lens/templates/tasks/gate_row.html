@@ -1,0 +1,86 @@
+{#
+  One open gate in the Gates section (§5.2.3). A gate is not workable, so this
+  row carries gate chrome — type badge, expandable waiter list, advisory
+  metadata summary, timer countdown — instead of the claim/blocker chrome of
+  tasks/row.html.
+
+  Markup hooks (class suffix, data attribute) use ``type_slug``, the closed
+  KNOWN_GATE_TYPES vocabulary; the raw ``gate_type`` appears only as escaped,
+  length-capped TEXT (``type_label``), so peer-written metadata cannot inject
+  class tokens or selector hooks. Timer gates render ``ready_at`` as an
+  absolute stamp — the no-JS baseline — which tasks.js rewrites into a live
+  countdown.
+#}
+<article class="task-row gate-row" id="task-row-{{ gate.task.id }}" data-gate-row data-task-id="{{ gate.task.id }}" data-gate-type="{{ gate.type_slug }}" title="{{ gate.task.title }}">
+  <div>
+    <a class="task-title" href="{{ task_detail_url(request, gate.task.id) }}">{{ gate.task.title }}</a>
+    {% if gate.task.description %}
+      <p>{{ gate.task.description }}</p>
+    {% endif %}
+    {% if gate.task.tags %}
+      <div class="tag-list">
+        {% for tag in gate.task.tags %}
+          <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag if tag else "(empty tag)" }}</a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <div class="task-row-meta">
+    <span class="badge badge-gate badge-gate-{{ gate.type_slug }}" data-gate-type-badge>{{ gate.type_label }}</span>
+    {% if gate.is_timer and gate.ready_at %}
+      {# The countdown attribute carries `ready_instant`, which is empty unless
+         the stamp parsed SERVER-side. The browser's Date.parse is the more
+         permissive of the two, so publishing the display text would tick a
+         countdown down to an instant Lens refused to schedule a refresh for.
+         An unparseable stamp still renders — as static text, which is what it
+         is. #}
+      {% if gate.ready_instant %}
+        <time class="gate-chip gate-countdown" datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">ready at {{ gate.ready_at[:16].replace("T", " ") }}</time>
+      {% else %}
+        <span class="gate-chip" data-gate-ready-unparsed>ready at {{ gate.ready_at[:16].replace("T", " ") }}</span>
+      {% endif %}
+    {% endif %}
+    {% if gate.task.created_by %}
+      <span>{{ gate.task.created_by }}</span>
+    {% endif %}
+    {% if gate.task.created_at %}
+      <time datetime="{{ gate.task.created_at }}">waiting since {{ gate.task.created_at[:16].replace("T", " ") }}</time>
+    {% endif %}
+  </div>
+  {% if gate.advisory %}
+    {# Advisory metadata, verbatim: Lithos does not interpret these keys and
+       neither does Lens. The row summarizes the first few; the rest are on
+       the gate's detail page. #}
+    <div class="gate-advisory" data-gate-advisory aria-label="Gate metadata">
+      {% for key, value in gate.advisory %}
+        <span class="gate-chip gate-advisory-chip"><b>{{ key }}</b> {{ value }}</span>
+      {% endfor %}
+      {% if gate.advisory_more %}
+        <a class="gate-chip gate-advisory-more" href="{{ task_detail_url(request, gate.task.id) }}">+{{ gate.advisory_more }} more</a>
+      {% endif %}
+    </div>
+  {% endif %}
+  {# Waiter count, expandable: opening the count lists the tasks this gate
+     holds (a <details> so it works with no JS). The label is qualified by the
+     source the count came from (GateWaiterState) — "at least N" for a
+     truncated read, "(unverified)" for edge-asserted waiters, and
+     "unavailable" when neither source answered, so a failed read never reads
+     as a confident zero — and the empty-list body is qualified the same way. #}
+  <details class="gate-waiters" data-gate-waiters data-gate-waiters-state="{{ gate.waiters_state }}">
+    <summary data-gate-waiting="{{ gate.waiting }}">{{ gate.waiters_label }}</summary>
+    {% if gate.waiters %}
+      <ul class="gate-waiter-list">
+        {% for waiter in gate.waiters %}
+          <li>
+            <a href="{{ task_detail_url(request, waiter.id) }}">{{ waiter.title }}</a>
+            <span class="badge badge-{{ waiter.status }}">{{ waiter.status }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      {# An empty list means different things per source, so the wording comes
+         from the view model: only a COMPLETE source may claim nothing waits. #}
+      <p class="empty">{{ gate.waiters_empty_note }}</p>
+    {% endif %}
+  </details>
+</article>

@@ -68,6 +68,8 @@ source_modules = [
     "lithos_lens.normalizers",
     "lithos_lens.task_graph",
     "lithos_lens.frontier",
+    "lithos_lens.gates",
+    "lithos_lens.dashboard",
     "lithos_lens.attention",
     "lithos_lens.frontier_fallback",
     "lithos_lens.frontier_join",

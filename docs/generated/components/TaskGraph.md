@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads.
 
 **Tier:** Foundation
 
@@ -12,10 +12,12 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.attention` | M | 1 | 1 |
+| `lithos_lens.dashboard` | S | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 2 |
+| `lithos_lens.gates` | M | 5 | 5 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -25,6 +27,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ### `lithos_lens.attention`
 - class `AttentionPolicy` — Thresholds for the age-based Needs-attention rules (3-6).
 - def `flag_attention` — Evaluate the six-rule severity model over a classified partition.
+
+### `lithos_lens.dashboard`
+- class `TaskSummary`
+- class `DashboardData`
 
 ### `lithos_lens.epic_strip`
 - class `EpicChildrenClient` — The narrow client surface the strip needs.
@@ -44,6 +50,18 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ### `lithos_lens.frontier_join`
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
+
+### `lithos_lens.gates`
+- class `GateEdgeClient` — The one client method the degraded waiter fan-out needs.
+- class `GateWaiterState` — How far a gate's "blocks N tasks" count can be trusted.
+- class `GateRow` — An open gate rendered in the dashboard's Gates section (§5.2.3).
+- class `GateGroup` — One gate-type group in the Gates section (§5.2.3: grouped by gate type).
+- class `GateSection` — The assembled Gates section, as ``load_gates`` hands it to the board.
+- def `load_gates` — Assemble the Gates section from the reads ``load_dashboard`` already has.
+- def `collect_gates` — Collect the open gates off the master open list (§5.2.3).
+- def `group_gates` — Group gate rows by gate type — human first, oldest first within a group.
+- def `attach_gate_waiters` — Fill each gate's waiter list, preferring the Lithos-computed source.
+- def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.

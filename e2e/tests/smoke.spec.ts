@@ -54,6 +54,41 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   expect(await cancelled.locator("[data-task-row]").count()).toBe(1);
 });
 
+test("the gates section counts its timer gate down in the browser", async ({ page, request }) => {
+  // T1-S4 story 6: Lithos emits NO event when a timer gate lapses, so the
+  // countdown and the one-shot self-refresh are browser-side and can only be
+  // proved here. The server renders the absolute stamp as the no-JS baseline;
+  // tasks.js replaces it with a live "ready in …" and publishes the instant it
+  // will refresh at.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const gates = page.locator('[data-task-group="gates"]');
+  // Human gates lead, and the human one says what it holds up.
+  const human = gates.locator(
+    '[data-gate-row][data-task-id="influx-read-swap-approval"]',
+  );
+  await expect(human.locator("[data-gate-type-badge]")).toHaveText("human");
+  await expect(human.locator("[data-gate-waiters] summary")).toHaveText(
+    "blocks 1 task",
+  );
+
+  const countdown = gates.locator(".gate-countdown");
+  await expect(countdown).toContainText(/^ready in /);
+  // The board carries exactly one refresh instant, and it is the timer gate's.
+  const readyAt = await countdown.getAttribute("data-gate-ready-at");
+  await expect(page.locator(".task-board")).toHaveAttribute(
+    "data-gates-next-ready-at",
+    readyAt as string,
+  );
+
+  // The countdown is genuinely client-side: what the SERVER sent for this
+  // element is the absolute "ready at …" baseline, so the "ready in …" above
+  // can only have come from tasks.js rewriting it after load.
+  const served = await (await request.get("/tasks?since=2026-08-01")).text();
+  expect(served).toContain(`data-gate-ready-at="${readyAt}">ready at `);
+  expect(served).not.toContain("ready in ");
+});
+
 test("elements marked hidden stay hidden", async ({ page }) => {
   // Browser truth for the [hidden] reset in lens.css: the chip rule sets
   // `display: inline-flex` on .finding-chip, which outranks the UA's
