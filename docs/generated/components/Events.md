@@ -11,15 +11,18 @@ Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventH
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.events` | S | 2 | 2 |
+| `lithos_lens.events` | M | 3 | 4 |
 
 ## Public API
 
 ### `lithos_lens.events`
+- def `wire_safe` — `value` reduced to something that cannot break out of its SSE frame line.
+- def `is_replay_cursor` — Whether `value` is safe to send back upstream as a `Last-Event-ID` header.
+- class `DroppedEventLog` — Rate-limited WARNING emitter for dropped upstream events.
 - class `LensEvent`
 - class `EventHub`
 - def `parse_lithos_sse_frame`
-- def `normalize_lithos_event`
+- def `normalize_lithos_event` — Normalize one upstream event, scope-aware.
 
 ## Dependencies
 

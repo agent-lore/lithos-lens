@@ -225,14 +225,40 @@ Current architecture:
 - Lens filters and normalizes task-relevant events.
 - Lens republishes them to browser clients via `GET /tasks/events`.
 
-The currently recognized event types are:
+The currently recognized event types are task-scoped:
 
 - `task.created`
 - `task.claimed`
 - `task.released`
 - `task.completed`
 - `task.cancelled`
+- `task.updated`
+- `task.reopened`
 - `finding.posted`
+
+plus one system-scoped type, `agent.registered`, which is forwarded with an
+empty `task_id` and never triggers a dashboard refresh (it invalidates the
+agent-dropdown data only). Task-scoped events arriving without a `task_id` are
+dropped with a warning.
+
+On reconnect Lens sends `Last-Event-ID` so Lithos replays its ring buffer from
+the last received event, and broadcasts one synthetic `lens.refresh` to browser
+subscribers as the correctness backstop for gaps wider than that buffer. The
+`lens.*` namespace is reserved for these Lens-internal synthetic events; Lens
+sanitizes the id and type it puts on the wire, so an upstream payload cannot
+forge a frame in that namespace (or any other).
+
+Only an id that came from an upstream frame's own `id:` field, and that is
+usable as a request header, is kept as the replay cursor — a Lens-synthesized
+id is a browser dedupe key, not a position in Lithos's buffer — and the cursor
+is dropped when a connection attempt fails before the stream comes up, so no
+single value can wedge the hub in a permanent reconnect loop. Synthetic
+refreshes are rate-limited to one per `LENS_REFRESH_MIN_INTERVAL_S` so a
+flapping upstream cannot turn them into a refetch storm across open dashboards,
+but they are only ever deferred, never dropped: reconnects inside a window
+coalesce into a single broadcast delivered on its trailing edge, so every
+disconnected interval — including one that gave up its replay cursor — still
+results in a refresh.
 
 Browser behavior currently includes:
 

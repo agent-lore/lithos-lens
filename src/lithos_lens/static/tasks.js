@@ -128,7 +128,11 @@
     if (type === "task.released") updateClaim(message, false);
     if (type === "task.completed") closeTask(message, "completed");
     if (type === "task.cancelled") closeTask(message, "cancelled");
+    if (type === "task.reopened") reopenTask(message);
     if (type === "finding.posted") handleFinding(message);
+    // task.updated carries only a task_id and lens.refresh carries nothing at
+    // all, so both are served by the requires_refresh reconcile below - as is
+    // any type this build does not know yet.
     if (message.requires_refresh) scheduleReconcile();
   }
 
@@ -231,6 +235,23 @@
     if (!target) row.remove();
   }
 
+  function reopenTask(message) {
+    const row = rowFor(message.task_id);
+    if (!row) return;
+    row.dataset.taskStatus = "open";
+    const badge = row.querySelector(".badge");
+    if (badge) {
+      badge.className = "badge badge-open";
+      badge.textContent = "open";
+    }
+    // Which workable section the task belongs to now is the frontier's answer,
+    // not ours, so the row waits in the pending strip until the reconcile
+    // re-renders the board - the same reason a just-created task lands there.
+    const list = document.querySelector('[data-task-list="pending"]');
+    if (list) list.prepend(row);
+    if (!list) row.remove();
+  }
+
   function handleFinding(message) {
     const row = rowFor(message.task_id);
     if (row) {
@@ -263,7 +284,9 @@
       reconnectRefreshPending = true;
       startPolling();
     });
-    ["task.created", "task.claimed", "task.released", "task.completed", "task.cancelled", "finding.posted"].forEach(function (type) {
+    // agent.registered is deliberately absent: it is system-scoped, carries
+    // requires_refresh=false, and must not move the board.
+    ["task.created", "task.claimed", "task.released", "task.completed", "task.cancelled", "task.updated", "task.reopened", "finding.posted", "lens.refresh"].forEach(function (type) {
       eventSource.addEventListener(type, handleEvent);
     });
   }

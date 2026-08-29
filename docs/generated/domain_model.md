@@ -11,6 +11,7 @@ classDiagram
     +config EventsConfig
     +lithos LithosConfig
     +status EventStatus
+    +last_event_id str
   }
   class LensEvent {
     +id str
@@ -18,6 +19,7 @@ classDiagram
     +task_id str
     +payload dict[str, Any]
     +requires_refresh bool
+    +upstream_id str
   }
 ```
 
