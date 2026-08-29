@@ -29,7 +29,7 @@ Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m
 Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
-LithosClient = "Lithos server clients — the real MCP-over-SSE client (health, registration, tool calls) plus the in-memory fake that backs fake-Lithos app mode."
+LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode."
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads."
@@ -43,7 +43,7 @@ Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
 Web          = ["lithos_lens.web", "lithos_lens.request_filters"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
-LithosClient = ["lithos_lens.lithos_client", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
+LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.task_detail", "lithos_lens.task_links"]
@@ -72,38 +72,27 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
-# lithos_client is the ONE module allowed above the 800 god-module threshold.
-# This PR raises its stop-loss 815 -> 895 for the transport hardening: the
-# per-call deadline, the process-wide call gate, and the decoder's notes —
-# that a whole-response size ceiling was considered and REJECTED (an
-# input-domain restriction dressed as a bound, which would answer a runaway
-# edge list with "blockers unavailable"), and that the parse holds the GIL, an
-# accepted residual a thread pool was found not to fix. The raise bought
-# bounds and the reasoning for them, not prose.
+# The god-module exception is RETIRED. lithos_client was the one module the
+# repo let past the 800-line ceiling, and three consecutive raises
+# (800 -> 830 -> 815 -> 895) each bought transport hardening: the tools/list
+# probe, then the per-call deadline, the process-wide call gate, and the
+# decoder's notes — that a whole-response size ceiling was considered and
+# REJECTED (an input-domain restriction dressed as a bound, which would answer
+# a runaway edge list with "blockers unavailable"), and that the parse holds
+# the GIL, an accepted residual a thread pool was found not to fix.
 #
-# The raise is granted against a TASK this time, not a promise in a comment:
-# 8b8a5888-0ef1-4368-916c-d63fd34676f8 lifts the MCP transport (session worker,
-# reconnect, call gate, tool-call decoding) out into its own module and hands
-# the allowance back. Three consecutive raises have each been individually
-# defensible; the cumulative 95 lines over threshold is why the extraction is
-# now overdue rather than optional. No further raise should be spent here.
-# web.py briefly held the second slot. It joined the over-800 set on the T1-S13
-# MERGE, not in either parent: #50 added 85 lines to it and T1-S13 added 227,
-# from 545 on the common base, and the sum crossed at 857 (881 after T1-S7).
-# Neither PR breached the budget alone, so there was no point at which a
-# reviewer could have been asked — a per-PR check cannot see an additive breach
-# between concurrent branches. The raise to 2 was granted against task 538e2f3d,
-# and that task has now been DISCHARGED: request_filters.py took the
-# request-scoped filter parsing and the URL builders, and web.py is 652. The
-# count is ratcheted back to 1 accordingly.
+# Task 8b8a5888 has now DISCHARGED that debt: mcp_transport.py took the session
+# worker, the reconnect/backoff, both call bounds and the result decoding, and
+# lithos_client is 675 — the typed method surface over it. web.py briefly held
+# a second slot (granted against 538e2f3d, discharged by request_filters.py).
 #
-# The remaining slot is lithos_client's, and 8b8a5888 owns it. max_module_lines
-# stays at 895 until that lands, deliberately: it is a stop-loss over TODAY'S
-# largest module, and lowering it now to fit web.py's new size would tighten the
-# ceiling around lithos_client without shrinking it. When 8b8a5888 lands, the
-# count goes to 0 and this allowance is given back in the same change.
-modules_over_800_lines = 1    # lithos_client (888); no other module may join it
-max_module_lines       = 895  # stop-loss, 7 lines over today's largest (888)
+# So the count goes to 0 and the allowance is handed back in the same change:
+# max_module_lines now rests ON the god-module threshold rather than above the
+# largest module, because with no exception left there is one uniform ceiling
+# and no reason to sit anywhere else. Today's largest is knowledge.py at 781.
+# A future exception must be argued from here, not from an inherited 895.
+modules_over_800_lines = 0    # the exception is discharged; no module may retake it
+max_module_lines       = 800  # the god-module threshold itself, no allowance above it
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

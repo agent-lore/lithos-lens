@@ -1108,7 +1108,7 @@ def test_a_stalled_gating_read_cannot_hang_the_render(
     the five GATING reads bare.
 
     Nothing under them imposes one — ``session.call_tool`` takes no timeout,
-    ``_SESSION_WAIT_TIMEOUT_S`` covers only session establishment, uvicorn
+    ``SESSION_WAIT_TIMEOUT_S`` covers only session establishment, uvicorn
     sets no request deadline — so a half-open session pinned the request task
     on the reads the render cannot even start without, which is a strictly
     worse place to be unbounded than the fan-out behind them.

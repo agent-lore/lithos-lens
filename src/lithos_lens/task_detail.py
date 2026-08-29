@@ -191,7 +191,7 @@ async def load_task_detail(
     #
     # Each read is deadlined here for the same reason ``task_links`` deadlines
     # the neighbour reads: nothing below imposes one (``session.call_tool``
-    # takes no timeout, ``_SESSION_WAIT_TIMEOUT_S`` covers only session
+    # takes no timeout, ``SESSION_WAIT_TIMEOUT_S`` covers only session
     # establishment, uvicorn sets no request deadline). These five are the
     # GATING reads — the render cannot start without them — so leaving them
     # bare while deadlining the fan-out behind them bounded the cheap half of

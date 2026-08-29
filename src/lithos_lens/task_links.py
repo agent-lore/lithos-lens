@@ -15,7 +15,7 @@ parsed locally in O(N). Resolving the ids is N round trips, each a
 request/response exchange multiplexed onto the single process-wide MCP session
 every other page render shares — N times the latency and N times the session
 contention. Nothing upstream caps it either: ``session.call_tool`` takes no
-per-call timeout, ``_SESSION_WAIT_TIMEOUT_S`` covers only session
+per-call timeout, ``SESSION_WAIT_TIMEOUT_S`` covers only session
 establishment, and uvicorn sets no request deadline. So the fan-out is bounded
 here, twice over:
 
@@ -100,7 +100,7 @@ LINK_FANOUT_CONCURRENCY = 8
 
 # Deadline on a single neighbour read. Lens tool calls are user-facing and
 # short-lived, so failing fast beats blocking a page render — the same call
-# ``lithos_client._SESSION_WAIT_TIMEOUT_S`` makes, and the same figure, because
+# ``mcp_transport.SESSION_WAIT_TIMEOUT_S`` makes, and the same figure, because
 # nothing under this module imposes one: ``session.call_tool`` takes no
 # timeout, and uvicorn sets no request deadline. A read that trips this renders
 # as an unresolved line rather than failing the page.
