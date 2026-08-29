@@ -457,6 +457,10 @@
            filter keys have one definition (request_filters) and the client
            obeys it rather than keeping a second copy that drifts. #}
         boardFiltered: {{ board_is_filtered(request) | tojson }},
+        {# And whether a row that becomes `open` still belongs here — the
+           narrower question a REOPEN asks, since the row already passed
+           every filter and only its status changed. #}
+        boardAdmitsOpen: {{ board_admits_open(request) | tojson }},
         eventsUrl: "/tasks/events"
       };
     </script>

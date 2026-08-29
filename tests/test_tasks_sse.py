@@ -443,6 +443,85 @@ async def test_ids_that_are_not_usable_cursors_are_never_replayed(
 
 
 @pytest.mark.anyio
+async def test_a_first_connect_that_had_to_retry_still_delivers_the_backstop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backstop is owed to a GAP, not to a prior success.
+
+    The first connect is refresh-free because nothing was missed: the page a
+    browser holds was server-rendered moments earlier. That reasoning stops
+    applying the instant an attempt FAILS. Lens is up and serving, so browsers
+    attach and their EventSource reports `live` — the polling fallback is
+    driven by the browser-to-Lens stream, not by Lens's upstream, so it never
+    arms. Every Lithos change during the retry window is invisible to those
+    tabs, and without a backstop on the eventual open it stays invisible until
+    something unrelated triggers a reconcile.
+
+    Keying on "have we ever connected" asks the wrong question: that is a
+    property of the hub's history, and staleness is a property of the interval.
+
+    The successful attempt HOLDS the stream open (no frame batch to exhaust),
+    so the refresh asserted here can only have come from that open — not from a
+    later reconnect after a batch ended.
+    """
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        # Upstream is down when Lens starts: the first attempt never opens a
+        # stream, so `_on_stream_open` is not reached on it at all. The second
+        # runs off the end of the list and holds open.
+        _recording_httpx_client(requests, [httpx.ConnectError("upstream refused")]),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    await hub.start()
+    try:
+        received = await asyncio.wait_for(subscriber.get(), timeout=2)
+        # and exactly one, not a burst
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(subscriber.get(), timeout=0.5)
+    finally:
+        await hub.stop()
+
+    assert received.id == f"{LENS_REFRESH_EVENT}:1"
+    assert len(requests) == 2
+
+
+@pytest.mark.anyio
+async def test_the_very_first_connect_still_sends_no_backstop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive control, so the assertion above means something: with no
+    failed attempt there is no gap, and a refresh on every process start would
+    make every dashboard refetch for nothing.
+
+    Same shape as the test above minus the failure — one attempt, held open."""
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx, "AsyncClient", _recording_httpx_client(requests, [])
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    await hub.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(subscriber.get(), timeout=0.5)
+    finally:
+        await hub.stop()
+
+    assert len(requests) == 1
+
+
+@pytest.mark.anyio
 async def test_a_connect_failure_drops_the_replay_cursor_and_still_refreshes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -247,7 +247,22 @@
     // Which workable section the task belongs to now is the frontier's answer,
     // not ours, so the row waits in the pending strip until the reconcile
     // re-renders the board - the same reason a just-created task lands there.
-    const list = document.querySelector('[data-task-list="pending"]');
+    //
+    // But NOT onto a board whose status filter excludes open rows. The pending
+    // strip renders on EVERY board, so parking the row there puts it back on
+    // screen under a filter that no longer admits it - and if the ~800ms
+    // reconcile then fails, it persists with nothing to say it is wrong. Drop
+    // it instead: a row missing for ~800ms is recoverable, one stuck out of
+    // scope is not. `closeTask` above is conservative the same way, removing a
+    // row whose new status has no list on this board rather than parking it.
+    //
+    // `boardAdmitsOpen`, not `boardFiltered`: this row was SERVER-RENDERED
+    // here, so it already passed every filter, and reopening changes only its
+    // status. A `since` or `tag` board still holds it (see
+    // request_filters.board_admits_open).
+    const list = config.boardAdmitsOpen
+      ? document.querySelector('[data-task-list="pending"]')
+      : null;
     if (list) list.prepend(row);
     if (!list) row.remove();
   }

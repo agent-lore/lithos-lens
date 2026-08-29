@@ -188,6 +188,27 @@ def board_is_filtered(request: Request) -> bool:
     return bool(_preserved_filter_params(request))
 
 
+def board_admits_open(request: Request) -> bool:
+    """True when a task that is now ``open`` still belongs on this board.
+
+    The sibling question to :func:`board_is_filtered`, and deliberately a
+    narrower one. That predicate counts EVERY preserved key, because a
+    just-created task has no attributes the client can check against any of
+    them. This one is asked about a row the server ALREADY rendered here — it
+    passed every filter — so the only thing that can evict it is the one
+    attribute reopening actually changes: its status. Project, agent, tag,
+    epic and ``since`` are all unmoved by a reopen (``created_at`` does not
+    change), and suppressing on those would hide a row from the board it still
+    belongs to.
+
+    Answered here rather than by the browser reading its own query string, for
+    the same reason as :func:`board_is_filtered`: one definition of what the
+    status filter's values mean.
+    """
+    status = request.query_params.get("status", "")
+    return not status or status == "open"
+
+
 def task_tag_url(request: Request, tag: str) -> str:
     params = _preserved_filter_params(request, exclude="tag")
     params.append(("tag", tag))

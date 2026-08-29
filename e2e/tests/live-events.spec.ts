@@ -52,6 +52,48 @@ test("task.reopened event moves a completed row out of the Completed group", asy
   ).toHaveCount(0);
 });
 
+test("a reopened task does not claim scope on a status-filtered board", async ({ page, request }) => {
+  // Same rule the optimistic skeleton follows (a3fd5f01, #56): a row must not
+  // assert membership of a board that has not checked it. The pending strip
+  // renders on EVERY board, so parking a reopened row there puts it back on
+  // screen under a `status=completed` filter that no longer admits it — and if
+  // the ~800ms reconcile fails, it persists with nothing to say it is wrong.
+  //
+  // Narrower than `boardFiltered`, deliberately: this row was server-rendered
+  // here, so it passed every filter already, and reopening changes only its
+  // status. The unfiltered case above is the other half of the contract — same
+  // event, same fixture row, and there the row SHOULD move to pending.
+  await page.goto("/tasks?status=completed&since=2026-08-01");
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+
+  // Present first, which is what makes the absence below evidence rather than
+  // a vacuous pass: the row can only leave because the event arrived and was
+  // acted on. (The skeleton test needs a separate positive control precisely
+  // because its row never existed to begin with.)
+  await expect(
+    page.locator('[data-task-row][data-task-id="lens-note-view"]'),
+  ).toBeVisible();
+
+  const publish = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-reopen-filtered-${Date.now()}`,
+      type: "task.reopened",
+      task_id: "lens-note-view",
+      payload: { agent: "worker-a", prior_status: "completed" },
+      requires_refresh: false,
+    },
+  });
+  expect(publish.status()).toBe(202);
+
+  // Gone from the board entirely — not relocated into the pending strip.
+  await expect(
+    page.locator('[data-task-row][data-task-id="lens-note-view"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-task-list="pending"] [data-task-row]'),
+  ).toHaveCount(0);
+});
+
 test("finding.posted reveals the finding chip on the task's row", async ({ page, request }) => {
   // The chip's whole affordance is absent-until-a-finding-lands, which only
   // means something if it starts hidden — the pipeline half of the `[hidden]`

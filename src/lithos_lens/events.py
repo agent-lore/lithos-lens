@@ -157,7 +157,7 @@ class EventHub:
         self._subscribers: set[asyncio.Queue[LensEvent]] = set()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
-        self._connected = False
+        self._gap_since_last_open = False
         self._reconnects = 0
         self._stream_open = False
         self._last_refresh_at = float("-inf")
@@ -210,16 +210,26 @@ class EventHub:
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
 
-        Every reconnect — never the first connect — results in one synthetic
-        `lens.refresh` reaching browsers. `Last-Event-ID` replays Lithos's ring
-        buffer, but a gap wider than that buffer cannot be replayed, so a full
-        browser refresh is the only correctness guarantee.
+        An open that FOLLOWS A GAP results in one synthetic `lens.refresh`
+        reaching browsers. `Last-Event-ID` replays Lithos's ring buffer, but a
+        gap wider than that buffer cannot be replayed, so a full browser
+        refresh is the only correctness guarantee.
+
+        The condition is the gap, not a prior success. Only the very first
+        attempt is refresh-free, because nothing has been missed yet: the page
+        a browser holds was server-rendered moments earlier. A first attempt
+        that FAILED breaks that — Lens is up and serving, so browsers attach
+        and their EventSource reports `live` (the polling fallback is driven by
+        the browser-to-Lens stream, not by Lens's upstream, so it never arms),
+        and every Lithos change during the retry window is invisible to them.
+        Keying on "have we ever connected" would ask about the hub's history
+        when staleness is a property of the interval.
         """
         self._stream_open = True
         self.status = "live"
-        if self._connected:
+        if self._gap_since_last_open:
             await self._schedule_refresh()
-        self._connected = True
+            self._gap_since_last_open = False
 
     async def _schedule_refresh(self) -> None:
         """Broadcast the reconnect backstop, at most once per cooldown window.
@@ -285,6 +295,11 @@ class EventHub:
                     extra={"last_event_id": self.last_event_id},
                 )
                 self.last_event_id = ""
+            # This iteration ended — cleanly, by error, or without ever opening.
+            # Either way there is now an interval in which browsers were
+            # attached and receiving nothing, so the next open owes them a
+            # refresh (see _on_stream_open).
+            self._gap_since_last_open = True
             self.status = "reconnecting"
             delay_ms = backoff[min(attempt, len(backoff) - 1)]
             attempt += 1
