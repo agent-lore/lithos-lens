@@ -2009,6 +2009,61 @@ def test_healthy_stripe_is_withheld_when_the_frontier_truncated(
     assert "data-attention-unknown" in text
 
 
+def test_only_the_truncated_side_marks_its_counter_on_the_page(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Story 28 on the rendered board: the ready read caps at the limit while
+    the blocked read answers in full, so the Ready and Needs-attention cards
+    carry the "at least this many" marking and the Blocked card — an exact
+    count Lithos answered completely — does not."""
+    fake = TaskFakeLithosClient()
+    # Drop the stale fixture (it fires the age rule) and add a second and third
+    # unclaimed ready row, so the ready frontier has 3 rows against a limit of 2.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.tasks.extend(
+        TaskRecord(
+            id=task_id,
+            title=title,
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=5),
+        )
+        for task_id, title in (
+            ("open-fresh", "Fresh ready task"),
+            ("open-spare", "Spare ready task"),
+            ("open-blocked", "Blocked open task"),
+        )
+    )
+    fake.ready_ids = {"open-unclaimed", "open-fresh", "open-spare"}
+    fake.blocked = {
+        "open-blocked": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-unclaimed",
+                type="blocks",
+                status="open",
+                message="Waiting on the unclaimed task.",
+            ),
+        )
+    }
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "2")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = unescape(response.text)
+    # The tail and its banner are there — and the banner names the ONE side.
+    assert "Not classified" in text
+    assert "Section counts are approximate." in text
+    assert "The Lithos ready frontier truncated at 2" in text
+    assert "blocked frontier" not in text
+    # The ready-fed counters are marked; the blocked count stands as exact.
+    assert 'data-approximate-count="ready"' in text
+    assert 'data-approximate-count="attention"' in text
+    assert 'data-approximate-count="blocked"' not in text
+
+
 def test_stale_open_row_is_flagged_with_its_reason_chip(
     lithos_lens_config_env: Path,
 ) -> None:

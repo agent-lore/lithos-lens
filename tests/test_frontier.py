@@ -606,6 +606,103 @@ def test_load_dashboard_flags_truncation_only_at_the_limit() -> None:
     assert fake.ready_calls == 1
 
 
+def test_only_the_capped_frontier_side_marks_its_counter_approximate() -> None:
+    """Story 28, the sharp half: ``lithos_task_ready`` and ``lithos_task_blocked``
+    are capped INDEPENDENTLY, so a board where only Ready hit the limit must not
+    call the exact Blocked count approximate. Only the counters the capped read
+    feeds are marked — Ready itself, and Needs attention, which is promoted out
+    of both workable sections."""
+    r1, r2, r3 = (_task(f"r{n}", claims=()) for n in (1, 2, 3))
+    blocked = _task("b", claims=())
+    fake = _FrontierFake(
+        open_tasks=[r1, r2, r3, blocked],
+        ready=[r1, r2, r3],  # honors limit=2 -> capped, r3 falls into the tail
+        blocked=[_blocked(blocked, BlockerRecord(kind="task", task_id="p"))],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=2))
+
+    assert _section_ids(data.sections, "unclassified") == ["r3"]
+    assert data.truncated is True
+    # The Ready read was cut short; the Blocked read answered in full.
+    assert data.summary.approximate == frozenset({"ready", "attention"})
+    assert data.summary.approximate_frontiers == ("ready",)
+    # The counts claims alone decide are untouched by any cap.
+    assert "in_progress" not in data.summary.approximate
+    assert "claims_unknown" not in data.summary.approximate
+
+
+def test_only_the_capped_frontier_side_marks_its_counter_approximate_blocked() -> None:
+    """The mirror: Blocked at the limit while Ready answered in full marks the
+    Blocked counter and leaves the exact Ready count alone."""
+    ready = _task("r", claims=())
+    b1, b2, b3 = (_task(f"b{n}", claims=()) for n in (1, 2, 3))
+    fake = _FrontierFake(
+        open_tasks=[ready, b1, b2, b3],
+        ready=[ready],
+        blocked=[  # honors limit=2 -> capped, b3 falls into the tail
+            _blocked(row, BlockerRecord(kind="task", task_id="p"))
+            for row in (b1, b2, b3)
+        ],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=2))
+
+    assert _section_ids(data.sections, "unclassified") == ["b3"]
+    assert data.truncated is True
+    assert data.summary.approximate == frozenset({"blocked", "attention"})
+    assert data.summary.approximate_frontiers == ("blocked",)
+
+
+def test_both_capped_frontier_sides_mark_both_counters() -> None:
+    """Both reads at the limit is the board-wide case the old single banner
+    described — still reported, now as the union of the two sides."""
+    r1, r2 = (_task(f"r{n}", claims=()) for n in (1, 2))
+    b1, b2 = (_task(f"b{n}", claims=()) for n in (1, 2))
+    fake = _FrontierFake(
+        open_tasks=[r1, r2, b1, b2],
+        ready=[r1, r2],
+        blocked=[
+            _blocked(row, BlockerRecord(kind="task", task_id="p")) for row in (b1, b2)
+        ],
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert _section_ids(data.sections, "unclassified") == ["r2", "b2"]
+    assert data.summary.approximate == frozenset({"ready", "blocked", "attention"})
+    assert data.summary.approximate_frontiers == ("ready", "blocked")
+
+
+def test_an_untruncated_frontier_marks_no_counter_approximate() -> None:
+    """A response that merely FITS the limit exactly left nothing in the tail,
+    so every counter is exact — the same evidence ``truncated`` is gated on."""
+    ready = _task("r", claims=())
+    fake = _FrontierFake(open_tasks=[ready], ready=[ready], blocked=[])
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert data.truncated is False
+    assert data.summary.approximate == frozenset()
+    assert data.summary.approximate_frontiers == ()
+
+
+def test_frontier_read_error_never_marks_a_counter_approximate() -> None:
+    """A frontier OUTAGE must never read as "we have too many tasks". The
+    surviving read can sit on its cap — that is not evidence of truncation when
+    its partner never answered, and §14 renders the board flat anyway."""
+    ready = _task("r", claims=())
+    blocked = _task("b", claims=())
+    fake = _FrontierFake(
+        open_tasks=[ready, blocked],
+        ready=[ready],
+        blocked=[_blocked(blocked, BlockerRecord(kind="task", task_id="p"))],
+        fail_ready=True,
+    )
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert data.open_flat is True
+    assert data.truncated is False
+    assert data.summary.approximate == frozenset()
+    assert any("ready frontier" in message for message in data.errors)
+
+
 def test_load_dashboard_below_limit_gap_retries_then_classifies_blocked() -> None:
     """A workable open task absent from BOTH frontier responses while BELOW the
     limit is read-skew, not truncation (the reads are independent, not a

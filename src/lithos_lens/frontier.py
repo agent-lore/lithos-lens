@@ -53,6 +53,7 @@ from lithos_lens.frontier_fallback import (
 )
 from lithos_lens.frontier_join import (
     WORKABLE_TASK_TYPE,
+    approximate_counters,
     classify_open_tasks,
     reclassify_conservative,
 )
@@ -276,9 +277,15 @@ async def load_dashboard(
         overlap = ready_ids & {record.task.id for record in blocked_rows}
         # Truncation is a fact about the response size, not an inference from
         # gaps: a frontier read that returned frontier_limit rows hit its cap.
-        at_limit = (
-            len(ready_rows) >= frontier_limit or len(blocked_rows) >= frontier_limit
+        # Recorded PER SIDE — the two reads are capped independently, and only
+        # the counters a capped side feeds are approximate (story 28). The skew
+        # machinery below still asks the board-wide question.
+        capped_frontiers = tuple(
+            side
+            for side, rows in (("ready", ready_rows), ("blocked", blocked_rows))
+            if len(rows) >= frontier_limit
         )
+        at_limit = bool(capped_frontiers)
         parts = classify_open_tasks(
             visible,
             ready_ids=ready_ids,
@@ -310,7 +317,7 @@ async def load_dashboard(
             visible,
             parts,
             effective_overlap,
-            at_limit,
+            capped_frontiers,
             skewed_frontier,
             skewed_frontier or bool(terminal_overlap),
         )
@@ -374,7 +381,7 @@ async def load_dashboard(
                 )
 
         partition = state.partition
-        at_limit = state.at_limit
+        capped_frontiers = state.capped_frontiers
         open_index = state.index
         visible_open = state.visible
         reconciliation_pending = frontier_ok and state.skewed_frontier
@@ -420,7 +427,7 @@ async def load_dashboard(
         partition = flat_open_sections(
             [task for task in visible_open if task.task_type != GATE_TASK_TYPE]
         )
-        at_limit = False
+        capped_frontiers = ()
         open_index = {task.id: task for task in open_snapshot}
         reconciliation_pending = False
 
@@ -550,6 +557,15 @@ async def load_dashboard(
         errors=errors,
         filters_narrowed=filters_narrowed,
     )
+    # Truncation means a frontier response actually HIT frontier_limit AND
+    # left otherwise-classifiable rows in the tail; one fact, computed once, so
+    # the banner and the per-counter marking can never disagree about it.
+    # Unclassified rows from a FAILED frontier read are surfaced by the error
+    # banner, and a below-limit gap is read-skew (handled by the retry +
+    # conservative Blocked above) — neither is mislabelled as truncation.
+    truncated = (
+        frontier_ok and bool(capped_frontiers) and bool(partition.get("unclassified"))
+    )
     summary = TaskSummary(
         # ``.get`` throughout: the flat fallback's partition holds one section.
         attention=len(partition.get("attention", ())),
@@ -568,6 +584,9 @@ async def load_dashboard(
         recent_completed=len(closed["completed"]),
         recent_cancelled=len(closed["cancelled"]),
         agents=int_stat(stats, "agents", default=len(agents)),
+        # Only the counters fed by a side that actually truncated: the board is
+        # not approximate, the capped side's sections are.
+        approximate=approximate_counters(capped_frontiers if truncated else ()),
     )
     return DashboardData(
         filters=filters,
@@ -579,12 +598,9 @@ async def load_dashboard(
         projects=projects,
         gate_groups=gate_section.groups,
         next_gate_ready_at=gate_section.next_ready_at,
-        # Truncation means a frontier response actually HIT frontier_limit,
-        # leaving otherwise-classifiable rows in the tail. Unclassified rows
-        # from a failed frontier read are surfaced by the error banner, and a
-        # below-limit gap is read-skew (handled by the retry + conservative
-        # Blocked above) — neither is mislabelled as truncation.
-        truncated=frontier_ok and at_limit and bool(partition.get("unclassified")),
+        # Computed once above, per side, so the banner and the per-counter
+        # marking cannot disagree about what truncated.
+        truncated=truncated,
         reconciliation_pending=reconciliation_pending,
         filters_narrowed=filters_narrowed,
         open_side_narrowed=open_side_narrowed,
@@ -636,6 +652,7 @@ def _is_nothing_to_show(
 class _FrontierState:
     """One generation of the joined reads: snapshot views + skew verdicts.
 
+    ``capped_frontiers`` names which frontier reads came back full;
     ``skewed_frontier`` drives the conservative reclassification + banner;
     ``retry_worthy`` additionally includes the open∩terminal freshness
     overlap, which only warrants the retry (the later snapshot then
@@ -648,7 +665,7 @@ class _FrontierState:
         "visible",
         "partition",
         "effective_overlap",
-        "at_limit",
+        "capped_frontiers",
         "skewed_frontier",
         "retry_worthy",
     )
@@ -660,7 +677,7 @@ class _FrontierState:
         visible: list[TaskRecord],
         partition: dict[SectionName, tuple[SectionRow, ...]],
         effective_overlap: set[str],
-        at_limit: bool,
+        capped_frontiers: tuple[str, ...],
         skewed_frontier: bool,
         retry_worthy: bool,
     ) -> None:
@@ -671,7 +688,9 @@ class _FrontierState:
         self.visible = visible
         self.partition = partition
         self.effective_overlap = effective_overlap
-        self.at_limit = at_limit
+        # The frontier sides whose response hit ``frontier_limit``, in read
+        # order — the per-counter approximate marking is derived from these.
+        self.capped_frontiers = capped_frontiers
         self.skewed_frontier = skewed_frontier
         self.retry_worthy = retry_worthy
 

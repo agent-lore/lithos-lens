@@ -2,6 +2,24 @@
 
 {% block title %}Tasks | Lithos Lens{% endblock %}
 
+{#
+  Per-counter truncation marking (T1-S11, story 28). ``lithos_task_ready`` and
+  ``lithos_task_blocked`` are capped INDEPENDENTLY, so one can truncate while
+  the other answers in full. Marking every card whenever either side capped
+  would understate what Lens knows exactly — a count Lithos answered completely
+  is exact and says so. ``summary.approximate`` names the counters the capped
+  read feeds (frontier_join.COUNTERS_BY_FRONTIER); this note is the marking, and
+  the banner below explains it once for the page.
+
+  The summary is passed in rather than read off the enclosing context: a macro
+  does not inherit it.
+#}
+{% macro approximate_note(summary, counter, limit) %}
+  {%- if counter in summary.approximate %}
+    <small class="metric-approximate" data-approximate-count="{{ counter }}">At least this many — the {{ summary.approximate_frontiers | join(" and ") }} frontier{{ "s" if summary.approximate_frontiers | length > 1 else "" }} truncated at {{ limit }}</small>
+  {%- endif %}
+{%- endmacro %}
+
 {% block content %}
   <section class="hero">
     <p class="eyebrow">Operational dashboard</p>
@@ -57,6 +75,9 @@
             <span>Needs attention</span>
             <strong data-attention-count>{{ dashboard.summary.attention }}</strong>
             <small>Promoted out of their section</small>
+            {# Attention is promoted OUT of both workable sections, so either
+               cap can hide a row that would have been promoted here. #}
+            {{ approximate_note(dashboard.summary, "attention", dashboard.frontier_limit) }}
           </a>
         {% endif %}
         {# Keyed on open_flat, exactly like the sections below: the cards
@@ -76,11 +97,13 @@
             <span>Ready</span>
             <strong>{{ dashboard.summary.ready }}</strong>
             <small>Unclaimed and workable now</small>
+            {{ approximate_note(dashboard.summary, "ready", dashboard.frontier_limit) }}
           </a>
           <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-blocked') }}">
             <span>Blocked</span>
             <strong>{{ dashboard.summary.blocked }}</strong>
             <small>Waiting on predecessors or gates</small>
+            {{ approximate_note(dashboard.summary, "blocked", dashboard.frontier_limit) }}
           </a>
         {% else %}
           {# No usable frontier: Ready/Blocked counts would be zeros dressed as
@@ -125,9 +148,13 @@
       </section>
 
       {% if dashboard.truncated %}
-        <section class="banner banner-warning" role="status">
+        {# Named per side, not board-wide: with the blocked read complete, a
+           workable open row missing from it is not blocked, so the tail is the
+           ready read's overflow and the Blocked count is exact. The cards say
+           which counts are affected; this says why, once. #}
+        <section class="banner banner-warning" role="status" data-truncation-banner>
           <strong>Section counts are approximate.</strong>
-          <span>The Lithos ready/blocked frontier truncated at {{ dashboard.frontier_limit }}; some open tasks are listed as Not classified below.</span>
+          <span>The Lithos {{ dashboard.summary.approximate_frontiers | join(" and ") }} frontier{{ "s" if dashboard.summary.approximate_frontiers | length > 1 else "" }} truncated at {{ dashboard.frontier_limit }}; some open tasks are listed as Not classified below. Only the counts marked "at least this many" are affected — the rest are exact.</span>
         </section>
       {% endif %}
       {% if dashboard.reconciliation_pending %}

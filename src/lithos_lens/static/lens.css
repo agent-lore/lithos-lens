@@ -273,6 +273,18 @@ small {
   margin: 0.25rem 0;
 }
 
+/* A count a truncated frontier read left understated. It has to read as a
+   qualification of the big number above it, not as a second sub-label, so it
+   takes the warning border the truncation banner uses rather than the muted
+   grey every other <small> on the card gets. */
+.metric-approximate {
+  border-top: 1px solid var(--warning-border);
+  color: var(--ink);
+  display: block;
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+}
+
 .filter-bar {
   align-items: end;
   display: grid;

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { TRUNCATED_BASE_URL, TRUNCATED_FRONTIER_LIMIT } from "../servers";
 
 /**
  * Responsive screenshot capture — the artifacts-dir contract.
@@ -56,6 +57,50 @@ const PAGES: ReadonlyArray<{
         page.locator('[data-task-group="gates"] [data-gate-type-badge]').first(),
       ).toBeVisible();
       await expect(page.locator(".gate-countdown")).toContainText(/ready in /);
+    },
+  },
+  {
+    // The truncation half of T1-S11, which no reviewer had ever seen rendered:
+    // the Not-classified tail, the accuracy banner, and the PER-COUNTER
+    // "at least this many" marking. Served by the second webServer, whose
+    // `frontier_limit` is low enough for the demo fixtures to overflow — an
+    // absolute URL, so it is unambiguous which instance this shot came from.
+    //
+    // The `ready()` below waits on EVERY marker the picture exists to prove,
+    // because this sandbox cannot look at the PNGs: a capture that silently
+    // lost one must FAIL here rather than produce a healthy-looking screenshot
+    // a later reviewer reads as proof that it did not.
+    slug: "dashboard-truncated",
+    url: `${TRUNCATED_BASE_URL}/tasks?since=2026-08-01`,
+    ready: async (page) => {
+      await expect(page.locator(".task-board")).toBeVisible();
+      // 1. The overflow tail, with a row actually in it.
+      await expect(
+        page.locator('[data-task-group="unclassified"] .task-row').first(),
+      ).toBeVisible();
+      // 2. The accuracy banner, naming the one side that truncated.
+      const banner = page.locator("[data-truncation-banner]");
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText(
+        `ready frontier truncated at ${TRUNCATED_FRONTIER_LIMIT}`,
+      );
+      // 3. The per-counter marking on both counters the ready read feeds.
+      await expect(
+        page.locator('[data-approximate-count="ready"]'),
+      ).toBeVisible();
+      await expect(
+        page.locator('[data-approximate-count="attention"]'),
+      ).toBeVisible();
+      // 4. The honesty claim itself, which is the whole slice: at this limit
+      //    the blocked read answered IN FULL, so the Blocked card carries an
+      //    exact count and must show no marking at all. A regression to the
+      //    board-wide banner fails right here.
+      await expect(
+        page.locator('[data-approximate-count="blocked"]'),
+      ).toHaveCount(0);
+      await expect(
+        page.locator('[data-task-group="blocked"] .task-row').first(),
+      ).toBeVisible();
     },
   },
   {
