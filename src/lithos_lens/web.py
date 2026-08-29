@@ -43,6 +43,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.request_filters import (
+    board_is_filtered,
     epic_scope_url,
     filter_query_oversized,
     knowledge_tag_url,
@@ -177,6 +178,7 @@ def create_app(
     templates.env.globals["tag_chip_class"] = tag_chip_class
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
     templates.env.globals["note_url"] = note_url
+    templates.env.globals["board_is_filtered"] = board_is_filtered
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

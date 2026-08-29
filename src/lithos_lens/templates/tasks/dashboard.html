@@ -453,6 +453,10 @@
     <script>
       window.LithosLensTasks = {
         autoRefreshIntervalMs: {{ config.tasks.auto_refresh_interval_s * 1000 }},
+        {# Whether this board is narrowed, decided server-side: the preserved
+           filter keys have one definition (request_filters) and the client
+           obeys it rather than keeping a second copy that drifts. #}
+        boardFiltered: {{ board_is_filtered(request) | tojson }},
         eventsUrl: "/tasks/events"
       };
     </script>

@@ -7,7 +7,8 @@
   let reconcileTimer = null;
   let pollTimer = null;
   let reconnectRefreshPending = false;
-  let latestRefreshToken = 0;
+  let refreshInFlight = false;
+  let refreshQueued = false;
   let currentLiveState = "paused";
   let currentLiveDetail = "Reconnecting; polling fallback is active";
 
@@ -38,12 +39,62 @@
     pollTimer = null;
   }
 
+  // ONE render in flight per tab, ever.
+  //
+  // This used to be a `latestRefreshToken` guard, which discarded a stale
+  // RESULT — after the server had already rendered it. That is not the same
+  // property. Every per-request bound on the server is per-INVOCATION, so two
+  // overlapping reconciles each get their own full allowance: on the task
+  // detail page a 25-slot fan-out becomes 25 x overlapping renders, capped in
+  // practice only by the browser's ~6 connections per origin. LithosClient
+  // holds ONE MCP session for the whole process, so that contention degrades
+  // every surface — the dashboard, /knowledge, /health — not just the page
+  // being viewed. Discarding the response afterwards saves none of it.
+  //
+  // An AbortController was the other option the finding offered. It is weaker
+  // here: cancelling the fetch tears down the client side, but a server-side
+  // render already in progress runs to completion — Starlette only notices a
+  // disconnect when it writes. Not issuing the second request is what actually
+  // bounds the work.
+  //
+  // Coalesced rather than dropped: a refresh asked for while one is running
+  // sets a flag and gets exactly ONE more pass afterwards, however many
+  // arrived. So the board still converges on the latest state, and a burst of
+  // events costs two renders rather than N.
   async function refreshFragments() {
-    const token = ++latestRefreshToken;
+    if (refreshInFlight) {
+      refreshQueued = true;
+      return;
+    }
+    refreshInFlight = true;
+    try {
+      do {
+        refreshQueued = false;
+        await runRefresh();
+      } while (refreshQueued);
+    } finally {
+      refreshInFlight = false;
+      // A REJECTED render jumps straight here, past the `while (refreshQueued)`
+      // check — so a reconcile asked for during a render that then failed was
+      // dropped, and the board sat stale until the 30s poll. Coalescing has to
+      // survive failure or it is only half a guarantee.
+      //
+      // Handed back to the DEBOUNCED path rather than retried inline: an
+      // inline retry against a server that is failing fast would spin at
+      // whatever rate events arrive, which is the shape of problem this whole
+      // function exists to prevent.
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleReconcile();
+      }
+    }
+  }
+
+  async function runRefresh() {
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
-    if (!response.ok || token !== latestRefreshToken) return;
+    if (!response.ok) return;
     const text = await response.text();
     const doc = new DOMParser().parseFromString(text, "text/html");
     replaceFragment(doc, "dashboard-data");
@@ -88,6 +139,24 @@
   function insertSkeletonRow(message) {
     const taskId = message.task_id;
     if (!taskId || rowFor(taskId)) return;
+    // Not on a narrowed board. The `task.created` payload carries no tags, no
+    // project and no creator, so there is nothing here to evaluate the new
+    // task against the active scope — inserting anyway puts a row that ASSERTS
+    // membership onto a board that never checked it, and if the ~800ms
+    // reconcile then fails, it persists with nothing to say it is wrong. A
+    // cross-project tag board is exactly where an unrelated task appearing is
+    // both likely and confusing. `boardFiltered` is decided server-side so the
+    // preserved-key list has one definition (request_filters.board_is_filtered).
+    if (config.boardFiltered) return;
+    // Which is also why the link below carries NO query string. Every other
+    // detail link goes through `task_detail_url`, which re-emits the preserved
+    // filters through an allowlist — so a retired param like `claimed_state`
+    // stops at the link rather than propagating (pinned by
+    // test_legacy_claimed_state_bookmark_does_not_propagate_through_navigation).
+    // Appending `window.location.search` raw would have made this the one link
+    // that leaks it. And the allowlisted set is necessarily EMPTY here: the
+    // guard above means no preserved filter is active when this row renders.
+    // So "preserve the filters" and "emit a bare task URL" are the same link.
     // A just-created task has no known section yet (its frontier membership
     // arrives with the ~800ms reconciliation), so the skeleton lands in the
     // dedicated pending strip at the top of the board; the reconcile's

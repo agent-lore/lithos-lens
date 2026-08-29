@@ -3205,3 +3205,55 @@ def test_childless_epic_scope_renders_an_explained_empty_board(
     # the operator both that a slice was empty and that everything was fine.
     assert "data-healthy-stripe" not in text
     assert "All systems healthy" not in text
+
+
+# --- The optimistic skeleton row and the board's scope ---------------------
+
+
+def test_the_board_tells_the_client_whether_it_is_narrowed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """a3fd5f01: the optimistic skeleton row asserted membership it had never
+    checked, because it cannot check it — a ``task.created`` payload carries no
+    tags, no project and no creator, so the client has nothing to evaluate the
+    new task against.
+
+    The scope decision is therefore made HERE and shipped to the client as a
+    flag. Deciding it in JavaScript from ``window.location.search`` would put a
+    second copy of the preserved-key list in the browser, to drift the next
+    time a filter is added.
+    """
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unfiltered = client.get("/tasks")
+        by_tag = client.get("/tasks?tag=area%3Adata")
+        by_project = client.get("/tasks?project=influx")
+        # `since` counts too. A just-created task is inside any past-anchored
+        # window, so this one will rarely exclude it — but "rarely" is the
+        # wrong bar for a row that asserts membership and persists when
+        # reconciliation fails, and a FUTURE `since` excludes it outright.
+        by_since = client.get("/tasks?since=2026-08-01")
+
+    assert "boardFiltered: false" in unfiltered.text
+    assert "boardFiltered: true" in by_tag.text
+    assert "boardFiltered: true" in by_project.text
+    assert "boardFiltered: true" in by_since.text
+
+
+def test_an_unrecognised_query_param_does_not_narrow_the_board(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The flag tracks the PRESERVED keys, not "the query string is non-empty".
+
+    A param outside the allowlist scores nothing against the filter budget and
+    scopes nothing, so suppressing the optimistic row for it would cost
+    responsiveness for no correctness gain — and would make an arbitrary
+    tracking param silently change the board's behaviour.
+    """
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?utm_source=slack")
+
+    assert "boardFiltered: false" in response.text

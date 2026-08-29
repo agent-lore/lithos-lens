@@ -11,13 +11,14 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.request_filters` | S | 0 | 10 |
+| `lithos_lens.request_filters` | M | 0 | 11 |
 | `lithos_lens.web` | M | 0 | 1 |
 
 ## Public API
 
 ### `lithos_lens.request_filters`
 - def `filter_query_oversized` — True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
+- def `board_is_filtered` — True when this request narrows the board to a subset of tasks.
 - def `task_tag_url`
 - def `task_tag_clear_url` — Link an active-filter chip to the same board WITHOUT that one tag.
 - def `task_detail_url` — Link a task id as ONE path segment, with every reserved character encoded.
