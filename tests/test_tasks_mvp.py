@@ -3257,3 +3257,59 @@ def test_an_unrecognised_query_param_does_not_narrow_the_board(
         response = client.get("/tasks?utm_source=slack")
 
     assert "boardFiltered: false" in response.text
+
+
+@pytest.mark.parametrize(
+    ("query", "admits_open"),
+    [
+        # No status filter: the board shows every status, open included.
+        ("", True),
+        ("status=open", True),
+        ("status=completed", False),
+        ("status=cancelled", False),
+        # The comma form `parse_filters` documents as a convenience.
+        ("status=open,completed", True),
+        ("status=completed,open", True),
+        ("status=completed,cancelled", False),
+        # Repeated parameters, which parse_filters accumulates. The order must
+        # not matter — and a single-value read cannot manage that: Starlette's
+        # QueryParams.get returns the LAST value, so it happens to be right on
+        # `completed&open` and wrong on `open&completed`. Both orderings are
+        # here so a fix that is accidentally right on one is still caught.
+        ("status=open&status=completed", True),
+        ("status=completed&status=open", True),
+        ("status=completed&status=cancelled", False),
+        # An unrecognized status leaves no valid selection, and parse_filters
+        # falls back to ALL statuses rather than an empty board — so this
+        # board does show open rows, and must say so.
+        ("status=nonsense", True),
+        ("status=nonsense,completed", False),
+    ],
+)
+def test_board_admits_open_matches_the_statuses_the_board_actually_renders(
+    lithos_lens_config_env: Path, query: str, admits_open: bool
+) -> None:
+    """``boardAdmitsOpen`` tells the client whether a row that has just become
+    ``open`` still belongs on this board — it is what stops a reopened row
+    being parked in the pending strip under a filter that excludes it.
+
+    It is read off the statuses THIS RENDER parsed, so it cannot disagree with
+    the board around it. Re-deriving it from the raw query string did: a
+    string compare against "open" reads `status=open,completed` as excluding
+    open, and gets the repeated form right or wrong depending on which value
+    happens to come first.
+
+    So the assertion is deliberately doubled: the flag must match what the
+    board RENDERS, not merely what a second parser thinks the query said.
+    """
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?since=2026-04-01{'&' + query if query else ''}")
+
+    assert response.status_code == 200
+    text = response.text
+    assert f"boardAdmitsOpen: {'true' if admits_open else 'false'}" in text
+    # The board's own rows are the oracle: an open fixture row renders exactly
+    # when the flag says open is admitted.
+    assert ("Unclaimed open task" in text) is admits_open
