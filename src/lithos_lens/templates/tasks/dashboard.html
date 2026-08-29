@@ -457,6 +457,14 @@
            filter keys have one definition (request_filters) and the client
            obeys it rather than keeping a second copy that drifts. #}
         boardFiltered: {{ board_is_filtered(request) | tojson }},
+        {# And whether a row that becomes `open` still belongs here — the
+           narrower question a REOPEN asks, since the row already passed every
+           filter and only its status changed. Read off the statuses THIS
+           RENDER parsed, not re-derived from the query string: `parse_filters`
+           already handles `status=open,completed`, repeated `status=` params,
+           and an unrecognized value falling back to all statuses. A second
+           reading of that vocabulary would be a copy to drift. #}
+        boardAdmitsOpen: {{ ("open" in dashboard.filters.statuses) | tojson }},
         eventsUrl: "/tasks/events"
       };
     </script>
