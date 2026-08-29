@@ -3315,6 +3315,7 @@ def test_board_admits_open_matches_the_statuses_the_board_actually_renders(
     # when the flag says open is admitted.
     assert ("Unclaimed open task" in text) is admits_open
 
+
 # --- T1-S4: the Gates section, as rendered -------------------------------
 
 
