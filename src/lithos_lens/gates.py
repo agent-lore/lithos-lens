@@ -276,7 +276,6 @@ async def load_gates(
     blocked: Sequence[BlockedTaskRecord],
     blocked_available: bool,
     blocked_truncated: bool,
-    ready_ids: frozenset[str] = frozenset(),
     placed_ids: frozenset[str] = frozenset(),
     now: datetime,
 ) -> GateSection:
@@ -285,8 +284,6 @@ async def load_gates(
     ``visible_open`` is the filtered open snapshot the sections render, so the
     board's scope decides WHICH gates appear; ``index`` is the WHOLE open
     snapshot, so a gate's waiter count is never narrowed by that same scope.
-    ``ready_ids`` is the ready frontier, which the degraded waiter paths use to
-    refute edge-asserted waiters (see ``_resolve_asserted_waiters``).
     ``placed_ids`` are rows some other section already rendered (Needs
     attention promotes a long-waiting human gate out of here) — the
     single-placement rule, enforced at the one point that can see both.
@@ -301,7 +298,6 @@ async def load_gates(
         blocked=blocked,
         blocked_available=blocked_available,
         blocked_truncated=blocked_truncated,
-        ready_ids=ready_ids,
     )
     return GateSection(
         groups=group_gates(gates),
@@ -375,7 +371,6 @@ async def attach_gate_waiters(
     blocked: Sequence[BlockedTaskRecord],
     blocked_available: bool,
     blocked_truncated: bool,
-    ready_ids: frozenset[str] = frozenset(),
     fanout_cap: int = GATE_WAITER_FANOUT_CAP,
 ) -> tuple[GateRow, ...]:
     """Fill each gate's waiter list, preferring the Lithos-computed source.
@@ -385,13 +380,13 @@ async def attach_gate_waiters(
     so when that response came back and did not hit its limit it is both
     complete and authoritative — waiters are read straight off it and NO
     per-gate call is made at all. A ``waits_on_gate`` edge, by contrast, is a
-    peer-written assertion that some task waits; it is unbounded (so it is the
-    only source that survives frontier truncation) and nothing CONFIRMS it,
-    which is why edge-derived counts render as ``UNVERIFIED``. What it is
-    checked against is whatever this render already read — see
-    ``_resolve_asserted_waiters``, which drops every edge target Lithos has
-    itself contradicted (``ready_ids`` is the ready frontier: a task on it is
-    blocked by nothing at all).
+    peer-written assertion that some task waits — though per the
+    ``lithos_task_edge_upsert`` contract an ACCEPTED one constitutes the wait
+    rather than merely claiming it. It is unbounded (so it is the only source
+    that survives frontier truncation) and nothing independently confirms it,
+    which is why edge-derived counts render as ``UNVERIFIED``; see
+    ``_resolve_asserted_waiters`` for the two admissions applied to it and for
+    why no frontier response is used to refute it.
 
     So the per-gate edge fan-out happens ONLY on the degraded paths (blocked
     truncated or unavailable), and even then it is bounded twice: at most
@@ -444,9 +439,7 @@ async def attach_gate_waiters(
         attached.append(
             replace(
                 gate,
-                waiters=_resolve_asserted_waiters(
-                    waiter_ids, index=index, ready_ids=ready_ids
-                ),
+                waiters=_resolve_asserted_waiters(waiter_ids, index=index),
                 waiters_state=GateWaiterState.UNVERIFIED,
             )
         )
@@ -492,39 +485,44 @@ def _resolve_asserted_waiters(
     waiter_ids: Iterable[str],
     *,
     index: Mapping[str, TaskRecord],
-    ready_ids: frozenset[str],
 ) -> tuple[TaskRecord, ...]:
-    """Resolve EDGE-asserted waiter ids, dropping the ones Lithos contradicts.
+    """Resolve EDGE-asserted waiter ids into the rows the section can show.
 
-    A ``waits_on_gate`` edge is a peer-written assertion and
-    ``lithos_task_edge_upsert`` accepts one between any two existing tasks, so
-    on the degraded paths this is the one waiter source nothing computed. Three
-    admission checks apply, each of them something Lithos itself said on a read
-    THIS render already holds — so none of them costs a call, and the fan-out
-    stays capped where criterion 5 put it:
+    On the degraded paths this is the one waiter source nothing computed, and
+    the ``lithos_task_edge_upsert`` contract is what makes it usable anyway: a
+    ``waits_on_gate`` edge means "*to_task is not ready until the gate
+    from_task is resolved*", so an accepted edge does not merely ASSERT the
+    wait — it constitutes it. An open workable task the edge names is a waiter
+    by definition, and Lens is in no position to overrule that.
 
-    - the id must be in the open snapshot. An edge outlives the wait, so a
-      completed or cancelled waiter still carries one, and an id naming nothing
-      must not surface a row the operator cannot see;
-    - the row must be WORKABLE. ``lithos_task_blocked`` returns ``task``-typed
-      rows only, so an edge naming an epic or another gate names something the
-      authoritative source could never report as waiting on anything;
-    - the row must NOT be on the ready frontier. Ready is Lithos's own
-      statement that a task is blocked by nothing at all, which refutes the
-      edge outright.
+    Two admissions remain, and neither is a refutation of the edge:
 
-    That leaves exactly the rows Lithos's own reads agree could be waiting: an
-    open workable task it has not called ready. It is still labelled
-    ``UNVERIFIED``, because "nothing contradicts it" is not "confirmed" — and
-    the checks can only ever REMOVE a waiter, so a degraded count errs low
-    rather than inventing one.
+    - the id must be in the open snapshot. This is a renderability bound, not a
+      verdict: the count and the expandable list under it must describe the
+      same set (the list IS the count's evidence), and Lens cannot draw a row
+      for a task it holds no record of — nor let an id naming nothing inflate
+      the number;
+    - the row must be WORKABLE. ``lithos_task_ready`` / ``lithos_task_blocked``
+      return ``task``-typed rows only, so "blocks N tasks" counts the same
+      domain the computed source does; an epic or another gate is structure,
+      never a unit of work waiting to be picked up.
+
+    There is deliberately NO cross-check against the ready frontier. It reads
+    as though it would work — ready is Lithos saying nothing blocks a task —
+    but the two reads are different generations in the WRONG order: ``ready``
+    is fetched in the opening gather and the edge list strictly later, so an
+    edge created in between is the newer fact and the ready response cannot
+    speak to it. Excluding on it silently dropped a real waiter. Anything
+    sound would need a same-or-later authoritative read per waiter, which is
+    exactly the unbounded fan-out ``GATE_WAITER_FANOUT_CAP`` exists to prevent
+    — so the row states its source instead (``UNVERIFIED``) and counts what
+    the edge says.
     """
     return tuple(
         task
         for task_id in waiter_ids
         if (task := index.get(task_id)) is not None
         and task.task_type == WORKABLE_TASK_TYPE
-        and task_id not in ready_ids
     )
 
 

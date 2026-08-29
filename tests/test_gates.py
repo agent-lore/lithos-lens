@@ -374,7 +374,6 @@ def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
     report as waiting is dropped, and a repeated edge counts once."""
     gate = _gate("g")
     real = _task("real")
-    ready = _task("ready-victim")
     epic = TaskRecord(id="an-epic", title="Epic", status="open", task_type="epic")
     other_gate = _gate("other-gate")
     fake = _EdgeFake(
@@ -386,13 +385,8 @@ def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
                 # Names nothing in the open snapshot.
                 EdgeRecord(from_task_id="g", to_task_id="ghost", type="waits_on_gate"),
                 EdgeRecord(from_task_id="g", to_task_id="", type="waits_on_gate"),
-                # Lithos calls this one READY — its own statement that nothing
-                # blocks it, which refutes the edge outright.
-                EdgeRecord(
-                    from_task_id="g", to_task_id="ready-victim", type="waits_on_gate"
-                ),
-                # Not workable: lithos_task_blocked returns ``task``-typed rows
-                # only, so neither could ever be reported as waiting.
+                # Not workable: the frontier reads return ``task``-typed rows
+                # only, so neither is a unit of work that can be waiting.
                 EdgeRecord(
                     from_task_id="g", to_task_id="an-epic", type="waits_on_gate"
                 ),
@@ -408,11 +402,10 @@ def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
         attach_gate_waiters(
             fake,
             collect_gates([gate]),
-            index=_index(gate, real, ready, epic, other_gate),
+            index=_index(gate, real, epic, other_gate),
             blocked=[],
             blocked_available=True,
             blocked_truncated=True,
-            ready_ids=frozenset({"ready-victim"}),
         )
     )
 
@@ -420,17 +413,19 @@ def test_fabricated_waits_on_gate_edge_does_not_inflate_the_count() -> None:
     assert rows[0].waiters_label == "blocks 1 task (unverified)"
 
 
-def test_edge_asserted_waiters_are_refuted_on_the_failed_blocked_path_too() -> None:
-    """The same admission checks apply when the blocked read is DOWN, not just
+def test_non_workable_edge_targets_are_dropped_on_the_failed_blocked_path_too() -> None:
+    """The same admissions apply when the blocked read is DOWN, not just
     truncated — that path reaches the identical fan-out."""
     gate = _gate("g")
-    ready = _task("ready-victim")
+    epic = TaskRecord(id="an-epic", title="Epic", status="open", task_type="epic")
+    work = _task("work")
     fake = _EdgeFake(
         {
             "g": [
                 EdgeRecord(
-                    from_task_id="g", to_task_id="ready-victim", type="waits_on_gate"
-                )
+                    from_task_id="g", to_task_id="an-epic", type="waits_on_gate"
+                ),
+                EdgeRecord(from_task_id="g", to_task_id="work", type="waits_on_gate"),
             ]
         }
     )
@@ -438,18 +433,44 @@ def test_edge_asserted_waiters_are_refuted_on_the_failed_blocked_path_too() -> N
         attach_gate_waiters(
             fake,
             collect_gates([gate]),
-            index=_index(gate, ready),
+            index=_index(gate, epic, work),
             blocked=[],
             blocked_available=False,
             blocked_truncated=False,
-            ready_ids=frozenset({"ready-victim"}),
         )
     )
 
-    assert rows[0].waiters == ()
-    # Refuting the only asserted waiter leaves an honest zero from a source
-    # that DID answer — not the "unavailable" of a source that did not.
-    assert rows[0].waiters_label == "blocks 0 tasks (unverified)"
+    assert [waiter.id for waiter in rows[0].waiters] == ["work"]
+    assert rows[0].waiters_label == "blocks 1 task (unverified)"
+
+
+def test_no_frontier_response_is_used_to_refute_an_edge_asserted_waiter() -> None:
+    """Regression (f-002): an accepted ``waits_on_gate`` edge CONSTITUTES the
+    wait (``lithos_task_edge_upsert`` contract), and the edge list is read
+    strictly after the frontier responses — so a task an earlier read called
+    ready, or one absent from an earlier blocked response, is still a waiter.
+    Dropping it would silently under-report the gate."""
+    gate = _gate("g")
+    victim = _task("victim")
+    fake = _EdgeFake(
+        {"g": [EdgeRecord(from_task_id="g", to_task_id="victim", type="waits_on_gate")]}
+    )
+
+    for blocked_available in (True, False):
+        rows = asyncio.run(
+            attach_gate_waiters(
+                fake,
+                collect_gates([gate]),
+                index=_index(gate, victim),
+                # An earlier blocked response that named no waiter at all.
+                blocked=[],
+                blocked_available=blocked_available,
+                blocked_truncated=True,
+            )
+        )
+
+        assert [waiter.id for waiter in rows[0].waiters] == ["victim"]
+        assert rows[0].waiters_label == "blocks 1 task (unverified)"
 
 
 def test_advisory_metadata_is_bounded_on_every_axis() -> None:

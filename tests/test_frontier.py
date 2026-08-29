@@ -241,6 +241,7 @@ class _FrontierFake:
         ready_error: BaseException | None = None,
         blocked_error: BaseException | None = None,
         edges: dict[str, list[EdgeRecord]] | None = None,
+        late_edges: dict[str, list[EdgeRecord]] | None = None,
         fail_edges: bool = False,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
@@ -264,6 +265,12 @@ class _FrontierFake:
         self.max_live_responses = 0
         self.get_calls: list[str] = []
         self._edges = edges or {}
+        # Edges that come into existence only AFTER the ready frontier was
+        # read. ``task_ready`` is awaited in the opening gather and
+        # ``task_edge_list`` strictly later, so this scripts the real ordering:
+        # an edge created in between is the NEWER fact, and no frontier
+        # response from before it can speak to it.
+        self._late_edges = late_edges or {}
         self._fail_edges = fail_edges
         self.edge_list_calls: list[dict[str, Any]] = []
         self.open_calls = 0
@@ -426,7 +433,10 @@ class _FrontierFake:
         )
         if self._fail_edges:
             raise RuntimeError(f"edges unavailable for {task_id}")
-        return list(self._edges.get(task_id, []))
+        edges = list(self._edges.get(task_id, []))
+        if self.ready_calls:
+            edges.extend(self._late_edges.get(task_id, []))
+        return edges
 
     async def task_get(self, task_id: str) -> TaskRecord:
         self.get_calls.append(task_id)
@@ -2352,31 +2362,38 @@ def test_next_gate_ready_at_is_the_earliest_visible_future_timer() -> None:
     )
 
 
-def test_edge_asserted_gate_waiters_are_refuted_by_the_ready_frontier() -> None:
-    """Reviewer repro (correctness f-001): ``lithos_task_edge_upsert`` accepts a
-    ``waits_on_gate`` edge between any two existing tasks, so on a degraded
-    blocked read the edge fallback must not turn one into a waiter count.
+def test_an_edge_created_after_the_ready_read_still_counts_as_a_waiter() -> None:
+    """Reviewer repro (correctness f-002): the reads are independent
+    generations, and the edge list is the LATER one.
 
-    The check costs nothing: the ready frontier was already read, and Lithos
-    calling a task ready IS its statement that nothing blocks it — so an edge
-    naming a ready task is contradicted outright. Same for an edge naming an
-    epic or another gate, which ``task_blocked`` could never report."""
+    Sequence: ``task_ready`` answers first and calls `victim` ready; another
+    actor then creates `gate-1 -waits_on_gate-> victim`, which per the
+    ``lithos_task_edge_upsert`` contract makes `victim` wait from that moment;
+    the degraded edge read then returns it. The earlier ready response cannot
+    refute the newer edge, so `victim` must be counted — a round-2 cross-check
+    against `ready_ids` dropped it and rendered "blocks 0 tasks (unverified)".
+
+    The other two targets are still dropped, and neither drop is a refutation
+    of an edge: an epic is not a unit of work the count is over, and `ghost`
+    names nothing the section could draw a row for."""
     gate = _gate_task("gate-1")
     victim = _task("victim", claims=())
     epic = _task("an-epic", task_type="epic", claims=())
-    other_gate = _gate_task("gate-2")
-    genuine = _task("genuine", claims=())
+    # One unrelated blocked row, so the blocked response HITS frontier_limit
+    # below — truncation is what routes the waiter counts to the edge read.
+    filler = _task("filler", claims=())
     fake = _FrontierFake(
-        open_tasks=[gate, other_gate, victim, epic, genuine],
-        # `victim` is on the ready frontier, so nothing blocks it.
+        open_tasks=[gate, victim, epic, filler],
+        # `victim` was ready when the frontier answered…
         ready=[victim],
-        blocked=[_blocked(genuine, BlockerRecord(kind="gate", task_id="gate-1"))],
-        edges={
+        blocked=[_blocked(filler, BlockerRecord(kind="task", task_id="elsewhere"))],
+        late_edges={
+            # …and only afterwards did the gate come to hold it.
             "gate-1": [
                 EdgeRecord(
                     from_task_id="gate-1", to_task_id=target, type="waits_on_gate"
                 )
-                for target in ("victim", "an-epic", "gate-2", "genuine")
+                for target in ("victim", "an-epic", "ghost")
             ]
         },
     )
@@ -2387,5 +2404,5 @@ def test_edge_asserted_gate_waiters_are_refuted_by_the_ready_frontier() -> None:
     )
 
     row = _gate_row(data, "gate-1")
-    assert [waiter.id for waiter in row.waiters] == ["genuine"]
+    assert [waiter.id for waiter in row.waiters] == ["victim"]
     assert row.waiters_label == "blocks 1 task (unverified)"
