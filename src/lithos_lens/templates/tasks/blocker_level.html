@@ -1,0 +1,47 @@
+{#
+  ONE lazily expanded level of the blocker chain (T1-S8), served by
+  GET /tasks/{task_id}/blockers and swapped in place of the expander that asked
+  for it.
+
+  The level itself renders through `link_page.html` — the same partial the
+  eager level-1 chain uses — so the page size, the counted tail and the row
+  markup have exactly one definition however deep the chain goes. Passing
+  `chain` on is what gives this level's own lines their expanders, their cycle
+  callouts, and their stop at the depth bound.
+#}
+{% macro depth_limit_banner() %}
+  {# Visible for the same reason the overflow tail is: the walk stopping short
+     of the graph is a fact about what the operator is looking at, not an
+     implementation detail, and silence here reads as "nothing further".
+     Rendered only when the bound really did hold something back
+     (`truncated_by_depth`) — a level that simply ends says nothing. #}
+  <p class="banner banner-warning" role="status" data-blocker-depth-limit data-blocker-max-depth="{{ blocker_max_depth }}">
+    <strong>Chain depth limit reached.</strong>
+    <span>Lens walks {{ blocker_max_depth }} levels of blockers from a task. Open a blocker's own page to keep walking from there.</span>
+  </p>
+{% endmacro %}
+{% if filter_query_rejected %}
+  {# Refused, not trimmed — see the dashboard's banner for why. #}
+  <p class="banner banner-warning" role="alert" data-filter-rejected>
+    <strong>Filter too large to apply.</strong>
+    <span>The filters in this link exceed the {{ max_filter_query_bytes }}-byte limit. <a href="/tasks">Start again with no filters</a>.</span>
+  </p>
+{% elif offline %}
+  <p class="warning-text" data-blocker-level-offline>Blockers unavailable while Lithos is offline.</p>
+{% elif level and level.over_depth %}
+  {# A chain past the bound, refused before any read. Rendered lines carry no
+     expander at the bound, so this is only reachable by a hand-edited URL — it
+     answers rather than 500s, and costs nothing to answer. #}
+  {{ depth_limit_banner() }}
+{% elif level and level.state == "error" %}
+  <p class="warning-text" data-blocker-level-error>Blockers unavailable. Refresh this task to retry.</p>
+{% elif level and level.page.total %}
+  <div class="blocker-level" data-blocker-level="{{ level.task_id }}" data-blocker-depth="{{ level.depth }}">
+    {% with page = level.page, page_noun = "blockers", page_label = "blockers", chain = level.chain %}
+      {% include "tasks/link_page.html" %}
+    {% endwith %}
+    {% if level.truncated_by_depth %}{{ depth_limit_banner() }}{% endif %}
+  </div>
+{% else %}
+  <p class="empty" data-blocker-level-empty>Nothing is blocking this task.</p>
+{% endif %}

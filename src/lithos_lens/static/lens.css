@@ -1028,6 +1028,35 @@ button,
   margin-top: 0.75rem;
 }
 
+/* Lazy per-level blocker expansion (T1-S8). The expander is a plain button in
+   the link row's flex line; the level HTMX swaps in for it takes a full row of
+   its own and is indented behind a rule, so which blockers belong to which
+   line stays legible as the walk goes deeper. */
+.link-expander {
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.3rem 0.55rem;
+}
+
+.link-expander:hover,
+.link-expander:focus-visible {
+  border-style: solid;
+  color: var(--ink);
+}
+
+.blocker-level {
+  border-left: 2px solid var(--line);
+  flex-basis: 100%;
+  margin-top: 0.25rem;
+  padding-left: 0.75rem;
+}
+
 .children-table {
   border-collapse: collapse;
   margin-top: 0.5rem;

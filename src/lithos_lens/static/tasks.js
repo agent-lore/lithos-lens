@@ -130,7 +130,14 @@
   function replaceFragment(doc, name) {
     const current = document.querySelector(`[data-refresh-fragment="${name}"]`);
     const next = doc.querySelector(`[data-refresh-fragment="${name}"]`);
-    if (current && next) current.replaceWith(next);
+    if (!current || !next) return;
+    current.replaceWith(next);
+    // htmx wires hx-* attributes on nodes IT swapped and on the initial page;
+    // it does not watch the DOM. These nodes were parsed out of a fetched
+    // document and inserted by hand, so without this every blocker expander in
+    // the detail fragment (T1-S8) goes inert at the first reconcile - roughly
+    // 30s after the page loads, or sooner on any task event.
+    if (window.htmx) window.htmx.process(next);
   }
 
   function handleEvent(event) {

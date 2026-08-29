@@ -21,6 +21,11 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from lithos_lens.blocker_chain import (
+    BLOCKER_MAX_DEPTH,
+    blocker_expansion,
+    load_blocker_level,
+)
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.events import LensEvent
 from lithos_lens.fake_lithos import (
@@ -43,6 +48,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.request_filters import (
+    blocker_expand_url,
     board_is_filtered,
     epic_scope_url,
     filter_query_oversized,
@@ -179,6 +185,11 @@ def create_app(
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
     templates.env.globals["note_url"] = note_url
     templates.env.globals["board_is_filtered"] = board_is_filtered
+    # The blocker chain's per-level expansion (T1-S8). The decision of what a
+    # line offers stays in blocker_chain; the partial asks it.
+    templates.env.globals["blocker_expansion"] = blocker_expansion
+    templates.env.globals["blocker_expand_url"] = blocker_expand_url
+    templates.env.globals["blocker_max_depth"] = BLOCKER_MAX_DEPTH
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -343,6 +354,53 @@ def create_app(
                 "health": snapshot,
                 "active_view": "tasks",
                 "detail": detail,
+                "offline": False,
+            },
+        )
+
+    @app.get("/tasks/{task_id}/blockers", response_class=HTMLResponse)
+    async def task_blockers(request: Request, task_id: str) -> HTMLResponse:
+        """One deeper level of the blocker chain (T1-S8), as an HTMX fragment.
+
+        An ordinary render on the same terms as ``/tasks/{task_id}/findings``,
+        which is the precedent for a detail fragment: an over-budget filter
+        query is refused BEFORE any Lithos read, and the route is deliberately
+        absent from the unmetered lists, so admission control bounds it like
+        every other render (``_is_metered`` is default-metered — the lists
+        exist for the health probe, the SSE stream and static assets, none of
+        which this is).
+
+        The ancestor trail arrives as repeated ``chain`` params and the depth
+        is derived from it, so the fragment holds no walk state of its own.
+        """
+        if filter_query_oversized(request):
+            return await _reject_oversized_filters(
+                request, templates, state, "tasks/blocker_level.html"
+            )
+        snapshot = await state.refresh_health()
+        if snapshot.lithos != "ok":
+            return templates.TemplateResponse(
+                request,
+                "tasks/blocker_level.html",
+                {
+                    "config": state.config,
+                    "health": snapshot,
+                    "active_view": "tasks",
+                    "level": None,
+                    "offline": True,
+                },
+            )
+        level = await load_blocker_level(
+            state.lithos_client, task_id, request.query_params.getlist("chain")
+        )
+        return templates.TemplateResponse(
+            request,
+            "tasks/blocker_level.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "tasks",
+                "level": level,
                 "offline": False,
             },
         )

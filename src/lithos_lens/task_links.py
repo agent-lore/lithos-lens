@@ -197,6 +197,39 @@ class LinkedTask:
         """A cancelled PREDECESSOR can never complete — a dead end."""
         return self.blocking and self.status == "cancelled"
 
+    @property
+    def expandable(self) -> bool:
+        """True when walking THIS line's own blockers would answer something.
+
+        The one input to T1-S8's per-level expander, and derived from the
+        verdicts above rather than from a fresh ``status != "completed"`` test.
+        Those verdicts are deliberately asymmetric and a re-derivation loses
+        that: an :attr:`unresolved` row has ``status == ""``, so a naive
+        comparison would offer to walk deeper on the strength of a read that
+        never answered.
+
+        What each of the four states decides, stated rather than left to fall
+        out of the expression:
+
+        - a LIVE blocker (an open predecessor, an unresolved gate) — expandable;
+          its own blockers are the next answer to "why can't this run?";
+        - :attr:`satisfied` (a completed predecessor) — the dependency is MET,
+          so it is not part of why this task cannot run and what once blocked
+          IT is a different question;
+        - :attr:`unsatisfiable` (a cancelled predecessor) — a dead end. Nothing
+          below it can change the verdict, so a deeper walk is busywork;
+        - :attr:`unresolved` (the ``task_get`` failed) — the page does not KNOW
+          this line's state, and an expander is a claim that it does. The line
+          already says so; offering to walk under it would spend reads on an
+          answer built from a failed one.
+
+        Non-blocking links never carry one: :attr:`blocking` gates it, so the
+        provenance lists rendered by the same partial are untouched.
+        """
+        return self.blocking and not (
+            self.satisfied or self.unsatisfiable or self.unresolved
+        )
+
 
 @dataclass(frozen=True)
 class PageTail:

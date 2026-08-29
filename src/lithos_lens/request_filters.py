@@ -242,6 +242,30 @@ def task_detail_url(request: Request, task_id: str) -> str:
     return f"/tasks/{quote(task_id, safe='')}{suffix}"
 
 
+def blocker_expand_url(request: Request, task_id: str, chain: Sequence[str]) -> str:
+    """Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
+
+    The ancestor trail rides in the query as repeated ``chain`` pairs, root
+    first, with the expanded id appended — so the fragment derives its depth
+    from what it was sent and needs no server-side walk state. That is also
+    what makes the fragment cycle-safe: the trail IS the seen-set.
+
+    Carries the board's preserved filters through the same allowlist every
+    other generated tasks URL uses. A fragment fetched without them would
+    render a level whose links are unfiltered — the expansion would silently
+    drop the scope the operator is browsing under, one level down — and a
+    retired param (``claimed_state``) stops here rather than propagating.
+
+    ``task_id`` is encoded as ONE path segment for the reason
+    :func:`task_detail_url` gives: ids are arbitrary non-empty strings, so a
+    ``/`` or ``?`` in one would otherwise address something else entirely.
+    """
+    params = _preserved_filter_params(request)
+    params.extend(("chain", ancestor) for ancestor in chain)
+    params.append(("chain", task_id))
+    return f"/tasks/{quote(task_id, safe='')}/blockers?{urlencode(params)}"
+
+
 def note_url(knowledge_id: str, task_id: str = "") -> str:
     """Link a finding's document, id-encoded, carrying the task back-link.
 

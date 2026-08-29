@@ -108,7 +108,11 @@
           {% if detail.relations_state == "error" %}
             <p class="warning-text">Blockers unavailable. Refresh this task to retry.</p>
           {% elif detail.blockers.total %}
-            {% with page = detail.blockers, page_noun = "blockers", page_label = "blockers" %}
+            {# `chain` is what makes this level 1 of a walk rather than a flat
+               list: every unfinished line below carries an HTMX expander for
+               its own blockers, and the trail it passes on is what keeps the
+               walk cycle-safe and bounded at blocker_max_depth levels. #}
+            {% with page = detail.blockers, page_noun = "blockers", page_label = "blockers", chain = [detail.task.id] %}
               {% include "tasks/link_page.html" %}
             {% endwith %}
           {% else %}

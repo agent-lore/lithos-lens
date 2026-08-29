@@ -65,6 +65,7 @@ source_modules = [
     "lithos_lens.task_filtering",
     "lithos_lens.task_detail",
     "lithos_lens.task_links",
+    "lithos_lens.blocker_chain",
     "lithos_lens.normalizers",
     "lithos_lens.task_graph",
     "lithos_lens.frontier",

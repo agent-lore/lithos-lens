@@ -8,7 +8,10 @@
   tail-rendering path, which the children table shares.
 
   Context: `page` (a task_links.LinkPage), `page_noun` (plural noun for the tail
-  copy) and `page_label` (the data-attribute hook).
+  copy) and `page_label` (the data-attribute hook), plus — for the blocker
+  chain only — `chain`, the ancestor trail of this level (root first, ending at
+  the task whose blockers these are). No `chain` means no expanders: the
+  provenance lists render through here too, and nothing hangs below them.
 #}
 <ul class="link-list" data-link-list="{{ page_label }}">
   {% for link in page.links %}
@@ -34,6 +37,29 @@
              the task is unblocked, but it must not be left looking like a
              reason the task cannot run. #}
           <span class="blocker-chip blocker-chip-satisfied" data-link-satisfied>satisfied</span>
+        {% endif %}
+      {% endif %}
+      {% if chain %}
+        {# T1-S8. What hangs below this line is decided in Python
+           (blocker_chain.blocker_expansion) rather than here, so the
+           four-state rule and the depth bound have one testable home. #}
+        {% set expansion = blocker_expansion(link, chain) %}
+        {% if expansion.cycle_path %}
+          {# §5.5.2's `cycle: A -> B -> A`, in place of recursing into it.
+             Named rather than merely flagged: which tasks close the loop is
+             the whole answer, and the chip carries no expander, which is what
+             actually stops the walk. #}
+          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}">cycle: {{ expansion.cycle_path | join(" → ") }}</span>
+        {% elif expansion.expandable %}
+          <span class="blocker-expand" data-blocker-expand="{{ link.task_id }}">
+            <button
+              type="button"
+              class="link-expander"
+              hx-get="{{ blocker_expand_url(request, link.task_id, chain) }}"
+              hx-target="closest .blocker-expand"
+              hx-swap="outerHTML"
+            >Show its blockers</button>
+          </span>
         {% endif %}
       {% endif %}
     </li>
