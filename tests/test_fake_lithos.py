@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -101,6 +101,39 @@ def test_fake_mode_dashboard_renders_fixture_tasks(
     assert 'data-task-row data-task-id="influx-ingest-cutover"' in body
     # A completed and a cancelled fixture so all three groups have content.
     assert 'data-task-group="completed"' in body
+
+
+def test_fake_mode_dashboard_renders_a_live_gates_section(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The demo fixture must exercise the Gates section, countdown included.
+
+    A fixed ``ready_at`` drifts into the past, which is why the demo's timer
+    gate is anchored RELATIVE to the process clock: without it the capture
+    suites (and anyone browsing fake mode) would only ever see a gate section
+    with no live timer in it — the one thing T1-S4 is about.
+    """
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/tasks?since=2026-08-01")
+
+    body = response.text
+    assert 'data-task-group="gates"' in body
+    # Two gate-type groups, human first: the demo shows the ordering rule.
+    assert body.index('data-gate-group="human"') < body.index('data-gate-group="timer"')
+    assert 'data-gate-row data-task-id="influx-read-swap-approval"' in body
+    assert "blocks 1 task" in body
+    # Advisory metadata is summarized on the row with the rest counted…
+    assert "approval_required_from" in body
+    assert "+1 more" in body
+
+    # …and the timer gate publishes a STILL-FUTURE instant, which is what the
+    # countdown ticks against and the one-shot self-refresh is scheduled for.
+    match = re.search(r'data-gates-next-ready-at="([^"]+)"', body)
+    assert match is not None
+    assert datetime.fromisoformat(match.group(1)) > datetime.now(UTC)
+    assert f'data-gate-ready-at="{match.group(1)}"' in body
 
 
 def test_fake_mode_task_detail_renders(

@@ -518,6 +518,90 @@ button,
   font-weight: 700;
 }
 
+/* Gates section (PRD stories 5/6): a gate's own chrome — type badge, waiter
+   count, timer countdown — instead of a task row's claim chips. A human gate
+   is the work waiting on a PERSON, so its badge carries the accent colour;
+   every other type shares the neutral gate badge, including the `unknown`
+   slug an unrecognised metadata.gate_type collapses to. */
+.gate-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+}
+
+.badge-gate {
+  border-color: rgba(65, 87, 111, 0.35);
+  color: var(--closed);
+}
+
+.badge-gate-human {
+  border-color: rgba(189, 79, 43, 0.5);
+  color: var(--accent);
+}
+
+/* Tabular figures so a ticking countdown does not reflow the row. */
+.gate-countdown {
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-group-title {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  margin: 0;
+  padding: 0.6rem 1.25rem 0;
+  text-transform: uppercase;
+}
+
+.gate-group-title span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* .task-row is a two-column grid; the advisory strip and the waiter details
+   are full-width rows under it. */
+.gate-advisory,
+.gate-waiters {
+  grid-column: 1 / -1;
+}
+
+.gate-advisory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.gate-advisory-chip b {
+  font-weight: 700;
+  margin-right: 0.3rem;
+}
+
+.gate-advisory-more {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.gate-waiters > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.gate-waiter-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.gate-waiter-list li {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+}
+
 .claim-chip {
   background: rgba(53, 106, 77, 0.09);
   border-color: rgba(53, 106, 77, 0.35);

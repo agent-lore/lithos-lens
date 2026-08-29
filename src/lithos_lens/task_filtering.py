@@ -10,10 +10,15 @@ records, ``tasks.py`` never imports back — so the pair stays acyclic.
 Project resolution (§5B.1) sits here too: a task's project is a *derived*
 property read from either ``metadata.project`` or a ``project:<slug>`` tag
 depending on the configured convention, which is filtering input rather than
-a stored field.
+a stored field — as do the two per-load reporting passes built on it
+(``project_universe`` for the filter dropdown, ``log_project_data_quality``
+for the convention-conflict warnings).
 """
 
 from __future__ import annotations
+
+import logging
+from collections.abc import Iterable, Sequence
 
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
@@ -26,6 +31,8 @@ from lithos_lens.tasks import (
     TaskStatusName,
     parse_date,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _metadata_project_slug(task: TaskRecord) -> str:
@@ -232,3 +239,86 @@ def filters_narrow_the_board(
     return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
         filters.statuses
     ) != set(TASK_STATUSES)
+
+
+def loaded_task_rows(
+    open_snapshot: Sequence[TaskRecord],
+    closed_groups: Iterable[Sequence[TaskRecord]],
+) -> tuple[TaskRecord, ...]:
+    """Every task row this load fetched, deduped by id (open snapshot wins).
+
+    Read skew can return the same id in both the open snapshot and a terminal
+    window; the open snapshot is the authority on the row, and dedup keeps
+    per-load reporting counted once.
+    """
+    rows: list[TaskRecord] = list(open_snapshot)
+    seen = {task.id for task in rows}
+    for group in closed_groups:
+        for task in group:
+            if task.id not in seen:
+                seen.add(task.id)
+                rows.append(task)
+    return tuple(rows)
+
+
+def project_universe(
+    tasks: Sequence[TaskRecord],
+    filters: TaskFilters,
+) -> tuple[str, ...]:
+    """Every project slug present in the loaded rows, sorted (§5B.1).
+
+    The universe is the union of BOTH conventions' slugs regardless of the
+    active posture — §5B.1 is explicit that no project may be invisible to its
+    own view — even though matching under a single-convention posture honours
+    only that convention. Only the tag KEY follows configuration (§5B.9).
+    """
+    slugs: set[str] = set()
+    for task in tasks:
+        slugs.update(
+            task_projects(task, convention="both", tag_key=filters.project_tag_key)
+        )
+    return tuple(sorted(slugs))
+
+
+def log_project_data_quality(
+    tasks: Sequence[TaskRecord],
+    filters: TaskFilters,
+) -> None:
+    """Report this load's project data-quality signals, once each (§5B.1).
+
+    Two independent signals over every loaded row — resolved rows carry their
+    conventions too:
+
+    - the two conventions are present and DISAGREE. Reported in every posture:
+      §5B.1 makes the warning a property of the data, not of the matching
+      posture Lens happens to run (both values are read for the universe
+      regardless). Neither value is dropped — the task matches under both slugs.
+    - ``metadata.project`` is present but is not a string. Lens cannot read a
+      project out of it, so the task is invisible to its project view; the
+      value is ignored rather than coerced into a fabricated slug.
+    """
+    conflicts: list[str] = []
+    malformed: list[str] = []
+    for task in tasks:
+        if project_convention_conflict(task, tag_key=filters.project_tag_key):
+            conflicts.append(task.id)
+        if invalid_project_metadata(task):
+            malformed.append(task.id)
+    if conflicts:
+        logger.warning(
+            "task project conventions disagree",
+            extra={
+                "lens_event": "lens.tasks.project_convention_conflict",
+                "conflict_count": len(conflicts),
+                "conflicting_task_ids": conflicts[:20],
+            },
+        )
+    if malformed:
+        logger.warning(
+            "task metadata.project is not a string slug",
+            extra={
+                "lens_event": "lens.tasks.project_metadata_invalid",
+                "invalid_count": len(malformed),
+                "invalid_task_ids": malformed[:20],
+            },
+        )

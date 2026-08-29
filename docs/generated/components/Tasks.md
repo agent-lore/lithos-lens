@@ -12,8 +12,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_filtering` | S | 0 | 8 |
-| `lithos_lens.tasks` | L | 15 | 11 |
+| `lithos_lens.task_filtering` | M | 0 | 11 |
+| `lithos_lens.tasks` | M | 13 | 11 |
 
 ## Public API
 
@@ -34,6 +34,9 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
 - def `filters_narrow_the_open_side` — True when these filters hide OPEN rows from the sections.
 - def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
+- def `loaded_task_rows` — Every task row this load fetched, deduped by id (open snapshot wins).
+- def `project_universe` — Every project slug present in the loaded rows, sorted (§5B.1).
+- def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).
 
 ### `lithos_lens.tasks`
 - class `SectionState`
@@ -49,8 +52,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
 - class `EpicRollup` — One open epic's progress chip in the dashboard's epic strip.
 - class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
-- class `TaskSummary`
-- class `DashboardData`
 - def `parse_filters`
 - def `note_updated_sort_key` — Newest-first sort key for a note's ISO ``updated`` timestamp.
 - def `default_since`

@@ -94,6 +94,13 @@
             <small>{{ dashboard.summary.active_claims }} active claim{{ "s" if dashboard.summary.active_claims != 1 else "" }}</small>
           </a>
         {% endif %}
+        {# Gates are outside the workable partition, so this card is honest in
+           the flat fallback too — the Gates section renders either way. #}
+        <a class="metric-card" href="{{ task_card_url(request, 'open', dashboard.filters.since, '#task-group-gates') }}">
+          <span>Gates</span>
+          <strong data-gate-count>{{ dashboard.summary.gates }}</strong>
+          <small>Open gates holding work</small>
+        </a>
         <a class="metric-card" href="{{ task_card_url(request, 'completed', dashboard.filters.since) }}">
           <span>Recently completed</span>
           <strong>{{ dashboard.summary.recent_completed }}</strong>
@@ -303,14 +310,23 @@
         "in_progress": "In progress",
         "ready": "Ready",
         "blocked": "Blocked",
+        "gates": "Gates",
         "claims_unknown": "Claims unknown",
         "unclassified": "Not classified",
         "completed": "Completed",
         "cancelled": "Cancelled",
       } %}
       {% set workable = ("in_progress", "ready", "blocked") %}
-      {% set section_order = ("attention", "open") + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
-      <section class="task-board" aria-label="Task sections">
+      {# "gates" is not a partition section — it is rendered from
+         dashboard.gate_groups — but it takes its place in this order so the
+         board reads in the PRD's order: attention, gates, then the workable
+         three (§5.2). #}
+      {% set section_order = ("attention", "gates", "open") + workable + ("claims_unknown", "unclassified", "completed", "cancelled") %}
+      {# data-gates-next-ready-at: the earliest still-future timer-gate
+         ready_at on the page. Lithos emits no event when a timer lapses, so
+         tasks.js schedules ONE fragment refresh at that instant (PRD story 6);
+         the attribute is absent when no timer gate is pending. #}
+      <section class="task-board" aria-label="Task sections"{% if dashboard.next_gate_ready_at %} data-gates-next-ready-at="{{ dashboard.next_gate_ready_at }}"{% endif %}>
         {# Skeleton strip for just-created tasks: a task.created event lands
            here (tasks.js insertSkeletonRow) until the ~800ms reconciliation
            re-renders the board with the task in its real section — a fresh
@@ -329,97 +345,129 @@
         {% else %}
         {% if dashboard.rolled_up_only %}
           {# Open rows came back, but every one of them rolls up rather than
-             rendering (epics; gates until they get their own section). Saying
-             nothing would leave a blank open side over a non-empty tracker —
-             and the healthy stripe is withheld for the same reason.
+             rendering (epics only — gates have had their own section since
+             T1-S4). Saying nothing would leave a blank open side over a
+             non-empty tracker — and the healthy stripe is withheld for the
+             same reason.
 
              This replaces the OPEN sections only. It sits inside the loop's
              else-branch rather than beside it, because a board whose open side
              is all roll-ups still has completed and cancelled rows to show. #}
           <article class="task-group task-board-empty" data-empty-state="rolled-up">
             <h2>Nothing to work on here</h2>
-            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above, and gates are evaluated on the tasks they gate. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
           </article>
         {% endif %}
         {% for section in section_order %}
-          {% set rows = dashboard.sections[section] %}
-          {% if section in ("completed", "cancelled") %}
-            {% set active = section in dashboard.filters.statuses %}
-          {% elif section == "attention" %}
-            {# Active whenever the open side is on screen, INCLUDING the flat
-               fallback: there the severity rules never ran, and the section's
-               "Cannot assess" line is the only place that says so. #}
-            {% set active = "open" in dashboard.filters.statuses %}
-          {% elif dashboard.rolled_up_only %}
-            {# The panel above already explains the empty open side once; three
-               "no tasks match these filters" groups would blame the filters
-               for it. #}
-            {% set active = false %}
-          {% elif section in ("claims_unknown", "unclassified") %}
-            {% set active = "open" in dashboard.filters.statuses and rows %}
-          {% elif section == "open" %}
-            {# The flat fallback's only open section — it replaces the workable
-               three rather than joining them. Keyed on open_flat, not on
-               the section list: a frontier read that did not answer renders
-               the open rows flat. #}
-            {% set active = "open" in dashboard.filters.statuses and dashboard.open_flat %}
-          {% else %}
-            {% set active = "open" in dashboard.filters.statuses and not dashboard.open_flat %}
-          {% endif %}
-          {% if active %}
-            <article class="task-group" id="task-group-{{ section }}" data-task-group="{{ section }}">
-              <header>
-                <h2>{{ section_labels[section] }}</h2>
-                <span>{{ rows | length }}</span>
-              </header>
-              {% if rows %}
-                <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}">
-                  {% for row in rows %}
-                    {% include "tasks/row.html" %}
-                  {% endfor %}
-                </div>
-              {% elif section == "attention" %}
-                <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
-                {# Kept visible on purpose (REQUIREMENTS §5.2.2): an empty
-                   attention list is reassurance, not noise to hide.
-
-                   But "0 issues" is a positive claim, and an empty list means
-                   nothing when the reads behind it were incomplete: rules 1-2
-                   fire only from the blocked frontier, so a failed frontier
-                   read, a truncated one, or an unreconciled disagreement can
-                   all leave the list empty with dead-end rows unexamined
-                   (they land in Not classified, which is never promoted). In
-                   those states say so instead of asserting health — the
-                   banners above carry the detail. #}
-                {% if dashboard.healthy %}
-                  {# ``healthy`` is the one gate: every read landed, the
-                     frontier was complete and self-consistent, claims came
-                     back, the graph is up, nothing was rolled out of sight,
-                     and no filter hid open rows. Anything less cannot support
-                     a SYSTEM-wide claim, which is what the two branches below
-                     are for. #}
-                  <p class="healthy-stripe" data-healthy-stripe data-attention-healthy>All systems healthy &mdash; 0 issues</p>
-                {% elif dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending or dashboard.open_flat or dashboard.sections["claims_unknown"] %}
-                  {# An empty list means nothing when the reads behind it were
-                     incomplete: rules 1-2 fire only from the blocked frontier,
-                     so a failed read, a truncated one, an unreconciled
-                     disagreement, a frontier that never answered, or rows
-                     whose claims are unknown all leave it empty with rows
-                     unexamined (they land in Not classified or the degraded
-                     groups, which are never promoted). #}
-                  <p class="healthy-stripe healthy-stripe-unknown" data-attention-unknown>Cannot assess &mdash; task data is incomplete; see the notice above.</p>
+          {# The operator's own queue (§5.2.3): open gates, human first, then
+             oldest first within each gate-type group. Gates are never part of
+             the workable partition (Lithos excludes them from both frontiers)
+             and a gate the severity rules promoted renders in Needs attention
+             instead of here, so the single-placement rule holds. #}
+          {% if section == "gates" %}
+            {% if "open" in dashboard.filters.statuses %}
+              <article class="task-group" id="task-group-gates" data-task-group="gates">
+                <header>
+                  <h2>{{ section_labels["gates"] }}</h2>
+                  <span>{{ dashboard.summary.gates }}</span>
+                </header>
+                {% if dashboard.gate_groups %}
+                  <div class="task-list" id="task-list-gates" data-task-list="gates">
+                    {% for group in dashboard.gate_groups %}
+                      <section class="gate-group" data-gate-group="{{ group.type_slug }}">
+                        <h3 class="gate-group-title">{{ group.label }} <span>{{ group.rows | length }}</span></h3>
+                        {% for gate in group.rows %}
+                          {% include "tasks/gate_row.html" %}
+                        {% endfor %}
+                      </section>
+                    {% endfor %}
+                  </div>
                 {% else %}
-                  {# Nothing is wrong and nothing went unexamined, but the
-                     board is a slice — a tag/agent/project filter, an epic
-                     scope, or a board holding only rolled-up rows — so the
-                     claim is scoped to what is on screen, not to the system. #}
-                  <p class="healthy-stripe" data-attention-scoped>Nothing needs attention in this view.</p>
+                  <div class="task-list" id="task-list-gates" data-task-list="gates"></div>
+                  <p class="empty">No open gates match these filters.</p>
                 {% endif %}
-              {% else %}
-                <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
-                <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>
-              {% endif %}
-            </article>
+              </article>
+            {% endif %}
+          {% else %}
+            {% set rows = dashboard.sections[section] %}
+            {% if section in ("completed", "cancelled") %}
+              {% set active = section in dashboard.filters.statuses %}
+            {% elif section == "attention" %}
+              {# Active whenever the open side is on screen, INCLUDING the flat
+                 fallback: there the severity rules never ran, and the section's
+                 "Cannot assess" line is the only place that says so. #}
+              {% set active = "open" in dashboard.filters.statuses %}
+            {% elif dashboard.rolled_up_only %}
+              {# The panel above already explains the empty open side once; three
+                 "no tasks match these filters" groups would blame the filters
+                 for it. #}
+              {% set active = false %}
+            {% elif section in ("claims_unknown", "unclassified") %}
+              {% set active = "open" in dashboard.filters.statuses and rows %}
+            {% elif section == "open" %}
+              {# The flat fallback's only open section — it replaces the workable
+                 three rather than joining them. Keyed on open_flat, not on
+                 the section list: a frontier read that did not answer renders
+                 the open rows flat. #}
+              {% set active = "open" in dashboard.filters.statuses and dashboard.open_flat %}
+            {% else %}
+              {% set active = "open" in dashboard.filters.statuses and not dashboard.open_flat %}
+            {% endif %}
+            {% if active %}
+              <article class="task-group" id="task-group-{{ section }}" data-task-group="{{ section }}">
+                <header>
+                  <h2>{{ section_labels[section] }}</h2>
+                  <span>{{ rows | length }}</span>
+                </header>
+                {% if rows %}
+                  <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}">
+                    {% for row in rows %}
+                      {% include "tasks/row.html" %}
+                    {% endfor %}
+                  </div>
+                {% elif section == "attention" %}
+                  <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                  {# Kept visible on purpose (REQUIREMENTS §5.2.2): an empty
+                     attention list is reassurance, not noise to hide.
+
+                     But "0 issues" is a positive claim, and an empty list means
+                     nothing when the reads behind it were incomplete: rules 1-2
+                     fire only from the blocked frontier, so a failed frontier
+                     read, a truncated one, or an unreconciled disagreement can
+                     all leave the list empty with dead-end rows unexamined
+                     (they land in Not classified, which is never promoted). In
+                     those states say so instead of asserting health — the
+                     banners above carry the detail. #}
+                  {% if dashboard.healthy %}
+                    {# ``healthy`` is the one gate: every read landed, the
+                       frontier was complete and self-consistent, claims came
+                       back, the graph is up, nothing was rolled out of sight,
+                       and no filter hid open rows. Anything less cannot support
+                       a SYSTEM-wide claim, which is what the two branches below
+                       are for. #}
+                    <p class="healthy-stripe" data-healthy-stripe data-attention-healthy>All systems healthy &mdash; 0 issues</p>
+                  {% elif dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending or dashboard.open_flat or dashboard.sections["claims_unknown"] %}
+                    {# An empty list means nothing when the reads behind it were
+                       incomplete: rules 1-2 fire only from the blocked frontier,
+                       so a failed read, a truncated one, an unreconciled
+                       disagreement, a frontier that never answered, or rows
+                       whose claims are unknown all leave it empty with rows
+                       unexamined (they land in Not classified or the degraded
+                       groups, which are never promoted). #}
+                    <p class="healthy-stripe healthy-stripe-unknown" data-attention-unknown>Cannot assess &mdash; task data is incomplete; see the notice above.</p>
+                  {% else %}
+                    {# Nothing is wrong and nothing went unexamined, but the
+                       board is a slice — a tag/agent/project filter, an epic
+                       scope, or a board holding only rolled-up rows — so the
+                       claim is scoped to what is on screen, not to the system. #}
+                    <p class="healthy-stripe" data-attention-scoped>Nothing needs attention in this view.</p>
+                  {% endif %}
+                {% else %}
+                  <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                  <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>
+                {% endif %}
+              </article>
+            {% endif %}
           {% endif %}
         {% endfor %}
         {% endif %}

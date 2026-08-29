@@ -37,6 +37,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
+# Rule 3 escalates only a HUMAN gate — the one waiting on a person; timer/ci/pr/
+# external gates resolve on their own and stay in the Gates section. Both names
+# come from ``gates``, which owns the gate vocabulary, so the two surfaces
+# cannot drift apart on what "a human gate" is.
+from lithos_lens.gates import GATE_TASK_TYPE, HUMAN_GATE_TYPE
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     ATTENTION_RULES,
@@ -63,12 +68,6 @@ ATTENTION_SOURCE_SECTIONS: tuple[SectionName, ...] = (
 # here because those rows are in NEITHER frontier — there are no blocker
 # records to prove anything with.
 STRUCTURAL_SOURCE_SECTIONS: tuple[SectionName, ...] = ("claims_unknown",)
-
-# The gate type whose waiting time escalates into Needs attention (rule 3):
-# only a HUMAN gate is waiting on a person. Timer/ci/pr/external gates resolve
-# on their own and belong in the Gates section.
-HUMAN_GATE_TYPE = "human"
-GATE_TASK_TYPE = "gate"
 
 
 @dataclass(frozen=True)
