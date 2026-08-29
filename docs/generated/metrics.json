@@ -17,9 +17,9 @@
         "max_function": ""
       },
       "Events": {
-        "functions_over_10": 0,
-        "max_complexity": 10,
-        "max_function": "lithos_lens.events.EventHub._run"
+        "functions_over_10": 1,
+        "max_complexity": 12,
+        "max_function": "lithos_lens.events.normalize_lithos_event"
       },
       "Knowledge": {
         "functions_over_10": 2,
@@ -62,7 +62,7 @@
         "max_function": "lithos_lens.request_filters._parse_preserved_filters"
       }
     },
-    "functions_over_10": 16,
+    "functions_over_10": 17,
     "top_functions": [
       {
         "complexity": 42,
@@ -98,14 +98,14 @@
       },
       {
         "complexity": 12,
-        "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
+        "qualname": "lithos_lens.events.normalize_lithos_event"
       },
       {
         "complexity": 12,
-        "qualname": "lithos_lens.frontier_join.classify_open_tasks"
+        "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
       }
     ],
-    "total_functions": 347
+    "total_functions": 348
   },
   "domain": {
     "associations": 38,
@@ -238,13 +238,13 @@
       },
       "Events": {
         "classes": 3,
-        "functions": 21,
+        "functions": 22,
         "largest_module": "lithos_lens.events",
-        "largest_module_lines": 415,
-        "lines": 415,
+        "largest_module_lines": 506,
+        "lines": 506,
         "modules": 1,
         "public_symbols": 7,
-        "sloc": 322
+        "sloc": 375
       },
       "Knowledge": {
         "classes": 13,
@@ -330,13 +330,13 @@
     "max_module": "lithos_lens.knowledge",
     "max_module_lines": 781,
     "modules_over_800": [],
-    "total_lines": 9506,
+    "total_lines": 9597,
     "total_modules": 31,
-    "total_sloc": 7372
+    "total_sloc": 7425
   },
   "tests": {
-    "ratio": 1.84,
-    "src_lines": 9506,
-    "test_lines": 17521
+    "ratio": 1.85,
+    "src_lines": 9597,
+    "test_lines": 17734
   }
 }

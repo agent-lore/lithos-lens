@@ -38,6 +38,17 @@ TASK_EVENT_TYPES = {
 # agent-dropdown data only and must not move the board under the operator.
 SYSTEM_EVENT_TYPES = {"agent.registered"}
 CONSUMED_EVENT_TYPES = TASK_EVENT_TYPES | SYSTEM_EVENT_TYPES
+# What a system-scoped event is allowed to carry to browsers, per type. The
+# task-scoped payloads pass through whole because the client reads them, but
+# nothing consumes an `agent.registered` payload — `tasks.js` registers no
+# listener for it and `requires_refresh=False` drives no reconcile — so
+# forwarding the frame verbatim to every subscriber of the unauthenticated
+# `/tasks/events` would pay an open-ended exposure for data dropped on the
+# floor. `lithos_agent_register` takes caller-supplied `metadata`, and any
+# field Lithos adds to the event later would reach every connected browser
+# with no change here. Projected to the two fields REQUIREMENTS.md §16.1.1
+# documents, so the exposure is bounded by Lens's own contract.
+SYSTEM_EVENT_PAYLOAD_FIELDS = {"agent.registered": ("agent_id", "name")}
 
 # `lens.*` is the reserved namespace for Lens-internal synthetic events; it
 # never collides with an upstream type and is never sent upstream. That
@@ -157,7 +168,16 @@ class EventHub:
         self._subscribers: set[asyncio.Queue[LensEvent]] = set()
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
-        self._gap_since_last_open = False
+        # True from the start, not False. `start()` only SCHEDULES `_run`, so
+        # Lens serves dashboards while the first upstream handshake is still in
+        # flight — a browser can render its snapshot, attach, and report `live`
+        # (the polling fallback arms off the browser-to-Lens stream, not off
+        # this one) before Lens is receiving anything. A change in that window
+        # reaches neither the snapshot nor the un-cursored stream that opens
+        # after it, so the first open owes a refresh exactly like any other.
+        # Only "nobody was attached yet" makes an interval free of stale tabs,
+        # and that is the subscriber question `_publish_refresh` asks.
+        self._gap_since_last_open = True
         self._reconnects = 0
         self._stream_open = False
         self._last_refresh_at = float("-inf")
@@ -197,13 +217,42 @@ class EventHub:
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
         self._subscribers.discard(queue)
 
-    async def publish(self, event: LensEvent) -> None:
+    async def publish(self, event: LensEvent, *, guaranteed: bool = False) -> None:
+        """Fan `event` out to every browser subscriber.
+
+        `guaranteed` is for the synthetic reconnect refresh, and ONLY for it.
+        An ordinary event is best-effort: a subscriber whose queue is full is
+        one the browser is not draining, and the refresh that follows any gap
+        repairs whatever it missed. The refresh itself has no such backstop —
+        it IS the backstop — so dropping it on a momentarily saturated queue
+        (a throttled background tab, a slow link) leaves exactly the stale tab
+        it exists to repair, with nothing left to signal it.
+        """
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
+                continue
             except asyncio.QueueFull:
+                pass
+            if not guaranteed:
                 logger.warning(
                     "lens event subscriber queue full",
+                    extra={"event_type": event.type, "event_id": event.id},
+                )
+                continue
+            # Displace the OLDEST queued event to make room. Sound because a
+            # refresh subsumes it: the reconcile it triggers refetches the
+            # whole board, so the discarded event's effect is re-derived from
+            # the server rather than lost. `get_nowait`/`put_nowait` with no
+            # await between them cannot be interleaved with the consumer, so
+            # the freed slot is still free when it is filled.
+            with contextlib.suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:  # pragma: no cover - defensive
+                logger.warning(
+                    "lens refresh could not be delivered",
                     extra={"event_type": event.type, "event_id": event.id},
                 )
 
@@ -215,15 +264,17 @@ class EventHub:
         gap wider than that buffer cannot be replayed, so a full browser
         refresh is the only correctness guarantee.
 
-        The condition is the gap, not a prior success. Only the very first
-        attempt is refresh-free, because nothing has been missed yet: the page
-        a browser holds was server-rendered moments earlier. A first attempt
-        that FAILED breaks that — Lens is up and serving, so browsers attach
-        and their EventSource reports `live` (the polling fallback is driven by
-        the browser-to-Lens stream, not by Lens's upstream, so it never arms),
-        and every Lithos change during the retry window is invisible to them.
-        Keying on "have we ever connected" would ask about the hub's history
-        when staleness is a property of the interval.
+        The condition is the gap, not a prior success — and the interval
+        BEFORE the first open is a gap too (see `__post_init__`). Lens is up
+        and serving while that first handshake is in flight, so browsers
+        attach and their EventSource reports `live` (the polling fallback is
+        driven by the browser-to-Lens stream, not by Lens's upstream, so it
+        never arms), and every Lithos change in that window is invisible to
+        them. Keying on "have we ever connected" would ask about the hub's
+        history when staleness is a property of the interval.
+
+        Refreshing on the first open costs nothing when nothing is attached:
+        `_publish_refresh` broadcasts only to subscribers that exist.
         """
         self._stream_open = True
         self.status = "live"
@@ -255,6 +306,12 @@ class EventHub:
         await self._publish_refresh()
 
     async def _publish_refresh(self) -> None:
+        # A broadcast to nobody is not a broadcast: it must not consume the
+        # cooldown window (or a sequence number) that a real recipient is owed
+        # moments later. This is what makes refreshing on the FIRST open free —
+        # at process start there are no dashboards to refetch.
+        if not self._subscribers:
+            return
         self._last_refresh_at = _now()
         self._reconnects += 1
         await self.publish(
@@ -263,7 +320,8 @@ class EventHub:
                 type=LENS_REFRESH_EVENT,
                 task_id="",
                 payload={"reason": "reconnect"},
-            )
+            ),
+            guaranteed=True,
         )
 
     async def _run(self) -> None:
@@ -356,8 +414,15 @@ def parse_lithos_sse_frame(lines: list[str]) -> LensEvent | None:
     if event_type not in CONSUMED_EVENT_TYPES:
         return None
     try:
-        payload = json.loads("\n".join(data_lines)) if data_lines else {}
-    except json.JSONDecodeError:
+        payload = (
+            json.loads("\n".join(data_lines), parse_constant=_reject_constant)
+            if data_lines
+            else {}
+        )
+    except ValueError:
+        # JSONDecodeError and the `_reject_constant` refusal alike: the frame
+        # is unusable, so it is treated as carrying nothing (a task-scoped one
+        # then has no `task_id` and is dropped by the normalizer).
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
@@ -367,6 +432,23 @@ def parse_lithos_sse_frame(lines: list[str]) -> LensEvent | None:
         payload=payload,
     )
     return event
+
+
+def _reject_constant(token: str) -> Any:
+    """Refuse `NaN`/`Infinity`/`-Infinity`, which Python accepts and JSON does not.
+
+    `json.loads` takes those bare tokens by default and `json.dumps` re-emits
+    them, so a non-finite float anywhere in an upstream payload would reach the
+    browser inside `as_sse`'s `data:` line — where `JSON.parse` throws. That is
+    worse than losing the one event: `tasks.js` commits the dedupe key BEFORE
+    parsing, so a Lithos replay of the same frame is discarded at the guard
+    rather than retried, and the event's reconcile never runs on a stream that
+    looks perfectly healthy. Refusing here keeps the value out of a `LensEvent`
+    entirely. `allow_nan=False` at the `as_sse` sink would be too late — it
+    raises inside the SSE generator and tears that browser's stream down.
+    """
+
+    raise ValueError(f"non-finite JSON constant in lithos event payload: {token}")
 
 
 def normalize_lithos_event(
@@ -392,11 +474,20 @@ def normalize_lithos_event(
     # raw on the wire. `wire_safe` guards the wire only: an id it had to rewrite
     # is not the position Lithos sent, so it is not carried as a cursor either.
     fallback = task_id or str(payload.get("agent_id") or "")
+    forwarded = (
+        {
+            field: payload[field]
+            for field in SYSTEM_EVENT_PAYLOAD_FIELDS.get(event_type, ())
+            if field in payload
+        }
+        if system_scoped
+        else payload
+    )
     return LensEvent(
         id=wire_safe(event_id) or wire_safe(f"{event_type}:{fallback}"),
         type=event_type,
         task_id=task_id,
-        payload=payload,
+        payload=forwarded,
         requires_refresh=not system_scoped,
         upstream_id=event_id if is_replay_cursor(event_id) else "",
     )

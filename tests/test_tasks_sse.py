@@ -95,6 +95,67 @@ def test_system_event_passes_through_unscoped_without_a_refresh() -> None:
     assert event.payload["agent_id"] == "agent-a"
 
 
+def test_a_system_event_forwards_only_the_fields_lens_contracts_for() -> None:
+    """Nothing consumes an `agent.registered` payload — `tasks.js` registers no
+    listener and `requires_refresh=False` drives no reconcile — yet every frame
+    goes to every subscriber of the unauthenticated `/tasks/events`. So the
+    payload is projected to the two fields REQUIREMENTS.md documents rather
+    than passed through: `lithos_agent_register` takes caller-supplied
+    `metadata`, and any field Lithos adds later would otherwise reach every
+    connected browser with no change here.
+    """
+    event = parse_lithos_sse_frame(
+        [
+            "id: evt-sys-2",
+            "event: agent.registered",
+            'data: {"agent_id":"agent-a","name":"Agent A",'
+            '"metadata":{"token":"s3cret","host":"10.0.0.4"},'
+            '"endpoint":"http://10.0.0.4:9000"}',
+        ]
+    )
+
+    assert event is not None
+    assert event.payload == {"agent_id": "agent-a", "name": "Agent A"}
+
+
+def test_a_non_finite_number_never_enters_an_event_payload() -> None:
+    """`json.loads` accepts the bare `NaN`/`Infinity` tokens and `json.dumps`
+    re-emits them, so without this guard a non-finite float upstream would ride
+    into `as_sse`'s `data:` line — which `JSON.parse` rejects.
+
+    That is worse than losing one event: `tasks.js` commits the dedupe key
+    before parsing, so a Lithos replay of the same frame is discarded at the
+    guard instead of retried, and the reconcile never runs on a stream that
+    looks healthy throughout. Refused at ingest, the frame is simply unusable
+    and the task-scoped event is dropped like any other without a `task_id`.
+    """
+    for token in ("NaN", "Infinity", "-Infinity"):
+        assert (
+            parse_lithos_sse_frame(
+                [
+                    "id: evt-nan",
+                    "event: task.updated",
+                    f'data: {{"task_id":"task-1","score": {token}}}',
+                ]
+            )
+            is None
+        ), token
+
+    # And a system-scoped frame, which survives having no `task_id`, still
+    # cannot carry the value onto the wire.
+    event = parse_lithos_sse_frame(
+        [
+            "id: evt-nan-sys",
+            "event: agent.registered",
+            'data: {"agent_id":"agent-a","name": Infinity}',
+        ]
+    )
+
+    assert event is not None
+    assert event.payload == {}
+    assert "Infinity" not in event.as_sse()
+
+
 def test_task_scoped_event_without_task_id_is_dropped_with_a_warning(
     caplog: pytest.LogCaptureFixture,
     fresh_drop_log: DroppedEventLog,
@@ -304,6 +365,21 @@ def _reopened_frame(event_id: str) -> list[str]:
     ]
 
 
+async def _first_open_backstop(subscriber: asyncio.Queue[LensEvent]) -> LensEvent:
+    """Consume the refresh owed to a tab that attached before the first open.
+
+    `start()` only SCHEDULES the upstream dial, so a subscriber attached before
+    it — which every hub test below is — rendered while Lens was receiving
+    nothing. That interval is a gap like any other, so the first open pays it
+    off. Drained here so each test can go on asserting about the behaviour it
+    is actually for.
+    """
+
+    event = await asyncio.wait_for(subscriber.get(), timeout=2)
+    assert event.id == f"{LENS_REFRESH_EVENT}:1"
+    return event
+
+
 @pytest.mark.anyio
 async def test_upstream_subscription_filters_the_consumed_types(
     monkeypatch: pytest.MonkeyPatch,
@@ -321,6 +397,7 @@ async def test_upstream_subscription_filters_the_consumed_types(
 
     await hub.start()
     try:
+        await _first_open_backstop(subscriber)
         event = await asyncio.wait_for(subscriber.get(), timeout=2)
     finally:
         await hub.stop()
@@ -342,6 +419,9 @@ async def test_upstream_subscription_filters_the_consumed_types(
 async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Shortened because the first open has already spent one window: the
+    # reconnect's refresh is deferred to the end of it, not dropped.
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
     requests: list[tuple[str, dict[str, str] | None]] = []
     monkeypatch.setattr(
         events_module.httpx,
@@ -357,6 +437,7 @@ async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
     try:
         # First connection: one real event, then the stream ends and the hub
         # dials again.
+        await _first_open_backstop(subscriber)
         first = await asyncio.wait_for(subscriber.get(), timeout=2)
         refresh = await asyncio.wait_for(subscriber.get(), timeout=2)
     finally:
@@ -367,7 +448,9 @@ async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
     assert len(requests) == 2
     assert requests[1][1] == {"Last-Event-ID": "evt-8"}
     # Replay is bounded by Lithos's ring buffer, so the reconnect also carries
-    # a synthetic full-refresh backstop — unscoped, and never on first connect.
+    # a synthetic full-refresh backstop — unscoped, and distinct from the one
+    # the first open already paid (hence `:2`).
+    assert refresh.id == f"{LENS_REFRESH_EVENT}:2"
     assert refresh.type == "lens.refresh"
     assert refresh.task_id == ""
     assert refresh.requires_refresh is True
@@ -415,6 +498,7 @@ async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
 async def test_ids_that_are_not_usable_cursors_are_never_replayed(
     monkeypatch: pytest.MonkeyPatch, frame: list[str], description: str
 ) -> None:
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
     requests: list[tuple[str, dict[str, str] | None]] = []
     monkeypatch.setattr(
         events_module.httpx,
@@ -428,6 +512,7 @@ async def test_ids_that_are_not_usable_cursors_are_never_replayed(
 
     await hub.start()
     try:
+        await _first_open_backstop(subscriber)
         event = await asyncio.wait_for(subscriber.get(), timeout=2)
         refresh = await asyncio.wait_for(subscriber.get(), timeout=2)
     finally:
@@ -446,19 +531,20 @@ async def test_ids_that_are_not_usable_cursors_are_never_replayed(
 async def test_a_first_connect_that_had_to_retry_still_delivers_the_backstop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The backstop is owed to a GAP, not to a prior success.
+    """The backstop is owed to a GAP, and a retry window is the widest kind.
 
-    The first connect is refresh-free because nothing was missed: the page a
-    browser holds was server-rendered moments earlier. That reasoning stops
-    applying the instant an attempt FAILS. Lens is up and serving, so browsers
-    attach and their EventSource reports `live` — the polling fallback is
-    driven by the browser-to-Lens stream, not by Lens's upstream, so it never
-    arms. Every Lithos change during the retry window is invisible to those
-    tabs, and without a backstop on the eventual open it stays invisible until
-    something unrelated triggers a reconcile.
+    Lens is up and serving throughout it, so browsers attach and their
+    EventSource reports `live` — the polling fallback is driven by the
+    browser-to-Lens stream, not by Lens's upstream, so it never arms. Every
+    Lithos change during the retry window is invisible to those tabs, and
+    without a backstop on the eventual open it stays invisible until something
+    unrelated triggers a reconcile.
 
     Keying on "have we ever connected" asks the wrong question: that is a
     property of the hub's history, and staleness is a property of the interval.
+    Which is why the count below is ONE and not two: the interval before the
+    first open and the retry window that follows it are the same uninterrupted
+    gap, and it is paid off once, on the open that ends it.
 
     The successful attempt HOLDS the stream open (no frame batch to exhaust),
     so the refresh asserted here can only have come from that open — not from a
@@ -493,14 +579,23 @@ async def test_a_first_connect_that_had_to_retry_still_delivers_the_backstop(
 
 
 @pytest.mark.anyio
-async def test_the_very_first_connect_still_sends_no_backstop(
+async def test_a_first_open_refreshes_a_tab_that_attached_before_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The positive control, so the assertion above means something: with no
-    failed attempt there is no gap, and a refresh on every process start would
-    make every dashboard refetch for nothing.
+    """Even a CLEANLY successful first connect owes a refresh to a tab already
+    attached, because Lens serves dashboards while that connect is in flight.
 
-    Same shape as the test above minus the failure — one attempt, held open."""
+    `EventHub.start()` schedules `_run`; it does not await the handshake. So a
+    browser can fetch its snapshot, attach, and report `live` before Lens is
+    receiving anything upstream. A task that changes in that window reaches
+    neither the snapshot (taken before it) nor the un-cursored stream that
+    opens after it, and the tab stays stale for the process lifetime with no
+    signal — the polling fallback arms off the browser-to-Lens stream, which
+    is healthy throughout.
+
+    One attempt, held open, so the refresh asserted here can only be the first
+    open's. Exactly one: an open is not a flap.
+    """
     monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
     requests: list[tuple[str, dict[str, str] | None]] = []
     monkeypatch.setattr(
@@ -513,12 +608,66 @@ async def test_the_very_first_connect_still_sends_no_backstop(
 
     await hub.start()
     try:
+        received = await asyncio.wait_for(subscriber.get(), timeout=2)
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(subscriber.get(), timeout=0.5)
     finally:
         await hub.stop()
 
+    assert received.id == f"{LENS_REFRESH_EVENT}:1"
+    assert received.requires_refresh is True
     assert len(requests) == 1
+
+
+@pytest.mark.anyio
+async def test_a_first_open_with_nothing_attached_spends_no_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counterweight to the test above, and what makes it free.
+
+    A refresh with no subscribers reaches nobody, so it must not spend the
+    cooldown window — or the sequence number — that a real recipient is owed
+    moments later. At process start that is the normal case: the hub dials
+    before any browser exists.
+
+    Demonstrated by the NUMBER: the first open happens with nothing attached,
+    a tab attaches during the backoff, and the refresh it receives from the
+    next open is `:1`. Were the empty broadcast counted it would be `:2`, and
+    it would additionally have been deferred to the end of a cooldown window
+    the tab never benefited from.
+    """
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        # One frame batch, then the stream ends; the next attempt holds open.
+        _recording_httpx_client(requests, [_reopened_frame("evt-40")]),
+    )
+    hub = EventHub(
+        # A backoff long enough to attach inside deterministically.
+        EventsConfig(enabled=True, reconnect_backoff_ms=(400,)),
+        LithosConfig(),
+    )
+
+    await hub.start()
+    try:
+        # Wait out the first open and the batch behind it. Nothing is
+        # attached, so nothing is published — and `subscribe()` is synchronous,
+        # so no reconnect can slip in between the check and the attach.
+        async with asyncio.timeout(2):
+            # `start()` sets "reconnecting" BEFORE scheduling `_run`, so the
+            # attempt count is what distinguishes "not dialled yet" from
+            # "dialled, opened, and the batch ran out".
+            while not (requests and hub.status == "reconnecting"):
+                await asyncio.sleep(0.005)
+        subscriber = hub.subscribe()
+        received = await asyncio.wait_for(subscriber.get(), timeout=2)
+    finally:
+        await hub.stop()
+
+    assert received.id == f"{LENS_REFRESH_EVENT}:1"
+    assert len(requests) == 2
 
 
 @pytest.mark.anyio
@@ -556,15 +705,19 @@ async def test_a_connect_failure_drops_the_replay_cursor_and_still_refreshes(
     finally:
         await hub.stop()
 
+    assert requests[0][1] is None
     assert requests[1][1] == {"Last-Event-ID": "evt-20"}
     assert requests[2][1] == {"Last-Event-ID": "evt-21"}
     # The third attempt died before the stream opened, so the cursor goes and
     # the fourth resumes from nothing — which is exactly why that reconnect
     # MUST still deliver a refresh, even though it lands inside the cooldown.
     assert requests[3][1] is None
+    # `:1` is the first open's (the tab attached before it); every later gap —
+    # including the one that gave up the cursor — coalesces onto the trailing
+    # edge of the cooldown as `:2`. Given up, never dropped.
     assert [event.id for event in received] == [
-        "evt-20",
         f"{LENS_REFRESH_EVENT}:1",
+        "evt-20",
         "evt-21",
         "evt-22",
         f"{LENS_REFRESH_EVENT}:2",
@@ -598,16 +751,76 @@ async def test_flapping_reconnect_refreshes_are_coalesced_but_never_dropped(
     finally:
         await hub.stop()
 
-    # Four reconnects, two refreshes: the flap rate does not reach the tabs
-    # (each refresh costs every one of them a full refetch), but neither is the
-    # signal discarded — the reconnects inside the window coalesce into one
-    # broadcast delivered on the trailing edge, after the last event.
+    # Four opens, two refreshes: the flap rate does not reach the tabs (each
+    # refresh costs every one of them a full refetch), but neither is the
+    # signal discarded — the three reconnects inside the window coalesce into
+    # one broadcast delivered on the trailing edge, after the last event.
+    # `:1` is the first open's, paid immediately to the tab already attached.
     assert [event.id for event in received] == [
-        "evt-30",
         f"{LENS_REFRESH_EVENT}:1",
+        "evt-30",
         "evt-31",
         "evt-32",
         "evt-33",
         f"{LENS_REFRESH_EVENT}:2",
     ]
     assert subscriber.empty()
+
+
+@pytest.mark.anyio
+async def test_the_backstop_reaches_a_subscriber_whose_queue_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Criterion 6 is about DELIVERY, not just about broadcasting.
+
+    An ordinary event is best-effort: a subscriber whose queue is full is one
+    the browser is not draining, and the refresh that follows the gap repairs
+    whatever it missed. The refresh has no such backstop — it IS the backstop —
+    so a browser that is merely slow (a throttled background tab) while the
+    upstream flaps would otherwise lose the one signal that would have
+    repaired it, and stay stale with nothing left to say so.
+
+    Delivered by displacing the OLDEST queued event, which the refresh
+    subsumes: the reconcile it triggers refetches the whole board, so that
+    event's effect is re-derived rather than lost.
+    """
+    monkeypatch.setattr(events_module, "LENS_REFRESH_MIN_INTERVAL_S", 0.3)
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        _recording_httpx_client(requests, [_reopened_frame("evt-50")]),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe(maxsize=2)
+    backlog = [
+        LensEvent(id=f"stale-{index}", type="task.updated", task_id="task-9")
+        for index in range(2)
+    ]
+    for event in backlog:
+        subscriber.put_nowait(event)
+    assert subscriber.full()
+
+    await hub.start()
+    try:
+        # Drained only AFTER the open, so the backstop meets the queue while it
+        # is still full — draining first would free the slot under test.
+        async with asyncio.timeout(2):
+            while hub.status != "live":
+                await asyncio.sleep(0.005)
+        # Long enough for the frame behind the backstop to be published too.
+        await asyncio.sleep(0.05)
+    finally:
+        await hub.stop()
+
+    delivered = []
+    while not subscriber.empty():
+        delivered.append(subscriber.get_nowait().id)
+
+    # The OLDEST queued event was displaced to make room, and the refresh got
+    # through. The real event behind it took the best-effort path and was
+    # dropped, rather than displacing the refresh that had just been
+    # guaranteed its slot.
+    assert delivered == ["stale-1", f"{LENS_REFRESH_EVENT}:1"]

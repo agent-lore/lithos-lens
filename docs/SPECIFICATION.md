@@ -238,8 +238,13 @@ The currently recognized event types are task-scoped:
 
 plus one system-scoped type, `agent.registered`, which is forwarded with an
 empty `task_id` and never triggers a dashboard refresh (it invalidates the
-agent-dropdown data only). Task-scoped events arriving without a `task_id` are
-dropped with a warning.
+agent-dropdown data only). A system-scoped payload is projected to the fields
+Lens contracts for (`agent_id`, `name`) rather than passed through, so a field
+Lithos adds upstream — `lithos_agent_register` accepts caller-supplied
+`metadata` — does not silently reach every browser on the unauthenticated
+event stream. Task-scoped events arriving without a `task_id` are dropped with
+a warning, as is any frame whose `data:` is not valid JSON — which includes the
+non-finite `NaN`/`Infinity` constants Python accepts and `JSON.parse` does not.
 
 On reconnect Lens sends `Last-Event-ID` so Lithos replays its ring buffer from
 the last received event, and broadcasts one synthetic `lens.refresh` to browser
@@ -258,7 +263,15 @@ flapping upstream cannot turn them into a refetch storm across open dashboards,
 but they are only ever deferred, never dropped: reconnects inside a window
 coalesce into a single broadcast delivered on its trailing edge, so every
 disconnected interval — including one that gave up its replay cursor — still
-results in a refresh.
+results in a refresh. The interval before the FIRST open counts: Lens serves
+dashboards while that connect is in flight, so a tab can attach and report
+`live` before Lens is receiving anything, and the first open pays that gap off
+like any other. A refresh with no subscribers is not broadcast at all, which is
+what makes that free at process start. Delivery of a refresh is guaranteed
+rather than best-effort: where an ordinary event is skipped for a subscriber
+whose queue is full, a refresh displaces the oldest queued event instead —
+sound because the reconcile it triggers re-derives that event's effect from the
+server, and necessary because the refresh is itself the backstop and has none.
 
 Browser behavior currently includes:
 
