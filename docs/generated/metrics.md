@@ -36,8 +36,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Config | 3 | 997 | 822 | 7 | 2 | 0.22 | 25 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 74 | 52 | 0 | 4 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
-| Errors | 1 | 23 | 14 | 4 | 0 | 0.00 | - | 0 |
-| Events | 1 | 544 | 396 | 3 | 2 | 0.40 | 12 (`lithos_lens.events._stream_lithos_events`) | 1 |
+| Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
+| Events | 1 | 638 | 472 | 3 | 2 | 0.40 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
 | Knowledge | 3 | 1057 | 806 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge._gather_candidates`) | 2 |
 | LithosClient | 4 | 2116 | 1699 | 2 | 5 | 0.71 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 103 | 68 | 1 | 1 | 0.50 | 7 (`lithos_lens.logging._json_safe`) | 0 |
@@ -49,13 +49,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **34**, lines: **11107**, SLOC: **8541**
+- Modules: **34**, lines: **11211**, SLOC: **8624**
 - Largest module: `lithos_lens.knowledge` (781 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **392**, cyclomatic > 10: **18**
+- Functions: **393**, cyclomatic > 10: **19**
 
 Top 10 most complex functions:
 
@@ -66,11 +66,11 @@ Top 10 most complex functions:
 | 23 | `lithos_lens.normalizers.normalize_task` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 15 | `lithos_lens.task_filtering.matches_filters` |
+| 14 | `lithos_lens.events._iter_sse_lines` |
 | 14 | `lithos_lens.request_filters._parse_preserved_filters` |
 | 13 | `lithos_lens.fake_lithos.FakeLithosClient.list_notes` |
 | 13 | `lithos_lens.frontier.load_dashboard._partition_state` |
 | 13 | `lithos_lens.knowledge._gather_candidates` |
-| 13 | `lithos_lens.lithos_client.LithosClient.recent_notes` |
 
 ## Seams
 
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **43** (44 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.90** (21112 test lines / 11107 source lines)
+- Test-to-source line ratio: **1.91** (21420 test lines / 11211 source lines)

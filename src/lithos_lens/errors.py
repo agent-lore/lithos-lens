@@ -21,3 +21,13 @@ class EventSubscriberLimit(LithosLensError):
     A refusal, not a failure: the caller turns it into a 503 and the browser
     falls back to polling. See ``events.MAX_EVENT_SUBSCRIBERS``.
     """
+
+
+class UnsupportedEventEncoding(LithosLensError):
+    """Raised when the upstream event stream arrives content-encoded.
+
+    Lens asks for ``identity`` and reads raw bytes so that one socket read is
+    one bounded chunk. A compressed stream would be decoded into memory before
+    any cap could see it, so it is refused rather than read unbounded. See
+    ``events._require_identity_encoding``.
+    """

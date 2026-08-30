@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 import tracemalloc
-from collections.abc import AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -26,6 +27,30 @@ from lithos_lens.events import (
     is_replay_cursor,
     parse_lithos_sse_frame,
 )
+
+
+class _FakeClock:
+    """A monotonic clock a test advances by hand.
+
+    The warning gate is bounded in TIME, so observing it needs control of time:
+    a burst has to land inside one window, and the record after it has to land
+    outside one, and neither should cost the suite a real minute.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _cursor(headers: dict[str, str] | None) -> str | None:
+    """The replay cursor on an outbound request, if it carried one."""
+
+    return None if headers is None else headers.get("Last-Event-ID")
 
 
 @pytest.fixture
@@ -117,30 +142,45 @@ def test_task_scoped_event_without_task_id_is_dropped_with_a_warning(
 def test_dropped_event_warnings_are_rate_limited(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The dropped id is upstream-controlled, so the log sink must stay bounded
-    # no matter how many malformed events arrive.
+    """The malformed-event rate is upstream's; the log-write rate must not be.
+
+    Bounded in time rather than by sampling every Nth drop: a 1-in-N sampler
+    divides the output but leaves it proportional to the input, so a faster
+    upstream still buys a faster log. Whatever arrives inside one window, the
+    window costs one record.
+    """
+    clock = _FakeClock()
     monkeypatch.setattr(
         events_module,
         "DROPPED_EVENTS",
-        RateLimitedWarning("dropping task-scoped lithos event", interval=10),
+        RateLimitedWarning("dropping task-scoped lithos event", clock=clock),
     )
-    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
-        for index in range(25):
-            assert (
-                parse_lithos_sse_frame(
-                    [
-                        f"id: evt-drop-{index}",
-                        "event: task.updated",
-                        "data: {}",
-                    ]
-                )
-                is None
-            )
 
-    # First, tenth and twentieth only — each carrying the running total.
-    assert len(caplog.records) == 3
-    totals = [record.__dict__["occurrences"] for record in caplog.records]
-    assert totals == [1, 10, 20]
+    def drop(index: int) -> None:
+        assert (
+            parse_lithos_sse_frame(
+                [f"id: evt-drop-{index}", "event: task.updated", "data: {}"]
+            )
+            is None
+        )
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        for index in range(25):  # a burst, entirely inside one window
+            drop(index)
+        assert len(caplog.records) == 1, "a burst costs its window one record"
+
+        clock.advance(events_module.WARN_MIN_INTERVAL_S + 1)
+        drop(25)
+        # Ten times the burst, still one record per window: the output does not
+        # follow the input rate.
+        for index in range(26, 276):
+            drop(index)
+
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 26]
+    # Nothing is lost from the record — the suppressed count carries the volume
+    # the second line stands for.
+    suppressed = [record.__dict__["suppressed_since_last"] for record in caplog.records]
+    assert suppressed == [0, 24]
 
 
 def test_payload_derived_id_cannot_inject_a_second_sse_frame() -> None:
@@ -250,23 +290,36 @@ async def test_a_stalled_subscriber_cannot_flood_the_log_with_dropped_events(
     Lithos emits, times however many tabs are in that state. One record per
     drop turns that into an unbounded write into the operator's log sink.
     """
+    clock = _FakeClock()
     monkeypatch.setattr(
         events_module,
         "UNDELIVERED_EVENTS",
-        RateLimitedWarning("lens event subscriber queue full", interval=10),
+        RateLimitedWarning("lens event subscriber queue full", clock=clock),
     )
     hub = EventHub(EventsConfig(enabled=False), LithosConfig())
     stalled = hub.subscribe(maxsize=1)
 
+    async def publish(index: int) -> None:
+        await hub.publish(
+            LensEvent(id=f"evt-{index}", type="task.updated", task_id="task-1")
+        )
+
     with caplog.at_level(logging.WARNING, logger=events_module.__name__):
-        for index in range(25):
-            await hub.publish(
-                LensEvent(id=f"evt-{index}", type="task.updated", task_id="task-1")
-            )
+        for index in range(25):  # one slot filled, then 24 undeliverable
+            await publish(index)
+        assert len(caplog.records) == 1
+
+        clock.advance(events_module.WARN_MIN_INTERVAL_S + 1)
+        for index in range(25, 125):
+            await publish(index)
 
     hub.unsubscribe(stalled)
-    # One slot filled, then 24 refusals: first, tenth and twentieth only.
-    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 10, 20]
+    # Two windows, two records, whatever the upstream rate was in between.
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 25]
+    assert [record.__dict__["suppressed_since_last"] for record in caplog.records] == [
+        0,
+        23,
+    ]
 
 
 @pytest.mark.anyio
@@ -302,20 +355,32 @@ def test_refusing_subscribers_does_not_hand_back_an_unbounded_log(
     request would give back, at the refusal, the same unbounded log write the
     ceiling exists to prevent.
     """
+    clock = _FakeClock()
     monkeypatch.setattr(events_module, "MAX_EVENT_SUBSCRIBERS", 0)
     monkeypatch.setattr(
         events_module,
         "REFUSED_SUBSCRIBERS",
-        RateLimitedWarning("refusing an event-stream subscriber", interval=10),
+        RateLimitedWarning("refusing an event-stream subscriber", clock=clock),
     )
     hub = EventHub(EventsConfig(enabled=False), LithosConfig())
 
-    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
-        for _ in range(25):
-            with pytest.raises(EventSubscriberLimit):
-                hub.subscribe()
+    def refused() -> None:
+        with pytest.raises(EventSubscriberLimit):
+            hub.subscribe()
 
-    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 10, 20]
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        for _ in range(25):  # hammering the ceiling inside one window
+            refused()
+        assert len(caplog.records) == 1
+
+        clock.advance(events_module.WARN_MIN_INTERVAL_S + 1)
+        refused()
+
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 26]
+    assert [record.__dict__["suppressed_since_last"] for record in caplog.records] == [
+        0,
+        24,
+    ]
 
 
 def _as_chunks(entry: Iterable[str | bytes]) -> Iterator[bytes]:
@@ -344,14 +409,21 @@ class _FakeStreamResponse:
     pieces, or never terminating at all, gets exercised.
     """
 
-    def __init__(self, chunks: Iterator[bytes], *, hold: bool) -> None:
+    def __init__(
+        self,
+        chunks: Iterator[bytes],
+        *,
+        hold: bool,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._chunks = chunks
         self._hold = hold
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         return None
 
-    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+    async def aiter_raw(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
         if self._hold:
@@ -361,8 +433,14 @@ class _FakeStreamResponse:
 
 
 class _FakeStreamContext:
-    def __init__(self, chunks: Iterator[bytes], *, hold: bool) -> None:
-        self._response = _FakeStreamResponse(chunks, hold=hold)
+    def __init__(
+        self,
+        chunks: Iterator[bytes],
+        *,
+        hold: bool,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self._response = _FakeStreamResponse(chunks, hold=hold, headers=headers)
 
     async def __aenter__(self) -> _FakeStreamResponse:
         return self._response
@@ -374,6 +452,8 @@ class _FakeStreamContext:
 def _recording_httpx_client(
     requests: list[tuple[str, dict[str, str] | None]],
     connections: list[Iterable[str | bytes] | Exception],
+    *,
+    response_headers: dict[str, str] | None = None,
 ) -> type:
     """An ``httpx.AsyncClient`` stand-in for the upstream ``/events`` stream.
 
@@ -402,7 +482,11 @@ def _recording_httpx_client(
             entry = connections[attempt] if attempt < len(connections) else None
             if isinstance(entry, Exception):
                 raise entry
-            return _FakeStreamContext(_as_chunks(entry or []), hold=entry is None)
+            return _FakeStreamContext(
+                _as_chunks(entry or []),
+                hold=entry is None,
+                headers=response_headers,
+            )
 
     return _Client
 
@@ -445,7 +529,10 @@ async def test_upstream_subscription_filters_the_consumed_types(
     assert "agent.registered" in types
     assert "edge.upserted" not in types
     # Nothing to replay on a first connect.
-    assert headers is None
+    assert headers is not None
+    # Nothing to replay on a first connect, and identity is asked for on every
+    # connect (see test_the_stream_is_requested_unencoded).
+    assert _cursor(headers) is None
     assert event.type == "task.reopened"
     assert event.task_id == "task-1"
 
@@ -477,7 +564,7 @@ async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
     assert first.id == "evt-8"
     assert hub.last_event_id == "evt-8"
     assert len(requests) == 2
-    assert requests[1][1] == {"Last-Event-ID": "evt-8"}
+    assert _cursor(requests[1][1]) == "evt-8"
     # Replay is bounded by Lithos's ring buffer, so the reconnect also carries
     # a synthetic full-refresh backstop — unscoped, and never on first connect.
     assert refresh.type == "lens.refresh"
@@ -551,7 +638,7 @@ async def test_ids_that_are_not_usable_cursors_are_never_replayed(
     assert refresh.type == LENS_REFRESH_EVENT
     assert hub.last_event_id == ""
     assert len(requests) == 2
-    assert requests[1][1] is None, description
+    assert _cursor(requests[1][1]) is None, description
 
 
 @pytest.mark.anyio
@@ -668,12 +755,12 @@ async def test_a_connect_failure_drops_the_replay_cursor_and_still_refreshes(
     finally:
         await hub.stop()
 
-    assert requests[1][1] == {"Last-Event-ID": "evt-20"}
-    assert requests[2][1] == {"Last-Event-ID": "evt-21"}
+    assert _cursor(requests[1][1]) == "evt-20"
+    assert _cursor(requests[2][1]) == "evt-21"
     # The third attempt died before the stream opened, so the cursor goes and
     # the fourth resumes from nothing — which is exactly why that reconnect
     # MUST still deliver a refresh, even though it lands inside the cooldown.
-    assert requests[3][1] is None
+    assert _cursor(requests[3][1]) is None
     assert [event.id for event in received] == [
         "evt-20",
         f"{LENS_REFRESH_EVENT}:1",
@@ -860,6 +947,227 @@ async def test_a_frame_inside_the_cap_is_untouched_by_it(
 
     assert received[0].id == "evt-fits"
     assert received[0].task_id == "task-1"
+
+
+async def _wait_for(predicate: Callable[[], bool], *, timeout: float = 2.0) -> None:
+    """Poll until `predicate` holds, or fail the test on the deadline."""
+
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.005)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("terminator", "chunks"),
+    [
+        ("LF", [b'id: evt-t\nevent: task.updated\ndata: {"task_id":"task-1"}\n\n']),
+        (
+            "CRLF",
+            [b'id: evt-t\r\nevent: task.updated\r\ndata: {"task_id":"task-1"}\r\n\r\n'],
+        ),
+        ("CR", [b'id: evt-t\revent: task.updated\rdata: {"task_id":"task-1"}\r\r']),
+        (
+            "CRLF cut in half by every chunk boundary",
+            [
+                b"id: evt-t\r",
+                b"\nevent: task.updated\r",
+                b'\ndata: {"task_id":"task-1"}\r',
+                b"\n\r\n",
+            ],
+        ),
+    ],
+)
+async def test_every_sse_line_terminator_is_read(
+    monkeypatch: pytest.MonkeyPatch, terminator: str, chunks: list[str | bytes]
+) -> None:
+    """SSE terminates a line with CR, LF or CRLF, and Lens reads all three.
+
+    Splitting bytes here rather than taking httpx's lines moved this
+    responsibility onto Lens, and it is easy to move it halfway: a splitter
+    that handles only LF leaves a CR-only stream connected and silent, with
+    every event of it accumulating into one line that the cap then drops. So
+    each terminator is a case here, plus the one the chunk boundary can cut in
+    half — a CR at the end of a chunk is not a terminator until the next chunk
+    proves it is not the first half of a CRLF.
+    """
+    received = await _events_from_stream(monkeypatch, chunks, 1)
+
+    assert received[0].id == "evt-t", f"{terminator} terminator was not read"
+    assert received[0].task_id == "task-1"
+
+
+@pytest.mark.anyio
+async def test_the_stream_is_requested_unencoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx advertises gzip and deflate by default; Lens must not.
+
+    A content coding is decoded a chunk at a time BELOW the pending-line cap,
+    and gzip of a repetitive line runs about 1000:1 — so accepting one hands
+    the size term back to whoever chose the compressor.
+    """
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        _recording_httpx_client(requests, [_reopened_frame("evt-plain")]),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    await hub.start()
+    try:
+        await asyncio.wait_for(subscriber.get(), timeout=2)
+        await _wait_for(lambda: len(requests) >= 2)
+    finally:
+        await hub.stop()
+
+    # Every connect, not just the first: a reconnect that quietly dropped the
+    # header would reopen the exposure on the next attempt.
+    assert [headers["Accept-Encoding"] for _, headers in requests if headers] == [
+        "identity",
+        "identity",
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_content_encoded_stream_is_refused_rather_than_decoded(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking for identity is not the same as getting it.
+
+    A proxy that compresses an event stream (which also breaks its streaming
+    semantics) or a server that ignores the header would put the decode back
+    below the cap, so the response is checked and refused. The body here is a
+    perfectly good frame: the ONLY reason nothing reaches the board is the
+    encoding.
+
+    Refusing means the reconnect loop retries, which makes this a STANDING
+    condition rather than a burst — so the rate limit matters more here than
+    anywhere else in this module, not less.
+    """
+    monkeypatch.setattr(
+        events_module,
+        "REFUSED_ENCODINGS",
+        RateLimitedWarning("refusing a content-encoded lithos event stream"),
+    )
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        _recording_httpx_client(
+            requests,
+            [_reopened_frame("evt-gzipped"), _reopened_frame("evt-gzipped-again")],
+            response_headers={"content-encoding": "gzip"},
+        ),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        await hub.start()
+        try:
+            await _wait_for(lambda: len(requests) >= 2)
+        finally:
+            await hub.stop()
+
+    assert subscriber.empty(), "a refused stream must not deliver events"
+    assert "content-encoded" in caplog.text
+    assert caplog.records[0].__dict__["content_encoding"] == "gzip"
+    # Retried every backoff, recorded once: the log rate is Lens's, not the
+    # reconnect loop's.
+    assert len(caplog.records) == 1
+
+
+def _mock_transport_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> type:
+    """A REAL ``httpx.AsyncClient`` wired to a mock transport.
+
+    The other fake in this file stands in for httpx entirely, which is what
+    most of these tests want. This one does not: the exposure it is here for
+    lives inside httpx's own content-decoding path, so the test has to run
+    through the real client to mean anything.
+    """
+
+    class _Client(httpx.AsyncClient):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    return _Client
+
+
+@pytest.mark.anyio
+async def test_a_gzipped_oversized_line_never_reaches_the_decoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bypass around the pending-line cap, reproduced against real httpx.
+
+    ``aiter_bytes`` content-decodes each chunk before yielding it, and httpx
+    advertises gzip and deflate by default — so a compressed upstream turns one
+    small socket read into an arbitrarily large decoded chunk, materialized
+    BELOW the cap and before anything here could measure it. 2 MiB of one line
+    compresses to about 2 KiB: roughly 1000:1, and none of the terms are
+    Lens's.
+
+    Two things close it, and this exercises both: the request asks for
+    identity, and the response is checked rather than trusted. The body is
+    built before the measurement starts, so the peak is the reader's.
+    """
+    monkeypatch.setattr(
+        events_module,
+        "REFUSED_ENCODINGS",
+        RateLimitedWarning("refusing a content-encoded lithos event stream"),
+    )
+    body = b'data: {"task_id":"task-1","pad":"' + b"x" * 2 * 1024 * 1024 + b'"}\n\n'
+    compressed = gzip.compress(body)
+    assert len(compressed) * 100 < len(body), "the amplification is the point"
+    asked: list[str] = []
+
+    async def lazy_body() -> AsyncIterator[bytes]:
+        yield compressed
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.headers.get("accept-encoding", ""))
+        # An async iterator, not `content=<bytes>`: constructing a Response
+        # from bytes makes httpx decode them THERE, which would put 2 MiB on
+        # the test's own account and measure nothing about the reader.
+        return httpx.Response(
+            200,
+            content=lazy_body(),
+            headers={
+                "content-encoding": "gzip",
+                "content-type": "text/event-stream",
+            },
+        )
+
+    monkeypatch.setattr(
+        events_module.httpx, "AsyncClient", _mock_transport_client(handler)
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    tracemalloc.start()
+    try:
+        await hub.start()
+        try:
+            await _wait_for(lambda: len(asked) >= 2)
+        finally:
+            await hub.stop()
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert asked[0] == "identity", "httpx would otherwise advertise gzip, deflate"
+    assert subscriber.empty()
+    assert peak < 1024 * 1024, f"peak {peak} bytes: the line was decoded after all"
 
 
 @pytest.mark.anyio

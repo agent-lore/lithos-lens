@@ -7,6 +7,8 @@ import codecs
 import contextlib
 import json
 import logging
+import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -15,7 +17,7 @@ from urllib.parse import urlencode
 import httpx
 
 from lithos_lens.config import EventsConfig, LithosConfig
-from lithos_lens.errors import EventSubscriberLimit
+from lithos_lens.errors import EventSubscriberLimit, UnsupportedEventEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +59,18 @@ LENS_REFRESH_MIN_INTERVAL_S = 5.0
 # Ids are upstream-controlled and end up in an SSE frame, a browser dedupe key
 # and an outbound request header; cap them well above any real ULID.
 EVENT_ID_MAX_LENGTH = 200
-# Upstream drives both how often these conditions fire and the text they carry
-# into the log sink: warn on the first occurrence, then once per this many, so
-# the sink stays bounded. See :class:`RateLimitedWarning`.
-WARN_REPEAT_INTERVAL = 100
+# The only content coding Lens will read: see `_require_identity_encoding`.
+IDENTITY_ENCODING = "identity"
+# SSE terminates a line with CR, LF or CRLF — all three, and nothing else. Not
+# `str.splitlines`, which also breaks on FF, VT and the Unicode separators and
+# would split lines the grammar does not.
+_SSE_TERMINATOR = re.compile(r"[\r\n]")
+# Shortest gap between two records of the SAME condition. Upstream drives both
+# how often these conditions fire and the text they carry into the log sink, so
+# the ceiling has to be one Lens sets in TIME: a "every Nth occurrence" sampler
+# still scales its output with the input rate, which is the term that is not
+# Lens's to choose. See :class:`RateLimitedWarning`.
+WARN_MIN_INTERVAL_S = 60.0
 # Ceiling on concurrent browser subscribers. Each one pins a queue and a live
 # generator, and every publish is O(subscribers) — so an unbounded count is
 # both a memory and a latency amplifier, driven by whoever can reach the port
@@ -122,30 +132,53 @@ class RateLimitedWarning:
     Every bound in this module refuses something, and each refusal is worth a
     record — but who drives them is upstream or whoever can reach the port, so
     one record per occurrence is an unbounded write into the operator's log
-    sink. Only the first occurrence and every `interval`-th are logged, each
-    carrying that condition's running total, and every field value goes through
-    `wire_safe` on the way, because the log is one more sink upstream text
-    reaches.
+    sink.
 
-    One instance per condition rather than one shared counter: a condition that
+    Bounded in TIME, not by counting. Sampling every Nth occurrence divides the
+    output by N but leaves it proportional to the input, so the rate of writes
+    is still set by whoever is driving the condition; a time gate caps it at
+    one record per `min_interval_s` no matter what arrives. The first
+    occurrence always lands (that is the record worth having), and each
+    subsequent one reports how many were suppressed since the last, so the
+    volume is still legible from the log.
+
+    One instance per condition rather than one shared gate: a condition that
     fires constantly would otherwise swallow the FIRST occurrence of a rare
-    one, which is the record most worth having.
+    one. Every field value goes through `wire_safe` on the way, because the log
+    is one more sink upstream text reaches.
+
+    `clock` is monotonic and injectable — wall time can step, and a test that
+    has to wait a minute to observe a bound is a test nobody runs.
     """
 
-    def __init__(self, message: str, *, interval: int = WARN_REPEAT_INTERVAL) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        min_interval_s: float = WARN_MIN_INTERVAL_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._message = message
-        self._interval = interval
+        self._min_interval_s = min_interval_s
+        self._clock = clock
         self._count = 0
+        self._suppressed = 0
+        self._last_record_at = float("-inf")
 
     def record(self, **fields: str) -> None:
         self._count += 1
-        if self._count != 1 and self._count % self._interval:
+        now = self._clock()
+        if now - self._last_record_at < self._min_interval_s:
+            self._suppressed += 1
             return
+        suppressed, self._suppressed = self._suppressed, 0
+        self._last_record_at = now
         logger.warning(
             self._message,
             extra={
                 **{name: wire_safe(value) for name, value in fields.items()},
                 "occurrences": self._count,
+                "suppressed_since_last": suppressed,
             },
         )
 
@@ -163,6 +196,10 @@ OVERSIZED_FRAMES = RateLimitedWarning("dropping oversized lithos event frame")
 REFUSED_SUBSCRIBERS = RateLimitedWarning(
     "refusing an event-stream subscriber at capacity"
 )
+#: The upstream answered a request for `identity` with a content-encoded body.
+#: A standing misconfiguration, retried at the reconnect backoff — so it needs
+#: the gate more than the bursty conditions do, not less.
+REFUSED_ENCODINGS = RateLimitedWarning("refusing a content-encoded lithos event stream")
 
 
 @dataclass(frozen=True)
@@ -378,13 +415,16 @@ async def _stream_lithos_events(
     on_connect: Callable[[], Awaitable[None]] | None = None,
 ) -> AsyncIterator[LensEvent]:
     endpoint = _events_url(lithos)
-    headers = {"Last-Event-ID": last_event_id} if last_event_id else None
+    headers = {"Accept-Encoding": IDENTITY_ENCODING}
+    if last_event_id:
+        headers["Last-Event-ID"] = last_event_id
     timeout = httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0)
     async with (
         httpx.AsyncClient(timeout=timeout) as client,
         client.stream("GET", endpoint, headers=headers) as response,
     ):
         response.raise_for_status()
+        _require_identity_encoding(response)
         if on_connect is not None:
             await on_connect()
         frame: list[str] = []
@@ -420,6 +460,35 @@ async def _stream_lithos_events(
             frame.append(line)
 
 
+def _require_identity_encoding(response: httpx.Response) -> None:
+    """Refuse a content-encoded stream, because Lens cannot bound one.
+
+    The reader takes `aiter_raw`, so every chunk is exactly what one socket
+    read delivered and the pending-line cap sees a line WHILE it is still
+    arriving. Content encoding defeats that at a layer below the cap: httpx
+    decodes a chunk whole before yielding it, and gzip of a repetitive line
+    runs about 1000:1 — one 64 KiB socket read becomes 64 MiB resident before
+    anything here could look at it. The size term would be back in the hands of
+    whoever chose the compressor, which is the exposure this module is closing.
+
+    So Lens asks for `identity` and reads raw. A conformant server honours
+    that; one that does not — or a proxy compressing an event stream, which
+    also breaks its streaming semantics — gets refused rather than read
+    unbounded. Loud rather than silent: the reconnect loop retries, the status
+    chip reads `reconnecting`, and the log names the encoding, because the fix
+    is a configuration change on the other end and nothing Lens can do about it
+    at read time is honest.
+    """
+    encoding = response.headers.get("content-encoding", "").strip().lower()
+    if not encoding or encoding == IDENTITY_ENCODING:
+        return
+    REFUSED_ENCODINGS.record(content_encoding=encoding)
+    raise UnsupportedEventEncoding(
+        f"lithos event stream is {encoding}-encoded; Lens requests identity "
+        "so that one socket read stays one bounded chunk"
+    )
+
+
 async def _iter_sse_lines(
     response: httpx.Response, *, max_chars: int
 ) -> AsyncIterator[str | None]:
@@ -435,26 +504,51 @@ async def _iter_sse_lines(
     `None` is yielded in its place, so the caller can drop the frame it belongs
     to whole rather than parse it from the part that fitted.
 
-    Lines split on LF with a trailing CR stripped, so LF and CRLF streams both
-    read correctly. A lone-CR terminator — legal in SSE, unused in practice —
-    reads as one long line instead, which the cap drops rather than misparses.
+    `aiter_raw` rather than `aiter_bytes`: a chunk here is exactly one socket
+    read, with no content decoding between the wire and the cap. Today that is
+    belt-and-braces — `_require_identity_encoding` has already refused anything
+    httpx would decode, so no test can tell the two apart, and none pretends to
+    — but it makes "this reader never sees an inflated byte" a property of the
+    call rather than of a check somebody could later relax.
+
+    Terminators are CR, LF and CRLF, all three, per the SSE grammar — the same
+    set httpx's reader normalized. A CR that lands at the end of a chunk is not
+    resolved until the next one arrives, since only that tells it apart from
+    the first half of a CRLF.
     """
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     pending = ""
     dropping = False
-    async for chunk in response.aiter_bytes():
+    held_cr = False
+    async for chunk in response.aiter_raw():
         text = decoder.decode(chunk)
+        if not text:
+            # A chunk that split a multi-byte character. Nothing is resolved by
+            # it — including a held CR, whose LF may still be coming.
+            continue
+        if held_cr:
+            held_cr = False
+            if text.startswith("\n"):
+                text = text[1:]  # the LF half of a CRLF the chunk boundary cut
+                if not text:
+                    continue
         while text:
-            head, newline, text = text.partition("\n")
-            if not newline:
+            terminator = _SSE_TERMINATOR.search(text)
+            if terminator is None:
                 # No terminator in what is left: hold it for the next chunk,
                 # unless holding it is what the cap exists to prevent.
-                pending += head
+                pending += text
                 if len(pending) > max_chars:
                     pending = ""
                     dropping = True
                 break
-            line, pending = pending + head, ""
+            line, text = pending + text[: terminator.start()], text[terminator.end() :]
+            pending = ""
+            if terminator.group() == "\r":
+                if text.startswith("\n"):
+                    text = text[1:]
+                elif not text:
+                    held_cr = True
             if dropping or len(line) > max_chars:
                 # The length test here is this reader's own contract — it never
                 # yields a line longer than its cap — not a second memory
@@ -465,7 +559,7 @@ async def _iter_sse_lines(
                 dropping = False
                 yield None
                 continue
-            yield line.removesuffix("\r")
+            yield line
 
 
 def parse_lithos_sse_frame(lines: list[str]) -> LensEvent | None:
