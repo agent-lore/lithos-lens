@@ -42,27 +42,33 @@ _JINJA = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.S)
 _DYNAMIC_MARK = "\x00"
 
 
-def _defined_classes() -> set[str]:
-    """Every class name the stylesheet mentions in CODE.
+def _class_names_in(css: str) -> set[str]:
+    """Every class name mentioned in CODE, given the text of a stylesheet.
 
-    Comments and quoted strings are removed FIRST, because they are the two
-    places a class name can appear without defining anything. Comments matter
-    most: this file's own rules are commented in terms of the classes they
-    relate to (".chip already gives them the pill"), so scanning raw text let a
-    prose mention stand in for a rule — delete `.chip` entirely and the guard
-    still called it defined. Strings are stripped for the same reason at lower
-    odds: `content: ".foo"` is a literal, not a selector.
+    Takes the text rather than reading the file so the tests below exercise
+    THIS function — a regression test that re-implements the stripping proves
+    only that the copy in the test works.
 
-    Still deliberately not a selector parser. A name used only in a descendant
-    or compound selector (`.gate-group-title span`) IS defined for this
-    purpose, and matching the bare token after the two removals above keeps the
-    check from claiming a rule is missing when it is merely nested — while a
-    full parser would also have to model the one `@media` block.
+    Comments and quoted strings are the two places a class name can appear
+    without defining anything, so both go. ORDER IS LOAD-BEARING and not
+    interchangeable: comments in this stylesheet contain apostrophes ("a gate's
+    own chrome"), and running the string strip first makes one of those open a
+    quote that swallows real selectors until the next apostrophe — 148 names
+    collapse to 83. Comments first, then strings.
+
+    Deliberately not a selector parser. A name used only in a descendant or
+    compound selector (`.gate-group-title span`) IS defined for this purpose,
+    and a prelude parser would additionally have to model the one `@media`
+    block or lose every rule nested inside it.
     """
-    css = STYLESHEET.read_text()
     css = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
     css = re.sub(r'"[^"]*"|\'[^\']*\'', " ", css)
     return set(re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", css))
+
+
+def _defined_classes() -> set[str]:
+    """Every class name the served stylesheet defines."""
+    return _class_names_in(STYLESHEET.read_text())
 
 
 def _value_tokens(value: str) -> set[str]:
@@ -145,23 +151,51 @@ def test_the_scan_actually_reads_both_sides() -> None:
 
 
 def test_a_comment_only_mention_is_not_a_definition() -> None:
-    """The stylesheet's own comments name the classes they relate to, so a
-    scan of raw text let prose stand in for a rule — deleting `.chip` outright
-    left the guard still calling it defined, because a comment two hundred
-    lines away mentioned it.
+    """The stylesheet's own comments name the classes they relate to, so a scan
+    of raw text let prose stand in for a rule — deleting `.chip` outright left
+    the guard still calling it defined, because a comment two hundred lines
+    away mentioned it.
 
-    Driven through the real reader rather than a hand-built string: the point
-    is that THIS file's comments cannot define anything.
+    Driven through :func:`_class_names_in`, the function the production path
+    uses. An earlier version of this test re-implemented the comment strip on
+    its own text, so reverting the real reader would not have failed it.
     """
     css = STYLESHEET.read_text()
     assert "/*" in css, "no comments left to scan — this test would be vacuous"
 
-    commented_only = "definitely-not-a-real-class"
-    patched = css.replace("/*", f"/* .{commented_only} ", 1)
-    stripped = re.sub(r"/\*.*?\*/", " ", patched, flags=re.S)
+    invented = "definitely-not-a-real-class"
+    commented = css.replace("/*", f"/* .{invented} ", 1)
 
-    assert f".{commented_only}" in patched
-    assert commented_only not in re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", stripped)
+    assert f".{invented}" in commented  # it really is in the text...
+    assert invented not in _class_names_in(commented)  # ...and still not defined
+
+
+def test_stripping_comments_before_strings_keeps_real_selectors() -> None:
+    """The two strips inside :func:`_class_names_in` are order-coupled, which
+    is invisible from the outside and worth pinning.
+
+    Comments here contain apostrophes ("a gate's own chrome"). Strip strings
+    first and one of those opens a quote that runs on until the next
+    apostrophe, blanking every selector in between — the count drops by
+    roughly half, and the guard then reports dozens of defined classes as
+    missing. This asserts the real reader keeps them.
+    """
+    css = STYLESHEET.read_text()
+    assert re.search(r"/\*[^*]*'", css), "no apostrophe-bearing comment left to trip on"
+
+    names = _class_names_in(css)
+    wrong_order = set(
+        re.findall(
+            r"\.([A-Za-z][A-Za-z0-9_-]*)",
+            re.sub(
+                r"/\*.*?\*/", " ", re.sub(r'"[^"]*"|\'[^\']*\'', " ", css), flags=re.S
+            ),
+        )
+    )
+
+    assert len(names) > len(wrong_order)
+    # And the real reader keeps the classes this PR is about.
+    assert {"chip", "related-panel", "note-status"} <= names
 
 
 def test_a_literal_class_abutting_an_expression_is_still_read() -> None:
