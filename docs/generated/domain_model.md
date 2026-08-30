@@ -205,6 +205,7 @@ classDiagram
     +task_type str
     +gate_type str
     +unresolved bool
+    +gate_elapsed bool
   }
   class PageTail {
     +shown int

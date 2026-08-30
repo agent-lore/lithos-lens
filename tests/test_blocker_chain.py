@@ -613,6 +613,90 @@ def test_a_gate_blocker_is_walkable_like_any_other_blocker(
     assert "gate-review" in _expander_urls(response.text)
 
 
+def test_an_elapsed_timer_gate_is_not_a_live_blocker(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A timer gate resolves BY THE CLOCK, and Lithos does not close the task
+    when it does — that is exactly why the Gates section schedules a refresh at
+    ``min(ready_at)`` rather than waiting for an event.
+
+    So an elapsed timer sits on the detail page as an ``open`` task with its
+    ``waits_on_gate`` edge intact, and a verdict read from status alone called
+    it a live reason the task cannot run. The page's whole job is answering
+    that question, so the wrong answer there is the expensive one: the row
+    claimed a blocker that came free hours ago, the heading stayed "Blocked
+    by", and T1-S8 offered to walk under it.
+
+    The edge is durable and still rendered; what changes is the verdict.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        _task(
+            "gate-lapsed",
+            title="Cooldown window",
+            task_type="gate",
+            metadata={"gate_type": "timer", "ready_at": "2020-01-01T00:00:00+00:00"},
+        )
+    )
+    _link(fake, "gate-lapsed", "open-unclaimed", "waits_on_gate")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert "gate-lapsed" not in _expander_urls(response.text)
+    # Still on the page — the edge is the durable record that the wait existed.
+    assert "Cooldown window" in response.text
+    assert "data-link-satisfied" in response.text
+
+
+def test_a_timer_gate_still_counting_down_is_a_live_blocker(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The positive control, so the absence above is a verdict and not a dead
+    render path: same shape, deadline still ahead, and everything is offered."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        _task(
+            "gate-pending",
+            title="Cooldown window",
+            task_type="gate",
+            metadata={"gate_type": "timer", "ready_at": "2099-01-01T00:00:00+00:00"},
+        )
+    )
+    _link(fake, "gate-pending", "open-unclaimed", "waits_on_gate")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    assert "gate-pending" in _expander_urls(response.text)
+
+
+def test_a_timer_gate_lens_cannot_time_keeps_blocking(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An unparseable or missing ``ready_at`` is NOT elapsed. Guessing the
+    other way would quietly drop a real blocker off the page, which is the
+    failure this section exists to prevent — the same call
+    ``gates.next_gate_ready_at`` makes about a stamp it cannot read."""
+    fake = TaskFakeLithosClient()
+    cases: tuple[tuple[str, dict[str, object]], ...] = (
+        ("gate-unreadable", {"gate_type": "timer", "ready_at": "whenever"}),
+        ("gate-undated", {"gate_type": "timer"}),
+    )
+    for gate_id, meta in cases:
+        fake.tasks.append(
+            _task(gate_id, title=f"Gate {gate_id}", task_type="gate", metadata=meta)
+        )
+        _link(fake, gate_id, "open-unclaimed", "waits_on_gate")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks/open-unclaimed")
+
+    expanders = _expander_urls(response.text)
+    assert "gate-unreadable" in expanders
+    assert "gate-undated" in expanders
+
+
 def test_the_expansion_verdict_is_derived_from_the_link_verdicts() -> None:
     """The rule stated directly, without a page around it: the four states and
     what each decides."""
@@ -901,6 +985,24 @@ def test_an_id_with_reserved_characters_stays_one_path_segment(
     assert urlsplit(expander).path == f"/tasks/{quote('team/pred', safe='')}/blockers"
     assert f'href="/tasks/{quote("team/pred", safe="")}"' in page.text
     assert "/tasks/team/pred" not in page.text
+
+    # AND FOLLOW IT, because asserting on the emitted string proves only that
+    # the builder encoded it — not that anything can serve it. ASGI decodes
+    # %2F before route matching, so a single-segment `{task_id}` never sees the
+    # id back: both this fragment AND the row's own detail link answer 404.
+    #
+    # Recorded rather than fixed here, and pinned so it cannot change silently.
+    # It is not this slice's defect and not this slice's to fix: the detail
+    # route has behaved this way since T1-S7, the expander merely inherits it,
+    # and the repair is a route-family change (`{task_id:path}` with the
+    # ordering that implies) — filed as its own task. Nor is it reachable in
+    # practice: `lithos_task_create` takes no `id`, so every task id Lens can
+    # ever be handed is a server-generated UUID.
+    #
+    # If a future change makes these routable, this test fails and should be
+    # updated to assert 200 — that is the point of pinning it.
+    assert client.get(expander).status_code == 404
+    assert client.get(f"/tasks/{quote('team/pred', safe='')}").status_code == 404
 
 
 # --- The expander sits on a shared row, so it shares the row's metrics -----

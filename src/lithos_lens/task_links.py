@@ -63,10 +63,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, cast
 
 from lithos_lens.task_graph import EdgeRecord
-from lithos_lens.tasks import TaskRecord
+from lithos_lens.tasks import TaskRecord, parse_timestamp
 
 # Edge types that stop a task running. Both point blocker -> blocked
 # (``blocks``: the predecessor must complete; ``waits_on_gate``: the gate must
@@ -154,6 +155,10 @@ class LinkedTask:
     task_type: str = ""
     gate_type: str = ""
     unresolved: bool = False
+    #: A TIMER gate whose ``ready_at`` has passed. Lithos resolves those on
+    #: their own without closing the task, so the gate stays ``open`` while it
+    #: no longer holds anything back — see :attr:`satisfied`.
+    gate_elapsed: bool = False
 
     @property
     def label(self) -> str:
@@ -177,6 +182,18 @@ class LinkedTask:
     def satisfied(self) -> bool:
         """True when this BLOCKER no longer holds the task back.
 
+        TWO ways that happens, not one. A predecessor completes — and a TIMER
+        GATE ELAPSES, which Lithos resolves on its own without closing the gate
+        task (that is why the Gates section schedules a refresh at
+        ``min(ready_at)``: there is no event). So an elapsed timer stays
+        ``open`` with its ``waits_on_gate`` edge intact, and reading status
+        alone reported a gate that came free hours ago as a live reason the
+        task cannot run — on the page whose whole job is answering that.
+
+        The edge is durable and rightly still rendered; what changes is the
+        verdict on it. Everything derived from this follows automatically:
+        the row's chip, ``still_blocking``'s heading, and T1-S8's expander.
+
         A ``blocks`` edge is not deleted when its predecessor completes — it
         is the durable record that the dependency existed — so the incoming
         edge set an unblocked task is reconstructed from still names every
@@ -190,7 +207,7 @@ class LinkedTask:
         and would delete the evidence of what this task waited on, which is
         most of what the section is read for once a task is unblocked.
         """
-        return self.blocking and self.status == "completed"
+        return self.blocking and (self.status == "completed" or self.gate_elapsed)
 
     @property
     def unsatisfiable(self) -> bool:
@@ -338,6 +355,11 @@ class Breadcrumb:
 
     ancestors: tuple[TaskRecord, ...] = ()
     incomplete: bool = False
+
+
+#: The one gate type that resolves by the clock rather than by someone
+#: completing it (``gates.KNOWN_GATE_TYPES`` holds the full vocabulary).
+TIMER_GATE_TYPE = "timer"
 
 
 def gate_type_of(task: TaskRecord) -> str:
@@ -502,6 +524,24 @@ async def load_parent_breadcrumb(
     return Breadcrumb(ancestors=tuple(ancestors), incomplete=incomplete)
 
 
+def _timer_gate_elapsed(task: TaskRecord) -> bool:
+    """Whether ``task`` is a TIMER gate whose deadline has already passed.
+
+    Only timer gates: a human or CI gate is resolved by someone completing it,
+    so its status is the whole answer. A timer resolves by the clock, which is
+    why this is read here rather than inferred from status.
+
+    An unparseable or absent ``ready_at`` is NOT elapsed — the same call
+    ``gates.next_gate_ready_at`` makes. A gate Lens cannot time is one it must
+    keep reporting as blocking; guessing the other way would quietly drop a
+    real blocker off the page.
+    """
+    if gate_type_of(task) != TIMER_GATE_TYPE:
+        return False
+    ready_at = parse_timestamp(str(task.metadata.get("ready_at") or ""))
+    return ready_at is not None and ready_at <= datetime.now(UTC)
+
+
 def _linked_task(target: LinkTarget, result: Any) -> LinkedTask:
     if isinstance(result, BaseException):
         return LinkedTask(
@@ -515,4 +555,5 @@ def _linked_task(target: LinkTarget, result: Any) -> LinkedTask:
         status=task.status,
         task_type=task.task_type,
         gate_type=gate_type_of(task),
+        gate_elapsed=_timer_gate_elapsed(task),
     )
