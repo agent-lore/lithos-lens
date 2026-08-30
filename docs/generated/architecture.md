@@ -42,6 +42,7 @@ graph TD
   Entrypoint --> Logging
   Entrypoint --> Web
   Events --> Config
+  Events --> Errors
   Knowledge --> Tasks
   LithosClient --> Config
   LithosClient --> Events
@@ -55,6 +56,7 @@ graph TD
   TaskGraph --> Tasks
   Telemetry --> Config
   Web --> Config
+  Web --> Errors
   Web --> Events
   Web --> Knowledge
   Web --> LithosClient
@@ -70,16 +72,18 @@ graph TD
   linkStyle 6 stroke:#bbb
   linkStyle 7 stroke:#bbb
   linkStyle 8 stroke:#bbb
-  linkStyle 10 stroke:#bbb
+  linkStyle 9 stroke:#bbb
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
   linkStyle 14 stroke:#bbb
-  linkStyle 17 stroke:#bbb
+  linkStyle 15 stroke:#bbb
   linkStyle 18 stroke:#bbb
-  linkStyle 19 stroke:#999,stroke-dasharray:4
+  linkStyle 19 stroke:#bbb
+  linkStyle 20 stroke:#999,stroke-dasharray:4
   linkStyle 21 stroke:#999,stroke-dasharray:4
-  linkStyle 24 stroke:#999,stroke-dasharray:4
-  linkStyle 25 stroke:#999,stroke-dasharray:4
+  linkStyle 23 stroke:#999,stroke-dasharray:4
   linkStyle 26 stroke:#999,stroke-dasharray:4
+  linkStyle 27 stroke:#999,stroke-dasharray:4
+  linkStyle 28 stroke:#999,stroke-dasharray:4
 ```

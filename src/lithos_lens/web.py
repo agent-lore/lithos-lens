@@ -16,6 +16,7 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ from lithos_lens.blocker_chain import (
     load_blocker_level,
 )
 from lithos_lens.config import LithosLensConfig
+from lithos_lens.errors import EventSubscriberLimit
 from lithos_lens.events import LensEvent
 from lithos_lens.fake_lithos import (
     FakeEventHub,
@@ -121,6 +123,12 @@ MAX_CONCURRENT_RENDERS = 128
 # idle, with N open tabs consuming N slots permanently. This is why the bound
 # lives here rather than in uvicorn's ``limit_concurrency``, which counts
 # connections and cannot tell the two apart.
+#
+# Unmetered is not unbounded: parked browsers have their OWN ceiling, one that
+# counts the thing they actually consume. ``EventHub.subscribe`` refuses past
+# ``events.MAX_EVENT_SUBSCRIBERS`` and the route below turns that into the same
+# 503, so the two bounds meter two different resources instead of one bound
+# meddling in both.
 #
 # ``/health`` — REQUIREMENTS §4 makes this the container health check. A 503
 # under load tells the orchestrator the container is unhealthy, so it restarts
@@ -245,8 +253,23 @@ def create_app(
         return await _render_tasks(request, templates, state)
 
     @app.get("/tasks/events")
-    async def task_events() -> StreamingResponse:
-        queue = state.events.subscribe()
+    async def task_events() -> Response:
+        try:
+            queue = state.events.subscribe()
+        except EventSubscriberLimit:
+            # EventSource treats any non-200 as a failed connection: it fires
+            # `error` and does NOT retry, which is exactly the handoff wanted
+            # here — tasks.js arms its polling fallback on that event, so the
+            # refused tab gets a slower board instead of the process getting
+            # one more queue it has already said it cannot afford.
+            #
+            # No log line here: the hub already records the refusal, and it
+            # does so RATE-LIMITED. A warning per refusal would hand the same
+            # unbounded-log-write back to whoever is opening the connections.
+            return PlainTextResponse(
+                "Lens is at event-stream capacity. This page will poll instead.",
+                status_code=503,
+            )
 
         async def stream():
             try:

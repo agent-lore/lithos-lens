@@ -11,17 +11,19 @@ Exception hierarchy rooted at LithosLensError.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.errors` | XS | 2 | 0 |
+| `lithos_lens.errors` | XS | 4 | 0 |
 
 ## Public API
 
 ### `lithos_lens.errors`
 - class `LithosLensError` — Base class for all Lithos Lens exceptions.
 - class `ConfigError` — Raised when required configuration is missing or invalid.
+- class `EventSubscriberLimit` — Raised when the event hub is already at its subscriber ceiling.
+- class `UnsupportedEventEncoding` — Raised when the upstream event stream arrives content-encoded.
 
 ## Dependencies
 
 - Depends on: —
-- Used by: [Config](Config.md), [Entrypoint](Entrypoint.md)
+- Used by: [Config](Config.md), [Entrypoint](Entrypoint.md), [Events](Events.md), [Web](Web.md)
 
 [← all generated docs](../README.md)
