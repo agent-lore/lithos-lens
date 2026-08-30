@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from lithos_lens.frontier_join import COUNTERS_BY_FRONTIER
 from lithos_lens.gates import GateGroup, GateRow
 from lithos_lens.tasks import (
     OPEN_SECTIONS,
@@ -52,6 +53,44 @@ class TaskSummary:
     recent_completed: int = 0
     recent_cancelled: int = 0
     agents: int = 0
+    # Counter names this render cannot state exactly, because the frontier read
+    # that feeds them hit ``frontier_limit`` and left classifiable rows in the
+    # Not-classified tail (``frontier_join.approximate_counters`` decides which).
+    # Per-side on purpose: the ready and blocked reads are capped
+    # INDEPENDENTLY, so a board where only one truncated must not label the
+    # other's exact count approximate. Empty unless ``DashboardData.truncated``
+    # — a frontier read that ERRORED is an outage, never an approximate count.
+    approximate: frozenset[str] = frozenset()
+
+    @property
+    def approximate_frontiers(self) -> tuple[str, ...]:
+        """Every frontier side that truncated, for the BANNER to name.
+
+        Read back off ``approximate`` rather than carried separately: the two
+        would be one more pair that can disagree, and each side's own counter
+        is marked exactly when that side capped.
+
+        Board-wide, so it belongs to the banner and NOT to a counter's own
+        note — see :meth:`approximate_frontiers_for`.
+        """
+        return tuple(side for side in ("ready", "blocked") if side in self.approximate)
+
+    def approximate_frontiers_for(self, counter: str) -> tuple[str, ...]:
+        """The capped sides that actually feed ONE counter.
+
+        The marking is per-side; the explanation has to be too. ``attention`` is
+        fed by BOTH reads (a promoted row can come from either frontier), but
+        ``ready`` is fed only by the ready read and ``blocked`` only by the
+        blocked one. Explaining every marked counter with the board-wide list
+        told the operator that a capped BLOCKED read is why the READY count is
+        approximate — which is exactly the conflation this slice exists to
+        undo, restated in prose after the number had been got right.
+        """
+        return tuple(
+            side
+            for side in self.approximate_frontiers
+            if counter in COUNTERS_BY_FRONTIER.get(side, ())
+        )
 
 
 @dataclass(frozen=True)

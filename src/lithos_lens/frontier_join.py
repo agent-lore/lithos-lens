@@ -31,6 +31,37 @@ from lithos_lens.tasks import (
 # classify here.
 WORKABLE_TASK_TYPE = "task"
 
+# Which summary counters each frontier read feeds. A capped read leaves in the
+# Not-classified tail rows it would otherwise have placed, so its own section is
+# UNDERSTATED — and Needs attention with it, because attention is promoted out
+# of BOTH workable sections and a row stuck in the tail is never promoted.
+# Nothing else moves: In progress and claims-unknown are decided by the claims
+# on the master open list, which no cap can touch, and ``open_total`` counts the
+# tail too, so it stays exact whatever the frontiers did.
+COUNTERS_BY_FRONTIER: dict[str, tuple[str, ...]] = {
+    "ready": ("ready", "attention"),
+    "blocked": ("blocked", "attention"),
+}
+
+
+def approximate_counters(capped_frontiers: Sequence[str]) -> frozenset[str]:
+    """Name the summary counters the given capped frontier reads understate.
+
+    The two frontiers are capped independently, which is the whole point: with
+    the blocked read complete, a workable open row missing from it is not
+    blocked, so the tail is the ready read's overflow and only the ready-fed
+    counters are approximate. Marking the board wholesale would understate what
+    Lens knows exactly.
+
+    The CALLER decides what counts as capped — an empty sequence (no cap, or no
+    overflow to show for one, or a read that failed outright) marks nothing.
+    """
+    return frozenset(
+        counter
+        for side in capped_frontiers
+        for counter in COUNTERS_BY_FRONTIER.get(side, ())
+    )
+
 
 def _blocker_chips(
     blockers: Sequence[BlockerRecord],

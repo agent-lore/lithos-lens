@@ -17,7 +17,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
-| `lithos_lens.frontier_join` | S | 0 | 2 |
+| `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -55,6 +55,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `resolve_frontier` — Read the two frontier responses into rows and error lines.
 
 ### `lithos_lens.frontier_join`
+- def `approximate_counters` — Name the summary counters the given capped frontier reads understate.
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
 

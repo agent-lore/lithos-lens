@@ -1,20 +1,28 @@
 import { defineConfig, devices } from "@playwright/test";
+import {
+  BASE_URL,
+  PORT,
+  TRUNCATED_BASE_URL,
+  TRUNCATED_FRONTIER_LIMIT,
+  TRUNCATED_PORT,
+} from "./servers";
 
 /**
  * Playwright smoke suite for Lithos Lens.
  *
- * The `webServer` below boots the real application in **fake-Lithos app mode**
- * (`LITHOS_LENS_FAKE_LITHOS=1`), so the whole server-rendered UI is driven end
- * to end against the in-memory fixtures in `src/lithos_lens/fake_lithos.py` —
- * no Lithos MCP server required. `LITHOS_LENS_CONFIG` points at the checked-in
- * example config so discovery never depends on the developer's machine.
+ * The `webServer` entries below boot the real application in **fake-Lithos app
+ * mode** (`LITHOS_LENS_FAKE_LITHOS=1`), so the whole server-rendered UI is
+ * driven end to end against the in-memory fixtures in
+ * `src/lithos_lens/fake_lithos.py` — no Lithos MCP server required.
+ * `LITHOS_LENS_CONFIG` points at the checked-in example config so discovery
+ * never depends on the developer's machine. There are two instances (ports and
+ * rationale in `servers.ts`): the default board, and one running at a low
+ * `frontier_limit` so the truncated board can be captured without degrading the
+ * healthy one.
  *
  * Run with `make e2e` (installs deps + Chromium), or from this directory:
  *   npm install && npm run install-browsers && npm test
  */
-
-const PORT = Number(process.env.LENS_E2E_PORT ?? 8123);
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests",
@@ -53,8 +61,10 @@ export default defineConfig({
     {
       // Sequenced AFTER the driving phases, not merely isolated from them.
       //
-      // There is ONE `webServer` for the whole run, and `EventHub.publish`
-      // fans every event to every connected browser. So while a driving
+      // The driving phases and every capture of the default board share ONE
+      // `webServer` (the truncation instance is a separate process nothing
+      // drives), and `EventHub.publish` fans every event to every browser
+      // connected to that server. So while a driving
       // phase's test publishes, any other open tab receives that synthetic
       // event too — and a capture tab that receives it photographs state the
       // application never rendered from its own data (`task.created` leaves a
@@ -78,19 +88,40 @@ export default defineConfig({
       dependencies: ["app", "live-events"],
     },
   ],
-  webServer: {
-    // `uv run --directory ..` launches the packaged `lithos-lens` entry point
-    // from the repo root regardless of Playwright's own cwd.
-    command: "uv run --directory .. lithos-lens",
-    url: BASE_URL,
-    // Correctness beats convenience: never silently reuse a stale server —
-    // explicit opt-in for dev iteration via LENS_E2E_REUSE_SERVER=1.
-    reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
-    timeout: 120_000,
-    env: {
-      LITHOS_LENS_FAKE_LITHOS: "1",
-      LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
-      LENS_PORT: String(PORT),
+  // TWO instances (see servers.ts): the default board, and a second one whose
+  // frontier_limit is low enough that the demo fixtures truncate. Separate
+  // PROCESSES, so the second one also sits outside the event-leak problem the
+  // projects above are sequenced around — `EventHub.publish` fans to the tabs
+  // of ITS server only, and no driving phase talks to this one.
+  webServer: [
+    {
+      // `uv run --directory ..` launches the packaged `lithos-lens` entry point
+      // from the repo root regardless of Playwright's own cwd.
+      command: "uv run --directory .. lithos-lens",
+      url: BASE_URL,
+      // Correctness beats convenience: never silently reuse a stale server —
+      // explicit opt-in for dev iteration via LENS_E2E_REUSE_SERVER=1.
+      reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
+      timeout: 120_000,
+      env: {
+        LITHOS_LENS_FAKE_LITHOS: "1",
+        LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
+        LENS_PORT: String(PORT),
+      },
     },
-  },
+    {
+      command: "uv run --directory .. lithos-lens",
+      url: TRUNCATED_BASE_URL,
+      reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
+      timeout: 120_000,
+      env: {
+        LITHOS_LENS_FAKE_LITHOS: "1",
+        LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
+        LENS_PORT: String(TRUNCATED_PORT),
+        // The whole point of the second instance. Well clear of the env path's
+        // `minimum = 1` floor, so the instance boots.
+        LITHOS_LENS_TASKS_FRONTIER_LIMIT: TRUNCATED_FRONTIER_LIMIT,
+      },
+    },
+  ],
 });

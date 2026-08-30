@@ -558,7 +558,9 @@ A **cancelled** gate is unsatisfiable — its waiters surface under Needs-attent
 
 #### 5.2.5 Not-classified tail
 
-Open workable tasks present in the master list but absent from both frontier responses. This is only possible when `frontier_limit` truncates `task_ready`/`task_blocked` results. The tail renders with an accuracy banner: `Frontier truncated at <frontier_limit> — these rows could not be classified. Raise [tasks].frontier_limit or narrow your filters.` Lens MUST NOT silently classify these rows. With the default `frontier_limit=500` against the current production frontier (~310 workable open tasks) truncation should be rare.
+Open workable tasks present in the master list but absent from both frontier responses. This is only possible when `frontier_limit` truncates `task_ready`/`task_blocked` results. The tail renders with an accuracy banner naming the frontier read that truncated and the limit it hit; Lens MUST NOT silently classify these rows.
+
+The banner is **per side**. `task_ready` and `task_blocked` are capped independently, so one can truncate while the other answers in full — and when the blocked read is complete, a workable open row missing from it is not blocked, so the tail is the ready read's overflow alone. Only the header counters fed by a truncated read are marked approximate (Ready or Blocked, plus Needs attention, which is promoted out of both); a counter Lithos answered completely renders as the exact number it is. A frontier read that ERRORED marks nothing: an outage is reported as the failed read it is (§14), never as "we have too many tasks". With the default `frontier_limit=500` against the current production frontier (~310 workable open tasks) truncation should be rare.
 
 #### 5.2.6 Completed / Cancelled (collapsed by default)
 
