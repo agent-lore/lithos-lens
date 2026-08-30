@@ -69,7 +69,15 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 27   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); direction: down
+# Raised 27 -> 29 for EventSubscriberLimit: Events raises it at the subscriber
+# ceiling and Web catches it to answer 503. Both new edges land on Errors, the
+# graph's only sink node — it imports nothing, so an edge to it adds no
+# reachability and cannot create a cycle; it is the cheapest edge available.
+# The alternative was a sentinel return from `subscribe`, which would have
+# dodged this counter at the cost of `assert ... is not None` in eleven
+# unrelated tests, and left the ceiling enforceable only by a caller that
+# remembers to check.
+cross_component_edges  = 29   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the

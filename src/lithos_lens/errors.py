@@ -13,3 +13,11 @@ class LithosLensError(Exception):
 
 class ConfigError(LithosLensError):
     """Raised when required configuration is missing or invalid."""
+
+
+class EventSubscriberLimit(LithosLensError):
+    """Raised when the event hub is already at its subscriber ceiling.
+
+    A refusal, not a failure: the caller turns it into a 503 and the browser
+    falls back to polling. See ``events.MAX_EVENT_SUBSCRIBERS``.
+    """

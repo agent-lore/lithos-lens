@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import json
 import logging
@@ -14,6 +15,7 @@ from urllib.parse import urlencode
 import httpx
 
 from lithos_lens.config import EventsConfig, LithosConfig
+from lithos_lens.errors import EventSubscriberLimit
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +57,37 @@ LENS_REFRESH_MIN_INTERVAL_S = 5.0
 # Ids are upstream-controlled and end up in an SSE frame, a browser dedupe key
 # and an outbound request header; cap them well above any real ULID.
 EVENT_ID_MAX_LENGTH = 200
-# Dropped events carry an upstream-controlled id into the log sink: warn on the
-# first drop, then once per this many, so the sink stays bounded.
-DROPPED_EVENT_WARN_INTERVAL = 100
+# Upstream drives both how often these conditions fire and the text they carry
+# into the log sink: warn on the first occurrence, then once per this many, so
+# the sink stays bounded. See :class:`RateLimitedWarning`.
+WARN_REPEAT_INTERVAL = 100
+# Ceiling on concurrent browser subscribers. Each one pins a queue and a live
+# generator, and every publish is O(subscribers) — so an unbounded count is
+# both a memory and a latency amplifier, driven by whoever can reach the port
+# rather than by Lens (it takes unauthenticated requests across the
+# trusted-network boundary, same premise as MAX_CONCURRENT_RENDERS).
+#
+# Set well above any real tab count, because stale subscribers are normal: a
+# departed peer is only discovered by a failing WRITE, so a browser reloading
+# in a loop leaves one behind per reload for up to SSE_KEEPALIVE_S. The cap has
+# to clear that churn without refusing the operator.
+MAX_EVENT_SUBSCRIBERS = 128
+# Ceiling on one upstream frame, counted in characters of accumulated line text
+# — what is actually retained (a str costs 1-4 bytes per character), and
+# measurable without re-encoding every line to ask.
+#
+# Two exposures, one bound: a `data:` line that never terminates, and a frame
+# whose lines never stop arriving. Each is otherwise limited only by available
+# memory, and what it produces is then held in up to MAX_EVENT_SUBSCRIBERS x
+# the queue depth of slots.
+#
+# Deliberately NOT the whole-response ceiling that was considered and rejected
+# for the MCP client (docs/architecture.toml records that call): there the
+# response IS the answer, so a cap answers a large-but-legitimate read with
+# "unavailable". Here a frame is a notification Lens reads one field of, the
+# board reconciles on the next event or the poll fallback regardless, and no
+# real event is within three orders of magnitude of this size.
+MAX_EVENT_FRAME_CHARS = 64 * 1024
 
 
 def wire_safe(value: str) -> str:
@@ -86,34 +116,53 @@ def is_replay_cursor(value: str) -> bool:
     )
 
 
-class DroppedEventLog:
-    """Rate-limited WARNING emitter for dropped upstream events.
+class RateLimitedWarning:
+    """WARNING emitter for one condition whose rate Lens does not choose.
 
-    One record per drop would hand a misbehaving upstream an unbounded write
-    into the operator's log sink (the id it chooses is what gets written), so
-    only the first drop and every `interval`-th one are logged, each carrying
-    the running total.
+    Every bound in this module refuses something, and each refusal is worth a
+    record — but who drives them is upstream or whoever can reach the port, so
+    one record per occurrence is an unbounded write into the operator's log
+    sink. Only the first occurrence and every `interval`-th are logged, each
+    carrying that condition's running total, and every field value goes through
+    `wire_safe` on the way, because the log is one more sink upstream text
+    reaches.
+
+    One instance per condition rather than one shared counter: a condition that
+    fires constantly would otherwise swallow the FIRST occurrence of a rare
+    one, which is the record most worth having.
     """
 
-    def __init__(self, interval: int = DROPPED_EVENT_WARN_INTERVAL) -> None:
+    def __init__(self, message: str, *, interval: int = WARN_REPEAT_INTERVAL) -> None:
+        self._message = message
         self._interval = interval
         self._count = 0
 
-    def record(self, *, event_type: str, event_id: str) -> None:
+    def record(self, **fields: str) -> None:
         self._count += 1
         if self._count != 1 and self._count % self._interval:
             return
         logger.warning(
-            "dropping task-scoped lithos event without task_id",
+            self._message,
             extra={
-                "event_type": event_type,
-                "event_id": wire_safe(event_id),
-                "dropped_total": self._count,
+                **{name: wire_safe(value) for name, value in fields.items()},
+                "occurrences": self._count,
             },
         )
 
 
-DROPPED_EVENTS = DroppedEventLog()
+#: A task-scoped frame arrived with no `task_id` — dropped at normalization.
+DROPPED_EVENTS = RateLimitedWarning("dropping task-scoped lithos event without task_id")
+#: A subscriber queue was full — that ONE browser misses this event; the others
+#: still get it, and its own reconnect/poll path is what recovers its board.
+UNDELIVERED_EVENTS = RateLimitedWarning("lens event subscriber queue full")
+#: A frame exceeded MAX_EVENT_FRAME_CHARS — dropped whole, never parsed.
+OVERSIZED_FRAMES = RateLimitedWarning("dropping oversized lithos event frame")
+#: A browser asked for the stream at MAX_EVENT_SUBSCRIBERS — refused with a 503.
+#: Rate-limited like the rest: the requests that trip this are exactly the ones
+#: arriving faster than Lens wants them.
+REFUSED_SUBSCRIBERS = RateLimitedWarning(
+    "refusing an event-stream subscriber at capacity"
+)
 
 
 @dataclass(frozen=True)
@@ -190,6 +239,19 @@ class EventHub:
             self._subscribers.discard(queue)
 
     def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
+        """Register a browser queue, refusing past :data:`MAX_EVENT_SUBSCRIBERS`.
+
+        Refusing is the point. The caller turns this into a 503, the browser's
+        EventSource fails over to polling, and the board is degraded rather
+        than the process being one subscriber further towards falling over.
+        Enforced HERE rather than at the route so a second caller cannot
+        acquire an unbounded queue by not knowing about the cap.
+        """
+        if len(self._subscribers) >= MAX_EVENT_SUBSCRIBERS:
+            REFUSED_SUBSCRIBERS.record(limit=str(MAX_EVENT_SUBSCRIBERS))
+            raise EventSubscriberLimit(
+                f"event subscriber limit reached ({MAX_EVENT_SUBSCRIBERS})"
+            )
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
         self._subscribers.add(queue)
         return queue
@@ -202,10 +264,10 @@ class EventHub:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                logger.warning(
-                    "lens event subscriber queue full",
-                    extra={"event_type": event.type, "event_id": event.id},
-                )
+                # Rate-limited: a subscriber that stops draining turns every
+                # upstream event into a record, at an upstream-chosen rate
+                # times a client-chosen number of stalled tabs.
+                UNDELIVERED_EVENTS.record(event_type=event.type, event_id=event.id)
 
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
@@ -326,17 +388,84 @@ async def _stream_lithos_events(
         if on_connect is not None:
             await on_connect()
         frame: list[str] = []
-        async for line in response.aiter_lines():
+        frame_chars = 0
+        poisoned = False
+        async for line in _iter_sse_lines(response, max_chars=MAX_EVENT_FRAME_CHARS):
+            if line is None:
+                # A line the reader had to cut short. What survived cannot be
+                # parsed honestly — a truncated `data:` line is not a smaller
+                # event, it is a different one — so the whole frame goes.
+                poisoned = True
+                frame = []
+                continue
             if line == "":
-                if frame:
+                if poisoned:
+                    OVERSIZED_FRAMES.record()
+                elif frame:
                     event = parse_lithos_sse_frame(frame)
                     if event is not None:
                         yield event
-                    frame = []
+                frame = []
+                frame_chars = 0
+                poisoned = False
                 continue
-            if line.startswith(":"):
+            if poisoned or line.startswith(":"):
+                continue
+            frame_chars += len(line)
+            if frame_chars > MAX_EVENT_FRAME_CHARS:
+                # Lines that each fitted but together did not.
+                poisoned = True
+                frame = []
                 continue
             frame.append(line)
+
+
+async def _iter_sse_lines(
+    response: httpx.Response, *, max_chars: int
+) -> AsyncIterator[str | None]:
+    """SSE lines from `response`, with the PENDING line bounded.
+
+    httpx's own `aiter_lines` buffers until a newline arrives, so a stream that
+    opens a line and never terminates it is bounded only by memory — and a
+    frame-level cap cannot reach that, because the line has already been
+    materialized by the time it is handed over. Reading bytes and splitting
+    here is what makes the buffer cappable at all.
+
+    Past `max_chars` the rest of that physical line is discarded and a single
+    `None` is yielded in its place, so the caller can drop the frame it belongs
+    to whole rather than parse it from the part that fitted.
+
+    Lines split on LF with a trailing CR stripped, so LF and CRLF streams both
+    read correctly. A lone-CR terminator — legal in SSE, unused in practice —
+    reads as one long line instead, which the cap drops rather than misparses.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending = ""
+    dropping = False
+    async for chunk in response.aiter_bytes():
+        text = decoder.decode(chunk)
+        while text:
+            head, newline, text = text.partition("\n")
+            if not newline:
+                # No terminator in what is left: hold it for the next chunk,
+                # unless holding it is what the cap exists to prevent.
+                pending += head
+                if len(pending) > max_chars:
+                    pending = ""
+                    dropping = True
+                break
+            line, pending = pending + head, ""
+            if dropping or len(line) > max_chars:
+                # The length test here is this reader's own contract — it never
+                # yields a line longer than its cap — not a second memory
+                # bound. A line that terminated inside a chunk was already
+                # paid for, and the caller's frame budget would refuse it
+                # anyway. The check that saves memory is the one above, on
+                # `pending`, which runs while the line is still arriving.
+                dropping = False
+                yield None
+                continue
+            yield line.removesuffix("\r")
 
 
 def parse_lithos_sse_frame(lines: list[str]) -> LensEvent | None:

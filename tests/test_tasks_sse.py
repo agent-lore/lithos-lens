@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+import tracemalloc
+from collections.abc import AsyncIterator, Iterable, Iterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -14,23 +15,24 @@ import pytest
 
 from lithos_lens import events as events_module
 from lithos_lens.config import EventsConfig, LithosConfig
+from lithos_lens.errors import EventSubscriberLimit
 from lithos_lens.events import (
     CONSUMED_EVENT_TYPES,
     EVENT_ID_MAX_LENGTH,
     LENS_REFRESH_EVENT,
-    DroppedEventLog,
     EventHub,
     LensEvent,
+    RateLimitedWarning,
     is_replay_cursor,
     parse_lithos_sse_frame,
 )
 
 
 @pytest.fixture
-def fresh_drop_log(monkeypatch: pytest.MonkeyPatch) -> DroppedEventLog:
+def fresh_drop_log(monkeypatch: pytest.MonkeyPatch) -> RateLimitedWarning:
     """Give a test its own drop-log counter (the module instance is process-wide)."""
 
-    drop_log = DroppedEventLog()
+    drop_log = RateLimitedWarning("dropping task-scoped lithos event without task_id")
     monkeypatch.setattr(events_module, "DROPPED_EVENTS", drop_log)
     return drop_log
 
@@ -97,7 +99,7 @@ def test_system_event_passes_through_unscoped_without_a_refresh() -> None:
 
 def test_task_scoped_event_without_task_id_is_dropped_with_a_warning(
     caplog: pytest.LogCaptureFixture,
-    fresh_drop_log: DroppedEventLog,
+    fresh_drop_log: RateLimitedWarning,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger=events_module.__name__):
         event = parse_lithos_sse_frame(
@@ -117,7 +119,11 @@ def test_dropped_event_warnings_are_rate_limited(
 ) -> None:
     # The dropped id is upstream-controlled, so the log sink must stay bounded
     # no matter how many malformed events arrive.
-    monkeypatch.setattr(events_module, "DROPPED_EVENTS", DroppedEventLog(interval=10))
+    monkeypatch.setattr(
+        events_module,
+        "DROPPED_EVENTS",
+        RateLimitedWarning("dropping task-scoped lithos event", interval=10),
+    )
     with caplog.at_level(logging.WARNING, logger=events_module.__name__):
         for index in range(25):
             assert (
@@ -133,7 +139,7 @@ def test_dropped_event_warnings_are_rate_limited(
 
     # First, tenth and twentieth only — each carrying the running total.
     assert len(caplog.records) == 3
-    totals = [record.__dict__["dropped_total"] for record in caplog.records]
+    totals = [record.__dict__["occurrences"] for record in caplog.records]
     assert totals == [1, 10, 20]
 
 
@@ -232,17 +238,122 @@ async def test_event_hub_fans_out_to_browser_subscribers() -> None:
     hub.unsubscribe(second)
 
 
+@pytest.mark.anyio
+async def test_a_stalled_subscriber_cannot_flood_the_log_with_dropped_events(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subscriber that stops draining must cost a bounded number of records.
+
+    Nothing about this rate is Lens's: a slept laptop, a throttled background
+    tab or a dropped NAT mapping fills its queue and never empties it, and from
+    then on EVERY upstream event is undeliverable to it — at whatever rate
+    Lithos emits, times however many tabs are in that state. One record per
+    drop turns that into an unbounded write into the operator's log sink.
+    """
+    monkeypatch.setattr(
+        events_module,
+        "UNDELIVERED_EVENTS",
+        RateLimitedWarning("lens event subscriber queue full", interval=10),
+    )
+    hub = EventHub(EventsConfig(enabled=False), LithosConfig())
+    stalled = hub.subscribe(maxsize=1)
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        for index in range(25):
+            await hub.publish(
+                LensEvent(id=f"evt-{index}", type="task.updated", task_id="task-1")
+            )
+
+    hub.unsubscribe(stalled)
+    # One slot filled, then 24 refusals: first, tenth and twentieth only.
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 10, 20]
+
+
+@pytest.mark.anyio
+async def test_the_hub_refuses_subscribers_past_its_ceiling() -> None:
+    """Each subscriber pins a queue and makes every publish O(subscribers).
+
+    Lens takes unauthenticated requests across a trusted-network boundary, so
+    the number of open streams is whoever-can-reach-the-port's to choose. The
+    ceiling counts LIVE subscribers rather than a high-water mark, because the
+    normal case for hitting it is churn — a tab that reloads leaves its old
+    subscriber behind until a write discovers the peer is gone.
+    """
+    hub = EventHub(EventsConfig(enabled=False), LithosConfig())
+    queues = [hub.subscribe() for _ in range(events_module.MAX_EVENT_SUBSCRIBERS)]
+
+    with pytest.raises(EventSubscriberLimit):
+        hub.subscribe()
+
+    hub.unsubscribe(queues[0])
+    replacement = hub.subscribe()  # the freed slot is usable again
+    hub.unsubscribe(replacement)
+    for queue in queues[1:]:
+        hub.unsubscribe(queue)
+
+
+def test_refusing_subscribers_does_not_hand_back_an_unbounded_log(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is worth recording, but not once per attempt.
+
+    Whoever is opening connections fast enough to sit at the ceiling is
+    precisely who would choose how often this fires — so a warning per refused
+    request would give back, at the refusal, the same unbounded log write the
+    ceiling exists to prevent.
+    """
+    monkeypatch.setattr(events_module, "MAX_EVENT_SUBSCRIBERS", 0)
+    monkeypatch.setattr(
+        events_module,
+        "REFUSED_SUBSCRIBERS",
+        RateLimitedWarning("refusing an event-stream subscriber", interval=10),
+    )
+    hub = EventHub(EventsConfig(enabled=False), LithosConfig())
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        for _ in range(25):
+            with pytest.raises(EventSubscriberLimit):
+                hub.subscribe()
+
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1, 10, 20]
+
+
+def _as_chunks(entry: Iterable[str | bytes]) -> Iterator[bytes]:
+    """Prepared stream content as byte chunks.
+
+    A ``str`` entry is one LF-terminated line — the shape almost every test
+    wants. A ``bytes`` entry is passed through verbatim, which is how a test
+    puts a line boundary somewhere other than where the reader expects it, or
+    omits one entirely.
+
+    Lazy, so a test measuring what the READER holds is not measuring its own
+    prepared input alongside it.
+    """
+
+    for chunk in entry:
+        yield chunk if isinstance(chunk, bytes) else f"{chunk}\n".encode()
+
+
 class _FakeStreamResponse:
-    def __init__(self, lines: list[str], *, hold: bool) -> None:
-        self._lines = lines
+    """Stands in for the upstream ``/events`` response.
+
+    Yields BYTES, as httpx does. The reader splits lines itself so that the
+    pending one can be capped, and a fake handing over ready-made lines would
+    leave that splitter — and the cap living inside it — untested. Chunk
+    boundaries are the test's to choose, which is how a line arriving in
+    pieces, or never terminating at all, gets exercised.
+    """
+
+    def __init__(self, chunks: Iterator[bytes], *, hold: bool) -> None:
+        self._chunks = chunks
         self._hold = hold
 
     def raise_for_status(self) -> None:
         return None
 
-    async def aiter_lines(self) -> AsyncIterator[str]:
-        for line in self._lines:
-            yield line
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
         if self._hold:
             # Keep the connection open so the hub stays on this attempt until
             # the test stops it; otherwise it would reconnect in a tight loop.
@@ -250,8 +361,8 @@ class _FakeStreamResponse:
 
 
 class _FakeStreamContext:
-    def __init__(self, lines: list[str], *, hold: bool) -> None:
-        self._response = _FakeStreamResponse(lines, hold=hold)
+    def __init__(self, chunks: Iterator[bytes], *, hold: bool) -> None:
+        self._response = _FakeStreamResponse(chunks, hold=hold)
 
     async def __aenter__(self) -> _FakeStreamResponse:
         return self._response
@@ -262,14 +373,15 @@ class _FakeStreamContext:
 
 def _recording_httpx_client(
     requests: list[tuple[str, dict[str, str] | None]],
-    connections: list[list[str] | Exception],
+    connections: list[Iterable[str | bytes] | Exception],
 ) -> type:
     """An ``httpx.AsyncClient`` stand-in for the upstream ``/events`` stream.
 
     Records every outbound GET and serves one prepared connection per attempt:
-    a frame batch to replay, or an exception to raise instead of connecting (as
-    httpx does for a header it refuses to send). Once the entries run out the
-    connection is held open.
+    a frame batch to replay — as lines (LF appended to each) or as raw byte
+    chunks when the test is about how the bytes are cut — or an exception to
+    raise instead of connecting (as httpx does for a header it refuses to
+    send). Once the entries run out the connection is held open.
     """
 
     class _Client:
@@ -290,12 +402,12 @@ def _recording_httpx_client(
             entry = connections[attempt] if attempt < len(connections) else None
             if isinstance(entry, Exception):
                 raise entry
-            return _FakeStreamContext(entry or [], hold=entry is None)
+            return _FakeStreamContext(_as_chunks(entry or []), hold=entry is None)
 
     return _Client
 
 
-def _reopened_frame(event_id: str) -> list[str]:
+def _reopened_frame(event_id: str) -> list[str | bytes]:
     return [
         f"id: {event_id}",
         "event: task.reopened",
@@ -611,3 +723,205 @@ async def test_flapping_reconnect_refreshes_are_coalesced_but_never_dropped(
         f"{LENS_REFRESH_EVENT}:2",
     ]
     assert subscriber.empty()
+
+
+async def _events_from_stream(
+    monkeypatch: pytest.MonkeyPatch, chunks: Iterable[str | bytes], count: int
+) -> list[LensEvent]:
+    """Run the hub over ONE prepared upstream connection and take `count` events."""
+
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        _recording_httpx_client(requests, [chunks]),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    subscriber = hub.subscribe()
+
+    await hub.start()
+    try:
+        return [
+            await asyncio.wait_for(subscriber.get(), timeout=2) for _ in range(count)
+        ]
+    finally:
+        await hub.stop()
+
+
+@pytest.mark.anyio
+async def test_a_single_oversized_line_is_cut_and_its_frame_dropped(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exposure a frame-level cap alone cannot reach.
+
+    httpx's own ``aiter_lines`` buffers until a newline arrives, so a `data:`
+    line that never terminates is already materialized by the time anything
+    downstream could measure it. Reading bytes and splitting here is what makes
+    that buffer cappable at all — and the observable proof that the cut
+    happened is this frame being refused rather than parsed, since every byte
+    of it does arrive in the end.
+
+    The frame goes whole. A truncated ``data:`` line is not a smaller event, it
+    is a different one, so parsing what fitted would be inventing an upstream
+    message. The next frame on the same connection still arrives: the reader
+    resynchronizes on the blank line rather than wedging.
+    """
+    monkeypatch.setattr(events_module, "MAX_EVENT_FRAME_CHARS", 200)
+    monkeypatch.setattr(
+        events_module, "OVERSIZED_FRAMES", RateLimitedWarning("oversized frame")
+    )
+    # Fresh too, so a frame dropped for some OTHER reason cannot satisfy the
+    # count below: the payload here is deliberately well-formed and carries a
+    # real task_id, so the only thing between it and the board is the cap.
+    monkeypatch.setattr(
+        events_module, "DROPPED_EVENTS", RateLimitedWarning("dropped event")
+    )
+    chunks: list[str | bytes] = [
+        "id: evt-too-long-a-line",
+        "event: task.updated",
+        b'data: {"task_id":"task-1","pad":"' + b"x" * 300,
+        b"x" * 300,
+        b'"}\n',
+        "",
+        *_reopened_frame("evt-after-the-cut"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        received = await _events_from_stream(monkeypatch, chunks, 1)
+
+    assert received[0].id == "evt-after-the-cut"
+    # Exactly one frame refused — the trailing one is well inside the cap, so
+    # the reader is delivering again rather than dropping everything after.
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1]
+
+
+@pytest.mark.anyio
+async def test_a_frame_whose_lines_together_exceed_the_cap_is_dropped_whole(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: every line fits, the frame does not.
+
+    SSE lets one payload span any number of ``data:`` lines, so bounding the
+    line alone leaves the frame unbounded — the accumulation has to be counted
+    across the whole frame as well.
+    """
+    monkeypatch.setattr(events_module, "MAX_EVENT_FRAME_CHARS", 200)
+    monkeypatch.setattr(
+        events_module, "OVERSIZED_FRAMES", RateLimitedWarning("oversized frame")
+    )
+    monkeypatch.setattr(
+        events_module, "DROPPED_EVENTS", RateLimitedWarning("dropped event")
+    )
+    # SSE joins `data:` lines with a newline and JSON allows one between
+    # tokens, so this splits into a payload that genuinely PARSES, carrying a
+    # real task_id. Junk spread across the lines would be dropped at
+    # normalization instead, and the test would still pass with the cap gone.
+    # Every line here is inside the cap; only their sum is not.
+    chunks: list[str | bytes] = [
+        "id: evt-too-many-lines",
+        "event: task.updated",
+        'data: {"task_id":"task-1",',
+        f'data: "pad":"{"x" * 150}",',
+        f'data: "pad2":"{"x" * 150}"}}',
+        "",
+        *_reopened_frame("evt-after-the-pile"),
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        received = await _events_from_stream(monkeypatch, chunks, 1)
+
+    assert received[0].id == "evt-after-the-pile"
+    assert [record.__dict__["occurrences"] for record in caplog.records] == [1]
+
+
+@pytest.mark.anyio
+async def test_a_frame_inside_the_cap_is_untouched_by_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound that ate real events would be worse than the one it replaced.
+
+    Dropping a frame costs the board an update, so the cap has to sit clear of
+    anything Lithos actually sends. This is the floor under the two tests
+    above: they must fail because the frame was oversized, not because the
+    reader stopped delivering.
+    """
+    monkeypatch.setattr(events_module, "MAX_EVENT_FRAME_CHARS", 200)
+    payload = json.dumps({"task_id": "task-1", "pad": "x" * 100})
+    chunks: list[str | bytes] = [
+        "id: evt-fits",
+        "event: task.updated",
+        f"data: {payload}",
+        "",
+    ]
+
+    received = await _events_from_stream(monkeypatch, chunks, 1)
+
+    assert received[0].id == "evt-fits"
+    assert received[0].task_id == "task-1"
+
+
+@pytest.mark.anyio
+async def test_the_reader_reassembles_lines_across_chunk_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Splitting bytes rather than taking httpx's lines puts three joins on Lens.
+
+    Chunk boundaries fall wherever the network put them — mid-line, and mid
+    UTF-8 sequence (the second chunk here opens with the continuation byte of
+    an e-acute). And a CRLF stream must read the same as an LF one, so the
+    terminator is stripped rather than left on the value.
+    """
+    chunks: list[str | bytes] = [
+        b"id: evt-split\r\nevent: task.upda",
+        b'ted\r\ndata: {"task_id":"caf\xc3',
+        b'\xa9-1"}\r\n\r\n',
+    ]
+
+    received = await _events_from_stream(monkeypatch, chunks, 1)
+
+    assert received[0].id == "evt-split"
+    assert received[0].type == "task.updated"
+    assert received[0].task_id == "café-1"
+
+
+@pytest.mark.anyio
+async def test_an_unterminated_line_is_bounded_while_it_is_still_arriving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Measured, because this bound has no behavioural signature.
+
+    Every OTHER guard here is visible in what reaches the board, so a test can
+    watch for it. This one is not: for any line that eventually ends, the frame
+    cap would refuse the frame anyway, and for a line that never ends nothing
+    is emitted either way. What changes is what the process is HOLDING while
+    the line is still arriving — which is the whole exposure (`a single
+    upstream data: line ... bounded only by available memory`), and the reason
+    the reader splits bytes itself instead of taking httpx's lines: httpx's own
+    buffer would already have grown before anything downstream could look.
+
+    So the assertion is on peak allocation, and the margin is wide enough not
+    to be a flake: 2 MiB of line against a cap of 200 characters measures 217
+    KiB held with the cap (one chunk, plus its decoded copy) and 2.2 MiB
+    without it, against a 1 MiB threshold. The chunks are generated lazily so
+    the number measures the reader rather than the test's own input.
+    """
+    monkeypatch.setattr(events_module, "MAX_EVENT_FRAME_CHARS", 200)
+
+    def never_terminated() -> Iterator[bytes]:
+        yield b'data: {"task_id":"task-1","pad":"'
+        for _ in range(32):
+            yield b"x" * 64 * 1024  # 2 MiB, and not a newline anywhere in it
+
+    tracemalloc.start()
+    try:
+        received = await _events_from_stream(monkeypatch, never_terminated(), 1)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    # Nothing was ever a frame, so the only thing the stream produced is the
+    # reconnect backstop once the connection ended.
+    assert received[0].type == LENS_REFRESH_EVENT
+    assert peak < 1024 * 1024, f"peak {peak} bytes: the pending line accumulated"
