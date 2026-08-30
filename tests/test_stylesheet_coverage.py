@@ -43,14 +43,62 @@ _DYNAMIC_MARK = "\x00"
 
 
 def _defined_classes() -> set[str]:
-    """Every class name the stylesheet mentions, wherever it appears.
+    """Every class name the stylesheet mentions in CODE.
 
-    Deliberately not a selector parser: a name used only in a descendant or
-    compound selector (`.gate-group-title span`) is still defined for this
-    purpose, and matching on the bare token keeps the check from claiming a
-    rule is missing when it is merely nested.
+    Comments and quoted strings are removed FIRST, because they are the two
+    places a class name can appear without defining anything. Comments matter
+    most: this file's own rules are commented in terms of the classes they
+    relate to (".chip already gives them the pill"), so scanning raw text let a
+    prose mention stand in for a rule — delete `.chip` entirely and the guard
+    still called it defined. Strings are stripped for the same reason at lower
+    odds: `content: ".foo"` is a literal, not a selector.
+
+    Still deliberately not a selector parser. A name used only in a descendant
+    or compound selector (`.gate-group-title span`) IS defined for this
+    purpose, and matching the bare token after the two removals above keeps the
+    check from claiming a rule is missing when it is merely nested — while a
+    full parser would also have to model the one `@media` block.
     """
-    return set(re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", STYLESHEET.read_text()))
+    css = STYLESHEET.read_text()
+    css = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+    css = re.sub(r'"[^"]*"|\'[^\']*\'', " ", css)
+    return set(re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", css))
+
+
+def _value_tokens(value: str) -> set[str]:
+    """The literal class names in one class attribute, expressions blanked.
+
+    Splits on the marker rather than discarding any token that contains it,
+    because a literal can ABUT an expression and still be a complete class:
+    `class="epic-chip{{ " epic-chip-selected" if ... }}"` carries `epic-chip`,
+    and `class="produced-by-chip{% if %} ...{% endif %}"` carries
+    `produced-by-chip`. Treating the whole token as dynamic dropped both, so
+    two real classes were never checked.
+
+    A token that touches an expression cannot be read whole, and there is one
+    documented shape for that: this codebase builds a dynamic name as
+    `prefix-{{ ... }}` — `badge-`, `attention-chip-`, `blocker-chip-`,
+    `note-status-`. So a touching token ending in `-` is a prefix and is
+    skipped; anything else is taken as complete. If that ever guesses wrong the
+    guard fails loudly and the fix is to write the dynamic name in the `-`
+    form, which is the right way round for a check whose job is exhaustiveness.
+    """
+    tokens: set[str] = set()
+    runs = value.split(_DYNAMIC_MARK)
+    for index, run in enumerate(runs):
+        parts = run.split()
+        if not parts:
+            continue
+        glued_left = index > 0 and not run[:1].isspace()
+        glued_right = index < len(runs) - 1 and not run[-1:].isspace()
+        for position, token in enumerate(parts):
+            touches = (glued_left and position == 0) or (
+                glued_right and position == len(parts) - 1
+            )
+            if touches and token.endswith("-"):
+                continue  # a dynamic name's prefix, not a class
+            tokens.add(token)
+    return tokens
 
 
 def _emitted_classes() -> dict[str, set[str]]:
@@ -60,9 +108,7 @@ def _emitted_classes() -> dict[str, set[str]]:
         tokens: set[str] = set()
         static = _JINJA.sub(_DYNAMIC_MARK, template.read_text())
         for value in re.findall(r'class="([^"]*)"', static):
-            tokens.update(
-                token for token in value.split() if token and _DYNAMIC_MARK not in token
-            )
+            tokens.update(_value_tokens(value))
         if tokens:
             emitted[str(template.relative_to(TEMPLATES))] = tokens
     return emitted
@@ -96,3 +142,51 @@ def test_the_scan_actually_reads_both_sides() -> None:
     assert len(emitted) >= 5, "found almost no templates — the glob is wrong"
     assert sum(len(tokens) for tokens in emitted.values()) >= 50
     assert len(_defined_classes()) >= 50, "found almost no rules — the path is wrong"
+
+
+def test_a_comment_only_mention_is_not_a_definition() -> None:
+    """The stylesheet's own comments name the classes they relate to, so a
+    scan of raw text let prose stand in for a rule — deleting `.chip` outright
+    left the guard still calling it defined, because a comment two hundred
+    lines away mentioned it.
+
+    Driven through the real reader rather than a hand-built string: the point
+    is that THIS file's comments cannot define anything.
+    """
+    css = STYLESHEET.read_text()
+    assert "/*" in css, "no comments left to scan — this test would be vacuous"
+
+    commented_only = "definitely-not-a-real-class"
+    patched = css.replace("/*", f"/* .{commented_only} ", 1)
+    stripped = re.sub(r"/\*.*?\*/", " ", patched, flags=re.S)
+
+    assert f".{commented_only}" in patched
+    assert commented_only not in re.findall(r"\.([A-Za-z][A-Za-z0-9_-]*)", stripped)
+
+
+def test_a_literal_class_abutting_an_expression_is_still_read() -> None:
+    """Two live examples the first version of this scan silently dropped, and
+    the prefix form it must keep dropping.
+
+    `epic-chip` (tasks/dashboard.html) and `produced-by-chip` (note.html) are
+    complete class names written flush against a Jinja expression that supplies
+    an optional second class. Blanking the expression to a marker and rejecting
+    any token containing it removed the literal along with the expression.
+    """
+    emitted = set().union(*_emitted_classes().values())
+
+    assert "epic-chip" in emitted
+    assert "produced-by-chip" in emitted
+    assert "produced-by-chip-record" in emitted
+    # ...while a dynamic name's prefix is still not mistaken for a class.
+    assert not {token for token in emitted if token.endswith("-")}
+
+
+def test_the_prefix_rule_is_applied_only_where_a_name_is_actually_cut() -> None:
+    """`badge` and `badge-` come out of the same attribute; only the one the
+    expression cuts is a prefix."""
+    tokens = _value_tokens(f"badge badge-{_DYNAMIC_MARK}")
+
+    assert tokens == {"badge"}
+    # A hyphen elsewhere in the value is untouched — nothing is cutting it.
+    assert _value_tokens("badge badge-open") == {"badge", "badge-open"}
