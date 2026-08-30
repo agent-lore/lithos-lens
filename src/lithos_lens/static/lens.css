@@ -878,13 +878,20 @@ button,
 /* Empty Needs attention: a thin reassurance stripe, deliberately NOT hidden —
    or, when the reads behind it were incomplete, the same stripe in a warning
    key that withholds the claim instead of making it. */
+/* The stripe is a BAND INSIDE the card, not the card's own footer: it carries
+   a border and a radius of its own. With `margin: 0` those sat directly on the
+   card's border and its corners were cropped by `.task-group`'s
+   `overflow: hidden`, so it read as a bar wedged into the card rather than a
+   notice within it — measured at 1px of inset against the 21px the section
+   title and every task row use. The margin matches that inset, which is what
+   `.empty` achieves with padding in the same slot. */
 .healthy-stripe {
   background: rgba(53, 106, 77, 0.1);
   border: 1px solid rgba(53, 106, 77, 0.35);
   border-radius: 0.8rem;
   color: var(--ok);
   font-size: 0.85rem;
-  margin: 0;
+  margin: 0 1.25rem 1.25rem;
   padding: 0.6rem 0.9rem;
 }
 

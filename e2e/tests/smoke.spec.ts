@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { TRUNCATED_BASE_URL } from "../servers";
 
 /**
  * Smoke suite: the app boots in fake-Lithos mode and every top-level
@@ -125,6 +126,63 @@ test("nothing marked hidden is painted, anywhere on the page", async ({ page }) 
   );
 
   expect(painted).toEqual([]);
+});
+
+test("the needs-attention stripe is inset like its siblings, not welded to the card", async ({
+  page,
+}) => {
+  // dafa6221. The stripe carries a border and a radius of its own, so it is a
+  // BAND INSIDE the card rather than the card's own footer. With `margin: 0` it
+  // had 1px of inset — the card's border and nothing else — so the two borders
+  // landed on each other and `.task-group`'s `overflow: hidden` cropped its
+  // corners against the card's radius. It read as a bar wedged in.
+  //
+  // Geometry, not a stylesheet substring, because this is the defect class the
+  // coverage guard cannot see: the rule was present the whole time, its value
+  // was wrong. Asserted against the section title's inset rather than a literal
+  // pixel count, so the two stay aligned if the card's padding ever changes.
+  //
+  // Both reachable variants, because they are separate template branches that
+  // share one rule — a per-variant margin would otherwise slip through. The
+  // third ("All systems healthy") needs an unfiltered board with an empty
+  // Needs-attention section, which the fixtures deliberately do not produce.
+  const boards = [
+    // The scoped stripe, on a narrowed board of the ordinary instance.
+    { url: "/tasks?since=2026-08-01&tag=area%3Adata", marker: "[data-attention-scoped]" },
+    // The "cannot assess" stripe, which only the truncated instance renders.
+    {
+      url: `${TRUNCATED_BASE_URL}/tasks?since=2026-08-01`,
+      marker: "[data-attention-unknown]",
+    },
+  ];
+
+  for (const { url, marker } of boards) {
+    for (const width of [320, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(url);
+
+      const stripe = page.locator(marker);
+      await expect(stripe).toBeVisible();
+
+      const inset = await stripe.evaluate((node) => {
+        const card = node.closest(".task-group")!;
+        const s = node.getBoundingClientRect();
+        const c = card.getBoundingClientRect();
+        const title = card.querySelector("h2, h3")!.getBoundingClientRect();
+        return {
+          left: Math.round(s.left - c.left),
+          right: Math.round(c.right - s.right),
+          title: Math.round(title.left - c.left),
+        };
+      });
+
+      expect(inset.left, `${marker} left inset at ${width}px`).toBe(inset.title);
+      expect(inset.right, `${marker} right inset at ${width}px`).toBe(inset.title);
+      // Belt and braces: the title itself must be inset, or the assertions
+      // above would hold for a stripe welded to a card that has no padding.
+      expect(inset.title).toBeGreaterThan(4);
+    }
+  }
 });
 
 test("a page shorter than the viewport still fills it", async ({ page }) => {
