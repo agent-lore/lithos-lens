@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.knowledge._gather_candidates"
       }
     ],
-    "total_functions": 393
+    "total_functions": 394
   },
   "domain": {
     "associations": 44,
@@ -219,13 +219,13 @@
       },
       "Entrypoint": {
         "classes": 0,
-        "functions": 3,
+        "functions": 4,
         "largest_module": "lithos_lens.main",
-        "largest_module_lines": 68,
-        "lines": 74,
+        "largest_module_lines": 97,
+        "lines": 103,
         "modules": 2,
-        "public_symbols": 3,
-        "sloc": 52
+        "public_symbols": 4,
+        "sloc": 75
       },
       "Errors": {
         "classes": 4,
@@ -331,13 +331,13 @@
     "max_module": "lithos_lens.knowledge",
     "max_module_lines": 781,
     "modules_over_800": [],
-    "total_lines": 11211,
+    "total_lines": 11240,
     "total_modules": 34,
-    "total_sloc": 8624
+    "total_sloc": 8647
   },
   "tests": {
     "ratio": 1.91,
-    "src_lines": 11211,
-    "test_lines": 21420
+    "src_lines": 11240,
+    "test_lines": 21511
   }
 }

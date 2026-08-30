@@ -17,6 +17,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from lithos_lens import main as main_module
 from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.events import LensEvent
@@ -27,7 +28,7 @@ from lithos_lens.fake_lithos import (
     fake_lithos_enabled,
 )
 from lithos_lens.lithos_client import LithosClient, LithosToolError
-from lithos_lens.main import DEFAULT_PORT, resolve_port
+from lithos_lens.main import DEFAULT_HOST, DEFAULT_PORT, resolve_host, resolve_port
 from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
 from tests.conftest import load_contract
@@ -374,6 +375,96 @@ def test_resolve_port_rejects_invalid(
     monkeypatch.setenv("LENS_PORT", bad)
     with pytest.raises(ConfigError):
         resolve_port()
+
+
+def test_resolve_host_defaults_to_every_interface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The container posture is the default and must stay it.
+
+    Lens is published on a port and reached across the trusted-network boundary
+    (REQUIREMENTS §5C.1). A loopback default would leave a correctly configured
+    container answering nothing, so narrowing the bind is opt-IN.
+    """
+    monkeypatch.delenv("LENS_HOST", raising=False)
+    assert resolve_host() == DEFAULT_HOST == "0.0.0.0"  # nosec B104
+
+
+@pytest.mark.parametrize("value", ["127.0.0.1", "  127.0.0.1  ", "::1"])
+def test_resolve_host_honors_env(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("LENS_HOST", value)
+    assert resolve_host() == value.strip()
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_resolve_host_treats_blank_as_unset(
+    monkeypatch: pytest.MonkeyPatch, blank: str
+) -> None:
+    # Same shape as LENS_PORT: an env var set to nothing is not an instruction.
+    monkeypatch.setenv("LENS_HOST", blank)
+    assert resolve_host() == DEFAULT_HOST
+
+
+def test_main_binds_the_host_and_port_it_resolved(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolver nothing calls would close nothing.
+
+    The bind is one line in ``main`` and no other test reaches it, so a change
+    that resolved the host and then passed a literal anyway would leave every
+    other test here green while the listener went back on every interface.
+    """
+    monkeypatch.setenv("LENS_HOST", "127.0.0.1")
+    monkeypatch.setenv("LENS_PORT", "8123")
+    monkeypatch.setattr(main_module, "configure_logging", lambda level: None)
+    recorded: dict[str, object] = {}
+    monkeypatch.setattr(
+        main_module.uvicorn,
+        "run",
+        lambda *args, **kwargs: recorded.update(kwargs),
+    )
+
+    main_module.main()
+
+    assert recorded["host"] == "127.0.0.1"
+    assert recorded["port"] == 8123
+
+
+def _web_server_entries(source: str) -> list[str]:
+    """The text of each ``webServer`` entry in the Playwright config.
+
+    Sliced between ``command:`` keys — one per entry — so an entry that carries
+    no ``env`` block at all is an entry with nothing in it, rather than one this
+    scan never looks at.
+    """
+    block = source[source.index("webServer:") :]
+    starts = [match.start() for match in re.finditer(r"^\s*command:", block, re.M)]
+    bounds = [*starts, len(block)]
+    return [block[bounds[i] : bounds[i + 1]] for i in range(len(starts))]
+
+
+def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
+    """``make e2e`` must not put an unauthenticated write seam on the network.
+
+    Fake mode registers ``POST /tasks/events/publish`` — no auth, no Origin
+    check — and the suite runs two instances of it. On every interface, anyone
+    on the segment could fan an event into the tabs being photographed, and
+    those artifacts are read as evidence by loom's visual review.
+
+    Asserted against the config file rather than the running servers because
+    that is where the decision lives, and because a Python test runs on every
+    ``make check`` while the harness itself does not.
+    """
+    config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
+    entries = _web_server_entries(config.read_text())
+
+    assert len(entries) >= 2, "the truncation instance is a second server"
+    for index, entry in enumerate(entries):
+        pinned = re.search(r'LENS_HOST:\s*"([^"]+)"', entry)
+        assert pinned, f"webServer entry {index} does not pin LENS_HOST"
+        assert pinned.group(1) in {"127.0.0.1", "localhost", "::1"}, (
+            f"webServer entry {index} binds {pinned.group(1)!r}, not loopback"
+        )
 
 
 @pytest.mark.anyio

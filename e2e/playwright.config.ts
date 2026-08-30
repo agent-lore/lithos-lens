@@ -93,6 +93,16 @@ export default defineConfig({
   // PROCESSES, so the second one also sits outside the event-leak problem the
   // projects above are sequenced around — `EventHub.publish` fans to the tabs
   // of ITS server only, and no driving phase talks to this one.
+  //
+  // BOTH pin `LENS_HOST` to loopback. Lens defaults to every interface, which
+  // is the accepted posture for the container (REQUIREMENTS §5C.1) but the
+  // wrong one here: fake mode registers `POST /tasks/events/publish`, an
+  // unauthenticated write seam with no Origin check, so on a shared segment
+  // anyone could fan an event into the very tabs this suite is photographing —
+  // and those artifacts are read as evidence by loom's visual review. Pinned
+  // per entry rather than left to a default, so a change to Lens's default
+  // cannot quietly widen the harness. `tests/test_fake_lithos.py` asserts every
+  // entry here carries it.
   webServer: [
     {
       // `uv run --directory ..` launches the packaged `lithos-lens` entry point
@@ -107,6 +117,7 @@ export default defineConfig({
         LITHOS_LENS_FAKE_LITHOS: "1",
         LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
         LENS_PORT: String(PORT),
+        LENS_HOST: "127.0.0.1",
       },
     },
     {
@@ -118,6 +129,7 @@ export default defineConfig({
         LITHOS_LENS_FAKE_LITHOS: "1",
         LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
         LENS_PORT: String(TRUNCATED_PORT),
+        LENS_HOST: "127.0.0.1",
         // The whole point of the second instance. Well clear of the env path's
         // `minimum = 1` floor, so the instance boots.
         LITHOS_LENS_TASKS_FRONTIER_LIMIT: TRUNCATED_FRONTIER_LIMIT,
