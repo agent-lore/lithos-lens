@@ -56,6 +56,23 @@ _PRESERVED_FILTER_KEYS = (
     "epic",
 )
 
+# What the byte budget MEASURES, which is a wider set than what it preserves.
+#
+# The budget exists for one property: a request must not choose how many bytes
+# the response copies out of it. Every key above is re-emitted into every
+# generated link, so each is measured. ``chain`` (T1-S8) is re-emitted the same
+# way — :func:`blocker_expand_url` writes the whole trail into the ``hx-get`` of
+# every expandable line, so one fragment copies it up to ``LINK_PAGE_SIZE``
+# times — and it was originally left out, which made it the one query parameter
+# an anonymous client could use to buy that multiplication unmetered (a 39 KB
+# chain rendered a 992 KB fragment, ~25x).
+#
+# It is measured but NOT preserved, and the two lists are separate for that
+# reason: ``chain`` describes one expansion walk, so re-emitting it onto a
+# board, tag or detail URL would carry a walk into navigation it has nothing to
+# do with. Measured here, emitted only by the one builder that owns it.
+_MEASURED_QUERY_KEYS = (*_PRESERVED_FILTER_KEYS, "chain")
+
 
 @dataclass(frozen=True)
 class _RequestFilters:
@@ -89,6 +106,10 @@ def _parse_preserved_filters(request: Request) -> _RequestFilters:
     documented — and displayed to the operator — as rejecting only what is
     larger. Measuring the real thing cannot drift from it.
 
+    Measured over :data:`_MEASURED_QUERY_KEYS` — every key the response copies
+    out, which is the preserved filters PLUS ``chain``. Only the preserved ones
+    are then emitted; see the constant for why the two lists differ.
+
     Measured over the request AS IT ARRIVED, then emitted in canonical form.
     The two differ only for tags: ``add_tag`` (the filter bar's text box) is
     folded into the ``tag`` list once and never re-emitted, so a tag added
@@ -102,11 +123,12 @@ def _parse_preserved_filters(request: Request) -> _RequestFilters:
     string is a literal tag (``?tag=`` is the empty-tag scope) and dropping it
     would silently widen the board to everything.
     """
-    raw = [
+    measured = [
         (key, value)
         for key, value in request.query_params.multi_items()
-        if key in _PRESERVED_FILTER_KEYS
+        if key in _MEASURED_QUERY_KEYS
     ]
+    raw = [(key, value) for key, value in measured if key in _PRESERVED_FILTER_KEYS]
     params = [
         (key, value) for key, value in raw if key not in TAG_FILTER_KEYS and value
     ]
@@ -117,7 +139,7 @@ def _parse_preserved_filters(request: Request) -> _RequestFilters:
             added=[value for key, value in raw if key == ADD_TAG_FILTER_KEY],
         )
     )
-    if len(urlencode(raw)) > MAX_FILTER_QUERY_BYTES:
+    if len(urlencode(measured)) > MAX_FILTER_QUERY_BYTES:
         # An oversized request preserves NOTHING, so the guarantee holds at the
         # choke point rather than per template: the refusal page still renders
         # its own chrome (the "back to tasks" link), and every URL on it must
@@ -139,11 +161,11 @@ def _request_filters(request: Request) -> _RequestFilters:
 def filter_query_oversized(request: Request) -> bool:
     """True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.
 
-    Measured over the preserved keys only — they are the ones re-emitted into
-    every generated URL, and so the ones whose size the response multiplies.
-    An oversized request is answered explicitly rather than served as though
-    the offending filter had not been sent: see the constant for why trimming
-    is not an option.
+    Measured over every key the response re-emits — the preserved filters and
+    the blocker chain's ``chain`` trail alike — because those are the ones
+    whose size the response multiplies. An oversized request is answered
+    explicitly rather than served as though the offending filter had not been
+    sent: see the constant for why trimming is not an option.
     """
     return _request_filters(request).oversized
 
@@ -240,6 +262,30 @@ def task_detail_url(request: Request, task_id: str) -> str:
     params = _preserved_filter_params(request)
     suffix = f"?{urlencode(params)}" if params else ""
     return f"/tasks/{quote(task_id, safe='')}{suffix}"
+
+
+def blocker_expand_url(request: Request, task_id: str, chain: Sequence[str]) -> str:
+    """Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
+
+    The ancestor trail rides in the query as repeated ``chain`` pairs, root
+    first, with the expanded id appended — so the fragment derives its depth
+    from what it was sent and needs no server-side walk state. That is also
+    what makes the fragment cycle-safe: the trail IS the seen-set.
+
+    Carries the board's preserved filters through the same allowlist every
+    other generated tasks URL uses. A fragment fetched without them would
+    render a level whose links are unfiltered — the expansion would silently
+    drop the scope the operator is browsing under, one level down — and a
+    retired param (``claimed_state``) stops here rather than propagating.
+
+    ``task_id`` is encoded as ONE path segment for the reason
+    :func:`task_detail_url` gives: ids are arbitrary non-empty strings, so a
+    ``/`` or ``?`` in one would otherwise address something else entirely.
+    """
+    params = _preserved_filter_params(request)
+    params.extend(("chain", ancestor) for ancestor in chain)
+    params.append(("chain", task_id))
+    return f"/tasks/{quote(task_id, safe='')}/blockers?{urlencode(params)}"
 
 
 def note_url(knowledge_id: str, task_id: str = "") -> str:

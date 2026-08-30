@@ -130,6 +130,17 @@ classDiagram
 ```mermaid
 classDiagram
   class BlockedTaskRecord
+  class BlockerExpansion {
+    +expandable bool
+    +revisits_chain bool
+  }
+  class BlockerLevel {
+    +task_id str
+    +chain tuple[str, ...]
+    +state SectionState
+    +over_depth bool
+    +bad_chain bool
+  }
   class BlockerRecord {
     +kind str
     +task_id str
@@ -194,6 +205,7 @@ classDiagram
     +task_type str
     +gate_type str
     +unresolved bool
+    +gate_elapsed bool
   }
   class PageTail {
     +shown int
@@ -238,6 +250,7 @@ classDiagram
   <<Tasks>> TaskStatusRecord
   BlockedTaskRecord "1" --> "0..*" BlockerRecord : blockers
   BlockedTaskRecord "1" --> "1" TaskRecord : task
+  BlockerLevel "1" --> "1" LinkPage : page
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
   DashboardData "1" --> "0..*" AgentRecord : agents
   DashboardData "1" --> "0..*" EpicRollup : epics

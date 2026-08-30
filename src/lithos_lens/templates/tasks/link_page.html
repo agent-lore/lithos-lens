@@ -8,7 +8,10 @@
   tail-rendering path, which the children table shares.
 
   Context: `page` (a task_links.LinkPage), `page_noun` (plural noun for the tail
-  copy) and `page_label` (the data-attribute hook).
+  copy) and `page_label` (the data-attribute hook), plus — for the blocker
+  chain only — `chain`, the ancestor trail of this level (root first, ending at
+  the task whose blockers these are). No `chain` means no expanders: the
+  provenance lists render through here too, and nothing hangs below them.
 #}
 <ul class="link-list" data-link-list="{{ page_label }}">
   {% for link in page.links %}
@@ -34,6 +37,34 @@
              the task is unblocked, but it must not be left looking like a
              reason the task cannot run. #}
           <span class="blocker-chip blocker-chip-satisfied" data-link-satisfied>satisfied</span>
+        {% endif %}
+      {% endif %}
+      {% if chain %}
+        {# T1-S8. What hangs below this line is decided in Python
+           (blocker_chain.blocker_expansion) rather than here, so the
+           four-state rule and the depth bound have one testable home. #}
+        {% set expansion = blocker_expansion(link, chain) %}
+        {% if expansion.revisits_chain %}
+          {# The cycle case, stated as what this render KNOWS. §5.5.2 words it
+             `cycle: A -> B -> A`, which asserts two edges; this level read one
+             of them (that this line blocks the task above). The other — that
+             the chain got here from this line — is in the query string, and a
+             hand-written one produced that exact arrow form over a graph with
+             no cycle in it. So the chip carries no ids, no arrows and no
+             request-derived text at all: it reports the chain, which is the
+             thing it can see, and the line's own link is right beside it to
+             open a fresh chain from. blocker_chain.blocker_expansion says more. #}
+          <span class="blocker-chip blocker-chip-cycle" data-blocker-cycle="{{ link.task_id }}" title="This expansion chain has already been through this task, so expanding it again would repeat the walk. Open the task itself to start a fresh chain from there.">cycle: already on this chain</span>
+        {% elif expansion.expandable %}
+          <span class="blocker-expand" data-blocker-expand="{{ link.task_id }}">
+            <button
+              type="button"
+              class="link-expander"
+              hx-get="{{ blocker_expand_url(request, link.task_id, chain) }}"
+              hx-target="closest .blocker-expand"
+              hx-swap="outerHTML"
+            >Show its blockers</button>
+          </span>
         {% endif %}
       {% endif %}
     </li>

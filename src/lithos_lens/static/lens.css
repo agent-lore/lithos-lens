@@ -1028,6 +1028,44 @@ button,
   margin-top: 0.75rem;
 }
 
+/* Lazy per-level blocker expansion (T1-S8). The expander is a plain button in
+   the link row's flex line; the level HTMX swaps in for it takes a full row of
+   its own and is indented behind a rule, so which blockers belong to which
+   line stays legible as the walk goes deeper.
+
+   Its METRICS are the badge/chip family's, not its own: same font-size, same
+   line-height, same 1px border, same `0.35rem 0.55rem` padding as `.badge`
+   and `.blocker-chip`. It shares a centred flex line with them, so any
+   difference here shows up as a pill inset a pixel at the top and bottom of
+   its neighbours (0.05rem per side measured as a 1.6px height delta). What is
+   deliberately different is only what marks it as the one INTERACTIVE pill on
+   the row: the dashed border, the muted colour and the pointer cursor, all
+   resolving on hover/focus. */
+.link-expander {
+  background: none;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+}
+
+.link-expander:hover,
+.link-expander:focus-visible {
+  border-style: solid;
+  color: var(--ink);
+}
+
+.blocker-level {
+  border-left: 2px solid var(--line);
+  flex-basis: 100%;
+  margin-top: 0.25rem;
+  padding-left: 0.75rem;
+}
+
 .children-table {
   border-collapse: collapse;
   margin-top: 0.5rem;
