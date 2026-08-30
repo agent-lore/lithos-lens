@@ -236,6 +236,8 @@ h1 {
 .metric-card,
 .panel,
 .detail-panel,
+.related-panel,
+.resolve-panel,
 .filter-bar,
 .task-group,
 .task-list-pending:not(:empty) {
@@ -256,6 +258,10 @@ h1 {
 .detail-meta,
 .warning-text,
 .empty,
+.related-empty,
+.related-error,
+.knowledge-active-filter,
+.resolve-candidate-path,
 small {
   color: var(--muted);
 }
@@ -909,6 +915,14 @@ button,
   padding: 0.35rem 0.55rem;
 }
 
+/* Status is the chip an operator scans for. Declared BEFORE its variants on
+   purpose: `.note-status-quarantined` and friends are single-class selectors
+   too, so a base rule placed after them would win on order and silently undo
+   the emphasis they exist to add. */
+.note-status {
+  font-weight: 600;
+}
+
 .note-status-active {
   border-color: rgba(53, 106, 77, 0.35);
   color: var(--ok);
@@ -1260,4 +1274,213 @@ button,
   to {
     background: rgba(255, 246, 227, 0.8);
   }
+}
+
+
+/* --- Knowledge surface chrome -------------------------------------------
+   These classes were emitted by the templates with no rule at all, so the
+   whole Related panel and the frontmatter chip row rendered as bare inline
+   text on the paper background beside a note body that had a card, padding
+   and a muted palette. Pinned by tests/test_stylesheet_coverage.py. */
+
+.related-panel {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+}
+
+.related-panel h2 {
+  margin-top: 0;
+}
+
+.related-section + .related-section,
+.related-section + .related-group {
+  border-top: 1px solid var(--line);
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+}
+
+.related-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+
+.related-section ul,
+.related-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.related-section li,
+.related-group li {
+  padding: 0.2rem 0;
+}
+
+.related-group {
+  margin-top: 0.9rem;
+}
+
+.related-group h4 {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.3rem;
+  text-transform: uppercase;
+}
+
+/* The provenance block groups several ref lists, so it reads as one thing. */
+.related-provenance {
+  background: var(--panel-strong);
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+}
+
+.related-more {
+  font-size: 0.85rem;
+}
+
+/* Typed-edge metadata, rendered beside the link it qualifies. Small and quiet
+   — the link is the content; these say how it is related. */
+.edge-direction,
+.edge-type,
+.edge-weight,
+.edge-conflict {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+}
+
+/* A contradiction is the one edge fact worth interrupting for. */
+.edge-conflict {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--ink);
+}
+
+/* Frontmatter chips. `.chip` already gives them the pill; these modifiers say
+   WHICH fact each pill carries. Three of the six rendered a bare word —
+   "summary", "task", "plans" — with nothing to say what it meant, while the
+   template labels the other two inline ("confidence 90%", "replaces: ..."), so
+   the label is generated here to match. Kept out of the markup so the value
+   stays the element's whole textContent and the existing assertions hold. */
+.note-type::before,
+.note-scope::before,
+.note-namespace::before {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.note-type::before {
+  content: "type ";
+}
+
+.note-scope::before {
+  content: "scope ";
+}
+
+.note-namespace::before {
+  content: "namespace ";
+}
+
+.note-confidence,
+.note-supersedes {
+  color: var(--muted);
+}
+
+.note-supersedes a {
+  color: var(--ink);
+}
+
+/* Wrapper round the produced-by chip; the chip itself is already styled. */
+.produced-by {
+  margin: 0.4rem 0 0;
+}
+
+/* --- Knowledge landing + wiki-link resolution ---------------------------- */
+
+.knowledge-landing {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.knowledge-active-filter {
+  margin: 0;
+}
+
+.resolve-panel {
+  margin-top: 1rem;
+  padding: 1.5rem;
+}
+
+.resolve-candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resolve-candidates li {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0;
+}
+
+.resolve-candidate-path {
+  display: block;
+  font-size: 0.8rem;
+}
+
+/* The two outcomes of a wiki-link: several matches, or none. Only the second
+   is a dead end, so only it takes the warning tone. */
+.resolve-disambiguation {
+  border-color: var(--line);
+}
+
+.resolve-unresolved {
+  border-color: var(--warning-border);
+}
+
+/* --- Task board chrome --------------------------------------------------- */
+
+/* Long titles must not push the progress bar and count out of the chip, and
+   must not widen the chip past the board either. `min-width: 0` rather than a
+   fixed `max-width`: a flex item defaults to `min-width: auto`, so with
+   `nowrap` it refuses to shrink below its text and pushes the chip wide — at
+   320px that overflowed the viewport. Zero lets it ellipsize into whatever
+   space is left instead of claiming a character count. */
+.epic-chip {
+  max-width: 100%;
+}
+
+.epic-chip-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gate-group + .gate-group {
+  margin-top: 1rem;
+}
+
+/* A gate is not workable, so its row is marked as chrome rather than work. */
+.gate-row {
+  border-left: 3px solid var(--warning-border);
+}
+
+/* "blocked" / "awaiting reconciliation": a state the operator did not choose
+   and cannot act on from here, so it reads as a caution rather than a status. */
+.badge-blocked {
+  border-color: rgba(213, 138, 31, 0.5);
+  color: var(--cancelled);
+}
+
+/* Wrapper the HTMX expander swaps itself out of; keeps the button on the
+   badge line rather than breaking it onto its own row. */
+.blocker-expand {
+  display: inline-flex;
 }
