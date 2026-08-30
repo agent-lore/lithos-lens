@@ -233,6 +233,7 @@ classDiagram
     +recent_completed int
     +recent_cancelled int
     +agents int
+    +approximate frozenset[str]
   }
   class AgentRecord
   <<Tasks>> AgentRecord

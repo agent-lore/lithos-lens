@@ -16,7 +16,12 @@
 #}
 {% macro approximate_note(summary, counter, limit) %}
   {%- if counter in summary.approximate %}
-    <small class="metric-approximate" data-approximate-count="{{ counter }}">At least this many — the {{ summary.approximate_frontiers | join(" and ") }} frontier{{ "s" if summary.approximate_frontiers | length > 1 else "" }} truncated at {{ limit }}</small>
+    {#- Only the sides that feed THIS counter. `attention` is fed by both
+        reads; `ready` and `blocked` by one each, so naming the board-wide
+        list here would say a capped BLOCKED read is why the READY count is
+        approximate. The banner states the board-wide fact once. -#}
+    {%- set sides = summary.approximate_frontiers_for(counter) %}
+    <small class="metric-approximate" data-approximate-count="{{ counter }}">At least this many — the {{ sides | join(" and ") }} frontier{{ "s" if sides | length > 1 else "" }} truncated at {{ limit }}</small>
   {%- endif %}
 {%- endmacro %}
 

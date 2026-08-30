@@ -2064,6 +2064,73 @@ def test_only_the_truncated_side_marks_its_counter_on_the_page(
     assert 'data-approximate-count="blocked"' not in text
 
 
+def test_each_counters_note_names_only_the_sides_that_feed_it(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With BOTH frontiers capped, the marking is right and the EXPLANATION has
+    to be too.
+
+    ``attention`` is fed by both reads — a promoted row can come from either
+    frontier — but ``ready`` is fed only by the ready read and ``blocked`` only
+    by the blocked one. Naming the board-wide list on every marked card told
+    the operator that a capped BLOCKED read is why the READY count is
+    approximate, which is the exact conflation this slice exists to undo,
+    restated in prose after the number had been got right.
+
+    The one-sided case above cannot catch this: with a single capped side the
+    board-wide list and the per-counter list are the same tuple.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.tasks.extend(
+        TaskRecord(
+            id=task_id,
+            title=title,
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=5),
+        )
+        for task_id, title in (
+            ("ready-a", "Ready A"),
+            ("ready-b", "Ready B"),
+            ("ready-c", "Ready C"),
+            ("blocked-a", "Blocked A"),
+            ("blocked-b", "Blocked B"),
+            ("blocked-c", "Blocked C"),
+        )
+    )
+    fake.ready_ids = {"ready-a", "ready-b", "ready-c"}
+    fake.blocked = {
+        task_id: (
+            BlockerRecord(
+                kind="task",
+                task_id="ready-a",
+                type="blocks",
+                status="open",
+                message="Waiting.",
+            ),
+        )
+        for task_id in ("blocked-a", "blocked-b", "blocked-c")
+    }
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "2")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = unescape(response.text)
+    notes = dict(re.findall(r'data-approximate-count="(\w+)">([^<]*)', text))
+    # Both sides capped, so all three counters are marked...
+    assert set(notes) == {"ready", "blocked", "attention"}
+    # ...but each names only what feeds it.
+    assert "the ready frontier truncated" in notes["ready"]
+    assert "blocked" not in notes["ready"]
+    assert "the blocked frontier truncated" in notes["blocked"]
+    assert "ready" not in notes["blocked"]
+    # Needs attention is the one genuinely fed by both.
+    assert "the ready and blocked frontiers truncated" in notes["attention"]
+
+
 def test_stale_open_row_is_flagged_with_its_reason_chip(
     lithos_lens_config_env: Path,
 ) -> None:
