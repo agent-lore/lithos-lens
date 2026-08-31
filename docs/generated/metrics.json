@@ -272,11 +272,11 @@
         "classes": 2,
         "functions": 6,
         "largest_module": "lithos_lens.logging",
-        "largest_module_lines": 164,
-        "lines": 164,
+        "largest_module_lines": 169,
+        "lines": 169,
         "modules": 1,
         "public_symbols": 3,
-        "sloc": 117
+        "sloc": 122
       },
       "State": {
         "classes": 2,
@@ -312,11 +312,11 @@
         "classes": 0,
         "functions": 12,
         "largest_module": "lithos_lens.telemetry",
-        "largest_module_lines": 381,
-        "lines": 381,
+        "largest_module_lines": 392,
+        "lines": 392,
         "modules": 1,
         "public_symbols": 5,
-        "sloc": 283
+        "sloc": 287
       },
       "Web": {
         "classes": 1,
@@ -332,13 +332,13 @@
     "max_module": "lithos_lens.knowledge",
     "max_module_lines": 781,
     "modules_over_800": [],
-    "total_lines": 11683,
+    "total_lines": 11699,
     "total_modules": 34,
-    "total_sloc": 8979
+    "total_sloc": 8988
   },
   "tests": {
     "ratio": 1.9,
-    "src_lines": 11683,
-    "test_lines": 22154
+    "src_lines": 11699,
+    "test_lines": 22175
   }
 }

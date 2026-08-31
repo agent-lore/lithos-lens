@@ -418,6 +418,9 @@ Lens currently includes:
 
 - structured JSON logging at a configurable level, every record stamped with
   the `trace_id` / `span_id` of the request that produced it when one is active
+  (the same record exported over OTLP reaches Loki as `traceid` / `spanid`,
+  written by the collector's exporter from the OTLP record's native trace
+  context — a query has to match whichever sink it reads)
 - task filter/debug logging around dashboard requests
 - OpenTelemetry traces, metrics and log export to an OTLP collector
 

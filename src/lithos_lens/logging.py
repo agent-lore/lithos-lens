@@ -90,8 +90,13 @@ def _trace_context() -> dict[str, str]:
     absent field reads as "outside a request" in Loki, where a zeroed one looks
     like a real trace that leads nowhere.
 
-    These are what a Grafana Loki->Tempo derived field matches on; keep the
-    names in step with the datasource config in lithos-observability.
+    These are what a Grafana Loki->Tempo derived field matches on. Note the
+    two log sinks name them DIFFERENTLY, verified against the live stack: the
+    stdout record carries ``trace_id`` / ``span_id`` from here, while the same
+    record exported over OTLP arrives in Loki as ``traceid`` / ``spanid`` --
+    the collector's Loki exporter writes the OTLP LogRecord's native trace
+    context under its own names, not these. A derived field or LogQL query
+    therefore has to match whichever sink it is reading.
     """
     span_context = trace.get_current_span().get_span_context()
     if not span_context.is_valid:

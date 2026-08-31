@@ -296,6 +296,27 @@ def test_ids_in_the_path_never_reach_the_span_name(
             assert value != "note-influx-rollback"
 
 
+def test_one_request_produces_exactly_one_span(
+    lithos_lens_config_env: Path, spans: InMemorySpanExporter
+) -> None:
+    """No ASGI `http send` / `http receive` children.
+
+    The instrumentation emits those by default, which made every request four
+    spans rather than one. That is not merely storage: Tempo's metrics
+    generator mints a Prometheus series per distinct span name, so
+    `GET /note/{knowledge_id} http send` was being tracked alongside the route
+    itself -- paying series cardinality to record that a response went out in
+    three chunks. Found against the live stack, not in this suite, which is why
+    the assertion is on the COUNT rather than on the names.
+    """
+    with _client(lithos_lens_config_env) as client:
+        assert client.get(f"/note/{DEMO_NOTE_ID}").status_code == 200
+
+    observed = spans.get_finished_spans()
+    assert len(observed) == 1, [span.name for span in observed]
+    assert _attributes(observed[0])["http.route"] == "/note/{knowledge_id}"
+
+
 def test_health_and_static_are_not_traced(
     lithos_lens_config_env: Path, spans: InMemorySpanExporter
 ) -> None:
