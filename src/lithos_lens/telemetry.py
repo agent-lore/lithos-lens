@@ -233,7 +233,18 @@ def instrument_app(app: FastAPI) -> None:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
-    FastAPIInstrumentor.instrument_app(app, excluded_urls=TRACE_EXCLUDED_URLS)
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls=TRACE_EXCLUDED_URLS,
+        # Drop the ASGI `http send` / `http receive` child spans. Verified
+        # against the live stack: they made every request FOUR spans instead of
+        # one, and Tempo's metrics generator turns each distinct span name into
+        # its own Prometheus series -- so `GET /note/{knowledge_id} http send`
+        # was minted alongside the route itself, multiplying both trace storage
+        # and series count to record that an ASGI response went out in three
+        # chunks. No operator question is answered by that.
+        exclude_spans=["send", "receive"],
+    )
     # httpx instrumentation is process-wide, not per-app, and re-instrumenting
     # warns and no-ops. The suite builds many apps in one process, so ask
     # first rather than emit a warning per app.
