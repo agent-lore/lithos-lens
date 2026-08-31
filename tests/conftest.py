@@ -74,4 +74,16 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_LLM_EXTRA_HEADERS_JSON", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_MAX_TOKENS", "")
     monkeypatch.setenv("LITHOS_LENS_OTEL_ENABLED", "")
+    # Every OTLP endpoint `setup_telemetry` consults, Lens's own and the
+    # standard OTEL ones. Not merely tidiness: telemetry is ON by default now,
+    # so a developer or CI runner with OTEL_EXPORTER_OTLP_ENDPOINT exported
+    # would turn nominally-hermetic tests into a live exporter and ship test
+    # spans, metrics and LOG RECORDS to whatever collector that names. The
+    # signal-specific variables take precedence over the base one, so clearing
+    # only the base would leave the hole open.
+    monkeypatch.setenv("LITHOS_LENS_OTEL_ENDPOINT", "")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "")
     return config_path

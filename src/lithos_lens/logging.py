@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
+
+from opentelemetry import trace
 
 from lithos_lens.config import LogLevel
 
@@ -64,12 +67,70 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": _truncated(record.getMessage()),
         }
+        payload.update(_trace_context())
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         for key, value in record.__dict__.items():
             if key not in _STANDARD_LOG_RECORD_FIELDS and not key.startswith("_"):
                 payload[key] = _json_safe(value)
         return json.dumps(payload, separators=(",", ":"))
+
+
+def _trace_context() -> dict[str, str]:
+    """``trace_id`` / ``span_id`` for the active span, or nothing.
+
+    Stamped in the FORMATTER rather than a ``logging.Filter`` on the root
+    logger. A logger-level filter only sees records logged directly on THAT
+    logger -- ``Logger.handle`` applies its own filters, then hands the record
+    to ancestors' HANDLERS, whose filters run instead. So a root filter would
+    silently miss every record from ``lithos_lens.*``, which is all of them.
+    Formatting is the one step every record reaches.
+
+    Omitted entirely when no span is active, rather than written as zeros: an
+    absent field reads as "outside a request" in Loki, where a zeroed one looks
+    like a real trace that leads nowhere.
+
+    These are what a Grafana Loki->Tempo derived field matches on; keep the
+    names in step with the datasource config in lithos-observability.
+    """
+    span_context = trace.get_current_span().get_span_context()
+    if not span_context.is_valid:
+        return {}
+    return {
+        "trace_id": format(span_context.trace_id, "032x"),
+        "span_id": format(span_context.span_id, "016x"),
+    }
+
+
+class BoundedRecordFilter(logging.Filter):
+    """Bound a record for a handler that does NOT run :class:`JsonFormatter`.
+
+    ``MAX_LOGGED_VALUE_CHARS`` is applied centrally in the formatter, which
+    covers the stdout handler and nothing else. The OTLP log-export handler
+    (``lithos_lens.telemetry``) is a second sink and takes no formatter at all:
+    it reads ``record.getMessage()`` and the record's extra attributes
+    directly. Without this filter a 47 KB query string reaches the collector
+    verbatim, which is the same unbounded-volume problem the formatter's own
+    comment describes, moved to a path that costs money instead of log history.
+
+    Implemented as a record REPLACEMENT rather than an in-place edit: returning
+    a ``LogRecord`` from a filter substitutes it for that handler only (Python
+    3.12+), so the stdout handler still sees the original and applies its own
+    bound. Mutating the record would silently shorten what every other handler
+    receives, depending on the order they happen to run in.
+
+    ``exc_info`` is deliberately not bounded, matching :class:`JsonFormatter`:
+    a traceback's size follows the code's call depth, not attacker input.
+    """
+
+    def filter(self, record: logging.LogRecord) -> logging.LogRecord:
+        bounded = copy.copy(record)
+        bounded.msg = _truncated(record.getMessage())
+        bounded.args = ()
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_LOG_RECORD_FIELDS and not key.startswith("_"):
+                setattr(bounded, key, _json_safe(value))
+        return bounded
 
 
 def configure_logging(level: LogLevel) -> None:

@@ -435,7 +435,10 @@ def _parse_telemetry(data: Any, config_path: Path) -> TelemetryConfig:
         raise ConfigError(f"{config_path}: [lithos-lens.telemetry] must be a table")
     return TelemetryConfig(
         enabled=optional_bool(
-            data, "enabled", False, config_path, "lithos-lens.telemetry"
+            data, "enabled", True, config_path, "lithos-lens.telemetry"
+        ),
+        endpoint=optional_str(
+            data, "endpoint", "", config_path, "lithos-lens.telemetry"
         ),
         console_fallback=optional_bool(
             data, "console_fallback", False, config_path, "lithos-lens.telemetry"
@@ -547,6 +550,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     )
     llm_max_tokens_override = os.environ.get("LITHOS_LENS_LLM_MAX_TOKENS", "")
     telemetry_enabled_override = os.environ.get("LITHOS_LENS_OTEL_ENABLED", "")
+    telemetry_endpoint_override = os.environ.get("LITHOS_LENS_OTEL_ENDPOINT", "")
 
     new_cfg = cfg
     if env_override:
@@ -640,13 +644,17 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             else new_cfg.llm.max_tokens,
         )
         new_cfg = replace(new_cfg, llm=new_llm)
-    if telemetry_enabled_override:
-        new_telemetry = replace(
-            new_cfg.telemetry,
-            enabled=_parse_env_bool(
-                "LITHOS_LENS_OTEL_ENABLED", telemetry_enabled_override
-            ),
-        )
+    if telemetry_enabled_override or telemetry_endpoint_override:
+        new_telemetry = new_cfg.telemetry
+        if telemetry_enabled_override:
+            new_telemetry = replace(
+                new_telemetry,
+                enabled=_parse_env_bool(
+                    "LITHOS_LENS_OTEL_ENABLED", telemetry_enabled_override
+                ),
+            )
+        if telemetry_endpoint_override:
+            new_telemetry = replace(new_telemetry, endpoint=telemetry_endpoint_override)
         new_cfg = replace(new_cfg, telemetry=new_telemetry)
     return new_cfg
 

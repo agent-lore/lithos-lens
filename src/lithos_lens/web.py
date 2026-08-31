@@ -73,7 +73,7 @@ from lithos_lens.tasks import (
     format_tag,
     parse_filters,
 )
-from lithos_lens.telemetry import install_request_middleware
+from lithos_lens.telemetry import instrument_app
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
@@ -231,7 +231,7 @@ def create_app(
             return await call_next(request)
 
     app.state.lens = state
-    install_request_middleware(app, config.telemetry)
+    instrument_app(app)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/health")

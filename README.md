@@ -134,10 +134,11 @@ agent_id = "lithos-lens"
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | boolean | No | `false` | Enables optional request instrumentation hooks. |
-| `console_fallback` | boolean | No | `false` | Reserved for later OTEL console export behavior. |
-| `service_name` | string | No | `lithos-lens` | Service name used by telemetry. |
-| `export_interval_ms` | integer | No | `30000` | Export interval for later OTEL metric support. |
+| `enabled` | boolean | No | `true` | Governs **export**, not whether instrumentation exists — the OpenTelemetry packages are required dependencies. With no endpoint and no console fallback, spans are still created (so `trace_id` reaches the log) and nothing leaves the process. Set `false` to install no providers at all. |
+| `endpoint` | string | No | `""` | Base OTLP/HTTP collector URL, e.g. `http://localhost:4318`; the `/v1/traces`, `/v1/metrics` and `/v1/logs` paths are derived. Empty falls back to the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `console_fallback` | boolean | No | `false` | Export spans and metrics to stdout when no endpoint is configured. |
+| `service_name` | string | No | `lithos-lens` | `service.name` resource attribute; what the shared Grafana dashboards key on. |
+| `export_interval_ms` | integer | No | `30000` | Metric export interval. |
 
 ### Environment variable overrides
 
@@ -167,7 +168,8 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_LLM_BASE_URL` | `lithos-lens.llm.base_url` | Optional API base URL. |
 | `LITHOS_LENS_LLM_EXTRA_HEADERS_JSON` | `lithos-lens.llm.extra_headers_json` | Optional JSON object string. |
 | `LITHOS_LENS_LLM_MAX_TOKENS` | `lithos-lens.llm.max_tokens` | Must be a positive integer. |
-| `LITHOS_LENS_OTEL_ENABLED` | `lithos-lens.telemetry.enabled` | Boolean. |
+| `LITHOS_LENS_OTEL_ENABLED` | `lithos-lens.telemetry.enabled` | Boolean. On by default; set false to install no providers at all. |
+| `LITHOS_LENS_OTEL_ENDPOINT` | `lithos-lens.telemetry.endpoint` | Base OTLP/HTTP collector URL, e.g. `http://localhost:4318`. The standard `OTEL_EXPORTER_OTLP_ENDPOINT` is used when this and the config key are both unset. |
 
 ### Config file discovery order
 
