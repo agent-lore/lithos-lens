@@ -35,6 +35,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
+from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -209,6 +211,20 @@ def get_tracer(name: str = INSTRUMENTATION_SCOPE) -> trace.Tracer:
     return trace.get_tracer(name)
 
 
+def get_current_span() -> trace.Span:
+    """The span the current request is already inside.
+
+    Lens's knowledge routes each do ONE unit of work, so wrapping a handler in
+    a child span would nest ~1:1 with the FastAPI server span and mint a second
+    Prometheus series per route through Tempo's metrics generator — the same
+    duplication removed in #71 for the ASGI `http send` children, for the same
+    reason. The information belongs on the request's own span, where a trace
+    reader is already looking. A child span earns its place when a handler
+    grows a phase worth timing separately from the request.
+    """
+    return trace.get_current_span()
+
+
 def get_meter(name: str = INSTRUMENTATION_SCOPE) -> metrics.Meter:
     """A meter. Before :func:`setup_telemetry` this is the API's no-op."""
     return metrics.get_meter(name)
@@ -235,6 +251,7 @@ def instrument_app(app: FastAPI) -> None:
 
     FastAPIInstrumentor.instrument_app(
         app,
+        server_request_hook=_bound_request_attributes,
         excluded_urls=TRACE_EXCLUDED_URLS,
         # Drop the ASGI `http send` / `http receive` child spans. Verified
         # against the live stack: they made every request FOUR spans instead of
@@ -251,6 +268,38 @@ def instrument_app(app: FastAPI) -> None:
     httpx_instrumentor = HTTPXClientInstrumentor()
     if not httpx_instrumentor.is_instrumented_by_opentelemetry:
         httpx_instrumentor.instrument()
+
+
+# Span attributes carrying the raw request target, which includes the query
+# string. The instrumentation sets these from the ASGI scope.
+_URL_ATTRIBUTES = ("http.target", "http.url", "url.full", "url.query")
+
+
+def _bound_request_attributes(span: Any, scope: dict[str, Any]) -> None:
+    """Apply the log-value ceiling to URL-bearing span attributes.
+
+    Same reason `JsonFormatter` bounds them, on a path that did not inherit it.
+    A query string is unbounded input on a route with no authentication, and
+    the instrumentation copies the request target onto the span verbatim -- so
+    the 47 KB query that `logging.py` describes writing a 47 KB log line was
+    also shipping a 47 KB span attribute to the collector.
+
+    Bounded rather than stripped: the query string is genuinely useful when
+    reading a trace (which filters produced this dashboard render), and unlike
+    a metric label it costs no series -- Tempo stores it per-trace. What it
+    must not do is carry unbounded volume.
+    """
+    if span is None or not getattr(span, "is_recording", lambda: False)():
+        return
+    attributes = getattr(span, "attributes", None) or {}
+    for name in _URL_ATTRIBUTES:
+        value = attributes.get(name)
+        if isinstance(value, str) and len(value) > MAX_LOGGED_VALUE_CHARS:
+            span.set_attribute(name, _truncated_url(value))
+
+
+def _truncated_url(value: str) -> str:
+    return f"{value[:MAX_LOGGED_VALUE_CHARS]}…[truncated, {len(value)} chars]"
 
 
 def _resolve_endpoint(config: LithosLensConfig) -> str:

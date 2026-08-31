@@ -170,21 +170,41 @@ def telemetry_off() -> Iterator[None]:
 
 
 @pytest.fixture
-def spans(lithos_lens_config_env: Path, telemetry_off: None) -> InMemorySpanExporter:
-    """Telemetry set up with an in-memory span exporter. No collector needed."""
+def telemetry_seams(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> tuple[InMemorySpanExporter, InMemoryMetricReader]:
+    """Both in-memory seams, installed by ONE `setup_telemetry` call.
+
+    They have to share a setup. `setup_telemetry` is idempotent, so two
+    fixtures each calling it would leave the second one's seam unregistered --
+    and an unregistered `InMemoryMetricReader` does not raise, it returns None
+    from `get_metrics_data()`. A test asserting on spans and metrics together
+    would fail as though the instrumentation were missing.
+    """
     exporter = InMemorySpanExporter()
-    setup_telemetry(load_config(lithos_lens_config_env), _test_span_exporter=exporter)
-    return exporter
+    reader = InMemoryMetricReader()
+    setup_telemetry(
+        load_config(lithos_lens_config_env),
+        _test_span_exporter=exporter,
+        _test_metric_reader=reader,
+    )
+    return exporter, reader
+
+
+@pytest.fixture
+def spans(
+    telemetry_seams: tuple[InMemorySpanExporter, InMemoryMetricReader],
+) -> InMemorySpanExporter:
+    """Finished spans, in memory. No collector needed."""
+    return telemetry_seams[0]
 
 
 @pytest.fixture
 def metric_reader(
-    lithos_lens_config_env: Path, telemetry_off: None
+    telemetry_seams: tuple[InMemorySpanExporter, InMemoryMetricReader],
 ) -> InMemoryMetricReader:
-    """Telemetry set up with an in-memory metric reader. No collector needed."""
-    reader = InMemoryMetricReader()
-    setup_telemetry(load_config(lithos_lens_config_env), _test_metric_reader=reader)
-    return reader
+    """Recorded instruments, in memory. No collector needed."""
+    return telemetry_seams[1]
 
 
 def metric_snapshot(reader: InMemoryMetricReader) -> dict[str, list[Any]]:

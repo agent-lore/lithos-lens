@@ -321,3 +321,107 @@ def render_admissions() -> Any:
             description="Metered requests by admission-control outcome.",
         ),
     )
+
+
+# ── Knowledge surface (K1 PRD, task cdce170a) ─────────────────────────
+
+
+def knowledge_note_renders() -> Any:
+    """Counter of note-page renders by terminal outcome.
+
+    Labels: ``outcome`` in ``rendered`` | ``not_found`` | ``error`` |
+    ``offline``.
+
+    ``not_found`` is separated from ``error`` because they are different
+    problems wearing the same 200: a dead wiki-link someone should fix, versus
+    Lithos failing to answer. The page looks similar either way, so the log and
+    this counter are the only places the difference survives.
+    """
+    return _instrument(
+        "lens_knowledge_note_renders_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_note_renders_total",
+            description="Knowledge note renders by terminal outcome.",
+        ),
+    )
+
+
+def knowledge_related_duration() -> Any:
+    """Histogram of seconds spent loading a note's related panel.
+
+    No labels.
+
+    The panel is the expensive half of a note render -- one `lithos_related`
+    call plus a bounded `lithos_read` fan-out -- so this is where a slow note
+    page is explained. Separate from the request span's own duration, which
+    cannot say which half was slow.
+    """
+    return _instrument(
+        "lens_knowledge_related_duration_seconds",
+        lambda meter: meter.create_histogram(
+            "lens_knowledge_related_duration_seconds",
+            unit="s",
+            description="Seconds spent loading a note's related panel.",
+        ),
+    )
+
+
+def knowledge_related_fanout() -> Any:
+    """Histogram of `lithos_read` calls spent resolving related-panel titles.
+
+    No labels.
+
+    Distribution rather than a total, because the question it answers is
+    whether `related_title_fanout_cap` is set anywhere near reality. A p95 that
+    sits ON the cap means notes are being silently truncated; one far below it
+    means the cap is costing nothing and the latency is elsewhere.
+    """
+    return _instrument(
+        "lens_knowledge_related_fanout",
+        lambda meter: meter.create_histogram(
+            "lens_knowledge_related_fanout",
+            description="Backend reads spent resolving related-panel titles.",
+        ),
+    )
+
+
+def knowledge_searches() -> Any:
+    """Counter of `/knowledge` landing requests by branch.
+
+    Labels: ``mode`` in ``search`` (hybrid `lithos_search`) | ``browse``
+    (recency list, tagged or bare) | ``offline`` | ``error``.
+
+    The raw query string is deliberately absent -- from the label AND from the
+    span. It is unbounded operator input on a route with no authentication, so
+    it belongs in neither a Prometheus series nor a trace attribute. Mode and
+    count answer the operational question without it.
+    """
+    return _instrument(
+        "lens_knowledge_searches_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_searches_total",
+            description="Knowledge landing requests by branch.",
+        ),
+    )
+
+
+def knowledge_resolves() -> Any:
+    """Counter of wiki-link resolutions by the arm that decided.
+
+    Labels: ``outcome`` in ``uuid`` | ``path`` | ``title`` | ``disambiguated``
+    | ``unresolved`` | ``empty`` | ``offline`` -- `ResolveOutcome.via`, which
+    exists so this distinction survives at all.
+
+    `kind` alone would collapse the first three into `redirect`, and the
+    difference is the whole signal: a corpus resolving entirely by `uuid` is
+    working for a different reason than one resolving by `title`, and only the
+    second is evidence the wiki-link convention is being used as intended. A
+    rising `unresolved` share is the corpus growing dead links.
+    """
+    return _instrument(
+        "lens_knowledge_resolves_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_resolves_total",
+            description="Wiki-link resolutions by the arm that decided.",
+        ),
+    )

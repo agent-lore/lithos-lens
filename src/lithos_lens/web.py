@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -38,13 +39,15 @@ from lithos_lens.fake_lithos import (
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
 from lithos_lens.knowledge import (
-    ResolveOutcome,
     load_related_panel,
     render_markdown,
-    resolve_wiki_link,
 )
 from lithos_lens.knowledge_metadata import build_note_metadata
 from lithos_lens.knowledge_produced_by import load_produced_by
+from lithos_lens.knowledge_resolver import (
+    ResolveOutcome,
+    resolve_wiki_link,
+)
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -74,7 +77,7 @@ from lithos_lens.tasks import (
     format_tag,
     parse_filters,
 )
-from lithos_lens.telemetry import instrument_app
+from lithos_lens.telemetry import get_current_span, instrument_app
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
@@ -453,7 +456,9 @@ def create_app(
         search_results = None
         results = None
         error = ""
+        mode = "search" if query else "browse"
         if snapshot.lithos != "ok":
+            mode = "offline"
             error = "Lithos is offline or degraded. Knowledge search is unavailable."
         else:
             try:
@@ -472,7 +477,16 @@ def create_app(
                         limit=state.config.knowledge.recent_limit,
                     )
             except Exception:
+                mode = "error"
                 error = "Knowledge search is currently unavailable."
+        span = get_current_span()
+        # The QUERY ITSELF is deliberately absent from both the span and the
+        # label: unbounded operator input on a route with no auth belongs in
+        # neither a trace attribute nor a Prometheus series.
+        span.set_attribute("lens.mode", mode)
+        span.set_attribute("lens.result_count", len(search_results or results or ()))
+        span.set_attribute("lens.has_tag", bool(tag))
+        metrics.knowledge_searches().add(1, {"mode": mode})
         return templates.TemplateResponse(
             request,
             "knowledge/landing.html",
@@ -503,14 +517,23 @@ def create_app(
         offline = snapshot.lithos != "ok"
         if offline:
             outcome = ResolveOutcome(
-                kind="unresolved", target=target, search_query=target
+                kind="unresolved", via="offline", target=target, search_query=target
             )
         else:
             outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
-            if outcome.kind == "redirect":
-                return RedirectResponse(
-                    f"/note/{quote(outcome.target_id)}", status_code=302
-                )
+        # Recorded BEFORE the redirect returns: the confident resolutions are
+        # the ones that leave early, so measuring after the branch would count
+        # only the failures and make resolution look broken. `via`, not `kind`
+        # — the latter answers "redirect" for the uuid, path and single-title
+        # arms alike (see ResolveOutcome).
+        span = get_current_span()
+        span.set_attribute("lens.outcome", outcome.via)
+        span.set_attribute("lens.candidate_count", len(outcome.candidates))
+        metrics.knowledge_resolves().add(1, {"outcome": outcome.via})
+        if outcome.kind == "redirect":
+            return RedirectResponse(
+                f"/note/{quote(outcome.target_id)}", status_code=302
+            )
         return templates.TemplateResponse(
             request,
             "knowledge/resolve.html",
@@ -532,7 +555,10 @@ def create_app(
         related = None
         produced_by = None
         error = ""
+        outcome = "rendered"
+        related_seconds = 0.0
         if snapshot.lithos != "ok":
+            outcome = "offline"
             error = "Lithos is offline or degraded. The note cannot be loaded."
         else:
             not_found = False
@@ -550,13 +576,18 @@ def create_app(
                 error = "Could not load this document from Lithos."
             if not_found or (note_record is None and not error):
                 error = "Document not found."
+                outcome = "not_found"
+            elif error:
+                outcome = "error"
             if note_record is not None:
                 note_meta = build_note_metadata(note_record)
+                started = time.perf_counter()
                 related = await load_related_panel(
                     state.lithos_client,
                     knowledge_id,
                     title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
                 )
+                related_seconds = time.perf_counter() - started
                 produced_by = await load_produced_by(state.lithos_client, note_record)
             task_id = request.query_params.get("task", "")
             if task_id:
@@ -568,6 +599,18 @@ def create_app(
                     task = await state.lithos_client.task_get(task_id)
                 except Exception:
                     task = None
+        span = get_current_span()
+        span.set_attribute("lens.outcome", outcome)
+        metrics.knowledge_note_renders().add(1, {"outcome": outcome})
+        if related is not None:
+            # Only when the panel was actually loaded. Recording a zero for the
+            # offline and not-found paths would drag the latency distribution
+            # toward nothing and make a slow panel look fast on average.
+            span.set_attribute("lens.related.duration_ms", related_seconds * 1000)
+            span.set_attribute("lens.related.fanout", related.fanout)
+            span.set_attribute("lens.related.state", related.state.value)
+            metrics.knowledge_related_duration().record(related_seconds)
+            metrics.knowledge_related_fanout().record(related.fanout)
         return templates.TemplateResponse(
             request,
             "note.html",

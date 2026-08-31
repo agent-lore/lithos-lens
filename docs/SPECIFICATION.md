@@ -475,8 +475,33 @@ surface, an outcome enum, or an event type mapped through Lens's allowlist
 `publish` is a public method and fake-Lithos app mode exposes a route that
 builds an event straight from request JSON.
 
-The feature-level `lens.knowledge.*` instrumentation the K1 PRD specifies is
-**not** yet wired (see §10).
+- **Knowledge surface** (the K1 PRD's three points) — note renders by outcome
+  (`rendered` | `not_found` | `error` | `offline`), related-panel latency and
+  backend fan-out, landing requests by branch (`search` | `browse` | `offline`
+  | `error`), and wiki-link resolutions by the arm that decided (`uuid` |
+  `path` | `title` | `disambiguated` | `unresolved` | `empty` | `offline`).
+
+That last one needs `ResolveOutcome.via`, added for it: `kind` answers
+`redirect` for the uuid, path and single-title arms alike, so the distinction
+the PRD asks for did not previously survive. It matters because a corpus
+resolving entirely by uuid is working for a different reason than one resolving
+by title, and only the second is evidence the wiki-link convention is being
+used as intended.
+
+These three set attributes on the request's own server span rather than opening
+child spans. A child span would nest ~1:1 with the server span for a handler
+that does one unit of work, and Tempo's metrics generator mints a Prometheus
+series per span name — the duplication removed in #71 for the ASGI `http send`
+children, for the same reason. A child span earns its place when a handler
+grows a phase worth timing separately from the request.
+
+Search queries are kept off metric labels entirely (one series per distinct
+search is the cardinality failure the rule above exists to prevent). On spans
+they are retained but **bounded** by `MAX_LOGGED_VALUE_CHARS`, applied through
+the instrumentation's request hook: the auto-instrumentation copies the request
+target onto the span verbatim, so the unbounded query string that `logging.py`
+bounds for the log was reaching the collector unbounded by a path that never
+inherited that ceiling.
 
 Warnings driven by conditions Lens does not control — a stalled browser queue,
 a malformed upstream event, a refused subscriber — are rate-limited in time,
@@ -520,13 +545,12 @@ The following requirement areas are not yet implemented in the current state:
   config block exists and is disabled by default; nothing consumes it
 - authentication
 
-Two gaps are narrower than a milestone and tracked as tasks:
+One gap is narrower than a milestone and tracked as a task:
 
-- the `lens.knowledge.*` telemetry the K1 PRD specifies is not wired (§8)
 - the fake↔real contract matrix runs manually against a live server rather
   than on a schedule against a seeded one
 
-These belong to future milestones and should not be assumed to exist merely
+This belongs to a future milestone and should not be assumed to exist merely
 because they are described in `docs/REQUIREMENTS.md`.
 
 ## 11. Compatibility Statement

@@ -15,10 +15,12 @@ from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import (
     RelatedNeighborhood,
     RelatedRef,
-    ResolveOutcome,
     render_markdown,
-    resolve_wiki_link,
     wiki_link_href,
+)
+from lithos_lens.knowledge_resolver import (
+    ResolveOutcome,
+    resolve_wiki_link,
 )
 from lithos_lens.lithos_client import LithosClient
 from lithos_lens.tasks import NoteRecord, NoteSummary
@@ -173,7 +175,11 @@ def test_resolver_uuid_target_redirects_without_probing() -> None:
 
     outcome = _run(resolve_wiki_link(fake, A_UUID, "src"))
 
-    assert outcome == ResolveOutcome(kind="redirect", target=A_UUID, target_id=A_UUID)
+    # `via` distinguishes this from the path-probe and single-title redirects,
+    # which `kind` alone cannot: all three answer "redirect".
+    assert outcome == ResolveOutcome(
+        kind="redirect", via="uuid", target=A_UUID, target_id=A_UUID
+    )
     # A UUID is authoritative — no path probe or title search is spent.
     assert fake.path_calls == []
     assert fake.list_calls == []

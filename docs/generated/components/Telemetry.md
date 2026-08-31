@@ -11,8 +11,8 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.metrics` | M | 0 | 11 |
-| `lithos_lens.telemetry` | M | 0 | 5 |
+| `lithos_lens.metrics` | M | 0 | 16 |
+| `lithos_lens.telemetry` | M | 0 | 6 |
 
 ## Public API
 
@@ -28,11 +28,17 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `events_dropped` — Counter of events Lens refused or discarded, by reason.
 - def `event_subscribers` — Gauge: SSE subscribers currently attached to the hub.
 - def `render_admissions` — Counter of metered requests by admission outcome.
+- def `knowledge_note_renders` — Counter of note-page renders by terminal outcome.
+- def `knowledge_related_duration` — Histogram of seconds spent loading a note's related panel.
+- def `knowledge_related_fanout` — Histogram of `lithos_read` calls spent resolving related-panel titles.
+- def `knowledge_searches` — Counter of `/knowledge` landing requests by branch.
+- def `knowledge_resolves` — Counter of wiki-link resolutions by the arm that decided.
 
 ### `lithos_lens.telemetry`
 - def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.
 - def `shutdown_telemetry` — Flush and tear down every provider. **Terminal: process-exit only.**
 - def `get_tracer` — A tracer. Before :func:`setup_telemetry` this is the API's no-op.
+- def `get_current_span` — The span the current request is already inside.
 - def `get_meter` — A meter. Before :func:`setup_telemetry` this is the API's no-op.
 - def `instrument_app` — Attach HTTP server and client instrumentation to ``app``.
 
