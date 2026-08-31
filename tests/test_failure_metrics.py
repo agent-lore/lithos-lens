@@ -8,6 +8,7 @@ reader, so these cover the recording path rather than the call site's intent.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -23,7 +24,12 @@ from lithos_lens.events import (
 )
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.mcp_transport import MCPTransport
-from tests.conftest import metric_points, metric_value
+from tests.conftest import (
+    metric_points,
+    metric_snapshot,
+    metric_value,
+    snapshot_value,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -564,3 +570,98 @@ async def test_no_metric_label_carries_an_unbounded_value(
                             "bounded set -- ids and free text belong on spans"
                         )
     assert seen, "no labelled points were recorded; the assertion proved nothing"
+
+
+# ── MCP session lifecycle ─────────────────────────────────────────────
+
+
+class _FakeSession:
+    """The slice of `ClientSession` the worker uses: a context manager that
+    initializes."""
+
+    def __init__(self, reader: Any, writer: Any) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def __aenter__(self) -> _FakeSession:
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> bool:
+        return False
+
+    async def initialize(self) -> None:
+        return None
+
+
+def _install_fake_mcp(
+    monkeypatch: pytest.MonkeyPatch, *, failures_before_success: int
+) -> None:
+    """Point the worker's lazy `mcp` imports at a controllable fake.
+
+    `_worker` imports `mcp` inside the function, so patching the modules is
+    what reaches it. `failures_before_success` makes the first N connect
+    attempts raise, which is the only way to drive the reconnect loop.
+    """
+    import contextlib
+
+    import mcp
+    import mcp.client.sse
+
+    attempts = {"n": 0}
+
+    @contextlib.asynccontextmanager
+    async def fake_sse_client(endpoint: str) -> AsyncIterator[tuple[str, str]]:
+        attempts["n"] += 1
+        if attempts["n"] <= failures_before_success:
+            raise ConnectionRefusedError(f"attempt {attempts['n']} refused")
+        yield ("reader", "writer")
+
+    monkeypatch.setattr(mcp.client.sse, "sse_client", fake_sse_client)
+    monkeypatch.setattr(mcp, "ClientSession", _FakeSession)
+
+
+async def test_the_session_gauge_rises_once_the_worker_connects(
+    metric_reader: InMemoryMetricReader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The transition the seeded zero cannot show on its own."""
+    _install_fake_mcp(monkeypatch, failures_before_success=0)
+
+    transport = _transport(None, session_wait_s=2.0)
+    await transport.startup()
+    try:
+        assert metric_value(metric_reader, "lens_lithos_session_up").value == 1
+    finally:
+        await transport.close()
+
+    assert metric_value(metric_reader, "lens_lithos_session_up").value == 0
+
+
+async def test_a_reconnect_is_counted_and_drops_the_gauge(
+    metric_reader: InMemoryMetricReader, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that is up but reconnecting every minute reads as healthy on
+    the gauge alone -- the counter is what says how hard the loop is working to
+    keep it that way.
+
+    Drives the real reconnect loop in `MCPTransport._worker`, which had no test
+    of any kind before this: the backoff is shortened rather than faked, so the
+    failure, the counter, the gauge drop and the eventual recovery are all the
+    production path.
+    """
+    import lithos_lens.mcp_transport as transport_module
+
+    monkeypatch.setattr(transport_module, "RECONNECT_BACKOFF_INITIAL_S", 0.01)
+    _install_fake_mcp(monkeypatch, failures_before_success=1)
+
+    transport = _transport(None, session_wait_s=2.0)
+    await transport.startup()
+    try:
+        # One snapshot for both: a second collection would find the gauge empty
+        # (see metric_snapshot) and the failure would look like missing
+        # instrumentation rather than a reader artefact.
+        snapshot = metric_snapshot(metric_reader)
+        assert snapshot_value(snapshot, "lens_lithos_reconnects_total").value == 1
+        # Recovered: the gauge is back up despite the failed first attempt.
+        assert snapshot_value(snapshot, "lens_lithos_session_up").value == 1
+    finally:
+        await transport.close()

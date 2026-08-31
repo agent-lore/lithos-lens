@@ -74,11 +74,16 @@ def lithos_tool_calls() -> Any:
 
     Labels: ``tool`` (the MCP tool name -- bounded by Lens's own client
     surface, roughly twenty), ``outcome`` in ``ok`` | ``timeout`` |
-    ``tool_error`` | ``transport_error``.
+    ``tool_error`` | ``transport_error`` | ``cancelled``.
 
-    ``timeout`` is broken out from the other failures on purpose: it is the one
-    outcome that means Lens gave up rather than Lithos answering, so a rise in
-    it points at the deadline or at load, not at the tool.
+    The failures are kept apart because they call for different responses.
+    ``timeout`` means LENS gave up, so a rise points at the deadline or at
+    load rather than at the tool. ``tool_error`` means Lithos answered "no".
+    ``transport_error`` means the socket failed. ``cancelled`` means the caller
+    went away -- a browser disconnect, or a sibling task torn down -- and it
+    exists because ``CancelledError`` inherits ``BaseException``: without its
+    own clause it lands in the success bucket, and the success rate then reads
+    highest exactly when Lens is dropping the most work.
     """
     return _instrument(
         "lens_lithos_tool_calls_total",
@@ -114,13 +119,19 @@ def lithos_tool_duration() -> Any:
 def lithos_call_queue_wait() -> Any:
     """Histogram of seconds spent blocked on the process-wide call gate.
 
-    No labels.
+    Labels: ``acquired`` in ``true`` | ``false``.
 
     This is the signal that does not exist today in any form. Queue time is
     folded into the call deadline, so a saturated gate and a slow Lithos look
     identical from outside -- both present as slow pages. Separating them is
     the difference between "Lithos is struggling" and "Lens is admitting more
     concurrent work than it can pass through".
+
+    ``acquired`` is what keeps that true under load. The deadline SPANS the
+    queue, so a caller can be shed while still waiting and never reach the
+    body; recording only on a successful acquire would leave this histogram
+    quiet at exactly the moment queueing was doing all the damage. ``false``
+    is the waiting time of a call that was shed rather than served.
     """
     return _instrument(
         "lens_lithos_call_queue_wait_seconds",

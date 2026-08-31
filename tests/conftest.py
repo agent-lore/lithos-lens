@@ -187,6 +187,40 @@ def metric_reader(
     return reader
 
 
+def metric_snapshot(reader: InMemoryMetricReader) -> dict[str, list[Any]]:
+    """One collection, queried many times: ``{metric name: [data points]}``.
+
+    Necessary whenever a test reads more than one instrument, because a
+    synchronous GAUGE only reports a value that was set since the last
+    collection. Calling ``metric_value`` twice collects twice, and the second
+    collection finds the gauge empty -- so a test asserting a counter and then
+    a gauge sees the gauge vanish, for reasons that have nothing to do with the
+    code under test. Snapshot once, then assert.
+    """
+    data = reader.get_metrics_data()
+    assert data is not None
+    snapshot: dict[str, list[Any]] = {}
+    for resource_metric in data.resource_metrics or []:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                snapshot.setdefault(metric.name, []).extend(metric.data.data_points)
+    return snapshot
+
+
+def snapshot_value(snapshot: dict[str, list[Any]], name: str, **labels: str) -> Any:
+    """The single point under ``name`` with exactly ``labels``, from a snapshot."""
+    matching = [
+        point
+        for point in snapshot.get(name, [])
+        if dict(point.attributes or {}) == labels
+    ]
+    assert len(matching) == 1, (
+        f"expected one {name} point with {labels}, got "
+        f"{[dict(p.attributes or {}) for p in snapshot.get(name, [])]}"
+    )
+    return matching[0]
+
+
 def metric_points(reader: InMemoryMetricReader, name: str) -> list[Any]:
     """Every data point recorded under ``name``, across all label sets."""
     data = reader.get_metrics_data()

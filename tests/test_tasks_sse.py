@@ -1096,6 +1096,15 @@ async def test_a_content_encoded_stream_is_refused_rather_than_decoded(
     # Retried every backoff, recorded once: the log rate is Lens's, not the
     # reconnect loop's.
     assert len(caplog.records) == 1
+    # The counter is NOT rate-limited, and here that difference carries real
+    # information: a refused encoding is a STANDING condition retried every
+    # backoff, so one log line understates it by design while the counter shows
+    # how hard the loop is churning.
+    assert metric_value(
+        metric_reader,
+        "lens_events_dropped_total",
+        reason="content_encoding_refused",
+    ).value >= len(requests)
 
 
 def _mock_transport_client(
