@@ -199,6 +199,40 @@ def test_a_second_setup_reaches_the_second_exporter(
     assert [s.name for s in second.get_finished_spans()] == ["second"]
 
 
+def test_shutdown_alone_does_not_permit_a_working_restart(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> None:
+    """`shutdown_telemetry` is TERMINAL, and this pins that so it cannot be
+    misread as supported.
+
+    Setup -> shutdown -> setup, with NO latch release in between, which is all
+    a production caller could do. OTEL keeps the first provider, so the second
+    setup's exporter never receives anything. Asserting the limitation is the
+    point: the failure mode it guards against is a future caller adding an
+    in-process restart path, seeing no error, and losing every span from the
+    restart onward to a discarded provider.
+
+    The companion tests either side of this one show the same sequence WITH
+    `_release_otel_provider_latches` working correctly -- so together they
+    locate the behaviour precisely in the latch, not in Lens's own teardown.
+    """
+    config = load_config(lithos_lens_config_env)
+
+    first = InMemorySpanExporter()
+    setup_telemetry(config, _test_span_exporter=first)
+    shutdown_telemetry()
+
+    second = InMemorySpanExporter()
+    setup_telemetry(config, _test_span_exporter=second)
+    with get_tracer().start_as_current_span("after-restart"):
+        pass
+
+    assert second.get_finished_spans() == (), (
+        "shutdown_telemetry() now permits a working restart -- if that is "
+        "deliberate, update its docstring, which documents the opposite"
+    )
+
+
 def test_the_meter_is_readable_without_a_collector(
     lithos_lens_config_env: Path, telemetry_off: None
 ) -> None:
@@ -370,3 +404,123 @@ def _metric_names(reader: InMemoryMetricReader) -> set[str]:
         for scope_metric in resource_metric.scope_metrics
         for metric in scope_metric.metrics
     }
+
+
+# ── endpoint resolution ───────────────────────────────────────────────
+#
+# The chain is four deep and only the middle two are obvious:
+#   LITHOS_LENS_OTEL_ENDPOINT  (Lens env override, applied by the config loader)
+#   > [lithos-lens.telemetry] endpoint
+#   > OTEL_EXPORTER_OTLP_ENDPOINT   (the standard variable, lowest priority)
+#   > nothing exported
+# Asserted through the `lens.telemetry.initialized` record rather than by
+# reaching for the private resolver, so these stay public-surface tests.
+
+
+def _resolved_endpoint(config_path: Path, caplog: pytest.LogCaptureFixture) -> str:
+    """The endpoint `setup_telemetry` actually resolved, read off its own event.
+
+    Both test seams are supplied so no real OTLP exporter is built. That is not
+    only speed: without them the log-export handler attaches to the root logger
+    at NOTSET, every record in the process is queued as an OTLP log record, and
+    shutdown spends seven seconds retrying them against a host that does not
+    exist. The endpoint is resolved and logged before any exporter is chosen,
+    so this still exercises the real resolution path.
+    """
+    with caplog.at_level(logging.INFO, logger="lithos_lens.telemetry"):
+        setup_telemetry(
+            load_config(config_path),
+            _test_span_exporter=InMemorySpanExporter(),
+            _test_metric_reader=InMemoryMetricReader(),
+        )
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.telemetry.initialized"
+    ]
+    return record.__dict__["otel_endpoint"]
+
+
+def _write_endpoint(config_path: Path, endpoint: str) -> None:
+    config_path.write_text(
+        config_path.read_text()
+        + f'\n[lithos-lens.telemetry]\nendpoint = "{endpoint}"\n'
+    )
+
+
+def test_no_endpoint_anywhere_exports_nothing(
+    lithos_lens_config_env: Path,
+    telemetry_off: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The default on a machine with no collector. Providers still install."""
+    assert _resolved_endpoint(lithos_lens_config_env, caplog) == ""
+
+
+def test_the_standard_otel_variable_is_the_lowest_priority_fallback(
+    lithos_lens_config_env: Path,
+    telemetry_off: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With nothing Lens-specific set, the ecosystem-standard variable is used
+    -- so a container that already exports it for lithos/influx needs no
+    Lens-specific configuration."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://standard:4318")
+
+    assert _resolved_endpoint(lithos_lens_config_env, caplog) == "http://standard:4318"
+
+
+def test_the_config_key_beats_the_standard_variable(
+    lithos_lens_config_env: Path,
+    telemetry_off: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A deliberate Lens setting outranks an ambient one inherited from the
+    environment -- otherwise a shell that happens to export the standard
+    variable would silently redirect a configured deployment."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://standard:4318")
+    _write_endpoint(lithos_lens_config_env, "http://configured:4318")
+
+    assert (
+        _resolved_endpoint(lithos_lens_config_env, caplog) == "http://configured:4318"
+    )
+
+
+def test_the_lens_env_override_beats_the_config_key(
+    lithos_lens_config_env: Path,
+    telemetry_off: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Same direction as every other LITHOS_LENS_* override (README: env var ->
+    config file -> default), so a container can retarget its collector without
+    editing the mounted config."""
+    monkeypatch.setenv("LITHOS_LENS_OTEL_ENDPOINT", "http://override:4318")
+    _write_endpoint(lithos_lens_config_env, "http://configured:4318")
+
+    assert _resolved_endpoint(lithos_lens_config_env, caplog) == "http://override:4318"
+
+
+def test_the_shared_fixture_neutralizes_an_inherited_collector(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Guards the suite itself, not the app.
+
+    Telemetry is on by default, so a developer or CI runner with an OTLP
+    endpoint exported would turn nominally-hermetic tests into a live exporter
+    and ship test spans, metrics and LOG RECORDS to a real backend. The fixture
+    must blank every variable `setup_telemetry` consults -- including the
+    signal-specific ones, which take precedence over the base.
+    """
+    import os
+
+    for name in (
+        "LITHOS_LENS_OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ):
+        assert os.environ.get(name, "") == "", f"{name} leaks into the test suite"

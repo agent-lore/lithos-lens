@@ -17,7 +17,7 @@ OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instru
 
 ### `lithos_lens.telemetry`
 - def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.
-- def `shutdown_telemetry` — Flush and tear down every provider. Safe to call when never set up.
+- def `shutdown_telemetry` — Flush and tear down every provider. **Terminal: process-exit only.**
 - def `get_tracer` — A tracer. Before :func:`setup_telemetry` this is the API's no-op.
 - def `get_meter` — A meter. Before :func:`setup_telemetry` this is the API's no-op.
 - def `instrument_app` — Attach HTTP server and client instrumentation to ``app``.

@@ -20,6 +20,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.28",
     "opentelemetry-instrumentation-fastapi>=0.49b0",
     "opentelemetry-instrumentation-httpx>=0.49b0",
+    "opentelemetry-instrumentation-logging>=0.49b0",
     "opentelemetry-sdk>=1.28",
     "python-dotenv>=1.0",
     "uvicorn[standard]>=0.30",

@@ -120,7 +120,16 @@ def setup_telemetry(
         )
         metrics.set_meter_provider(_meter_provider)
 
-    _logger_provider, _log_handler = _install_log_export(endpoint, resource)
+    _logger_provider, _log_handler = _install_log_export(
+        endpoint,
+        resource,
+        # A supplied test seam means "keep this process off the network". Logs
+        # have no in-memory reader of their own, so without this a test that
+        # names an endpoint would build a real OTLP log exporter and pay its
+        # retry backoff on shutdown -- seven seconds per test, for a pipeline
+        # the test is not looking at.
+        offline=_test_span_exporter is not None or _test_metric_reader is not None,
+    )
 
     _initialized = True
     logger.info(
@@ -135,15 +144,28 @@ def setup_telemetry(
 
 
 def shutdown_telemetry() -> None:
-    """Flush and tear down every provider. Safe to call when never set up.
+    """Flush and tear down every provider. **Terminal: process-exit only.**
 
-    Restores this module to its pre-setup state in full -- providers flushed
-    and dropped, the OTLP log handler detached from the root logger, and
-    ``_initialized`` cleared -- so that a later :func:`setup_telemetry` starts
-    clean. That completeness is what lets the test suite reset through the
-    PUBLIC surface instead of reaching for module privates; the only thing it
-    deliberately does not touch is OTEL's own global provider latches, which
-    belong to the ``opentelemetry`` package rather than to Lens.
+    Clears everything this module owns -- providers flushed and dropped, the
+    OTLP log handler detached from the root logger, ``_initialized`` cleared --
+    so calling it is always safe, including when setup never ran.
+
+    It does NOT restore the ability to start telemetry again, and no caller
+    should assume it does. OTEL latches each global provider the first time it
+    is set: after this returns, a second :func:`setup_telemetry` builds fresh
+    providers, logs ``Overriding of current TracerProvider is not allowed``,
+    and the SDK keeps the ORIGINAL ones -- so spans would go to the discarded
+    provider's exporter and quietly never arrive. Releasing those latches means
+    writing to ``opentelemetry``'s module globals, which is not something a
+    service should do to a library at runtime.
+
+    That is not a limitation in practice: the only caller is the ``atexit``
+    hook registered by ``main.create_app_from_config``, and Lens has no
+    in-process restart path. The test suite, which does need repeated setup,
+    releases the latches itself -- see ``_release_otel_provider_latches`` in
+    ``tests/test_telemetry.py``, and
+    ``test_shutdown_alone_does_not_permit_a_working_restart``, which pins this
+    contract so it cannot be misread as supported.
     """
     global _initialized, _tracer_provider, _meter_provider, _logger_provider
     global _log_handler
@@ -278,22 +300,28 @@ def _build_metric_reader(
 
 
 def _install_log_export(
-    endpoint: str, resource: Resource
+    endpoint: str, resource: Resource, *, offline: bool = False
 ) -> tuple[Any, logging.Handler | None]:
     """Export Python logs over OTLP so they reach Loki with the same resource.
 
     Additive: the JSON handler on stdout stays, so ``docker logs`` is unchanged
     whether or not a collector is reachable.
     """
-    logs_endpoint = _signal_override("logs") or (
-        _signal_endpoint(endpoint, "logs") if endpoint else ""
+    logs_endpoint = (
+        ""
+        if offline
+        else (
+            _signal_override("logs")
+            or (_signal_endpoint(endpoint, "logs") if endpoint else "")
+        )
     )
     if not logs_endpoint:
         return None, None
 
     from opentelemetry._logs import set_logger_provider
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.instrumentation.logging.handler import LoggingHandler
+    from opentelemetry.sdk._logs import LoggerProvider
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
     provider = LoggerProvider(resource=resource)

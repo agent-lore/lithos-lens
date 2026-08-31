@@ -134,10 +134,11 @@ agent_id = "lithos-lens"
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | boolean | No | `false` | Enables optional request instrumentation hooks. |
-| `console_fallback` | boolean | No | `false` | Reserved for later OTEL console export behavior. |
-| `service_name` | string | No | `lithos-lens` | Service name used by telemetry. |
-| `export_interval_ms` | integer | No | `30000` | Export interval for later OTEL metric support. |
+| `enabled` | boolean | No | `true` | Governs **export**, not whether instrumentation exists — the OpenTelemetry packages are required dependencies. With no endpoint and no console fallback, spans are still created (so `trace_id` reaches the log) and nothing leaves the process. Set `false` to install no providers at all. |
+| `endpoint` | string | No | `""` | Base OTLP/HTTP collector URL, e.g. `http://localhost:4318`; the `/v1/traces`, `/v1/metrics` and `/v1/logs` paths are derived. Empty falls back to the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `console_fallback` | boolean | No | `false` | Export spans and metrics to stdout when no endpoint is configured. |
+| `service_name` | string | No | `lithos-lens` | `service.name` resource attribute; what the shared Grafana dashboards key on. |
+| `export_interval_ms` | integer | No | `30000` | Metric export interval. |
 
 ### Environment variable overrides
 

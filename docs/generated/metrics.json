@@ -53,8 +53,8 @@
       },
       "Telemetry": {
         "functions_over_10": 0,
-        "max_complexity": 6,
-        "max_function": "lithos_lens.telemetry._build_metric_reader"
+        "max_complexity": 7,
+        "max_function": "lithos_lens.telemetry.setup_telemetry"
       },
       "Web": {
         "functions_over_10": 2,
@@ -312,11 +312,11 @@
         "classes": 0,
         "functions": 12,
         "largest_module": "lithos_lens.telemetry",
-        "largest_module_lines": 316,
-        "lines": 316,
+        "largest_module_lines": 344,
+        "lines": 344,
         "modules": 1,
         "public_symbols": 5,
-        "sloc": 234
+        "sloc": 255
       },
       "Web": {
         "classes": 1,
@@ -332,13 +332,13 @@
     "max_module": "lithos_lens.knowledge",
     "max_module_lines": 781,
     "modules_over_800": [],
-    "total_lines": 11586,
+    "total_lines": 11614,
     "total_modules": 34,
-    "total_sloc": 8904
+    "total_sloc": 8925
   },
   "tests": {
-    "ratio": 1.89,
-    "src_lines": 11586,
-    "test_lines": 21889
+    "ratio": 1.9,
+    "src_lines": 11614,
+    "test_lines": 22055
   }
 }

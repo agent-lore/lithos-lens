@@ -161,14 +161,14 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 | Frontend | FastAPI + HTMX + Cytoscape.js | No build step; minimal stack; HTMX SSE extension drives live updates |
 | Styling/assets | Vendored, pinned static assets (`static/`) with app CSS | Local-first/offline behaviour; no CDN supply-chain or runtime dependency |
 | Config format | TOML + env overrides | Consistent with Lithos conventions |
-| OTEL | Opt-in, additive, optional packages | Consistent with Lithos conventions |
+| OTEL | Required packages, on by default, exercised in CI | Lens joins the shared `lithos-observability` stack. Deliberately NOT the sibling services' optional-`otel`-extra posture: an enabled-path test that skips when a package is absent is not a test. `telemetry.enabled` governs export, not whether instrumentation exists |
 | LLM access | Optional, env-gated LiteLLM client (`LITHOS_LENS_LLM_*`) | Provider-agnostic across OpenAI, Anthropic, OpenRouter, Ollama; prefers MCP synthesis when Lithos ships it |
 | Centrality computation | Client-side in Cytoscape | Lithos exposes edges but no centrality scores; computing in the browser operates on the already-loaded graph |
 | SSE event handling | Single shared subscription, fan-out via in-process pub/sub | Avoids N independent SSE connections; scope-aware normalization (§5.8.2) |
 
 ### Shared Application Surface
 
-The following concerns are shared by every view and constitute the "common core": the FastAPI app and top-nav shell, the typed TOML+env config loader, the Lithos MCP client (one shared session), the shared events subscription and in-process hub, the optional LiteLLM wrapper, OTEL setup, and the base template. The authoritative module layout is documented in [`docs/SPECIFICATION.md`](./SPECIFICATION.md) and enforced by `docs/architecture.toml` guardrail tests; this document does not duplicate it.
+The following concerns are shared by every view and constitute the "common core": the FastAPI app and top-nav shell, the typed TOML+env config loader, the Lithos MCP client (one shared session), the shared events subscription and in-process hub, the optional LiteLLM wrapper, OTEL setup (providers, the FastAPI/httpx instrumentation, and the trace context stamped onto every log record), and the base template. The authoritative module layout is documented in [`docs/SPECIFICATION.md`](./SPECIFICATION.md) and enforced by `docs/architecture.toml` guardrail tests; this document does not duplicate it.
 
 ---
 
@@ -197,7 +197,7 @@ Every TOML knob in §4 has a `LITHOS_LENS_*` environment override following the 
 LITHOS_LENS_ENVIRONMENT=dev
 LITHOS_LENS_HOST_PORT=7843
 LITHOS_LENS_CONTAINER_NAME=lithos-lens
-LITHOS_LENS_OTEL_ENABLED=false
+# Telemetry is on by default; unset endpoints simply export nothing.
 OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318
 
 # Lithos transport
@@ -243,7 +243,7 @@ LITHOS_LENS_LLM_ENABLED=false
 # LITHOS_LENS_LLM_MAX_TOKENS=2048
 ```
 
-**`.env.prod`:** same keys with production values (`LITHOS_LENS_LITHOS_URL=http://lithos:8765`, `LITHOS_LENS_OTEL_ENABLED=true`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LITHOS_LENS_WRITES_ENABLED=true` explicitly and deliberately.
+**`.env.prod`:** same keys with production values (`LITHOS_LENS_LITHOS_URL=http://lithos:8765`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LITHOS_LENS_WRITES_ENABLED=true` explicitly and deliberately.
 
 ### `docker-compose.yml`
 
@@ -362,7 +362,8 @@ synthesis_prefer_mcp = true       # use lithos_synthesize when available, else l
 findings_curation_enabled = true  # enables "most significant findings" (ROADMAP X1)
 
 [lithos-lens.telemetry]
-enabled = false                   # overridden by LITHOS_LENS_OTEL_ENABLED
+enabled = true                    # export on/off; overridden by LITHOS_LENS_OTEL_ENABLED
+endpoint = ""                     # base OTLP/HTTP URL; falls back to OTEL_EXPORTER_OTLP_ENDPOINT
 console_fallback = false
 service_name = "lithos-lens"
 export_interval_ms = 30000
