@@ -12,12 +12,13 @@ Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`).
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.__main__` | XS | 0 | 0 |
-| `lithos_lens.main` | XS | 0 | 3 |
+| `lithos_lens.main` | XS | 0 | 4 |
 
 ## Public API
 
 ### `lithos_lens.main`
 - def `resolve_port` — Return the port to bind, honoring the ``LENS_PORT`` env override.
+- def `resolve_host` — Return the interface to bind, honoring the ``LENS_HOST`` env override.
 - def `main` — Load config and run the ASGI server.
 - def `create_app_from_config` — Uvicorn factory used by :func:`main`.
 

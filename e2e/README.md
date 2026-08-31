@@ -59,10 +59,17 @@ boots the app itself with:
 
 ```sh
 LITHOS_LENS_FAKE_LITHOS=1 LITHOS_LENS_CONFIG=lithos-lens.example.toml \
-  LENS_PORT=8123 uv run lithos-lens
+  LENS_PORT=8123 LENS_HOST=127.0.0.1 uv run lithos-lens
 ```
 
 so you do not need to start a server yourself.
+
+`LENS_HOST` is not decoration. Lens binds every interface by default — the
+accepted posture for the container it ships as — but fake mode registers
+`POST /tasks/events/publish`, an unauthenticated write seam, and the suite runs
+two such instances. Loopback keeps a run on a shared network from having a
+foreign event fanned into the tabs being photographed. Use it for any fake-mode
+instance you start by hand, too.
 
 ## Screenshot artifacts — the visual-review contract
 
@@ -106,4 +113,6 @@ factory swaps the real MCP client for
 make run-fake        # LITHOS_LENS_FAKE_LITHOS=1 ... uv run lithos-lens
 ```
 
-then open <http://127.0.0.1:8000/tasks>. Override the port with `LENS_PORT`.
+then open <http://127.0.0.1:8000/tasks>. Override the port with `LENS_PORT`,
+and prefer `LENS_HOST=127.0.0.1` — see the note above on why fake mode in
+particular should not listen on every interface.
