@@ -1,8 +1,8 @@
 # Lithos Lens - Specification
 
-Version: 0.1.0  
-Date: 2026-04-27  
-Status: Aligned with Implementation
+Version: 0.3.0  
+Date: 2026-08-31  
+Status: Aligned with Implementation (T1 and K1 shipped)
 
 ## 1. Purpose
 
@@ -70,21 +70,42 @@ The current application exposes these routes:
   Renders a task detail page.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
+- `GET /tasks/{task_id}/blockers`
+  Renders one expanded level of a task's blocker chain (HTMX fragment).
+- `GET /knowledge`
+  Renders the knowledge landing page: hybrid search, recently-updated notes,
+  and tag browse.
+- `GET /knowledge/resolve`
+  Resolves a wiki-link target to a note, or renders the disambiguation /
+  not-found page when it cannot.
 - `GET /note/{knowledge_id}`
-  Renders a minimal note page backed by Lithos note reads.
+  Renders a note: server-side markdown, frontmatter metadata chips, the
+  related panel, and provenance.
 
-No authenticated routes currently exist.
+One further route, `POST /tasks/events/publish`, is registered **only** when
+fake-Lithos app mode is enabled (`LITHOS_LENS_FAKE_LITHOS`). It is a harness
+seam for the browser suite and does not exist in a normal deployment.
+
+No authenticated routes currently exist. Lens takes unauthenticated requests
+across a trusted-network boundary; see `docs/REQUIREMENTS.md` §5C.1. Two
+process-level bounds exist in place of authentication: a concurrent-render cap
+that answers 503 rather than queueing, and a ceiling on concurrent SSE
+subscribers.
 
 ### 5.2 Configuration
 
-Lens loads configuration from:
+Lens loads configuration from the first of:
 
-1. `./lithos-lens.toml`
-2. `~/.lithos-lens/lithos-lens.toml`
-3. `/etc/lithos-lens/lithos-lens.toml`
+1. the path in `LITHOS_LENS_CONFIG`, if set
+2. `./lithos-lens.toml`
+3. `~/.lithos-lens/lithos-lens.toml`
+4. `/etc/lithos-lens/lithos-lens.toml`
 
-Environment variables may also be used for deployment, following the project
-README and container examples.
+A set of `LITHOS_LENS_*` environment variables override individual values after
+the file is read; the containerized deployment uses `LITHOS_LENS_CONFIG` plus a
+mounted data directory. Two further variables are read outside the config model
+by the entry point: `LENS_PORT` and `LENS_HOST` select the bind, defaulting to
+8000 and every interface.
 
 The current configuration model includes:
 
@@ -96,8 +117,18 @@ The current configuration model includes:
 - `lithos.agent_id`
 - `tasks.auto_refresh_interval_s`
 - `tasks.visible_cap`
+- `tasks.frontier_limit`
 - `tasks.default_time_range_days`
 - `tasks.default_status_groups`
+- `tasks.project_convention`
+- `tasks.project_tag_key`
+- `tasks.gate_waiting_attention_hours`
+- `tasks.claim_expiring_soon_minutes`
+- `tasks.stale_open_age_days`
+- `tasks.unclaimed_ready_age_minutes`
+- `knowledge.related_title_fanout_cap`
+- `knowledge.search_limit`
+- `knowledge.recent_limit`
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -114,34 +145,56 @@ The current configuration model includes:
 - `ui.default_view`
 - `health.refresh_interval_s`
 
-Defaults are implementation-defined in `src/lithos_lens/config.py`.
+Defaults, ceilings, and the env-override names are defined in
+`src/lithos_lens/config_schema.py` and `src/lithos_lens/config.py`; the shipped
+values are documented inline in `lithos-lens.example.toml`. Every integer knob
+has a maximum as well as a minimum, so a mistyped value fails at load rather
+than at render.
 
 ### 5.3 Tasks Dashboard
 
-The Tasks view is the primary implemented feature in Lens.
+The Tasks view is the primary implemented feature in Lens. Since T1 it is
+**graph-native**: the board is assembled from Lithos's computed ready and
+blocked frontiers plus the master open list, not from a flat status listing.
 
-It currently provides:
+Open work is partitioned into sections, and a row appears in exactly one of
+them (the single-placement rule — a task that needs attention renders *only*
+there, so an unsatisfiable task cannot be mistaken for one merely waiting):
 
-- Summary cards for:
-  - open task count
-  - known claimed count
-  - known unclaimed count
-  - recently completed count
-  - recently cancelled count
-  - registered agent count
-- Grouped task lists for:
-  - open
-  - completed
-  - cancelled
-- Per-task display of:
-  - title
-  - excerpt/summary text
-  - status
-  - creating agent
-  - creation timestamp
-  - claim state where known
-  - finding count/status
-  - tags
+- **Needs attention** — rows the severity model promoted (see below)
+- **Ready** — on the ready frontier, nothing blocking
+- **In progress** — claimed
+- **Blocked** — on the blocked frontier, with its blockers named
+- **Claims unknown** — claims were requested but not returned; the row says so
+  rather than rendering a confident "unclaimed" chip
+- **Unclassified** — in neither frontier, so Lens will not assert why
+
+Completed and cancelled tasks render in their own lists over a resolved-at
+window.
+
+**Needs attention** applies six ordered rules, most severe first. Two are
+intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
+can never become ready) and `cycle` (the blocking chain closes on itself) — and
+four are threshold-driven from config: `gate-waiting`, `claim-expiring`,
+`stale-open`, and `ready-unclaimed`. A promoted row carries one chip per rule
+that fired, with a one-line supporting fact, and the list sorts by severity then
+oldest-first within a tier.
+
+Two never-fire policies keep the list trustworthy: a timestamp Lens cannot
+parse never triggers an age rule, and a degraded row is promoted only on
+evidence its degradation cannot touch — a claims-unknown row is eligible for the
+two structural rules alone, and an unclassified row is never promoted.
+
+The dashboard also renders:
+
+- a **Gates section** for open gates (timer, CI, PR, external, human), showing
+  what each is waiting on; a human gate past its threshold is promoted into
+  Needs attention instead, and the browser schedules a single refresh at the
+  earliest still-future timer deadline
+- an **Epic rollup strip** summarizing epics by child progress, with a scope
+  link that filters the board to one epic
+- **summary counters** for each section, marked as approximate when the
+  frontier read they derive from was truncated
 
 The dashboard is intentionally optimized for operational awareness rather than
 deep paging through large historical task lists.
@@ -156,6 +209,11 @@ The current dashboard supports these filters:
   `any`, `known_claimed`, or `known_unclaimed`.
 - `tag`
   Free-text tag filter.
+- `project`
+  Project scope, honoring the configured convention (metadata key, reserved
+  tag, or both).
+- `epic`
+  Scopes the board to one epic's children, from the rollup strip.
 - `agent`
   Creating agent filter.
 - `since`
@@ -171,49 +229,79 @@ Filter behavior:
 - Clicking a task tag in list or detail view navigates back to `/tasks` with
   that tag as the only active tag filter.
 - Existing `status`, `agent`, `since`, and `claimed_state` filters are
-  preserved when clicking a tag.
+  preserved when clicking a tag, and carried across navigation into the detail
+  and note views.
 - Tags with the `project:` prefix are rendered with distinct visual styling but
   are otherwise filtered the same way as other tags.
+- A filter query beyond a fixed byte budget is **refused** with a banner
+  offering an unfiltered link, rather than silently trimmed — a partially
+  applied filter would render a board that misrepresents its own scope.
 
-### 5.5 Visible Cap and Claim-State Semantics
+### 5.5 Bounds on What Is Read and Shown
 
 Lens is designed for deployments with tens to low hundreds of tasks, not
-thousands.
+thousands, and every bound it imposes is stated in the UI rather than applied
+silently.
 
-The dashboard enforces a visible-cap model:
-
-- Open-task task counts represent all matching open tasks, not just visible
-  rows.
-- Claim-state enrichment is attempted for visible open tasks.
-- If claim enrichment cannot be determined beyond the visible cap or because of
-  fetch failures, the dashboard surfaces that condition as part of the summary.
+- **Visible cap** — open-task counts represent all matching open tasks, not
+  just visible rows; claim enrichment is attempted for visible open tasks only,
+  and the dashboard surfaces when it could not be determined.
+- **Frontier limit** — pushed into the ready/blocked frontier reads. When a
+  read comes back truncated, the sections derived from it mark their counts as
+  approximate, per side rather than board-wide, so a complete count is not
+  labelled as an estimate because the other side was cut.
+- **Link page size** — bounded neighbour lists on the detail page state the
+  remainder they are not showing ("N more not shown"), because a "why can't
+  this run?" list that quietly drops blockers is worse than a slow one.
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 
 ### 5.6 Task Detail View
 
-The task detail page currently shows:
+The task detail page is built on the same graph reads as the dashboard, so the
+two cannot disagree about why a task is where it is. It shows:
 
-- task title and body/summary content
-- status metadata
-- creating agent
-- created timestamp
-- tags
-- claim state where known
-- findings list
+- task title and body/summary content, status metadata, creating agent, created
+  timestamp, tags, and claim state where known
+- **why this task is here** — the Needs-attention reasons, when the board
+  promoted it, with the same supporting facts the chips carry
+- **blockers**, each labelled: a satisfied predecessor (the edge survives
+  completion and is still shown, but never as a reason the task cannot run), an
+  unsatisfiable one, or a cycle
+- **the blocker chain**, expandable one level at a time to a bounded depth; a
+  level that would revisit the chain reports the cycle instead of walking it
+- **provenance** in both directions (`discovered_from`)
+- **children**, for an epic
+- **findings**, with links to any note a finding produced
 - related note links where available
+
+Every bounded list on the page states its own remainder through one shared
+tail, so the page-size claim has a single definition.
 
 Detail rendering is read-only in the current implementation.
 
-### 5.7 Note View
+### 5.7 Knowledge Surface
 
-`/note/{knowledge_id}` exists as a minimal read path.
+K1 replaced the minimal note path with a browsable knowledge surface.
 
-Current behavior:
+`GET /note/{knowledge_id}` renders a note with:
 
-- Lens asks Lithos to read the corresponding note.
-- Lens renders a simple note page when the note exists.
-- This is not yet a full knowledge browser.
+- server-side markdown (headings, tables, code); raw HTML is escaped and
+  `javascript:` hrefs are neutralized
+- **wiki-links** (`[[target]]`) resolved through `/knowledge/resolve`, which
+  renders a disambiguation page when a target is ambiguous and a not-found
+  panel when it resolves to nothing
+- **frontmatter metadata chips** (note type, status, access scope, namespace,
+  confidence), a short-summary lede above the body, a `supersedes`
+  back-reference, and an authorship line
+- a **related panel** — the note's neighborhood, sectioned by relationship,
+  with back-links and a bounded title fanout that falls back to bare ids past
+  the cap
+- a **produced-by chip** when the note came from a task and that task reads
+  back successfully
+
+`GET /knowledge` is the landing page: hybrid search over notes, a
+recently-updated list, and tag browse.
 
 ### 5.8 Live Updates
 
@@ -290,13 +378,22 @@ provides:
 
 - a reachable base HTTP URL
 - task listing and task-status read capabilities
-- note read capability
+- **task-graph reads**: the computed ready and blocked frontiers with
+  classified blockers, task types (`task`/`epic`/`gate`), typed task edges, and
+  children — the Lithos 0.4 surface the whole graph-native dashboard rests on
+- note read, search, and neighborhood capability for the knowledge surface
 - agent registry/statistics endpoints used by the dashboard
 - an `/events` SSE stream carrying task-related events
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
 ambiguous or partially missing, Lens treats parsing and enrichment as best
-effort and continues rendering what it can.
+effort and continues rendering what it can — and says so on the surface rather
+than presenting a degraded read as a complete one.
+
+Every request and response shape for these calls is pinned by a vendored
+contract under `tests/contracts/`, transcribed from the Lithos source with a
+citation. A client method without a contract fails the suite, so fakes and
+fixtures cannot drift from the payloads the server actually sends.
 
 ## 7. Frontend Model
 
@@ -318,44 +415,70 @@ even if live updates are unavailable.
 
 Lens currently includes:
 
-- configurable log levels
+- structured JSON logging at a configurable level
 - task filter/debug logging around dashboard requests
-- optional telemetry configuration scaffolding
+- an optional OpenTelemetry request middleware
 
-Telemetry configuration exists in the codebase, but telemetry is not the
-primary operational mechanism today. Logging remains the main implemented
-observability path.
+Logging remains the main implemented observability path. The OTel middleware
+covers requests only; the feature-level `lens.knowledge.*` instrumentation the
+K1 PRD specifies is **not** wired (see §10).
+
+Warnings driven by conditions Lens does not control — a stalled browser queue,
+a malformed upstream event, a refused subscriber — are rate-limited in time,
+one record per condition per interval, each carrying a running total and the
+count suppressed since the last. The upstream chooses how often these fire; it
+does not get to choose how fast Lens writes to the operator's log.
 
 ## 9. Testing State
 
-The current repository includes meaningful automated tests for:
+The current repository includes meaningful automated tests for common
+application wiring, the graph-native dashboard and its severity model, task
+filtering and rendering, the knowledge surface, SSE normalization and fan-out,
+transport bounds, and admission control.
 
-- common application wiring
-- tasks dashboard behavior
-- task filtering and rendering behavior
-- task SSE normalization and fan-out behavior
+Beyond ordinary unit and integration tests, three mechanisms carry weight:
 
-The implemented tests are intended to exercise real behavior with lightweight
-fakes, rather than shallow mock-only checks.
+- **Guardrails as tests** — `tests/guardrail/` regenerates the component
+  diagram, domain model, and architecture metrics from the code, and CI fails
+  when the committed artifacts drift. Hard budgets in `docs/architecture.toml`
+  (module size, cross-component edges, cycles, cross-module private reaches)
+  fail the build when breached; raising one is an explicit, reviewed edit.
+- **Contracts** — see §6.
+- **Browser suite** — a Playwright suite runs the real application in
+  fake-Lithos mode and captures screenshot artifacts at four viewport widths.
+
+The implemented tests exercise real behavior with lightweight fakes rather than
+shallow mock-only checks, and the working practice is to demonstrate a new
+guard fails when reverted rather than assuming it binds.
 
 ## 10. Known Gaps Relative to Requirements
 
 The following requirement areas are not yet implemented in the current state:
 
-- first-class knowledge browser/feed
+- **write actions of any kind** — every surface is read-only (T3)
+- knowledge graph view and knowledge event wiring (K2)
+- cognitive search (`lithos_retrieve`) and node stats (K3)
+- feed, feedback, and cited-by panel (K4)
 - archive-backed file serving and in-browser document viewing
 - saved reading paths
-- LLM-assisted curation, summaries, or browsing assistance
+- LLM-assisted curation, summaries, or browsing assistance (X1) — the LLM
+  config block exists and is disabled by default; nothing consumes it
 - authentication
-- broader cross-note browsing and filtering
+
+Two gaps are narrower than a milestone and tracked as tasks:
+
+- the `lens.knowledge.*` telemetry the K1 PRD specifies is not wired (§8)
+- the fake↔real contract matrix runs manually against a live server rather
+  than on a schedule against a seeded one
 
 These belong to future milestones and should not be assumed to exist merely
 because they are described in `docs/REQUIREMENTS.md`.
 
 ## 11. Compatibility Statement
 
-This specification describes the behavior of Lithos Lens `0.1.0` as currently
-implemented in this repository.
+This specification describes the behavior of Lithos Lens `0.3.0` as currently
+implemented in this repository — the 0.1.0 foundation plus the **T1**
+graph-native operator view and the **K1** knowledge note view and search.
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be

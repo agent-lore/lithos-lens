@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.0.0
-Date: 2026-07-07
+Version: 1.1.0
+Date: 2026-08-31
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -39,8 +39,19 @@ startup agent registration, degraded boot, `/health`), the **Tasks MVP**
 claim enrichment, task detail with findings and note links, minimal
 `/note/{id}` renderer), and **Tasks SSE** (shared upstream `/events`
 subscription, normalized browser fan-out at `/tasks/events`, optimistic row
-updates, reconnect and polling fallback). `docs/SPECIFICATION.md` describes
-this state precisely.
+updates, reconnect and polling fallback).
+
+**Lens 0.3.0** adds the two milestones below it in the table: **T1**, the
+graph-native operator view — the dashboard rebuilt on Lithos's ready/blocked
+frontiers, the six-rule Needs-attention severity model, the Gates section, the
+epic rollup strip, per-side truncation marking, and a task detail page carrying
+blocker chains, provenance and children — and **K1**, the knowledge surface:
+`/note/{id}` as a real document page with safe server-rendered markdown,
+wiki-link resolution, metadata chips and a related panel, plus the `/knowledge`
+landing page with search, recent notes and tag browse.
+
+`docs/SPECIFICATION.md` describes this state precisely, and is the document to
+update when behavior changes.
 
 Everything below builds on that foundation. The driver for the current
 sequence is **Lithos 0.4.0's task graph**: typed task edges (`blocks`,
@@ -59,9 +70,9 @@ T and K milestones touch disjoint modules and may overlap in practice.
 
 | # | Id | Surface | Content | Status | PRD | Target |
 |---|----|---------|---------|--------|-----|--------|
-| 1 | **T1** | Tasks | Graph-native Operator View (read-only) | prd | [t1-graph-native-operator-view.md](./prd/t1-graph-native-operator-view.md) | 0.2.0 |
-| 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | prd | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
-| 3 | **T2** | Tasks | Graph pages, planning view rebase, operator ergonomics | planned | — | 0.4.0 |
+| 1 | **T1** | Tasks | Graph-native Operator View (read-only) | **shipped** | [t1-graph-native-operator-view.md](./prd/t1-graph-native-operator-view.md) | 0.3.0 |
+| 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
+| 3 | **T2** | Tasks | Graph pages, planning view rebase, operator ergonomics | **next** | — | 0.4.0 |
 | 4 | **T3** | Tasks | Curated write actions | planned | — | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
@@ -69,7 +80,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 8 | **K4** | Knowledge | Feed, feedback, cited-by panel | planned | — | — |
 | 9+ | pool | Knowledge | Conflict-resolution UI, note comparison, reading paths | deferred | — | — |
 
-### T1 — Graph-Native Operator View (read-only)
+### T1 — Graph-Native Operator View (read-only) — SHIPPED in 0.3.0
 
 Rebuild the dashboard on `lithos_task_ready` / `lithos_task_blocked` instead
 of claim-state inference. Sections: epic rollup strip → Needs attention
@@ -82,13 +93,25 @@ context, and spawn provenance. Event pipeline learns `task.updated`,
 `claimed_state` filter and `visible_cap` claim fan-out are retired. Full
 detail: the T1 PRD.
 
-### K1 — Knowledge Note View + Search
+Landed across twelve slices; `docs/SPECIFICATION.md` §5.3–§5.6 describes the
+shipped behavior. One deviation from the plan above: `claimed_state` and the
+visible cap were **not** retired — both still exist and are documented, because
+the degraded groups (claims unknown, unclassified) need them to say what Lens
+does not know. Nothing from the milestone remains open.
+
+### K1 — Knowledge Note View + Search — SHIPPED in 0.3.0
 
 `/note/{id}` becomes a real document page: server-rendered markdown (safe by
 default), clickable wiki-links via a Lens-side resolver route, metadata chips,
 a related/back-links panel from `lithos_related`, and a "produced by task"
 chip. A `/knowledge` landing page adds `lithos_search` and recently-updated
 browsing; the Knowledge nav item goes live. Full detail: the K1 PRD.
+
+Landed across seven slices; `docs/SPECIFICATION.md` §5.7 describes the shipped
+behavior. One item remains open: the `lens.knowledge.*` telemetry the PRD
+specifies was never wired (Lithos task `cdce170a`). It is tracked as a gap
+rather than as unshipped scope — every user-facing surface in the milestone is
+live.
 
 ### T2 — Graph Pages, Planning View, Operator Ergonomics
 

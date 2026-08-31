@@ -224,7 +224,13 @@ K1 adds it, and the chip degrades to hidden when the method is unavailable
 - **Nav**: Knowledge item enabled, active on `/knowledge` and `/note/*`;
   search box present on tasks pages.
 
-Coverage ≥ 80% on `knowledge.py` and the wiki-link tokenizer.
+No numeric coverage floor is set. The repository measures no coverage and
+enforces none, so a percentage here would be a requirement that can be neither
+met nor missed — and a number nothing checks invites being satisfied by tests
+that execute lines without asserting behavior. The bar instead is: every
+behavior listed above has a test that FAILS when that behavior is reverted, and
+the architecture budgets in `docs/architecture.toml` hold. (Decision recorded
+against Lithos task `1337b88d` / GitHub issue #35.)
 
 ## Tracer-bullet vertical slices
 
