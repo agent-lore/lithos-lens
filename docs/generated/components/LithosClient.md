@@ -40,7 +40,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Events](Events.md), [Knowledge](Knowledge.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md)
+- Depends on: [Config](Config.md), [Events](Events.md), [Knowledge](Knowledge.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md), [Telemetry](Telemetry.md)
 - Used by: [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

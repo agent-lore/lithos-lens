@@ -89,6 +89,7 @@ source_modules = [
     "lithos_lens.config_schema",
     "lithos_lens.logging",
     "lithos_lens.telemetry",
+    "lithos_lens.metrics",
 ]
 forbidden_modules = [
     "lithos_lens.events",

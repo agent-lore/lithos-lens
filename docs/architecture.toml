@@ -35,7 +35,7 @@ Tasks        = "Tasks-dashboard data loading and normalization (task/claim/findi
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain."
 Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
-Telemetry    = "OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instrumentation. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
+Telemetry    = "OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
 Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
@@ -49,7 +49,7 @@ Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
-Telemetry    = ["lithos_lens.telemetry"]
+Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
 Errors       = ["lithos_lens.errors"]
 
 [tiers]
@@ -92,7 +92,14 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # which would mean two independent definitions of "how long may a logged value
 # be" and a silent divergence the first time one moved. Both components are
 # Foundation, so the edge points sideways within a tier, not upward.
-cross_component_edges  = 31   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); direction: down
+# Raised 31 -> 33 for the failure-mode metrics: LithosClient -> Telemetry (the
+# MCP call funnel records per-tool outcome, latency and gate queue time) and
+# Events -> Telemetry (the hub counts drops, deliveries and subscribers). Both
+# are the point of the change rather than a side effect of it -- the signals
+# that say WHY Lens is degraded live in those two components, and an
+# instrumentation module they may not import cannot observe them. Telemetry is
+# Foundation, so both edges point down.
+cross_component_edges  = 33   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the

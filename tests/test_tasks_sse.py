@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from lithos_lens import events as events_module
 from lithos_lens.config import EventsConfig, LithosConfig
@@ -27,6 +28,7 @@ from lithos_lens.events import (
     is_replay_cursor,
     parse_lithos_sse_frame,
 )
+from tests.conftest import metric_value
 
 
 class _FakeClock:
@@ -839,7 +841,9 @@ async def _events_from_stream(
 
 @pytest.mark.anyio
 async def test_a_single_oversized_line_is_cut_and_its_frame_dropped(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    metric_reader: InMemoryMetricReader,
 ) -> None:
     """The exposure a frame-level cap alone cannot reach.
 
@@ -882,6 +886,14 @@ async def test_a_single_oversized_line_is_cut_and_its_frame_dropped(
     # Exactly one frame refused — the trailing one is well inside the cap, so
     # the reader is delivering again rather than dropping everything after.
     assert [record.__dict__["occurrences"] for record in caplog.records] == [1]
+    # And the counter agrees. The log line is rate-limited, so it carries a
+    # running total rather than a rate; this is the graphable half.
+    assert (
+        metric_value(
+            metric_reader, "lens_events_dropped_total", reason="oversized_frame"
+        ).value
+        == 1
+    )
 
 
 @pytest.mark.anyio
@@ -1035,7 +1047,9 @@ async def test_the_stream_is_requested_unencoded(
 
 @pytest.mark.anyio
 async def test_a_content_encoded_stream_is_refused_rather_than_decoded(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    metric_reader: InMemoryMetricReader,
 ) -> None:
     """Asking for identity is not the same as getting it.
 
@@ -1082,6 +1096,15 @@ async def test_a_content_encoded_stream_is_refused_rather_than_decoded(
     # Retried every backoff, recorded once: the log rate is Lens's, not the
     # reconnect loop's.
     assert len(caplog.records) == 1
+    # The counter is NOT rate-limited, and here that difference carries real
+    # information: a refused encoding is a STANDING condition retried every
+    # backoff, so one log line understates it by design while the counter shows
+    # how hard the loop is churning.
+    assert metric_value(
+        metric_reader,
+        "lens_events_dropped_total",
+        reason="content_encoding_refused",
+    ).value >= len(requests)
 
 
 def _mock_transport_client(

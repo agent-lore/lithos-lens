@@ -22,6 +22,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from lithos_lens import metrics
 from lithos_lens.blocker_chain import (
     BLOCKER_MAX_DEPTH,
     blocker_expansion,
@@ -224,9 +225,15 @@ def create_app(
         if not _is_metered(request.url.path):
             return await call_next(request)
         if render_gate.locked():
+            # Counted, not just logged: refusals are visible today only as
+            # users receiving 503s, which is the last moment anyone would want
+            # to learn about saturation. Graphed against MAX_CONCURRENT_RENDERS
+            # this shows the headroom disappearing beforehand.
+            metrics.render_admissions().add(1, {"outcome": "refused"})
             return PlainTextResponse(
                 "Lens is at capacity. Retry shortly.", status_code=503
             )
+        metrics.render_admissions().add(1, {"outcome": "admitted"})
         async with render_gate:
             return await call_next(request)
 

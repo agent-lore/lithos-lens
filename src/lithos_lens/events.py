@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from lithos_lens import metrics
 from lithos_lens.config import EventsConfig, LithosConfig
 from lithos_lens.errors import EventSubscriberLimit, UnsupportedEventEncoding
 
@@ -50,6 +51,22 @@ CONSUMED_EVENT_TYPES = TASK_EVENT_TYPES | SYSTEM_EVENT_TYPES
 # CR/LF would let an upstream payload forge whole extra frames — including a
 # `lens.*` one — into Lens's own browser control channel.
 LENS_REFRESH_EVENT = "lens.refresh"
+
+# The bounded label set for `lens_events_published_total`. `publish` is a
+# PUBLIC method and normalization is not on all of its paths — fake-Lithos app
+# mode's `POST /tasks/events/publish` builds a LensEvent straight from request
+# JSON — so the type is mapped here rather than trusted. Fake mode can be run
+# with an OTLP endpoint configured, which would otherwise let an arbitrary
+# request mint an arbitrary Prometheus series.
+METRIC_EVENT_TYPES = CONSUMED_EVENT_TYPES | {LENS_REFRESH_EVENT}
+UNKNOWN_EVENT_TYPE_LABEL = "other"
+
+
+def metric_event_type(event_type: str) -> str:
+    """``event_type`` if it is one Lens recognizes, else ``other``."""
+    return event_type if event_type in METRIC_EVENT_TYPES else UNKNOWN_EVENT_TYPE_LABEL
+
+
 # Shortest gap between two synthetic reconnect refreshes. Each one costs every
 # open dashboard a full refetch, so a flapping upstream must not be able to use
 # them as a fan-out amplifier against Lens and Lithos. A refresh that lands
@@ -248,14 +265,18 @@ class EventHub:
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
+        # Seeded before the first connect attempt for the same reason the MCP
+        # gauge is: an absent series reads as "not deployed", which is the
+        # wrong conclusion during the outage it would be consulted for.
+        metrics.event_stream_up().set(0)
 
     async def start(self) -> None:
         if not self.config.enabled:
-            self.status = "disabled"
+            self._set_status("disabled")
             return
         if self._task is not None and not self._task.done():
             return
-        self.status = "reconnecting"
+        self._set_status("reconnecting")
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="lithos-events")
 
@@ -271,9 +292,20 @@ class EventHub:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._pending_refresh
             self._pending_refresh = None
-        self.status = "disabled"
+        self._set_status("disabled")
         for queue in list(self._subscribers):
             self._subscribers.discard(queue)
+
+    def _set_status(self, status: EventStatus) -> None:
+        """Move the hub's status and publish it as a gauge in one place.
+
+        Routed through one method rather than recorded at each of the five
+        assignment sites: a transition that updated the field but forgot the
+        gauge would leave an operator reading a stale "live" while the stream
+        was down, and that divergence is invisible until someone needs it.
+        """
+        self.status = status
+        metrics.event_stream_up().set(1 if status == "live" else 0)
 
     def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
         """Register a browser queue, refusing past :data:`MAX_EVENT_SUBSCRIBERS`.
@@ -286,17 +318,31 @@ class EventHub:
         """
         if len(self._subscribers) >= MAX_EVENT_SUBSCRIBERS:
             REFUSED_SUBSCRIBERS.record(limit=str(MAX_EVENT_SUBSCRIBERS))
+            metrics.events_dropped().add(1, {"reason": "subscriber_limit"})
             raise EventSubscriberLimit(
                 f"event subscriber limit reached ({MAX_EVENT_SUBSCRIBERS})"
             )
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
         self._subscribers.add(queue)
+        self._record_subscriber_count()
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
         self._subscribers.discard(queue)
+        self._record_subscriber_count()
+
+    def _record_subscriber_count(self) -> None:
+        """Publish the CURRENT subscriber count, not a delta.
+
+        Set from the authoritative length at both transitions, so the gauge
+        cannot drift out of step with reality the way an incremented counter
+        would after a missed unsubscribe — and a missed unsubscribe is exactly
+        the condition an operator would be reading this to diagnose.
+        """
+        metrics.event_subscribers().set(len(self._subscribers))
 
     async def publish(self, event: LensEvent) -> None:
+        metrics.events_published().add(1, {"type": metric_event_type(event.type)})
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
@@ -304,7 +350,16 @@ class EventHub:
                 # Rate-limited: a subscriber that stops draining turns every
                 # upstream event into a record, at an upstream-chosen rate
                 # times a client-chosen number of stalled tabs.
+                #
+                # The counter alongside is not redundant. Rate limiting is
+                # right for the log and it costs the RATE: `occurrences` is a
+                # running total, not something to graph or alert on. A counter
+                # is cheap per occurrence, so the log keeps the readable detail
+                # and this carries how often it is happening.
                 UNDELIVERED_EVENTS.record(event_type=event.type, event_id=event.id)
+                metrics.events_dropped().add(1, {"reason": "subscriber_queue_full"})
+            else:
+                metrics.events_delivered().add(1)
 
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
@@ -325,7 +380,7 @@ class EventHub:
         when staleness is a property of the interval.
         """
         self._stream_open = True
-        self.status = "live"
+        self._set_status("live")
         if self._gap_since_last_open:
             await self._schedule_refresh()
             self._gap_since_last_open = False
@@ -399,7 +454,7 @@ class EventHub:
             # attached and receiving nothing, so the next open owes them a
             # refresh (see _on_stream_open).
             self._gap_since_last_open = True
-            self.status = "reconnecting"
+            self._set_status("reconnecting")
             delay_ms = backoff[min(attempt, len(backoff) - 1)]
             attempt += 1
             try:
@@ -441,6 +496,7 @@ async def _stream_lithos_events(
             if line == "":
                 if poisoned:
                     OVERSIZED_FRAMES.record()
+                    metrics.events_dropped().add(1, {"reason": "oversized_frame"})
                 elif frame:
                     event = parse_lithos_sse_frame(frame)
                     if event is not None:
@@ -483,6 +539,7 @@ def _require_identity_encoding(response: httpx.Response) -> None:
     if not encoding or encoding == IDENTITY_ENCODING:
         return
     REFUSED_ENCODINGS.record(content_encoding=encoding)
+    metrics.events_dropped().add(1, {"reason": "content_encoding_refused"})
     raise UnsupportedEventEncoding(
         f"lithos event stream is {encoding}-encoded; Lens requests identity "
         "so that one socket read stays one bounded chunk"
@@ -609,6 +666,7 @@ def normalize_lithos_event(
     task_id = "" if system_scoped else str(payload.get("task_id") or "")
     if not system_scoped and not task_id:
         DROPPED_EVENTS.record(event_type=event_type, event_id=event_id)
+        metrics.events_dropped().add(1, {"reason": "no_task_id"})
         return None
     # The synthesized fallback is a dedupe key made of payload data (a
     # caller-chosen agent id, say) — never a replay position, and never trusted

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import tomllib
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -34,62 +34,11 @@ from lithos_lens.telemetry import (
     shutdown_telemetry,
 )
 from lithos_lens.web import create_app
+from tests.conftest import _release_otel_provider_latches
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # A note the demo dataset serves, so /note/{id} takes its rendered path.
 DEMO_NOTE_ID = "note-influx-plan"
-
-
-def _release_otel_provider_latches() -> None:
-    """Let a later `set_*_provider` take effect. Test-only.
-
-    OTEL guards each global provider with a one-shot latch: a second
-    `set_tracer_provider` logs a warning and is IGNORED. Without releasing
-    them, every test after the first would assert against the FIRST test's
-    exporter and pass for the wrong reason.
-
-    The two signals keep their globals in DIFFERENT modules, and getting that
-    wrong fails silently: the tracer globals live on `opentelemetry.trace`
-    itself, but the meter globals live on `opentelemetry.metrics._internal` and
-    are not re-exported, so `metrics._METER_PROVIDER = None` would just mint an
-    unused attribute on the package and leave the real provider latched. Each
-    name is READ before it is written, so a future OTEL layout change surfaces
-    here as an AttributeError rather than as a stale-exporter assertion.
-
-    This lives in the suite, not in `lithos_lens.telemetry`: resetting OTEL's
-    package globals is a fact about testing OTEL, not about Lens. Lens's own
-    state is cleared in full by the public `shutdown_telemetry`.
-    """
-    from opentelemetry import trace as trace_api
-    from opentelemetry.metrics import _internal as metrics_internal
-    from opentelemetry.util._once import Once
-
-    for module, name in (
-        (trace_api, "_TRACER_PROVIDER"),
-        (metrics_internal, "_METER_PROVIDER"),
-    ):
-        getattr(module, name)
-        setattr(module, name, None)
-        getattr(module, f"{name}_SET_ONCE")
-        setattr(module, f"{name}_SET_ONCE", Once())
-
-
-@pytest.fixture
-def telemetry_off() -> Iterator[None]:
-    """Guarantee a clean provider state around a test that installs its own."""
-    shutdown_telemetry()
-    _release_otel_provider_latches()
-    yield
-    shutdown_telemetry()
-    _release_otel_provider_latches()
-
-
-@pytest.fixture
-def spans(lithos_lens_config_env: Path, telemetry_off: None) -> InMemorySpanExporter:
-    """Telemetry set up with an in-memory span exporter. No collector needed."""
-    exporter = InMemorySpanExporter()
-    setup_telemetry(load_config(lithos_lens_config_env), _test_span_exporter=exporter)
-    return exporter
 
 
 def _client(config_path: Path) -> TestClient:

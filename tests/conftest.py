@@ -1,11 +1,19 @@
 """Shared pytest fixtures and helpers."""
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+
+from lithos_lens.config import load_config
+from lithos_lens.telemetry import setup_telemetry, shutdown_telemetry
 
 CONTRACTS_DIR = Path(__file__).resolve().parent / "contracts"
 
@@ -87,3 +95,155 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "")
     return config_path
+
+
+# ── telemetry fixtures, shared by every suite that asserts on OTEL ──
+
+
+def _release_otel_provider_latches() -> None:
+    """Let a later `set_*_provider` take effect. Test-only.
+
+    OTEL guards each global provider with a one-shot latch: a second
+    `set_tracer_provider` logs a warning and is IGNORED. Without releasing
+    them, every test after the first would assert against the FIRST test's
+    exporter and pass for the wrong reason.
+
+    The two signals keep their globals in DIFFERENT modules, and getting that
+    wrong fails silently: the tracer globals live on `opentelemetry.trace`
+    itself, but the meter globals live on `opentelemetry.metrics._internal` and
+    are not re-exported, so `metrics._METER_PROVIDER = None` would just mint an
+    unused attribute on the package and leave the real provider latched. Each
+    name is READ before it is written, so a future OTEL layout change surfaces
+    here as an AttributeError rather than as a stale-exporter assertion.
+
+    This lives in the suite, not in `lithos_lens.telemetry`: resetting OTEL's
+    package globals is a fact about testing OTEL, not about Lens. Lens's own
+    state is cleared in full by the public `shutdown_telemetry`.
+    """
+    from opentelemetry import trace as trace_api
+    from opentelemetry.metrics import _internal as metrics_internal
+    from opentelemetry.util._once import Once
+
+    for module, name in (
+        (trace_api, "_TRACER_PROVIDER"),
+        (metrics_internal, "_METER_PROVIDER"),
+    ):
+        getattr(module, name)
+        setattr(module, name, None)
+        getattr(module, f"{name}_SET_ONCE")
+        setattr(module, f"{name}_SET_ONCE", Once())
+
+    # Clearing the globals is NOT enough, and the shortfall is silent.
+    #
+    # With `_METER_PROVIDER` set to None, `get_meter_provider()` falls back to
+    # the module-level PROXY provider -- which caches the real provider it was
+    # last pointed at and keeps delegating to it. So the next `get_meter()`
+    # reaches the SHUT-DOWN provider and logs "A shutdown MeterProvider can not
+    # provide a Meter", once per call, into whatever test is running by then.
+    # That is how this was found: unrelated SSE tests asserting exact caplog
+    # counts started seeing stray records.
+    #
+    # Same failure shape as the reset bug filed against lithos.telemetry
+    # (task 41de9716) -- a reset that looks complete, leaves no error, and
+    # quietly keeps the previous object alive.
+    for proxy, attribute in (
+        (getattr(metrics_internal, "_PROXY_METER_PROVIDER", None), "_meters"),
+        (getattr(trace_api, "_PROXY_TRACER_PROVIDER", None), None),
+    ):
+        if proxy is None:  # pragma: no cover - layout differs across versions
+            continue
+        for field in vars(proxy):
+            if field.startswith("_real_"):
+                setattr(proxy, field, None)
+        if attribute is not None and hasattr(proxy, attribute):
+            getattr(proxy, attribute).clear()
+
+
+@pytest.fixture
+def telemetry_off() -> Iterator[None]:
+    """Guarantee a clean provider state around a test that installs its own."""
+    shutdown_telemetry()
+    _release_otel_provider_latches()
+    yield
+    shutdown_telemetry()
+    _release_otel_provider_latches()
+
+
+@pytest.fixture
+def spans(lithos_lens_config_env: Path, telemetry_off: None) -> InMemorySpanExporter:
+    """Telemetry set up with an in-memory span exporter. No collector needed."""
+    exporter = InMemorySpanExporter()
+    setup_telemetry(load_config(lithos_lens_config_env), _test_span_exporter=exporter)
+    return exporter
+
+
+@pytest.fixture
+def metric_reader(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> InMemoryMetricReader:
+    """Telemetry set up with an in-memory metric reader. No collector needed."""
+    reader = InMemoryMetricReader()
+    setup_telemetry(load_config(lithos_lens_config_env), _test_metric_reader=reader)
+    return reader
+
+
+def metric_snapshot(reader: InMemoryMetricReader) -> dict[str, list[Any]]:
+    """One collection, queried many times: ``{metric name: [data points]}``.
+
+    Necessary whenever a test reads more than one instrument, because a
+    synchronous GAUGE only reports a value that was set since the last
+    collection. Calling ``metric_value`` twice collects twice, and the second
+    collection finds the gauge empty -- so a test asserting a counter and then
+    a gauge sees the gauge vanish, for reasons that have nothing to do with the
+    code under test. Snapshot once, then assert.
+    """
+    data = reader.get_metrics_data()
+    assert data is not None
+    snapshot: dict[str, list[Any]] = {}
+    for resource_metric in data.resource_metrics or []:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                snapshot.setdefault(metric.name, []).extend(metric.data.data_points)
+    return snapshot
+
+
+def snapshot_value(snapshot: dict[str, list[Any]], name: str, **labels: str) -> Any:
+    """The single point under ``name`` with exactly ``labels``, from a snapshot."""
+    matching = [
+        point
+        for point in snapshot.get(name, [])
+        if dict(point.attributes or {}) == labels
+    ]
+    assert len(matching) == 1, (
+        f"expected one {name} point with {labels}, got "
+        f"{[dict(p.attributes or {}) for p in snapshot.get(name, [])]}"
+    )
+    return matching[0]
+
+
+def metric_points(reader: InMemoryMetricReader, name: str) -> list[Any]:
+    """Every data point recorded under ``name``, across all label sets."""
+    data = reader.get_metrics_data()
+    assert data is not None
+    return [
+        point
+        for resource_metric in (data.resource_metrics or [])
+        for scope_metric in resource_metric.scope_metrics
+        for metric in scope_metric.metrics
+        if metric.name == name
+        for point in metric.data.data_points
+    ]
+
+
+def metric_value(reader: InMemoryMetricReader, name: str, **labels: str) -> Any:
+    """The single point recorded under ``name`` with exactly ``labels``."""
+    matching = [
+        point
+        for point in metric_points(reader, name)
+        if dict(point.attributes or {}) == labels
+    ]
+    assert len(matching) == 1, (
+        f"expected one {name} point with {labels}, got "
+        f"{[dict(p.attributes or {}) for p in metric_points(reader, name)]}"
+    )
+    return matching[0]
