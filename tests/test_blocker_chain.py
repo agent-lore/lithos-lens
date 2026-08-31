@@ -991,16 +991,18 @@ def test_an_id_with_reserved_characters_stays_one_path_segment(
     # %2F before route matching, so a single-segment `{task_id}` never sees the
     # id back: both this fragment AND the row's own detail link answer 404.
     #
-    # Recorded rather than fixed here, and pinned so it cannot change silently.
-    # It is not this slice's defect and not this slice's to fix: the detail
-    # route has behaved this way since T1-S7, the expander merely inherits it,
-    # and the repair is a route-family change (`{task_id:path}` with the
-    # ordering that implies) — filed as its own task. Nor is it reachable in
-    # practice: `lithos_task_create` takes no `id`, so every task id Lens can
-    # ever be handed is a server-generated UUID.
+    # DECIDED, not merely deferred: this will not be fixed (Lithos task
+    # b1a65c6d, closed won't-fix). It is unreachable — `lithos_task_create`
+    # takes no `id`, so every task id Lens can ever be handed is a
+    # server-generated UUID — and the repair is a route-family change
+    # (`{task_id:path}` on the whole `/tasks/{task_id}` family) whose greedy
+    # matching would trade an unreachable 404 for a SILENT MISROUTE: an id
+    # ending `/blockers` would serve another task's fragment at HTTP 200.
+    # Moving the discriminator only relocates the collision.
     #
-    # If a future change makes these routable, this test fails and should be
-    # updated to assert 200 — that is the point of pinning it.
+    # So the 404 is the specified behavior, and this test is what says so. If a
+    # future change makes these routable, this test fails — reopen b1a65c6d and
+    # take the misroute question with it, rather than flipping the assertion.
     assert client.get(expander).status_code == 404
     assert client.get(f"/tasks/{quote('team/pred', safe='')}").status_code == 404
 

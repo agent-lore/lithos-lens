@@ -350,7 +350,13 @@ returns explicit ready/blocked sets.
 - **Degraded**: a failed frontier read → flat board + the read-error banner;
   Lithos unreachable → existing banner; empty corpus → empty states.
 
-Coverage ≥ 80% on `frontier.py` and the new normalizers.
+No numeric coverage floor is set. The repository measures no coverage and
+enforces none, so a percentage here would be a requirement that can be neither
+met nor missed — and a number nothing checks invites being satisfied by tests
+that execute lines without asserting behavior. The bar instead is: every
+behavior listed above has a test that FAILS when that behavior is reverted, and
+the architecture budgets in `docs/architecture.toml` hold. (Decision recorded
+against Lithos task `1337b88d` / GitHub issue #35.)
 
 ## Tracer-bullet vertical slices
 
