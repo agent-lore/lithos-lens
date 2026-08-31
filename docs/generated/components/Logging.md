@@ -11,17 +11,18 @@ Structured JSON logging setup (JsonFormatter).
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.logging` | S | 1 | 1 |
+| `lithos_lens.logging` | S | 2 | 1 |
 
 ## Public API
 
 ### `lithos_lens.logging`
 - class `JsonFormatter` — Small JSON formatter that avoids a runtime dependency for M0.
+- class `BoundedRecordFilter` — Bound a record for a handler that does NOT run :class:`JsonFormatter`.
 - def `configure_logging` — Configure root logging to stdout with a structured JSON formatter.
 
 ## Dependencies
 
 - Depends on: [Config](Config.md)
-- Used by: [Entrypoint](Entrypoint.md)
+- Used by: [Entrypoint](Entrypoint.md), [Telemetry](Telemetry.md)
 
 [← all generated docs](../README.md)

@@ -75,15 +75,17 @@ def setup_telemetry(
     *,
     _test_span_exporter: Any = None,
     _test_metric_reader: Any = None,
+    _test_log_exporter: Any = None,
 ) -> None:
     """Install the tracer, meter and (when exporting) log providers.
 
     Idempotent: a second call while initialized is a no-op, so the uvicorn
     factory calling this per worker is safe.
 
-    ``_test_span_exporter`` / ``_test_metric_reader`` are the test seams (an
-    ``InMemorySpanExporter`` / ``InMemoryMetricReader``), letting the suite
-    assert on real spans and real instruments with no collector running.
+    ``_test_span_exporter`` / ``_test_metric_reader`` / ``_test_log_exporter``
+    are the test seams (``InMemorySpanExporter`` / ``InMemoryMetricReader`` /
+    ``InMemoryLogRecordExporter``), letting the suite assert on real spans,
+    instruments and log records with no collector running.
     """
     global _initialized, _tracer_provider, _meter_provider, _logger_provider
     global _log_handler
@@ -123,22 +125,38 @@ def setup_telemetry(
     _logger_provider, _log_handler = _install_log_export(
         endpoint,
         resource,
-        # A supplied test seam means "keep this process off the network". Logs
-        # have no in-memory reader of their own, so without this a test that
-        # names an endpoint would build a real OTLP log exporter and pay its
-        # retry backoff on shutdown -- seven seconds per test, for a pipeline
-        # the test is not looking at.
-        offline=_test_span_exporter is not None or _test_metric_reader is not None,
+        test_exporter=_test_log_exporter,
+        # A span or metric seam with no log seam means "keep this process off
+        # the network": a test that names an endpoint would otherwise build a
+        # real OTLP log exporter and pay its retry backoff on shutdown -- seven
+        # seconds per test, for a pipeline the test is not looking at.
+        offline=_test_log_exporter is None
+        and (_test_span_exporter is not None or _test_metric_reader is not None),
     )
 
     _initialized = True
+    # Report per SIGNAL, not just traces. The three pipelines are configured
+    # independently (OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT each
+    # override the base), so a deployment exporting only metrics is exporting
+    # -- and a single `otel_exporting` flag derived from the span processor
+    # would tell its operator the opposite while the data flowed.
+    exporting = [
+        signal
+        for signal, active in (
+            ("traces", span_processor is not None),
+            ("metrics", metric_reader is not None),
+            ("logs", _logger_provider is not None),
+        )
+        if active
+    ]
     logger.info(
         "telemetry initialized",
         extra={
             "lens_event": "lens.telemetry.initialized",
             "otel_endpoint": endpoint or "",
             "otel_environment": config.environment,
-            "otel_exporting": span_processor is not None,
+            "otel_exporting": bool(exporting),
+            "otel_exporting_signals": exporting,
         },
     )
 
@@ -300,7 +318,11 @@ def _build_metric_reader(
 
 
 def _install_log_export(
-    endpoint: str, resource: Resource, *, offline: bool = False
+    endpoint: str,
+    resource: Resource,
+    *,
+    test_exporter: Any = None,
+    offline: bool = False,
 ) -> tuple[Any, logging.Handler | None]:
     """Export Python logs over OTLP so they reach Loki with the same resource.
 
@@ -315,21 +337,36 @@ def _install_log_export(
             or (_signal_endpoint(endpoint, "logs") if endpoint else "")
         )
     )
-    if not logs_endpoint:
+    if test_exporter is None and not logs_endpoint:
         return None, None
 
     from opentelemetry._logs import set_logger_provider
-    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.instrumentation.logging.handler import LoggingHandler
     from opentelemetry.sdk._logs import LoggerProvider
-    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk._logs.export import (
+        BatchLogRecordProcessor,
+        SimpleLogRecordProcessor,
+    )
+
+    from lithos_lens.logging import BoundedRecordFilter
 
     provider = LoggerProvider(resource=resource)
-    provider.add_log_record_processor(
-        BatchLogRecordProcessor(OTLPLogExporter(endpoint=logs_endpoint))
-    )
+    if test_exporter is not None:
+        provider.add_log_record_processor(SimpleLogRecordProcessor(test_exporter))
+    else:
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter,
+        )
+
+        provider.add_log_record_processor(
+            BatchLogRecordProcessor(OTLPLogExporter(endpoint=logs_endpoint))
+        )
     set_logger_provider(provider)
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=provider)
+    # This handler takes no formatter, so `MAX_LOGGED_VALUE_CHARS` -- applied
+    # centrally in JsonFormatter -- does not reach it. Without the filter an
+    # oversized request line is exported to the collector verbatim.
+    handler.addFilter(BoundedRecordFilter())
     logging.getLogger().addHandler(handler)
     return provider, handler
 

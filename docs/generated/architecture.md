@@ -56,6 +56,7 @@ graph TD
   State --> LithosClient
   TaskGraph --> Tasks
   Telemetry --> Config
+  Telemetry --> Logging
   Web --> Config
   Web --> Errors
   Web --> Events
@@ -82,10 +83,11 @@ graph TD
   linkStyle 16 stroke:#bbb
   linkStyle 19 stroke:#bbb
   linkStyle 20 stroke:#bbb
-  linkStyle 21 stroke:#999,stroke-dasharray:4
+  linkStyle 21 stroke:#bbb
   linkStyle 22 stroke:#999,stroke-dasharray:4
-  linkStyle 24 stroke:#999,stroke-dasharray:4
-  linkStyle 27 stroke:#999,stroke-dasharray:4
+  linkStyle 23 stroke:#999,stroke-dasharray:4
+  linkStyle 25 stroke:#999,stroke-dasharray:4
   linkStyle 28 stroke:#999,stroke-dasharray:4
   linkStyle 29 stroke:#999,stroke-dasharray:4
+  linkStyle 30 stroke:#999,stroke-dasharray:4
 ```

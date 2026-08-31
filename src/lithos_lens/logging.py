@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import UTC, datetime
@@ -99,6 +100,37 @@ def _trace_context() -> dict[str, str]:
         "trace_id": format(span_context.trace_id, "032x"),
         "span_id": format(span_context.span_id, "016x"),
     }
+
+
+class BoundedRecordFilter(logging.Filter):
+    """Bound a record for a handler that does NOT run :class:`JsonFormatter`.
+
+    ``MAX_LOGGED_VALUE_CHARS`` is applied centrally in the formatter, which
+    covers the stdout handler and nothing else. The OTLP log-export handler
+    (``lithos_lens.telemetry``) is a second sink and takes no formatter at all:
+    it reads ``record.getMessage()`` and the record's extra attributes
+    directly. Without this filter a 47 KB query string reaches the collector
+    verbatim, which is the same unbounded-volume problem the formatter's own
+    comment describes, moved to a path that costs money instead of log history.
+
+    Implemented as a record REPLACEMENT rather than an in-place edit: returning
+    a ``LogRecord`` from a filter substitutes it for that handler only (Python
+    3.12+), so the stdout handler still sees the original and applies its own
+    bound. Mutating the record would silently shorten what every other handler
+    receives, depending on the order they happen to run in.
+
+    ``exc_info`` is deliberately not bounded, matching :class:`JsonFormatter`:
+    a traceback's size follows the code's call depth, not attacker input.
+    """
+
+    def filter(self, record: logging.LogRecord) -> logging.LogRecord:
+        bounded = copy.copy(record)
+        bounded.msg = _truncated(record.getMessage())
+        bounded.args = ()
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_LOG_RECORD_FIELDS and not key.startswith("_"):
+                setattr(bounded, key, _json_safe(value))
+        return bounded
 
 
 def configure_logging(level: LogLevel) -> None:

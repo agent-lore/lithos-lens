@@ -375,7 +375,7 @@ At process startup Lens performs the following steps in order:
 
 1. Load TOML config and environment overrides into a typed config object.
 2. Configure structured stdout logging.
-3. Configure OTEL only if `LITHOS_LENS_OTEL_ENABLED=true`; missing optional OTEL packages must not prevent boot when telemetry is disabled.
+3. Configure OTEL. The packages are required dependencies, so this always runs; `telemetry.enabled` (env: `LITHOS_LENS_OTEL_ENABLED`) governs whether providers are installed at all, and the configured endpoint governs whether anything is exported. Trace context is stamped onto every log record from here on, so step 2's logging gains `trace_id`/`span_id` for any record written inside a request.
 4. Create the Lithos MCP client (one shared MCP-over-SSE session reused across all tool calls).
 5. Attempt startup auto-registration of the **service agent**:
 
@@ -1293,9 +1293,17 @@ Editing happens via TOML/env outside the container. Lens does not write to confi
 
 ## 15. Observability
 
-### OTEL — Opt-In, Additive
+### OTEL — Required, On by Default
 
-Same pattern as Lithos and Influx: `LITHOS_LENS_OTEL_ENABLED=true` enables it; optional packages via `uv sync --extra otel`; `LITHOS_LENS_OTEL_CONSOLE_FALLBACK=true` prints spans to stdout.
+Deliberately **not** the Lithos/Influx pattern. Those services put the SDK behind an optional `otel` extra with an ImportError guard, which leaves the enabled path covered only on machines that opted in — an enabled-path test that skips when a package is absent is not a test. In Lens the OTEL packages are required dependencies, telemetry is on by default, and `make check` exercises the real SDK.
+
+`telemetry.enabled` governs **export**, not whether the instrumentation exists. With no endpoint and no console fallback, providers are installed and spans are created but nothing leaves the process — which still puts `trace_id` on every log record. Setting it false is the one escape hatch.
+
+Endpoint resolution, highest priority first: `LITHOS_LENS_OTEL_ENDPOINT` → `[lithos-lens.telemetry] endpoint` → the standard `OTEL_EXPORTER_OTLP_ENDPOINT` → nothing exported. The per-signal `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` variables override the derived paths, so the three pipelines can be configured independently.
+
+HTTP server spans are auto-instrumented (`opentelemetry-instrumentation-fastapi`) rather than hand-rolled, because span names and `http.route` must come from the route TEMPLATE: Tempo's metrics generator turns span names into Prometheus series, and Lens routes on ids. The same rule governs metric labels — bounded sets only; unbounded values belong on spans. `/health`, `/static/` and `/tasks/events` are excluded from tracing (§8 of [`SPECIFICATION.md`](./SPECIFICATION.md) records why each).
+
+Both log sinks are size-bounded. `MAX_LOGGED_VALUE_CHARS` is applied centrally in `JsonFormatter` for stdout, and by a record-replacing filter on the OTLP export handler, which runs no formatter of its own.
 
 **Key spans:**
 
@@ -1451,7 +1459,7 @@ Additional payload notes: task events carry empty `tags`, so upstream `?tags=` f
 | `pydantic` | Request/response validation |
 | `markdown-it-py` | Server-side markdown rendering, safe-by-default (§6.2) |
 | `python-json-logger` | Structured JSON logging |
-| `opentelemetry-*` | OTEL (optional extra: `uv sync --extra otel`) |
+| `opentelemetry-*` (api, sdk, otlp-proto-http exporter, fastapi/httpx/logging instrumentation) | OTEL. **Required**, not an extra — see §15 |
 | `litellm` | Provider-agnostic LLM calls (optional extra: `uv sync --extra llm`) |
 | Cytoscape.js *(vendored static asset)* | Graph visualisation (task DAG, knowledge graph, mini-graphs); client-side centrality |
 | HTMX + SSE extension *(vendored static assets)* | Dynamic HTML; live tile/row updates |

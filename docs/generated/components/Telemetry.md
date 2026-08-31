@@ -24,7 +24,7 @@ OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instru
 
 ## Dependencies
 
-- Depends on: [Config](Config.md)
+- Depends on: [Config](Config.md), [Logging](Logging.md)
 - Used by: [Entrypoint](Entrypoint.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

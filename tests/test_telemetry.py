@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from opentelemetry import trace
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -24,7 +25,7 @@ from opentelemetry.util.http import parse_excluded_urls
 
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.logging import JsonFormatter
+from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS, JsonFormatter
 from lithos_lens.telemetry import (
     TRACE_EXCLUDED_URLS,
     get_meter,
@@ -524,3 +525,101 @@ def test_the_shared_fixture_neutralizes_an_inherited_collector(
         "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
     ):
         assert os.environ.get(name, "") == "", f"{name} leaks into the test suite"
+
+
+# ── the OTLP log path is bounded too ──────────────────────────────────
+
+
+def _exported_logs(config_path: Path, message: str, **extra: object) -> Any:
+    """Emit one record through the real OTLP log pipeline, in memory."""
+    exporter = InMemoryLogRecordExporter()
+    setup_telemetry(load_config(config_path), _test_log_exporter=exporter)
+    logging.getLogger("lithos_lens.probe").warning(message, extra=extra)
+    return exporter.get_finished_logs()[-1].log_record
+
+
+def test_the_exported_log_body_is_bounded(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> None:
+    """`MAX_LOGGED_VALUE_CHARS` is applied in JsonFormatter, which the OTLP
+    handler does not run -- it reads `record.getMessage()` directly.
+
+    Without a bound this is the log-volume problem JsonFormatter's own comment
+    describes, relocated to a path that costs collector storage rather than
+    local log history: an unauthenticated request with a 47 KB query string
+    writes a 47 KB uvicorn.access record, and that record is exported verbatim.
+    """
+    record = _exported_logs(lithos_lens_config_env, "x" * 5000)
+
+    body = str(record.body)
+    assert len(body) < 5000
+    assert len(body) <= MAX_LOGGED_VALUE_CHARS + 64  # + the truncation marker
+    assert "truncated, 5000 chars" in body
+
+
+def test_exported_log_attributes_are_bounded(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> None:
+    """Extras are the likelier carrier: structured fields hold the raw query
+    string, tag lists and ids. Bounding only the message would leave the same
+    volume travelling one field over."""
+    record = _exported_logs(
+        lithos_lens_config_env, "short message", lens_query="q" * 5000
+    )
+
+    attributes = record.attributes or {}
+    assert len(str(attributes["lens_query"])) <= MAX_LOGGED_VALUE_CHARS + 64
+
+
+def test_bounding_the_export_does_not_shorten_the_stdout_record(
+    lithos_lens_config_env: Path, telemetry_off: None
+) -> None:
+    """The bound is a per-handler REPLACEMENT, not an edit of the shared record.
+
+    An in-place mutation would shorten what every other handler receives, and
+    which one saw the original would depend on the order they happen to run in.
+    JsonFormatter must still see the full value and apply its own bound.
+    """
+    exporter = InMemoryLogRecordExporter()
+    setup_telemetry(load_config(lithos_lens_config_env), _test_log_exporter=exporter)
+
+    record = logging.LogRecord(
+        name="lithos_lens.probe",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg="z" * 5000,
+        args=(),
+        exc_info=None,
+    )
+    logging.getLogger("lithos_lens.probe").handle(record)
+
+    assert len(record.getMessage()) == 5000, "the original record was mutated"
+    assert "truncated, 5000 chars" in JsonFormatter().format(record)
+
+
+def test_the_initialized_event_reports_every_active_signal(
+    lithos_lens_config_env: Path,
+    telemetry_off: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A metrics-only deployment IS exporting.
+
+    The three pipelines are configured independently, so a flag derived from
+    the span processor alone would tell the operator of a metrics-only or
+    logs-only deployment that nothing was being exported while the data flowed.
+    """
+    monkeypatch.setenv(
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://collector:4318/v1/metrics"
+    )
+    with caplog.at_level(logging.INFO, logger="lithos_lens.telemetry"):
+        setup_telemetry(load_config(lithos_lens_config_env))
+
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "lens_event", "") == "lens.telemetry.initialized"
+    ]
+    assert record.__dict__["otel_exporting_signals"] == ["metrics"]
+    assert record.__dict__["otel_exporting"] is True

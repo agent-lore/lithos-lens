@@ -84,7 +84,15 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # create_app, which would install global providers on every app the test suite
 # builds and make the enabled path a side effect of constructing a router.
 # Telemetry is Foundation, so the edge points down like every other one here.
-cross_component_edges  = 30   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); direction: down
+# Raised 30 -> 31 for Telemetry -> Logging. The OTLP log-export handler runs no
+# formatter, so MAX_LOGGED_VALUE_CHARS -- applied centrally in JsonFormatter --
+# does not reach it, and an oversized request line would be exported to the
+# collector verbatim. Telemetry therefore imports BoundedRecordFilter from
+# Logging. The alternative was a second copy of the bound inside Telemetry,
+# which would mean two independent definitions of "how long may a logged value
+# be" and a silent divergence the first time one moved. Both components are
+# Foundation, so the edge points sideways within a tier, not upward.
+cross_component_edges  = 31   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the
