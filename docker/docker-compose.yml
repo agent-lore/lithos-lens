@@ -8,6 +8,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: ${LITHOS_LENS_CONTAINER_NAME:-lithos-lens}
     user: "${LITHOS_LENS_UID:-1000}:${LITHOS_LENS_GID:-1000}"
+    restart: unless-stopped
     ports:
       - "${LITHOS_LENS_HOST_PORT:-8000}:8000"
     extra_hosts:
