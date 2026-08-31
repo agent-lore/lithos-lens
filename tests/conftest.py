@@ -133,6 +133,31 @@ def _release_otel_provider_latches() -> None:
         getattr(module, f"{name}_SET_ONCE")
         setattr(module, f"{name}_SET_ONCE", Once())
 
+    # Clearing the globals is NOT enough, and the shortfall is silent.
+    #
+    # With `_METER_PROVIDER` set to None, `get_meter_provider()` falls back to
+    # the module-level PROXY provider -- which caches the real provider it was
+    # last pointed at and keeps delegating to it. So the next `get_meter()`
+    # reaches the SHUT-DOWN provider and logs "A shutdown MeterProvider can not
+    # provide a Meter", once per call, into whatever test is running by then.
+    # That is how this was found: unrelated SSE tests asserting exact caplog
+    # counts started seeing stray records.
+    #
+    # Same failure shape as the reset bug filed against lithos.telemetry
+    # (task 41de9716) -- a reset that looks complete, leaves no error, and
+    # quietly keeps the previous object alive.
+    for proxy, attribute in (
+        (getattr(metrics_internal, "_PROXY_METER_PROVIDER", None), "_meters"),
+        (getattr(trace_api, "_PROXY_TRACER_PROVIDER", None), None),
+    ):
+        if proxy is None:  # pragma: no cover - layout differs across versions
+            continue
+        for field in vars(proxy):
+            if field.startswith("_real_"):
+                setattr(proxy, field, None)
+        if attribute is not None and hasattr(proxy, attribute):
+            getattr(proxy, attribute).clear()
+
 
 @pytest.fixture
 def telemetry_off() -> Iterator[None]:

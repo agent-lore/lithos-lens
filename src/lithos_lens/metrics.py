@@ -137,22 +137,51 @@ def lithos_session_up() -> Any:
 
     No labels.
 
+    This is the MCP TOOL session (`MCPTransport`), and it is not the event
+    stream. Lens holds two independent connections to Lithos -- MCP-over-SSE
+    for tool calls, and the `/events` SSE stream for the live board -- and they
+    can disagree: tool calls can be healthy while event delivery is
+    reconnecting, which presents to an operator as a board that renders but
+    never updates. `lens_event_stream_up` is the one that tracks the `events`
+    health field; reading this gauge for that would answer the wrong question.
+
     A SYNCHRONOUS gauge set from the authoritative value at each transition,
     not an observable gauge with a callback. The callback form needs a
     registration guard and module state to survive being installed twice (the
     shape `lithos.telemetry.register_sse_active_clients_observer` has); setting
-    an exact value at the two places the state actually changes needs neither,
-    and cannot drift the way an incremented counter would.
+    an exact value at the places the state actually changes needs neither, and
+    cannot drift the way an incremented counter would.
 
-    This is what turns the `events: "live" | "reconnecting"` field -- readable
-    today only by fetching /health by hand -- into something graphable and
-    alertable.
+    Seeded to 0 before the first connection attempt, so "never connected" is
+    distinguishable from "not deployed" -- an absent series looks like the
+    latter.
     """
     return _instrument(
         "lens_lithos_session_up",
         lambda meter: meter.create_gauge(
             "lens_lithos_session_up",
             description="1 while the Lithos MCP session is established, 0 otherwise.",
+        ),
+    )
+
+
+def event_stream_up() -> Any:
+    """Gauge: 1 while the Lithos `/events` SSE stream is live, 0 otherwise.
+
+    No labels. This is the connection behind the `events: live | reconnecting |
+    disabled` health field, and it is a DIFFERENT connection from the MCP tool
+    session `lens_lithos_session_up` tracks. Both are needed: a board that
+    renders correctly but stops updating is the two disagreeing.
+
+    `disabled` and `reconnecting` both record 0 -- the operator question this
+    answers is "are events flowing", and neither state answers yes. Which of
+    the two it is stays in the health endpoint and the log.
+    """
+    return _instrument(
+        "lens_event_stream_up",
+        lambda meter: meter.create_gauge(
+            "lens_event_stream_up",
+            description="1 while the Lithos /events SSE stream is live, 0 otherwise.",
         ),
     )
 
@@ -182,9 +211,17 @@ def lithos_reconnects() -> Any:
 def events_published() -> Any:
     """Counter of events accepted from upstream and fanned out.
 
-    Labels: ``type`` -- safe as a label only because ``normalize_event`` drops
-    anything outside ``CONSUMED_EVENT_TYPES``, so the value comes from Lens's
-    own allowlist rather than from whatever upstream decides to emit.
+    Labels: ``type``, mapped through ``METRIC_EVENT_TYPES`` at the recording
+    site -- anything else becomes ``other``.
+
+    Mapped rather than trusted. ``normalize_event`` does allowlist upstream
+    types, but ``publish`` has other callers: fake-Lithos app mode exposes
+    ``POST /tasks/events/publish``, which builds a ``LensEvent`` straight from
+    request JSON and never passes through normalization. Since fake mode can be
+    run with an OTLP endpoint configured, taking ``event.type`` on trust would
+    let an arbitrary request mint an arbitrary Prometheus series -- unbounded
+    cardinality reachable from outside the process, which is the failure this
+    module's cardinality rule exists to prevent.
     """
     return _instrument(
         "lens_events_published_total",

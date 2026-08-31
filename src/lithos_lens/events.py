@@ -51,6 +51,22 @@ CONSUMED_EVENT_TYPES = TASK_EVENT_TYPES | SYSTEM_EVENT_TYPES
 # CR/LF would let an upstream payload forge whole extra frames — including a
 # `lens.*` one — into Lens's own browser control channel.
 LENS_REFRESH_EVENT = "lens.refresh"
+
+# The bounded label set for `lens_events_published_total`. `publish` is a
+# PUBLIC method and normalization is not on all of its paths — fake-Lithos app
+# mode's `POST /tasks/events/publish` builds a LensEvent straight from request
+# JSON — so the type is mapped here rather than trusted. Fake mode can be run
+# with an OTLP endpoint configured, which would otherwise let an arbitrary
+# request mint an arbitrary Prometheus series.
+METRIC_EVENT_TYPES = CONSUMED_EVENT_TYPES | {LENS_REFRESH_EVENT}
+UNKNOWN_EVENT_TYPE_LABEL = "other"
+
+
+def metric_event_type(event_type: str) -> str:
+    """``event_type`` if it is one Lens recognizes, else ``other``."""
+    return event_type if event_type in METRIC_EVENT_TYPES else UNKNOWN_EVENT_TYPE_LABEL
+
+
 # Shortest gap between two synthetic reconnect refreshes. Each one costs every
 # open dashboard a full refetch, so a flapping upstream must not be able to use
 # them as a fan-out amplifier against Lens and Lithos. A refresh that lands
@@ -249,14 +265,18 @@ class EventHub:
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
+        # Seeded before the first connect attempt for the same reason the MCP
+        # gauge is: an absent series reads as "not deployed", which is the
+        # wrong conclusion during the outage it would be consulted for.
+        metrics.event_stream_up().set(0)
 
     async def start(self) -> None:
         if not self.config.enabled:
-            self.status = "disabled"
+            self._set_status("disabled")
             return
         if self._task is not None and not self._task.done():
             return
-        self.status = "reconnecting"
+        self._set_status("reconnecting")
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="lithos-events")
 
@@ -272,9 +292,20 @@ class EventHub:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._pending_refresh
             self._pending_refresh = None
-        self.status = "disabled"
+        self._set_status("disabled")
         for queue in list(self._subscribers):
             self._subscribers.discard(queue)
+
+    def _set_status(self, status: EventStatus) -> None:
+        """Move the hub's status and publish it as a gauge in one place.
+
+        Routed through one method rather than recorded at each of the five
+        assignment sites: a transition that updated the field but forgot the
+        gauge would leave an operator reading a stale "live" while the stream
+        was down, and that divergence is invisible until someone needs it.
+        """
+        self.status = status
+        metrics.event_stream_up().set(1 if status == "live" else 0)
 
     def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
         """Register a browser queue, refusing past :data:`MAX_EVENT_SUBSCRIBERS`.
@@ -311,7 +342,7 @@ class EventHub:
         metrics.event_subscribers().set(len(self._subscribers))
 
     async def publish(self, event: LensEvent) -> None:
-        metrics.events_published().add(1, {"type": event.type})
+        metrics.events_published().add(1, {"type": metric_event_type(event.type)})
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
@@ -349,7 +380,7 @@ class EventHub:
         when staleness is a property of the interval.
         """
         self._stream_open = True
-        self.status = "live"
+        self._set_status("live")
         if self._gap_since_last_open:
             await self._schedule_refresh()
             self._gap_since_last_open = False
@@ -423,7 +454,7 @@ class EventHub:
             # attached and receiving nothing, so the next open owes them a
             # refresh (see _on_stream_open).
             self._gap_since_last_open = True
-            self.status = "reconnecting"
+            self._set_status("reconnecting")
             delay_ms = backoff[min(attempt, len(backoff) - 1)]
             attempt += 1
             try:

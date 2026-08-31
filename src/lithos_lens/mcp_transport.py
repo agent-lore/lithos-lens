@@ -122,6 +122,11 @@ class MCPTransport:
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._call_gate = asyncio.Semaphore(max_concurrent_calls)
+        # Seed before the first connection attempt so "never connected" is
+        # distinguishable from "not deployed": a gauge that only appears on the
+        # first transition is ABSENT during the outage an operator is most
+        # likely to be investigating.
+        metrics.lithos_session_up().set(0)
 
     @property
     def endpoint(self) -> str:
@@ -189,6 +194,15 @@ class MCPTransport:
                 outcome = "tool_error"
                 span.set_attribute("error.code", exc.code or "")
                 raise
+            except asyncio.CancelledError:
+                # CancelledError inherits BaseException, so without this clause
+                # it slips past `except Exception` and the finally below counts
+                # a cancelled call as a SUCCESS. A browser disconnect or a
+                # sibling task being torn down would then inflate the success
+                # rate -- the metric reading best exactly when Lens is dropping
+                # work.
+                outcome = "cancelled"
+                raise
             except Exception:
                 outcome = "transport_error"
                 raise
@@ -201,14 +215,29 @@ class MCPTransport:
                 )
 
     async def _invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        # Queue time is recorded on BOTH exits from the acquire, which is the
+        # whole point of the signal. Without this, a saturated gate and a slow
+        # Lithos are indistinguishable from outside: both present only as slow
+        # pages, and the deadline that fires cannot say which it was shedding.
+        #
+        # Recording only after a successful acquire loses exactly the calls
+        # that matter most. The outer deadline spans the queue, so under hard
+        # saturation a caller is cancelled while STILL WAITING and never
+        # reaches the body — so the histogram would stay quiet at the moment
+        # queueing was doing all the damage. `acquired` separates "waited, then
+        # ran" from "waited, then was shed"; both values are bounded.
         queued_at = time.monotonic()
-        async with self._call_gate:
-            # Measured on the INSIDE of the acquire, so it is the wait that
-            # actually happened. Without this, a saturated gate and a slow
-            # Lithos are indistinguishable from outside: both present only as
-            # slow pages, and the deadline that would eventually fire cannot
-            # say which of the two it was shedding.
-            metrics.lithos_call_queue_wait().record(time.monotonic() - queued_at)
+        try:
+            await self._call_gate.acquire()
+        except BaseException:
+            metrics.lithos_call_queue_wait().record(
+                time.monotonic() - queued_at, {"acquired": "false"}
+            )
+            raise
+        metrics.lithos_call_queue_wait().record(
+            time.monotonic() - queued_at, {"acquired": "true"}
+        )
+        try:
             if self._worker_task is None:
                 # startup() was never called; fall back to a one-shot session
                 # so we don't silently break callers that bypass the lifecycle.
@@ -222,6 +251,11 @@ class MCPTransport:
             # residual note in `decode_tool_result` for why that would not buy
             # what it looks like it buys.
             return decode_tool_result(result)
+        finally:
+            # Paired by hand because the acquire is, and it must run on every
+            # exit including cancellation: a leaked permit is permanent, and
+            # MAX_CONCURRENT_TOOL_CALLS of them wedge every later call forever.
+            self._call_gate.release()
 
     async def live_session(self, *, wait_s: float | None = None) -> Any:
         """The worker's MCP session, waiting up to ``wait_s`` for startup.

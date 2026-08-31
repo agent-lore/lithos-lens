@@ -445,8 +445,38 @@ information), `/static/` (served from disk, no Lithos call), and `/tasks/events`
 (an SSE stream that lives as long as the browser tab — its span would stay open
 for hours and sit in every latency histogram, making p95 meaningless).
 
+Metrics are Prometheus-native (`lens_*_total`, `lens_*_seconds`), and follow
+Lens's failure modes rather than its routes:
+
+- **Lithos transport** — per-tool call counts by outcome (`ok` | `timeout` |
+  `tool_error` | `transport_error` | `cancelled`), call latency, time queued at
+  the process-wide call gate, reconnects, and `lens_lithos_session_up`.
+- **Event hub** — events published by type and delivered per subscriber; drops
+  by reason (`no_task_id`, `oversized_frame`, `subscriber_queue_full`,
+  `content_encoding_refused`, `subscriber_limit`); the current subscriber count
+  against its ceiling; and `lens_event_stream_up`.
+- **Admission control** — metered requests by outcome (`admitted` | `refused`).
+
+The drop counters do not replace the rate-limited warnings §8 describes above,
+they complete them: rate limiting is correct for the log and it necessarily
+discards the RATE, since the record carries a running total. The log keeps the
+readable detail; the counter carries how often.
+
+Two connections, two gauges. `lens_lithos_session_up` is the MCP tool session;
+`lens_event_stream_up` is the `/events` SSE stream behind the `events` health
+field. They can disagree — tool calls healthy while event delivery reconnects
+presents as a board that renders but never updates — so neither substitutes for
+the other. Both are seeded to 0 before the first connection attempt, because an
+absent series reads as "not deployed" rather than "down".
+
+Every metric label comes from a bounded set: a tool name from Lens's own client
+surface, an outcome enum, or an event type mapped through Lens's allowlist
+(anything else becomes `other`). This is enforced by a test, not assumed —
+`publish` is a public method and fake-Lithos app mode exposes a route that
+builds an event straight from request JSON.
+
 The feature-level `lens.knowledge.*` instrumentation the K1 PRD specifies is
-**not** yet wired (see §10), nor are the Lithos-call and event-hub metrics.
+**not** yet wired (see §10).
 
 Warnings driven by conditions Lens does not control — a stalled browser queue,
 a malformed upstream event, a refused subscriber — are rate-limited in time,

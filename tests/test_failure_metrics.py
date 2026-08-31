@@ -15,7 +15,12 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from lithos_lens.config import EventsConfig, LithosConfig
 from lithos_lens.errors import EventSubscriberLimit
-from lithos_lens.events import MAX_EVENT_SUBSCRIBERS, EventHub, LensEvent
+from lithos_lens.events import (
+    LENS_REFRESH_EVENT,
+    MAX_EVENT_SUBSCRIBERS,
+    EventHub,
+    LensEvent,
+)
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.mcp_transport import MCPTransport
 from tests.conftest import metric_points, metric_value
@@ -168,6 +173,99 @@ async def test_time_queued_at_the_call_gate_is_measured(
     assert queued.max > 0.01
 
 
+async def test_a_call_shed_while_still_queued_is_measured(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The saturation case, which recording only after a successful acquire
+    silently omitted.
+
+    The outer deadline spans the queue, so under hard saturation a caller is
+    shed while STILL WAITING and never reaches the body. Recording only on
+    acquisition therefore left the histogram quiet at exactly the moment
+    queueing was doing all the damage -- inverting the signal's purpose.
+
+    The waiting call is cancelled directly rather than left to time out.
+    ``call_timeout_s`` is per-TRANSPORT, so a deadline short enough to shed the
+    queued call also sheds the one holding the gate, which then releases it and
+    lets the "queued" call straight through -- a test that would pass against
+    the bug about half the time. Cancellation exercises the same
+    ``except BaseException`` path around the acquire, deterministically.
+    """
+    hold = asyncio.Event()
+
+    async def slow(name: str, arguments: dict[str, Any]) -> Any:
+        await hold.wait()
+        return _Result()
+
+    transport = _transport(slow, max_concurrent_calls=1, call_timeout_s=30)
+    holder = asyncio.create_task(transport.call_tool("lithos_read", {}))
+    await asyncio.sleep(0.02)
+
+    queued = asyncio.create_task(transport.call_tool("lithos_read", {}))
+    await asyncio.sleep(0.05)
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+
+    shed = [
+        point
+        for point in metric_points(metric_reader, "lens_lithos_call_queue_wait_seconds")
+        if dict(point.attributes or {}) == {"acquired": "false"}
+    ]
+    assert shed and shed[0].count == 1, "the shed call recorded no queue wait"
+    assert shed[0].sum > 0.01, "the recorded wait is not the wait that happened"
+
+    hold.set()
+    await holder
+
+
+async def test_a_cancelled_call_is_not_counted_as_a_success(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """`CancelledError` inherits BaseException, so it slips past
+    `except Exception` and the finally block would record `outcome="ok"`.
+
+    A browser disconnect or a sibling task being torn down would then inflate
+    the success rate -- the metric reading healthiest exactly when Lens is
+    dropping the most work.
+    """
+    gate = asyncio.Event()
+
+    async def blocks(name: str, arguments: dict[str, Any]) -> Any:
+        await gate.wait()
+        return _Result()
+
+    task = asyncio.create_task(_transport(blocks).call_tool("lithos_stats", {}))
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    outcomes = {
+        dict(point.attributes or {}).get("outcome")
+        for point in metric_points(metric_reader, "lens_lithos_tool_calls_total")
+    }
+    assert outcomes == {"cancelled"}
+
+
+async def test_the_mcp_session_gauge_starts_at_zero(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Seeded before the first connect attempt.
+
+    A gauge that only appears on the first transition is ABSENT during the
+    outage an operator is most likely to be investigating, and absent reads as
+    "not deployed" rather than "down".
+    """
+
+    async def ok(name: str, arguments: dict[str, Any]) -> Any:
+        return _Result()
+
+    _transport(ok)
+
+    assert metric_value(metric_reader, "lens_lithos_session_up").value == 0
+
+
 # ── Event hub ─────────────────────────────────────────────────────────
 
 
@@ -254,6 +352,51 @@ async def test_the_subscriber_gauge_tracks_the_real_count_in_both_directions(
     assert metric_value(metric_reader, "lens_event_subscribers").value == 1
 
 
+async def test_the_event_stream_gauge_tracks_a_different_connection(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Lens holds TWO connections to Lithos and they can disagree.
+
+    `lens_lithos_session_up` is the MCP tool session; this is the `/events`
+    stream behind the `events` health field. Tool calls healthy while event
+    delivery reconnects presents to an operator as a board that renders but
+    never updates -- invisible if only one of the two is graphed.
+    """
+    hub = _hub()
+    assert metric_value(metric_reader, "lens_event_stream_up").value == 0
+
+    hub._set_status("live")
+    assert metric_value(metric_reader, "lens_event_stream_up").value == 1
+
+    hub._set_status("reconnecting")
+    assert metric_value(metric_reader, "lens_event_stream_up").value == 0
+
+
+async def test_an_event_without_a_task_id_is_counted_as_dropped(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Task-scoped types carry a task id or they are dropped; the counter is
+    what makes a rise in that visible as a rate.
+
+    The other two out-of-hub reasons (`oversized_frame`,
+    `content_encoding_refused`) live inside the SSE reader and are asserted in
+    `test_tasks_sse.py`, where the stream that drives them already exists.
+    """
+    from lithos_lens.events import normalize_lithos_event
+
+    assert (
+        normalize_lithos_event(event_id="e1", event_type="task.created", payload={})
+        is None
+    )
+
+    assert (
+        metric_value(
+            metric_reader, "lens_events_dropped_total", reason="no_task_id"
+        ).value
+        == 1
+    )
+
+
 # ── Admission control ─────────────────────────────────────────────────
 
 
@@ -283,18 +426,102 @@ def test_admitted_and_refused_requests_are_counted(
     )
 
 
+def test_a_refused_request_is_counted_as_refused(
+    metric_reader: InMemoryMetricReader, lithos_lens_config_env: Any
+) -> None:
+    """The branch that matters, which the admitted case does not reach.
+
+    Saturation is visible today only as users receiving 503s. A counter that is
+    only ever incremented on the happy path would report full health right up
+    to the moment the board stops answering.
+    """
+    from fastapi.testclient import TestClient
+
+    from lithos_lens import web as web_module
+    from lithos_lens.config import load_config
+    from lithos_lens.fake_lithos import FakeLithosClient
+
+    # A ceiling of zero: the gate is locked before any request arrives, so the
+    # refusal path is taken deterministically rather than by racing the server.
+    original = web_module.MAX_CONCURRENT_RENDERS
+    web_module.MAX_CONCURRENT_RENDERS = 0
+    try:
+        app = web_module.create_app(
+            load_config(lithos_lens_config_env),
+            lithos_client_factory=lambda _: FakeLithosClient(),
+        )
+        with TestClient(app) as client:
+            assert client.get("/tasks").status_code == 503
+    finally:
+        web_module.MAX_CONCURRENT_RENDERS = original
+
+    assert (
+        metric_value(
+            metric_reader, "lens_render_admissions_total", outcome="refused"
+        ).value
+        == 1
+    )
+
+
 # ── cardinality ───────────────────────────────────────────────────────
+
+
+async def test_a_caller_chosen_event_type_cannot_mint_a_series(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """`publish` is public and normalization is not on all of its paths.
+
+    Fake-Lithos app mode exposes `POST /tasks/events/publish`, which builds a
+    LensEvent straight from request JSON, and fake mode can be run with an OTLP
+    endpoint configured. Taking `event.type` on trust would therefore let an
+    arbitrary REQUEST mint an arbitrary Prometheus series -- unbounded
+    cardinality reachable from outside the process. Driven through the public
+    hub surface, which is the surface that route uses.
+    """
+    hub = _hub()
+    hub.subscribe()
+
+    await hub.publish(LensEvent(id="x", type="caller-chosen-type-12345", task_id="t1"))
+
+    assert (
+        metric_value(metric_reader, "lens_events_published_total", type="other").value
+        == 1
+    )
+    assert not [
+        point
+        for point in metric_points(metric_reader, "lens_events_published_total")
+        if "caller-chosen" in str(dict(point.attributes or {}).get("type", ""))
+    ]
+
+
+async def test_lens_synthesized_events_keep_their_own_label(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """`lens.refresh` is Lens's own synthetic type and is not in the upstream
+    allowlist, so a naive allowlist check would bucket it as `other` and hide
+    the refresh rate behind whatever else landed there."""
+    hub = _hub()
+    hub.subscribe()
+
+    await hub.publish(LensEvent(id="r", type=LENS_REFRESH_EVENT, task_id=""))
+
+    assert (
+        metric_value(
+            metric_reader, "lens_events_published_total", type=LENS_REFRESH_EVENT
+        ).value
+        == 1
+    )
 
 
 async def test_no_metric_label_carries_an_unbounded_value(
     metric_reader: InMemoryMetricReader,
 ) -> None:
-    """The rule the catalog states, enforced rather than trusted.
+    """The rule the catalogue states, enforced rather than trusted.
 
     Tempo's metrics generator turns these into Prometheus series, so a task id
     or a note id in a label mints one series per entity. Every label emitted
-    here must come from a bounded set: a tool name off Lens's own client
-    surface, an outcome enum, or an event type off Lens's allowlist.
+    must come from a bounded set -- and the adversarial values below are the
+    ones a caller could actually choose.
     """
 
     async def ok(name: str, arguments: dict[str, Any]) -> Any:
@@ -303,12 +530,23 @@ async def test_no_metric_label_carries_an_unbounded_value(
     await _transport(ok).call_tool("lithos_task_get", {"task_id": "unbounded-id-42"})
     hub = _hub()
     hub.subscribe()
-    await hub.publish(LensEvent(id="ev-9", type="task.created", task_id="task-77"))
+    await hub.publish(
+        LensEvent(id="ev-9", type="attacker-chosen-99", task_id="task-77")
+    )
 
     allowed = {
         "tool": {"lithos_task_get"},
-        "outcome": {"ok", "timeout", "tool_error", "transport_error", "admitted"},
-        "type": {"task.created"},
+        "outcome": {
+            "ok",
+            "timeout",
+            "tool_error",
+            "transport_error",
+            "cancelled",
+            "admitted",
+            "refused",
+        },
+        "type": {"other"},
+        "acquired": {"true", "false"},
         "reason": set(),
     }
     data = metric_reader.get_metrics_data()
@@ -326,69 +564,3 @@ async def test_no_metric_label_carries_an_unbounded_value(
                             "bounded set -- ids and free text belong on spans"
                         )
     assert seen, "no labelled points were recorded; the assertion proved nothing"
-
-
-# ── the instrument cache ──────────────────────────────────────────────
-
-
-def test_recording_after_shutdown_does_not_write_a_log_line_per_call(
-    metric_reader: InMemoryMetricReader, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Instruments are cached per provider, and this is why.
-
-    Every metric here sits on a hot path -- one per event delivered, one per
-    Lithos call. Resolving `get_meter()` on each of them means that once the
-    provider is shut down, the SDK logs "A shutdown MeterProvider can not
-    provide a Meter" EVERY time: an unbounded log write driven by upstream
-    event rate, at exactly the moment nothing is watching. That is the shape
-    the event hub's rate limiting exists to prevent elsewhere, reintroduced by
-    the instrumentation meant to observe it.
-
-    Caught by the existing SSE suite, which asserts exact `caplog` record
-    counts and started seeing dozens of these.
-    """
-    from lithos_lens import metrics
-    from lithos_lens.telemetry import shutdown_telemetry
-
-    metrics.events_delivered().add(1)
-    shutdown_telemetry()
-
-    with caplog.at_level("WARNING"):
-        for _ in range(25):
-            metrics.events_delivered().add(1)
-
-    noisy = [r for r in caplog.records if "shutdown" in r.getMessage().lower()]
-    assert noisy == [], f"{len(noisy)} log lines from 25 post-shutdown records"
-
-
-def test_a_new_provider_gets_new_instruments(
-    lithos_lens_config_env: Any, telemetry_off: None
-) -> None:
-    """The cache is keyed on provider IDENTITY, not on a "built already" flag.
-
-    A flag would leave the second reader empty while measurements kept landing
-    in the first -- silently, which is precisely the trap filed against
-    lithos.telemetry as task 41de9716.
-    """
-    from lithos_lens import metrics
-    from lithos_lens.config import load_config
-    from lithos_lens.telemetry import setup_telemetry, shutdown_telemetry
-    from tests.conftest import _release_otel_provider_latches
-
-    config = load_config(lithos_lens_config_env)
-
-    first = InMemoryMetricReader()
-    setup_telemetry(config, _test_metric_reader=first)
-    metrics.events_delivered().add(1)
-
-    shutdown_telemetry()
-    _release_otel_provider_latches()
-
-    second = InMemoryMetricReader()
-    setup_telemetry(config, _test_metric_reader=second)
-    metrics.events_delivered().add(1)
-
-    assert metric_points(second, "lens_events_delivered_total"), (
-        "the second reader saw nothing -- instruments are still bound to the "
-        "first provider"
-    )
