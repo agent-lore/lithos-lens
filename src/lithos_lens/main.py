@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 
@@ -10,6 +11,7 @@ import uvicorn
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError, LithosLensError
 from lithos_lens.logging import configure_logging
+from lithos_lens.telemetry import setup_telemetry, shutdown_telemetry
 
 DEFAULT_PORT = 8000
 # Every interface. Lens ships as a container and is reached across the
@@ -87,10 +89,20 @@ def main() -> None:
 
 
 def create_app_from_config():
-    """Uvicorn factory used by :func:`main`."""
+    """Uvicorn factory used by :func:`main`.
+
+    Telemetry is set up HERE rather than in :func:`main` because uvicorn runs
+    the factory in the worker: providers installed in the parent would not be
+    the ones the request path uses. ``setup_telemetry`` is idempotent, and the
+    flush is registered with :mod:`atexit` rather than the app lifespan so a
+    provider set up once per process is not torn down by whichever app instance
+    happens to exit first.
+    """
 
     config = load_config()
     configure_logging(config.logging.level)
+    setup_telemetry(config)
+    atexit.register(shutdown_telemetry)
 
     from lithos_lens.web import create_app
 

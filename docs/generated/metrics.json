@@ -3,7 +3,7 @@
     "components": {
       "Config": {
         "functions_over_10": 1,
-        "max_complexity": 25,
+        "max_complexity": 28,
         "max_function": "lithos_lens.config._apply_env_overrides"
       },
       "Entrypoint": {
@@ -53,8 +53,8 @@
       },
       "Telemetry": {
         "functions_over_10": 0,
-        "max_complexity": 2,
-        "max_function": "lithos_lens.telemetry.install_request_middleware.lens_request"
+        "max_complexity": 6,
+        "max_function": "lithos_lens.telemetry._build_metric_reader"
       },
       "Web": {
         "functions_over_10": 2,
@@ -69,7 +69,7 @@
         "qualname": "lithos_lens.frontier.load_dashboard"
       },
       {
-        "complexity": 25,
+        "complexity": 28,
         "qualname": "lithos_lens.config._apply_env_overrides"
       },
       {
@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.knowledge._gather_candidates"
       }
     ],
-    "total_functions": 394
+    "total_functions": 405
   },
   "domain": {
     "associations": 44,
@@ -122,7 +122,7 @@
       },
       "Entrypoint": {
         "fan_in": 0,
-        "fan_out": 4,
+        "fan_out": 5,
         "instability": 1.0
       },
       "Errors": {
@@ -166,9 +166,9 @@
         "instability": 0.0
       },
       "Telemetry": {
-        "fan_in": 1,
+        "fan_in": 2,
         "fan_out": 1,
-        "instability": 0.5
+        "instability": 0.33
       },
       "Web": {
         "fan_in": 1,
@@ -176,8 +176,8 @@
         "instability": 0.9
       }
     },
-    "cross_component_edges": 29,
-    "cross_component_module_edges": 62,
+    "cross_component_edges": 30,
+    "cross_component_module_edges": 63,
     "longest_component_chain": 6,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -185,6 +185,7 @@
       "Entrypoint -> Config",
       "Entrypoint -> Errors",
       "Entrypoint -> Logging",
+      "Entrypoint -> Telemetry",
       "Web -> Config",
       "Web -> Errors",
       "Web -> Knowledge",
@@ -192,7 +193,7 @@
       "Web -> Tasks",
       "Web -> Telemetry"
     ],
-    "tier_skipping_edges": 9
+    "tier_skipping_edges": 10
   },
   "mcp": {
     "tools": 0,
@@ -211,21 +212,21 @@
         "classes": 11,
         "functions": 25,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 672,
-        "lines": 997,
+        "largest_module_lines": 680,
+        "lines": 1015,
         "modules": 3,
         "public_symbols": 19,
-        "sloc": 822
+        "sloc": 831
       },
       "Entrypoint": {
         "classes": 0,
         "functions": 4,
         "largest_module": "lithos_lens.main",
-        "largest_module_lines": 97,
-        "lines": 103,
+        "largest_module_lines": 109,
+        "lines": 115,
         "modules": 2,
         "public_symbols": 4,
-        "sloc": 75
+        "sloc": 86
       },
       "Errors": {
         "classes": 4,
@@ -269,13 +270,13 @@
       },
       "Logging": {
         "classes": 1,
-        "functions": 4,
+        "functions": 5,
         "largest_module": "lithos_lens.logging",
-        "largest_module_lines": 103,
-        "lines": 103,
+        "largest_module_lines": 132,
+        "lines": 132,
         "modules": 1,
         "public_symbols": 2,
-        "sloc": 68
+        "sloc": 91
       },
       "State": {
         "classes": 2,
@@ -309,13 +310,13 @@
       },
       "Telemetry": {
         "classes": 0,
-        "functions": 2,
+        "functions": 12,
         "largest_module": "lithos_lens.telemetry",
-        "largest_module_lines": 29,
-        "lines": 29,
+        "largest_module_lines": 316,
+        "lines": 316,
         "modules": 1,
-        "public_symbols": 1,
-        "sloc": 20
+        "public_symbols": 5,
+        "sloc": 234
       },
       "Web": {
         "classes": 1,
@@ -331,13 +332,13 @@
     "max_module": "lithos_lens.knowledge",
     "max_module_lines": 781,
     "modules_over_800": [],
-    "total_lines": 11240,
+    "total_lines": 11586,
     "total_modules": 34,
-    "total_sloc": 8647
+    "total_sloc": 8904
   },
   "tests": {
-    "ratio": 1.91,
-    "src_lines": 11240,
-    "test_lines": 21513
+    "ratio": 1.89,
+    "src_lines": 11586,
+    "test_lines": 21889
   }
 }

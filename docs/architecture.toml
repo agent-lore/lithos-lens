@@ -35,7 +35,7 @@ Tasks        = "Tasks-dashboard data loading and normalization (task/claim/findi
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain."
 Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
-Telemetry    = "Optional OpenTelemetry hooks and request middleware."
+Telemetry    = "OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instrumentation. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
 Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
@@ -77,7 +77,14 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # dodged this counter at the cost of `assert ... is not None` in eleven
 # unrelated tests, and left the ceiling enforceable only by a caller that
 # remembers to check.
-cross_component_edges  = 29   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); direction: down
+# Raised 29 -> 30 for Entrypoint -> Telemetry. OTEL provider setup is
+# process lifecycle, so main.py owns it: uvicorn runs create_app_from_config in
+# the WORKER, and providers installed anywhere else would not be the ones the
+# request path resolves. The alternative was setting telemetry up inside
+# create_app, which would install global providers on every app the test suite
+# builds and make the enabled path a side effect of constructing a router.
+# Telemetry is Foundation, so the edge points down like every other one here.
+cross_component_edges  = 30   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the

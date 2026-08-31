@@ -167,7 +167,11 @@ def test_config_loads_common_core_defaults(lithos_lens_config_env: Path) -> None
     assert config.tasks.project_tag_key == "project"
     assert config.events.enabled is True
     assert config.llm.enabled is False
-    assert config.telemetry.enabled is False
+    # ON by default: the OTEL packages are required, so there is no install to
+    # be missing. `enabled` governs export, and with no endpoint configured
+    # nothing leaves the process (see lithos_lens.telemetry).
+    assert config.telemetry.enabled is True
+    assert config.telemetry.endpoint == ""
     assert config.ui.default_view == "tasks"
 
 

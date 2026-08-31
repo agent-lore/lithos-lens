@@ -3,7 +3,7 @@
 
 # Telemetry
 
-Optional OpenTelemetry hooks and request middleware.
+OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instrumentation. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists.
 
 **Tier:** Foundation
 
@@ -11,16 +11,20 @@ Optional OpenTelemetry hooks and request middleware.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.telemetry` | XS | 0 | 1 |
+| `lithos_lens.telemetry` | M | 0 | 5 |
 
 ## Public API
 
 ### `lithos_lens.telemetry`
-- def `install_request_middleware` — Install request instrumentation middleware.
+- def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.
+- def `shutdown_telemetry` — Flush and tear down every provider. Safe to call when never set up.
+- def `get_tracer` — A tracer. Before :func:`setup_telemetry` this is the API's no-op.
+- def `get_meter` — A meter. Before :func:`setup_telemetry` this is the API's no-op.
+- def `instrument_app` — Attach HTTP server and client instrumentation to ``app``.
 
 ## Dependencies
 
 - Depends on: [Config](Config.md)
-- Used by: [Web](Web.md)
+- Used by: [Entrypoint](Entrypoint.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

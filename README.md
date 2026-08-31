@@ -167,7 +167,8 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_LLM_BASE_URL` | `lithos-lens.llm.base_url` | Optional API base URL. |
 | `LITHOS_LENS_LLM_EXTRA_HEADERS_JSON` | `lithos-lens.llm.extra_headers_json` | Optional JSON object string. |
 | `LITHOS_LENS_LLM_MAX_TOKENS` | `lithos-lens.llm.max_tokens` | Must be a positive integer. |
-| `LITHOS_LENS_OTEL_ENABLED` | `lithos-lens.telemetry.enabled` | Boolean. |
+| `LITHOS_LENS_OTEL_ENABLED` | `lithos-lens.telemetry.enabled` | Boolean. On by default; set false to install no providers at all. |
+| `LITHOS_LENS_OTEL_ENDPOINT` | `lithos-lens.telemetry.endpoint` | Base OTLP/HTTP collector URL, e.g. `http://localhost:4318`. The standard `OTEL_EXPORTER_OTLP_ENDPOINT` is used when this and the config key are both unset. |
 
 ### Config file discovery order
 

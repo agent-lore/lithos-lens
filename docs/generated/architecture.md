@@ -40,6 +40,7 @@ graph TD
   Entrypoint --> Config
   Entrypoint --> Errors
   Entrypoint --> Logging
+  Entrypoint --> Telemetry
   Entrypoint --> Web
   Events --> Config
   Events --> Errors
@@ -69,21 +70,22 @@ graph TD
   linkStyle 2 stroke:#999,stroke-dasharray:4
   linkStyle 3 stroke:#999,stroke-dasharray:4
   linkStyle 4 stroke:#999,stroke-dasharray:4
-  linkStyle 6 stroke:#bbb
+  linkStyle 5 stroke:#999,stroke-dasharray:4
   linkStyle 7 stroke:#bbb
   linkStyle 8 stroke:#bbb
   linkStyle 9 stroke:#bbb
-  linkStyle 11 stroke:#bbb
+  linkStyle 10 stroke:#bbb
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
   linkStyle 14 stroke:#bbb
   linkStyle 15 stroke:#bbb
-  linkStyle 18 stroke:#bbb
+  linkStyle 16 stroke:#bbb
   linkStyle 19 stroke:#bbb
-  linkStyle 20 stroke:#999,stroke-dasharray:4
+  linkStyle 20 stroke:#bbb
   linkStyle 21 stroke:#999,stroke-dasharray:4
-  linkStyle 23 stroke:#999,stroke-dasharray:4
-  linkStyle 26 stroke:#999,stroke-dasharray:4
+  linkStyle 22 stroke:#999,stroke-dasharray:4
+  linkStyle 24 stroke:#999,stroke-dasharray:4
   linkStyle 27 stroke:#999,stroke-dasharray:4
   linkStyle 28 stroke:#999,stroke-dasharray:4
+  linkStyle 29 stroke:#999,stroke-dasharray:4
 ```

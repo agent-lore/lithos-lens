@@ -162,7 +162,17 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class TelemetryConfig:
-    enabled: bool = False
+    # ON by default: the OTEL packages are required dependencies, so there is
+    # no install to be missing and nothing to opt into. `enabled` governs
+    # EXPORT, not whether the instrumentation exists -- with no endpoint and no
+    # console fallback, spans are created and dropped, which still puts
+    # trace_id on every log line. Set false only to switch the providers off
+    # entirely.
+    enabled: bool = True
+    # Base OTLP/HTTP collector URL, e.g. "http://localhost:4318". The per-signal
+    # /v1/traces, /v1/metrics and /v1/logs paths are derived from it. Empty
+    # falls back to the standard OTEL_EXPORTER_OTLP_ENDPOINT env var.
+    endpoint: str = ""
     console_fallback: bool = False
     service_name: str = "lithos-lens"
     export_interval_ms: int = 30000

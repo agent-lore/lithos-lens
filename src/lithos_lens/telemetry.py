@@ -1,29 +1,316 @@
-"""Telemetry hooks.
+"""OpenTelemetry setup for Lithos Lens.
 
-Milestone 0 keeps OpenTelemetry optional. The request middleware records the
-place where spans are created once OTEL packages are enabled; with telemetry
-disabled it is a low-cost pass-through.
+Unlike the sibling services (``lithos``, ``influx``), the OTEL packages here are
+**required** dependencies, not an optional ``otel`` extra. There is therefore no
+``_HAS_OTEL`` import guard and there are no no-op stub classes: those exist in
+the siblings only to survive a missing install, and half of what they buy is a
+code path CI never runs. ``make check`` exercises the real SDK.
+
+What ``config.telemetry.enabled`` still governs is **export**, never whether the
+instrumentation is compiled in:
+
+* enabled + an endpoint       -> OTLP/HTTP to the collector
+* enabled + ``console_fallback`` -> spans and metrics to stdout
+* enabled + neither           -> providers installed, nothing exported. Spans
+  are still created, so ``trace_id`` reaches the log (see
+  :class:`lithos_lens.logging.JsonFormatter`) and requests stay correlatable
+  on a machine with no collector running.
+* disabled                    -> the one escape hatch; no providers at all.
+
+The endpoint is the base collector URL (e.g. ``http://localhost:4318``); the
+per-signal ``/v1/traces``, ``/v1/metrics`` and ``/v1/logs`` paths are derived,
+and the standard ``OTEL_EXPORTER_OTLP_*_ENDPOINT`` variables override.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any
+import logging
+import os
+from typing import TYPE_CHECKING, Any
 
-from starlette.requests import Request
-from starlette.responses import Response
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from lithos_lens.config import TelemetryConfig
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
-RequestHandler = Callable[[Request], Awaitable[Response]]
+    from lithos_lens.config import LithosLensConfig
+
+logger = logging.getLogger(__name__)
+
+# Instrumentation scope name for every tracer and meter Lens creates. One scope
+# keeps the emitted `otel_scope_name` label stable across modules.
+INSTRUMENTATION_SCOPE = "lithos_lens"
+
+# Request paths kept OUT of the trace, as a comma-joined regex list for
+# `opentelemetry-instrumentation-fastapi`.
+#
+# These coincide with web.py's `_UNMETERED_EXACT` / `_UNMETERED_PREFIXES` today,
+# but the reasons differ and the lists are deliberately not derived from each
+# other:
+#
+# * `/health` is polled by the container healthcheck AND by every page render
+#   (health.refresh_interval_s, default 30s). Tracing it is constant volume
+#   carrying no information.
+# * `/tasks/events` is an SSE stream that lives as long as the browser tab. Its
+#   span would stay open for hours and sit in every latency histogram, making
+#   p95 meaningless. The stream is measured with its own counters and a
+#   subscriber gauge instead.
+# * `/static/` is served from disk with no Lithos call.
+TRACE_EXCLUDED_URLS = "/health,/tasks/events,/static/"
+
+_initialized = False
+_tracer_provider: TracerProvider | None = None
+_meter_provider: MeterProvider | None = None
+_logger_provider: Any = None
+_log_handler: logging.Handler | None = None
 
 
-def install_request_middleware(app: Any, config: TelemetryConfig) -> None:
-    """Install request instrumentation middleware."""
+def setup_telemetry(
+    config: LithosLensConfig,
+    *,
+    _test_span_exporter: Any = None,
+    _test_metric_reader: Any = None,
+) -> None:
+    """Install the tracer, meter and (when exporting) log providers.
 
-    @app.middleware("http")
-    async def lens_request(request: Request, call_next: RequestHandler) -> Response:
-        response = await call_next(request)
-        if config.enabled:
-            response.headers["x-lithos-lens-telemetry"] = "enabled"
-        return response
+    Idempotent: a second call while initialized is a no-op, so the uvicorn
+    factory calling this per worker is safe.
+
+    ``_test_span_exporter`` / ``_test_metric_reader`` are the test seams (an
+    ``InMemorySpanExporter`` / ``InMemoryMetricReader``), letting the suite
+    assert on real spans and real instruments with no collector running.
+    """
+    global _initialized, _tracer_provider, _meter_provider, _logger_provider
+    global _log_handler
+
+    if _initialized:
+        return
+    if not config.telemetry.enabled:
+        logger.debug("telemetry disabled in config; no providers installed")
+        return
+
+    resource = Resource.create(
+        {
+            "service.name": config.telemetry.service_name,
+            "service.version": _service_version(),
+            "deployment.environment": config.environment,
+        }
+    )
+    endpoint = _resolve_endpoint(config)
+
+    _tracer_provider = TracerProvider(resource=resource)
+    span_processor = _build_span_processor(
+        endpoint, config, test_exporter=_test_span_exporter
+    )
+    if span_processor is not None:
+        _tracer_provider.add_span_processor(span_processor)
+    trace.set_tracer_provider(_tracer_provider)
+
+    metric_reader = _build_metric_reader(
+        endpoint, config, test_reader=_test_metric_reader
+    )
+    if metric_reader is not None:
+        _meter_provider = MeterProvider(
+            resource=resource, metric_readers=[metric_reader]
+        )
+        metrics.set_meter_provider(_meter_provider)
+
+    _logger_provider, _log_handler = _install_log_export(endpoint, resource)
+
+    _initialized = True
+    logger.info(
+        "telemetry initialized",
+        extra={
+            "lens_event": "lens.telemetry.initialized",
+            "otel_endpoint": endpoint or "",
+            "otel_environment": config.environment,
+            "otel_exporting": span_processor is not None,
+        },
+    )
+
+
+def shutdown_telemetry() -> None:
+    """Flush and tear down every provider. Safe to call when never set up.
+
+    Restores this module to its pre-setup state in full -- providers flushed
+    and dropped, the OTLP log handler detached from the root logger, and
+    ``_initialized`` cleared -- so that a later :func:`setup_telemetry` starts
+    clean. That completeness is what lets the test suite reset through the
+    PUBLIC surface instead of reaching for module privates; the only thing it
+    deliberately does not touch is OTEL's own global provider latches, which
+    belong to the ``opentelemetry`` package rather than to Lens.
+    """
+    global _initialized, _tracer_provider, _meter_provider, _logger_provider
+    global _log_handler
+
+    for provider in (_tracer_provider, _meter_provider, _logger_provider):
+        if provider is None:
+            continue
+        try:
+            provider.shutdown()
+        except Exception:  # pragma: no cover - shutdown must not mask an exit
+            logger.warning("telemetry provider shutdown failed", exc_info=True)
+    if _log_handler is not None:
+        logging.getLogger().removeHandler(_log_handler)
+    _tracer_provider = None
+    _meter_provider = None
+    _logger_provider = None
+    _log_handler = None
+    _initialized = False
+
+
+def get_tracer(name: str = INSTRUMENTATION_SCOPE) -> trace.Tracer:
+    """A tracer. Before :func:`setup_telemetry` this is the API's no-op."""
+    return trace.get_tracer(name)
+
+
+def get_meter(name: str = INSTRUMENTATION_SCOPE) -> metrics.Meter:
+    """A meter. Before :func:`setup_telemetry` this is the API's no-op."""
+    return metrics.get_meter(name)
+
+
+def instrument_app(app: FastAPI) -> None:
+    """Attach HTTP server and client instrumentation to ``app``.
+
+    Auto-instrumentation rather than a hand-rolled middleware, for one reason
+    that matters at this scale: **route-template cardinality**. Lens routes on
+    ids (``/note/{knowledge_id}``, ``/tasks/{task_id}``), and Tempo's
+    metrics-generator turns span names into Prometheus series. Naming a span
+    after the concrete path would mint one series per note id. The
+    instrumentation names spans and sets ``http.route`` from the route
+    TEMPLATE, which is the bounded form.
+
+    Also gives Lens the semantic-convention attributes
+    (``http.request.method``, ``http.response.status_code``) that
+    ``service-health.json`` and the service graph key on, so Lens appears there
+    without a dashboard of its own.
+    """
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app, excluded_urls=TRACE_EXCLUDED_URLS)
+    # httpx instrumentation is process-wide, not per-app, and re-instrumenting
+    # warns and no-ops. The suite builds many apps in one process, so ask
+    # first rather than emit a warning per app.
+    httpx_instrumentor = HTTPXClientInstrumentor()
+    if not httpx_instrumentor.is_instrumented_by_opentelemetry:
+        httpx_instrumentor.instrument()
+
+
+def _resolve_endpoint(config: LithosLensConfig) -> str:
+    """The base OTLP collector URL, config first then the standard env var."""
+    configured = config.telemetry.endpoint.strip()
+    if configured:
+        return configured
+    return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+
+
+def _signal_endpoint(base: str, signal: str) -> str:
+    """Build the OTLP/HTTP endpoint for ``signal`` from a base collector URL."""
+    base = base.rstrip("/")
+    if base.endswith(f"/v1/{signal}"):
+        return base
+    return f"{base}/v1/{signal}"
+
+
+def _signal_override(signal: str) -> str:
+    """A per-signal endpoint from the standard env var, if set."""
+    return os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "").strip()
+
+
+def _build_span_processor(
+    endpoint: str, config: LithosLensConfig, *, test_exporter: Any
+) -> Any:
+    """The span processor to install, or ``None`` to create-and-drop spans."""
+    if test_exporter is not None:
+        return SimpleSpanProcessor(test_exporter)
+
+    traces_endpoint = _signal_override("traces") or (
+        _signal_endpoint(endpoint, "traces") if endpoint else ""
+    )
+    if traces_endpoint:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
+        return BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_endpoint))
+    if config.telemetry.console_fallback:
+        from opentelemetry.sdk.trace.export import ConsoleSpanExporter
+
+        return SimpleSpanProcessor(ConsoleSpanExporter())
+    # No exporter: spans are still created and still carry ids, which is what
+    # puts trace_id on every log line. Nothing leaves the process.
+    return None
+
+
+def _build_metric_reader(
+    endpoint: str, config: LithosLensConfig, *, test_reader: Any
+) -> Any:
+    """The metric reader to install, or ``None`` for no metrics pipeline."""
+    if test_reader is not None:
+        return test_reader
+
+    metrics_endpoint = _signal_override("metrics") or (
+        _signal_endpoint(endpoint, "metrics") if endpoint else ""
+    )
+    if metrics_endpoint:
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+
+        return PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=metrics_endpoint),
+            export_interval_millis=config.telemetry.export_interval_ms,
+        )
+    if config.telemetry.console_fallback:
+        from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
+
+        return PeriodicExportingMetricReader(
+            ConsoleMetricExporter(),
+            export_interval_millis=config.telemetry.export_interval_ms,
+        )
+    return None
+
+
+def _install_log_export(
+    endpoint: str, resource: Resource
+) -> tuple[Any, logging.Handler | None]:
+    """Export Python logs over OTLP so they reach Loki with the same resource.
+
+    Additive: the JSON handler on stdout stays, so ``docker logs`` is unchanged
+    whether or not a collector is reachable.
+    """
+    logs_endpoint = _signal_override("logs") or (
+        _signal_endpoint(endpoint, "logs") if endpoint else ""
+    )
+    if not logs_endpoint:
+        return None, None
+
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+    provider = LoggerProvider(resource=resource)
+    provider.add_log_record_processor(
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint=logs_endpoint))
+    )
+    set_logger_provider(provider)
+    handler = LoggingHandler(level=logging.NOTSET, logger_provider=provider)
+    logging.getLogger().addHandler(handler)
+    return provider, handler
+
+
+def _service_version() -> str:
+    """Lens's version from package metadata, never hardcoded."""
+    try:
+        from importlib.metadata import version
+
+        return version("lithos-lens")
+    except Exception:
+        return "unknown"

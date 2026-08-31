@@ -139,6 +139,7 @@ The current configuration model includes:
 - `llm.extra_headers_json`
 - `llm.max_tokens`
 - `telemetry.enabled`
+- `telemetry.endpoint`
 - `telemetry.console_fallback`
 - `telemetry.service_name`
 - `telemetry.export_interval_ms`
@@ -415,13 +416,34 @@ even if live updates are unavailable.
 
 Lens currently includes:
 
-- structured JSON logging at a configurable level
+- structured JSON logging at a configurable level, every record stamped with
+  the `trace_id` / `span_id` of the request that produced it when one is active
 - task filter/debug logging around dashboard requests
-- an optional OpenTelemetry request middleware
+- OpenTelemetry traces, metrics and log export to an OTLP collector
 
-Logging remains the main implemented observability path. The OTel middleware
-covers requests only; the feature-level `lens.knowledge.*` instrumentation the
-K1 PRD specifies is **not** wired (see §10).
+OpenTelemetry is a **required** dependency, not an optional extra, and is on by
+default. `telemetry.enabled` governs export rather than whether the
+instrumentation exists: with no endpoint configured, providers are still
+installed and spans still carry ids, which is what keeps logs correlatable on a
+machine with no collector running. Setting it false is the one escape hatch.
+
+HTTP server spans come from `opentelemetry-instrumentation-fastapi`, which
+names spans and sets `http.route` from the route TEMPLATE — `/note/{knowledge_id}`,
+not the concrete path. That is a hard requirement rather than a convenience:
+Tempo's metrics generator turns span names into Prometheus series, so a name
+carrying a note id would mint one series per note. The same rule governs
+metric labels — bounded sets only (route template, tool name, outcome enum);
+unbounded values belong on spans, which are stored per-trace and never become
+series.
+
+Three request paths are deliberately untraced: `/health` (polled by the
+container healthcheck and by every page render, so constant volume carrying no
+information), `/static/` (served from disk, no Lithos call), and `/tasks/events`
+(an SSE stream that lives as long as the browser tab — its span would stay open
+for hours and sit in every latency histogram, making p95 meaningless).
+
+The feature-level `lens.knowledge.*` instrumentation the K1 PRD specifies is
+**not** yet wired (see §10), nor are the Lithos-call and event-hub metrics.
 
 Warnings driven by conditions Lens does not control — a stalled browser queue,
 a malformed upstream event, a refused subscriber — are rate-limited in time,

@@ -28,3 +28,7 @@ services:
       - LITHOS_LENS_CONFIG=/data/lithos-lens.toml
       - LITHOS_LENS_DATA_DIR=/data
       - LITHOS_LENS_ENVIRONMENT=${LITHOS_LENS_ENVIRONMENT:-dev}
+      # OTLP collector (lithos-observability). host.docker.internal is already
+      # mapped via extra_hosts above, the same way the Lithos URL reaches the
+      # host. Unset leaves telemetry installed but exporting nothing.
+      - LITHOS_LENS_OTEL_ENDPOINT=${LITHOS_LENS_OTEL_ENDPOINT:-}

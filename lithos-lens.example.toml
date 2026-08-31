@@ -55,7 +55,17 @@ extra_headers_json = ""
 max_tokens = 2048
 
 [lithos-lens.telemetry]
-enabled = false
+# The OpenTelemetry packages are REQUIRED dependencies, so `enabled` is on by
+# default and governs EXPORT, not whether the instrumentation exists. With no
+# endpoint and no console fallback, spans are created and dropped -- which
+# still puts trace_id on every log line. Set false to install no providers.
+enabled = true
+# Base OTLP/HTTP collector URL; /v1/traces, /v1/metrics and /v1/logs are
+# derived from it. Empty falls back to the standard OTEL_EXPORTER_OTLP_ENDPOINT.
+# The shared stack lives in lithos-observability (docker compose up -d):
+#   host run:   http://localhost:4318
+#   container:  http://host.docker.internal:4318
+endpoint = ""
 console_fallback = false
 service_name = "lithos-lens"
 export_interval_ms = 30000

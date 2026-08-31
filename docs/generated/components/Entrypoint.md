@@ -12,7 +12,7 @@ Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`).
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.__main__` | XS | 0 | 0 |
-| `lithos_lens.main` | XS | 0 | 4 |
+| `lithos_lens.main` | S | 0 | 4 |
 
 ## Public API
 
@@ -24,7 +24,7 @@ Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`).
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Errors](Errors.md), [Logging](Logging.md), [Web](Web.md)
+- Depends on: [Config](Config.md), [Errors](Errors.md), [Logging](Logging.md), [Telemetry](Telemetry.md), [Web](Web.md)
 - Used by: —
 
 [← all generated docs](../README.md)
