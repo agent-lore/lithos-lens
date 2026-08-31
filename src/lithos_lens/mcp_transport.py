@@ -20,11 +20,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any
 
+from lithos_lens import metrics
 from lithos_lens.config import LithosConfig
+from lithos_lens.telemetry import get_tracer
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -158,19 +161,54 @@ class MCPTransport:
         paths and every SURFACE. Queue time is inside the deadline on purpose:
         a queued call has not answered yet. The deadline sheds the CALLER's
         wait, not the work (see the decoder's note).
+
+        Instrumented here for the same reason the bounds live here: this is the
+        one funnel every client method passes through, so one span and one pair
+        of instruments cover the whole ~20-method surface and keep covering it
+        as methods are added.
         """
-        try:
-            return await asyncio.wait_for(
-                self._invoke(name, arguments), timeout=self._call_timeout_s
-            )
-        except TimeoutError as exc:
-            raise LithosToolError(
-                f"lithos tool '{name}' did not answer within {self._call_timeout_s}s",
-                code="timeout",
-            ) from exc
+        started = time.monotonic()
+        outcome = "ok"
+        with get_tracer().start_as_current_span("lens.lithos.call_tool") as span:
+            span.set_attribute("lithos.tool", name)
+            try:
+                return await asyncio.wait_for(
+                    self._invoke(name, arguments), timeout=self._call_timeout_s
+                )
+            except TimeoutError as exc:
+                outcome = "timeout"
+                raise LithosToolError(
+                    f"lithos tool '{name}' did not answer within "
+                    f"{self._call_timeout_s}s",
+                    code="timeout",
+                ) from exc
+            except LithosToolError as exc:
+                # Lithos answered, with a coded refusal. Distinct from the
+                # transport failing: the error code is the diagnosis, and it is
+                # bounded (a coded envelope), so it is safe on a span.
+                outcome = "tool_error"
+                span.set_attribute("error.code", exc.code or "")
+                raise
+            except Exception:
+                outcome = "transport_error"
+                raise
+            finally:
+                span.set_attribute("lithos.outcome", outcome)
+                labels = {"tool": name, "outcome": outcome}
+                metrics.lithos_tool_calls().add(1, labels)
+                metrics.lithos_tool_duration().record(
+                    time.monotonic() - started, {"tool": name}
+                )
 
     async def _invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        queued_at = time.monotonic()
         async with self._call_gate:
+            # Measured on the INSIDE of the acquire, so it is the wait that
+            # actually happened. Without this, a saturated gate and a slow
+            # Lithos are indistinguishable from outside: both present only as
+            # slow pages, and the deadline that would eventually fire cannot
+            # say which of the two it was shedding.
+            metrics.lithos_call_queue_wait().record(time.monotonic() - queued_at)
             if self._worker_task is None:
                 # startup() was never called; fall back to a one-shot session
                 # so we don't silently break callers that bypass the lifecycle.
@@ -233,6 +271,7 @@ class MCPTransport:
                     await session.initialize()
                     self._session = session
                     self._session_ready.set()
+                    metrics.lithos_session_up().set(1)
                     backoff = RECONNECT_BACKOFF_INITIAL_S
                     await self._stop_event.wait()
                 return
@@ -240,9 +279,11 @@ class MCPTransport:
                 raise
             except Exception:
                 logger.warning("lithos MCP session lost; reconnecting", exc_info=True)
+                metrics.lithos_reconnects().add(1)
             finally:
                 self._session = None
                 self._session_ready.clear()
+                metrics.lithos_session_up().set(0)
 
             if self._stop_event.is_set():
                 return

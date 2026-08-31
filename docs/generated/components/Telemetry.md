@@ -3,7 +3,7 @@
 
 # Telemetry
 
-OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instrumentation. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists.
+OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists.
 
 **Tier:** Foundation
 
@@ -11,9 +11,22 @@ OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instru
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.metrics` | S | 0 | 10 |
 | `lithos_lens.telemetry` | M | 0 | 5 |
 
 ## Public API
+
+### `lithos_lens.metrics`
+- def `lithos_tool_calls` — Counter of Lithos MCP tool calls, by tool and terminal outcome.
+- def `lithos_tool_duration` — Histogram of Lithos tool-call latency in seconds, including queue time.
+- def `lithos_call_queue_wait` — Histogram of seconds spent blocked on the process-wide call gate.
+- def `lithos_session_up` — Gauge: 1 while the MCP session is established, 0 while it is not.
+- def `lithos_reconnects` — Counter of MCP session losses that began a reconnect.
+- def `events_published` — Counter of events accepted from upstream and fanned out.
+- def `events_delivered` — Counter of per-subscriber event deliveries.
+- def `events_dropped` — Counter of events Lens refused or discarded, by reason.
+- def `event_subscribers` — Gauge: SSE subscribers currently attached to the hub.
+- def `render_admissions` — Counter of metered requests by admission outcome.
 
 ### `lithos_lens.telemetry`
 - def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.
@@ -25,6 +38,6 @@ OpenTelemetry setup: providers, exporter selection, and the FastAPI/httpx instru
 ## Dependencies
 
 - Depends on: [Config](Config.md), [Logging](Logging.md)
-- Used by: [Entrypoint](Entrypoint.md), [Web](Web.md)
+- Used by: [Entrypoint](Entrypoint.md), [Events](Events.md), [LithosClient](LithosClient.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

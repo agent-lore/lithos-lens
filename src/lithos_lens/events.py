@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from lithos_lens import metrics
 from lithos_lens.config import EventsConfig, LithosConfig
 from lithos_lens.errors import EventSubscriberLimit, UnsupportedEventEncoding
 
@@ -286,17 +287,31 @@ class EventHub:
         """
         if len(self._subscribers) >= MAX_EVENT_SUBSCRIBERS:
             REFUSED_SUBSCRIBERS.record(limit=str(MAX_EVENT_SUBSCRIBERS))
+            metrics.events_dropped().add(1, {"reason": "subscriber_limit"})
             raise EventSubscriberLimit(
                 f"event subscriber limit reached ({MAX_EVENT_SUBSCRIBERS})"
             )
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
         self._subscribers.add(queue)
+        self._record_subscriber_count()
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
         self._subscribers.discard(queue)
+        self._record_subscriber_count()
+
+    def _record_subscriber_count(self) -> None:
+        """Publish the CURRENT subscriber count, not a delta.
+
+        Set from the authoritative length at both transitions, so the gauge
+        cannot drift out of step with reality the way an incremented counter
+        would after a missed unsubscribe — and a missed unsubscribe is exactly
+        the condition an operator would be reading this to diagnose.
+        """
+        metrics.event_subscribers().set(len(self._subscribers))
 
     async def publish(self, event: LensEvent) -> None:
+        metrics.events_published().add(1, {"type": event.type})
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
@@ -304,7 +319,16 @@ class EventHub:
                 # Rate-limited: a subscriber that stops draining turns every
                 # upstream event into a record, at an upstream-chosen rate
                 # times a client-chosen number of stalled tabs.
+                #
+                # The counter alongside is not redundant. Rate limiting is
+                # right for the log and it costs the RATE: `occurrences` is a
+                # running total, not something to graph or alert on. A counter
+                # is cheap per occurrence, so the log keeps the readable detail
+                # and this carries how often it is happening.
                 UNDELIVERED_EVENTS.record(event_type=event.type, event_id=event.id)
+                metrics.events_dropped().add(1, {"reason": "subscriber_queue_full"})
+            else:
+                metrics.events_delivered().add(1)
 
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
@@ -441,6 +465,7 @@ async def _stream_lithos_events(
             if line == "":
                 if poisoned:
                     OVERSIZED_FRAMES.record()
+                    metrics.events_dropped().add(1, {"reason": "oversized_frame"})
                 elif frame:
                     event = parse_lithos_sse_frame(frame)
                     if event is not None:
@@ -483,6 +508,7 @@ def _require_identity_encoding(response: httpx.Response) -> None:
     if not encoding or encoding == IDENTITY_ENCODING:
         return
     REFUSED_ENCODINGS.record(content_encoding=encoding)
+    metrics.events_dropped().add(1, {"reason": "content_encoding_refused"})
     raise UnsupportedEventEncoding(
         f"lithos event stream is {encoding}-encoded; Lens requests identity "
         "so that one socket read stays one bounded chunk"
@@ -609,6 +635,7 @@ def normalize_lithos_event(
     task_id = "" if system_scoped else str(payload.get("task_id") or "")
     if not system_scoped and not task_id:
         DROPPED_EVENTS.record(event_type=event_type, event_id=event_id)
+        metrics.events_dropped().add(1, {"reason": "no_task_id"})
         return None
     # The synthesized fallback is a dedupe key made of payload data (a
     # caller-chosen agent id, say) — never a replay position, and never trusted
