@@ -1323,12 +1323,32 @@ Both log sinks are size-bounded. `MAX_LOGGED_VALUE_CHARS` is applied centrally i
 | `lens.tasks.project_convention_conflict` | Metadata-vs-tag disagreement warning (§5B.1) |
 | `lens.writes.<action>` | One span per write attempt (`complete`, `reopen`, `cancel`, `create`, `edge_upsert`); attributes: operator, result code |
 | `lens.events.connect` | SSE connection lifecycle |
-| `lens.knowledge.note` / `.resolve` / `.search` / `.related` | Note page render / wiki-link resolution / search / related panel |
+| `lens.knowledge.related` | Related-panel load inside a note render; attributes: fan-out, section state |
+| ~~`lens.knowledge.note` / `.resolve` / `.search`~~ | **Superseded.** These three are recorded as ATTRIBUTES on the request's own server span (`lens.outcome`, `lens.mode`, `lens.result_count`, `lens.has_tag`, `lens.candidate_count`) rather than as named spans — see the note below |
 | `lens.graph.knowledge` / `lens.graph.centrality` | Knowledge graph assembly / centrality overlay |
 | `lens.retrieve` | Cognitive search call |
 | `lens.llm.*` | LLM calls (curation, synthesis) |
 | `lens.feedback.write` | Feedback write |
 | `lens.archive.serve` | Archive file serve (optional mount) |
+
+> **Named spans vs. span attributes.** This table was written before the
+> instrumentation existed, and three of its knowledge entries were superseded by
+> what shipping it revealed. `/note/{id}`, `/knowledge` and `/knowledge/resolve`
+> each do ONE unit of work, so a span named after the handler nests ~1:1 with
+> the FastAPI server span while Tempo's metrics generator mints a Prometheus
+> series per span name — paying storage and cardinality for no added
+> resolution. (The same duplication was removed in #71 for the ASGI
+> `http send` children.) Their information is recorded as attributes on the
+> request's own span, where a trace reader is already looking.
+>
+> `lens.knowledge.related` is kept as a real span, because it is the case the
+> rule is FOR: a phase within a handler, with its own backend calls and its own
+> failure mode, that does not nest 1:1 with the request. "Which half of the
+> note page was slow" is a question the server span alone cannot answer.
+>
+> The remaining `lens.tasks.*` and `lens.writes.*` entries are unbuilt and
+> should be read as intent, not contract; apply the same test when they are
+> built — a span earns its name by being separable from the request.
 
 ### Logging
 

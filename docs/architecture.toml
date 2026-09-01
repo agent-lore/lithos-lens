@@ -40,7 +40,7 @@ Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters"]
+Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]

@@ -203,6 +203,20 @@ K1 adds it, and the chip degrades to hidden when the method is unavailable
 `lens.knowledge.search` (mode, result count), `lens.knowledge.resolve`
 (outcome: uuid | path | disambiguated | unresolved).
 
+**SHIPPED (task `cdce170a`), with one deviation from the wording above.** All
+three points exist and carry the named information, but as attributes on the
+request's own server span rather than as three named spans: each of these
+handlers does one unit of work, so a span named after it would nest ~1:1 with
+the server span while Tempo's metrics generator mints a Prometheus series per
+span name. `lens.knowledge.related` IS a named span, because the panel is a
+phase within the note render rather than the render itself. Each point also has
+a counter (`lens_knowledge_*_total`). See §8 of
+[`SPECIFICATION.md`](../SPECIFICATION.md).
+
+Delivering `resolve`'s outcome needed `ResolveOutcome.via`: `kind` answers
+`redirect` for the uuid, path and single-title arms alike, so the distinction
+this section asks for did not previously survive the resolver.
+
 ## Testing Decisions
 
 - **Wiki-link tokenizer (pure, table-driven)**: `[[target]]`,

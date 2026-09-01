@@ -80,6 +80,7 @@ classDiagram
   class ResolveOutcome {
     +kind str
     +via str
+    +candidate_count int
     +target str
     +target_id str
     +search_query str

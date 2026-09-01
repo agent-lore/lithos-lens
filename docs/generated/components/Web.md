@@ -11,10 +11,14 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 12 |
-| `lithos_lens.web` | L | 0 | 1 |
+| `lithos_lens.web` | M | 0 | 1 |
 
 ## Public API
+
+### `lithos_lens.knowledge_routes`
+- def `register_knowledge_routes` — Attach the knowledge landing, wiki-link resolver and note routes.
 
 ### `lithos_lens.request_filters`
 - def `filter_query_oversized` — True when this request's filters exceed ``MAX_FILTER_QUERY_BYTES``.

@@ -20,9 +20,14 @@ from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.lithos_client import LithosToolError
-from lithos_lens.tasks import NoteRecord
+from lithos_lens.tasks import NoteRecord, NoteSummary
 from lithos_lens.web import create_app
-from tests.conftest import metric_value
+from tests.conftest import (
+    metric_points,
+    metric_snapshot,
+    metric_value,
+    snapshot_value,
+)
 
 DEMO_NOTE = "note-influx-plan"
 DEMO_UUID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
@@ -59,6 +64,38 @@ def _attr(span: ReadableSpan, key: str) -> Any:
     return (span.attributes or {})[key]
 
 
+def _expected_result_count(config_path: Path, path: str) -> int:
+    """What the branch SHOULD report, computed independently of the route.
+
+    Asking the fake directly rather than reading the number back off the span:
+    a test that compares the instrumentation against itself would pass against
+    a hard-coded zero, which is exactly the weakness being closed here.
+    """
+    import asyncio
+    from urllib.parse import parse_qs, urlparse
+
+    config = load_config(config_path)
+    params = parse_qs(urlparse(path).query)
+    query = params.get("q", [""])[0]
+    tag = params.get("tag", [""])[0]
+    fake = FakeLithosClient()
+    if query:
+        found = asyncio.run(
+            fake.search_notes(
+                query,
+                tags=[tag] if tag else None,
+                limit=config.knowledge.search_limit,
+            )
+        )
+    else:
+        found = asyncio.run(
+            fake.recent_notes(
+                tags=[tag] if tag else None, limit=config.knowledge.recent_limit
+            )
+        )
+    return len(found)
+
+
 # ── lens.knowledge.note ───────────────────────────────────────────────
 
 
@@ -79,20 +116,29 @@ def test_a_rendered_note_reports_its_related_panel_cost(
 
     span = _route_span(spans, "/note/{knowledge_id}")
     assert _attr(span, "lens.outcome") == "rendered"
-    assert _attr(span, "lens.related.duration_ms") >= 0
+    assert _attr(span, "lens.related.duration_ms") > 0
     assert _attr(span, "lens.related.state") == "ok"
-    assert _attr(span, "lens.related.fanout") >= 0
 
+    snapshot = metric_snapshot(metric_reader)
     assert (
-        metric_value(
-            metric_reader, "lens_knowledge_note_renders_total", outcome="rendered"
+        snapshot_value(
+            snapshot, "lens_knowledge_note_renders_total", outcome="rendered"
         ).value
         == 1
     )
+    # Both histograms take a sample from a loaded panel. Asserting the COUNT,
+    # not just presence: the companion test proves an unloaded panel adds none,
+    # and together they pin that the sample follows the work.
+    (duration,) = snapshot["lens_knowledge_related_duration_seconds"]
+    assert duration.count == 1 and duration.sum > 0
+    (fanout,) = snapshot["lens_knowledge_related_fanout"]
+    assert fanout.count == 1
 
 
 def test_the_fanout_reported_is_the_backend_read_count(
-    lithos_lens_config_env: Path, spans: InMemorySpanExporter
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
 ) -> None:
     """Fan-out counts `lithos_read` calls, not neighbours.
 
@@ -112,11 +158,15 @@ def test_the_fanout_reported_is_the_backend_read_count(
     with _client(lithos_lens_config_env, CountingClient()) as client:
         assert client.get(f"/note/{DEMO_NOTE}").status_code == 200
 
-    span = _route_span(spans, "/note/{knowledge_id}")
     # The note body read is not fan-out; the title lookups are.
-    assert _attr(span, "lens.related.fanout") == len(
-        [note_id for note_id in reads if note_id != DEMO_NOTE]
+    expected = len([note_id for note_id in reads if note_id != DEMO_NOTE])
+    assert expected > 0, "the demo note resolves no titles; this proves nothing"
+    assert _attr(_route_span(spans, "/note/{knowledge_id}"), "lens.related.fanout") == (
+        expected
     )
+    # And the histogram carries the same number, not merely a sample.
+    (recorded,) = metric_points(metric_reader, "lens_knowledge_related_fanout")
+    assert recorded.sum == expected
 
 
 def test_a_missing_note_is_reported_apart_from_a_failure(
@@ -204,11 +254,11 @@ def test_an_unloaded_panel_records_no_latency_sample(
 
 
 @pytest.mark.parametrize(
-    ("path", "mode"),
+    ("path", "mode", "has_tag"),
     [
-        ("/knowledge?q=influx", "search"),
-        ("/knowledge", "browse"),
-        ("/knowledge?tag=project%3Ainflux", "browse"),
+        ("/knowledge?q=influx", "search", False),
+        ("/knowledge", "browse", False),
+        ("/knowledge?tag=project%3Ainflux", "browse", True),
     ],
 )
 def test_each_landing_branch_reports_its_mode(
@@ -217,16 +267,23 @@ def test_each_landing_branch_reports_its_mode(
     metric_reader: InMemoryMetricReader,
     path: str,
     mode: str,
+    has_tag: bool,
 ) -> None:
     """Hybrid search and the two recency-browse branches are different backend
     calls with different costs; one counter for "the landing page" would hide
     which is being used."""
+    expected_results = _expected_result_count(lithos_lens_config_env, path)
+    assert expected_results > 0, "the demo corpus answers this branch emptily"
+
     with _client(lithos_lens_config_env) as client:
         assert client.get(path).status_code == 200
 
     span = _route_span(spans, "/knowledge")
     assert _attr(span, "lens.mode") == mode
-    assert _attr(span, "lens.result_count") >= 0
+    # A real count, not >= 0: the demo corpus answers all three branches, so a
+    # hard-coded zero must not pass.
+    assert _attr(span, "lens.result_count") == expected_results
+    assert _attr(span, "lens.has_tag") is has_tag
     assert (
         metric_value(metric_reader, "lens_knowledge_searches_total", mode=mode).value
         == 1
@@ -429,3 +486,144 @@ def test_an_offline_resolve_is_not_reported_as_a_dead_link(
         ).value
         == 1
     )
+
+
+def test_every_resolve_arm_the_catalogue_declares_is_reachable(
+    lithos_lens_config_env: Path, metric_reader: InMemoryMetricReader
+) -> None:
+    """`path`, `disambiguated` and `empty` — the arms the demo corpus cannot
+    reach on its own.
+
+    The catalogue declares seven `via` values, and an arm that is declared but
+    never exercised is a label nobody knows works until an operator needs it.
+    The demo notes carry no paths and no duplicate titles, so a client that
+    supplies both is what makes these reachable.
+    """
+
+    class AmbiguousClient(FakeLithosClient):
+        async def read_note_by_path(self, path: str) -> NoteRecord | None:
+            # The probe appends .md before reading (see _probe_path).
+            if path == "docs/by-path.md":
+                return NoteRecord(id="note-by-path", title="By path", content="")
+            return None
+
+        async def list_notes(
+            self,
+            *,
+            title_contains: str | None = None,
+            tags: list[str] | None = None,
+            limit: int | None = None,
+        ) -> list[Any]:
+            if title_contains == "Twin":
+                return [
+                    NoteSummary(id="twin-a", title="Twin"),
+                    NoteSummary(id="twin-b", title="Twin"),
+                ]
+            return []
+
+    with _client(lithos_lens_config_env, AmbiguousClient()) as client:
+        assert (
+            client.get(
+                "/knowledge/resolve?target=docs/by-path&from=x", follow_redirects=False
+            ).status_code
+            == 302
+        )
+        assert (
+            client.get(
+                "/knowledge/resolve?target=Twin&from=x", follow_redirects=False
+            ).status_code
+            == 200
+        )
+        # A blank target is the "empty" arm: a wiki-link with nothing in it.
+        assert (
+            client.get(
+                "/knowledge/resolve?target=&from=x", follow_redirects=False
+            ).status_code
+            == 200
+        )
+
+    snapshot = metric_snapshot(metric_reader)
+    for outcome in ("path", "disambiguated", "empty"):
+        assert (
+            snapshot_value(
+                snapshot, "lens_knowledge_resolves_total", outcome=outcome
+            ).value
+            == 1
+        ), f"the {outcome} arm was never counted"
+
+
+def test_the_disambiguation_page_reports_how_many_candidates_it_found(
+    lithos_lens_config_env: Path, spans: InMemorySpanExporter
+) -> None:
+    """`candidate_count`, not `len(candidates)`.
+
+    The single-candidate arm redirects carrying only `target_id` and drops the
+    candidate that decided it, so the tuple's length reports 0 for a resolution
+    exactly one candidate made. Both arms are asserted here because the bug was
+    invisible from the disambiguation side alone.
+    """
+
+    class AmbiguousClient(FakeLithosClient):
+        async def list_notes(
+            self,
+            *,
+            title_contains: str | None = None,
+            tags: list[str] | None = None,
+            limit: int | None = None,
+        ) -> list[Any]:
+            if title_contains == "Twin":
+                return [
+                    NoteSummary(id="twin-a", title="Twin"),
+                    NoteSummary(id="twin-b", title="Twin"),
+                ]
+            return []
+
+    with _client(lithos_lens_config_env, AmbiguousClient()) as client:
+        assert (
+            client.get(
+                "/knowledge/resolve?target=Twin&from=x", follow_redirects=False
+            ).status_code
+            == 200
+        )
+    assert _attr(_route_span(spans, "/knowledge/resolve"), "lens.candidate_count") == 2
+
+    spans.clear()
+    with _client(lithos_lens_config_env) as client:
+        assert (
+            client.get(
+                f"/knowledge/resolve?target={quote(DEMO_TITLE)}&from={DEMO_NOTE}",
+                follow_redirects=False,
+            ).status_code
+            == 302
+        )
+    assert _attr(_route_span(spans, "/knowledge/resolve"), "lens.candidate_count") == 1
+
+
+def test_the_related_panel_is_its_own_span(
+    lithos_lens_config_env: Path, spans: InMemorySpanExporter
+) -> None:
+    """The one knowledge point that keeps a named span.
+
+    The panel is a PHASE within the note render, with its own backend calls and
+    its own failure mode, so it does not nest 1:1 with the request — "which
+    half of the note page was slow" is a question the server span alone cannot
+    answer. The other three points are attributes on the request's own span
+    precisely because they do nest 1:1.
+    """
+    with _client(lithos_lens_config_env) as client:
+        assert client.get(f"/note/{DEMO_NOTE}").status_code == 200
+
+    named = [
+        span
+        for span in spans.get_finished_spans()
+        if span.name == "lens.knowledge.related"
+    ]
+    assert len(named) == 1
+    assert _attr(named[0], "lens.related.state") == "ok"
+    assert _attr(named[0], "lens.related.fanout") > 0
+    # And it is a CHILD of the request, not a second root.
+    server = _route_span(spans, "/note/{knowledge_id}")
+    parent = named[0].parent
+    server_context = server.context
+    assert parent is not None and server_context is not None
+    assert parent.span_id == server_context.span_id

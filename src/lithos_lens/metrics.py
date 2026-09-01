@@ -391,10 +391,16 @@ def knowledge_searches() -> Any:
     Labels: ``mode`` in ``search`` (hybrid `lithos_search`) | ``browse``
     (recency list, tagged or bare) | ``offline`` | ``error``.
 
-    The raw query string is deliberately absent -- from the label AND from the
-    span. It is unbounded operator input on a route with no authentication, so
-    it belongs in neither a Prometheus series nor a trace attribute. Mode and
-    count answer the operational question without it.
+    The raw query string is deliberately absent from this LABEL: one series per
+    distinct search is unbounded cardinality driven by unauthenticated input,
+    which is the failure the module's cardinality rule exists to prevent. Mode
+    and count answer the operational question without it.
+
+    It is NOT absent from the trace. The HTTP instrumentation records the
+    request target, query string included, and that is kept -- bounded by
+    `MAX_LOGGED_VALUE_CHARS` in `telemetry._bound_request_attributes`. On a
+    span it costs no series and genuinely helps read a trace; the constraint
+    there is volume, not cardinality.
     """
     return _instrument(
         "lens_knowledge_searches_total",

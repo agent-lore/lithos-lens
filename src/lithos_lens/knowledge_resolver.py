@@ -63,6 +63,13 @@ class ResolveOutcome:
     kind: str
     #: `uuid` | `path` | `title` | `disambiguated` | `unresolved` | `empty`.
     via: str = ""
+    #: Candidates FOUND, which is not `len(candidates)`. The single-candidate
+    #: arm redirects and carries only `target_id`, so the candidate that
+    #: decided it is dropped from the tuple — reporting the tuple's length
+    #: would say "0 candidates" about a resolution exactly one candidate made.
+    #: `candidates` is what the disambiguation page renders; this is how much
+    #: the resolver found, which is the measure of how ambiguous the corpus is.
+    candidate_count: int = 0
     target: str = ""
     target_id: str = ""
     candidates: tuple[ResolveCandidate, ...] = ()
@@ -113,12 +120,17 @@ async def resolve_wiki_link(
     )
     if len(candidates) == 1:
         return ResolveOutcome(
-            kind="redirect", via="title", target=target, target_id=candidates[0].id
+            kind="redirect",
+            via="title",
+            candidate_count=1,
+            target=target,
+            target_id=candidates[0].id,
         )
     if candidates:
         return ResolveOutcome(
             kind="disambiguation",
             via="disambiguated",
+            candidate_count=len(candidates),
             target=target,
             candidates=candidates,
         )
