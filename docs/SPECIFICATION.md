@@ -466,8 +466,21 @@ Two connections, two gauges. `lens_lithos_session_up` is the MCP tool session;
 `lens_event_stream_up` is the `/events` SSE stream behind the `events` health
 field. They can disagree — tool calls healthy while event delivery reconnects
 presents as a board that renders but never updates — so neither substitutes for
-the other. Both are seeded to 0 before the first connection attempt, because an
-absent series reads as "not deployed" rather than "down".
+the other.
+
+All three gauges (these two and `lens_event_subscribers`) are **observable**:
+the owning object registers a callback, and the SDK reads the authoritative
+state at every collection. They are not written at transitions. A synchronous
+gauge reports only a value set since the last collection, so one written at
+transitions stops being exported as soon as the transitions stop — and a
+session that is simply CONNECTED produces none. Measured against the shared
+stack, `lens_lithos_session_up` expired out of Prometheus about five minutes
+after connecting, while the process was healthy and its counters were still
+exporting. Seeding to 0 before the first connection attempt distinguishes
+"never connected" from "not deployed", but only until the first collection
+after the last transition, which is not when anyone is looking. With a callback
+the gauge answers whenever it is asked, and an absent series once again means
+what it should: nothing is reporting.
 
 Every metric label comes from a bounded set: a tool name from Lens's own client
 surface, an outcome enum, or an event type mapped through Lens's allowlist

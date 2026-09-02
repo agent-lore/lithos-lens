@@ -265,10 +265,13 @@ class EventHub:
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
-        # Seeded before the first connect attempt for the same reason the MCP
-        # gauge is: an absent series reads as "not deployed", which is the
-        # wrong conclusion during the outage it would be consulted for.
-        metrics.event_stream_up().set(0)
+        # Registered before the first connect attempt, and read at collection
+        # rather than written at each transition: a gauge written only on
+        # transitions stops being exported once the status settles, and an
+        # absent series reads as "not deployed" during the outage it would be
+        # consulted for.
+        metrics.register_event_stream_up(lambda: 1.0 if self.status == "live" else 0.0)
+        metrics.register_event_subscribers(lambda: float(len(self._subscribers)))
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -297,15 +300,15 @@ class EventHub:
             self._subscribers.discard(queue)
 
     def _set_status(self, status: EventStatus) -> None:
-        """Move the hub's status and publish it as a gauge in one place.
+        """Move the hub's status through one place.
 
-        Routed through one method rather than recorded at each of the five
-        assignment sites: a transition that updated the field but forgot the
-        gauge would leave an operator reading a stale "live" while the stream
-        was down, and that divergence is invisible until someone needs it.
+        `lens_event_stream_up` reads `self.status` at collection time, so the
+        gauge can no longer disagree with the field the way it could when each
+        of the five assignment sites had to remember to publish it. This stays
+        a single funnel anyway: the status is what `/health` reports, and one
+        place to change it is one place to read when it is wrong.
         """
         self.status = status
-        metrics.event_stream_up().set(1 if status == "live" else 0)
 
     def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
         """Register a browser queue, refusing past :data:`MAX_EVENT_SUBSCRIBERS`.
@@ -324,22 +327,10 @@ class EventHub:
             )
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
         self._subscribers.add(queue)
-        self._record_subscriber_count()
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
         self._subscribers.discard(queue)
-        self._record_subscriber_count()
-
-    def _record_subscriber_count(self) -> None:
-        """Publish the CURRENT subscriber count, not a delta.
-
-        Set from the authoritative length at both transitions, so the gauge
-        cannot drift out of step with reality the way an incremented counter
-        would after a missed unsubscribe — and a missed unsubscribe is exactly
-        the condition an operator would be reading this to diagnose.
-        """
-        metrics.event_subscribers().set(len(self._subscribers))
 
     async def publish(self, event: LensEvent) -> None:
         metrics.events_published().add(1, {"type": metric_event_type(event.type)})
