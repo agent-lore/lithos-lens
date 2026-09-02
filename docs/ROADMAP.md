@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.1.0
-Date: 2026-08-31
+Version: 1.2.0
+Date: 2026-09-02
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -72,7 +72,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 |---|----|---------|---------|--------|-----|--------|
 | 1 | **T1** | Tasks | Graph-native Operator View (read-only) | **shipped** | [t1-graph-native-operator-view.md](./prd/t1-graph-native-operator-view.md) | 0.3.0 |
 | 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
-| 3 | **T2** | Tasks | Graph pages, planning view rebase, operator ergonomics | **next** | — | 0.4.0 |
+| 3 | **T2** | Tasks | Graph pages, planning view rebase, operator ergonomics | **next** | [t2-graph-pages-planning-ergonomics.md](./prd/t2-graph-pages-planning-ergonomics.md) | 0.4.0 |
 | 4 | **T3** | Tasks | Curated write actions | planned | — | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
@@ -115,7 +115,9 @@ live.
 
 ### T2 — Graph Pages, Planning View, Operator Ergonomics
 
-Three strands:
+PRD: [t2-graph-pages-planning-ergonomics.md](./prd/t2-graph-pages-planning-ergonomics.md)
+(2026-09-02). Cut line for 0.4.0: graph pages + planning view rebase; the
+ergonomics strand is flex, each slice droppable to 0.4.x. Three strands:
 
 - **Graph pages**: `/tasks/graph?project=<slug>|epic=<id>` renders the
   dependency DAG (Cytoscape; topological text layers as the no-JS baseline;
