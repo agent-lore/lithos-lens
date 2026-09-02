@@ -272,6 +272,56 @@ async def test_the_mcp_session_gauge_starts_at_zero(
     assert metric_value(metric_reader, "lens_lithos_session_up").value == 0
 
 
+async def test_the_session_gauge_survives_a_collection_with_no_transition(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The gauge has to answer while nothing is happening.
+
+    A SYNCHRONOUS gauge reports only a value set since the last collection, so
+    one written at transitions goes quiet the moment the transitions stop --
+    and a Lithos session that is simply CONNECTED produces no transitions at
+    all. Against the live stack that showed up as the series expiring out of
+    Prometheus about five minutes after connecting, while the process was
+    healthy and its counters were still exporting: a healthy Lens reading as
+    ABSENT, which is the "not deployed" conclusion the seeding exists to
+    prevent.
+
+    Two collections with no transition between them is the smallest thing that
+    tells the two designs apart.
+    """
+
+    async def ok(name: str, arguments: dict[str, Any]) -> Any:
+        return _Result()
+
+    _transport(ok)
+
+    assert metric_value(metric_reader, "lens_lithos_session_up").value == 0
+    assert metric_value(metric_reader, "lens_lithos_session_up").value == 0
+
+
+async def test_the_subscriber_gauge_follows_the_latest_hub(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Re-registration replaces the source; it does not stack.
+
+    The instrument is cached by name, so a second hub in the same process does
+    not build a second gauge -- meaning a callback that closed over the FIRST
+    hub would keep reporting a dead object's subscriber count forever. The
+    source is held in a dict keyed by metric name so the latest registration
+    wins.
+    """
+    first = _hub()
+    first.subscribe()
+    first.subscribe()
+    assert metric_value(metric_reader, "lens_event_subscribers").value == 2
+
+    second = _hub()
+    assert metric_value(metric_reader, "lens_event_subscribers").value == 0
+
+    second.subscribe()
+    assert metric_value(metric_reader, "lens_event_subscribers").value == 1
+
+
 # ── Event hub ─────────────────────────────────────────────────────────
 
 

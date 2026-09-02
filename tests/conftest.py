@@ -210,12 +210,17 @@ def metric_reader(
 def metric_snapshot(reader: InMemoryMetricReader) -> dict[str, list[Any]]:
     """One collection, queried many times: ``{metric name: [data points]}``.
 
-    Necessary whenever a test reads more than one instrument, because a
-    synchronous GAUGE only reports a value that was set since the last
-    collection. Calling ``metric_value`` twice collects twice, and the second
-    collection finds the gauge empty -- so a test asserting a counter and then
-    a gauge sees the gauge vanish, for reasons that have nothing to do with the
-    code under test. Snapshot once, then assert.
+    A coherent single point in time: every assertion in a test reads the same
+    collection, rather than one collection per ``metric_value`` call.
+
+    This began as a workaround. Lens's gauges were synchronous, and a
+    synchronous gauge reports only a value set since the last collection, so
+    reading a counter and then a gauge made the gauge vanish for reasons that
+    had nothing to do with the code under test. That was a real defect wearing
+    a test-harness costume -- the same disappearance happened in Prometheus,
+    where it mattered more -- and the gauges are observable now, so no
+    instrument goes quiet on a second collection. The helper survives on the
+    coherence argument alone.
     """
     data = reader.get_metrics_data()
     assert data is not None

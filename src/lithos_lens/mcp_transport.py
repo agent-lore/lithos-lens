@@ -122,11 +122,14 @@ class MCPTransport:
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._call_gate = asyncio.Semaphore(max_concurrent_calls)
-        # Seed before the first connection attempt so "never connected" is
-        # distinguishable from "not deployed": a gauge that only appears on the
-        # first transition is ABSENT during the outage an operator is most
-        # likely to be investigating.
-        metrics.lithos_session_up().set(0)
+        # Registered before the first connection attempt, and read at every
+        # collection rather than written at each transition: a gauge that is
+        # only written on a transition stops being exported once the
+        # transitions stop, and an absent series reads as "not deployed" during
+        # exactly the outage an operator is investigating.
+        metrics.register_lithos_session_up(
+            lambda: 1.0 if self._session_ready.is_set() else 0.0
+        )
 
     @property
     def endpoint(self) -> str:
@@ -305,7 +308,6 @@ class MCPTransport:
                     await session.initialize()
                     self._session = session
                     self._session_ready.set()
-                    metrics.lithos_session_up().set(1)
                     backoff = RECONNECT_BACKOFF_INITIAL_S
                     await self._stop_event.wait()
                 return
@@ -317,7 +319,6 @@ class MCPTransport:
             finally:
                 self._session = None
                 self._session_ready.clear()
-                metrics.lithos_session_up().set(0)
 
             if self._stop_event.is_set():
                 return

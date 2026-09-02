@@ -20,13 +20,13 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `lithos_tool_calls` — Counter of Lithos MCP tool calls, by tool and terminal outcome.
 - def `lithos_tool_duration` — Histogram of Lithos tool-call latency in seconds, including queue time.
 - def `lithos_call_queue_wait` — Histogram of seconds spent blocked on the process-wide call gate.
-- def `lithos_session_up` — Gauge: 1 while the MCP session is established, 0 while it is not.
-- def `event_stream_up` — Gauge: 1 while the Lithos `/events` SSE stream is live, 0 otherwise.
+- def `register_lithos_session_up` — Gauge: 1 while the MCP session is established, 0 while it is not.
+- def `register_event_stream_up` — Gauge: 1 while the Lithos `/events` SSE stream is live, 0 otherwise.
 - def `lithos_reconnects` — Counter of MCP session losses that began a reconnect.
 - def `events_published` — Counter of events accepted from upstream and fanned out.
 - def `events_delivered` — Counter of per-subscriber event deliveries.
 - def `events_dropped` — Counter of events Lens refused or discarded, by reason.
-- def `event_subscribers` — Gauge: SSE subscribers currently attached to the hub.
+- def `register_event_subscribers` — Gauge: SSE subscribers currently attached to the hub.
 - def `render_admissions` — Counter of metered requests by admission outcome.
 - def `knowledge_note_renders` — Counter of note-page renders by terminal outcome.
 - def `knowledge_related_duration` — Histogram of seconds spent loading a note's related panel.

@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from opentelemetry import metrics as _metrics_api
+from opentelemetry.metrics import Observation
 
 from lithos_lens.telemetry import get_meter
 
@@ -64,6 +65,44 @@ def _instrument(name: str, build: Callable[[Any], Any]) -> Any:
         cached = build(get_meter())
         _instruments[name] = cached
     return cached
+
+
+# Observable-gauge sources, keyed by metric name.
+#
+# Gauges here are OBSERVABLE (callback at collection) rather than synchronous
+# (`.set()` at each transition), and the difference is not stylistic. A
+# synchronous gauge reports only a value set SINCE THE LAST COLLECTION, so one
+# whose value changes at transitions stops being exported once the transitions
+# stop: the collector expires the series, and a healthy Lens that has simply
+# been connected for five minutes reads as ABSENT. Absent is indistinguishable
+# from not deployed, which is precisely the confusion these gauges were seeded
+# to prevent. Measured against the live stack: `lens_lithos_session_up` vanished
+# roughly five minutes after connecting while the process stayed up and its
+# counters kept exporting.
+#
+# The indirection through this dict rather than a closure over `read` is what
+# makes RE-registration work. `_instrument` caches by name, so a second
+# transport or hub in the same process would not rebuild the gauge, and a
+# closure would leave the FIRST instance's callback installed -- reporting a
+# dead object's state forever. Last registration wins instead.
+_observers: dict[str, Callable[[], float]] = {}
+
+
+def _observable(name: str, description: str, read: Callable[[], float]) -> None:
+    """Register ``read`` as the source of the observable gauge ``name``."""
+
+    _observers[name] = read
+
+    def observe(_options: Any) -> list[Observation]:
+        source = _observers.get(name)
+        return [] if source is None else [Observation(source())]
+
+    _instrument(
+        name,
+        lambda meter: meter.create_observable_gauge(
+            name, callbacks=[observe], description=description
+        ),
+    )
 
 
 # ── Lithos transport ──────────────────────────────────────────────────
@@ -143,10 +182,11 @@ def lithos_call_queue_wait() -> Any:
     )
 
 
-def lithos_session_up() -> Any:
+def register_lithos_session_up(read: Callable[[], float]) -> None:
     """Gauge: 1 while the MCP session is established, 0 while it is not.
 
-    No labels.
+    No labels. ``read`` is called at every metric collection, so it must be
+    cheap and synchronous -- an attribute read, not a lock or a round trip.
 
     This is the MCP TOOL session (`MCPTransport`), and it is not the event
     stream. Lens holds two independent connections to Lithos -- MCP-over-SSE
@@ -156,27 +196,27 @@ def lithos_session_up() -> Any:
     never updates. `lens_event_stream_up` is the one that tracks the `events`
     health field; reading this gauge for that would answer the wrong question.
 
-    A SYNCHRONOUS gauge set from the authoritative value at each transition,
-    not an observable gauge with a callback. The callback form needs a
-    registration guard and module state to survive being installed twice (the
-    shape `lithos.telemetry.register_sse_active_clients_observer` has); setting
-    an exact value at the places the state actually changes needs neither, and
-    cannot drift the way an incremented counter would.
-
-    Seeded to 0 before the first connection attempt, so "never connected" is
-    distinguishable from "not deployed" -- an absent series looks like the
-    latter.
+    OBSERVABLE rather than synchronous, and registered rather than set. An
+    earlier version set an exact value at each transition, on the reasoning
+    that a callback needs a registration guard and module state while a `.set()`
+    needs neither. That reasoning was wrong in the way that matters: a
+    synchronous gauge only reports a value set since the last collection, so a
+    session that came up and then simply STAYED up stopped being exported, and
+    the series expired out of Prometheus while the process was perfectly
+    healthy. Seeding to 0 does distinguish "never connected" from "not
+    deployed" at startup, but only until the first collection after the last
+    transition -- which is not when anyone is looking. The callback holds the
+    real invariant: the gauge is whatever the transport's state says it is,
+    at the moment the question is asked.
     """
-    return _instrument(
+    _observable(
         "lens_lithos_session_up",
-        lambda meter: meter.create_gauge(
-            "lens_lithos_session_up",
-            description="1 while the Lithos MCP session is established, 0 otherwise.",
-        ),
+        "1 while the Lithos MCP session is established, 0 otherwise.",
+        read,
     )
 
 
-def event_stream_up() -> Any:
+def register_event_stream_up(read: Callable[[], float]) -> None:
     """Gauge: 1 while the Lithos `/events` SSE stream is live, 0 otherwise.
 
     No labels. This is the connection behind the `events: live | reconnecting |
@@ -184,16 +224,18 @@ def event_stream_up() -> Any:
     session `lens_lithos_session_up` tracks. Both are needed: a board that
     renders correctly but stops updating is the two disagreeing.
 
-    `disabled` and `reconnecting` both record 0 -- the operator question this
+    `disabled` and `reconnecting` both read 0 -- the operator question this
     answers is "are events flowing", and neither state answers yes. Which of
     the two it is stays in the health endpoint and the log.
+
+    Observable for the reason given on `register_lithos_session_up`: a stream
+    that stays live stops emitting transitions, and a synchronous gauge stops
+    being exported with them.
     """
-    return _instrument(
+    _observable(
         "lens_event_stream_up",
-        lambda meter: meter.create_gauge(
-            "lens_event_stream_up",
-            description="1 while the Lithos /events SSE stream is live, 0 otherwise.",
-        ),
+        "1 while the Lithos /events SSE stream is live, 0 otherwise.",
+        read,
     )
 
 
@@ -283,22 +325,23 @@ def events_dropped() -> Any:
     )
 
 
-def event_subscribers() -> Any:
+def register_event_subscribers(read: Callable[[], float]) -> None:
     """Gauge: SSE subscribers currently attached to the hub.
 
-    No labels. Set from ``len(self._subscribers)`` -- the authoritative value --
-    rather than incremented, so it cannot drift out of step with reality after
-    a missed unsubscribe.
+    No labels. ``read`` returns the authoritative ``len(subscribers)`` at
+    collection time rather than a running tally, so the gauge cannot drift out
+    of step with reality after a missed unsubscribe -- and a missed unsubscribe
+    is exactly the condition an operator would be reading this to diagnose.
 
     Graphed against ``MAX_EVENT_SUBSCRIBERS`` this shows headroom before the
-    hub starts answering 503.
+    hub starts answering 503. Observable for the reason given on
+    `register_lithos_session_up`: a stable subscriber count is still a fact
+    worth exporting, and a synchronous gauge exports only changes.
     """
-    return _instrument(
+    _observable(
         "lens_event_subscribers",
-        lambda meter: meter.create_gauge(
-            "lens_event_subscribers",
-            description="SSE subscribers currently attached to the event hub.",
-        ),
+        "SSE subscribers currently attached to the event hub.",
+        read,
     )
 
 
