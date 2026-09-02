@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede).
+Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided).
 
 **Tier:** Foundation
 
@@ -11,9 +11,10 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | L | 10 | 6 |
+| `lithos_lens.knowledge` | M | 7 | 5 |
 | `lithos_lens.knowledge_metadata` | S | 1 | 1 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
+| `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 
 ## Public API
 
@@ -30,10 +31,6 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 - def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
 - class `SearchResult` — One ``lithos_search`` hit rendered as a result card (§7.1).
 - def `normalize_search_result` — Normalize one ``lithos_search`` result row into a ``SearchResult``.
-- class `ResolveCandidate` — One plausible target for a wiki-link, shown on the disambiguation page.
-- class `ResolveOutcome` — The result of resolving one wiki-link click.
-- class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
-- def `resolve_wiki_link` — Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3).
 
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
@@ -43,6 +40,12 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 - class `ProducedByTask` — The validated 'produced by task' chip for a note's ``metadata.source``.
 - class `ProducedByClientProtocol` — The ``task_get`` capability the chip needs — checked at runtime.
 - def `load_produced_by` — Validate a note's ``metadata.source`` into a produced-by-task chip.
+
+### `lithos_lens.knowledge_resolver`
+- class `ResolveCandidate` — One plausible target for a wiki-link, shown on the disambiguation page.
+- class `ResolveOutcome` — The result of resolving one wiki-link click.
+- class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
+- def `resolve_wiki_link` — Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3).
 
 ## Dependencies
 

@@ -59,6 +59,7 @@ classDiagram
   class RelatedPanel {
     +unresolved tuple[str, ...]
     +state SectionState
+    +fanout int
   }
   class RelatedRef {
     +id str
@@ -78,6 +79,8 @@ classDiagram
   }
   class ResolveOutcome {
     +kind str
+    +via str
+    +candidate_count int
     +target str
     +target_id str
     +search_query str

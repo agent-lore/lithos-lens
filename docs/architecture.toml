@@ -33,21 +33,21 @@ LithosClient = "Lithos server clients — the MCP transport (one shared session,
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain."
-Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models, and the frontmatter metadata chips + lede)."
+Knowledge    = "Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided)."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
 Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters"]
+Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain"]
-Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
+Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
 Errors       = ["lithos_lens.errors"]
@@ -140,6 +140,7 @@ include_modules = [
     "lithos_lens.blocker_chain",
     "lithos_lens.task_graph",
     "lithos_lens.knowledge",
+    "lithos_lens.knowledge_resolver",
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",
     "lithos_lens.events",

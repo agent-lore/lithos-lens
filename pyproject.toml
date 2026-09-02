@@ -82,6 +82,7 @@ source_modules = [
     "lithos_lens.frontier_join",
     "lithos_lens.epic_strip",
     "lithos_lens.knowledge",
+    "lithos_lens.knowledge_resolver",
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",
     "lithos_lens.config",
@@ -100,6 +101,7 @@ forbidden_modules = [
     "lithos_lens.state",
     "lithos_lens.web",
     "lithos_lens.request_filters",
+    "lithos_lens.knowledge_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -118,6 +120,7 @@ source_modules = [
 forbidden_modules = [
     "lithos_lens.web",
     "lithos_lens.request_filters",
+    "lithos_lens.knowledge_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

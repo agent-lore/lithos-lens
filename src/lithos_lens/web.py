@@ -8,14 +8,12 @@ from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
-    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -38,17 +36,12 @@ from lithos_lens.fake_lithos import (
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
 from lithos_lens.knowledge import (
-    ResolveOutcome,
-    load_related_panel,
     render_markdown,
-    resolve_wiki_link,
 )
-from lithos_lens.knowledge_metadata import build_note_metadata
-from lithos_lens.knowledge_produced_by import load_produced_by
+from lithos_lens.knowledge_routes import register_knowledge_routes
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
-    LithosToolError,
 )
 from lithos_lens.request_filters import (
     blocker_expand_url,
@@ -435,154 +428,7 @@ def create_app(
             },
         )
 
-    @app.get("/knowledge", response_class=HTMLResponse)
-    async def knowledge(request: Request) -> HTMLResponse:
-        """Knowledge landing: hybrid search, tag browse, and recently-updated.
-
-        Three branches (§7.1): a ``?q=`` query runs ``lithos_search`` and
-        renders hybrid-search result cards (title, escaped snippet, updated);
-        a ``?tag=`` filter and the bare landing both run ``lithos_list`` for a
-        lightweight note list (tagged, or recently updated). Every branch is
-        capped from config so a broad ``?q=a`` / ``?tag=`` cannot materialize
-        an unbounded result set (the resolver caps candidates for the same
-        reason).
-        """
-        query = request.query_params.get("q", "").strip()
-        tag = request.query_params.get("tag", "").strip()
-        snapshot = await state.refresh_health()
-        search_results = None
-        results = None
-        error = ""
-        if snapshot.lithos != "ok":
-            error = "Lithos is offline or degraded. Knowledge search is unavailable."
-        else:
-            try:
-                if query:
-                    search_results = await state.lithos_client.search_notes(
-                        query,
-                        tags=[tag] if tag else None,
-                        limit=state.config.knowledge.search_limit,
-                    )
-                else:
-                    # Both browse branches (tagged and bare) are recency
-                    # lists: recent_notes owns the newest-first ordering
-                    # lithos_list cannot provide (upstream task e0e31654).
-                    results = await state.lithos_client.recent_notes(
-                        tags=[tag] if tag else None,
-                        limit=state.config.knowledge.recent_limit,
-                    )
-            except Exception:
-                error = "Knowledge search is currently unavailable."
-        return templates.TemplateResponse(
-            request,
-            "knowledge/landing.html",
-            {
-                "config": state.config,
-                "health": snapshot,
-                "active_view": "knowledge",
-                "query": query,
-                "tag": tag,
-                "search_results": search_results,
-                "results": results,
-                "error": error,
-            },
-        )
-
-    @app.get("/knowledge/resolve")
-    async def knowledge_resolve(request: Request):
-        """Resolve a clicked ``[[wiki-link]]`` per §6.3 and redirect or explain.
-
-        A confident resolution 302-redirects to the note page; an ambiguous one
-        renders a disambiguation page listing candidates; an unresolvable one
-        renders an unresolved page offering a search. When Lithos is offline the
-        link can't be resolved, so the unresolved page is shown directly.
-        """
-        target = request.query_params.get("target", "").strip()
-        from_id = request.query_params.get("from", "").strip()
-        snapshot = await state.refresh_health()
-        offline = snapshot.lithos != "ok"
-        if offline:
-            outcome = ResolveOutcome(
-                kind="unresolved", target=target, search_query=target
-            )
-        else:
-            outcome = await resolve_wiki_link(state.lithos_client, target, from_id)
-            if outcome.kind == "redirect":
-                return RedirectResponse(
-                    f"/note/{quote(outcome.target_id)}", status_code=302
-                )
-        return templates.TemplateResponse(
-            request,
-            "knowledge/resolve.html",
-            {
-                "config": state.config,
-                "health": snapshot,
-                "active_view": "knowledge",
-                "outcome": outcome,
-                "offline": offline,
-            },
-        )
-
-    @app.get("/note/{knowledge_id}", response_class=HTMLResponse)
-    async def note(request: Request, knowledge_id: str) -> HTMLResponse:
-        snapshot = await state.refresh_health()
-        note_record = None
-        note_meta = None
-        task = None
-        related = None
-        produced_by = None
-        error = ""
-        if snapshot.lithos != "ok":
-            error = "Lithos is offline or degraded. The note cannot be loaded."
-        else:
-            not_found = False
-            try:
-                note_record = await state.lithos_client.read_note(knowledge_id)
-            except LithosToolError as exc:
-                # Lithos answers a missing document with a coded error envelope
-                # (doc_not_found) rather than an empty success, so this — not
-                # the None fallback below — is the production not-found path.
-                if exc.code == "doc_not_found":
-                    not_found = True
-                else:
-                    error = "Could not load this document from Lithos."
-            except Exception:
-                error = "Could not load this document from Lithos."
-            if not_found or (note_record is None and not error):
-                error = "Document not found."
-            if note_record is not None:
-                note_meta = build_note_metadata(note_record)
-                related = await load_related_panel(
-                    state.lithos_client,
-                    knowledge_id,
-                    title_fanout_cap=state.config.knowledge.related_title_fanout_cap,
-                )
-                produced_by = await load_produced_by(state.lithos_client, note_record)
-            task_id = request.query_params.get("task", "")
-            if task_id:
-                try:
-                    # Addressed directly, like the detail page since T1-S7:
-                    # the three-list scan `find_task` did is gone. A dead
-                    # ?task= link answers task_not_found and drops the
-                    # back-link rather than failing the document render.
-                    task = await state.lithos_client.task_get(task_id)
-                except Exception:
-                    task = None
-        return templates.TemplateResponse(
-            request,
-            "note.html",
-            {
-                "config": state.config,
-                "health": snapshot,
-                "active_view": "knowledge",
-                "note": note_record,
-                "note_meta": note_meta,
-                "task": task,
-                "related": related,
-                "produced_by": produced_by,
-                "error": error,
-            },
-        )
+    register_knowledge_routes(app, state, templates)
 
     return app
 
