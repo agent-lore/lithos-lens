@@ -121,9 +121,12 @@ is deferred to X1, where the transition detector it exists to serve is built.
    want the graph as topological text layers with status and type per task,
    so that the page's baseline is complete and reviewable on its own.
 5. As an operator, I want a dependency cycle rendered as a bracketed group
-   inside its own layer with its members named in order, and its dependents
-   layered below it marked "blocked via cycle", so that a cycle never makes
-   its downstream work vanish from the layering.
+   inside its own layer with its members in a deterministic order plus one
+   representative path, and its dependents layered below it marked "blocked
+   via cycle", so that a cycle never makes its downstream work vanish from
+   the layering — and, when Lithos reports a cycle Lens cannot see through
+   its ghosts, or the scoped blocked read truncates or fails, I want the page
+   to say so rather than imply "no cycle".
 6. As an operator, I want an edge whose far endpoint is outside the scope
    to render that endpoint as a dimmed ghost node carrying its project chip,
    with links to its detail page and to *its* project's graph, so that
@@ -170,9 +173,11 @@ is deferred to X1, where the transition detector it exists to serve is built.
 17. As an operator, I want an agent-overload flag when one non-human agent
     holds most of a project's in-flight claims, so that a fleet bottleneck
     is visible.
-18. As an operator, I want a stalled flag when an in-progress task has
-    posted no finding for `stalled_no_findings_hours`, so that a quiet agent
-    is distinguishable from a working one.
+18. As an operator, I want a stalled flag when an in-progress task's latest
+    finding is older than `stalled_no_findings_hours`, and a separate
+    `no findings yet` label when it has none (claims carry no start time,
+    so that silence has no measurable length), so that a quiet agent is
+    distinguishable from a working one without Lens guessing.
 19. As an operator, I want throughput per project over the
     `resolved_since` window — completed, cancelled, completion ratio, median
     time-to-resolve, median open-age of ready work (labelled as the proxy it
@@ -243,9 +248,9 @@ planning view only computes over it, and its node set is the master open
 list the dashboard already holds (~330 today, which already exceeds
 `max_tasks`). It is therefore **exempt from `max_tasks`** and bounded
 instead by `[graph].corpus_max_tasks` (1000). Above that bound the corpus
-fan-out is skipped and the metrics that need it (keystone, and the
-cross-project part of starvation's tooltip) render as *not computed* with a
-banner naming the bound; everything else on the planning view still renders.
+fan-out is skipped and the one metric that needs it — keystone — renders as
+*not computed* with a banner naming the bound; everything else on the
+planning view still renders (D10a).
 That is the honest ceiling: beyond ~1000 open tasks the answer is ledger gap
 #3, not a bigger fan-out.
 
@@ -278,11 +283,21 @@ layers behind a "show as text" toggle; the text stays in the DOM.
 Two sources, with a stated division of labour:
 
 - **Lithos is the authority on *whether* a task is in a cycle.** The graph
-  page reads `lithos_task_blocked` (one call, the same read the dashboard
-  makes) and every in-scope task whose blockers include `kind="cycle"` is
-  marked *in a cycle* with the blocker's `message` (which carries the cycle
-  path as Lithos saw it), regardless of what Lens's own topology finds.
-  This signal is never dropped.
+  page reads `lithos_task_blocked` **scoped to the page** — `project=<slug>`
+  and, under the `"both"` convention, a second read with
+  `tags=["project:<slug>"]`, unioned (§5B.7's pattern; epic scope uses the
+  epic's own project) — each with `limit=frontier_limit`. Every in-scope
+  task whose blockers include `kind="cycle"` is marked *in a cycle* with the
+  blocker's `message` (which carries the cycle path as Lithos saw it),
+  regardless of what Lens's own topology finds. **This read can truncate or
+  fail, and the page says so:** a response of `len == limit` is treated as
+  truncated (the dashboard's own rule), and a truncated or failed read
+  renders a banner ("cycle signal incomplete: blocked read truncated /
+  unavailable") and gives every in-scope task *absent from the response* a
+  `cycle status unknown` marker — never an implied "no cycle". Cycles Lens
+  finds by SCC are still drawn. A scoped read on the live corpus is tens of
+  rows, so truncation is a scale event, not a routine one; when it happens
+  it is visible.
 - **Lens computes the *shape* of cycles it can see.** `graph_layout.py`
   (pure) runs Tarjan's SCC over the `blocks` + `waits_on_gate` edges of the
   **fetched topology** — in-scope nodes' edges only; ghost edges are never
@@ -308,8 +323,10 @@ several cycles; the page shows one path and the full member set, never an
 order that depends on iteration. The payload marks each member with a
 `cycle` id; Cytoscape draws members inside a compound parent with the
 `cycle` attention styling, and the page passes explicit `roots` (every
-in-degree-zero node plus one representative per condensed node) so
-`breadthfirst` never guesses.
+in-degree-zero node of the condensed graph, plus one representative per
+*cyclic* condensation — an SCC of size > 1, a self-loop, or a
+Lithos-flagged single node — since a cycle has no in-degree-zero member of
+its own) so `breadthfirst` never guesses.
 
 SCC detection is topology over an edge set, not readiness; readiness and
 cycle *membership* stay Lithos's. **Lens still never re-implements the
@@ -386,9 +403,18 @@ M needs a complete blocked frontier and is withheld without one.
   claims. Humans are excluded: an operator holding five claims is not a
   fleet bottleneck.
 - **Stalled:** an in-progress task whose latest finding (D11) is older than
-  `stalled_no_findings_hours` (24), or unknown after warmup. Row decoration
-  on the dashboard; never promoted into Needs attention (T1's model is
-  unchanged).
+  `stalled_no_findings_hours` (24). **Stalled fires on evidence only.** Two
+  further states are distinct and labelled, never folded into stalled:
+  *no findings yet* — the finding history is known to be empty. Claims
+  expose `expires_at` but no `claimed_at` (vendored `task_list` contract),
+  so Lens cannot tell "claimed a minute ago" from "silent for two days";
+  the row says `no findings yet` with a tooltip stating exactly that, and
+  a claim start time is a new upstream ask (ROADMAP ledger #12).
+  *finding status unknown* — the warmup or refetch for that task failed;
+  the row says so, and the read is retried on the next event or reconcile
+  for that task. A failed read is never recorded as an empty history.
+  Row decoration on the dashboard; never promoted into Needs attention
+  (T1's model is unchanged).
 - **Throughput:** per §5A.5 — `resolved_since` window, completion ratio,
   median `resolved_at − created_at`, and **median open-age of ready work**:
   the median `now − created_at` over the project's ready-and-unclaimed
@@ -432,11 +458,13 @@ knowledge_id}` map and onto a ring buffer of `recent_findings_drawer_size`
 (50). The vendored `finding_list` contract promises no order, so Lens sorts;
 the pipeline tolerates replay and out-of-order delivery, so the ring
 **deduplicates by `finding_id`** and a refetch that yields an entry already
-present is a no-op. **Warmup covers in-progress tasks only**: one `finding_list` per
+present is a no-op. The map records three outcomes per warmed task: a
+finding, *known empty* (the read succeeded with no rows), or *unknown* (the
+read failed) — D10's stalled rule reads the distinction. **Warmup covers in-progress tasks only**: one `finding_list` per
 claimed workable task at boot and on `task.claimed`. That makes the stalled
 flag exact from the first render; the drawer is a by-product with an honest
 header ("findings since HH:MM"), not a claim about the corpus's last 24h.
-`recent_findings_warmup_window_h` is not introduced.
+No warmup-window knob exists.
 
 ### D12. Human identity: registry ∪ config
 
@@ -490,9 +518,8 @@ metrics_debounce_ms = 2000         # client reconcile debounce (existing behavio
 ```
 
 Env overrides follow the shipped `LITHOS_LENS_<SECTION>_<KNOB>` convention
-(`tests/test_config_env_prefix.py` guards docs↔config parity). The
-`[tasks].notifications.title_badge` knob is not introduced; the badge is
-always on.
+(`tests/test_config_env_prefix.py` guards docs↔config parity). The title
+badge has no knob; it is always on.
 
 ### Routes
 
@@ -510,8 +537,9 @@ always on.
 
 No new Lithos tools. `lithos_task_edge_list`, `lithos_task_children`,
 `lithos_task_get`, `lithos_task_blocked` (the graph page's authoritative
-cycle signal, D4), `lithos_finding_list`, `lithos_agent_list` all have
-vendored contracts. New consumer of the existing `finding.posted` and
+cycle signal, D4 — a new *scoped* use of an existing contract: `project=`
+and `tags=` filters, already canonical in the vendored request),
+`lithos_finding_list`, `lithos_agent_list` all have vendored contracts. New consumer of the existing `finding.posted` and
 `task.claimed` events (warmup trigger). The hub gains one pre-fan-out hook
 (cache eviction).
 
@@ -567,7 +595,19 @@ board.
   summary; newest = `max(created_at)` with an unordered fake response; a
   replayed event is a no-op on the ring (dedup by `finding_id`); warmup
   calls `finding_list` for claimed tasks only (call log); `task.claimed`
-  triggers warmup for that task.
+  triggers warmup for that task; an empty successful read records *known
+  empty*; a failed read records *unknown* and is retried on the next
+  reconcile.
+- **Stalled states:** newly claimed + no findings → `no findings yet`, not
+  stalled; a claim whose `expires_at` is days away + no findings → still
+  `no findings yet`, not stalled (no `claimed_at` exists to say otherwise);
+  a finding read failure → `finding status unknown`, not stalled; a finding
+  25h old → stalled.
+- **Graph-page cycle signal:** a scoped `task_blocked` response of exactly
+  `limit` rows → truncation banner and `cycle status unknown` on every
+  in-scope task absent from it; a failed read → unavailable banner, SCC
+  cycles still drawn; under `"both"` convention a task carrying only the
+  `project:` tag is covered by the second read.
 - **Human identity:** registry `type=human` alone; config alone; both;
   unregistered id → plain chip.
 - **Side panel:** `?selected=` server-renders open; fragment route returns
@@ -609,16 +649,20 @@ lens parity command (`make check && make diagrams` with no generated drift).
    layered and marked, not dropped.
 3. **A3 `/tasks/graph` text baseline.** Route, picker, layers, callout,
    ghosts, `include_resolved`, refusal panel, JSON payload, nav item,
-   `as_of`, `task_blocked` read for the authoritative cycle signal.
-   *Needs A1, A2.*
+   `as_of`, scoped `task_blocked` reads for the authoritative cycle signal
+   with truncation/failure banners. *Needs A1, A2.*
    Acceptance: the fake project renders one `<ol>` per layer with status
    per task; the cycle callout names members in sorted order with one path;
    a cross-scope cycle (A in scope, B and C ghosts, Lithos reporting A
    `kind="cycle"`) appears in the callout under "through tasks outside this
-   scope" with Lithos's message and draws no SCC group; the ghost row shows
-   its project chip and links to `/tasks/graph?project=<slug>`; the
-   embedded payload's node set equals the text's; no scope → picker lists
-   the fake's projects and open epics.
+   scope" with Lithos's message and draws no SCC group; with the fake's
+   scoped blocked read returning exactly `limit` rows, the page shows the
+   truncation banner and marks the absent in-scope task `cycle status
+   unknown` (not "no cycle"); with the read failing, the unavailable banner
+   shows and the SCC cycle is still rendered; the ghost row shows its
+   project chip and links to `/tasks/graph?project=<slug>`; the embedded
+   payload's node set equals the text's; no scope → picker lists the fake's
+   projects and open epics.
 4. **A4 Cytoscape enhancement.** Vendor script loaded on the graph page
    only; `graph.js`: draw from payload with explicit roots, styling
    vocabulary (colour=status, shape=type, edge style per type), compound
@@ -647,7 +691,9 @@ lens parity command (`make check && make diagrams` with no generated drift).
    response; the same event replayed leaves the ring unchanged; boot
    against a fake with 2 claimed and 5 unclaimed tasks calls
    `finding_list` exactly twice; a subsequent `task.claimed` calls it once
-   more.
+   more; a claimed task with an empty history records *known empty*; a
+   claimed task whose read raises records *unknown* and is refetched on the
+   next reconcile.
 7. **B2 Human identity + agent chips.** `human_agents` ∪ registry `type`;
    role markers on every chip (dashboard rows, gates, detail, claims).
    *Independent.*
@@ -663,7 +709,10 @@ lens parity command (`make check && make diagrams` with no generated drift).
    Acceptance: the table-driven cases in Testing Decisions; the keystone
    case yields `3 downstream / 1 immediately`; a human holding 4 of 5
    claims does not flag overload; a 30-day-old task made ready a minute ago
-   reports 30 days under the open-age label; with the fake's ready read
+   reports 30 days under the open-age label; the four stalled-state cases
+   (newly claimed + none, old claim + none, read failure, 25h-old finding)
+   yield `no findings yet` / `no findings yet` / `finding status unknown` /
+   stalled; with the fake's ready read
    truncated and blocked complete, starvation is *unknown* and keystone
    shows both numbers; with blocked truncated and ready complete, starvation
    is exact and keystone shows N only; with `corpus_max_tasks` set below the
@@ -715,7 +764,11 @@ checkpoint: A1 → A3 → A4 → A5.
 - **Configurable ghost depth** — one hop, by decision (D5).
 - **Per-scope snapshot memoisation** — the per-task cache makes assembly
   cheap; revisit only if `lens.tasks.graph` spans say otherwise.
-- **`recent_findings_warmup_window_h`** — not introduced (D11).
+- **A findings warmup-window knob** — not introduced (D11).
+- **A claim start time upstream** (new ledger gap #12) — claims expose
+  `expires_at` only, so an in-progress task with no findings has no
+  observable silence duration; T2 labels it `no findings yet` rather than
+  guessing.
 - **Bulk graph fetch upstream** (ledger gap #3) — the ~100-call fan-out is
   accepted for September, per the epic; the cache + span counters are the
   evidence for the upstream ask if it is slow in practice.
@@ -740,13 +793,15 @@ checkpoint: A1 → A3 → A4 → A5.
   bound (D2). Both are one-off per TTL window and shared across surfaces.
   Beyond `corpus_max_tasks` the planning view degrades visibly; beyond low
   thousands of open tasks, the answer is ledger gap #3, not a smarter cache.
-- **Normative docs updated with this PRD.** REQUIREMENTS §5.7 (cache, ghost
-  rule, cycle presentation), §5.8.4 (buffer warmup; recompute deferred to
-  X1), §5.9 (badge always on), §5A.4–§5A.6 (keystone, open-age, dormant
-  default, discovery), the §3 env block, and ROADMAP §3 T2 + ledger #11
-  were changed in the same PR, so implementers and slice reviewers have one
-  authority. Where REQUIREMENTS and this PRD still disagree, REQUIREMENTS
-  is wrong and should be fixed, not the PRD re-argued.
+- **Normative docs updated with this PRD.** REQUIREMENTS §3 (env block), §4
+  (config reference), §5.1 (consumed reads), §5.2, §5.4.1 (agent chips),
+  §5.7 (cache, ghost rule, cycle presentation), §5.8.1, §5.8.4 (buffer;
+  recompute deferred to X1), §5.9 (badge always on), §5A.2–§5A.6
+  (wireframe, human identity, keystone, stalled states, open-age, dormant
+  default, discovery), §16.1, and ROADMAP §3 T2 + ledger #11/#12 were
+  changed in the same PR, so implementers and slice reviewers have one
+  authority: REQUIREMENTS is the contract, this PRD is its execution plan,
+  and the two agree.
 - **Why the text baseline carries the acceptance criteria.** Loom's review
   gate is hermetic and headless. A slice whose only observable output is a
   canvas has nothing a panel can assert; that is the shape that produced the

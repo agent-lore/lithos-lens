@@ -210,6 +210,7 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 | 9 | `lithos_finding_list` requires `task_id`; `finding.posted` lacks `knowledge_id` | Optional `knowledge_id` filter; add `knowledge_id` to the event payload | Gates K4's cited-by panel entirely. |
 | 10 | Retrieval receipts have no MCP read surface | Receipt read tool (optional) | K3 shows `receipt_id` as text without click-through. |
 | 11 | No readiness timestamp: `lithos_task_ready` returns `created_at` only, and nothing records when a task last *became* ready | `ready_since` on ready rows (or a `task.ready` event) | True ready-age ("how long has available work sat") is unobservable. T2's Planning View ships median **open-age** of ready work, labelled as the proxy it is; a Lens-side lifecycle tracker is rejected for the same reason as the claim ledger (dies on restart, lies after a Lithos restart). |
+| 12 | Claims expose `expires_at` but no `claimed_at` (`with_claims` rows and `lithos_task_status`) | `claimed_at` on claim records | An in-progress task with no findings has no observable silence duration, so T2's stalled rule cannot fire on it; Lens labels it `no findings yet` instead of guessing. |
 
 Minor, noted: `task.updated` carries only `task_id` (forces refetch — fine at
 current scale); task events carry empty `tags`, so `/events?tags=` cannot

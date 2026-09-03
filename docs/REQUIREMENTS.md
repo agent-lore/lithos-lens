@@ -321,23 +321,22 @@ unclaimed_ready_age_minutes = 60  # Needs-attention rule 6: ready-but-unclaimed
 stale_open_age_days = 7           # Needs-attention rule 5: stale open
 project_convention = "both"       # metadata | tag | both — see §5B.1
 project_tag_key = "project"       # tag-key reserved for the tag convention
-metrics_debounce_ms = 2000        # server-side debounce for metric recompute on SSE bursts
-recent_findings_drawer_size = 50  # rolling buffer size for drawer + latest-finding line
-recent_findings_warmup_window_h = 48  # boot-time finding.posted backfill window
-stalled_no_findings_hours = 24    # Planning View stalled rule
+metrics_debounce_ms = 2000        # client-side reconcile debounce on SSE bursts (server-side recompute: ROADMAP X1)
+recent_findings_drawer_size = 50  # ring-buffer size for drawer + latest-finding line (warmup covers in-progress tasks only; no window knob)
+stalled_no_findings_hours = 24    # Planning View stalled rule (fires on evidence only — see §5A.4)
 bottleneck_min_inflight = 3       # Planning View agent-overload rule
 bottleneck_concentration = 0.7    # one-agent claim share threshold
 throughput_window_days = 30       # Planning View throughput resolved_since window
 human_actionable_tag = "human"    # tag identifying tasks needing a human
-human_agents = []                 # agent IDs that represent humans, e.g. ["dave"]
+human_agents = []                 # agent IDs treated as human, unioned with registry type="human" (§5A.3)
 
-[lithos-lens.tasks.notifications]
-title_badge = true                # "(N) Lithos Lens" for unseen Needs-attention items
+[lithos-lens.tasks.notifications]  # the title badge (§5.9) is always on and has no knob
 desktop_optin = true              # show "Enable notifications" affordance (wiring: ROADMAP X1)
 
 [lithos-lens.graph]                # task dependency graph pages (§5.7)
-cache_ttl_s = 30                  # in-process snapshot cache TTL; event-invalidated
-max_tasks = 300                   # refuse to render larger scopes; ask to narrow
+cache_ttl_s = 30                  # per-TASK edge cache TTL; task-event-evicted
+max_tasks = 300                   # page-scope size guard (ghosts count); refuse and ask to narrow
+corpus_max_tasks = 1000           # internal corpus-scope bound feeding §5A metrics; above it keystone is "not computed"
 fetch_concurrency = 16            # semaphore for the per-task edge_list fan-out
 
 [lithos-lens.writes]               # curated write actions (§5C)
@@ -470,7 +469,7 @@ The view consumes (reads):
 - `lithos_task_list(status="completed"|"cancelled", resolved_since=…)` — recently resolved work
 - `lithos_task_children(epic_id, recursive=true, include_closed=true)` — epic rollups
 - `lithos_task_get(task_id)` / `lithos_task_status(task_id)` / `lithos_task_edge_list(task_id)` / `lithos_finding_list(task_id)` — detail surfaces
-- `lithos_agent_list()`, `lithos_tags(prefix="project:")`, `lithos_stats()` — filter dropdowns and summary signals
+- `lithos_agent_list()`, `lithos_stats()` — filter dropdowns, human identity (§5A.3), summary signals
 - `lithos_read(id, max_length=…)` — resolving `finding.knowledge_id` to note titles
 - the Lithos SSE event stream (§5.8)
 
@@ -481,7 +480,7 @@ Constraints the UI must respect (documented as such; the asks live in the ROADMA
 
 ### 5.2 Operator View Structure
 
-The Operator View renders, top-to-bottom, the following sections. Each is rendered server-side at page load and updated in place via HTMX OOB swaps fed by the SSE pipeline (§5.8).
+The Operator View renders, top-to-bottom, the following sections. Each is rendered server-side at page load and refreshed in place by the debounced client reconcile the SSE pipeline drives (§5.8.4).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -607,7 +606,7 @@ Every list row renders a compact, scannable line (specific layout left to the im
 | **Title** | Truncated to one line; full title in tooltip |
 | **Status / section decorations** | `blocked` decoration on claimed-but-blocked rows; `reopened` marker; blocker chips on Blocked rows; reason chips in Needs attention |
 | **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp, from the server-side rolling buffer (§5.8.4). Updates on `finding.posted`. |
-| **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Agents listed in `[tasks].human_agents` render with a person-icon prefix and distinct background. Clicking an agent chip filters across all roles. |
+| **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Human agents (registry `type="human"` ∪ `[tasks].human_agents`, §5A.3) render with a person-icon prefix and distinct background; the registry `type` string renders as a role marker, and an unregistered id gets a plain chip, never a guessed role. Clicking an agent chip filters across all roles. |
 | **Active claims** | Compact `aspect → agent` list with time-to-expiry, from inline claims |
 | **Tags** | Chips for tags other than the reserved project/human keys |
 | **Created at** | Relative time; absolute on hover |
@@ -706,7 +705,7 @@ For `task_type="gate"` tasks: the `gate_type` badge; a live countdown to `ready_
 
 #### 5.8.1 Connection model
 
-Lens holds one server-side subscription to Lithos `GET /events`, passing a server-side `types=` filter for the consumed set. Browser tabs connect to Lens's own `GET /tasks/events` re-broadcast endpoint, which emits normalized events plus recomputed metric fragments.
+Lens holds one server-side subscription to Lithos `GET /events`, passing a server-side `types=` filter for the consumed set. Browser tabs connect to Lens's own `GET /tasks/events` re-broadcast endpoint, which emits normalized events; tabs refetch fragments through the debounced reconcile (§5.8.4).
 
 Consumed upstream event types (tasks surface): `task.created`, `task.claimed`, `task.released`, `task.completed`, `task.cancelled`, `task.updated`, `task.reopened`, `finding.posted`, `agent.registered`. (Knowledge surfaces add `note.*` and `edge.upserted` — §8.5.) Payload gotchas are catalogued in §16.1.1.
 
@@ -784,7 +783,7 @@ Three stacked sections answer three sub-questions, top to bottom:
 ├─────────────────────────────────────────────────────────────┤
 │  👤 Human-actionable                                         │
 │     1. Human gates awaiting approval (oldest first,          │
-│        each with "unblocks N" waiter count)                  │
+│        each with "N tasks wait on it")                       │
 │     2. Open tasks tagged `[tasks].human_actionable_tag`      │
 │     3. Tasks claimed by a human agent (resume your work)     │
 ├─────────────────────────────────────────────────────────────┤
@@ -795,15 +794,15 @@ Three stacked sections answer three sub-questions, top to bottom:
 │  📈 Throughput overview                                      │
 │     per project over the resolved_since window:              │
 │     completed, cancelled, completion ratio,                  │
-│     median time-to-resolve, median ready-age                 │
+│     median time-to-resolve, median open-age of ready work    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 5A.3 Human-actionable section
 
-- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("approving this unblocks N tasks") and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
+- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("N tasks wait on it" — waiters may have other blockers, so it is not an unblock promise) and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
 - **Tagged tasks:** open tasks carrying `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first.
-- **Human-claimed tasks:** open tasks claimed by an agent listed in `[tasks].human_agents` — so a human can resume their own work.
+- **Human-claimed tasks:** open tasks claimed by a **human agent** — one whose `lithos_agent_list` entry has `type="human"` (what T3 registers operators as) **or** whose id is in `[tasks].human_agents`; the union is the one definition of "human" across the Tasks views — so a human can resume their own work.
 - Empty state: `Nothing for you to do right now ✓`.
 
 ### 5A.4 Project breakdown
@@ -815,7 +814,7 @@ For every known project (§5B.1 universe), one row showing ready / in-flight / b
 | **Starvation (v2)** | Project has **> 0 open workable tasks but 0 ready-and-unclaimed tasks** — nothing can be picked up. Sub-classified on the chip: `fully-blocked` (nothing is ready) vs `fully-claimed` (ready work exists but every ready task is claimed). The old queue-depth rule is replaced: with a graph, "unclaimed" only matters on the frontier. |
 | **Agent overload** | In-flight depth ≥ `bottleneck_min_inflight` (3) AND one **non-human** agent holds ≥ `bottleneck_concentration` (0.7) of those claims. Humans (registry `type="human"` ∪ `[tasks].human_agents`) are excluded — an operator holding five claims is not a fleet bottleneck. Tooltip names the dominant agent. |
 | **Keystone task** | The open task **or open gate** in the project with the most open transitive dependents via `blocks`/`waits_on_gate`, counted **across the whole corpus** over the §5.7 per-task cache (epics are not candidates). Rendered as `keystone: "<title>" — N downstream`; the tooltip splits *M become ready immediately* (dependents whose `task_blocked` entry lists this task as their sole unsatisfied blocker) from the rest and names the dependents' projects. A single "unblocks N" is not shown — it would be wrong for most keystones. Ties oldest-first; no chip when no candidate has an open dependent; the chip links to the task detail. |
-| **Stalled** | ≥ 1 in-progress task in the project whose latest finding (§5.8.4 map) is older than `stalled_no_findings_hours` (24). Stalled rows also get a row decoration on the Operator View but are never promoted into Needs attention. |
+| **Stalled** | ≥ 1 in-progress task in the project whose latest finding (§5.8.4 map) is older than `stalled_no_findings_hours` (24). **Fires on evidence only.** Two distinct, labelled states are never folded into it: `no findings yet` (the history is known empty — claims expose `expires_at` but no `claimed_at`, so the silence has no observable duration; ROADMAP ledger #12) and `finding status unknown` (the read failed; retried on the next event or reconcile). A failed read is never recorded as an empty history. Stalled rows also get a row decoration on the Operator View but are never promoted into Needs attention. |
 
 Hover on any flag → tooltip with the rule facts (which agent, which task, which chain).
 
@@ -1396,10 +1395,10 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 | `lithos_task_blocked` | `limit`, (`project`, `tags`) | Blocked tasks with structured `blockers[]` (`kind`: `task` / `gate` / `blocker_unsatisfiable` / `cycle`) |
 | `lithos_task_children(task_id)` | `recursive`, `include_closed` | Epic rollups; children tables; epic-scope node sets |
 | `lithos_task_edge_list(task_id)` | `direction`, `types` | Edges touching a task: `{from_task_id, to_task_id, type, direction, metadata, created_by, created_at}`; graph assembly, gate waiters, provenance |
-| `lithos_finding_list(task_id, since?)` | — | Findings timeline; rolling-buffer warm-up. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
+| `lithos_finding_list(task_id, since?)` | — | Findings timeline; findings-buffer refetch on `finding.posted` and in-progress warmup (§5.8.4). Response order is not promised — Lens sorts by `created_at`. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
 | `lithos_stats()` | — | Health probe; summary signals |
 | `lithos_agent_list` | `type`, `active_since` | Agent filter dropdown |
-| `lithos_tags(prefix?)` | — | Project universe (tag convention); tag filters |
+| `lithos_tags(prefix?)` | — | **Not consumed.** The project universe is derived from the loaded snapshot under both conventions (§5A.6) |
 | `lithos_read` | `id` \| `path`, `max_length`, `agent_id` | Note pages; cheap title/metadata fetches (`max_length=1` still returns complete frontmatter metadata); wiki-link path probe. Response carries **no top-level `path`**; `links` entries are unresolved `{target, display}`. |
 | `lithos_search(query)` | `mode="hybrid"`, `limit`, `tags`, `path_prefix` | `/knowledge` search; retrieve fallback. **Snippets contain raw markdown — render escaped** (§7.1) |
 | `lithos_list` | `path_prefix`, `tags`, `since`, `limit`, `offset`, `title_contains` | Recently-updated lists; feed; wiki-link disambiguation |
