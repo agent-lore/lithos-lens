@@ -175,8 +175,9 @@ is deferred to X1, where the transition detector it exists to serve is built.
     is distinguishable from a working one.
 19. As an operator, I want throughput per project over the
     `resolved_since` window — completed, cancelled, completion ratio, median
-    time-to-resolve, median ready-age — with dormant projects hidden by
-    default, so that the overall shape of work is a table I can read.
+    time-to-resolve, median open-age of ready work (labelled as the proxy it
+    is) — with dormant projects hidden by default, so that the overall
+    shape of work is a table I can read.
 20. As an operator, I want planning-view fragments to refresh on the same
     debounced client reconcile the dashboard uses, so that the page is live
     without a second event pipeline.
@@ -234,6 +235,20 @@ the planning view warms the rest, and the mini-graph reuses whatever is
 warm. There is no per-scope memoisation: assembly over cached entries is
 cheap at this scale.
 
+**Two size bounds, because two kinds of scope.** A *page* scope (project,
+epic) is rendered, so it is refused above `[graph].max_tasks` (300, ghosts
+counted) with the "narrow your scope" panel — a graph that cannot be read
+should not be drawn. The *corpus* scope is internal: nothing renders it, the
+planning view only computes over it, and its node set is the master open
+list the dashboard already holds (~330 today, which already exceeds
+`max_tasks`). It is therefore **exempt from `max_tasks`** and bounded
+instead by `[graph].corpus_max_tasks` (1000). Above that bound the corpus
+fan-out is skipped and the metrics that need it (keystone, and the
+cross-project part of starvation's tooltip) render as *not computed* with a
+banner naming the bound; everything else on the planning view still renders.
+That is the honest ceiling: beyond ~1000 open tasks the answer is ledger gap
+#3, not a bigger fan-out.
+
 **Invalidation, stated honestly:**
 - Any consumed task event carrying a `task_id` evicts that task's entry (a
   hook the hub calls before fan-out). A `lens.refresh` flushes everything.
@@ -260,21 +275,45 @@ layers behind a "show as text" toggle; the text stays in the DOM.
 
 ### D4. Cycles: SCC condensed into its own layer
 
-`graph_layout.py` (pure): Tarjan's SCC over `blocks` + `waits_on_gate` edges
-in the scope. Every SCC of size > 1, or a self-loop, is a cycle. Kahn's
-layering runs over the graph with each SCC condensed to one node, so cycle
-members receive a layer and their dependents are layered below them
-(marked "blocked via cycle", mirroring the `kind="cycle"` blocker
-`task_blocked` reports for them). Text renders the SCC as a bracketed group
-inside its layer, members in cycle order. The payload marks each member with
-a `cycle` id; Cytoscape draws members inside a compound parent with the
-`cycle` attention styling, and the page passes explicit `roots` (every
-in-degree-zero node plus one representative per SCC) so `breadthfirst`
-never guesses.
+Two sources, with a stated division of labour:
 
-This is topology over an edge set, not readiness. Lithos's `task_blocked`
-remains the authority on which task is blocked; the two agree by
-construction. **Lens still never re-implements the readiness predicate.**
+- **Lithos is the authority on *whether* a task is in a cycle.** The graph
+  page reads `lithos_task_blocked` (one call, the same read the dashboard
+  makes) and every in-scope task whose blockers include `kind="cycle"` is
+  marked *in a cycle* with the blocker's `message` (which carries the cycle
+  path as Lithos saw it), regardless of what Lens's own topology finds.
+  This signal is never dropped.
+- **Lens computes the *shape* of cycles it can see.** `graph_layout.py`
+  (pure) runs Tarjan's SCC over the `blocks` + `waits_on_gate` edges of the
+  **fetched topology** — in-scope nodes' edges only; ghost edges are never
+  fetched (D5). Every SCC of size > 1, or a self-loop, is a cycle Lens can
+  draw. This promise is explicitly bounded: a cycle that passes through two
+  or more out-of-scope tasks (`A(in) → B(ghost) → C(ghost) → A`) is invisible
+  to SCC, because `B → C` is never read. Such a task is still marked in a
+  cycle by the Lithos signal above, and the callout lists it under *cycle
+  through tasks outside this scope* with Lithos's path message, so the
+  page says what it cannot draw.
+
+Kahn's layering runs with each SCC condensed to one node, and each
+Lithos-flagged cycle member that belongs to no SCC treated as its own
+single-node condensation, so every cycle member receives a layer and its
+dependents are layered below it (marked "blocked via cycle", mirroring the
+`kind="cycle"` blocker `task_blocked` reports for them).
+
+Text renders an SCC as a bracketed group inside its layer. **Display order
+is deterministic:** members sorted by (`created_at`, `id`), followed by one
+representative cycle path — a DFS from the smallest member over adjacency
+sorted the same way — rendered as `A → B → A`. A general SCC may contain
+several cycles; the page shows one path and the full member set, never an
+order that depends on iteration. The payload marks each member with a
+`cycle` id; Cytoscape draws members inside a compound parent with the
+`cycle` attention styling, and the page passes explicit `roots` (every
+in-degree-zero node plus one representative per condensed node) so
+`breadthfirst` never guesses.
+
+SCC detection is topology over an edge set, not readiness; readiness and
+cycle *membership* stay Lithos's. **Lens still never re-implements the
+readiness predicate.**
 
 ### D5. Ghost nodes: one hop, leaf-only
 
@@ -286,7 +325,9 @@ layer). Open ghosts get title/status from the master open list for free;
 only resolved far endpoints need a `task_get`, through the same semaphore.
 Ghosts count toward `max_tasks`. A ghost renders dimmed with its project
 chip and two links: its detail page, and `/tasks/graph?project=<its slug>`.
-No configurable hop count.
+No configurable hop count. The cost of leaf-only ghosts is the bounded
+cycle promise in D4: Lens draws cycles within fetched topology and relies on
+Lithos's `task_blocked` signal for the rest.
 
 ### D6. Scope membership and satisfied edges
 
@@ -333,6 +374,8 @@ immediately* (dependents whose `task_blocked` entry lists this task as their
 only unsatisfied blocker — a direct read of data Lithos returns) from *N−M
 further down the chain*, and names the projects the dependents fall in.
 Ties break oldest-first; no chip when no candidate has an open dependent.
+Degradation per D10a: N comes from edges and survives frontier truncation;
+M needs a complete blocked frontier and is withheld without one.
 
 ### D10. Starvation v2, overload, stalled, throughput
 
@@ -346,18 +389,50 @@ Ties break oldest-first; no chip when no candidate has an open dependent.
   `stalled_no_findings_hours` (24), or unknown after warmup. Row decoration
   on the dashboard; never promoted into Needs attention (T1's model is
   unchanged).
-- **Throughput:** per §5A.5 verbatim — `resolved_since` window, completion
-  ratio, median `resolved_at − created_at`, median ready-age over the
-  project's ready-and-unclaimed tasks; `Hide dormant` on by default, cookie
-  + URL. Sparklines stay deferred.
+- **Throughput:** per §5A.5 — `resolved_since` window, completion ratio,
+  median `resolved_at − created_at`, and **median open-age of ready work**:
+  the median `now − created_at` over the project's ready-and-unclaimed
+  tasks, labelled exactly that on the page. This is a *proxy*, and the PRD
+  names it as one: `lithos_task_ready` returns `created_at` only (see the
+  vendored contract), so "how long has this been ready" is unobservable —
+  an old task that became ready seconds ago reports its open-age, not
+  seconds. A readiness timestamp is a new upstream ask (ROADMAP ledger
+  #11); Lens does not fake one with a lifecycle tracker (D13). `Hide
+  dormant` on by default, cookie + URL. Sparklines stay deferred.
+
+### D10a. Degraded semantics when a frontier read truncates
+
+The reused snapshot calls `task_ready` and `task_blocked` with
+`frontier_limit` (500); either side can truncate independently, and the
+dashboard already marks each side's counts approximate when it does. The
+planning view inherits that per-side flag and degrades **per metric**,
+never asserting an exact result from a cut read:
+
+| Metric | Depends on | Ready truncated | Blocked truncated |
+|---|---|---|---|
+| Ready / blocked depths | that side's frontier | `≥ N`, approximate marker | `≥ N`, approximate marker |
+| Starvation + sub-class | ready frontier + master list | **unknown** — chip not shown; tooltip says why | unaffected |
+| Keystone `N downstream` | edge cache | unaffected | unaffected |
+| Keystone `M immediately` | blocked frontier (sole-blocker fact) | unaffected | **withheld** — chip shows N only; tooltip names the truncation |
+| Median open-age of ready work | ready frontier | approximate marker | unaffected |
+| Agent overload, stalled | master list claims, findings map | unaffected | unaffected |
+| Throughput counts, ratio, time-to-resolve | resolved lists (no limit) | unaffected | unaffected |
+
+"Unknown" is a fourth state beside fired / not-fired / not-computed, and it
+renders as absence plus an explanation, never as "not starved". A row whose
+project is entirely inside a truncated tail shows depths of `≥ 0`.
 
 ### D11. Findings buffer: latest-finding-per-task, in-progress warmup
 
 `finding.posted` carries `finding_id, task_id, agent` only. On each event
 the hub-side consumer calls `lithos_finding_list(task_id)` and takes the
-newest entry into a `latest_finding[task_id] = {agent, timestamp, summary,
+**newest** entry — `max(created_at)`, ties broken by `finding_id` — into a
+`latest_finding[task_id] = {finding_id, agent, timestamp, summary,
 knowledge_id}` map and onto a ring buffer of `recent_findings_drawer_size`
-(50). **Warmup covers in-progress tasks only**: one `finding_list` per
+(50). The vendored `finding_list` contract promises no order, so Lens sorts;
+the pipeline tolerates replay and out-of-order delivery, so the ring
+**deduplicates by `finding_id`** and a refetch that yields an entry already
+present is a no-op. **Warmup covers in-progress tasks only**: one `finding_list` per
 claimed workable task at boot and on `task.claimed`. That makes the stalled
 flag exact from the first render; the drawer is a by-product with an honest
 header ("findings since HH:MM"), not a claim about the corpus's last 24h.
@@ -399,7 +474,8 @@ Needs-attention ids the tab has not had focus for; state is client-only.
 ```toml
 [lithos-lens.graph]
 cache_ttl_s = 30                   # per-task edge cache TTL
-max_tasks = 300                    # scope size guard (ghosts count)
+max_tasks = 300                    # PAGE scope size guard (ghosts count)
+corpus_max_tasks = 1000            # internal corpus scope bound (planning metrics)
 fetch_concurrency = 16             # edge_list fan-out semaphore
 
 [lithos-lens.tasks]
@@ -433,7 +509,8 @@ always on.
 ### MCP / SSE dependencies
 
 No new Lithos tools. `lithos_task_edge_list`, `lithos_task_children`,
-`lithos_task_get`, `lithos_finding_list`, `lithos_agent_list` all have
+`lithos_task_get`, `lithos_task_blocked` (the graph page's authoritative
+cycle signal, D4), `lithos_finding_list`, `lithos_agent_list` all have
 vendored contracts. New consumer of the existing `finding.posted` and
 `task.claimed` events (warmup trigger). The hub gains one pre-fan-out hook
 (cache eviction).
@@ -462,10 +539,13 @@ board.
 - **graph_scope (pure):** project open-only vs `include_resolved`; epic
   closed-by-default; satisfied edge dropped; open/cancelled far endpoint
   ghosted; ghost edges never fetched; ghosts count toward the guard; guard
-  refuses at `max_tasks + 1`.
+  refuses at `max_tasks + 1`; the corpus scope is NOT refused at
+  `max_tasks + 1` and IS skipped at `corpus_max_tasks + 1`.
 - **graph_layout (pure, table-driven):** DAG layers; self-loop and 2-cycle
   and 3-cycle each an SCC; dependents of a cycle layered below it; ghosts
-  top/bottom; roots list.
+  top/bottom; roots list; member order and representative path are
+  identical under reversed input order; a Lithos-flagged cycle member with
+  no SCC is condensed alone and layered.
 - **Graph page rendering:** layers as ordered lists with status; cycle
   callout text names members in order; ghost row carries project chip and
   both links; picker on no scope; refusal panel; payload JSON parses and
@@ -476,10 +556,18 @@ board.
   knob; starvation sub-classes; keystone two numbers (a task with 3
   transitive dependents of which 1 has it as sole blocker → `3 downstream`,
   `1 immediately`); cross-project dependent counted; human excluded from
-  overload; stalled from latest-finding age; medians on a known window.
+  overload; stalled from latest-finding age; medians on a known window;
+  **open-age proxy** (a task created 30 days ago whose last blocker
+  completed a minute ago reports 30 days, labelled open-age); **truncation**
+  — ready-only truncated → starvation unknown, open-age approximate,
+  keystone both numbers; blocked-only truncated → starvation exact, keystone
+  N only; corpus over `corpus_max_tasks` → keystone not computed, every
+  other metric present.
 - **Findings buffer:** `finding.posted` → `finding_list` refetch → entry with
-  summary; warmup calls `finding_list` for claimed tasks only (call log);
-  `task.claimed` triggers warmup for that task.
+  summary; newest = `max(created_at)` with an unordered fake response; a
+  replayed event is a no-op on the ring (dedup by `finding_id`); warmup
+  calls `finding_list` for claimed tasks only (call log); `task.claimed`
+  triggers warmup for that task.
 - **Human identity:** registry `type=human` alone; config alone; both;
   unregistered id → plain chip.
 - **Side panel:** `?selected=` server-renders open; fragment route returns
@@ -503,19 +591,31 @@ lens parity command (`make check && make diagrams` with no generated drift).
    `architecture.toml` mapping + budget bump. *Independent.*
    Acceptance: two concurrent project scopes over the fake fetch each
    task's edges exactly once; a `task.updated` for a node evicts it and the
-   next scope refetches only that task; a scope of `max_tasks + 1` (ghosts
-   included) is refused with the count; a completed out-of-scope
-   predecessor's edge is absent while a cancelled one is a ghost.
+   next scope refetches only that task; a page scope of `max_tasks + 1`
+   (ghosts included) is refused with the count; the corpus scope over a
+   fake of `max_tasks + 1` open tasks assembles, and over
+   `corpus_max_tasks + 1` is skipped with a reason; a completed
+   out-of-scope predecessor's edge is absent while a cancelled one is a
+   ghost.
 2. **A2 Topology.** `graph_layout.py`: SCC, condensed Kahn, hierarchy tree,
-   roots. Pure over `EdgeRecord`/`TaskRecord`. *Independent.*
+   roots, deterministic member order + representative path, single-node
+   condensation for Lithos-flagged members outside any SCC. Pure over
+   `EdgeRecord`/`TaskRecord`/`BlockerRecord`. *Independent.*
    Acceptance: A→B→A with C blocked by B yields layers `[{A,B} cycle]`,
    `[C blocked-via-cycle]`; a DAG of depth 4 yields four layers; a ghost
-   with only outgoing edges is in layer 0.
+   with only outgoing edges is in layer 0; the same SCC fed in reversed
+   edge order renders the same member list and path; an in-scope A with a
+   `kind="cycle"` blocker but no SCC (its cycle runs through two ghosts) is
+   layered and marked, not dropped.
 3. **A3 `/tasks/graph` text baseline.** Route, picker, layers, callout,
    ghosts, `include_resolved`, refusal panel, JSON payload, nav item,
-   `as_of`. *Needs A1, A2.*
+   `as_of`, `task_blocked` read for the authoritative cycle signal.
+   *Needs A1, A2.*
    Acceptance: the fake project renders one `<ol>` per layer with status
-   per task; the cycle callout names members in order; the ghost row shows
+   per task; the cycle callout names members in sorted order with one path;
+   a cross-scope cycle (A in scope, B and C ghosts, Lithos reporting A
+   `kind="cycle"`) appears in the callout under "through tasks outside this
+   scope" with Lithos's message and draws no SCC group; the ghost row shows
    its project chip and links to `/tasks/graph?project=<slug>`; the
    embedded payload's node set equals the text's; no scope → picker lists
    the fake's projects and open epics.
@@ -543,9 +643,11 @@ lens parity command (`make check && make diagrams` with no generated drift).
    `task.claimed`, `/tasks/findings/recent` fragment,
    `recent_findings_drawer_size`. *Independent.*
    Acceptance: a `finding.posted` on the fake produces a buffer entry with
-   the finding's summary; boot against a fake with 2 claimed and 5
-   unclaimed tasks calls `finding_list` exactly twice; a subsequent
-   `task.claimed` calls it once more.
+   the finding's summary, chosen by `max(created_at)` from an unordered
+   response; the same event replayed leaves the ring unchanged; boot
+   against a fake with 2 claimed and 5 unclaimed tasks calls
+   `finding_list` exactly twice; a subsequent `task.claimed` calls it once
+   more.
 7. **B2 Human identity + agent chips.** `human_agents` ∪ registry `type`;
    role markers on every chip (dashboard rows, gates, detail, claims).
    *Independent.*
@@ -555,10 +657,18 @@ lens parity command (`make check && make diagrams` with no generated drift).
    a plain chip.
 8. **B3 Planning metrics.** `planning.py` (pure): starvation v2, overload
    (humans excluded), keystone (two numbers, corpus-wide), stalled,
-   throughput medians, universe from the snapshot. *Needs A1, B1, B2.*
+   throughput medians (open-age proxy, labelled), universe from the
+   snapshot, per-metric truncation degradation (D10a), corpus-bound
+   degradation. *Needs A1, B1, B2.*
    Acceptance: the table-driven cases in Testing Decisions; the keystone
    case yields `3 downstream / 1 immediately`; a human holding 4 of 5
-   claims does not flag overload.
+   claims does not flag overload; a 30-day-old task made ready a minute ago
+   reports 30 days under the open-age label; with the fake's ready read
+   truncated and blocked complete, starvation is *unknown* and keystone
+   shows both numbers; with blocked truncated and ready complete, starvation
+   is exact and keystone shows N only; with `corpus_max_tasks` set below the
+   fake's open count, keystone reads *not computed* and every other metric
+   renders.
 9. **B4 `/tasks/plan` route.** Three sections, human-gate queue first
    (oldest-first, waiter counts), tagged and human-claimed lists, project
    rows with flag chips and tooltips, throughput table with `Hide dormant`
@@ -567,8 +677,10 @@ lens parity command (`make check && make diagrams` with no generated drift).
    Acceptance: the fake renders a human gate above a tagged task above a
    human-claimed task; a starved project shows `fully-claimed` when its only
    ready task is claimed; a dormant project is absent by default and present
-   with `?dormant=1`; a `task.completed` event refreshes the projects
-   fragment within the debounce window.
+   with `?dormant=1`; the throughput column header reads "open-age of ready
+   work"; a truncated ready read renders depths as `≥ N` with the
+   approximate marker and no starvation chip; a `task.completed` event
+   refreshes the projects fragment within the debounce window.
 
 ### Strand C — flex (each droppable to 0.4.x)
 
@@ -609,6 +721,14 @@ checkpoint: A1 → A3 → A4 → A5.
   evidence for the upstream ask if it is slow in practice.
 - **Task-edge events upstream** (ledger gap #1) — the TTL is the workaround;
   the PRD states the staleness bound rather than hiding it.
+- **A readiness timestamp upstream** (new ledger gap #11) — true ready-age
+  needs Lithos to record when a task last became ready; T2 ships the
+  labelled open-age proxy instead and never fakes it with a Lens-side
+  lifecycle tracker (it would die on restart and lie after a Lithos
+  restart, the same reason T1 rejected a claim ledger).
+- **Fetching ghost edges to complete cross-scope cycles** — the cycle
+  promise is bounded to fetched topology (D4); Lithos's `task_blocked` is
+  the authority for the rest.
 - **All write actions** — T3. **Knowledge graph** — K2.
 - **Sparklines** in the throughput table — still deferred.
 
@@ -616,9 +736,17 @@ checkpoint: A1 → A3 → A4 → A5.
 
 - **Scale posture.** A project scope is ~100 `edge_list` calls cold under a
   16-wide semaphore against local SQLite; the corpus scope the planning view
-  needs is ~330. Both are one-off per TTL window and shared across surfaces.
-  Beyond low thousands of open tasks, the answer is ledger gap #3, not a
-  smarter cache.
+  needs is ~330 — already above the page guard, which is why it has its own
+  bound (D2). Both are one-off per TTL window and shared across surfaces.
+  Beyond `corpus_max_tasks` the planning view degrades visibly; beyond low
+  thousands of open tasks, the answer is ledger gap #3, not a smarter cache.
+- **Normative docs updated with this PRD.** REQUIREMENTS §5.7 (cache, ghost
+  rule, cycle presentation), §5.8.4 (buffer warmup; recompute deferred to
+  X1), §5.9 (badge always on), §5A.4–§5A.6 (keystone, open-age, dormant
+  default, discovery), the §3 env block, and ROADMAP §3 T2 + ledger #11
+  were changed in the same PR, so implementers and slice reviewers have one
+  authority. Where REQUIREMENTS and this PRD still disagree, REQUIREMENTS
+  is wrong and should be fixed, not the PRD re-argued.
 - **Why the text baseline carries the acceptance criteria.** Loom's review
   gate is hermetic and headless. A slice whose only observable output is a
   canvas has nothing a panel can assert; that is the shape that produced the

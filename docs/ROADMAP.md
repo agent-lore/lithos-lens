@@ -122,19 +122,21 @@ ergonomics strand is flex, each slice droppable to 0.4.x. Three strands:
 - **Graph pages**: `/tasks/graph?project=<slug>|epic=<id>` renders the
   dependency DAG (Cytoscape; topological text layers as the no-JS baseline;
   status/type-encoded nodes; cycle callouts; dimmed cross-scope ghost nodes),
-  backed by a cached per-task `edge_list` fan-out. Task detail gains a 1–2-hop
-  dependency mini-graph above its text blocker chain.
+  backed by a per-task `edge_list` cache shared by every graph surface. Task
+  detail gains a two-up-one-down dependency mini-graph above its text blocker
+  chain.
 - **Planning view rebase** (`/tasks/plan`): starvation redefined on the ready
   frontier (fully-blocked vs fully-claimed sub-classification), keystone-task
-  metric ("completing this unblocks N tasks", from the shared graph snapshot),
-  agent-overload flag, stalled detection, throughput on `resolved_since` with
-  median time-to-resolve and median ready-age. Human-actionable section gains
-  the human-gate queue.
-- **Operator ergonomics** carried forward from the pre-graph operator-view
-  plan: recent-findings rolling buffer + drawer, latest-finding line per row,
-  agent chips with role markers and human-agent distinction, task side panel
-  (`?selected=`), title-badge notifications, debounced server-side metric
-  recompute.
+  metric (two honest numbers — `N downstream` / `M become ready immediately`,
+  corpus-wide, from the shared cache), agent-overload flag (humans excluded),
+  stalled detection, throughput on `resolved_since` with median
+  time-to-resolve and median open-age of ready work (a labelled proxy —
+  ledger #11). Human-actionable section gains the human-gate queue.
+- **Operator ergonomics** (flex): the recent-findings buffer (foundational —
+  the planning view's stalled flag reads it), latest-finding line per row +
+  drawer, agent chips with role markers and human-agent distinction, task
+  side panel (`?selected=`), title badge. Debounced **server-side** metric
+  recompute moved to X1 with the transition detector it serves.
 
 ### T3 — Curated Write Actions
 
@@ -207,6 +209,7 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 | 8 | No MCP response resolves inline `[[target]]` wiki-links to note ids (`lithos_read.links[]` is `{target, display}`) | Add `id \| null` per link entry | K1 ships a Lens-side resolver route (UUID / path probe / title disambiguation); inline links resolve per-click rather than per-render. |
 | 9 | `lithos_finding_list` requires `task_id`; `finding.posted` lacks `knowledge_id` | Optional `knowledge_id` filter; add `knowledge_id` to the event payload | Gates K4's cited-by panel entirely. |
 | 10 | Retrieval receipts have no MCP read surface | Receipt read tool (optional) | K3 shows `receipt_id` as text without click-through. |
+| 11 | No readiness timestamp: `lithos_task_ready` returns `created_at` only, and nothing records when a task last *became* ready | `ready_since` on ready rows (or a `task.ready` event) | True ready-age ("how long has available work sat") is unobservable. T2's Planning View ships median **open-age** of ready work, labelled as the proxy it is; a Lens-side lifecycle tracker is rejected for the same reason as the claim ledger (dies on restart, lies after a Lithos restart). |
 
 Minor, noted: `task.updated` carries only `task_id` (forces refetch — fine at
 current scale); task events carry empty `tags`, so `/events?tags=` cannot
