@@ -482,6 +482,18 @@ after the last transition, which is not when anyone is looking. With a callback
 the gauge answers whenever it is asked, and an absent series once again means
 what it should: nothing is reporting.
 
+Every histogram carries explicit bucket boundaries (`telemetry.HISTOGRAM_BUCKETS`),
+because the SDK's defaults — `(0, 5, 10, 25, … 10000)` — are shaped for
+milliseconds and Lens records seconds. Left on the defaults, every healthy
+observation falls into the single bucket `(0, 5]` and `histogram_quantile`
+interpolates inside it, reporting a p50 of 2.5s and a p95 of 4.75s whatever the
+real latency was. Those numbers look like measurements and are not: against the
+live stack, calls averaging 130ms and a call gate averaging 2.8 microseconds
+both reported p95 = 4.75s. Boundaries are chosen per instrument from where the
+mass actually sits, with a boundary ON each operational threshold — the 15s call
+deadline, the 20-read related-panel cap — so "at the limit" is a bucket edge
+rather than something interpolated across.
+
 Every metric label comes from a bounded set: a tool name from Lens's own client
 surface, an outcome enum, or an event type mapped through Lens's allowlist
 (anything else becomes `other`). This is enforced by a test, not assumed —

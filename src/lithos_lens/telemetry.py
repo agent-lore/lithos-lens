@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
@@ -68,6 +69,110 @@ TRACE_EXCLUDED_URLS = "/health,/tasks/events,/static/"
 _initialized = False
 _tracer_provider: TracerProvider | None = None
 _meter_provider: MeterProvider | None = None
+
+# Explicit histogram buckets, keyed by instrument name.
+#
+# The SDK's defaults are (0, 5, 10, 25, 50, ... 10000) and are shaped for
+# MILLISECONDS. Lens records SECONDS, so every healthy observation falls into
+# the single bucket (0, 5] and `histogram_quantile` interpolates inside it --
+# reporting a p50 of 2.5s and a p95 of 4.75s regardless of the real latency.
+# Those are not measurements; they are the midpoint and the 95% point of one
+# bucket. Measured against the live stack, calls averaging 130ms and a call
+# gate averaging 2.8 MICROseconds both reported p95 = 4.75s, which is how the
+# defect announces itself: unrelated instruments agreeing to three digits.
+#
+# Boundaries are chosen per instrument from where the mass actually sits, with
+# a boundary ON each operational threshold so "at the limit" is a bucket edge
+# rather than something interpolated across.
+HISTOGRAM_BUCKETS: dict[str, tuple[float, ...]] = {
+    # Lithos calls: sub-second in practice, abandoned at CALL_TIMEOUT_S (15s),
+    # which is a boundary so timeouts separate from merely slow calls.
+    "lens_lithos_tool_duration_seconds": (
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        15.0,
+        30.0,
+    ),
+    # Queue wait is microseconds when the gate is free, so the bottom boundary
+    # is 0.1ms: everything healthy lands under it and reads as "no queueing",
+    # which is the operational answer. The upper end matches the call deadline,
+    # since the deadline spans the queue.
+    "lens_lithos_call_queue_wait_seconds": (
+        0.0001,
+        0.001,
+        0.005,
+        0.01,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        15.0,
+    ),
+    # One `lithos_related` call plus a bounded read fan-out: tens of ms.
+    "lens_knowledge_related_duration_seconds": (
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+    ),
+    # A COUNT of backend reads, not a duration, so the boundaries are integers.
+    # 19 and 20 are both boundaries so observations sitting exactly ON the
+    # default `related_title_fanout_cap` land in (19, 20] and a p95 of 20 means
+    # notes are genuinely being truncated -- the question this histogram exists
+    # to answer. Tuned for the DEFAULT cap; a deployment that moves the cap far
+    # from 20 wants boundaries moved with it.
+    "lens_knowledge_related_fanout": (
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        10,
+        12,
+        15,
+        18,
+        19,
+        20,
+        25,
+        30,
+        50,
+    ),
+}
+
+
+def _histogram_views() -> list[View]:
+    """One View per histogram, replacing the millisecond-shaped defaults."""
+
+    return [
+        View(
+            instrument_name=name,
+            aggregation=ExplicitBucketHistogramAggregation(boundaries),
+        )
+        for name, boundaries in HISTOGRAM_BUCKETS.items()
+    ]
+
+
 _logger_provider: Any = None
 _log_handler: logging.Handler | None = None
 
@@ -120,7 +225,9 @@ def setup_telemetry(
     )
     if metric_reader is not None:
         _meter_provider = MeterProvider(
-            resource=resource, metric_readers=[metric_reader]
+            resource=resource,
+            metric_readers=[metric_reader],
+            views=_histogram_views(),
         )
         metrics.set_meter_provider(_meter_provider)
 

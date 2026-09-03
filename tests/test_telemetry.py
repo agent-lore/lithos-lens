@@ -23,10 +23,12 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.util.http import parse_excluded_urls
 
+from lithos_lens import metrics
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS, JsonFormatter
 from lithos_lens.telemetry import (
+    HISTOGRAM_BUCKETS,
     TRACE_EXCLUDED_URLS,
     get_meter,
     get_tracer,
@@ -34,7 +36,7 @@ from lithos_lens.telemetry import (
     shutdown_telemetry,
 )
 from lithos_lens.web import create_app
-from tests.conftest import _release_otel_provider_latches
+from tests.conftest import _release_otel_provider_latches, metric_value
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # A note the demo dataset serves, so /note/{id} takes its rendered path.
@@ -595,3 +597,91 @@ def test_the_initialized_event_reports_every_active_signal(
     ]
     assert record.__dict__["otel_exporting_signals"] == ["metrics"]
     assert record.__dict__["otel_exporting"] is True
+
+
+# ── Histogram resolution ──────────────────────────────────────────────
+
+
+def test_every_histogram_has_explicit_buckets() -> None:
+    """A histogram left on the SDK defaults cannot report a real percentile.
+
+    The defaults are ``(0, 5, 10, 25, ... 10000)`` and are shaped for
+    MILLISECONDS. Lens records seconds, so every healthy observation lands in
+    the single bucket ``(0, 5]`` and ``histogram_quantile`` interpolates inside
+    it -- p50 2.5s, p95 4.75s, whatever the real latency was. This walks the
+    instrument catalogue rather than a hand-kept list, so a histogram added
+    later without a view fails here instead of shipping a plausible-looking
+    number nobody can tell is fabricated.
+    """
+    import ast
+
+    source = Path("src/lithos_lens/metrics.py").read_text()
+    declared: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "create_histogram" or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            declared.add(first.value)
+
+    assert declared, "found no histograms to check -- the AST walk is wrong"
+    assert declared <= set(HISTOGRAM_BUCKETS), (
+        f"histograms with no explicit buckets: "
+        f"{sorted(declared - set(HISTOGRAM_BUCKETS))}"
+    )
+    assert set(HISTOGRAM_BUCKETS) <= declared, (
+        f"buckets for instruments that no longer exist: "
+        f"{sorted(set(HISTOGRAM_BUCKETS) - declared)}"
+    )
+
+
+def test_a_sub_second_call_is_not_reported_as_seconds(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The observation has to land in a bucket that can distinguish it.
+
+    130ms is roughly what a real Lithos call costs. Under the SDK defaults it
+    shares the bucket ``(0, 5]`` with everything else sub-5-second, so the only
+    percentile derivable from it is an interpolation across five seconds. Here
+    it must land in ``(0.1, 0.25]``, which is narrow enough for a percentile to
+    mean something.
+    """
+    metrics.lithos_tool_duration().record(0.13, {"tool": "lithos_read"})
+
+    point = metric_value(
+        metric_reader, "lens_lithos_tool_duration_seconds", tool="lithos_read"
+    )
+    bounds = list(point.explicit_bounds)
+    counts = list(point.bucket_counts)
+    occupied = [i for i, c in enumerate(counts) if c]
+
+    assert len(occupied) == 1
+    index = occupied[0]
+    assert bounds[index] == 0.25
+    assert bounds[index - 1] == 0.1
+
+
+def test_the_fanout_cap_sits_on_a_bucket_boundary(
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """ "Is the cap being hit" is only answerable if the cap is an edge.
+
+    With the default boundaries the buckets jump 10 -> 25, so a fan-out of
+    exactly 20 -- a note whose related panel was truncated -- is
+    indistinguishable from one of 11, and a p95 anywhere in that range is
+    interpolated. 19 and 20 are both boundaries here, so a truncated note lands
+    in ``(19, 20]`` on its own.
+    """
+    metrics.knowledge_related_fanout().record(20)
+    metrics.knowledge_related_fanout().record(11)
+
+    point = metric_value(metric_reader, "lens_knowledge_related_fanout")
+    bounds = list(point.explicit_bounds)
+    counts = list(point.bucket_counts)
+    at_cap = counts[bounds.index(20)]
+    below = counts[bounds.index(12)]
+
+    assert at_cap == 1, "the fan-out sitting ON the cap needs its own bucket"
+    assert below == 1
