@@ -202,8 +202,10 @@ The former M3 PRD, rebased: optional LiteLLM client, "Most significant
 findings" curation toggle with complexity slider, MCP-synthesis preference
 layer, and opt-in desktop notifications — retargeted at the new attention
 triggers (human gate waiting, task entering Needs attention, task unblocked).
-Lands after the surfaces it augments (T2's recompute machinery, T1's
-attention model).
+Lands after the surfaces it augments (T2's graph, T2b's planning view, T1's
+attention model), and **builds the server-side debounced recompute** here —
+the transition detector notifications need is the first consumer of a
+server-held derived state.
 
 ### K4 — Feed, Feedback, Cited-By
 
@@ -236,8 +238,8 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 | 8 | No MCP response resolves inline `[[target]]` wiki-links to note ids (`lithos_read.links[]` is `{target, display}`) | Add `id \| null` per link entry | K1 ships a Lens-side resolver route (UUID / path probe / title disambiguation); inline links resolve per-click rather than per-render. |
 | 9 | `lithos_finding_list` requires `task_id`; `finding.posted` lacks `knowledge_id` | Optional `knowledge_id` filter; add `knowledge_id` to the event payload | Gates K4's cited-by panel entirely. |
 | 10 | Retrieval receipts have no MCP read surface | Receipt read tool (optional) | K3 shows `receipt_id` as text without click-through. |
-| 11 | No readiness timestamp: `lithos_task_ready` returns `created_at` only, and nothing records when a task last *became* ready | `ready_since` on ready rows (or a `task.ready` event) | True ready-age ("how long has available work sat") is unobservable. T2's Planning View ships median **open-age** of ready work, labelled as the proxy it is; a Lens-side lifecycle tracker is rejected for the same reason as the claim ledger (dies on restart, lies after a Lithos restart). |
-| 12 | Claims expose `expires_at` but no `claimed_at` (`with_claims` rows and `lithos_task_status`) | `claimed_at` on claim records | An in-progress task with no findings has no observable silence duration, so T2's stalled rule cannot fire on it; Lens labels it `no findings yet` instead of guessing. |
+| 11 | No readiness timestamp: `lithos_task_ready` returns `created_at` only, and nothing records when a task last *became* ready | `ready_since` on ready rows (or a `task.ready` event) | True ready-age ("how long has available work sat") is unobservable. T2b's Planning View ships median **open-age** of ready work, labelled as the proxy it is; a Lens-side lifecycle tracker is rejected for the same reason as the claim ledger (dies on restart, lies after a Lithos restart). |
+| 12 | Claims expose `expires_at` but no `claimed_at` (`with_claims` rows and `lithos_task_status`) | `claimed_at` on claim records | An in-progress task with no findings has no observable silence duration, so T2b's stalled rule cannot fire on it; Lens labels it `no findings yet` instead of guessing. |
 
 Minor, noted: `task.updated` carries only `task_id` (forces refetch — fine at
 current scale); task events carry empty `tags`, so `/events?tags=` cannot
@@ -251,7 +253,7 @@ Two historical numbering schemes existed; both are retired.
 |---|---|
 | Legacy checklist M0 (Common Core), M1 (Tasks MVP), M2 (Tasks SSE) | Shipped in 0.1.0 — §2 above |
 | Legacy checklist M3 (Optional LLM) | **X1** |
-| PRD `milestone-1-operator-view.md` (section-structured operator view) | Rewritten graph-native as **T1**; ergonomics strand (drawer, agent chips, side panel, title badge, recompute) moved to **T2** |
-| PRD `milestone-1-5-planning-view.md` (planning view) | Rebased on the task graph into **T2** |
+| PRD `milestone-1-operator-view.md` (section-structured operator view) | Rewritten graph-native as **T1**; side panel → **T2**; drawer, agent chips, title badge → **T2b**; server-side recompute → **X1** |
+| PRD `milestone-1-5-planning-view.md` (planning view) | Rebased on the task graph into **T2b** (originally slotted in T2; split out 2026-09-04) |
 | PRD `milestone-3-llm-curation-and-desktop-notifications.md` | **X1** |
 | REQUIREMENTS §17 implementation plan (old M0–M11) | Deleted; tasks milestones → T1–T3, knowledge milestones → K1–K4 + pool, LLM milestones → X1 |

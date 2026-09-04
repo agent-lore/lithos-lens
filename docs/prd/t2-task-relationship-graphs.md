@@ -69,7 +69,7 @@ search to jump, click to open the **side panel**.
 
 The side panel is one implementation for dashboard rows and graph nodes:
 `?selected=<id>` server-renders it open, and it shows the task's blockers,
-its dependents, its parent epic, its **downstream impact within the scope**
+its dependents, its parent epic, its **downstream impact within the fetched graph**
 ("frees N, M immediately"), and a link to the full page. The detail page
 gains a two-up-one-down **mini-graph** above its text blocker chain,
 rendered by the same client module.
@@ -93,7 +93,7 @@ is stale, capped, or unreachable says so on the page.
 │  bright, rest dimmed; longest    │   Blocked by: Design schema (open)│
 │  chain traced)   [show as text]  │   Blocks: Ship 0.4, Write docs    │
 │                                  │   Parent: EPIC loom-arch          │
-│                                  │   Frees 4 in scope, 2 immediately │
+│                                  │   Frees 4 in graph, 2 immediately │
 │                                  │   On the longest chain (3 of 5)   │
 ├──────────────────────────────────┴───────────────────────────────────┤
 │ Longest blocking chain (5): influx#41 → Design schema → Implement BLE │
@@ -136,10 +136,12 @@ is stale, capped, or unreachable says so on the page.
 7. As an operator, I want a satisfied edge (predecessor `completed`) dropped
    from the default graph and restored by an `include_resolved` toggle, so
    that the default picture shows what can still run.
-8. As an operator, I want the **longest blocking chain** in the scope
-   computed and named (in text) and traced (on the canvas), so that
-   "what is the critical sequence here" is answered by arithmetic, not by
-   eye.
+8. As an operator, I want the **longest blocking chain** in the graph —
+   over *active* dependencies only, never over edges already satisfied —
+   computed and named (in text) and traced (on the canvas), so that "what
+   is the critical sequence here" is answered by arithmetic, not by eye;
+   and when some task's edges could not be read, I want the chain labelled
+   as a lower bound rather than presented as exact.
 9. As an operator, I want a scope larger than `[graph].max_tasks` refused
    with a "narrow your scope" panel naming the count, so that a graph is
    never rendered unreadably.
@@ -159,11 +161,13 @@ is stale, capped, or unreachable says so on the page.
     folded into an "N isolated tasks" disclosure — hidden by default on a
     project graph, shown by default on an epic graph — so that unrelated
     work does not crowd the relationships, and epic progress is not
-    misrepresented.
+    misrepresented; a task whose edges could not be read is never folded
+    as isolated, because Lens does not know that.
 13. As an operator, I want `?focus=<id>` to be an **exploration mode**:
-    the node centred, its ancestors and descendants lit, everything else
-    dimmed, and the longest chain through it traced — so that "what
-    surrounds this task" is one URL I can share.
+    the node centred, its active ancestors and descendants lit, everything
+    else dimmed, the longest chain through it traced, and its panel open —
+    so that "what surrounds this task" is one URL I can share, and back /
+    forward walk my exploration.
 14. As an operator, I want a search box that jumps to a task by title or id
     within the scope (setting `focus=`), so that a hundred-node graph is
     navigable without scanning.
@@ -182,10 +186,11 @@ is stale, capped, or unreachable says so on the page.
     Expand link — and I want `GET /tasks?selected=<id>` to render it open
     server-side — so that browsing relationships never means leaving the
     board.
-18. As an operator, I want the panel to state the task's **downstream
-    impact within the current scope** — "frees N, M immediately", with M
-    from Lithos's sole-blocker fact — so that the highest-leverage
-    completion is named honestly rather than guessed.
+18. As an operator, I want the panel to state an open task's **downstream
+    impact within the fetched graph** — "frees N, M immediately", over
+    active dependencies, with M from Lithos's sole-blocker fact — so that
+    the highest-leverage completion is named honestly rather than guessed;
+    a completed or cancelled task shows no future-tense impact.
 19. As an operator, I want the detail page to show a mini-graph of the
     task's blockers two hops up and dependents one hop down, capped with an
     honest remainder and a focus link to the full graph, so that "why can't
@@ -234,6 +239,20 @@ This is one new cross-component edge (Events → GraphCache) against the
 `cross_component_edges` budget in `docs/architecture.toml`; raise it with the
 reason in the same diff.
 
+**Completeness is part of the result, not a banner beside it.** A scope
+carries `incomplete: {task_id: reason}` for every node whose `edge_list`
+read failed (REQUIREMENTS §14 already requires the banner; T2 makes the
+state flow into every derived claim), and `as_of` = the **oldest**
+`fetched_at` among the cache entries that contributed, so a mostly-stale
+graph never presents itself as current. Downstream rules, each stated
+where it applies: an incomplete node is **never** isolated (D8); the
+longest chain, the focus lit-set and the impact count become **lower
+bounds** and are labelled so (D7, D8, D10); the page banner names the
+count. A ghost whose `task_get` failed — so Lens cannot tell a completed
+(drop) from a cancelled (show) far endpoint — is **shown** as a ghost with
+`status unknown`, because hiding a possibly-live blocker is the wrong
+direction to err.
+
 ### D3. Text is the first-class baseline
 
 The graph page renders, in order: the cycle callout (if any) and any
@@ -250,20 +269,30 @@ stays in the DOM.
 
 ### D4. Cycles: Lithos is the authority, Lens computes the shape
 
-- **Authority.** The page reads `lithos_task_blocked` **scoped to the
-  page**: for a project scope, `project=<slug>` and, under the `"both"`
-  convention, a second read with `tags=["project:<slug>"]`, unioned
-  (§5B.7's pattern). For an **epic** scope, one such read pair **per
-  distinct project observed in the subtree** (Lens supports multi-project
-  tasks; an epic's children need not share its project) — a handful at
-  most, unioned. Each read uses `limit=frontier_limit`; `len == limit` is
-  truncation (the dashboard's rule). Every in-scope task whose blockers
-  include `kind="cycle"` is marked *in a cycle* with the blocker's
+- **Authority — one coverage plan for cycles and for impact (D10).** The
+  page reads `lithos_task_blocked` **scoped**, one read pair per project in
+  the **coverage set** = every distinct project (per §5B.1) among the
+  in-scope tasks **and the downstream ghosts** (far endpoints of outgoing
+  dependency edges — they appear in impact counts, so their sole-blocker
+  fact must be readable). A read pair is `project=<slug>` plus, under the
+  `"both"` convention, `tags=["<project_tag_key>:<slug>"]` using the
+  configured `[tasks].project_tag_key`, unioned (§5B.7's pattern). A
+  project scope's coverage set is usually one project plus whatever its
+  downstream ghosts add; an epic's is every project its children and
+  downstream ghosts span (Lens supports multi-project tasks). Each read
+  uses `limit=frontier_limit`; `len == limit` is truncation (the
+  dashboard's rule). A task with **no project** under either convention is
+  not reachable by any scoped read; it is marked `cycle status unknown` and
+  excluded from M with the count stated — Lens does not issue an unscoped
+  read to cover it (that read is global, capped, and would make the
+  coverage claim depend on corpus size). Every covered in-scope task whose
+  blockers include `kind="cycle"` is marked *in a cycle* with the blocker's
   `message`, regardless of what Lens's topology finds. A truncated or
   failed read renders a banner ("cycle signal incomplete: blocked read
   truncated / unavailable for project X") and gives every in-scope task
-  absent from the response — or belonging to a project whose read failed —
-  a `cycle status unknown` marker, never an implied "no cycle".
+  absent from the response — or belonging to a project whose read failed
+  or was never made — a `cycle status unknown` marker, never an implied
+  "no cycle".
 - **Shape.** `graph_layout.py` (pure) runs Tarjan's SCC over the `blocks` +
   `waits_on_gate` edges of the **fetched topology** (in-scope nodes' edges;
   ghost edges are never fetched, D5). Every SCC of size > 1, or a
@@ -311,18 +340,33 @@ configurable hop count; the cost is the bounded cycle promise in D4.
   of scope the edge goes. Ghosting applies to far endpoints that are `open`
   (live blocker) or `cancelled` (T1's unsatisfiable case — a graph that hid
   it would contradict the dashboard). All four edge types follow the rule.
+- **Active dependency projection.** When resolved tasks *are* in scope
+  (epic default, or `include_resolved=1`), their satisfied edges are drawn
+  as history — faded, and labelled `satisfied` in text — but every claim
+  about *blocking* is computed over the **active projection** only: a
+  dependency edge is active when its predecessor is `open` or `cancelled`
+  (a cancelled predecessor blocks forever; a completed one blocks nothing).
+  Layers use all fetched dependency edges, because layers describe the
+  planned sequence; the longest **blocking** chain (D7), focus lighting
+  (D8) and downstream impact (D10) use the active projection, because they
+  describe what blocks now. Isolation (D8) uses all fetched dependency
+  edges, so a completed child with satisfied edges is not folded away.
 
 ### D7. Longest blocking chain
 
-Over the condensed DAG in topological order, longest path by node count
-through `blocks` + `waits_on_gate` (a cyclic condensation counts as one
-node; ghosts count). Ties break by the smallest (`created_at`, `id`) at
-each step, so the chain is deterministic. Rendered as one line of text
-("Longest blocking chain (5): A → B → …"), traced on the canvas, and, in
-focus mode, the longest chain *through the focused node* replaces it. The
-panel says "on the longest chain (k of n)" when the selected task is on it.
-This is labelled "within this scope" everywhere — it is not a corpus-wide
-critical path, and the PRD does not claim one.
+Over the condensed DAG of the **active projection** (D6) in topological
+order, longest path by node count through `blocks` + `waits_on_gate` (a
+cyclic condensation counts as one node; ghosts count). Ties break by the
+smallest (`created_at`, `id`) at each step, so the chain is deterministic.
+Rendered as one line of text ("Longest blocking chain (5): A → B → …"),
+traced on the canvas, and, in focus mode, the longest chain *through the
+focused node* replaces it. The panel says "on the longest chain (k of n)"
+when the focused task is on it. A completed `A → B → C` never dominates
+it, because satisfied edges are not in the projection. When the scope is
+**incomplete** (D2) the line reads "Longest blocking chain (≥ 5,
+incomplete: K tasks' edges unreadable)" — a lower bound, never an exact
+claim. This is labelled "within this graph" everywhere — it is not a
+corpus-wide critical path, and the PRD does not claim one.
 
 ### D8. Interactive rendering
 
@@ -333,28 +377,49 @@ critical path, and the PRD does not claim one.
   by the overlay toggle; it is always rendered.
 - **Legend:** persistent, plain language, one line per visible edge type,
   plus the ghost and cycle conventions.
-- **Isolated tasks:** a task with no `blocks`/`waits_on_gate` edge in the
-  scope is *isolated*. Project scope hides them by default; epic scope
-  shows them by default; both render an "N isolated tasks" disclosure and a
-  toggle (`isolated=1|0`). Isolated tasks still count toward `max_tasks`
-  and still appear in the payload.
+- **Isolated tasks:** a task with no fetched `blocks`/`waits_on_gate` edge
+  in the scope (active or satisfied) is *isolated*. A task whose edge read
+  failed is **never** isolated — it renders in the layering with an
+  `edges unknown` marker. Project scope hides isolates by default; epic
+  scope shows them by default; both render an "N isolated tasks" disclosure
+  and a toggle (`isolated=1|0`). Isolated tasks still count toward
+  `max_tasks` and still appear in the payload.
 - **Focus mode (`focus=<id>`):** centre the node, class its ancestors and
-  descendants (transitive, within the fetched topology) as lit and every
-  other node as dimmed, trace the longest chain through it, open the panel.
-  Escape or clearing the search returns to the unfocused view.
+  descendants over the **active projection** (transitive, within the
+  fetched topology) as lit, every other node as dimmed, and any node with
+  unreadable edges as `unknown` (neither lit nor dimmed — its relation is
+  not known), trace the longest chain through it, and open its panel. When
+  the scope is incomplete the lit set is a lower bound and the panel says
+  so. Focusing a **hidden isolate** reveals it: the page sets `isolated=1`
+  in the URL as part of the same transition, so a search hit or a deep link
+  never points at an invisible node.
 - **Search:** a toolbar input matching title substring or id prefix over
   the payload's nodes; selecting a match sets `focus=` via `pushState`.
+- **One URL state, one panel state.** On the graph page `focus` is the
+  *only* selection parameter: focusing opens the focused node's panel,
+  and there is no separate `selected` (a `selected=` arriving on the graph
+  route is treated as `focus=`). Transitions, all via `pushState`:
+  **load** with `focus=A` → A lit, A's panel open; **node click** on B →
+  `focus=B`, B's panel; **search** hit → same as click; **panel close** /
+  **Escape** → `focus` removed, unfocused view, panel closed; **back /
+  forward** → `popstate` re-applies the URL's `focus` / `overlays` /
+  `isolated` from the static payload with no reload. The dashboard keeps
+  `selected` as REQUIREMENTS §5.5 specifies; the two pages do not share a
+  parameter because they do not share a highlight model.
 - **Events:** the page matches event `task_id`s against its node ids and
   shows the "graph changed — refresh" pill; it never re-layouts on its own.
 - **Layout:** `breadthfirst` with the server's `roots`; no physics.
 
 ### D9. Side panel: one implementation for rows and nodes
 
-`GET /tasks?selected=<id>` server-renders the panel open (the no-JS
-baseline). A row click or a node click fetches `GET /tasks/{id}?fragment=
-panel` (same template as the detail page, partial block) and pushes
-`selected` onto the URL; close clears it and preserves list and graph
-state; Expand navigates to `/tasks/{id}`. The panel shows: header (title,
+`GET /tasks?selected=<id>` server-renders the panel open on the
+dashboard, and `GET /tasks/graph?…&focus=<id>` does the same on the graph
+page (the no-JS baseline for both). A row click pushes `selected`; a node
+click pushes `focus` (D8) — one panel implementation, two host pages, each
+with its own single selection parameter. Both fetch `GET /tasks/{id}?
+fragment=panel` (same template as the detail page, partial block); close
+clears the host page's parameter and preserves its other state; Expand
+navigates to `/tasks/{id}`. The panel shows: header (title,
 type badge, status, project chip), active claims, **blockers** with live
 status (the T1 text chain, level 1), **dependents** (outgoing
 `blocks`/`waits_on_gate`, level 1, with status), **parent** breadcrumb,
@@ -366,22 +431,32 @@ when the panel is opened from the detail route.
 
 ### D10. Downstream impact, scoped and labelled
 
-For the selected task, N = open transitive dependents via `blocks` +
-`waits_on_gate` **within the current scope's fetched topology** (ghosts
-included as leaves), M = those whose scoped `task_blocked` entry lists this
-task as their sole unsatisfied blocker. Rendered "frees N in scope, M
-immediately". When the blocked read for the relevant project truncated or
-failed, M is withheld and the label says why. No corpus-wide keystone: that
-needs a corpus scope with its own bound and is T2b's business. Gates are
-eligible (completing a gate is the operator's own move); epics carry no
-`blocks` edges and show no impact.
+For an **open** focused task (or open gate — completing a gate is the
+operator's own move), N = open transitive dependents via the **active
+projection** of `blocks` + `waits_on_gate` **within the fetched graph**
+(downstream ghosts included as leaves), M = those dependents whose scoped
+`task_blocked` entry (D4's coverage set, which includes downstream ghosts'
+projects) lists this task as their sole unsatisfied blocker. Rendered
+"frees N in this graph, M immediately". Degradation, each labelled: when
+the blocked read for a dependent's project truncated, failed or could not
+be made (projectless), M is withheld or stated as "M of the K covered";
+when the scope is incomplete, N is a lower bound ("≥ N"). A **completed or
+cancelled** focused task shows no future-tense line at all — its edges are
+satisfied or unsatisfiable, not pending — the panel says "completed; no
+pending impact" (or "cancelled — its dependents are unsatisfiable", which
+is T1's attention case). Epics carry no `blocks` edges and show no impact.
+No corpus-wide keystone: that needs a corpus scope with its own bound and
+is T2b's business.
 
 ### D11. Detail mini-graph: two up, one down
 
 Incoming `blocks`/`waits_on_gate` to depth 2, outgoing to depth 1, the
 parent epic as a single labelled node, no `discovered_from`. Capped at
-`[graph].mini_graph_max_nodes` (40) through T1's shared remainder tail,
-with a link to `/tasks/graph?project=<slug>&focus=<id>`. Same cache, same
+`[graph].mini_graph_max_nodes` (40) **total, the focal task included**,
+filled in deterministic priority — focal task, parent epic, depth-1
+blockers, depth-1 dependents, depth-2 blockers, each tier in (`created_at`,
+`id`) order — with the remainder reported through T1's shared tail and a
+link to `/tasks/graph?project=<slug>&focus=<id>`. Same cache, same
 payload shape, same client module (arrowheads, legend, colour/shape
 vocabulary); its text baseline is the existing blocker chain plus a new
 "Blocks:" line listing level-1 dependents, so it renders no layers of its
@@ -413,9 +488,9 @@ scope.
 | Endpoint | Purpose |
 |---|---|
 | `GET /tasks/graph` | Scope picker |
-| `GET /tasks/graph?project=<slug>\|epic=<id>[&include_resolved=1][&focus=<id>][&overlays=…][&isolated=1\|0]` | Graph page |
+| `GET /tasks/graph?project=<slug>\|epic=<id>[&include_resolved=1\|0][&focus=<id>][&overlays=…][&isolated=1\|0]` | Graph page (`include_resolved` defaults 0 for project, 1 for epic; `selected=` is accepted as an alias of `focus=`) |
 | `GET /tasks/{task_id}/minigraph` | Mini-graph fragment (payload + container) |
-| `GET /tasks/{task_id}?fragment=panel[&scope=project:<slug>\|epic:<id>]` | Side-panel partial (scope enables impact) |
+| `GET /tasks/{task_id}?fragment=panel[&scope=project:<slug>\|epic:<id>]` | Side-panel partial (scope enables the impact line, computed over that scope's fetched graph) |
 | `GET /tasks?selected=<task_id>` | Dashboard with the panel open (SSR) |
 
 ### MCP / SSE dependencies
@@ -448,17 +523,25 @@ so the e2e visual pipeline sees every branch on one board.
 
 - **graph_cache:** hit/miss/TTL; single-flight (two concurrent scopes → one
   `edge_list` per task, asserted on the fake's call log); eviction on task
-  event; flush on `lens.refresh`; semaphore bound.
+  event; flush on `lens.refresh`; semaphore bound; a failed `edge_list`
+  is recorded in the scope's `incomplete` set (not cached as empty); `as_of`
+  is the oldest contributing `fetched_at`.
 - **graph_scope (pure):** project open-only vs `include_resolved`; epic
   closed-by-default; satisfied edge dropped; open/cancelled far endpoint
   ghosted; ghost edges never fetched; ghosts count toward the guard; refuses
-  at `max_tasks + 1`; isolated set computed from dependency edges only.
+  at `max_tasks + 1`; isolated set computed from all fetched dependency
+  edges; an incomplete node is never in the isolated set; a ghost whose
+  `task_get` failed is shown with `status unknown`, not dropped; the active
+  projection excludes completed predecessors and keeps cancelled ones.
 - **graph_layout (pure, table-driven):** DAG layers; self-loop, 2-cycle and
   3-cycle each an SCC; dependents of a cycle layered below it; ghosts
   top/bottom; roots list; member order and representative path identical
   under reversed input; a Lithos-flagged member with no SCC condensed alone
   and layered; **longest chain** of a known depth-5 DAG; chain through a
-  focused node; deterministic tie-break; a cyclic condensation counts once.
+  focused node; deterministic tie-break; a cyclic condensation counts once;
+  a completed `A → B → C` alongside an open `D → E` yields chain `D → E`
+  (2), not 3; with one node incomplete the chain result is flagged
+  lower-bound.
 - **Graph page rendering:** one `<ol>` per layer with status; callout names
   members in sorted order with one path; a cross-scope cycle (A in scope,
   B and C ghosts, Lithos reporting A `kind="cycle"`) is listed under
@@ -467,25 +550,43 @@ so the e2e visual pipeline sees every branch on one board.
   status unknown` on absent in-scope tasks; a failed read → unavailable
   banner, SCC cycle still rendered; an epic whose child is in another
   project → a blocked read for that project too (call log), and if that
-  read fails only that child is unknown; ghost row shows project chip and
-  both links; the longest-chain line names the depth-5 chain; the isolated
-  disclosure is collapsed on project scope and open on epic scope with the
-  right count; the legend lists exactly the visible edge types; payload
-  node set equals the text's; picker on no scope; refusal panel.
-- **Side panel:** `?selected=` server-renders open with title, blockers,
-  dependents, parent; fragment route returns the partial only; unknown id
-  → not-found panel, not 500; closing keeps `?project=` and `?focus=` (JS
-  test); with `scope=`, impact reads "frees N in scope, M immediately" for
-  a fixture where a task has 3 transitive dependents of which 1 has it as
-  sole blocker → `3`, `1`; with that project's blocked read truncated, M is
-  withheld with the reason.
-- **Mini-graph:** two-up-one-down membership; cap at 40 with tail text;
-  focus link; "Blocks:" line lists level-1 dependents in the text baseline.
-- **Client (`test_tasks_js.py` pattern, extended):** focus classes
-  ancestors/descendants lit and others dimmed for a fixture graph; search
-  match sets `focus=`; overlay toggles add/remove `parent_child` edges and
-  update the URL; the pill appears on a matching `task_id` and the layout
-  is not re-run; Escape clears focus.
+  read fails only that child is unknown; a projectless epic child is
+  `cycle status unknown` with no read attempted for it; with
+  `project_tag_key = "proj"` the tag-side read sends `proj:<slug>` (call
+  log); a downstream cross-project ghost's project appears in the read set
+  (call log); ghost row shows project chip and both links; the
+  longest-chain line names the depth-5 chain and, with one node's edge
+  read failing, reads "≥" with the incomplete count while that node
+  renders with `edges unknown` and outside the isolated disclosure; on an
+  epic graph a completed child's satisfied edges render faded and labelled
+  `satisfied`; `include_resolved=0` on an epic hides its closed children;
+  the isolated disclosure is collapsed on project scope and open on epic
+  scope with the right count; the legend lists exactly the visible edge
+  types; payload node set equals the text's; picker on no scope; refusal
+  panel.
+- **Side panel:** `?selected=` server-renders open on the dashboard and
+  `?focus=` on the graph page, with title, blockers, dependents, parent;
+  fragment route returns the partial only; unknown id → not-found panel,
+  not 500; closing on the dashboard keeps `?project=` (JS test); with
+  `scope=`, impact reads "frees N in this graph, M immediately" for a
+  fixture where an open task has 3 transitive dependents of which 1 has it
+  as sole blocker → `3`, `1`; a downstream cross-project ghost that has the
+  focal task as sole blocker is counted in M; with that project's blocked
+  read truncated, M is withheld with the reason; a completed focal task
+  renders "completed; no pending impact" and no numbers; with one
+  dependent's edge read failed, N reads "≥".
+- **Mini-graph:** two-up-one-down membership; cap counts the focal task
+  (focal + 39 dependents from 60 → "21 more not shown"); priority order
+  (parent and blockers before dependents when the cap binds); focus link;
+  "Blocks:" line lists level-1 dependents in the text baseline.
+- **Client (`test_tasks_js.py` pattern, extended):** focus classes active
+  ancestors/descendants lit, others dimmed, incomplete nodes `unknown` for
+  a fixture graph; search match sets `focus=`; node click replaces `focus`
+  and the panel; close and Escape remove `focus` and close the panel; back
+  after two focuses restores the first with its panel (popstate, no
+  reload); focusing a hidden isolate sets `isolated=1` and reveals it;
+  overlay toggles add/remove `parent_child` edges and update the URL; the
+  pill appears on a matching `task_id` and the layout is not re-run.
 - **Visual (e2e, through loom's artifact review):** project graph with
   cycle + ghost + isolated disclosure + legend + arrowheads; focus mode on
   a mid-chain node; the panel beside the canvas; mini-graph on a blocked
@@ -507,7 +608,10 @@ generated drift).
    next scope refetches only that task; a page scope of `max_tasks + 1`
    (ghosts included) is refused with the count; a completed out-of-scope
    predecessor's edge is absent while a cancelled one is a ghost; a task
-   with only a `parent_child` edge is isolated.
+   with only a `parent_child` edge is isolated; a task whose `edge_list`
+   raises lands in `incomplete`, is not isolated, and the scope's `as_of`
+   is its oldest contributing `fetched_at`; a ghost whose `task_get` fails
+   is present with `status unknown`.
 2. **A2 Topology.** `graph_layout.py`: SCC, condensed Kahn, hierarchy tree,
    roots, deterministic member order + representative path, single-node
    condensation for Lithos-flagged members, **longest blocking chain** (and
@@ -519,7 +623,9 @@ generated drift).
    order renders the same member list and path; an in-scope A with a
    `kind="cycle"` blocker but no SCC is layered and marked; the depth-5
    fixture's longest chain is the known one and the chain through its
-   layer-2 node is the known sub-chain.
+   layer-2 node is the known sub-chain; a completed 3-chain beside an open
+   2-chain yields the open one; an incomplete node flags the chain
+   lower-bound.
 3. **A6 Side panel (dashboard first).** `?selected=` SSR baseline, panel
    fragment route with blockers / dependents / parent / claims, Expand,
    close preserves state, row click wiring on the dashboard. No graph
@@ -536,8 +642,12 @@ generated drift).
    (per project in the subtree for epics). *Needs A1, A2.*
    Acceptance: the graph-page rendering cases in Testing Decisions, in
    full — layers, callout order, cross-scope cycle, truncation and failure
-   banners, multi-project epic read, ghost links, longest chain, isolated
-   disclosure defaults, legend, payload/text equality, picker, refusal.
+   banners, coverage-set reads (multi-project epic, downstream ghost's
+   project, configured tag key, projectless child unknown), ghost links,
+   longest chain incl. the lower-bound and satisfied-edge cases,
+   `include_resolved=0` on an epic, isolated disclosure defaults and the
+   `edges unknown` exclusion, legend, payload/text equality, picker,
+   refusal.
 5. **A4 Cytoscape rendering + interaction.** Vendor script loaded on the
    graph page only; `graph.js`: draw from payload with explicit roots,
    arrowheads, styling vocabulary, compound cycle nodes, longest-chain
@@ -550,24 +660,34 @@ generated drift).
    `task.updated` for a node shows the pill and does not re-layout; text
    remains in the DOM when the canvas is up; clicking a node opens the
    panel with that task.
-6. **A7 Exploration mode.** `focus=`: centre + lit/dimmed classes + chain
-   through the node + panel open; search box → `focus=`; Escape clears;
-   **downstream impact** in the panel (`scope=` param, N from topology, M
-   from the scoped blocked read, withheld on truncation). *Needs A4.*
+6. **A7 Exploration mode.** `focus=` as the graph page's single selection
+   state: centre + lit/dimmed/unknown classes over the active projection +
+   chain through the node + panel open; node click, search, close, Escape
+   and back/forward transitions (D8); hidden-isolate reveal; **downstream
+   impact** in the panel (`scope=` param; N over the active projection, M
+   from the coverage-set blocked reads; lower-bound and withheld
+   labelling; no future tense for a resolved task). *Needs A4.*
    Acceptance: focusing the depth-5 fixture's layer-2 node lights exactly
-   its ancestors and descendants and dims the rest (JS test on classes);
-   the chain line changes to the chain through it; typing a title prefix
-   and selecting sets `focus=`; the panel reads "frees 3 in scope, 1
-   immediately" for the impact fixture and withholds M when that project's
-   blocked read is truncated.
+   its active ancestors and descendants and dims the rest (JS test on
+   classes); the chain line changes to the chain through it; typing a
+   title prefix and selecting sets `focus=`; clicking another node replaces
+   `focus` and the panel; back restores the previous focus without a
+   reload; focusing a hidden isolate sets `isolated=1`; the panel reads
+   "frees 3 in this graph, 1 immediately" for the impact fixture, counts a
+   sole-blocked downstream cross-project ghost in M, withholds M when that
+   ghost's project read is truncated, reads "≥" when a dependent's edge
+   read failed, and shows "completed; no pending impact" for a completed
+   focal task.
 7. **A5 Detail mini-graph.** `/tasks/{id}/minigraph` fragment, two-up-one-
    down scope, cap + tail, focus link, "Blocks:" text line, rendered above
    the text chain on the detail page and on panel-open from the detail
    route. *Needs A4.*
    Acceptance: a task blocked by B (blocked by C) with dependent D renders
-   nodes {C, B, task, D, parent}; a task with 60 dependents renders 40 and
-   "20 more not shown"; the focus link carries the project slug and id;
-   the text baseline lists D under "Blocks:".
+   nodes {C, B, task, D, parent}; a task with no parent, no blockers and 60
+   dependents renders the focal task plus 39 dependents and "21 more not
+   shown"; with a parent and two blockers the cap binds on dependents
+   first; the focus link carries the project slug and id; the text baseline
+   lists D under "Blocks:".
 
 Ready at milestone start: **A1, A2, A6**. Critical path to the 20 Sep
 checkpoint: A1 → A3 → A4 → A7. A5 can land after the checkpoint without
@@ -584,8 +704,11 @@ changing what it measures.
   are theirs.
 - **Corpus-wide keystone and `corpus_max_tasks`** — need a corpus scope;
   T2b. T2's impact number is scoped to the page and says so (D10).
-- **A corpus-wide critical path** — the longest chain is within-scope by
-  construction and labelled so (D7).
+- **A corpus-wide critical path** — the longest chain is within the fetched
+  graph by construction and labelled so (D7).
+- **An unscoped `task_blocked` read to cover projectless tasks** — global,
+  capped, and corpus-size-dependent; projectless tasks are marked unknown
+  instead (D4).
 - **Server-side debounced recompute + OOB fragment push** — X1 (D12).
 - **Desktop notifications** — X1.
 - **Configurable ghost depth** — one hop, by decision (D5).
@@ -631,11 +754,13 @@ changing what it measures.
   dimming, search, and the longest chain as a spine to read along. If a
   hundred-node project is still unreadable with all of those, the next
   lever is a per-epic default scope, not more styling.
-- **Normative docs updated with this PRD.** REQUIREMENTS §5.5 (panel
-  content, mini-graph text line), §5.7 (longest chain, overlays, isolated
-  tasks, focus mode, search, legend, epic multi-project cycle read), §4
-  (`mini_graph_max_nodes`; `corpus_max_tasks` marked T2b), and ROADMAP §3
-  (T2 narrowed, T2b added) were changed in the same PR. REQUIREMENTS is the
+- **Normative docs updated with this PRD.** REQUIREMENTS §5.4.1
+  (ergonomics slotting → T2b), §5.5 (panel content, mini-graph text line
+  and cap), §5.7 (completeness, active projection, longest chain,
+  overlays, isolated tasks, focus/URL state, search, legend, coverage-set
+  cycle read), §4 (`mini_graph_max_nodes`; `corpus_max_tasks` marked T2b),
+  §14 (partial fan-out row), and ROADMAP §3 (T2 narrowed, T2b added, X1
+  wording) and §5 (legacy mapping) were changed in the same PR. REQUIREMENTS is the
   contract; this PRD is its execution plan; the two agree.
 - **Checkpoint measurement.** `bcaf9379` (2026-09-20) measures the
   intervention rate on these slices through loom against August's 43%.
