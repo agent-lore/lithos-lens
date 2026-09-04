@@ -134,9 +134,11 @@ the W38 checkpoint is unaffected, it measures graph slices). One strand,
   one-hop ghosts; Lithos's `task_blocked` stays the authority on cycle
   membership. Backed by a per-task `edge_list` cache shared by every graph
   surface.
-- **Side panel** (`?selected=`): one implementation for dashboard rows and
-  graph nodes — blockers, dependents, parent, and the task's **downstream
-  impact within the scope** ("frees N, M immediately").
+- **Side panel**: one implementation for dashboard rows (`?selected=`) and
+  graph nodes (`?focus=`, the graph page's single selection parameter;
+  `selected=` there is only an alias) — blockers, dependents, parent, and
+  the task's **downstream impact within the fetched graph** ("frees N, M
+  immediately").
 - **Detail mini-graph**: two hops upstream, one downstream, above the text
   blocker chain.
 

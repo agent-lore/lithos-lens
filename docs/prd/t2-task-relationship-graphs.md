@@ -67,8 +67,11 @@ hierarchy/provenance as overlays, isolated tasks folded away, and a real
 exploration mode: focus a node to light its ancestors and descendants,
 search to jump, click to open the **side panel**.
 
-The side panel is one implementation for dashboard rows and graph nodes:
-`?selected=<id>` server-renders it open, and it shows the task's blockers,
+The side panel is one implementation for dashboard rows and graph nodes —
+`/tasks?selected=<id>` server-renders it open on the dashboard,
+`/tasks/graph?…&focus=<id>` on the graph page (each host has one selection
+parameter; the graph route accepts `selected=` only as an alias it
+canonicalises to `focus=`) — and it shows the task's blockers,
 its dependents, its parent epic, its **downstream impact within the fetched graph**
 ("frees N, M immediately"), and a link to the full page. The detail page
 gains a two-up-one-down **mini-graph** above its text blocker chain,
@@ -251,7 +254,11 @@ bounds** and are labelled so (D7, D8, D10); the page banner names the
 count. A ghost whose `task_get` failed — so Lens cannot tell a completed
 (drop) from a cancelled (show) far endpoint — is **shown** as a ghost with
 `status unknown`, because hiding a possibly-live blocker is the wrong
-direction to err.
+direction to err; every dependency edge touching it is of the **`unknown`
+class** (D6), which is neither active nor satisfied. The payload carries
+completeness per node (`completeness: ok | edges_unknown | status_unknown`)
+and state per dependency edge (`state: active | satisfied | unknown`), so
+the client renders exactly what the server computed.
 
 ### D3. Text is the first-class baseline
 
@@ -259,8 +266,10 @@ The graph page renders, in order: the cycle callout (if any) and any
 cycle-signal banner; the legend; the longest blocking chain; the
 topological layers as ordered lists (status, type, claim, project chip for
 ghosts; isolated tasks in their disclosure); the `parent_child` hierarchy
-tree; and a `<script type="application/json">` payload `{nodes, edges,
-layers, cycles, ghosts, longest_chain, isolated, as_of}`. Acceptance
+tree; and a `<script type="application/json">` payload `{nodes (each with
+completeness), edges (dependency edges with state), layers, cycles, ghosts,
+longest_chain (with its exact|lower_bound flag), isolated, incomplete,
+as_of}`. Acceptance
 criteria and pytest assert on the text; the Cytoscape layer is verified
 through the e2e visual-review artifacts (`e2e/`, `develop_artifacts_path`)
 lens already runs through loom. When Cytoscape initialises it draws from the
@@ -324,8 +333,10 @@ layering and in the longest chain (a chain may start at a ghost). Open
 ghosts get title/status from the master open list; only resolved far
 endpoints need a `task_get`, through the same semaphore. Ghosts count
 toward `max_tasks`. A ghost renders dimmed with its project chip and two
-links: its detail page and `/tasks/graph?project=<its slug>`. No
-configurable hop count; the cost is the bounded cycle promise in D4.
+links: its detail page and `/tasks/graph?project=<its slug>`; a ghost with
+`status unknown` renders in the `unknown` style and its edges are the
+`unknown` class (D6). Context ghosts for hierarchy/provenance follow D6.
+No configurable hop count; the cost is the bounded cycle promise in D4.
 
 ### D6. Scope membership and satisfied edges
 
@@ -335,22 +346,43 @@ configurable hop count; the cost is the bounded cycle promise in D4.
 - Epic scope: `lithos_task_children(epic, recursive=True,
   include_closed=True)` plus the epic; **closed children included by
   default**; same toggle, opposite default.
-- **A satisfied edge is dropped, not ghosted.** An edge whose predecessor is
-  `completed` says nothing about what can run; when the predecessor is out
-  of scope the edge goes. Ghosting applies to far endpoints that are `open`
-  (live blocker) or `cancelled` (T1's unsatisfiable case — a graph that hid
-  it would contradict the dashboard). All four edge types follow the rule.
-- **Active dependency projection.** When resolved tasks *are* in scope
-  (epic default, or `include_resolved=1`), their satisfied edges are drawn
-  as history — faded, and labelled `satisfied` in text — but every claim
-  about *blocking* is computed over the **active projection** only: a
-  dependency edge is active when its predecessor is `open` or `cancelled`
-  (a cancelled predecessor blocks forever; a completed one blocks nothing).
-  Layers use all fetched dependency edges, because layers describe the
-  planned sequence; the longest **blocking** chain (D7), focus lighting
-  (D8) and downstream impact (D10) use the active projection, because they
-  describe what blocks now. Isolation (D8) uses all fetched dependency
-  edges, so a completed child with satisfied edges is not folded away.
+- **Dependency edges (`blocks`, `waits_on_gate`) have three states.**
+  `active` — predecessor `open` or `cancelled` (a cancelled predecessor
+  blocks forever, a completed one blocks nothing); `satisfied` —
+  predecessor `completed`; `unknown` — the predecessor is a ghost whose
+  `task_get` failed, so Lens cannot tell which. Only these two edge types
+  are ever "satisfied": completion resolves a dependency, it does not
+  erase hierarchy or provenance.
+- **A satisfied edge is dropped, not ghosted.** When a completed
+  predecessor is out of scope, its dependency edge goes (it returns, faded,
+  under `include_resolved`). Ghosting applies to far endpoints that are
+  `open` (live blocker), `cancelled` (T1's unsatisfiable case — a graph that
+  hid it would contradict the dashboard), or `unknown` (D2).
+- **Active dependency projection.** Every claim about *blocking* — the
+  longest blocking chain (D7), focus lighting (D8), downstream impact
+  (D10) — is computed over **`active` edges only**. An `unknown` edge is
+  excluded from that computation and **degrades every claim it touches to
+  a lower bound** ("≥", "incomplete"): the chain, if any unknown edge
+  touches its condensed DAG; the lit-set, if an unknown edge is reachable
+  from the focused node; impact, if an unknown edge is reachable
+  downstream. Treating an unknown edge as active would make the result no
+  lower bound at all (the predecessor may be completed); omitting it
+  silently would hide a possibly-live relationship — so it is visible,
+  drawn in the `unknown` style, and counted in neither direction. Layers
+  use all fetched dependency edges (active, satisfied, unknown), because
+  layers describe the planned sequence; isolation (D8) likewise, so a
+  completed child with satisfied edges is not folded away.
+- **Hierarchy and provenance edges are never satisfied and never
+  dropped.** `parent_child` and `discovered_from` carry no readiness
+  meaning. Their far endpoint outside the node set is resolved as a
+  **context ghost** — `task_get`, faded, status shown, leaf-only, counted
+  toward `max_tasks` — so an open child keeps its edge to a completed
+  parent and an open follow-on keeps its provenance to the completed task
+  it was discovered from. Parent endpoints are resolved always (the text
+  hierarchy tree is always rendered and a parent chain is short — the
+  hierarchy is a single-parent forest); provenance endpoints are resolved
+  only when the provenance overlay is enabled (`overlays=provenance`,
+  server-rendered per URL), which keeps the default fan-out unchanged.
 
 ### D7. Longest blocking chain
 
@@ -363,9 +395,11 @@ traced on the canvas, and, in focus mode, the longest chain *through the
 focused node* replaces it. The panel says "on the longest chain (k of n)"
 when the focused task is on it. A completed `A → B → C` never dominates
 it, because satisfied edges are not in the projection. When the scope is
-**incomplete** (D2) the line reads "Longest blocking chain (≥ 5,
-incomplete: K tasks' edges unreadable)" — a lower bound, never an exact
-claim. This is labelled "within this graph" everywhere — it is not a
+**incomplete** (D2), or any `unknown` edge touches the condensed DAG (D6),
+the line reads "Longest blocking chain (≥ 5, incomplete: K tasks' edges
+unreadable, J predecessors unresolvable)" — a lower bound, never an exact
+claim; the payload's `longest_chain` carries the `exact | lower_bound`
+flag the client renders. This is labelled "within this graph" everywhere — it is not a
 corpus-wide critical path, and the PRD does not claim one.
 
 ### D8. Interactive rendering
@@ -387,10 +421,11 @@ corpus-wide critical path, and the PRD does not claim one.
 - **Focus mode (`focus=<id>`):** centre the node, class its ancestors and
   descendants over the **active projection** (transitive, within the
   fetched topology) as lit, every other node as dimmed, and any node with
-  unreadable edges as `unknown` (neither lit nor dimmed — its relation is
-  not known), trace the longest chain through it, and open its panel. When
-  the scope is incomplete the lit set is a lower bound and the panel says
-  so. Focusing a **hidden isolate** reveals it: the page sets `isolated=1`
+  unreadable edges — or reached only through an `unknown` edge — as
+  `unknown` (neither lit nor dimmed — its relation is not known), trace
+  the longest chain through it, and open its panel. When the scope is
+  incomplete, or an `unknown` edge is reachable from the focused node, the
+  lit set is a lower bound and the panel says so. Focusing a **hidden isolate** reveals it: the page sets `isolated=1`
   in the URL as part of the same transition, so a search hit or a deep link
   never points at an invisible node.
 - **Search:** a toolbar input matching title substring or id prefix over
@@ -440,7 +475,9 @@ projects) lists this task as their sole unsatisfied blocker. Rendered
 "frees N in this graph, M immediately". Degradation, each labelled: when
 the blocked read for a dependent's project truncated, failed or could not
 be made (projectless), M is withheld or stated as "M of the K covered";
-when the scope is incomplete, N is a lower bound ("≥ N"). A **completed or
+when the scope is incomplete, or an `unknown` edge is reachable
+downstream, N is a lower bound ("≥ N") and the unknown dependents are
+listed as such rather than counted. A **completed or
 cancelled** focused task shows no future-tense line at all — its edges are
 satisfied or unsatisfiable, not pending — the panel says "completed; no
 pending impact" (or "cancelled — its dependents are unsatisfiable", which
@@ -531,8 +568,14 @@ so the e2e visual pipeline sees every branch on one board.
   ghosted; ghost edges never fetched; ghosts count toward the guard; refuses
   at `max_tasks + 1`; isolated set computed from all fetched dependency
   edges; an incomplete node is never in the isolated set; a ghost whose
-  `task_get` failed is shown with `status unknown`, not dropped; the active
-  projection excludes completed predecessors and keeps cancelled ones.
+  `task_get` failed is shown with `status unknown`, not dropped, and its
+  dependency edges are `unknown`; the active projection excludes completed
+  predecessors, keeps cancelled ones, and excludes unknown edges; a
+  completed parent outside an open-only project scope is a context ghost
+  with its `parent_child` edge kept; a completed `discovered_from` source
+  is a context ghost only under `overlays=provenance` (call log shows no
+  `task_get` for it otherwise); the payload carries per-node completeness
+  and per-edge state.
 - **graph_layout (pure, table-driven):** DAG layers; self-loop, 2-cycle and
   3-cycle each an SCC; dependents of a cycle layered below it; ghosts
   top/bottom; roots list; member order and representative path identical
@@ -541,7 +584,9 @@ so the e2e visual pipeline sees every branch on one board.
   focused node; deterministic tie-break; a cyclic condensation counts once;
   a completed `A → B → C` alongside an open `D → E` yields chain `D → E`
   (2), not 3; with one node incomplete the chain result is flagged
-  lower-bound.
+  lower-bound; an in-scope A blocked by an `unknown` ghost yields a chain
+  flagged lower-bound that does not pass through the ghost; an `unknown`
+  edge off the chain's DAG leaves it exact.
 - **Graph page rendering:** one `<ol>` per layer with status; callout names
   members in sorted order with one path; a cross-scope cycle (A in scope,
   B and C ghosts, Lithos reporting A `kind="cycle"`) is listed under
@@ -559,7 +604,11 @@ so the e2e visual pipeline sees every branch on one board.
   read failing, reads "≥" with the incomplete count while that node
   renders with `edges unknown` and outside the isolated disclosure; on an
   epic graph a completed child's satisfied edges render faded and labelled
-  `satisfied`; `include_resolved=0` on an epic hides its closed children;
+  `satisfied`; `include_resolved=0` on an epic hides its closed children; an
+  in-scope task blocked by an `unknown` ghost renders the ghost in the
+  `unknown` style, the chain line lower-bound, and the layer marker
+  "blocked by unresolvable predecessor"; the hierarchy tree shows a
+  completed parent of an open child on an open-only project graph;
   the isolated disclosure is collapsed on project scope and open on epic
   scope with the right count; the legend lists exactly the visible edge
   types; payload node set equals the text's; picker on no scope; refusal
@@ -584,9 +633,11 @@ so the e2e visual pipeline sees every branch on one board.
   a fixture graph; search match sets `focus=`; node click replaces `focus`
   and the panel; close and Escape remove `focus` and close the panel; back
   after two focuses restores the first with its panel (popstate, no
-  reload); focusing a hidden isolate sets `isolated=1` and reveals it;
-  overlay toggles add/remove `parent_child` edges and update the URL; the
-  pill appears on a matching `task_id` and the layout is not re-run.
+  reload); focusing a hidden isolate sets `isolated=1` and reveals it; a
+  node reachable only through an `unknown` edge is classed `unknown` under
+  focus, neither lit nor dimmed; overlay toggles add/remove `parent_child`
+  edges and update the URL; the pill appears on a matching `task_id` and
+  the layout is not re-run.
 - **Visual (e2e, through loom's artifact review):** project graph with
   cycle + ghost + isolated disclosure + legend + arrowheads; focus mode on
   a mid-chain node; the panel beside the canvas; mini-graph on a blocked
@@ -611,7 +662,10 @@ generated drift).
    with only a `parent_child` edge is isolated; a task whose `edge_list`
    raises lands in `incomplete`, is not isolated, and the scope's `as_of`
    is its oldest contributing `fetched_at`; a ghost whose `task_get` fails
-   is present with `status unknown`.
+   is present with `status unknown` and its dependency edges are
+   `unknown`; an open child's completed parent outside the node set is a
+   context ghost; a provenance source is resolved only under
+   `overlays=provenance`.
 2. **A2 Topology.** `graph_layout.py`: SCC, condensed Kahn, hierarchy tree,
    roots, deterministic member order + representative path, single-node
    condensation for Lithos-flagged members, **longest blocking chain** (and
@@ -676,8 +730,8 @@ generated drift).
    "frees 3 in this graph, 1 immediately" for the impact fixture, counts a
    sole-blocked downstream cross-project ghost in M, withholds M when that
    ghost's project read is truncated, reads "≥" when a dependent's edge
-   read failed, and shows "completed; no pending impact" for a completed
-   focal task.
+   read failed or a dependent is an `unknown` ghost (listed, not counted),
+   and shows "completed; no pending impact" for a completed focal task.
 7. **A5 Detail mini-graph.** `/tasks/{id}/minigraph` fragment, two-up-one-
    down scope, cap + tail, focus link, "Blocks:" text line, rendered above
    the text chain on the detail page and on panel-open from the detail
