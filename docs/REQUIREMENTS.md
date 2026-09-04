@@ -336,8 +336,9 @@ desktop_optin = true              # show "Enable notifications" affordance (wiri
 [lithos-lens.graph]                # task dependency graph pages (§5.7)
 cache_ttl_s = 30                  # per-TASK edge cache TTL; task-event-evicted
 max_tasks = 300                   # page-scope size guard (ghosts count); refuse and ask to narrow
-corpus_max_tasks = 1000           # internal corpus-scope bound feeding §5A metrics; above it keystone is "not computed"
 fetch_concurrency = 16            # semaphore for the per-task edge_list fan-out
+mini_graph_max_nodes = 40         # detail mini-graph cap (§5.5.2)
+corpus_max_tasks = 1000           # internal corpus-scope bound feeding §5A metrics (lands with ROADMAP T2b); above it keystone is "not computed"
 
 [lithos-lens.writes]               # curated write actions (§5C)
 enabled = false                   # POST routes are NOT REGISTERED when false
@@ -631,7 +632,7 @@ Removed: the **status filter** (sections express status structurally; `?status=`
 
 ### 5.5 Task Detail: Side Panel + Full-Page Route
 
-Clicking a row opens a **right-side panel** by default (`/tasks?selected=<task_id>`); an **Expand** button navigates to the full-page route (`/tasks/{task_id}`). Both render the same content fragments — single template path, two surfaces. Closing the panel clears the `selected` param and preserves list state.
+Clicking a row — or a node on the graph page (§5.7) — opens a **right-side panel** (`/tasks?selected=<task_id>`; on the graph page the panel sits beside the canvas); an **Expand** button navigates to the full-page route (`/tasks/{task_id}`). Both render the same content fragments — single template path, two surfaces, **one implementation for rows and nodes**. `GET /tasks?selected=<id>` renders the panel open server-side (the no-JS baseline); a click fetches the panel fragment and pushes `selected` onto the URL. Closing the panel clears the `selected` param and preserves list and graph state.
 
 Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claims) + `lithos_task_edge_list(task_id, direction="both")` + `lithos_finding_list(task_id)`, gathered concurrently. An unknown ID returns the `task_not_found` envelope and MUST render a not-found panel, not HTTP 500.
 
@@ -642,6 +643,8 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 | Header | Title, status, **type badge** (task / epic / gate + `gate_type`), creating agent, `created_at`, project chip, `reopened` marker when applicable, **Expand** button |
 | **Why this task is here** *(Needs attention only)* | Reason chips with one-line supporting facts (§5.2.2) |
 | **Why can't this run** *(blocked tasks)* | The blocker chain (§5.5.2) |
+| **Blocks** | Level-1 dependents (outgoing `blocks` / `waits_on_gate`) with live status — the downstream half of the relationship the chain shows upstream |
+| **Downstream impact** *(when opened from a graph, or with a `scope=` in the URL)* | `frees N in scope, M immediately` — N = open transitive dependents within the scope's fetched topology, M = those whose scoped `task_blocked` entry names this task as sole unsatisfied blocker. Labelled *within this scope*; M is withheld (with the reason) when that project's blocked read truncated or failed. Not a corpus-wide keystone — that is §5A.4 (ROADMAP T2b). |
 | Hierarchy | Parent breadcrumb + children table (§5.5.3) |
 | Gate context *(gates)* | §5.5.4 |
 | Provenance | `discovered_from` both directions: "Discovered while working on: X" (incoming) and "Spawned follow-ons: …" (outgoing) |
@@ -655,7 +658,8 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 
 - **Text chain (no-JS baseline, required):** one line per immediate blocker with live status — e.g. `blocked by "Design schema" (open, claimed by agent-zero)`, `waiting on gate "Human review" (human, waiting 2d)`, `blocker "Old spike" was cancelled — unsatisfiable`, `cycle: A → B → A`. Sourced from the task's `task_blocked` entry when available, else from incoming `blocks`/`waits_on_gate` edges plus per-predecessor `lithos_task_get`.
 - **Lazy per-level expansion:** each unfinished blocker line carries an expander that loads *its* blockers one level deeper (HTMX fragment), bounded at **depth ≤ 5**; cycles render an explicit callout instead of recursing.
-- **Mini-graph (progressive enhancement):** a Cytoscape 1–2-hop dependency neighbourhood rendered above the text chain, using the §5.7 styling vocabulary. The text chain remains the accessible baseline. Sequencing: ROADMAP T2.
+- **Blocks line (no-JS baseline):** one line listing level-1 dependents with status, beneath the blocker chain, so the text baseline covers both directions.
+- **Mini-graph (progressive enhancement):** a Cytoscape neighbourhood rendered above the text chain — incoming `blocks`/`waits_on_gate` to depth **2**, outgoing to depth **1**, the parent epic as one labelled node, no `discovered_from` — capped at `[graph].mini_graph_max_nodes` (40) through the shared remainder tail, with a link to `/tasks/graph?project=<slug>&focus=<id>`. Same cache, payload shape, and client module as §5.7 (arrowheads, legend, colour/shape vocabulary). The text chain plus the Blocks line remain the accessible baseline. Sequencing: ROADMAP T2.
 
 #### 5.5.3 Hierarchy
 
@@ -691,15 +695,20 @@ For `task_type="gate"` tasks: the `gate_type` badge; a live countdown to `ready_
 
 **No-JS baseline (required)**
 - **Topological text layers:** Kahn's algorithm over `blocks` + `waits_on_gate` edges of the fetched topology, with every strongly-connected component (Tarjan; size > 1 or a self-loop) **condensed to one node** so cycle members still receive a layer and their dependents are layered below them, marked "blocked via cycle". A cycle renders as a bracketed group inside its layer — members sorted by (`created_at`, `id`) plus one deterministic representative path — and in a "dependency cycle" callout at the top of the page.
-- **Cycle authority is Lithos, cycle shape is Lens:** the page also reads `lithos_task_blocked`, and every in-scope task carrying a `kind="cycle"` blocker is marked *in a cycle* with Lithos's message regardless of what SCC finds. Because ghost edges are never fetched, a cycle passing through two or more out-of-scope tasks is invisible to SCC; such tasks are still marked, listed in the callout under "through tasks outside this scope", condensed alone for layering, and never dropped. The text layers carry the acceptance criteria; Cytoscape below is enhancement over the same embedded JSON payload.
-- **Hierarchy tree:** an indented `parent_child` tree for the scope.
+- **Cycle authority is Lithos, cycle shape is Lens:** the page also reads `lithos_task_blocked` **scoped to the page** — `project=<slug>` plus, under the `"both"` convention, `tags=["project:<slug>"]`, unioned; for an epic scope one such read pair **per distinct project observed in the subtree** (multi-project tasks are supported, §5B.8), unioned — each at `frontier_limit`, with `len == limit` treated as truncation. Every in-scope task carrying a `kind="cycle"` blocker is marked *in a cycle* with Lithos's message regardless of what SCC finds. A truncated or failed read renders a banner and marks every in-scope task absent from the response (or belonging to a project whose read failed) `cycle status unknown` — never an implied "no cycle". Because ghost edges are never fetched, a cycle passing through two or more out-of-scope tasks is invisible to SCC; such tasks are still marked, listed in the callout under "through tasks outside this scope", condensed alone for layering, and never dropped. The text layers carry the acceptance criteria; Cytoscape below is enhancement over the same embedded JSON payload.
+- **Longest blocking chain:** longest path by node count through `blocks` + `waits_on_gate` over the condensed DAG (a cyclic condensation counts once; ghosts count), ties broken by smallest (`created_at`, `id`) at each step so it is deterministic; rendered as one line ("Longest blocking chain (n): A → B → …") and labelled *within this scope* — it is not a corpus-wide critical path and Lens does not claim one.
+- **Isolated tasks:** a task with no `blocks`/`waits_on_gate` edge in the scope is *isolated*; rendered in an "N isolated tasks" disclosure — collapsed by default on a project scope, open by default on an epic scope (hiding an epic's edge-less children would misrepresent its progress) — with a toggle (`isolated=1|0`). Isolated tasks still count toward `max_tasks`.
+- **Legend:** a persistent plain-language legend, one line per visible edge type ("A ──▶ B means *A blocks B*") plus the ghost and cycle conventions — edge direction is easy to misread without it.
+- **Hierarchy tree:** an indented `parent_child` tree for the scope, always rendered regardless of the overlay toggles below.
 
 **Cytoscape rendering (progressive enhancement)**
-- Layout: `breadthfirst` (the DAG's natural shape); no physics simulation.
-- Node **colour = status** (open, completed, cancelled; blocked tasks tinted; in-progress tasks with a subtle pulse), node **shape = type** (ellipse `task`, round-rect `epic`, diamond `gate`).
-- Edge style per type: **solid** `blocks`, **dashed** `waits_on_gate`, **dotted** `discovered_from`, **thin light** `parent_child` (toggleable off — hierarchy is noise when reading dependency flow).
-- Click = side panel (task summary, blockers, link to detail); double-click = navigate to `/tasks/{task_id}`.
-- On task events touching the snapshot, show a **"graph changed — refresh"** pill rather than auto-re-layouting under the operator's cursor.
+- Layout: `breadthfirst` from the server-computed layers and explicit `roots` (every in-degree-zero node of the condensed graph plus one representative per cyclic condensation); no physics simulation. The picture and the text cannot disagree because both come from the same embedded payload.
+- Node **colour = status** (open, completed, cancelled; blocked tasks tinted; in-progress tasks with a subtle pulse), node **shape = type** (ellipse `task`, round-rect `epic`, diamond `gate`); cycle members inside a compound parent with the §5.2.2 `cycle` styling; ghosts dimmed with a project chip.
+- **Arrowheads on every edge.** Edge style per type: **solid** `blocks`, **dashed** `waits_on_gate`. `discovered_from` (dotted) and `parent_child` (thin, light) are **overlays, off by default** — the default view is dependency flow, not hierarchy — toggled in the toolbar and remembered in the URL (`overlays=hierarchy,provenance`).
+- The longest blocking chain is traced on the canvas.
+- **Exploration mode (`?focus=<id>`):** the node centred, its ancestors and descendants (transitive, within the fetched topology) lit and every other node dimmed, the longest chain *through the focused node* traced in place of the scope's, and the side panel opened. A toolbar **search** (title substring or id prefix over the scope) sets `focus=` via `pushState`; Escape clears it. A focused URL is shareable.
+- Click = side panel (§5.5 — the same implementation as dashboard rows, with the downstream-impact line); double-click = navigate to `/tasks/{task_id}`.
+- On task events touching a node on the page, show a **"graph changed — refresh"** pill rather than auto-re-layouting under the operator's cursor.
 
 ### 5.8 Live Updates & Event Pipeline
 

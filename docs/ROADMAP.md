@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.2.0
-Date: 2026-09-02
+Version: 1.3.0
+Date: 2026-09-04
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -72,7 +72,8 @@ T and K milestones touch disjoint modules and may overlap in practice.
 |---|----|---------|---------|--------|-----|--------|
 | 1 | **T1** | Tasks | Graph-native Operator View (read-only) | **shipped** | [t1-graph-native-operator-view.md](./prd/t1-graph-native-operator-view.md) | 0.3.0 |
 | 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
-| 3 | **T2** | Tasks | Graph pages, planning view rebase, operator ergonomics | **next** | [t2-graph-pages-planning-ergonomics.md](./prd/t2-graph-pages-planning-ergonomics.md) | 0.4.0 |
+| 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **next** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
+| 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
 | 4 | **T3** | Tasks | Curated write actions | planned | — | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
@@ -113,30 +114,56 @@ specifies was never wired (Lithos task `cdce170a`). It is tracked as a gap
 rather than as unshipped scope — every user-facing surface in the milestone is
 live.
 
-### T2 — Graph Pages, Planning View, Operator Ergonomics
+### T2 — Task Relationship Graphs
 
-PRD: [t2-graph-pages-planning-ergonomics.md](./prd/t2-graph-pages-planning-ergonomics.md)
-(2026-09-02). Cut line for 0.4.0: graph pages + planning view rebase; the
-ergonomics strand is flex, each slice droppable to 0.4.x. Three strands:
+PRD: [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md)
+(2026-09-02; **narrowed 2026-09-04**: the first draft bundled graph pages,
+the planning view and ergonomics, and two review rounds showed most of its
+correctness machinery served five project-row metrics rather than the
+graph — so the analytics moved to T2b and 0.4.0 became relationship-first;
+the W38 checkpoint is unaffected, it measures graph slices). One strand,
+**relationship-first**, so the graph's value can be judged on its own:
 
 - **Graph pages**: `/tasks/graph?project=<slug>|epic=<id>` renders the
-  dependency DAG (Cytoscape; topological text layers as the no-JS baseline;
-  status/type-encoded nodes; cycle callouts; dimmed cross-scope ghost nodes),
-  backed by a per-task `edge_list` cache shared by every graph surface. Task
-  detail gains a two-up-one-down dependency mini-graph above its text blocker
-  chain.
-- **Planning view rebase** (`/tasks/plan`): starvation redefined on the ready
-  frontier (fully-blocked vs fully-claimed sub-classification), keystone-task
-  metric (two honest numbers — `N downstream` / `M become ready immediately`,
-  corpus-wide, from the shared cache), agent-overload flag (humans excluded),
-  stalled detection, throughput on `resolved_since` with median
-  time-to-resolve and median open-age of ready work (a labelled proxy —
-  ledger #11). Human-actionable section gains the human-gate queue.
-- **Operator ergonomics** (flex): the recent-findings buffer (foundational —
-  the planning view's stalled flag reads it), latest-finding line per row +
-  drawer, agent chips with role markers and human-agent distinction, task
-  side panel (`?selected=`), title badge. Debounced **server-side** metric
-  recompute moved to X1 with the transition detector it serves.
+  dependency graph — topological text layers with cycles condensed into
+  their own layer, the longest blocking chain, and the hierarchy tree as the
+  no-JS baseline; Cytoscape as enhancement with arrowheads, a plain-language
+  legend, dependency edges by default and hierarchy/provenance as overlays,
+  isolated tasks folded away, a **focus** exploration mode (ancestors and
+  descendants lit, the rest dimmed), and search. Cross-scope endpoints are
+  one-hop ghosts; Lithos's `task_blocked` stays the authority on cycle
+  membership. Backed by a per-task `edge_list` cache shared by every graph
+  surface.
+- **Side panel** (`?selected=`): one implementation for dashboard rows and
+  graph nodes — blockers, dependents, parent, and the task's **downstream
+  impact within the scope** ("frees N, M immediately").
+- **Detail mini-graph**: two hops upstream, one downstream, above the text
+  blocker chain.
+
+Seven slices; five of the correctness decisions (per-task cache and its
+staleness bound, bounded cycle promise, satisfied-edge drop, ghost rule,
+scoped and truncation-aware blocked read) carry over from the first draft.
+
+### T2b — Operational Insights
+
+The two strands split out of T2 on 2026-09-04, sequenced after it so that
+the graph is judged before analytics are layered on it. Summary only — the
+PRD is written when T2b comes up, and it inherits the decisions already
+recorded in REQUIREMENTS §5A, §5.8.4, §5.9 and §5.4.1:
+
+- **Planning view rebase** (`/tasks/plan`): starvation on the ready frontier
+  (fully-blocked vs fully-claimed), corpus-wide keystone (two honest numbers)
+  over a corpus scope with its own `corpus_max_tasks` bound, agent overload
+  (humans excluded), stalled detection that fires on evidence only, throughput
+  on `resolved_since` with median time-to-resolve and median **open-age** of
+  ready work (a labelled proxy — ledger #11), per-metric degradation when a
+  frontier read truncates. Human-actionable section led by the human-gate
+  queue.
+- **Operator ergonomics**: the recent-findings buffer (latest-finding-per-task,
+  in-progress-only warmup; ledger #12), latest-finding line per row + drawer,
+  agent chips with role markers and the registry ∪ config human definition,
+  title badge. Debounced **server-side** metric recompute stays at X1 with the
+  transition detector it serves.
 
 ### T3 — Curated Write Actions
 
@@ -201,7 +228,7 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 |---|-----|-----|----------------|
 | 1 | `lithos_task_edge_upsert` emits no event | `task_edge.upserted` event (`from_task_id`, `to_task_id`, `type`, `agent`) | Other agents' dependency edits are invisible until the next task event. T3 covers its own writes with synthetic internal `lens.edge_upserted` events. |
 | 2 | No `lithos_task_edge_delete` | Edge delete (or tombstone) tool | Mistaken dependencies are permanent; re-parenting is impossible (`parent_exists` is a dead end). T3 UI must say so honestly. **Top ask.** |
-| 3 | No bulk graph fetch | `lithos_task_graph(project \| task_ids)` → `{tasks, edges}` | T2 assembles graphs via N per-task `edge_list` calls (semaphored, cached, ~100 calls/project). One indexed SQL join upstream collapses this to one call. |
+| 3 | No bulk graph fetch | `lithos_task_graph(project \| task_ids)` → `{tasks, edges}` | T2 assembles graphs via N per-task `edge_list` calls (semaphored, per-task cached, ~100 calls/project); T2b's corpus scope would be ~330. One indexed SQL join upstream collapses this to one call. |
 | 4 | Expired claims unobservable (lazy query-time filtering) | Expose recently-expired claims, or a `claim.expired` event | The old "expired claim" attention rule is impossible; T1 substitutes a pre-expiry warning. True abandoned-work detection stays blocked. |
 | 5 | Timer-gate resolution emits no event (query-time evaluation) | `gate.resolved` event | T1 self-schedules a dashboard refresh at `min(ready_at)` of visible timer gates. |
 | 6 | `task_cancel.reason` not persisted (event payload only) | Persist cancel reason | Lens shows it live but loses it on reload. |
