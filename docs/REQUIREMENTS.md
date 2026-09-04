@@ -214,13 +214,19 @@ LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
 LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
 LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS=7
 LITHOS_LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
-LITHOS_LENS_TASKS_METRICS_DEBOUNCE_MS=2000
+LITHOS_LENS_TASKS_METRICS_DEBOUNCE_MS=2000       # client-side reconcile debounce
 LITHOS_LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
-# LITHOS_LENS_TASKS_HUMAN_AGENTS=dave,human      # comma-separated agent IDs that represent humans
+LITHOS_LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
+LITHOS_LENS_TASKS_THROUGHPUT_WINDOW_DAYS=30
+LITHOS_LENS_TASKS_BOTTLENECK_MIN_INFLIGHT=3
+LITHOS_LENS_TASKS_BOTTLENECK_CONCENTRATION=0.7
+LITHOS_LENS_TASKS_HUMAN_ACTIONABLE_TAG=human
+# LITHOS_LENS_TASKS_HUMAN_AGENTS=dave,human      # agent IDs treated as human, unioned with registry type="human"
 
 # Task graph pages
-LITHOS_LENS_GRAPH_CACHE_TTL_S=30
-LITHOS_LENS_GRAPH_MAX_TASKS=300
+LITHOS_LENS_GRAPH_CACHE_TTL_S=30                 # per-task edge cache TTL
+LITHOS_LENS_GRAPH_MAX_TASKS=300                  # page-scope size guard (ghosts count)
+LITHOS_LENS_GRAPH_CORPUS_MAX_TASKS=1000          # internal corpus-scope bound (planning metrics)
 LITHOS_LENS_GRAPH_FETCH_CONCURRENCY=16
 
 # Curated writes — disabled by default; POST routes are not registered when false
@@ -315,24 +321,24 @@ unclaimed_ready_age_minutes = 60  # Needs-attention rule 6: ready-but-unclaimed
 stale_open_age_days = 7           # Needs-attention rule 5: stale open
 project_convention = "both"       # metadata | tag | both — see §5B.1
 project_tag_key = "project"       # tag-key reserved for the tag convention
-metrics_debounce_ms = 2000        # server-side debounce for metric recompute on SSE bursts
-recent_findings_drawer_size = 50  # rolling buffer size for drawer + latest-finding line
-recent_findings_warmup_window_h = 48  # boot-time finding.posted backfill window
-stalled_no_findings_hours = 24    # Planning View stalled rule
+metrics_debounce_ms = 2000        # client-side reconcile debounce on SSE bursts (server-side recompute: ROADMAP X1)
+recent_findings_drawer_size = 50  # ring-buffer size for drawer + latest-finding line (warmup covers in-progress tasks only; no window knob)
+stalled_no_findings_hours = 24    # Planning View stalled rule (fires on evidence only — see §5A.4)
 bottleneck_min_inflight = 3       # Planning View agent-overload rule
 bottleneck_concentration = 0.7    # one-agent claim share threshold
 throughput_window_days = 30       # Planning View throughput resolved_since window
 human_actionable_tag = "human"    # tag identifying tasks needing a human
-human_agents = []                 # agent IDs that represent humans, e.g. ["dave"]
+human_agents = []                 # agent IDs treated as human, unioned with registry type="human" (§5A.3)
 
-[lithos-lens.tasks.notifications]
-title_badge = true                # "(N) Lithos Lens" for unseen Needs-attention items
+[lithos-lens.tasks.notifications]  # the title badge (§5.9) is always on and has no knob
 desktop_optin = true              # show "Enable notifications" affordance (wiring: ROADMAP X1)
 
 [lithos-lens.graph]                # task dependency graph pages (§5.7)
-cache_ttl_s = 30                  # in-process snapshot cache TTL; event-invalidated
-max_tasks = 300                   # refuse to render larger scopes; ask to narrow
+cache_ttl_s = 30                  # per-TASK edge cache TTL; task-event-evicted
+max_tasks = 300                   # page-scope size guard (ghosts count); refuse and ask to narrow
 fetch_concurrency = 16            # semaphore for the per-task edge_list fan-out
+mini_graph_max_nodes = 40         # detail mini-graph cap (§5.5.2)
+corpus_max_tasks = 1000           # internal corpus-scope bound feeding §5A metrics (lands with ROADMAP T2b); above it keystone is "not computed"
 
 [lithos-lens.writes]               # curated write actions (§5C)
 enabled = false                   # POST routes are NOT REGISTERED when false
@@ -464,7 +470,7 @@ The view consumes (reads):
 - `lithos_task_list(status="completed"|"cancelled", resolved_since=…)` — recently resolved work
 - `lithos_task_children(epic_id, recursive=true, include_closed=true)` — epic rollups
 - `lithos_task_get(task_id)` / `lithos_task_status(task_id)` / `lithos_task_edge_list(task_id)` / `lithos_finding_list(task_id)` — detail surfaces
-- `lithos_agent_list()`, `lithos_tags(prefix="project:")`, `lithos_stats()` — filter dropdowns and summary signals
+- `lithos_agent_list()`, `lithos_stats()` — filter dropdowns, human identity (§5A.3), summary signals
 - `lithos_read(id, max_length=…)` — resolving `finding.knowledge_id` to note titles
 - the Lithos SSE event stream (§5.8)
 
@@ -475,7 +481,7 @@ Constraints the UI must respect (documented as such; the asks live in the ROADMA
 
 ### 5.2 Operator View Structure
 
-The Operator View renders, top-to-bottom, the following sections. Each is rendered server-side at page load and updated in place via HTMX OOB swaps fed by the SSE pipeline (§5.8).
+The Operator View renders, top-to-bottom, the following sections. Each is rendered server-side at page load and refreshed in place by the debounced client reconcile the SSE pipeline drives (§5.8.4).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -601,13 +607,13 @@ Every list row renders a compact, scannable line (specific layout left to the im
 | **Title** | Truncated to one line; full title in tooltip |
 | **Status / section decorations** | `blocked` decoration on claimed-but-blocked rows; `reopened` marker; blocker chips on Blocked rows; reason chips in Needs attention |
 | **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp, from the server-side rolling buffer (§5.8.4). Updates on `finding.posted`. |
-| **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Agents listed in `[tasks].human_agents` render with a person-icon prefix and distinct background. Clicking an agent chip filters across all roles. |
+| **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Human agents (registry `type="human"` ∪ `[tasks].human_agents`, §5A.3) render with a person-icon prefix and distinct background; the registry `type` string renders as a role marker, and an unregistered id gets a plain chip, never a guessed role. Clicking an agent chip filters across all roles. |
 | **Active claims** | Compact `aspect → agent` list with time-to-expiry, from inline claims |
 | **Tags** | Chips for tags other than the reserved project/human keys |
 | **Created at** | Relative time; absolute on hover |
 
 > [!note] Ergonomics slotting
-> The latest-finding line, recent-findings drawer, agent role chips, side panel, title-badge notifications, and debounced metric recompute are requirements of this document; their delivery is sequenced by ROADMAP (T2, "operator ergonomics" strand). Requirements here do not imply a delivery order.
+> The latest-finding line, recent-findings drawer, agent role chips, title badge and (server-side) debounced metric recompute are requirements of this document; their delivery is sequenced by ROADMAP — the side panel in **T2**, the findings line/drawer, role chips and title badge in **T2b**, server-side recompute in **X1**. Requirements here do not imply a delivery order.
 
 #### 5.4.2 Filters
 
@@ -626,7 +632,7 @@ Removed: the **status filter** (sections express status structurally; `?status=`
 
 ### 5.5 Task Detail: Side Panel + Full-Page Route
 
-Clicking a row opens a **right-side panel** by default (`/tasks?selected=<task_id>`); an **Expand** button navigates to the full-page route (`/tasks/{task_id}`). Both render the same content fragments — single template path, two surfaces. Closing the panel clears the `selected` param and preserves list state.
+Clicking a row — or a node on the graph page (§5.7) — opens a **right-side panel**; an **Expand** button navigates to the full-page route (`/tasks/{task_id}`). Both render the same content fragments — single template path, two host pages, **one implementation for rows and nodes** — and **each host has exactly one selection parameter**: the dashboard uses `selected` (`/tasks?selected=<task_id>`; a row click pushes it, closing clears it and preserves list state), the graph page uses `focus` (`/tasks/graph?…&focus=<task_id>`; a node click pushes it, closing clears it and preserves graph state; the panel sits beside the canvas; §5.7's exploration mode). The graph route accepts `selected=` only as a compatibility alias it canonicalises to `focus=`. Both `GET /tasks?selected=<id>` and `GET /tasks/graph?…&focus=<id>` render the panel open server-side (the no-JS baseline); a click fetches the panel fragment and pushes the host's parameter onto the URL.
 
 Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claims) + `lithos_task_edge_list(task_id, direction="both")` + `lithos_finding_list(task_id)`, gathered concurrently. An unknown ID returns the `task_not_found` envelope and MUST render a not-found panel, not HTTP 500.
 
@@ -637,6 +643,8 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 | Header | Title, status, **type badge** (task / epic / gate + `gate_type`), creating agent, `created_at`, project chip, `reopened` marker when applicable, **Expand** button |
 | **Why this task is here** *(Needs attention only)* | Reason chips with one-line supporting facts (§5.2.2) |
 | **Why can't this run** *(blocked tasks)* | The blocker chain (§5.5.2) |
+| **Blocks** | Level-1 dependents (outgoing `blocks` / `waits_on_gate`) with live status — the downstream half of the relationship the chain shows upstream |
+| **Downstream impact** *(open tasks and gates only; when opened from a graph, or with a `scope=` in the URL)* | `frees N in this graph, M immediately` — N = open transitive dependents over the **active** dependency projection (§5.7) within the fetched graph, downstream ghosts included; M = those whose scoped `task_blocked` entry (§5.7 coverage set) names this task as sole unsatisfied blocker. Labelled *within this graph*; N becomes `≥ N` when any contributing edge read failed; M is withheld or stated as "of the K covered" when a dependent's project read truncated, failed, or could not be made. A completed or cancelled task shows no future-tense line ("completed; no pending impact"). Not a corpus-wide keystone — that is §5A.4 (ROADMAP T2b). |
 | Hierarchy | Parent breadcrumb + children table (§5.5.3) |
 | Gate context *(gates)* | §5.5.4 |
 | Provenance | `discovered_from` both directions: "Discovered while working on: X" (incoming) and "Spawned follow-ons: …" (outgoing) |
@@ -650,7 +658,8 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 
 - **Text chain (no-JS baseline, required):** one line per immediate blocker with live status — e.g. `blocked by "Design schema" (open, claimed by agent-zero)`, `waiting on gate "Human review" (human, waiting 2d)`, `blocker "Old spike" was cancelled — unsatisfiable`, `cycle: A → B → A`. Sourced from the task's `task_blocked` entry when available, else from incoming `blocks`/`waits_on_gate` edges plus per-predecessor `lithos_task_get`.
 - **Lazy per-level expansion:** each unfinished blocker line carries an expander that loads *its* blockers one level deeper (HTMX fragment), bounded at **depth ≤ 5**; cycles render an explicit callout instead of recursing.
-- **Mini-graph (progressive enhancement):** a Cytoscape 1–2-hop dependency neighbourhood rendered above the text chain, using the §5.7 styling vocabulary. The text chain remains the accessible baseline. Sequencing: ROADMAP T2.
+- **Blocks line (no-JS baseline):** one line listing level-1 dependents with status, beneath the blocker chain, so the text baseline covers both directions.
+- **Mini-graph (progressive enhancement):** a Cytoscape neighbourhood rendered above the text chain — incoming `blocks`/`waits_on_gate` to depth **2**, outgoing to depth **1**, the parent epic as one labelled node, no `discovered_from` — capped at `[graph].mini_graph_max_nodes` (40) **total, focal task included**, filled in deterministic priority (focal, parent, depth-1 blockers, depth-1 dependents, depth-2 blockers; (`created_at`, `id`) within a tier) with the remainder through the shared tail, with a link to `/tasks/graph?project=<slug>&focus=<id>`. Same cache, payload shape, and client module as §5.7 (arrowheads, legend, colour/shape vocabulary). The text chain plus the Blocks line remain the accessible baseline. Sequencing: ROADMAP T2.
 
 #### 5.5.3 Hierarchy
 
@@ -678,26 +687,36 @@ For `task_type="gate"` tasks: the `gate_type` badge; a live countdown to `ready_
 **Data assembly**
 - **Node set:** for project scope, the project's tasks per §5B.1 (open tasks always; recently-resolved per the `resolved_since` window, toggleable); for epic scope, `lithos_task_children(epic_id, recursive=true, include_closed=true)` plus the epic itself.
 - **Edge set:** there is **no bulk graph fetch upstream** (ROADMAP ledger ask) — Lens fans out `lithos_task_edge_list(task_id, direction="both")` per node, bounded by a semaphore of `[graph].fetch_concurrency` (16), and **dedupes** edges (each edge is returned from both of its endpoints). Edge records are `{from_task_id, to_task_id, type, direction, metadata, created_by, created_at}`.
-- **Ghost nodes:** edges whose far endpoint lies outside the scope render that endpoint as a dimmed ghost node (fetched via `lithos_task_get` for its title/status) rather than dropping the edge — cross-scope dependencies must be visible.
-- **Snapshot cache:** the assembled `{tasks, edges}` snapshot is cached in-process per scope with TTL `[graph].cache_ttl_s` (30s), invalidated early by any task event touching a node in the snapshot.
-- **Size guard:** scopes larger than `[graph].max_tasks` (300) are refused with a "narrow your scope" panel instead of a degraded render.
+- **Scope membership:** project scope is **open only by default** (epics and gates included); `include_resolved=1` adds tasks resolved within the dashboard's `resolved_since` window. Epic scope includes closed children by default; `include_resolved=0` hides them (same toggle, opposite default).
+- **Active dependency projection:** every claim about *blocking* — the longest blocking chain, focus lighting, downstream impact — is computed over **`active`** dependency edges only (dependent `open`, predecessor `open` or `cancelled`; see the edge-state rule below). `inactive` edges — predecessor completed, or dependent resolved — are drawn faded as history when their endpoints are in scope, labelled with their reason in text. Layers and isolation use all fetched dependency edges, because they describe planned sequence and structure, not what blocks now.
+- **Completeness is part of the result:** the scope carries `incomplete` (every node whose `edge_list` read failed — §14 requires the banner; this makes the state flow into every derived claim) and `as_of` = the **oldest** `fetched_at` among contributing cache entries. An incomplete node is never classified isolated (it renders in the layering with `edges unknown`); the longest chain, the focus lit-set and the impact count become labelled lower bounds ("≥"). A ghost whose `task_get` failed — Lens cannot tell a completed (drop) from a cancelled (show) endpoint — is shown with `status unknown` and its dependency edges are the `unknown` class above; hiding a possibly-live blocker is the wrong way to err. The embedded payload carries per-node completeness and per-edge state so the client renders exactly what the server computed.
+- **Dependency edges have three states, classified from both endpoints — and only dependency edges carry readiness meaning:** a `blocks` / `waits_on_gate` edge is `active` (dependent `open` **and** predecessor `open` or `cancelled`), `inactive` (predecessor `completed` — reason `satisfied`; or dependent `completed`/`cancelled` — reason `dependent_resolved`; rendered faded and labelled with its reason), or `unknown` (either endpoint is a ghost whose `task_get` failed). Completion resolves a dependency; it does not erase hierarchy or provenance. **An inactive edge to an out-of-scope endpoint is dropped, not ghosted** (a completed predecessor's edge returns, faded, under `include_resolved`). **Unknown edges are visible, excluded from the active computation, and degrade every claim they could affect** — the global longest chain whenever *any* unknown edge exists in the fetched graph (a disconnected one may itself be the longest active component), the focus lit-set when one is reachable from the focused node, impact when one is reachable downstream — to a lower bound; treating them as active would make the result no bound at all, omitting them would hide a possibly-live relationship. **`parent_child` and `discovered_from` are never dropped, and context is added upstream only:** the *immediate* out-of-set *parent* of an included node and the out-of-set *`discovered_from` source* of an included node are resolved as faded, leaf-only *context ghosts* (one hop — `task_get` carries no parent id or edges, and a ghost's edges are never read, so no ancestor walk; the root breadcrumb stays on the detail page, §5.5.3) (one `task_get` each, counted toward `max_tasks`) **on every request and always present in the payload**, hidden on the canvas until their overlay is toggled — overlays are client-only state applied from the static payload, so the data must be there before the toggle. An out-of-set *child* or *follow-on* is never ghosted: what the scope's resolved filter excluded stays excluded, so `include_resolved=0` on an epic really hides its completed children. Result: an open child keeps its completed parent and an open follow-on keeps its provenance. The payload's per-edge `state` is `active | inactive | unknown` with `reason: satisfied | dependent_resolved` required on inactive edges (`satisfied` takes precedence when both apply).
+- **Ghost nodes — one hop, leaf-only:** dependency edges whose far endpoint is `open`, `cancelled`, or of unknown status (failed `task_get`) and outside the scope render that endpoint as a dimmed ghost node carrying its project chip, with links to its detail page and to *its* project's graph. Lens **never fetches a ghost's own edges**, so fan-out is bounded by the scope, not the corpus. Ghosts participate in layering and count toward the size guard. Open ghosts take title/status from the master open list; only resolved far endpoints need a `lithos_task_get`.
+- **Per-task edge cache (not a per-scope snapshot):** one in-process entry per `task_id` holding its deduped `edge_list` result, TTL `[graph].cache_ttl_s` (30s), single-flight. Every scope — project, epic, the detail mini-graph, and the Planning View's corpus-wide dependency snapshot — is a pure function over the master task list plus this cache, fanning out only for misses. Any consumed task event evicts that task's entry; `lens.refresh` flushes all. **Edge upserts emit no event** (ROADMAP ledger #1), so an edge added by another agent is invisible until the TTL expires or a task event lands on either endpoint; the page states its `as_of` time rather than implying freshness.
+- **Size guards:** a *page* scope larger than `[graph].max_tasks` (300, ghosts counted) is refused with a "narrow your scope" panel instead of a degraded render. The internal *corpus* scope (never rendered; feeds §5A metrics) is exempt from that guard and bounded by `[graph].corpus_max_tasks` (1000); above it the fan-out is skipped and the dependent metrics render as *not computed* with a banner.
 
 **No-JS baseline (required)**
-- **Topological text layers:** Kahn's algorithm over `blocks` + `waits_on_gate` edges; each layer lists its tasks with status. Cycle members cannot be layered — they are excluded from the layering and rendered in an explicit "dependency cycle" callout naming the members.
-- **Hierarchy tree:** an indented `parent_child` tree for the scope.
+- **Topological text layers:** Kahn's algorithm over `blocks` + `waits_on_gate` edges of the fetched topology, with every strongly-connected component (Tarjan; size > 1 or a self-loop) **condensed to one node** so cycle members still receive a layer and their dependents are layered below them, marked "blocked via cycle". A cycle renders as a bracketed group inside its layer — members sorted by (`created_at`, `id`) plus one deterministic representative path — and in a "dependency cycle" callout at the top of the page.
+- **Cycle authority is Lithos, cycle shape is Lens:** the page also reads `lithos_task_blocked` **scoped**, one read pair per project in the **coverage set** — every distinct §5B.1 project among the in-scope tasks *and the downstream ghosts* (they appear in impact counts, so their sole-blocker fact must be readable; multi-project tasks are supported, §5B.8) — where a read pair is `project=<slug>` plus, under the `"both"` convention, `tags=["<project_tag_key>:<slug>"]` with the configured `[tasks].project_tag_key`, unioned; each at `frontier_limit`, with `len == limit` treated as truncation. A task with no project under either convention is reachable by no scoped read: it is marked `cycle status unknown` and excluded from impact's M with the count stated (Lens issues no unscoped read to cover it — that read is global, capped and corpus-size-dependent). Every in-scope task carrying a `kind="cycle"` blocker is marked *in a cycle* with Lithos's message regardless of what SCC finds. A truncated or failed read renders a banner and marks every in-scope task absent from the response (or belonging to a project whose read failed) `cycle status unknown` — never an implied "no cycle". Because ghost edges are never fetched, a cycle passing through two or more out-of-scope tasks is invisible to SCC; such tasks are still marked, listed in the callout under "through tasks outside this scope", condensed alone for layering, and never dropped. The text layers carry the acceptance criteria; Cytoscape below is enhancement over the same embedded JSON payload.
+- **Longest blocking chain:** longest path by node count through the **active** `blocks` + `waits_on_gate` projection over the condensed DAG (a cyclic condensation counts once; ghosts count), ties broken by smallest (`created_at`, `id`) at each step so it is deterministic; rendered as one line ("Longest blocking chain (n): A → B → …"), "≥ n, incomplete" when any edge read failed, and labelled *within this graph* — it is not a corpus-wide critical path and Lens does not claim one.
+- **Isolated tasks:** a task with no fetched `blocks`/`waits_on_gate` edge in the scope (active, inactive or unknown) is *isolated* — never a task whose edge read failed; rendered in an "N isolated tasks" disclosure — collapsed by default on a project scope, open by default on an epic scope (hiding an epic's edge-less children would misrepresent its progress) — with a toggle (`isolated=1|0`). Isolated tasks still count toward `max_tasks`.
+- **Legend:** a persistent plain-language legend, one line per visible edge type ("A ──▶ B means *A blocks B*") plus the ghost and cycle conventions — edge direction is easy to misread without it.
+- **Hierarchy tree:** an indented `parent_child` tree for the scope, always rendered regardless of the overlay toggles below.
 
 **Cytoscape rendering (progressive enhancement)**
-- Layout: `breadthfirst` (the DAG's natural shape); no physics simulation.
-- Node **colour = status** (open, completed, cancelled; blocked tasks tinted; in-progress tasks with a subtle pulse), node **shape = type** (ellipse `task`, round-rect `epic`, diamond `gate`).
-- Edge style per type: **solid** `blocks`, **dashed** `waits_on_gate`, **dotted** `discovered_from`, **thin light** `parent_child` (toggleable off — hierarchy is noise when reading dependency flow).
-- Click = side panel (task summary, blockers, link to detail); double-click = navigate to `/tasks/{task_id}`.
-- On task events touching the snapshot, show a **"graph changed — refresh"** pill rather than auto-re-layouting under the operator's cursor.
+- Layout: `breadthfirst` from the server-computed layers and explicit `roots` (every in-degree-zero node of the condensed graph plus one representative per cyclic condensation); no physics simulation. The picture and the text cannot disagree because both come from the same embedded payload.
+- Node **colour = status** (open, completed, cancelled; blocked tasks tinted; in-progress tasks with a subtle pulse), node **shape = type** (ellipse `task`, round-rect `epic`, diamond `gate`); cycle members inside a compound parent with the §5.2.2 `cycle` styling; ghosts dimmed with a project chip.
+- **Arrowheads on every edge.** Edge style per type: **solid** `blocks`, **dashed** `waits_on_gate`. `discovered_from` (dotted) and `parent_child` (thin, light) are **overlays, off by default** — the default view is dependency flow, not hierarchy — toggled in the toolbar and remembered in the URL (`overlays=hierarchy,provenance`).
+- The longest blocking chain is traced on the canvas.
+- **Exploration mode (`?focus=<id>`):** the node centred, its ancestors and descendants over the active projection (transitive, within the fetched topology) lit, every other node dimmed, nodes with unreadable edges classed `unknown`, the longest chain *through the focused node* traced in place of the scope's, and the side panel opened. `focus` is the graph page's **only** selection parameter (`selected=` on the graph route is treated as `focus=`): load with `focus=A` → A lit + A's panel; node click or search hit on B → `focus=B` via `pushState`; panel close or Escape → `focus` removed, unfocused view; back/forward → `popstate` re-applies `focus` / `overlays` / `isolated` from the static payload without a reload. Focusing a hidden isolate sets `isolated=1` in the same transition, so a deep link never points at an invisible node. A toolbar **search** (title substring or id prefix over the scope) is one way to set `focus=`. A focused URL is shareable.
+- Click = side panel (§5.5 — the same implementation as dashboard rows, with the downstream-impact line); double-click = navigate to `/tasks/{task_id}`.
+- On task events touching a node on the page, show a **"graph changed — refresh"** pill rather than auto-re-layouting under the operator's cursor.
 
 ### 5.8 Live Updates & Event Pipeline
 
 #### 5.8.1 Connection model
 
-Lens holds one server-side subscription to Lithos `GET /events`, passing a server-side `types=` filter for the consumed set. Browser tabs connect to Lens's own `GET /tasks/events` re-broadcast endpoint, which emits normalized events plus recomputed metric fragments.
+Lens holds one server-side subscription to Lithos `GET /events`, passing a server-side `types=` filter for the consumed set. Browser tabs connect to Lens's own `GET /tasks/events` re-broadcast endpoint, which emits normalized events; tabs refetch fragments through the debounced reconcile (§5.8.4).
 
 Consumed upstream event types (tasks surface): `task.created`, `task.claimed`, `task.released`, `task.completed`, `task.cancelled`, `task.updated`, `task.reopened`, `finding.posted`, `agent.registered`. (Knowledge surfaces add `note.*` and `edge.upserted` — §8.5.) Payload gotchas are catalogued in §16.1.1.
 
@@ -717,13 +736,13 @@ Normalized browser events preserve the Lithos event `id` for dedupe and carry `r
 
 #### 5.8.4 Server-side recompute and rolling buffers
 
-- SSE events mark derived metrics dirty; a debounce window (`tasks.metrics_debounce_ms`, 2000ms) batches bursts; one recompute per window pushes OOB fragments to all open tabs. Manual refresh, page load, and reconnect bypass the debounce.
-- A **recent-findings rolling buffer** (server-side ring buffer, size `tasks.recent_findings_drawer_size`, warmed at boot over `tasks.recent_findings_warmup_window_h`) powers the collapsible **Recent findings drawer** and the per-row latest-finding line, and feeds the Planning View's stalled detection. It survives tab refresh and stays consistent across tabs.
+- **Recompute is client-driven through T2.** Every task surface (dashboard sections, Planning View fragments, the graph page's "graph changed" pill) refreshes through the browser's debounced reconcile (`tasks.metrics_debounce_ms`, 2000ms). Server-side dirty-marking with one recompute per window pushing OOB fragments to all tabs is sequenced at **ROADMAP X1**, where the server-held *transition* detector desktop notifications need is built (a single-operator deployment with one or two tabs gains nothing from it sooner). Manual refresh, page load, and reconnect bypass the debounce.
+- A **recent-findings buffer** (server-side: a latest-finding-per-task map plus a ring buffer of size `tasks.recent_findings_drawer_size`) powers the collapsible **Recent findings drawer**, the per-row latest-finding line, and the Planning View's stalled detection. `finding.posted` carries no summary, so each event triggers a `lithos_finding_list(task_id)` refetch; the newest entry is `max(created_at)` (tie-break `finding_id`) and the ring deduplicates by `finding_id`. **Warmup covers in-progress tasks only** (one `finding_list` per claimed workable task at boot and on `task.claimed`) — there is no corpus-wide findings tool, and in-progress tasks are the only ones the stalled flag needs. The drawer header states "findings since HH:MM" (Lens start) rather than claiming a window. It survives tab refresh and stays consistent across tabs.
 - Timer-gate self-refresh (§5.2.3) is scheduled client-side from a server-rendered `min(ready_at)` attribute.
 
 ### 5.9 Notifications
 
-- **Title-badge** (always on by default; `[tasks].notifications.title_badge`): the page `<title>` becomes `(N) Lithos Lens` while there are unseen Needs-attention items; tab focus clears it.
+- **Title-badge** (always on; no knob): the page `<title>` becomes `(N) Lithos Lens` while there are unseen Needs-attention items; tab focus clears it. Client-side state only.
 - **Desktop notifications** (opt-in; wiring sequenced at ROADMAP X1): an "Enable notifications" affordance in the header. Once granted, Lens fires notifications on **transition events only** (never steady-state), retargeted at the graph-native triggers:
   - a row **enters Needs attention** (any rule),
   - a **human gate** enters the waiting state,
@@ -775,7 +794,7 @@ Three stacked sections answer three sub-questions, top to bottom:
 ├─────────────────────────────────────────────────────────────┤
 │  👤 Human-actionable                                         │
 │     1. Human gates awaiting approval (oldest first,          │
-│        each with "unblocks N" waiter count)                  │
+│        each with "N tasks wait on it")                       │
 │     2. Open tasks tagged `[tasks].human_actionable_tag`      │
 │     3. Tasks claimed by a human agent (resume your work)     │
 ├─────────────────────────────────────────────────────────────┤
@@ -786,15 +805,15 @@ Three stacked sections answer three sub-questions, top to bottom:
 │  📈 Throughput overview                                      │
 │     per project over the resolved_since window:              │
 │     completed, cancelled, completion ratio,                  │
-│     median time-to-resolve, median ready-age                 │
+│     median time-to-resolve, median open-age of ready work    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 5A.3 Human-actionable section
 
-- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("approving this unblocks N tasks") and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
+- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("N tasks wait on it" — waiters may have other blockers, so it is not an unblock promise) and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
 - **Tagged tasks:** open tasks carrying `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first.
-- **Human-claimed tasks:** open tasks claimed by an agent listed in `[tasks].human_agents` — so a human can resume their own work.
+- **Human-claimed tasks:** open tasks claimed by a **human agent** — one whose `lithos_agent_list` entry has `type="human"` (what T3 registers operators as) **or** whose id is in `[tasks].human_agents`; the union is the one definition of "human" across the Tasks views — so a human can resume their own work.
 - Empty state: `Nothing for you to do right now ✓`.
 
 ### 5A.4 Project breakdown
@@ -804,11 +823,13 @@ For every known project (§5B.1 universe), one row showing ready / in-flight / b
 | Flag | Rule |
 |------|------|
 | **Starvation (v2)** | Project has **> 0 open workable tasks but 0 ready-and-unclaimed tasks** — nothing can be picked up. Sub-classified on the chip: `fully-blocked` (nothing is ready) vs `fully-claimed` (ready work exists but every ready task is claimed). The old queue-depth rule is replaced: with a graph, "unclaimed" only matters on the frontier. |
-| **Agent overload** | In-flight depth ≥ `bottleneck_min_inflight` (3) AND one agent holds ≥ `bottleneck_concentration` (0.7) of those claims. Tooltip names the dominant agent. |
-| **Keystone task** | The open task with the most **open transitive dependents** via `blocks`/`waits_on_gate` (computed over the §5.7 graph snapshot). Rendered as `keystone: "<title>" — unblocks N`. Completing keystones is the highest-leverage scheduling move; the chip links to the task detail. |
-| **Stalled** | ≥ 1 in-progress task in the project with no `finding.posted` in the last `stalled_no_findings_hours` (24), per the rolling buffer. Stalled rows also get a row decoration on the Operator View but are never promoted into Needs attention. |
+| **Agent overload** | In-flight depth ≥ `bottleneck_min_inflight` (3) AND one **non-human** agent holds ≥ `bottleneck_concentration` (0.7) of those claims. Humans (registry `type="human"` ∪ `[tasks].human_agents`) are excluded — an operator holding five claims is not a fleet bottleneck. Tooltip names the dominant agent. |
+| **Keystone task** | The open task **or open gate** in the project with the most open transitive dependents via `blocks`/`waits_on_gate`, counted **across the whole corpus** over the §5.7 per-task cache (epics are not candidates). Rendered as `keystone: "<title>" — N downstream`; the tooltip splits *M become ready immediately* (dependents whose `task_blocked` entry lists this task as their sole unsatisfied blocker) from the rest and names the dependents' projects. A single "unblocks N" is not shown — it would be wrong for most keystones. Ties oldest-first; no chip when no candidate has an open dependent; the chip links to the task detail. |
+| **Stalled** | ≥ 1 in-progress task in the project whose latest finding (§5.8.4 map) is older than `stalled_no_findings_hours` (24). **Fires on evidence only.** Two distinct, labelled states are never folded into it: `no findings yet` (the history is known empty — claims expose `expires_at` but no `claimed_at`, so the silence has no observable duration; ROADMAP ledger #12) and `finding status unknown` (the read failed; retried on the next event or reconcile). A failed read is never recorded as an empty history. Stalled rows also get a row decoration on the Operator View but are never promoted into Needs attention. |
 
 Hover on any flag → tooltip with the rule facts (which agent, which task, which chain).
+
+**Degraded semantics.** The ready and blocked frontier reads truncate independently at `frontier_limit`, and the Planning View inherits the dashboard's per-side truncation flag. Per metric: depths render `≥ N` with the approximate marker for a truncated side; **starvation** depends on the ready side only and becomes *unknown* (no chip, tooltip says why) when it is truncated; keystone's `N downstream` comes from edges and is unaffected, while `M immediately` needs a complete blocked frontier and is withheld without one; overload, stalled and throughput read the master list, the findings map and the unlimited resolved lists and are unaffected. Above `[graph].corpus_max_tasks` the keystone renders *not computed* with a banner. Unknown is never rendered as not-fired.
 
 ### 5A.5 Throughput overview
 
@@ -819,13 +840,13 @@ For every project, over the last `tasks.throughput_window_days` (30) using **`re
 | Completed / Cancelled counts | Tasks with `resolved_at` in the window, by terminal status |
 | Completion ratio | `completed / (completed + cancelled)` (or `—` when both zero) |
 | Median time-to-resolve | Median `resolved_at − created_at` over tasks resolved in the window |
-| Median ready-age | Median age of the project's currently ready-and-unclaimed tasks (how long available work sits) |
+| Median open-age of ready work | Median `now − created_at` over the project's currently ready-and-unclaimed tasks, **labelled as open-age**. This is a proxy: `lithos_task_ready` returns `created_at` only, so how long a task has *been ready* is unobservable (an old task whose last blocker just completed reports its full open-age). A readiness timestamp is ROADMAP ledger ask #11; Lens does not fake one with a lifecycle tracker. Marked approximate when the ready read truncated. |
 
-Ordering: completed desc, then ratio desc, then alphabetical. Dormant projects (zero resolved in window) show `0 / 0` by default; a `Hide dormant` toggle (cookie + URL) suppresses them. Sparklines remain deferred.
+Ordering: completed desc, then ratio desc, then alphabetical. Dormant projects (zero resolved in window) are **hidden by default**; the `Hide dormant` toggle (cookie + URL) reveals them as `0 / 0`. Sparklines remain deferred.
 
 ### 5A.6 Project discovery and caching
 
-The project universe is the union of `lithos_tags(prefix="project:")` and the distinct `metadata.project` values observed in the loaded snapshot (§5B.1), fetched once per request and shared with the Operator View. Cache invalidation: page load, manual refresh, and `task.created` events introducing a never-seen project.
+The project universe is what the loaded snapshot observes under both §5B.1 conventions (open tasks plus the `resolved_since` window), shared with the Operator View. **No `lithos_tags` call**: a project with no open task and no resolution in the window is dormant by §5A.5's own definition and hidden by default, so listing it would cost a contract and a per-request call for a row with nothing to say. The Planning View reuses the Operator View's five-call snapshot plus one corpus-wide dependency scope from the §5.7 cache; it introduces no Lithos tools of its own.
 
 ### 5A.7 API
 
@@ -1271,7 +1292,7 @@ Editing happens via TOML/env outside the container. Lens does not write to confi
 | Frontier re-read (skew retry) fails | Keep the first generation rather than mixing generations, and report the failure — the "all systems healthy" stripe is gated on that error channel |
 | `lithos_task_children` errors | Epic chip renders without a progress fraction; tooltip explains |
 | `lithos_task_get` → `task_not_found` | Not-found panel with a link back to `/tasks` (never HTTP 500) |
-| `lithos_task_edge_list` fan-out partial failure (graph page) | Render the partial graph with a "N tasks could not be fetched" banner |
+| `lithos_task_edge_list` fan-out partial failure (graph page) | Render the partial graph with a "N tasks could not be fetched" banner **and** carry the incomplete set into every derived claim (§5.7): affected nodes render `edges unknown` and are never classified isolated; the longest chain, focus lit-set and downstream impact are labelled lower bounds |
 | Write tool errors | Mapped per §5C.4; network failure mid-write renders "the action may or may not have applied — refresh to see current state" (writes are not idempotent) |
 | Expired claims | Invisible by design (§5.1) — claim lists are labelled "active claims"; Lens never renders an expired/released inference |
 | `lithos_retrieve` errors | Silent fallback to `lithos_search` with a "fast search" badge (§7.2) |
@@ -1385,10 +1406,10 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 | `lithos_task_blocked` | `limit`, (`project`, `tags`) | Blocked tasks with structured `blockers[]` (`kind`: `task` / `gate` / `blocker_unsatisfiable` / `cycle`) |
 | `lithos_task_children(task_id)` | `recursive`, `include_closed` | Epic rollups; children tables; epic-scope node sets |
 | `lithos_task_edge_list(task_id)` | `direction`, `types` | Edges touching a task: `{from_task_id, to_task_id, type, direction, metadata, created_by, created_at}`; graph assembly, gate waiters, provenance |
-| `lithos_finding_list(task_id, since?)` | — | Findings timeline; rolling-buffer warm-up. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
+| `lithos_finding_list(task_id, since?)` | — | Findings timeline; findings-buffer refetch on `finding.posted` and in-progress warmup (§5.8.4). Response order is not promised — Lens sorts by `created_at`. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
 | `lithos_stats()` | — | Health probe; summary signals |
 | `lithos_agent_list` | `type`, `active_since` | Agent filter dropdown |
-| `lithos_tags(prefix?)` | — | Project universe (tag convention); tag filters |
+| `lithos_tags(prefix?)` | — | **Not consumed.** The project universe is derived from the loaded snapshot under both conventions (§5A.6) |
 | `lithos_read` | `id` \| `path`, `max_length`, `agent_id` | Note pages; cheap title/metadata fetches (`max_length=1` still returns complete frontmatter metadata); wiki-link path probe. Response carries **no top-level `path`**; `links` entries are unresolved `{target, display}`. |
 | `lithos_search(query)` | `mode="hybrid"`, `limit`, `tags`, `path_prefix` | `/knowledge` search; retrieve fallback. **Snippets contain raw markdown — render escaped** (§7.1) |
 | `lithos_list` | `path_prefix`, `tags`, `since`, `limit`, `offset`, `title_contains` | Recently-updated lists; feed; wiki-link disambiguation |
