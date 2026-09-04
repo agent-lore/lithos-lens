@@ -389,11 +389,14 @@ No configurable hop count; the cost is the bounded cycle promise in D4.
 - **Hierarchy and provenance edges are never satisfied, and context is
   added upstream only.** `parent_child` and `discovered_from` carry no
   readiness meaning, so completion never drops them. But context ghosts
-  are **directional**: Lens resolves the out-of-set **parent** of an
-  included node (and its ancestors up to the root — a single-parent
-  forest, so a short chain) and the out-of-set **`discovered_from`
-  source** of an included node, never an out-of-set **child** or
-  **follow-on**. A child or follow-on that the scope's resolved filter
+  are **directional and one hop**: Lens resolves the **immediate**
+  out-of-set **parent** of an included node and the out-of-set
+  **`discovered_from` source** of an included node — each as a leaf
+  anchor, exactly like a dependency ghost (D5) — never an out-of-set
+  **child** or **follow-on**, and never the parent's own parent: the
+  vendored `task_get` carries no parent id or edges, so a grandparent is
+  only reachable by reading a ghost's `edge_list`, which D5 forbids. The
+  breadcrumb to the root epic stays where T1 put it, on the detail page. A child or follow-on that the scope's resolved filter
   excluded stays excluded; otherwise an epic's edges to its completed
   children would reintroduce exactly what `include_resolved=0` removed.
   Each context ghost is one `task_get`, faded, status shown, leaf-only,
@@ -708,12 +711,14 @@ generated drift).
    is present with `status unknown` and its dependency edges are
    `unknown` in both directions; an open child's completed parent outside
    the node set is a context ghost; an out-of-set `discovered_from` source
-   is a context ghost on the default request; an open epic with one open
-   child and one completed direct child under `include_resolved=0` yields
-   a scope without the completed child and no `task_get` for it (call
-   log), while the open child's own completed parent (a different epic,
-   outside the set) is present as a context ghost; an open → completed
-   edge is `inactive` with reason `dependent_resolved`.
+   is a context ghost on the default request; two hierarchy fixtures —
+   (a) an open epic with one open child and one completed direct child
+   under `include_resolved=0` yields a scope without the completed child
+   and no `task_get` for it (call log); (b) a completed epic with one open
+   child, on an open-only project scope, yields the epic as a context
+   ghost of the child, and no `task_get` for the epic's own parent (call
+   log) — one hop only; an open → completed edge is `inactive` with reason
+   `dependent_resolved`.
 2. **A2 Topology.** `graph_layout.py`: SCC, condensed Kahn, hierarchy tree,
    roots, deterministic member order + representative path, single-node
    condensation for Lithos-flagged members, **longest blocking chain** (and
