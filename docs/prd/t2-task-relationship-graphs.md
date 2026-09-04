@@ -258,7 +258,11 @@ direction to err; every dependency edge touching it — as predecessor or
 as dependent — is of the **`unknown`** class (D6), which is neither active
 nor inactive. The payload carries
 completeness per node (`completeness: ok | edges_unknown | status_unknown`)
-and state per dependency edge (`state: active | satisfied | unknown`), so
+and state per dependency edge (`state: active | inactive | unknown`, with
+`reason: satisfied | dependent_resolved` required when inactive; when a
+completed predecessor meets a resolved dependent, `satisfied` takes
+precedence — the dependency was met regardless of what the dependent
+did), so
 the client renders exactly what the server computed.
 
 ### D3. Text is the first-class baseline
@@ -382,20 +386,26 @@ No configurable hop count; the cost is the bounded cycle promise in D4.
   Layers use all fetched dependency edges (active, inactive, unknown),
   because layers describe the planned sequence; isolation (D8) likewise,
   so a completed child with inactive edges is not folded away.
-- **Hierarchy and provenance edges are never satisfied and never
-  dropped.** `parent_child` and `discovered_from` carry no readiness
-  meaning. Their far endpoint outside the node set is resolved as a
-  **context ghost** — `task_get`, faded, status shown, leaf-only, counted
-  toward `max_tasks` — so an open child keeps its edge to a completed
-  parent and an open follow-on keeps its provenance to the completed task
-  it was discovered from. **Both are resolved on every request and always
-  present in the payload**, hidden on the canvas until their overlay is
-  toggled — the overlays are client-only state applied from the static
-  payload (D8), so the data has to be there before the toggle. The cost is
-  bounded: parent chains are short (single-parent forest) and provenance
-  ghosts number at most the scope's out-of-set `discovered_from`
-  endpoints, each one `task_get` through the same semaphore; both count
-  toward `max_tasks`, so the size guard already accounts for them.
+- **Hierarchy and provenance edges are never satisfied, and context is
+  added upstream only.** `parent_child` and `discovered_from` carry no
+  readiness meaning, so completion never drops them. But context ghosts
+  are **directional**: Lens resolves the out-of-set **parent** of an
+  included node (and its ancestors up to the root — a single-parent
+  forest, so a short chain) and the out-of-set **`discovered_from`
+  source** of an included node, never an out-of-set **child** or
+  **follow-on**. A child or follow-on that the scope's resolved filter
+  excluded stays excluded; otherwise an epic's edges to its completed
+  children would reintroduce exactly what `include_resolved=0` removed.
+  Each context ghost is one `task_get`, faded, status shown, leaf-only,
+  counted toward `max_tasks`, so an open child keeps its edge to a
+  completed parent and an open follow-on keeps its provenance to the
+  completed task it was discovered from. **Both kinds are resolved on
+  every request and always present in the payload**, hidden on the canvas
+  until their overlay is toggled — the overlays are client-only state
+  applied from the static payload (D8), so the data has to be there
+  before the toggle. Provenance sources are upstream by definition, so
+  they need no separate exemption from the resolved filter: a completed
+  source is context, a completed follow-on is filtered scope.
 
 ### D7. Longest blocking chain
 
@@ -595,8 +605,10 @@ so the e2e visual pipeline sees every branch on one board.
   ghost with its `parent_child` edge kept; a completed `discovered_from`
   source outside the node set is a context ghost present in the payload on
   the default request (call log shows its `task_get`) and counts toward
-  `max_tasks`; the payload carries per-node completeness, per-edge state
-  with reason, and `roots`.
+  `max_tasks`; a completed direct child excluded by `include_resolved=0`
+  is not reintroduced as a context ghost (directional context); the
+  payload carries per-node completeness, per-edge `state` with `reason`
+  on inactive edges, and `roots`.
 - **graph_layout (pure, table-driven):** DAG layers; self-loop, 2-cycle and
   3-cycle each an SCC; dependents of a cycle layered below it; ghosts
   top/bottom; roots list; member order and representative path identical
@@ -610,8 +622,10 @@ so the e2e visual pipeline sees every branch on one board.
   disconnected `unknown` edge elsewhere in the graph also flags the global
   chain lower-bound (a known chain of length 1 beside an unknown `X → Y`
   reports "≥ 1"); on an epic fixture, open `A → completed B` puts neither
-  B on the chain nor B in A's ancestry, and reopening A (fake) makes the
-  edge active again.
+  B on the chain nor B in A's ancestry, and reopening B (fake) makes the
+  edge active again; a `completed A → open B` edge is `inactive` with
+  reason `satisfied`, and `completed A → completed B` is also `satisfied`
+  (precedence over `dependent_resolved`).
 - **Graph page rendering:** one `<ol>` per layer with status; callout names
   members in sorted order with one path; a cross-scope cycle (A in scope,
   B and C ghosts, Lithos reporting A `kind="cycle"`) is listed under
@@ -633,7 +647,9 @@ so the e2e visual pipeline sees every branch on one board.
   in-scope task blocked by an `unknown` ghost renders the ghost in the
   `unknown` style, the chain line lower-bound, and the layer marker
   "blocked by unresolvable predecessor"; the hierarchy tree shows a
-  completed parent of an open child on an open-only project graph;
+  completed parent of an open child on an open-only project graph, and on
+  an epic graph with `include_resolved=0` it does not show the epic's
+  completed children;
   the isolated disclosure is collapsed on project scope and open on epic
   scope with the right count; the legend lists exactly the visible edge
   types; payload node set equals the text's; picker on no scope; refusal
@@ -692,8 +708,12 @@ generated drift).
    is present with `status unknown` and its dependency edges are
    `unknown` in both directions; an open child's completed parent outside
    the node set is a context ghost; an out-of-set `discovered_from` source
-   is a context ghost on the default request; an open → completed edge is
-   `inactive` with reason `dependent_resolved`.
+   is a context ghost on the default request; an open epic with one open
+   child and one completed direct child under `include_resolved=0` yields
+   a scope without the completed child and no `task_get` for it (call
+   log), while the open child's own completed parent (a different epic,
+   outside the set) is present as a context ghost; an open → completed
+   edge is `inactive` with reason `dependent_resolved`.
 2. **A2 Topology.** `graph_layout.py`: SCC, condensed Kahn, hierarchy tree,
    roots, deterministic member order + representative path, single-node
    condensation for Lithos-flagged members, **longest blocking chain** (and
