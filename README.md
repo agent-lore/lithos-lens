@@ -160,7 +160,7 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES` | `lithos-lens.tasks.claim_expiring_soon_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 4. |
 | `LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS` | `lithos-lens.tasks.stale_open_age_days` | Integer 1-3650 (same bounds as the TOML key). Needs-attention rule 5. |
 | `LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES` | `lithos-lens.tasks.unclaimed_ready_age_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 6. |
-| `LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES` | `lithos-lens.tasks.dispatch_trigger_tag_prefixes` | Comma-separated tag prefixes, no blank entries. Scopes Needs-attention rule 6 to work a fleet dispatches on. An empty value reads as unset — use the TOML key with `[]` to widen rule 6 back to every ready task. |
+| `LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES` | `lithos-lens.tasks.dispatch_trigger_tag_prefixes` | Comma-separated tag prefixes, no blank entries. Scopes Needs-attention rule 6 to work a fleet dispatches on. Set it to the empty string for the empty list (the TOML `[]` opt-out: rule 6 judges every ready task). |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |
