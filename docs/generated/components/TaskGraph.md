@@ -26,7 +26,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ## Public API
 
 ### `lithos_lens.attention`
-- class `AttentionPolicy` — Thresholds for the age-based Needs-attention rules (3-6).
+- class `AttentionPolicy` — Tuning for the Needs-attention rules that have any (3-6).
 - def `flag_attention` — Evaluate the six-rule severity model over a classified partition.
 
 ### `lithos_lens.blocker_chain`

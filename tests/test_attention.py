@@ -10,13 +10,14 @@ widened) — a rule that can only ever fire is a rule that will cry wolf.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.config import (
     DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES,
+    DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES,
     DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS,
     DEFAULT_TASKS_STALE_OPEN_AGE_DAYS,
     DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES,
@@ -26,6 +27,10 @@ from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import ClaimRecord, SectionName, SectionRow, TaskRecord
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+
+# The dispatch trigger tag loom actually dispatches on — rule 6's scope is
+# "tasks a fleet was expected to pick up", and this is what that looks like.
+_TRIGGER = "trigger:story-develop"
 
 
 def _task(
@@ -108,6 +113,9 @@ def test_attention_policy_defaults_match_the_config_defaults() -> None:
     assert policy.stale_open_age_days == DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
     assert policy.unclaimed_ready_age_minutes == (
         DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
+    )
+    assert policy.dispatch_trigger_tag_prefixes == (
+        DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES
     )
 
 
@@ -282,8 +290,8 @@ def test_stale_open_flags_workable_rows_and_respects_its_knob() -> None:
 def test_ready_unclaimed_flags_only_ready_rows() -> None:
     """Rule 6 is ready-aware: at the same age, the READY row is "the fleet is
     not picking up work" and the BLOCKED row is correct behavior."""
-    unpicked = _task("r", claims=(), created_at=_ago(hours=3))
-    waiting = _task("b", claims=(), created_at=_ago(hours=3))
+    unpicked = _task("r", claims=(), tags=(_TRIGGER,), created_at=_ago(hours=3))
+    waiting = _task("b", claims=(), tags=(_TRIGGER,), created_at=_ago(hours=3))
     sections = _flag(
         [unpicked, waiting],
         ready_ids={"r"},
@@ -300,13 +308,127 @@ def test_ready_unclaimed_flags_only_ready_rows() -> None:
     assert "3h" in row.attention[0].detail
 
 
+# Rule 6's scope matrix (2026-09). The rule assumes a fleet picks ready work up
+# within the hour; on the live corpus only tasks carrying a dispatch trigger tag
+# are ever picked up automatically, so judging the rest emptied Ready and turned
+# Needs attention into the de-facto Ready list. Each row below is one way the
+# scope decision can go: which tag the task carries, which prefixes are
+# configured, whether it is old enough, and whether anyone claimed it.
+_CLAIM = (ClaimRecord(agent="a", aspect="impl", expires_at=_ahead(hours=5)),)
+
+_READY_UNCLAIMED_SCOPE_CASES = [
+    pytest.param(
+        ("project:influx", _TRIGGER),
+        (),
+        {"hours": 3},
+        None,
+        "attention",
+        f'On the ready frontier with "{_TRIGGER}", unclaimed for 3h.',
+        id="dispatch-tagged-and-old-is-promoted",
+    ),
+    pytest.param(
+        ("project:influx",),
+        (),
+        {"hours": 3},
+        None,
+        "ready",
+        None,
+        id="untagged-work-stays-ready-at-any-age",
+    ),
+    pytest.param(
+        ("project:influx",),
+        (),
+        {"hours": 3},
+        (),
+        "attention",
+        "On the ready frontier, unclaimed for 3h.",
+        id="empty-prefix-list-restores-the-old-behaviour",
+    ),
+    pytest.param(
+        (_TRIGGER,),
+        (),
+        {"minutes": 30},
+        None,
+        "ready",
+        None,
+        id="tagged-but-younger-than-the-threshold-stays-ready",
+    ),
+    pytest.param(
+        (_TRIGGER,),
+        _CLAIM,
+        {"hours": 3},
+        None,
+        "in_progress",
+        None,
+        id="tagged-but-claimed-renders-in-progress",
+    ),
+    pytest.param(
+        ("dispatch:robot-day",),
+        (),
+        {"hours": 3},
+        ("trigger:", "dispatch:"),
+        "attention",
+        'On the ready frontier with "dispatch:robot-day", unclaimed for 3h.',
+        id="either-configured-prefix-matches",
+    ),
+    pytest.param(
+        ("dispatch:robot-day",),
+        (),
+        {"hours": 3},
+        None,
+        "ready",
+        None,
+        id="a-prefix-that-is-not-configured-does-not-match",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("tags", "claims", "age", "prefixes", "section", "detail"),
+    _READY_UNCLAIMED_SCOPE_CASES,
+)
+def test_ready_unclaimed_fires_only_for_dispatch_triggered_work(
+    tags: tuple[str, ...],
+    claims: tuple[ClaimRecord, ...],
+    age: dict[str, float],
+    prefixes: tuple[str, ...] | None,
+    section: SectionName,
+    detail: str | None,
+) -> None:
+    """Rule 6 judges only work some fleet was expected to pick up.
+
+    One ready row per case, and it must land in exactly one section: promoted
+    with a ``ready-unclaimed`` chip whose supporting fact NAMES the trigger tag,
+    or left in Ready (or In progress) with no chip at all.
+    """
+    row = _task("r", claims=claims, tags=tags, created_at=_ago(**age))
+    policy = (
+        AttentionPolicy()
+        if prefixes is None
+        else AttentionPolicy(dispatch_trigger_tag_prefixes=prefixes)
+    )
+    sections = _flag([row], ready_ids={"r"}, policy=policy)
+
+    assert _section_ids(sections, section) == ["r"]
+    # Single placement: the row is in that section and nowhere else.
+    for other in ("attention", "ready", "in_progress", "blocked"):
+        if other != section:
+            assert _section_ids(sections, cast(SectionName, other)) == []
+    (rendered,) = sections[section]
+    if section == "attention":
+        assert _rules(rendered) == ["ready-unclaimed"]
+        assert rendered.attention[0].detail == detail
+    else:
+        assert rendered.attention == ()
+
+
 def test_ready_unclaimed_respects_its_knob_and_ignores_claimed_rows() -> None:
     claimed = _task(
         "c",
         claims=(ClaimRecord(agent="a", aspect="impl", expires_at=_ahead(hours=5)),),
         created_at=_ago(hours=3),
     )
-    unpicked = _task("r", claims=(), created_at=_ago(hours=3))
+    unpicked = _task("r", claims=(), tags=(_TRIGGER,), created_at=_ago(hours=3))
     sections = _flag(
         [claimed, unpicked],
         ready_ids={"c", "r"},
@@ -334,7 +456,10 @@ def test_rules_3_to_6_do_not_fire_exactly_at_their_threshold() -> None:
     )
     stale = _task("s", claims=(), created_at=_ago(days=policy.stale_open_age_days))
     unpicked = _task(
-        "r", claims=(), created_at=_ago(minutes=policy.unclaimed_ready_age_minutes)
+        "r",
+        claims=(),
+        tags=(_TRIGGER,),
+        created_at=_ago(minutes=policy.unclaimed_ready_age_minutes),
     )
     claimed = _task(
         "c",
@@ -374,7 +499,10 @@ def test_rules_3_to_6_fire_one_tick_past_their_threshold() -> None:
         "s", claims=(), created_at=_ago(days=policy.stale_open_age_days, minutes=1)
     )
     unpicked = _task(
-        "r", claims=(), created_at=_ago(minutes=policy.unclaimed_ready_age_minutes + 1)
+        "r",
+        claims=(),
+        tags=(_TRIGGER,),
+        created_at=_ago(minutes=policy.unclaimed_ready_age_minutes + 1),
     )
     claimed = _task(
         "c",
@@ -402,7 +530,7 @@ def test_rules_3_to_6_fire_one_tick_past_their_threshold() -> None:
 def test_row_firing_several_rules_appears_once_with_a_chip_per_rule() -> None:
     """De-dup + severity order: an old unclaimed ready row fires rules 5 and 6,
     and renders as ONE row carrying both chips, most severe first."""
-    old_ready = _task("r", claims=(), created_at=_ago(days=20))
+    old_ready = _task("r", claims=(), tags=(_TRIGGER,), created_at=_ago(days=20))
     sections = _flag([old_ready], ready_ids={"r"})
 
     assert _section_ids(sections, "attention") == ["r"]

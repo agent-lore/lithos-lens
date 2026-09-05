@@ -424,6 +424,99 @@ def test_env_override_sets_each_needs_attention_knob(
         assert getattr(config.tasks, name) == default
 
 
+def test_dispatch_trigger_tag_prefixes_default_to_the_loom_convention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Rule 6's scope ships configured: an operator who writes no [tasks] table
+    gets the ``trigger:`` prefix loom dispatches on."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ("trigger:",)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('["trigger:", "dispatch:"]', ("trigger:", "dispatch:")),
+        # The documented opt-out: rule 6 goes back to judging every ready task.
+        ("[]", ()),
+    ],
+)
+def test_dispatch_trigger_tag_prefixes_read_from_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+    expected: tuple[str, ...],
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        f"dispatch_trigger_tag_prefixes = {value}\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == expected
+
+
+@pytest.mark.parametrize("bad", ['"trigger:"', '["trigger:", ""]', "[1]"])
+def test_dispatch_trigger_tag_prefixes_rejects_junk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """A blank prefix would match every tag — silently widening rule 6 back to
+    every ready task while the config still reads as scoped."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        f"dispatch_trigger_tag_prefixes = {bad}\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match="dispatch_trigger_tag_prefixes"):
+        load_config(config_path)
+
+
+def test_env_override_sets_dispatch_trigger_tag_prefixes(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Comma-separated, and it must not disturb its integer neighbours — they
+    share the [tasks] apply pass."""
+    monkeypatch.setenv(
+        "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "trigger:, dispatch:"
+    )
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ("trigger:", "dispatch:")
+    assert config.tasks.unclaimed_ready_age_minutes == 60
+
+
+def test_env_override_dispatch_trigger_tag_prefixes_empty_value_is_the_opt_out(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty list is the whole point of the knob (rule 6 back to every ready
+    task), and the only comma-separated spelling of it is an empty value — so
+    this override is gated on the variable being PRESENT, not on it being
+    non-blank like its integer neighbours."""
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ()
+
+
+def test_env_override_dispatch_trigger_tag_prefixes_rejects_a_blank_entry(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "trigger:,")
+
+    with pytest.raises(
+        ConfigError, match="LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES"
+    ):
+        load_config(lithos_lens_config_env)
+
+
 @pytest.mark.parametrize(
     ("key", "over_max"),
     [
