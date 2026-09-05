@@ -146,6 +146,13 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
         # The cancelled predecessor and what it strands. A cancelled blocker
         # can never complete, so this edge stays ACTIVE forever — the case a
         # graph that hid cancelled endpoints would contradict the dashboard on.
+        #
+        # This strand carries its own ``area:`` tag, the way the influx rows do.
+        # That is what gives the e2e suite a slice of the TRUNCATED board whose
+        # Needs-attention list is empty while the Not-classified tail still has
+        # a row in it — the only state that renders the "cannot assess" stripe,
+        # and the honest one: the row that would have been flagged
+        # (unsatisfiable) is precisely the one the capped read did not return.
         TaskRecord(
             id="loom-cancelled-pred",
             title="Port the legacy run bridge",
@@ -156,7 +163,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             # Static and inside the browsing suites' since=2026-08-01 window,
             # for the same reason the influx terminal rows are.
             resolved_at="2026-08-25T12:00:00+00:00",
-            tags=LOOM_TAGS,
+            tags=(*LOOM_TAGS, "area:archive"),
         ),
         TaskRecord(
             id="loom-blocked-forever",
@@ -164,7 +171,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             status="open",
             created_by="worker-b",
             created_at=ago(days=1, hours=2),
-            tags=LOOM_TAGS,
+            tags=(*LOOM_TAGS, "area:archive"),
         ),
         # Two completed predecessors, one INSIDE the resolved window and one
         # outside it. Both their edges are `satisfied`; the difference is

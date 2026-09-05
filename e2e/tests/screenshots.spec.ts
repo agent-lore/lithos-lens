@@ -78,28 +78,31 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.locator('[data-task-group="unclassified"] .task-row').first(),
       ).toBeVisible();
-      // 2. The accuracy banner, naming the one side that truncated.
+      // 2. The accuracy banner, naming the one side that truncated. Which
+      //    side that is follows the fixture counts, not the slice: since the
+      //    graph cluster landed, Blocked is the larger frontier (see
+      //    `servers.ts`), so the limit separates them the other way round.
       const banner = page.locator("[data-truncation-banner]");
       await expect(banner).toBeVisible();
       await expect(banner).toContainText(
-        `ready frontier truncated at ${TRUNCATED_FRONTIER_LIMIT}`,
+        `blocked frontier truncated at ${TRUNCATED_FRONTIER_LIMIT}`,
       );
-      // 3. The per-counter marking on both counters the ready read feeds.
+      // 3. The per-counter marking on both counters the blocked read feeds.
       await expect(
-        page.locator('[data-approximate-count="ready"]'),
+        page.locator('[data-approximate-count="blocked"]'),
       ).toBeVisible();
       await expect(
         page.locator('[data-approximate-count="attention"]'),
       ).toBeVisible();
       // 4. The honesty claim itself, which is the whole slice: at this limit
-      //    the blocked read answered IN FULL, so the Blocked card carries an
+      //    the ready read answered IN FULL, so the Ready card carries an
       //    exact count and must show no marking at all. A regression to the
       //    board-wide banner fails right here.
       await expect(
-        page.locator('[data-approximate-count="blocked"]'),
+        page.locator('[data-approximate-count="ready"]'),
       ).toHaveCount(0);
       await expect(
-        page.locator('[data-task-group="blocked"] .task-row').first(),
+        page.locator('[data-task-group="ready"] .task-row').first(),
       ).toBeVisible();
     },
   },

@@ -471,6 +471,49 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
         )
 
 
+def test_the_truncation_instance_limit_still_separates_the_two_frontiers() -> None:
+    """The truncated-board capture only proves anything at the right limit.
+
+    ``e2e/servers.ts`` picks a ``frontier_limit`` that sits BETWEEN the demo's
+    two frontier sizes, so one read comes back capped and the other complete —
+    that pairing is the whole subject of the per-side marking the capture
+    photographs, and at a limit below both sides it degrades to the board-wide
+    banner that was already there.
+
+    The coupling is invisible from either file alone: growing the fixtures
+    (T2-A1's graph cluster did) silently moves which side overflows. Checked
+    here rather than only in Playwright because `make check` runs on every
+    change and `make e2e` does not — this exact drift shipped once already.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    servers = (repo_root / "e2e/servers.ts").read_text()
+    match = re.search(r'TRUNCATED_FRONTIER_LIMIT = "(\d+)"', servers)
+    assert match, "e2e/servers.ts no longer declares TRUNCATED_FRONTIER_LIMIT"
+    limit = int(match.group(1))
+
+    dataset = demo_dataset()
+    open_ids = {task.id for task in dataset.tasks if task.status == "open"}
+    ready = len(open_ids & set(dataset.ready_ids))
+    blocked = len(open_ids & set(dataset.blocked))
+
+    # A read is truncated exactly when it comes back holding `limit` rows.
+    capped = {"ready": ready >= limit, "blocked": blocked >= limit}
+    truncating = [side for side, is_capped in capped.items() if is_capped]
+    assert len(truncating) == 1, (
+        f"frontier_limit {limit} against {ready} ready / {blocked} blocked "
+        f"caps {truncating or 'neither side'}; the capture needs exactly one. "
+        "Pick a limit strictly between the two counts and update "
+        "e2e/tests/screenshots.spec.ts to name that side."
+    )
+
+    # ...and the capture must assert the side that actually caps.
+    spec = (repo_root / "e2e/tests/screenshots.spec.ts").read_text()
+    assert f"{truncating[0]} frontier truncated at" in spec, (
+        f"the {truncating[0]} frontier is the one that truncates, but "
+        "screenshots.spec.ts asserts a different side's banner"
+    )
+
+
 @pytest.mark.anyio
 async def test_fake_client_task_get_missing_raises_coded_error() -> None:
     client = FakeLithosClient()
