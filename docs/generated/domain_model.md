@@ -215,6 +215,7 @@ classDiagram
   class GraphScopeLimits {
     +max_tasks int
     +fetch_concurrency int
+    +ghost_read_budget int
   }
   class LinkPage {
     +total int

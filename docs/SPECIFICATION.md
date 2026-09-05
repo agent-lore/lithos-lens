@@ -260,14 +260,13 @@ silently.
   this run?" list that quietly drops blockers is worse than a slow one.
 - **Graph scope size** — a dependency-graph scope whose rendered node set
   (ghosts counted) is larger than `graph.max_tasks` is refused with that exact
-  count rather than rendered unreadably. Two cheaper checks bracket it so the
-  reads behind that answer stay bounded: a task set already over the guard is
-  refused before any edge is read, and a scope naming more distinct out-of-set
-  endpoints than `graph.max_tasks` is declined before their status reads —
-  stated as its own reason, because a named endpoint is not yet a node. One
-  render therefore costs at most `max_tasks` edge reads plus `max_tasks`
-  status reads, each under the `graph.fetch_concurrency` semaphore and a
-  per-read deadline (§5.10).
+  count rather than rendered unreadably; a task set already over the guard is
+  refused before any edge is read at all. Nothing else refuses a page: the
+  ghost-status reads behind the exact count carry their own internal ceiling,
+  and past it an unread endpoint is reported as `status unknown` — the same
+  treatment a failed read gets — rather than being turned into a refusal
+  (§5.10). Every read runs under the `graph.fetch_concurrency` semaphore with
+  a per-read deadline.
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 
@@ -402,8 +401,10 @@ go through a **per-task edge cache** (`graph_cache.py`) on `AppState`:
   `fetched_at` is what the page shows, and a wall clock can step backwards),
   and single-flight, so concurrent readers of the same task share one upstream
   call — per generation: an eviction retires the flight, so a reader arriving
-  after an event starts one more read, bounded at a few live reads per task id
-  past which a reader joins the freshest one already out;
+  after an event starts its own read rather than being answered from one that
+  predates the event. Concurrent reads of one task id are capped; past the cap
+  a reader waits for a slot and then reads for itself, so the bound costs
+  latency rather than the invalidation guarantee;
 - eviction driven by the event stream — the `EventHub` evicts a consumed task
   event's `task_id` **before** it fans the event out to browsers, and a
   `lens.refresh` flushes everything. Eviction also **retires** any read of
@@ -432,9 +433,11 @@ over the master task list plus that cache and fanning out only for misses:
   read. Only `blocks` and `waits_on_gate` carry readiness meaning;
 - **ghosts**, one hop and leaf-only — a ghost's own edges are never read, so
   the fan-out is bounded by the scope. Open far endpoints come from the master
-  list at no cost; only resolved ones need a `task_get`, and the number of
-  those reads is capped by `max_tasks` before any of them is issued (§5.5).
-  An inactive edge
+  list at no cost; only resolved ones need a `task_get`. Those reads carry an
+  internal ceiling — the term they scale with is how many out-of-set endpoints
+  the scope's edges name, which is chosen by whoever wrote those edges — and
+  an endpoint past it is treated exactly as one whose read failed: shown, with
+  `status unknown` and `unknown` dependency edges. An inactive edge
   pointing out of the scope is dropped rather than ghosted, and context —
   the immediate out-of-set parent and `discovered_from` source of an included
   node — is added upstream only, never an out-of-set child or follow-on;

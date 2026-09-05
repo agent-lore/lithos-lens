@@ -35,9 +35,9 @@ from lithos_lens.graph_scope import (
     EDGE_UNKNOWN,
     GHOST_CONTEXT,
     GHOST_DEPENDENCY,
+    MAX_GHOST_RESOLVE_READS,
     REASON_DEPENDENT_RESOLVED,
     REASON_SATISFIED,
-    REFUSAL_GHOST_CANDIDATES,
     REFUSAL_NODES,
     REFUSAL_TASKS,
     UNKNOWN_STATUS,
@@ -283,34 +283,74 @@ async def test_a_dropped_candidate_does_not_push_a_scope_over_the_guard() -> Non
     assert all(edge.from_task_id != "done-pred" for edge in scope.edges)
 
 
-async def test_more_ghost_candidates_than_the_guard_allows_are_never_read() -> None:
-    """A resource bound, stated as its own reason rather than as a node count.
+async def test_many_dropped_candidates_do_not_refuse_an_in_limit_scope() -> None:
+    """The guard counts nodes, and no resource bound may answer it instead.
 
-    How many out-of-set endpoints a scope NAMES is chosen by whoever wrote the
-    edges — `lithos_task_edge_list` takes no limit — and each one would cost a
-    `task_get` on the process-wide MCP session, whose deadline includes queue
-    time, so unrelated renders time out rather than merely slowing. Past
-    `max_tasks` of them Lens declines instead of spending the reads.
+    Two in-scope tasks at ``max_tasks=2``, each named alongside completed
+    out-of-scope predecessors: every one of those edges is satisfied history
+    pointing out of the scope, so every endpoint is dropped and exactly two
+    nodes render. A cap on the CANDIDATE count would refuse this page — which
+    is both larger than it is and not what §5.7 measures.
     """
     tasks = [task("a"), task("b")]
-    far = [task(f"far-{index}", project="other") for index in range(3)]
+    preds = [
+        task(f"done-{index}", status="completed", project="other") for index in range(3)
+    ]
     client = RecordingClient(
         dataset(
-            [*tasks, *far],
-            [(ghost.id, "a", "blocks") for ghost in far],
+            [*tasks, *preds],
+            [(pred.id, "a", "blocks") for pred in preds],
         )
     )
 
     scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=2))
 
-    assert scope.refusal is not None
-    assert (scope.refusal.count, scope.refusal.reason) == (
-        3,
-        REFUSAL_GHOST_CANDIDATES,
+    assert not scope.refused
+    assert scope.node_ids == ("a", "b")
+    assert scope.edges == ()
+    # It cost three reads to know that, and they were made: the guard is
+    # exact, so the deciding reads are not optional.
+    assert sorted(client.get_calls) == ["done-0", "done-1", "done-2"]
+
+
+async def test_ghost_reads_past_the_budget_are_unknown_rather_than_refused() -> None:
+    """The read budget bounds the spend; it never refuses a page.
+
+    How many out-of-set endpoints a scope names is chosen by whoever wrote the
+    edges, so the total spend needs a ceiling. Past it an endpoint is treated
+    exactly as one whose ``task_get`` failed — shown, ``status unknown``, its
+    dependency edges ``unknown`` — which is D2's existing treatment for "Lens
+    does not know this endpoint's status" and errs towards showing a
+    possibly-live blocker.
+    """
+    tasks = [task("a")]
+    far = [
+        task(f"far-{index}", status="cancelled", project="other") for index in range(3)
+    ]
+    client = RecordingClient(
+        dataset([*tasks, *far], [(ghost.id, "a", "blocks") for ghost in far])
     )
-    # Not the node count, and it does not claim to be.
-    assert not scope.refusal.ghosts_counted
-    assert client.get_calls == []
+
+    scope = await project_scope(
+        client,
+        tasks,
+        limits=GraphScopeLimits(max_tasks=10, ghost_read_budget=1),
+    )
+
+    assert not scope.refused
+    assert len(client.get_calls) == 1
+    unknown = [node for node in scope.nodes if node.status == UNKNOWN_STATUS]
+    assert len(unknown) == 2
+    assert all(node.completeness == COMPLETENESS_STATUS_UNKNOWN for node in unknown)
+    assert {edge.state for edge in scope.dependency_edges} == {
+        EDGE_ACTIVE,
+        EDGE_UNKNOWN,
+    }
+
+
+def test_the_ghost_read_budget_defaults_to_the_module_safety_net() -> None:
+    """It is a runaway net rather than an operator knob, so it has one value."""
+    assert GraphScopeLimits().ghost_read_budget == MAX_GHOST_RESOLVE_READS
 
 
 async def test_the_ghost_phase_reads_no_more_endpoints_than_the_guard_allows() -> None:

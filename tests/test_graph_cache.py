@@ -66,7 +66,13 @@ def edge(from_id: str, to_id: str, *, direction: str = "outgoing") -> EdgeRecord
 
 
 class Reader:
-    """One recorded ``edge_list`` reader, optionally gated and/or failing."""
+    """One recorded ``edge_list`` reader, optionally gated and/or failing.
+
+    ``peak`` is the most reads it ever had in flight at once — the figure the
+    per-task flight cap bounds. ``versioned`` makes each call return a
+    distinguishable edge set, so a test can say WHICH read a result came from
+    rather than only how many were made.
+    """
 
     def __init__(
         self,
@@ -74,19 +80,31 @@ class Reader:
         *,
         gate: asyncio.Event | None = None,
         fail: set[str] | None = None,
+        versioned: bool = False,
     ) -> None:
         self._edges = edges or {}
         self._gate = gate
         self._fail = fail or set()
+        self._versioned = versioned
         self.calls: list[str] = []
+        self.inflight = 0
+        self.peak = 0
 
     async def __call__(self, task_id: str) -> list[EdgeRecord]:
         self.calls.append(task_id)
-        if self._gate is not None:
-            await self._gate.wait()
-        if task_id in self._fail:
-            raise RuntimeError(f"edge_list failed for {task_id}")
-        return list(self._edges.get(task_id, ()))
+        version = len(self.calls)
+        self.inflight += 1
+        self.peak = max(self.peak, self.inflight)
+        try:
+            if self._gate is not None:
+                await self._gate.wait()
+            if task_id in self._fail:
+                raise RuntimeError(f"edge_list failed for {task_id}")
+            if self._versioned:
+                return [edge(task_id, f"v{version}")]
+            return list(self._edges.get(task_id, ()))
+        finally:
+            self.inflight -= 1
 
 
 def test_default_ttl_mirrors_the_config_default() -> None:
@@ -251,19 +269,19 @@ async def test_a_reader_arriving_after_an_eviction_starts_a_new_read() -> None:
     assert cache.get("a") is not None
 
 
-async def test_duplicate_flights_for_one_task_are_bounded() -> None:
+async def test_concurrent_reads_of_one_task_are_bounded() -> None:
     """Retirement makes the collapse per-generation, so it needs its own bound.
 
     Both terms are chosen outside Lens: how many renders arrive, and how often
     the entry is evicted (one per consumed task event, at the fleet's rate).
     Each retired read keeps running and keeps its slot in the process-wide MCP
     gate, whose deadline includes queue time — so unbounded duplicates would
-    time out unrelated renders, not merely slow the graph page. At the cap a
-    reader joins the freshest read already out instead of adding another.
+    time out unrelated renders, not merely slow the graph page. Past the cap a
+    reader waits for a slot instead of adding one.
     """
     gate = asyncio.Event()
     cache = GraphCache(clock=StepClock(), max_flights_per_task=2)
-    reader = Reader({"a": [edge("a", "b")]}, gate=gate)
+    reader = Reader({"a": [edge("a", "b")]}, gate=gate, versioned=True)
 
     waiters = []
     for _ in range(4):
@@ -275,10 +293,44 @@ async def test_duplicate_flights_for_one_task_are_bounded() -> None:
     gate.set()
     await asyncio.gather(*waiters)
 
+    assert reader.peak <= 2
+    assert cache.waits >= 1
+
+
+async def test_at_the_cap_a_post_eviction_reader_still_gets_a_post_event_read() -> None:
+    """The cap is backpressure, never a shared stale result.
+
+    Every live read here was started before the last eviction, so none of them
+    may answer a request made after it — that is the guarantee the hub's
+    pre-fan-out eviction exists to give, and it has to hold under pressure or
+    it holds only when it is not needed. The third reader therefore waits for
+    a slot and reads for itself, and gets the read that started AFTER the
+    event rather than the freshest one that predates it.
+    """
+    gate = asyncio.Event()
+    cache = GraphCache(clock=StepClock(), max_flights_per_task=2)
+    reader = Reader(gate=gate, versioned=True)
+
+    first = asyncio.create_task(cache.edges_for("a", reader))
+    await asyncio.sleep(0)
+    cache.evict("a")
+    second = asyncio.create_task(cache.edges_for("a", reader))
+    await asyncio.sleep(0)
+    cache.evict("a")
+
+    late = asyncio.create_task(cache.edges_for("a", reader))
+    await asyncio.sleep(0)
+    # Held at the cap: it has NOT joined either retired read.
     assert reader.calls == ["a", "a"]
-    # Every flight was retired, so none of them poisoned the cache with a
-    # result that predates the last eviction.
-    assert cache.get("a") is None
+
+    gate.set()
+    await asyncio.gather(first, second)
+    entry = await late
+
+    assert reader.calls == ["a", "a", "a"]
+    assert entry.edges == (edge("a", "v3"),)
+    # Its read was never overtaken, so it is the one that gets cached.
+    assert cache.get("a") == entry
 
 
 async def test_entries_are_bounded_and_the_least_recently_used_goes_first() -> None:

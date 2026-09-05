@@ -95,9 +95,19 @@ REFUSAL_TASKS = "tasks"
 #: The rendered node set (tasks plus the ghosts that survived classification)
 #: exceeded the guard. This is §5.7's normative rule, and its count is EXACT.
 REFUSAL_NODES = "nodes"
-#: The scope's edges named more out-of-set endpoints than one render will
-#: resolve. A resource bound, not the size guard — see :class:`ScopeRefusal`.
-REFUSAL_GHOST_CANDIDATES = "ghost_candidates"
+
+# Ceiling on the ``task_get`` reads ONE scope spends resolving ghost
+# candidates. Not config, and not a size guard: it never decides which scopes
+# render (:class:`ScopeRefusal`), only how much Lens will spend deciding. It
+# has to exist because the term it bounds — how many out-of-set endpoints a
+# scope's edges name — is chosen by whoever wrote those edges, while the reads
+# land on the process-wide MCP session whose deadline includes queue time, so
+# an unbounded total times out unrelated renders. The semaphore bounds
+# concurrency and leaves the total open; this is the total, the distinction
+# ``task_links`` already draws. Set far above any real scope (the live corpus
+# is ~330 open tasks) so it signals a runaway edge writer rather than trimming
+# routine work — the same call ``LINK_PAGE_SIZE`` makes.
+MAX_GHOST_RESOLVE_READS = 1000
 
 # What a ghost is there for. A dependency ghost is on the default canvas; a
 # context ghost only appears with its overlay, but is resolved on EVERY
@@ -141,10 +151,16 @@ class GraphScopeClient(Protocol):
 
 @dataclass(frozen=True)
 class GraphScopeLimits:
-    """The two ``[graph]`` knobs that bound one scope's reads."""
+    """What bounds one scope's reads: two ``[graph]`` knobs and a safety net.
+
+    ``ghost_read_budget`` is NOT config (see :data:`MAX_GHOST_RESOLVE_READS`);
+    it lives here so one object describes a render's whole read budget, and so
+    a test can bind it without reaching for the module constant.
+    """
 
     max_tasks: int = DEFAULT_GRAPH_MAX_TASKS
     fetch_concurrency: int = DEFAULT_GRAPH_FETCH_CONCURRENCY
+    ghost_read_budget: int = MAX_GHOST_RESOLVE_READS
 
 
 @dataclass(frozen=True)
@@ -220,25 +236,18 @@ class GraphEdge:
 class ScopeRefusal:
     """A scope Lens would not render, why, and how large it was.
 
-    Three reasons, because they are three different claims and only one of
-    them is §5.7's size guard:
+    Two reasons, and only the size of the RENDERED graph ever refuses a page:
 
-    - :data:`REFUSAL_NODES` — the guard itself. ``count`` is the EXACT
-      rendered node count, tasks plus surviving ghosts, so a completed
-      out-of-scope predecessor (whose edge is dropped, not ghosted) never
-      inflates it. Deciding this exactly is what the ghost reads are for.
+    - :data:`REFUSAL_NODES` — §5.7's guard. ``count`` is the EXACT rendered
+      node count, tasks plus the ghosts that survived classification, so a
+      completed out-of-scope predecessor — whose edge and endpoint are both
+      dropped — never inflates it. Deciding this exactly is what the ghost
+      reads are for, and no resource bound is allowed to answer it instead:
+      a page inside the guard renders, whatever it cost to find out.
     - :data:`REFUSAL_TASKS` — the task set alone was already over, so no
       edge was read at all. ``count`` is a lower bound: ghosts would only
       add to it, and resolving them to say so precisely would cost the very
       fan-out the guard exists to prevent.
-    - :data:`REFUSAL_GHOST_CANDIDATES` — a resource bound rather than a size
-      one. ``count`` is how many distinct out-of-set endpoints the scope's
-      edges NAME, which is chosen by whoever wrote those edges
-      (``lithos_task_edge_list`` takes no limit and Lithos caps no task's
-      edge count), and each one would cost a ``task_get`` on the shared MCP
-      session. Past ``max_tasks`` of them Lens declines rather than spending
-      an unbounded number of credentialed reads to decide a scope this size.
-      Stated as its own reason precisely so it is not read as the node count.
     """
 
     count: int
@@ -445,23 +454,8 @@ async def assemble_scope(
     edges = _dedupe_scope_edges(entries)
 
     far_ids = _ghostable_endpoints(edges, in_scope)
-    # A RESOURCE bound, checked before the ghost phase and reported as its own
-    # reason. `far_ids` is every out-of-set endpoint this scope's edges name,
-    # and each one costs a `task_get` on the process-wide MCP session whose
-    # slots — and whose queue-inclusive deadline — every other render shares.
-    # Its length is chosen by whoever wrote those edges, not by the operator:
-    # `lithos_task_edge_list` takes no limit and Lithos caps no task's edge
-    # count, so the semaphore bounds the CONCURRENCY and leaves the TOTAL open
-    # (the distinction `task_links` already draws). With this, one render costs
-    # at most `max_tasks` edge reads plus `max_tasks` status reads.
-    #
-    # It is deliberately NOT the size guard — a candidate is not yet a ghost;
-    # see :class:`ScopeRefusal` for why the two carry different reasons.
-    if len(far_ids) > limits.max_tasks:
-        return refused(len(far_ids), REFUSAL_GHOST_CANDIDATES)
-
     far_tasks, unresolved = await _resolve_far_endpoints(
-        lithos, far_ids, master, limiter
+        lithos, far_ids, master, limiter, budget=limits.ghost_read_budget
     )
     graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
     nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
@@ -581,6 +575,8 @@ async def _resolve_far_endpoints(
     far_ids: Sequence[str],
     master: Sequence[TaskRecord],
     limiter: asyncio.Semaphore,
+    *,
+    budget: int = MAX_GHOST_RESOLVE_READS,
 ) -> tuple[dict[str, TaskRecord], set[str]]:
     """Resolve ghost candidates: the open snapshot first, ``task_get`` after.
 
@@ -589,16 +585,25 @@ async def _resolve_far_endpoints(
     (or absent) endpoints need one, and one that fails leaves the id in the
     returned ``unresolved`` set: the ghost is still shown, with
     ``status unknown``, and every dependency edge touching it is ``unknown``.
+
+    ``budget`` caps how many of those reads one scope makes. Candidates past
+    it are ``unresolved`` too — not dropped, and not a refusal: "Lens did not
+    read this endpoint" is the same claim as "the read failed", and D2 already
+    fixes its treatment. Ordering is the deterministic edge order the
+    candidates arrived in, so the same scope resolves the same set twice.
     """
     open_index = {task.id: task for task in master if task.status == "open"}
     resolved: dict[str, TaskRecord] = {}
-    pending = []
+    pending: list[str] = []
+    over_budget: list[str] = []
     for far_id in far_ids:
         known = open_index.get(far_id)
         if known is not None:
             resolved[far_id] = known
-        else:
+        elif len(pending) < budget:
             pending.append(far_id)
+        else:
+            over_budget.append(far_id)
 
     async def read(task_id: str) -> TaskRecord:
         async with limiter:
@@ -607,7 +612,7 @@ async def _resolve_far_endpoints(
     results = await asyncio.gather(
         *(read(task_id) for task_id in pending), return_exceptions=True
     )
-    unresolved: set[str] = set()
+    unresolved: set[str] = set(over_budget)
     for task_id, result in zip(pending, results, strict=True):
         if isinstance(result, BaseException):
             unresolved.add(task_id)

@@ -25,10 +25,12 @@ Three properties, each earning its keep:
   read rather than joining a result that predates it. Under a churning fleet
   — evictions are upstream-driven and a graph page is opened at exactly the
   tasks that churn — that is one extra concurrent read per eviction landing
-  inside one read's window, so it is bounded rather than left to the event
-  rate: at :data:`MAX_FLIGHTS_PER_TASK` live flights for one id, further
-  readers join the freshest read already out and take its (bounded)
-  staleness instead of adding to a queue every other render shares.
+  inside one read's window, so the CONCURRENCY is bounded at
+  :data:`MAX_FLIGHTS_PER_TASK` live reads per id: past it a reader WAITS for
+  one of them to finish and then reads for itself. Backpressure, not sharing
+  — a reader that arrived after an eviction may never be answered from a read
+  that started before it, whatever the pressure, or the hub's pre-fan-out
+  ordering would stop meaning anything at exactly the load it matters at.
 - **Event eviction** — :meth:`evict` on any consumed task event,
   :meth:`flush` on ``lens.refresh``. The :class:`~lithos_lens.events.EventHub`
   calls both BEFORE it fans an event out to browsers, so the refresh a
@@ -83,12 +85,12 @@ MAX_GRAPH_CACHE_ENTRIES = 2000
 # CALL_TIMEOUT_S includes QUEUE time, so the overflow does not just slow the
 # graph page, it times out unrelated renders.
 #
-# Above this many live flights for one id, a reader joins the freshest one
-# instead of adding another. That trades a bounded staleness (the joined read
-# may predate the newest eviction, and is not cached, so the request after it
-# reads again) for a bounded amplification — the same shape of call
-# MAX_EVENT_SUBSCRIBERS makes: refusing to grow is the degradation, and it is
-# better than the failure it prevents.
+# Above this many live reads of one id, a reader WAITS for one to finish and
+# then makes its own read. Latency, not staleness: joining one of those reads
+# would answer a post-eviction request with pre-eviction edges, which is the
+# invalidation guarantee this cache exists to keep. The wait is bounded by the
+# deadline the caller puts on each read (the scope's LINK_READ_TIMEOUT_S), so
+# a stuck read delays a reader rather than pinning it.
 MAX_FLIGHTS_PER_TASK = 4
 
 #: How the cache reads a task's edges. The caller supplies it — bound to a
@@ -207,6 +209,9 @@ class GraphCache:
         #: Upstream ``edge_list`` calls this cache issued.
         self.misses = 0
         self.evictions = 0
+        #: Readers held back by the per-task flight cap. A rising figure is
+        #: the signal that eviction pressure is outrunning the reads.
+        self.waits = 0
 
     @property
     def size(self) -> int:
@@ -239,25 +244,34 @@ class GraphCache:
         the caller decides what a failed read means (for a scope, an
         ``incomplete`` node — never an edge-less one).
         """
-        entry = self.get(task_id)
-        if entry is not None:
-            self.hits += 1
-            return entry
+        while True:
+            entry = self.get(task_id)
+            if entry is not None:
+                self.hits += 1
+                return entry
 
-        flights = self._flights.setdefault(task_id, [])
-        current = next((flight for flight in flights if not flight.retired), None)
-        if current is not None:
-            self.hits += 1
-            inflight = current.task
-        elif len(flights) >= self._max_flights:
-            # Every live read of this id has been overtaken by an eviction and
-            # the cap is reached: join the freshest of them rather than adding
-            # another to a gate every other render shares. Its result predates
-            # the latest eviction — bounded staleness, and it is not stored,
-            # so the next request after it completes reads again.
-            self.hits += 1
-            inflight = flights[-1].task
-        else:
+            flights = self._flights.setdefault(task_id, [])
+            current = next((flight for flight in flights if not flight.retired), None)
+            if current is not None:
+                self.hits += 1
+                # Shielded: one waiter being cancelled (a browser that went
+                # away mid-render) must not cancel the read the OTHER waiters
+                # are on.
+                return await asyncio.shield(current.task)
+
+            if len(flights) >= self._max_flights:
+                # Every live read of this id was overtaken by an eviction, so
+                # none of them may answer this request, and the cap says not
+                # to add another. Wait for a slot and re-decide: by then the
+                # answer may be a fresh cached entry, a flight started by
+                # another post-eviction reader, or this reader's own read.
+                self.waits += 1
+                await asyncio.wait(
+                    [flight.task for flight in flights],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                continue
+
             self.misses += 1
             self._generation += 1
             generation = self._generation
@@ -266,9 +280,7 @@ class GraphCache:
                 name=f"graph-cache-edges-{task_id}",
             )
             flights.append(_Flight(generation=generation, task=inflight))
-        # Shielded: one waiter being cancelled (a browser that went away
-        # mid-render) must not cancel the read the OTHER waiters are on.
-        return await asyncio.shield(inflight)
+            return await asyncio.shield(inflight)
 
     async def _load(
         self, task_id: str, fetch: EdgeFetch, generation: int
