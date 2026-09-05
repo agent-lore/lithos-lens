@@ -365,6 +365,21 @@ def _representative_path(
     input order's. A self-loop yields ``(A, A)``; a component always has such a
     walk, so the bare ``(start,)`` fallback is unreachable for a real SCC and
     is there to keep the function total.
+
+    ``visited`` is NEVER un-marked on backtrack, which bounds the walk at
+    O(V+E) — one expansion per member — instead of enumerating simple paths.
+    A security property, not a micro-optimisation: these edges AND their
+    ``created_at`` are agent-written (``blocker_chain``'s opening premise), so
+    their author picks the component's shape and, through the sort key, which
+    branch is tried first. Unwinding ``visited`` would let them plant 2**n dead
+    ends ahead of the closing edge and burn the event loop on every render of
+    the page — the whole process, since the route is an ordinary coroutine and
+    no concurrency meter can preempt a running one.
+
+    Keeping the mark still finds a walk: DFS reaches every member, each
+    member's neighbours are scanned in full while it is on top of the stack,
+    and ``start`` has an in-neighbour inside the component, so that scan
+    returns the closing edge if nothing shorter did first.
     """
     member_set = set(members)
     inside = {
@@ -378,7 +393,7 @@ def _representative_path(
         neighbours = inside.get(path[-1], ())
         cursor = cursors[-1]
         if cursor >= len(neighbours):
-            visited.discard(path.pop())
+            path.pop()
             cursors.pop()
             continue
         cursors[-1] = cursor + 1

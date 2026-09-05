@@ -393,7 +393,9 @@ slice); what ships here is the computation and its rules.
   tasks is invisible to a graph that never fetches a ghost's edges. The shape —
   members ordered by `(created_at, id)` plus one representative path — is Lens's,
   and is empty for a flagged member with no component, where Lithos's message is
-  all there is.
+  all there is. The representative path is one linear DFS pass, not a search
+  over the component's paths: these edges are agent-written, and a walk whose
+  cost grew with the shape of the cycle would hand their author the render.
 - **Layers** are Kahn's algorithm over the graph with each cycle condensed to a
   single node, so every cycle member gets a layer and its dependents are layered
   below it and marked *blocked via cycle* — a cycle never takes downstream work

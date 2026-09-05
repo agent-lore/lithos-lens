@@ -14,7 +14,7 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 33 | 33 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 751 | 800 | 49 |
+| `max_module_lines` | 766 | 800 | 34 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 0 | 0 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
@@ -42,15 +42,15 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 4 | 2192 | 1746 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 71 | 56 | 1 | 3 | 0.75 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 12 | 4681 | 3593 | 2 | 1 | 0.33 | 46 (`lithos_lens.frontier.load_dashboard`) | 8 |
+| TaskGraph | 12 | 4696 | 3606 | 2 | 1 | 0.33 | 46 (`lithos_lens.frontier.load_dashboard`) | 8 |
 | Tasks | 3 | 1069 | 786 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 2 | 1024 | 741 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 3 | 1191 | 927 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **38**, lines: **13361**, SLOC: **10250**
-- Largest module: `lithos_lens.graph_layout` (751 lines)
+- Modules: **38**, lines: **13376**, SLOC: **10263**
+- Largest module: `lithos_lens.graph_layout` (766 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **49** (48 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.81** (24228 test lines / 13361 source lines)
+- Test-to-source line ratio: **1.82** (24285 test lines / 13376 source lines)

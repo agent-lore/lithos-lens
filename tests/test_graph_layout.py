@@ -11,6 +11,8 @@ chain it is nowhere near.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from lithos_lens.graph_layout import (
@@ -450,3 +452,58 @@ def test_hierarchy_walk_refuses_to_revisit_a_malformed_loop() -> None:
 
     # Every parented node, no root: the walk still terminates and shows both.
     assert sorted(row.task_id for row in rows) == ["A", "B"]
+
+
+# ── security: bounded representative-path walk (security/f-001) ────────
+
+
+def _exponential_scc(depth: int) -> tuple[list[TaskRecord], list[EdgeRecord]]:
+    """One SCC whose closing edge sits behind ``2**depth`` dead-end descents.
+
+    ``s -> m``, then ``m`` branches into a trap lattice (``t_i`` forking through
+    ``u_i``/``v_i`` into ``t_{i+1}``, the last one pointing back at ``m``) and
+    into ``w -> s``, the only edge that closes the cycle. ``created_at`` is
+    assigned so ``s`` is the smallest member — hence the walk's start — and
+    ``w`` the largest, so the sorted adjacency offers ``m`` the trap first.
+    """
+    order = ["s", "m"]
+    edges = [_edge("s>m"), _edge("m>t0"), _edge(f"t{depth}>m")]
+    for index in range(depth):
+        order += [f"t{index}", f"u{index}", f"v{index}"]
+        edges += _edges(
+            f"t{index}>u{index}",
+            f"t{index}>v{index}",
+            f"u{index}>t{index + 1}",
+            f"v{index}>t{index + 1}",
+        )
+    order += [f"t{depth}", "w"]
+    edges += [_edge("m>w"), _edge("w>s")]
+    base = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
+    tasks = [
+        _task(task_id, created_at=(base + timedelta(minutes=index)).isoformat())
+        for index, task_id in enumerate(order)
+    ]
+    return tasks, edges
+
+
+def test_representative_path_walk_is_bounded_by_the_component_size() -> None:
+    """Regression for the exhaustive-backtracking DoS: un-marking a node when
+    the walk backtracked made the path search enumerate simple paths, so an
+    agent-written cycle of ~80 tasks (well inside ``[graph].max_tasks``) burned
+    minutes of event loop per render. Keeping the visited mark bounds it at one
+    expansion per member. Black-box through ``build_topology``, the entry point
+    a page scope actually reaches, and asserting the answer is unchanged as
+    well as fast — the trap costs nothing to skip, it only costs to explore."""
+    import time
+
+    tasks, edges = _exponential_scc(24)
+
+    start = time.perf_counter()
+    topology = build_topology(tasks, edges)
+    elapsed = time.perf_counter() - start
+
+    (cycle,) = topology.cycles
+    assert cycle.path == ("s", "m", "w", "s")
+    assert cycle.members[0] == "s"
+    assert len(cycle.members) == len(tasks)
+    assert elapsed < 2.0  # pre-fix: 14.8 s here, and 2x per 3 nodes added
