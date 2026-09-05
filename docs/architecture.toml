@@ -46,7 +46,7 @@ Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_layout"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
@@ -139,6 +139,7 @@ include_modules = [
     "lithos_lens.task_links",
     "lithos_lens.blocker_chain",
     "lithos_lens.task_graph",
+    "lithos_lens.graph_layout",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_resolver",
     "lithos_lens.knowledge_metadata",

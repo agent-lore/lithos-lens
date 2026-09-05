@@ -74,6 +74,7 @@ source_modules = [
     "lithos_lens.blocker_chain",
     "lithos_lens.normalizers",
     "lithos_lens.task_graph",
+    "lithos_lens.graph_layout",
     "lithos_lens.frontier",
     "lithos_lens.gates",
     "lithos_lens.dashboard",

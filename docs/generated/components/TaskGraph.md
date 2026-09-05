@@ -19,6 +19,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
+| `lithos_lens.graph_layout` | L | 6 | 4 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -70,6 +71,18 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `group_gates` — Group gate rows by gate type — human first, oldest first within a group.
 - def `attach_gate_waiters` — Fill each gate's waiter list, preferring the Lithos-computed source.
 - def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
+
+### `lithos_lens.graph_layout`
+- class `DependencyEdge` — One fetched ``blocks``/``waits_on_gate`` edge, classified per D6.
+- class `Cycle` — A cycle in the scope: Lithos's verdict, or Lens's own SCC, or both.
+- class `Condensation` — One node of the condensed graph: a cycle's members, or a lone task.
+- class `BlockingChain` — The longest blocking chain, by node count, over the active projection.
+- class `HierarchyRow` — One line of the indented ``parent_child`` tree.
+- class `Topology` — The condensed shape of one fetched scope.
+- def `classify_dependency_edges` — Classify the fetched dependency edges from BOTH endpoints (D6).
+- def `build_topology` — Condense the fetched scope into cycles, layers and roots.
+- def `longest_blocking_chain` — The longest chain of blocking work in this graph, by node count (D7).
+- def `hierarchy_rows` — The scope's ``parent_child`` forest, flattened into indented rows.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.
