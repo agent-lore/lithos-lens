@@ -54,6 +54,11 @@ DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS = 24
 DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES = 10
 DEFAULT_TASKS_STALE_OPEN_AGE_DAYS = 7
 DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES = 60
+# Rule 6 judges only work a fleet is EXPECTED to pick up: a ready task carrying
+# a tag with one of these prefixes (loom dispatches on `trigger:story-develop`).
+# An EMPTY list opts out — every ready task is judged again, the pre-2026-09
+# behaviour — which is why the knob is a list and not a bool.
+DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES: tuple[str, ...] = ("trigger:",)
 # Ceilings for every [lithos-lens.tasks] knob that reaches ``timedelta()`` —
 # the four Needs-attention thresholds and the resolved-window size — in their
 # own units (a year / a week / ten years / a week / ten years). A value beyond
@@ -135,6 +140,10 @@ class TasksConfig:
     claim_expiring_soon_minutes: int = DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
     stale_open_age_days: int = DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
     unclaimed_ready_age_minutes: int = DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
+    # Tag prefixes that mark a ready task as fleet-dispatched (rule 6 scope).
+    dispatch_trigger_tag_prefixes: tuple[str, ...] = (
+        DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES
+    )
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
     # Which project convention the /tasks project filter honours (§5B.1):
     # "metadata" (metadata.project), "tag" (project:<slug>), or "both" (union).

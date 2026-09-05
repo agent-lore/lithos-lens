@@ -126,6 +126,7 @@ The current configuration model includes:
 - `tasks.claim_expiring_soon_minutes`
 - `tasks.stale_open_age_days`
 - `tasks.unclaimed_ready_age_minutes`
+- `tasks.dispatch_trigger_tag_prefixes`
 - `knowledge.related_title_fanout_cap`
 - `knowledge.search_limit`
 - `knowledge.recent_limit`
@@ -180,6 +181,13 @@ four are threshold-driven from config: `gate-waiting`, `claim-expiring`,
 `stale-open`, and `ready-unclaimed`. A promoted row carries one chip per rule
 that fired, with a one-line supporting fact, and the list sorts by severity then
 oldest-first within a tier.
+
+`ready-unclaimed` carries one further condition beyond its threshold: the ready
+task must carry a tag with one of `tasks.dispatch_trigger_tag_prefixes`, the
+prefixes a fleet dispatches on. Untagged ready work is nobody's promise to pick
+up, so it stays in Ready however old it is (rule 5 still covers "open too
+long"), and the chip's supporting fact names the trigger tag it did find.
+Configuring an empty prefix list widens the rule back to every ready task.
 
 Two never-fire policies keep the list trustworthy: a timestamp Lens cannot
 parse never triggers an age rule, and a degraded row is promoted only on

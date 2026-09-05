@@ -545,6 +545,9 @@ async def _render_tasks(
                 claim_expiring_soon_minutes=tasks_config.claim_expiring_soon_minutes,
                 stale_open_age_days=tasks_config.stale_open_age_days,
                 unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
+                dispatch_trigger_tag_prefixes=(
+                    tasks_config.dispatch_trigger_tag_prefixes
+                ),
             ),
         )
         logger.debug(

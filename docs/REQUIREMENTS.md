@@ -212,6 +212,7 @@ LITHOS_LENS_TASKS_DEFAULT_TIME_RANGE_DAYS=30     # resolved_since window for Com
 LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS=24
 LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
 LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
+LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES=trigger:   # comma-separated; scopes rule 6
 LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS=7
 LITHOS_LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
 LITHOS_LENS_TASKS_METRICS_DEBOUNCE_MS=2000       # client-side reconcile debounce
@@ -318,6 +319,7 @@ frontier_limit = 500              # limit passed to task_ready / task_blocked
 gate_waiting_attention_hours = 24 # Needs-attention rule 3: human gate waiting
 claim_expiring_soon_minutes = 10  # Needs-attention rule 4: claim expiring soon
 unclaimed_ready_age_minutes = 60  # Needs-attention rule 6: ready-but-unclaimed
+dispatch_trigger_tag_prefixes = ["trigger:"]  # rule 6 SCOPE: tags a fleet dispatches on; [] judges every ready task
 stale_open_age_days = 7           # Needs-attention rule 5: stale open
 project_convention = "both"       # metadata | tag | both — see §5B.1
 project_tag_key = "project"       # tag-key reserved for the tag convention
@@ -528,11 +530,12 @@ A **severity-ordered single list** of open rows that trigger any of the followin
 | 3 | **Human gate waiting** | An open `gate_type="human"` gate has waited longer than the threshold | gate rows + `created_at` | `gate_waiting_attention_hours` (24) |
 | 4 | **Claim expiring soon** | An active claim's `expires_at − now` is below the threshold — likely-abandoned work, surfaced *before* the claim silently vanishes | inline claims | `claim_expiring_soon_minutes` (10) |
 | 5 | **Stale open** | A workable open task older than the threshold | master list `created_at` | `stale_open_age_days` (7) |
-| 6 | **Ready but unclaimed** | A task on the ready frontier, with zero claims, older than the threshold — the fleet is not picking up available work | ready join | `unclaimed_ready_age_minutes` (60) |
+| 6 | **Ready but unclaimed** | A task on the ready frontier, with zero claims, **carrying a dispatch trigger tag**, older than the threshold — a fleet was expected to pick this up and has not | ready join + tags | `unclaimed_ready_age_minutes` (60), `dispatch_trigger_tag_prefixes` (`["trigger:"]`) |
 
 Deliberate changes from the pre-graph model, both forced by observed Lithos semantics:
 - The old **`expired-claim` rule is removed** — it can never fire (expired claims are unobservable; see §5.1). Rule 4 is the observable replacement. A Lens-side claim ledger was considered and rejected: it dies on Lens restart and lies after Lithos restarts.
 - The old **`unclaimed-old` rule becomes ready-aware** (rule 6). A **blocked** task being unclaimed is *correct behaviour*, not a warning — flagging it was a structural false positive.
+- Rule 6 is also **dispatch-aware** (2026-09). It fires only for a ready task carrying a tag with one of the `dispatch_trigger_tag_prefixes` — the tags a fleet dispatches on (loom picks up `trigger:story-develop`). Untagged ready work waits for a human to schedule it, so its age says nothing about a stalled fleet: on the live corpus every ready task tripped the rule, single-placement emptied Ready, and Needs attention became the de-facto Ready list. Rule 5 (stale open) still covers "open too long" for that work. Setting the knob to `[]` restores the every-ready-task behaviour for deployments that want it. Rule 6's supporting fact names the trigger tag: `On the ready frontier with "trigger:story-develop", unclaimed for 3h.`
 
 Chrome requirements (carried over):
 - Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone.

@@ -2157,6 +2157,89 @@ def test_stale_open_row_is_flagged_with_its_reason_chip(
     assert 'data-task-id="open-unclaimed"' in ready_group
 
 
+def test_only_dispatch_triggered_ready_work_reaches_needs_attention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Rule 6 acceptance on the page: four ready rows of the same age, and only
+    the one a fleet was expected to pick up is promoted.
+
+    The live corpus is mostly untagged ready work (loom dispatches on
+    ``trigger:``, robot-companion tasks wait for a robot day), so judging every
+    ready row emptied Ready and made Needs attention the de-facto Ready list.
+    """
+    fake = TaskFakeLithosClient()
+    # Drop the deliberately-ancient fixture: it fires stale-open, and this test
+    # is counting rule-6 rows.
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.tasks.extend(
+        TaskRecord(
+            id=task_id,
+            title=title,
+            status="open",
+            created_by="planner",
+            created_at=created_at,
+            tags=tags,
+        )
+        for task_id, title, tags, created_at in (
+            (
+                "dispatch-old",
+                "Dispatched and unpicked",
+                ("trigger:story-develop",),
+                _ago(hours=3),
+            ),
+            (
+                "untagged-old",
+                "Nobody promised to pick this up",
+                ("area:docs",),
+                _ago(hours=3),
+            ),
+            (
+                "dispatch-fresh",
+                "Dispatched a moment ago",
+                ("trigger:story-develop",),
+                _ago(minutes=20),
+            ),
+            (
+                "dispatch-claimed",
+                "Dispatched and picked up",
+                ("trigger:story-develop",),
+                _ago(hours=3),
+            ),
+        )
+    )
+    fake.claims["dispatch-claimed"] = (
+        ClaimRecord(
+            agent="worker-b", aspect="implementation", expires_at=_ahead(hours=6)
+        ),
+    )
+    fake.ready_ids = {
+        "open-unclaimed",
+        "dispatch-old",
+        "untagged-old",
+        "dispatch-fresh",
+        "dispatch-claimed",
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert text.count('data-attention-rule="ready-unclaimed"') == 1
+    attention = _group(text, "attention")
+    assert 'data-task-id="dispatch-old"' in attention
+    # The supporting fact names the trigger tag, so the operator can see WHICH
+    # fleet was expected to pick the task up.
+    assert "trigger:story-develop" in unescape(attention)
+    assert "<strong data-attention-count>1</strong>" in text
+    # The other three stay where they belong: untagged and fresh work is still
+    # Ready, and the claimed row is In progress.
+    ready_group = _group(text, "ready")
+    for task_id in ("untagged-old", "dispatch-fresh", "open-unclaimed"):
+        assert f'data-task-id="{task_id}"' in ready_group
+    assert 'data-task-id="dispatch-claimed"' in _group(text, "in_progress")
+
+
 def test_direct_task_detail_resolves_findings_and_note_links(
     lithos_lens_config_env: Path,
 ) -> None:

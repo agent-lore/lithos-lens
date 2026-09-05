@@ -26,6 +26,7 @@ from lithos_lens.config_fields import (
     optional_path,
     optional_status_groups,
     optional_str,
+    optional_str_list,
 )
 from lithos_lens.config_schema import (
     DEFAULT_DATA_DIR,
@@ -44,6 +45,7 @@ from lithos_lens.config_schema import (
     DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S,
     DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES,
     DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS,
+    DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES,
     DEFAULT_TASKS_FRONTIER_LIMIT,
     DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS,
     DEFAULT_TASKS_STALE_OPEN_AGE_DAYS,
@@ -99,6 +101,7 @@ __all__ = [
     "DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S",
     "DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES",
     "DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS",
+    "DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
     "DEFAULT_TASKS_FRONTIER_LIMIT",
     "DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS",
     "DEFAULT_TASKS_STALE_OPEN_AGE_DAYS",
@@ -344,6 +347,13 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
         unclaimed_ready_age_minutes=positive_int(
             "unclaimed_ready_age_minutes", DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
         ),
+        dispatch_trigger_tag_prefixes=optional_str_list(
+            data,
+            "dispatch_trigger_tag_prefixes",
+            DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES,
+            config_path,
+            "lithos-lens.tasks",
+        ),
         default_status_groups=optional_status_groups(
             data,
             "default_status_groups",
@@ -537,6 +547,9 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
     unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
+    trigger_prefixes_env = os.environ.get(
+        "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", ""
+    )
     knowledge_fanout_cap_override = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
     )
@@ -603,6 +616,20 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     }
     if tasks_env_overrides:
         new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
+    if trigger_prefixes_env:
+        # Comma-separated, unlike its integer neighbours. An empty value reads
+        # as "unset" here (as everywhere in this pass), so the opt-out —
+        # dispatch_trigger_tag_prefixes = [] — is expressible in TOML only.
+        new_cfg = replace(
+            new_cfg,
+            tasks=replace(
+                new_cfg.tasks,
+                dispatch_trigger_tag_prefixes=_parse_env_str_list(
+                    "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
+                    trigger_prefixes_env,
+                ),
+            ),
+        )
     if knowledge_fanout_cap_override:
         new_knowledge = replace(
             new_cfg.knowledge,
@@ -669,6 +696,14 @@ def _parse_env_int(name: str, value: str, *, maximum: int | None = None) -> int:
     if maximum is not None and parsed > maximum:
         raise ConfigError(f"{name} must be <= {maximum}")
     return parsed
+
+
+def _parse_env_str_list(name: str, value: str) -> tuple[str, ...]:
+    """A comma-separated env list, blank entries rejected (see the TOML twin)."""
+    items = [item.strip() for item in value.split(",")]
+    if any(not item for item in items):
+        raise ConfigError(f"{name} must not contain an empty comma-separated entry")
+    return tuple(items)
 
 
 def _parse_env_bool(name: str, value: str) -> bool:
