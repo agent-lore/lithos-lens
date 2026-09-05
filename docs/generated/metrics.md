@@ -14,7 +14,7 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 35 | 35 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 783 | 800 | 17 |
+| `max_module_lines` | 790 | 800 | 10 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 0 | 0 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 3 | 1197 | 969 | 7 | 2 | 0.22 | 32 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 3 | 1204 | 972 | 7 | 2 | 0.22 | 32 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
@@ -49,8 +49,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **41**, lines: **14599**, SLOC: **11098**
-- Largest module: `lithos_lens.config` (783 lines)
+- Modules: **41**, lines: **14606**, SLOC: **11101**
+- Largest module: `lithos_lens.config` (790 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **49** (50 associations, 14 without docstrings)
-- Test-to-source line ratio: **1.76** (25662 test lines / 14599 source lines)
+- Test-to-source line ratio: **1.76** (25676 test lines / 14606 source lines)

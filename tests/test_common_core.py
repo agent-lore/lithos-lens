@@ -492,6 +492,20 @@ def test_env_override_sets_dispatch_trigger_tag_prefixes(
     assert config.tasks.unclaimed_ready_age_minutes == 60
 
 
+def test_env_override_dispatch_trigger_tag_prefixes_empty_value_is_the_opt_out(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty list is the whole point of the knob (rule 6 back to every ready
+    task), and the only comma-separated spelling of it is an empty value — so
+    this override is gated on the variable being PRESENT, not on it being
+    non-blank like its integer neighbours."""
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ()
+
+
 def test_env_override_dispatch_trigger_tag_prefixes_rejects_a_blank_entry(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
