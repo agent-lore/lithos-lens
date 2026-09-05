@@ -151,8 +151,27 @@ classDiagram
     +status str
     +message str
   }
+  class BlockingChain {
+    +nodes tuple[str, ...]
+    +bound ChainBound
+  }
   class Breadcrumb {
     +incomplete bool
+  }
+  class Condensation {
+    +id str
+    +members tuple[str, ...]
+    +layer int
+    +blocked_via_cycle bool
+    +created_at str
+  }
+  class Cycle {
+    +id str
+    +members tuple[str, ...]
+    +path tuple[str, ...]
+    +scc bool
+    +flagged bool
+    +message str
   }
   class DashboardData {
     +frontier_limit int
@@ -168,6 +187,13 @@ classDiagram
     +nothing_to_show bool
     +errors tuple[str, ...]
     +epic_scope str
+  }
+  class DependencyEdge {
+    +from_task_id str
+    +to_task_id str
+    +type str
+    +state EdgeState
+    +reason str
   }
   class EdgeRecord {
     +from_task_id str
@@ -196,6 +222,11 @@ classDiagram
   class GateSection {
     +next_ready_at str
     +errors tuple[str, ...]
+  }
+  class HierarchyRow {
+    +task_id str
+    +depth int
+    +has_children bool
   }
   class LinkPage {
     +total int
@@ -238,6 +269,12 @@ classDiagram
     +agents int
     +approximate frozenset[str]
   }
+  class Topology {
+    +nodes tuple[str, ...]
+    +layers tuple[tuple[str, ...], ...]
+    +roots tuple[str, ...]
+    +incomplete frozenset[str]
+  }
   class AgentRecord
   <<Tasks>> AgentRecord
   class EpicRollup
@@ -256,6 +293,7 @@ classDiagram
   BlockedTaskRecord "1" --> "1" TaskRecord : task
   BlockerLevel "1" --> "1" LinkPage : page
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
+  Condensation "1" --> "0..1" Cycle : cycle
   DashboardData "1" --> "0..*" AgentRecord : agents
   DashboardData "1" --> "0..*" EpicRollup : epics
   DashboardData "1" --> "0..*" GateGroup : gate_groups
@@ -277,6 +315,9 @@ classDiagram
   TaskDetailData "1" --> "0..*" TaskRecord : children
   TaskDetailData "1" --> "0..1" TaskRecord : task
   TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status
+  Topology "1" --> "0..*" Condensation : condensations
+  Topology "1" --> "0..*" Cycle : cycles
+  Topology "1" --> "0..*" DependencyEdge : edges
 ```
 
 ## Tasks
