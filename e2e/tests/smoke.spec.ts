@@ -43,7 +43,12 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   await expect(
     completed.getByRole("link", { name: "Land knowledge note view" }),
   ).toBeVisible();
-  expect(await completed.locator("[data-task-row]").count()).toBe(1);
+  // The graph cluster's "resolved predecessor inside the window" fixture is
+  // deliberately inside this window too, so each terminal group carries two.
+  await expect(
+    completed.locator('[data-task-row][data-task-id="loom-design-done"]'),
+  ).toHaveAttribute("data-task-status", "completed");
+  expect(await completed.locator("[data-task-row]").count()).toBe(2);
 
   const cancelled = page.locator('[data-task-group="cancelled"]');
   await expect(
@@ -52,7 +57,10 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   await expect(
     cancelled.getByRole("link", { name: "Spike Influx client options" }),
   ).toBeVisible();
-  expect(await cancelled.locator("[data-task-row]").count()).toBe(1);
+  await expect(
+    cancelled.locator('[data-task-row][data-task-id="loom-cancelled-pred"]'),
+  ).toHaveAttribute("data-task-status", "cancelled");
+  expect(await cancelled.locator("[data-task-row]").count()).toBe(2);
 });
 
 test("the gates section counts its timer gate down in the browser", async ({ page, request }) => {
@@ -149,9 +157,14 @@ test("the needs-attention stripe is inset like its siblings, not welded to the c
   const boards = [
     // The scoped stripe, on a narrowed board of the ordinary instance.
     { url: "/tasks?since=2026-08-01&tag=area%3Adata", marker: "[data-attention-scoped]" },
-    // The "cannot assess" stripe, which only the truncated instance renders.
+    // The "cannot assess" stripe, which only the truncated instance renders —
+    // and only where the Needs-attention list is EMPTY while the tail still
+    // has a row: an empty list is what the three stripe branches choose
+    // between. The `area:archive` slice is that state, and honestly so, since
+    // the row it would flag (unsatisfiable) is the one the capped blocked read
+    // did not return.
     {
-      url: `${TRUNCATED_BASE_URL}/tasks?since=2026-08-01`,
+      url: `${TRUNCATED_BASE_URL}/tasks?since=2026-08-01&tag=area%3Aarchive`,
       marker: "[data-attention-unknown]",
     },
   ];

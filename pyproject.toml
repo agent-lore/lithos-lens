@@ -74,6 +74,8 @@ source_modules = [
     "lithos_lens.blocker_chain",
     "lithos_lens.normalizers",
     "lithos_lens.task_graph",
+    "lithos_lens.graph_cache",
+    "lithos_lens.graph_scope",
     "lithos_lens.frontier",
     "lithos_lens.gates",
     "lithos_lens.dashboard",
@@ -98,6 +100,7 @@ forbidden_modules = [
     "lithos_lens.mcp_transport",
     "lithos_lens.fake_lithos",
     "lithos_lens.fake_dataset",
+    "lithos_lens.fake_graph_dataset",
     "lithos_lens.state",
     "lithos_lens.web",
     "lithos_lens.request_filters",
@@ -115,6 +118,7 @@ source_modules = [
     "lithos_lens.mcp_transport",
     "lithos_lens.fake_lithos",
     "lithos_lens.fake_dataset",
+    "lithos_lens.fake_graph_dataset",
     "lithos_lens.state",
 ]
 forbidden_modules = [

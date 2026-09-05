@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
+from lithos_lens.fake_graph_dataset import graph_fixtures
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -116,7 +117,17 @@ class FakeLithosDataset:
 
 
 def demo_dataset() -> FakeLithosDataset:
-    """Build the shipped demo fixture set for fake-Lithos app mode."""
+    """Build the shipped demo fixture set for fake-Lithos app mode.
+
+    Two clusters, disjoint in ids: the influx one below, which demonstrates
+    the dashboard, and the loom one from
+    :func:`~lithos_lens.fake_graph_dataset.graph_fixtures`, which demonstrates
+    the task graph (a cycle, a cross-project edge, a cancelled predecessor,
+    resolved predecessors in and out of the window, a multi-project epic,
+    isolated tasks, and a depth-5 chain). Both share the one process anchor so
+    the whole board ages together.
+    """
+    graph = graph_fixtures(_ANCHOR)
 
     # Findings on the flagship claimed task link to these notes so the
     # knowledge surface (/note/<id>) renders in fake mode too.
@@ -254,169 +265,173 @@ def demo_dataset() -> FakeLithosDataset:
     )
 
     tasks: tuple[TaskRecord, ...] = (
-        # The rollup epic: never a section row (epics are excluded from both
-        # frontiers), it renders as the epic strip's progress chip over its
-        # recursive subtree — every influx task below is a descendant.
-        TaskRecord(
-            id="influx-epic",
-            title="Influx storage migration",
-            description="Umbrella epic for the Influx cutover programme.",
-            status="open",
-            task_type="epic",
-            created_by="planner",
-            created_at="2026-08-07T09:00:00+00:00",
-            tags=("project:influx",),
-        ),
-        TaskRecord(
-            id="influx-ingest-cutover",
-            title="Cut over Influx ingest path",
-            description="Dual-write, then swap reads onto the new store.",
-            status="open",
-            created_by="planner",
-            created_at=_ago(hours=3),
-            tags=("project:influx", "area:data"),
-        ),
-        TaskRecord(
-            id="influx-backfill",
-            title="Backfill historical Influx series",
-            description="Replay the archive once the cutover is stable.",
-            status="open",
-            created_by="planner",
-            created_at=_ago(hours=2),
-            tags=("project:influx", "area:data"),
-        ),
-        TaskRecord(
-            id="influx-dashboards",
-            title="Rebuild Influx operator dashboards",
-            status="open",
-            created_by="planner",
-            # Younger than unclaimed_ready_age_minutes, so the demo keeps a
-            # populated Ready section rather than flagging its whole frontier.
-            created_at=_ago(minutes=40),
-            tags=("project:influx", "area:observability"),
-        ),
-        TaskRecord(
-            id="lens-graph-view",
-            title="Ship graph-native operator view",
-            description="Rebuild the dashboard on the ready/blocked frontier.",
-            status="open",
-            created_by="planner",
-            created_at=_ago(minutes=20),
-            tags=("project:lithos-lens", "milestone:t1"),
-        ),
-        # The Gates section's two fixtures (T1-S4). Both are `gate` tasks, so
-        # Lithos keeps them out of BOTH frontiers and Lens renders them in the
-        # Gates section only. The human gate leads (human gates sort first);
-        # the timer gate is what gives the demo a live countdown and the
-        # one-shot self-refresh, which is why its `ready_at` is RELATIVE — a
-        # fixed stamp would drift into the past and the demo would ship a
-        # countdown that has already expired.
-        TaskRecord(
-            id="influx-read-swap-approval",
-            title="Approve the Influx read swap",
-            description="Operator sign-off before reads move to the new store.",
-            status="open",
-            task_type="gate",
-            created_by="planner",
-            # Younger than gate_waiting_attention_hours, so the gate stays in
-            # the Gates section instead of being promoted into Needs attention
-            # (rule 3) and disappearing from the surface it demonstrates.
-            created_at=_ago(hours=4),
-            # `gate_type` is what Lithos requires on a gate task and what the
-            # Gates section badges. The remaining keys are ADVISORY — Lithos
-            # does not interpret them and neither does Lens — and there are
-            # four of them against a row cap of three, so the demo also shows
-            # the "+1 more" overflow link.
-            metadata={
-                "project": "influx",
-                "gate_type": "human",
-                "approval_required_from": "operator-on-call",
-                "change_window": "2026-08-30 02:00 UTC",
-                "runbook": "runbooks/influx-rollback.md",
-                "risk": "medium",
-            },
-            tags=("project:influx", "area:data"),
-        ),
-        TaskRecord(
-            id="influx-replica-cooldown",
-            title="Wait out the replica cooldown",
-            description="The new store needs a settling window before backfill.",
-            status="open",
-            task_type="gate",
-            created_by="planner",
-            created_at=_ago(hours=1),
-            metadata={
-                "project": "influx",
-                "gate_type": "timer",
-                # Relative and comfortably in the future: the dashboard renders
-                # a live countdown against it and schedules ONE self-refresh at
-                # this instant (Lithos emits no event when a timer lapses).
-                "ready_at": _ahead(hours=6),
-            },
-            tags=("project:influx", "area:data"),
-        ),
-        TaskRecord(
-            id="influx-ingest-old",
-            title="Retire legacy Influx ingest shim",
-            status="open",
-            created_by="planner",
-            # Deliberately ancient: the demo's Needs-attention row (stale open
-            # + ready-but-unclaimed), so that section has something to show.
-            created_at="2025-11-01T09:00:00+00:00",
-            tags=("project:influx",),
-        ),
-        TaskRecord(
-            id="lens-note-view",
-            title="Land knowledge note view",
-            status="completed",
-            outcome="Shipped in 0.3.0.",
-            created_by="worker-a",
-            # Static and inside the suite's static since=2026-08-01 window,
-            # so the completed group renders a real row (no Date.now()-style
-            # nondeterminism — both sides of the comparison are fixed).
-            created_at="2026-08-04T09:00:00+00:00",
-            resolved_at="2026-08-05T17:00:00+00:00",
-            tags=("project:lithos-lens", "milestone:k1"),
-        ),
-        # Completed BEFORE the demo since-window on purpose: it is invisible in
-        # the Completed section yet still counts in the epic chip, which is the
-        # rollup contract (subtree facts ignore the section filters).
-        TaskRecord(
-            id="influx-schema-design",
-            title="Design the Influx replacement schema",
-            status="completed",
-            outcome="Schema agreed and documented.",
-            created_by="worker-a",
-            created_at="2026-07-18T09:00:00+00:00",
-            resolved_at="2026-07-25T15:00:00+00:00",
-            tags=("project:influx", "area:data"),
-        ),
-        TaskRecord(
-            id="influx-spike",
-            title="Spike Influx client options",
-            status="cancelled",
-            outcome="Superseded by the cutover plan.",
-            created_by="worker-b",
-            # Inside the since window for the same reason as lens-note-view.
-            created_at="2026-08-03T09:00:00+00:00",
-            resolved_at="2026-08-04T12:00:00+00:00",
-            tags=("project:influx",),
-        ),
-        # Parent of the runaway subtree above; closed, so it is invisible
-        # everywhere except its own detail page.
-        TaskRecord(
-            id="influx-shard-epic",
-            title="Migrate every Influx shard",
-            description="One task per shard; kept as history after the cutover.",
-            status="completed",
-            outcome="All shards migrated.",
-            task_type="epic",
-            created_by="planner",
-            created_at=_ago(days=210),
-            resolved_at=_ago(days=150),
-            tags=("project:influx",),
-        ),
-    ) + shard_children
+        (
+            # The rollup epic: never a section row (epics are excluded from both
+            # frontiers), it renders as the epic strip's progress chip over its
+            # recursive subtree — every influx task below is a descendant.
+            TaskRecord(
+                id="influx-epic",
+                title="Influx storage migration",
+                description="Umbrella epic for the Influx cutover programme.",
+                status="open",
+                task_type="epic",
+                created_by="planner",
+                created_at="2026-08-07T09:00:00+00:00",
+                tags=("project:influx",),
+            ),
+            TaskRecord(
+                id="influx-ingest-cutover",
+                title="Cut over Influx ingest path",
+                description="Dual-write, then swap reads onto the new store.",
+                status="open",
+                created_by="planner",
+                created_at=_ago(hours=3),
+                tags=("project:influx", "area:data"),
+            ),
+            TaskRecord(
+                id="influx-backfill",
+                title="Backfill historical Influx series",
+                description="Replay the archive once the cutover is stable.",
+                status="open",
+                created_by="planner",
+                created_at=_ago(hours=2),
+                tags=("project:influx", "area:data"),
+            ),
+            TaskRecord(
+                id="influx-dashboards",
+                title="Rebuild Influx operator dashboards",
+                status="open",
+                created_by="planner",
+                # Younger than unclaimed_ready_age_minutes, so the demo keeps a
+                # populated Ready section rather than flagging its whole frontier.
+                created_at=_ago(minutes=40),
+                tags=("project:influx", "area:observability"),
+            ),
+            TaskRecord(
+                id="lens-graph-view",
+                title="Ship graph-native operator view",
+                description="Rebuild the dashboard on the ready/blocked frontier.",
+                status="open",
+                created_by="planner",
+                created_at=_ago(minutes=20),
+                tags=("project:lithos-lens", "milestone:t1"),
+            ),
+            # The Gates section's two fixtures (T1-S4). Both are `gate` tasks, so
+            # Lithos keeps them out of BOTH frontiers and Lens renders them in the
+            # Gates section only. The human gate leads (human gates sort first);
+            # the timer gate is what gives the demo a live countdown and the
+            # one-shot self-refresh, which is why its `ready_at` is RELATIVE — a
+            # fixed stamp would drift into the past and the demo would ship a
+            # countdown that has already expired.
+            TaskRecord(
+                id="influx-read-swap-approval",
+                title="Approve the Influx read swap",
+                description="Operator sign-off before reads move to the new store.",
+                status="open",
+                task_type="gate",
+                created_by="planner",
+                # Younger than gate_waiting_attention_hours, so the gate stays in
+                # the Gates section instead of being promoted into Needs attention
+                # (rule 3) and disappearing from the surface it demonstrates.
+                created_at=_ago(hours=4),
+                # `gate_type` is what Lithos requires on a gate task and what the
+                # Gates section badges. The remaining keys are ADVISORY — Lithos
+                # does not interpret them and neither does Lens — and there are
+                # four of them against a row cap of three, so the demo also shows
+                # the "+1 more" overflow link.
+                metadata={
+                    "project": "influx",
+                    "gate_type": "human",
+                    "approval_required_from": "operator-on-call",
+                    "change_window": "2026-08-30 02:00 UTC",
+                    "runbook": "runbooks/influx-rollback.md",
+                    "risk": "medium",
+                },
+                tags=("project:influx", "area:data"),
+            ),
+            TaskRecord(
+                id="influx-replica-cooldown",
+                title="Wait out the replica cooldown",
+                description="The new store needs a settling window before backfill.",
+                status="open",
+                task_type="gate",
+                created_by="planner",
+                created_at=_ago(hours=1),
+                metadata={
+                    "project": "influx",
+                    "gate_type": "timer",
+                    # Relative and comfortably in the future: the dashboard renders
+                    # a live countdown against it and schedules ONE self-refresh at
+                    # this instant (Lithos emits no event when a timer lapses).
+                    "ready_at": _ahead(hours=6),
+                },
+                tags=("project:influx", "area:data"),
+            ),
+            TaskRecord(
+                id="influx-ingest-old",
+                title="Retire legacy Influx ingest shim",
+                status="open",
+                created_by="planner",
+                # Deliberately ancient: the demo's Needs-attention row (stale open
+                # + ready-but-unclaimed), so that section has something to show.
+                created_at="2025-11-01T09:00:00+00:00",
+                tags=("project:influx",),
+            ),
+            TaskRecord(
+                id="lens-note-view",
+                title="Land knowledge note view",
+                status="completed",
+                outcome="Shipped in 0.3.0.",
+                created_by="worker-a",
+                # Static and inside the suite's static since=2026-08-01 window,
+                # so the completed group renders a real row (no Date.now()-style
+                # nondeterminism — both sides of the comparison are fixed).
+                created_at="2026-08-04T09:00:00+00:00",
+                resolved_at="2026-08-05T17:00:00+00:00",
+                tags=("project:lithos-lens", "milestone:k1"),
+            ),
+            # Completed BEFORE the demo since-window on purpose: it is invisible in
+            # the Completed section yet still counts in the epic chip, which is the
+            # rollup contract (subtree facts ignore the section filters).
+            TaskRecord(
+                id="influx-schema-design",
+                title="Design the Influx replacement schema",
+                status="completed",
+                outcome="Schema agreed and documented.",
+                created_by="worker-a",
+                created_at="2026-07-18T09:00:00+00:00",
+                resolved_at="2026-07-25T15:00:00+00:00",
+                tags=("project:influx", "area:data"),
+            ),
+            TaskRecord(
+                id="influx-spike",
+                title="Spike Influx client options",
+                status="cancelled",
+                outcome="Superseded by the cutover plan.",
+                created_by="worker-b",
+                # Inside the since window for the same reason as lens-note-view.
+                created_at="2026-08-03T09:00:00+00:00",
+                resolved_at="2026-08-04T12:00:00+00:00",
+                tags=("project:influx",),
+            ),
+            # Parent of the runaway subtree above; closed, so it is invisible
+            # everywhere except its own detail page.
+            TaskRecord(
+                id="influx-shard-epic",
+                title="Migrate every Influx shard",
+                description="One task per shard; kept as history after the cutover.",
+                status="completed",
+                outcome="All shards migrated.",
+                task_type="epic",
+                created_by="planner",
+                created_at=_ago(days=210),
+                resolved_at=_ago(days=150),
+                tags=("project:influx",),
+            ),
+        )
+        + shard_children
+        + graph.tasks
+    )
 
     return FakeLithosDataset(
         tasks=tasks,
@@ -444,7 +459,10 @@ def demo_dataset() -> FakeLithosDataset:
                 "lens-graph-view",
                 "influx-ingest-old",
             }
-        ),
+        )
+        | graph.ready_ids,
+        # The two clusters' id spaces are disjoint, so every merge below is a
+        # union rather than a precedence decision.
         blocked={
             "influx-backfill": (
                 BlockerRecord(
@@ -473,6 +491,7 @@ def demo_dataset() -> FakeLithosDataset:
                     message="Waiting on timer gate influx-replica-cooldown.",
                 ),
             ),
+            **graph.blocked,
         },
         # Epic subtree for the rollup strip (lithos_task_children): four open
         # tasks, one completed, one cancelled -> the chip reads 1/5 (cancelled
@@ -489,6 +508,7 @@ def demo_dataset() -> FakeLithosDataset:
             # 30 children against a page of 25: the demo's only overflow-tail
             # fixture (see shard_children above).
             "influx-shard-epic": tuple(task.id for task in shard_children),
+            **graph.children,
         },
         # Task-graph edges, listed from BOTH endpoints (lithos_task_edge_list
         # reports `direction` relative to the task asked about). Enough shape
@@ -572,6 +592,7 @@ def demo_dataset() -> FakeLithosDataset:
                     direction="incoming",
                 ),
             ),
+            **graph.edges,
         },
         findings={
             "influx-ingest-cutover": (

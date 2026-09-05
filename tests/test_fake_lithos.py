@@ -246,9 +246,13 @@ def test_fake_mode_dashboard_renders_terminal_groups(
     assert 'data-task-id="influx-spike" data-task-status="cancelled"' in body
     assert "Spike Influx client options" in body
     assert 'class="badge badge-cancelled"' in body
-    # Exactly one row in each terminal group.
-    assert body.count('data-task-status="completed"') == 1
-    assert body.count('data-task-status="cancelled"') == 1
+    # The graph cluster's resolved predecessors are inside the window too —
+    # deliberately, since "a resolved predecessor inside the window" is one of
+    # the graph fixtures — so each terminal group carries exactly two rows.
+    assert 'data-task-id="loom-design-done" data-task-status="completed"' in body
+    assert 'data-task-id="loom-cancelled-pred" data-task-status="cancelled"' in body
+    assert body.count('data-task-status="completed"') == 2
+    assert body.count('data-task-status="cancelled"') == 2
 
 
 def test_fake_mode_missing_note_renders_not_found_banner(
@@ -467,6 +471,49 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
         )
 
 
+def test_the_truncation_instance_limit_still_separates_the_two_frontiers() -> None:
+    """The truncated-board capture only proves anything at the right limit.
+
+    ``e2e/servers.ts`` picks a ``frontier_limit`` that sits BETWEEN the demo's
+    two frontier sizes, so one read comes back capped and the other complete —
+    that pairing is the whole subject of the per-side marking the capture
+    photographs, and at a limit below both sides it degrades to the board-wide
+    banner that was already there.
+
+    The coupling is invisible from either file alone: growing the fixtures
+    (T2-A1's graph cluster did) silently moves which side overflows. Checked
+    here rather than only in Playwright because `make check` runs on every
+    change and `make e2e` does not — this exact drift shipped once already.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    servers = (repo_root / "e2e/servers.ts").read_text()
+    match = re.search(r'TRUNCATED_FRONTIER_LIMIT = "(\d+)"', servers)
+    assert match, "e2e/servers.ts no longer declares TRUNCATED_FRONTIER_LIMIT"
+    limit = int(match.group(1))
+
+    dataset = demo_dataset()
+    open_ids = {task.id for task in dataset.tasks if task.status == "open"}
+    ready = len(open_ids & set(dataset.ready_ids))
+    blocked = len(open_ids & set(dataset.blocked))
+
+    # A read is truncated exactly when it comes back holding `limit` rows.
+    capped = {"ready": ready >= limit, "blocked": blocked >= limit}
+    truncating = [side for side, is_capped in capped.items() if is_capped]
+    assert len(truncating) == 1, (
+        f"frontier_limit {limit} against {ready} ready / {blocked} blocked "
+        f"caps {truncating or 'neither side'}; the capture needs exactly one. "
+        "Pick a limit strictly between the two counts and update "
+        "e2e/tests/screenshots.spec.ts to name that side."
+    )
+
+    # ...and the capture must assert the side that actually caps.
+    spec = (repo_root / "e2e/tests/screenshots.spec.ts").read_text()
+    assert f"{truncating[0]} frontier truncated at" in spec, (
+        f"the {truncating[0]} frontier is the one that truncates, but "
+        "screenshots.spec.ts asserts a different side's banner"
+    )
+
+
 @pytest.mark.anyio
 async def test_fake_client_task_get_missing_raises_coded_error() -> None:
     client = FakeLithosClient()
@@ -493,11 +540,15 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
     all_ids = {t.id for t in await client.task_ready()}
+    # Both demo clusters: the influx (dashboard) one and the loom (graph) one.
     assert all_ids == {
         "influx-ingest-cutover",
         "influx-dashboards",
         "lens-graph-view",
         "influx-ingest-old",
+        "loom-schema",
+        "loom-docs-tidy",
+        "loom-metrics-note",
     }
 
     influx = {t.id for t in await client.task_ready(project="influx")}
@@ -517,13 +568,20 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
 async def test_fake_client_task_blocked_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
-    assert [b.task.id for b in await client.task_blocked()] == ["influx-backfill"]
+    assert [b.task.id for b in await client.task_blocked(project="influx")] == [
+        "influx-backfill"
+    ]
     assert [b.task.id for b in await client.task_blocked(tags=["area:data"])] == [
         "influx-backfill"
     ]
     # influx-backfill lacks these, so a scoped read must exclude it.
     assert await client.task_blocked(tags=["area:observability"]) == []
-    assert await client.task_blocked(project="lithos-lens") == []
+    # The graph cluster's cross-project dependent is the one lens-tagged
+    # blocked row: a loom task blocks it, which is what makes each project's
+    # graph render the other endpoint as a ghost.
+    assert [b.task.id for b in await client.task_blocked(project="lithos-lens")] == [
+        "lens-graph-page"
+    ]
 
 
 def test_fake_client_defaults_to_the_demo_dataset() -> None:
@@ -750,6 +808,28 @@ def test_fake_mode_event_publish_seam_reaches_subscribers(
     assert event.id == "evt-77"
     assert event.type == "task.created"
     assert event.task_id == "brand-new"
+
+
+@pytest.mark.parametrize("forged", ["lens.refresh", "task.exploded"])
+def test_fake_mode_event_publish_seam_refuses_types_lithos_never_sends(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, forged: str
+) -> None:
+    """The seam is unauthenticated and CSRF-reachable, and since T2 it drives
+    server state: the hub invalidates the graph cache before fanning out, so a
+    forged ``lens.refresh`` would flush the whole cache (and a forged task type
+    would evict an entry) on a cross-origin POST. Only the types Lithos itself
+    sends are accepted — `lens.*` is the hub's own synthetic namespace."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        hub = app.state.lens.events
+        queue = hub.subscribe()
+        response = client.post(
+            "/tasks/events/publish", json={"type": forged, "task_id": "x"}
+        )
+
+    assert response.status_code == 400
+    assert queue.empty()
 
 
 def test_event_publish_seam_absent_outside_fake_mode(

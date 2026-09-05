@@ -111,6 +111,19 @@ agent_id = "lithos-lens"
 | `project_convention` | string | No | `both` | Which project convention the `?project=` filter honours: `metadata` (`metadata.project`), `tag` (`project:<slug>`), or `both` (a task matches under either). |
 | `project_tag_key` | string | No | `project` | Tag key reserved for the tag convention; must not contain `:`. |
 
+#### `[lithos-lens.graph]`
+
+Task dependency graph pages (REQUIREMENTS §5.7). There is no bulk graph fetch
+upstream, so a page assembles its edges with one `lithos_task_edge_list` call
+per node, shared through a per-task cache.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `cache_ttl_s` | integer | No | `30` | TTL of the per-task edge cache. Task events evict a single entry and a reconnect refresh flushes all of them; this bounds how stale an edge another agent added may be, since edge writes emit no event. |
+| `max_tasks` | integer | No | `300` | Page-scope size guard, ghosts included (1-2000). A larger scope is refused with its count instead of rendered unreadably. |
+| `fetch_concurrency` | integer | No | `16` | How many of a scope's edge/status reads may be in flight at once (1-64). |
+| `mini_graph_max_nodes` | integer | No | `40` | Cap on the task-detail mini-graph, the focal task included. |
+
 #### `[lithos-lens.events]`
 
 | Field | Type | Required | Default | Description |
@@ -161,6 +174,10 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS` | `lithos-lens.tasks.stale_open_age_days` | Integer 1-3650 (same bounds as the TOML key). Needs-attention rule 5. |
 | `LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES` | `lithos-lens.tasks.unclaimed_ready_age_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 6. |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
+| `LITHOS_LENS_GRAPH_CACHE_TTL_S` | `lithos-lens.graph.cache_ttl_s` | Must be a positive integer. Staleness bound on the per-task edge cache. |
+| `LITHOS_LENS_GRAPH_MAX_TASKS` | `lithos-lens.graph.max_tasks` | Integer 1-2000 (same bounds as the TOML key). Ghosts count toward it. |
+| `LITHOS_LENS_GRAPH_FETCH_CONCURRENCY` | `lithos-lens.graph.fetch_concurrency` | Integer 1-64 (same bounds as the TOML key). |
+| `LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES` | `lithos-lens.graph.mini_graph_max_nodes` | Must be a positive integer. |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |
 | `LITHOS_LENS_LLM_PROVIDER` | `lithos-lens.llm.provider` | Optional provider label. |

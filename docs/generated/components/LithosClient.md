@@ -12,6 +12,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.fake_dataset` | M | 1 | 1 |
+| `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | M | 3 | 0 |
 | `lithos_lens.mcp_transport` | M | 2 | 2 |
@@ -21,6 +22,11 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 ### `lithos_lens.fake_dataset`
 - class `FakeLithosDataset` — Immutable fixture bundle served by ``FakeLithosClient``.
 - def `demo_dataset` — Build the shipped demo fixture set for fake-Lithos app mode.
+
+### `lithos_lens.fake_graph_dataset`
+- class `GraphFixtures` — The graph cluster, in the shape ``FakeLithosDataset`` merges.
+- def `graph_fixtures` — Build the graph cluster relative to the demo's process anchor.
+- def `edge_index` — Mirror ``(from, to, type)`` onto both endpoints, as Lithos reports them.
 
 ### `lithos_lens.fake_lithos`
 - def `fake_lithos_enabled` — Return whether the fake-Lithos app mode is switched on via the environment.

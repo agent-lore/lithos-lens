@@ -9,6 +9,7 @@ from typing import Literal
 
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.events import EventHub, EventStatus
+from lithos_lens.graph_cache import GraphCache
 from lithos_lens.lithos_client import LithosClientProtocol, LithosHealth
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,14 @@ class AppState:
         self.events = (
             events if events is not None else EventHub(config.events, config.lithos)
         )
+        # The per-task edge cache every graph surface reads through, and the
+        # hub's eviction hook wired to it. It lives HERE, beside the hub,
+        # because both halves of its invalidation are process-wide: one entry
+        # per task shared by every scope, evicted by the one event stream.
+        # Wired after construction so an injected hub (fake mode's hermetic
+        # FakeEventHub) gets the same treatment as the real one.
+        self.graph_cache = GraphCache(ttl_s=config.graph.cache_ttl_s)
+        self.events.graph_cache = self.graph_cache
         self.health = HealthSnapshot(llm="disabled" if not config.llm.enabled else "ok")
         self._last_health_probe_at = 0.0
 

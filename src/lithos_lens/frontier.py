@@ -251,13 +251,40 @@ async def load_dashboard(
     # never answered would be a fabricated fact rather than a degraded one.
     blocked_ok = not isinstance(blocked_result, BaseException)
 
-    # Raw terminal ids (pre-filter): a task appearing in BOTH the open
-    # snapshot and a terminal result is freshness skew worth a retry, whether
-    # or not the terminal row survives the section filters.
+    # Raw terminal rows (pre-filter). Two uses, one pass:
+    #
+    # - ``terminal_ids`` — a task appearing in BOTH the open snapshot and a
+    #   terminal result is freshness skew worth a retry, whether or not the
+    #   terminal row survives the section filters.
+    # - ``terminal_index`` — blocker NAMES. A predecessor that was cancelled or
+    #   completed is by definition absent from the open snapshot, and a
+    #   cancelled one is exactly what the highest-severity rule fires on: the
+    #   unsatisfiable chip and its reason sentence would print a raw task id on
+    #   the loudest row on the board while the same page renders that task's
+    #   title in Cancelled. These reads are already in hand, so naming it costs
+    #   nothing. The residual is honest and bounded: a predecessor resolved
+    #   outside the ``resolved_since`` window was never read, so it still falls
+    #   back to its id — Lens names what it read.
     terminal_ids: set[str] = set()
+    terminal_index: dict[str, TaskRecord] = {}
     for closed_result in closed_results:
         if not isinstance(closed_result, BaseException):
-            terminal_ids.update(task.id for task in closed_result)
+            for closed_task in closed_result:
+                terminal_ids.add(closed_task.id)
+                terminal_index[closed_task.id] = closed_task
+
+    def _blocker_names(open_index: Mapping[str, TaskRecord]) -> dict[str, TaskRecord]:
+        """The index used to NAME blockers — never to decide openness.
+
+        Deliberately a second view rather than a wider ``index``: the open
+        index is also the authority on which tasks are open (the terminal
+        sections dedup against it), so a terminal row added there would delete
+        itself from the section it belongs to. Naming has no such duty — it
+        only needs a title for an id — so it takes the union, with the open
+        rows winning a collision because they are the generation the sections
+        render.
+        """
+        return {**terminal_index, **open_index}
 
     def _partition_state(
         snapshot: list[TaskRecord],
@@ -290,7 +317,7 @@ async def load_dashboard(
             visible,
             ready_ids=ready_ids,
             blocked=blocked_rows,
-            index=index,
+            index=_blocker_names(index),
         )
         # Only an overlap that changes what RENDERS is a contradiction worth
         # the warning: a filtered-out task is in no section, and a
@@ -400,7 +427,7 @@ async def load_dashboard(
             blocked=blocked_records,
             policy=policy,
             now=evaluated_at,
-            index=open_index,
+            index=_blocker_names(open_index),
         )
     else:
         # Flat fallback — no usable frontier, because a read of it failed
