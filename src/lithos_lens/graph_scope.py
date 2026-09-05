@@ -209,10 +209,19 @@ class GraphEdge:
 class ScopeRefusal:
     """A scope too large to render, and how large it was (D2).
 
-    ``ghosts_counted`` is false when the in-scope task set alone already
-    exceeded the guard: the count is then a lower bound, because Lens
-    refuses BEFORE the per-node fan-out rather than spending several hundred
-    reads to make an already-final answer more precise.
+    Both counts are taken BEFORE the reads they would authorise, because a
+    guard that spends the fan-out first and refuses afterwards bounds nothing:
+
+    - ``ghosts_counted`` false — the task set alone exceeded the guard, so no
+      edge was read. The count is a lower bound (ghosts would only add).
+    - ``ghosts_counted`` true — the tasks plus every out-of-set endpoint their
+      edges NAME exceeded it, so no ``task_get`` was made. That count is an
+      upper bound on what would have rendered, since some of those endpoints
+      resolve to completed predecessors whose edges are then dropped. Refusing
+      on the upper bound is the deliberate call: the alternative is one
+      credentialed read per named endpoint — a number chosen by whoever wrote
+      the edges, not by the operator — spent to decide a scope that is at the
+      guard's edge either way.
     """
 
     count: int
@@ -413,19 +422,34 @@ async def assemble_scope(
     edges = _dedupe_scope_edges(entries)
 
     far_ids = _ghostable_endpoints(edges, in_scope)
-    far_tasks, unresolved = await _resolve_far_endpoints(
-        lithos, far_ids, master, limiter
-    )
-
-    graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
-    nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
-    if len(nodes) > limits.max_tasks:
+    # The guard again, and this is where it has to bite: `far_ids` is the
+    # complete list of endpoints the ghost phase would resolve, and each one
+    # costs a `task_get` on the process-wide MCP session whose slots (and
+    # queue-inclusive deadline) every other render shares. Its length is
+    # chosen by whoever wrote the edges of the tasks in scope —
+    # `lithos_task_edge_list` takes no limit and Lithos caps no task's edge
+    # count — so the semaphore alone bounds the CONCURRENCY and leaves the
+    # TOTAL open, which is the distinction `task_links` already draws.
+    #
+    # Checking here also makes the node count final: every ghost comes from
+    # this list, so a scope that passes cannot breach the guard afterwards,
+    # and the whole render is bounded at `max_tasks` edge reads plus
+    # `max_tasks` status reads.
+    if len(scope_tasks) + len(far_ids) > limits.max_tasks:
         return TaskGraphScope(
             kind=kind,
             key=key,
             include_resolved=include_resolved,
-            refusal=ScopeRefusal(count=len(nodes), max_tasks=limits.max_tasks),
+            refusal=ScopeRefusal(
+                count=len(scope_tasks) + len(far_ids), max_tasks=limits.max_tasks
+            ),
         )
+
+    far_tasks, unresolved = await _resolve_far_endpoints(
+        lithos, far_ids, master, limiter
+    )
+    graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
+    nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
 
     return TaskGraphScope(
         kind=kind,
@@ -503,10 +527,17 @@ def _ghostable_endpoints(
     unknown future edge type — names no ghost, so its edge is dropped in
     :func:`_classify_edges` rather than pulling a node in.
     """
+    # The list keeps the documented order; the set does the membership test.
+    # An `in list` here would be O(edges x candidates) of uninterruptible CPU
+    # on the event-loop thread, over an edge set whose size Lithos does not
+    # cap — a stall that no deadline or render gate can shed, because there is
+    # no await inside the loop.
     candidates: list[str] = []
+    seen: set[str] = set()
     for edge in edges:
         far = _far_endpoint(edge, in_scope)
-        if far and far not in candidates:
+        if far and far not in seen:
+            seen.add(far)
             candidates.append(far)
     return tuple(candidates)
 

@@ -40,6 +40,7 @@ fan-out semaphore stays the caller's to place.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,17 +52,38 @@ from lithos_lens.task_graph import EdgeRecord
 # ``tests/test_graph_cache.py`` pins the two together.
 DEFAULT_GRAPH_CACHE_TTL_S = 30
 
+# Ceiling on retained entries, evicting least-recently-used first. WHICH task
+# ids get cached is chosen from outside (``?epic=<id>`` admits any subtree), the
+# TTL is enforced lazily on read — an entry nobody asks for again is never
+# swept — and each entry holds a task's full edge list, whose size Lithos does
+# not cap. So without a bound, resident memory of a long-lived process grows to
+# every edge of every task ever scoped. The same call MAX_EVENT_SUBSCRIBERS and
+# MAX_CONCURRENT_RENDERS make for the other structures whose size the caller
+# chooses.
+#
+# Set at the ``[graph].max_tasks`` CEILING rather than its default, so no single
+# page scope — however it is configured — can evict its own working set while
+# assembling it, and so the mini-graph still reuses what a project page warmed.
+MAX_GRAPH_CACHE_ENTRIES = 2000
+
 #: How the cache reads a task's edges. The caller supplies it — bound to a
 #: Lithos client and, on a scope fan-out, wrapped in that scope's semaphore.
 EdgeFetch = Callable[[str], Awaitable[Sequence[EdgeRecord]]]
 
-#: Injectable clock. The same reading serves both the TTL and the operator's
-#: ``as_of`` line, so it is deliberately a WALL clock rather than a monotonic
-#: one: a graph page has to name the instant its data came from, and two
-#: clocks would let the timestamp shown disagree with the entry's freshness.
-#: The residual — a system clock step could expire an entry early or hold it
-#: a little long — costs at most one extra read against a 30-second TTL.
+#: Injectable WALL clock: it stamps ``fetched_at``, which is what the page
+#: shows as its ``as_of`` line. It does NOT decide expiry — see :data:`Ticks`.
 Clock = Callable[[], datetime]
+
+#: Injectable MONOTONIC clock, in seconds; it alone decides expiry.
+#:
+#: Two clocks rather than one, deliberately. ``fetched_at`` has to be wall time
+#: because an operator reads it, and wall time can move BACKWARDS (an NTP
+#: correction, a VM clock adjustment) — under which a wall-clock TTL computes a
+#: negative age and keeps serving the entry until real time catches up, which a
+#: large enough correction stretches into hours. That would break the one claim
+#: the TTL makes: it is the ONLY invalidation path for an edge another agent
+#: added, because edge upserts emit no event.
+Ticks = Callable[[], float]
 
 
 def _utcnow() -> datetime:
@@ -75,11 +97,16 @@ class EdgeCacheEntry:
     ``fetched_at`` is what makes a scope's ``as_of`` honest: a scope reports
     the OLDEST ``fetched_at`` among the entries that contributed to it, so a
     graph assembled mostly from warm entries never presents itself as current.
+
+    ``expires_at`` is on a different clock and is not comparable with it: it is
+    a MONOTONIC instant (:data:`Ticks`), so a system clock step cannot extend
+    an entry's life past the TTL it was cached under.
     """
 
     task_id: str
     edges: tuple[EdgeRecord, ...] = ()
     fetched_at: datetime = datetime.min.replace(tzinfo=UTC)
+    expires_at: float = 0.0
 
 
 def dedupe_edges(edges: Sequence[EdgeRecord]) -> tuple[EdgeRecord, ...]:
@@ -114,16 +141,23 @@ class GraphCache:
         *,
         ttl_s: float = DEFAULT_GRAPH_CACHE_TTL_S,
         clock: Clock = _utcnow,
+        ticks: Ticks = time.monotonic,
+        max_entries: int = MAX_GRAPH_CACHE_ENTRIES,
     ) -> None:
         self._ttl_s = ttl_s
         self._clock = clock
+        self._ticks = ticks
+        self._max_entries = max_entries
+        # Insertion order IS recency order: every hit re-inserts its key (see
+        # `_touch`), so the oldest key is the least recently USED one and the
+        # bound evicts LRU rather than FIFO.
         self._entries: dict[str, EdgeCacheEntry] = {}
-        self._inflight: dict[str, asyncio.Task[EdgeCacheEntry]] = {}
-        # Task ids evicted while their read was in flight. That result
-        # describes the graph BEFORE the event that evicted it, so it is
-        # returned to the waiters who asked for it and then dropped rather
-        # than stored — caching it would pin known-stale edges for a full TTL.
-        self._invalidated_inflight: set[str] = set()
+        # One flight per task id, tagged with the generation it belongs to.
+        # Eviction RETIRES the current flight (drops it from this map) rather
+        # than marking it, so a caller arriving after the event starts a new
+        # read instead of joining the one that predates it — see `evict`.
+        self._inflight: dict[str, tuple[int, asyncio.Task[EdgeCacheEntry]]] = {}
+        self._generation = 0
         #: Served from a live entry, or joined to an in-flight read. Both mean
         #: "no new upstream call", which is what the graph page reports.
         self.hits = 0
@@ -138,16 +172,22 @@ class GraphCache:
     def get(self, task_id: str) -> EdgeCacheEntry | None:
         """The live entry for ``task_id``, or ``None`` when absent or expired.
 
-        A pure read: it neither fetches nor counts, so a caller can ask what
-        is warm without changing the hit/miss figures the page reports.
+        A pure read as far as the counters go: it neither fetches nor counts,
+        so a caller can ask what is warm without changing the hit/miss figures
+        the page reports. It does refresh the entry's RECENCY, which is what
+        makes the size bound an LRU rather than a FIFO.
         """
         entry = self._entries.get(task_id)
         if entry is None:
             return None
-        if (self._clock() - entry.fetched_at).total_seconds() >= self._ttl_s:
+        if self._ticks() >= entry.expires_at:
             del self._entries[task_id]
             return None
+        self._touch(task_id)
         return entry
+
+    def _touch(self, task_id: str) -> None:
+        self._entries[task_id] = self._entries.pop(task_id)
 
     async def edges_for(self, task_id: str, fetch: EdgeFetch) -> EdgeCacheEntry:
         """The task's edges, from the cache or from one shared upstream read.
@@ -161,42 +201,75 @@ class GraphCache:
             self.hits += 1
             return entry
 
-        inflight = self._inflight.get(task_id)
-        if inflight is None:
+        flight = self._inflight.get(task_id)
+        if flight is None:
             self.misses += 1
+            self._generation += 1
+            generation = self._generation
             inflight = asyncio.create_task(
-                self._load(task_id, fetch), name=f"graph-cache-edges-{task_id}"
+                self._load(task_id, fetch, generation),
+                name=f"graph-cache-edges-{task_id}",
             )
-            self._inflight[task_id] = inflight
+            self._inflight[task_id] = (generation, inflight)
         else:
             self.hits += 1
+            _, inflight = flight
         # Shielded: one waiter being cancelled (a browser that went away
         # mid-render) must not cancel the read the OTHER waiters are on.
         return await asyncio.shield(inflight)
 
-    async def _load(self, task_id: str, fetch: EdgeFetch) -> EdgeCacheEntry:
+    async def _load(
+        self, task_id: str, fetch: EdgeFetch, generation: int
+    ) -> EdgeCacheEntry:
         try:
             edges = await fetch(task_id)
             entry = EdgeCacheEntry(
                 task_id=task_id,
                 edges=dedupe_edges(edges),
                 fetched_at=self._clock(),
+                expires_at=self._ticks() + self._ttl_s,
             )
-            if task_id not in self._invalidated_inflight:
-                self._entries[task_id] = entry
+            if self._is_current(task_id, generation):
+                self._store(entry)
             return entry
         finally:
-            self._inflight.pop(task_id, None)
-            self._invalidated_inflight.discard(task_id)
+            if self._is_current(task_id, generation):
+                del self._inflight[task_id]
+
+    def _is_current(self, task_id: str, generation: int) -> bool:
+        """Whether this flight is still the one the cache is waiting on.
+
+        False once :meth:`evict` or :meth:`flush` has retired it — possibly
+        with a NEWER flight already in its place, which a retired flight must
+        neither overwrite nor cancel out of the map.
+        """
+        flight = self._inflight.get(task_id)
+        return flight is not None and flight[0] == generation
+
+    def _store(self, entry: EdgeCacheEntry) -> None:
+        self._entries[entry.task_id] = entry
+        while len(self._entries) > self._max_entries:
+            # Least recently used first. Counted as an eviction: it is one,
+            # and a page whose cache is thrashing should be able to see it.
+            self._entries.pop(next(iter(self._entries)))
+            self.evictions += 1
 
     def evict(self, task_id: str) -> None:
-        """Drop one task's entry — what a consumed task event does."""
+        """Drop one task's entry — what a consumed task event does.
+
+        Also RETIRES any read of that task already in flight. Retiring is what
+        makes the hub's pre-fan-out ordering mean anything: the browser that
+        reacts to the event asks again, and an eviction that only marked the
+        flight would hand that new request the very result the event
+        invalidated — for as long as the upstream read took. Callers already
+        waiting on the retired flight still receive its result: it is the
+        answer to the question they asked, and it is simply not cached.
+        """
         if not task_id:
             return
         if self._entries.pop(task_id, None) is not None:
             self.evictions += 1
-        if task_id in self._inflight:
-            self._invalidated_inflight.add(task_id)
+        self._inflight.pop(task_id, None)
 
     def flush(self) -> None:
         """Drop every entry — what ``lens.refresh`` does.
@@ -208,4 +281,8 @@ class GraphCache:
         """
         self.evictions += len(self._entries)
         self._entries.clear()
-        self._invalidated_inflight.update(self._inflight)
+        # Every flight in progress is retired too, for the same reason
+        # :meth:`evict` retires one: a refresh says Lens missed events, so a
+        # read started before it cannot be trusted to answer a request made
+        # after it.
+        self._inflight.clear()

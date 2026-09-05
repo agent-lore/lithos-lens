@@ -17,10 +17,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from lithos_lens.config import DEFAULT_GRAPH_CACHE_TTL_S as CONFIG_CACHE_TTL_S
-from lithos_lens.config import EventsConfig, LithosConfig
+from lithos_lens.config import MAX_GRAPH_INT_KNOBS, EventsConfig, LithosConfig
 from lithos_lens.events import LENS_REFRESH_EVENT, EventHub, LensEvent
 from lithos_lens.graph_cache import (
     DEFAULT_GRAPH_CACHE_TTL_S,
+    MAX_GRAPH_CACHE_ENTRIES,
     GraphCache,
     dedupe_edges,
 )
@@ -32,15 +33,29 @@ _T0 = datetime(2026, 9, 5, 12, 0, 0, tzinfo=UTC)
 
 
 class StepClock:
-    """A wall clock the test moves by hand."""
+    """The cache's two clocks, moved by hand and independently.
+
+    ``advance`` moves both, as real time does. ``skew`` moves ONLY the wall
+    clock, which is what an NTP correction or a VM clock adjustment does — and
+    what must not touch expiry.
+    """
 
     def __init__(self, start: datetime = _T0) -> None:
         self.now = start
+        self.ticks_now = 1000.0
 
     def __call__(self) -> datetime:
         return self.now
 
+    def ticks(self) -> float:
+        return self.ticks_now
+
     def advance(self, **delta: float) -> None:
+        step = timedelta(**delta)
+        self.now += step
+        self.ticks_now += step.total_seconds()
+
+    def skew(self, **delta: float) -> None:
         self.now += timedelta(**delta)
 
 
@@ -98,7 +113,7 @@ async def test_second_read_is_served_without_asking_upstream() -> None:
 
 async def test_an_entry_past_its_ttl_is_re_read() -> None:
     clock = StepClock()
-    cache = GraphCache(ttl_s=30, clock=clock)
+    cache = GraphCache(ttl_s=30, clock=clock, ticks=clock.ticks)
     reader = Reader({"a": [edge("a", "b")]})
 
     first = await cache.edges_for("a", reader)
@@ -107,6 +122,28 @@ async def test_an_entry_past_its_ttl_is_re_read() -> None:
 
     assert reader.calls == ["a", "a"]
     assert second.fetched_at > first.fetched_at
+
+
+async def test_a_backwards_wall_clock_does_not_extend_an_entry_s_life() -> None:
+    """Expiry runs on the monotonic clock, `as_of` on the wall clock.
+
+    A wall clock can step BACKWARDS (an NTP correction, a VM clock
+    adjustment), which makes an entry's wall-clock age negative and would keep
+    serving it until real time caught back up — hours, for a large enough
+    correction. The TTL is the only invalidation path for an edge another
+    agent added, so it may not be the thing that moves.
+    """
+    clock = StepClock()
+    cache = GraphCache(ttl_s=30, clock=clock, ticks=clock.ticks)
+    reader = Reader({"a": [edge("a", "b")]})
+    await cache.edges_for("a", reader)
+
+    clock.skew(hours=-1)
+    clock.advance(seconds=31)
+
+    assert cache.get("a") is None
+    await cache.edges_for("a", reader)
+    assert reader.calls == ["a", "a"]
 
 
 async def test_two_concurrent_readers_share_one_in_flight_call() -> None:
@@ -184,6 +221,59 @@ async def test_an_entry_evicted_mid_flight_is_returned_but_not_stored() -> None:
 
     assert entry.edges == (edge("a", "b"),)
     assert cache.get("a") is None
+
+
+async def test_a_reader_arriving_after_an_eviction_starts_a_new_read() -> None:
+    """Eviction RETIRES the flight; it does not merely mark its result.
+
+    The interleaving this exists for: a scope starts reading task `a`, the
+    `task.updated` for `a` is consumed and evicts before the hub notifies
+    browsers, and a browser reacts and asks again while the first read is
+    still out. Joining the in-flight read would hand that refresh exactly the
+    pre-event edges the event invalidated — which is what the hub's
+    pre-fan-out ordering is supposed to make impossible.
+    """
+    gate = asyncio.Event()
+    cache = GraphCache(clock=StepClock())
+    reader = Reader({"a": [edge("a", "b")]}, gate=gate)
+
+    early = asyncio.create_task(cache.edges_for("a", reader))
+    await asyncio.sleep(0)
+    cache.evict("a")
+    late = asyncio.create_task(cache.edges_for("a", reader))
+    await asyncio.sleep(0)
+    gate.set()
+    await asyncio.gather(early, late)
+
+    assert reader.calls == ["a", "a"]
+    # The post-event read is the one that gets cached; the retired flight
+    # neither stores its result nor evicts the newer flight from the map.
+    assert cache.get("a") is not None
+
+
+async def test_entries_are_bounded_and_the_least_recently_used_goes_first() -> None:
+    """WHICH ids are cached is chosen from outside, so the count needs a bound.
+
+    The TTL is enforced lazily on read, so an entry nobody asks for again is
+    never swept — a one-off `?epic=<id>` scope would otherwise pin its whole
+    subtree's edge lists for the life of the process.
+    """
+    cache = GraphCache(clock=StepClock(), max_entries=2)
+    reader = Reader({"a": [], "b": [], "c": []})
+    await cache.edges_for("a", reader)
+    await cache.edges_for("b", reader)
+
+    assert cache.get("a") is not None  # `a` becomes the most recently used
+    await cache.edges_for("c", reader)
+
+    assert cache.size == 2
+    assert cache.get("b") is None
+    assert cache.get("a") is not None and cache.get("c") is not None
+
+
+def test_the_shipped_entry_bound_clears_the_largest_configurable_scope() -> None:
+    """A page must never evict its own working set while assembling it."""
+    assert MAX_GRAPH_INT_KNOBS["max_tasks"] <= MAX_GRAPH_CACHE_ENTRIES
 
 
 async def test_the_hub_evicts_the_event_s_task_before_fanning_it_out() -> None:

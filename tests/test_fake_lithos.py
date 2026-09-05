@@ -767,6 +767,28 @@ def test_fake_mode_event_publish_seam_reaches_subscribers(
     assert event.task_id == "brand-new"
 
 
+@pytest.mark.parametrize("forged", ["lens.refresh", "task.exploded"])
+def test_fake_mode_event_publish_seam_refuses_types_lithos_never_sends(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch, forged: str
+) -> None:
+    """The seam is unauthenticated and CSRF-reachable, and since T2 it drives
+    server state: the hub invalidates the graph cache before fanning out, so a
+    forged ``lens.refresh`` would flush the whole cache (and a forged task type
+    would evict an entry) on a cross-origin POST. Only the types Lithos itself
+    sends are accepted — `lens.*` is the hub's own synthetic namespace."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        hub = app.state.lens.events
+        queue = hub.subscribe()
+        response = client.post(
+            "/tasks/events/publish", json={"type": forged, "task_id": "x"}
+        )
+
+    assert response.status_code == 400
+    assert queue.empty()
+
+
 def test_event_publish_seam_absent_outside_fake_mode(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

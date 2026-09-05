@@ -229,7 +229,15 @@ async def test_a_task_event_evicts_that_node_and_the_next_scope_refetches_it() -
 
 
 async def test_a_scope_one_over_max_tasks_is_refused_with_the_count() -> None:
-    """Ghosts count: three in-scope tasks plus one ghost breaches a guard of 3."""
+    """Ghosts count: three in-scope tasks plus one ghost breaches a guard of 3.
+
+    And it is refused BEFORE the ghost reads. The endpoints a scope's edges
+    name are counted by whoever wrote those edges — `lithos_task_edge_list`
+    takes no limit — so a guard applied after `_resolve_far_endpoints` would
+    let one request spend an unbounded number of credentialed `task_get` calls
+    on the shared MCP session and then throw the result away. The call log is
+    the assertion because the bound IS the behaviour.
+    """
     tasks = [task("a"), task("b"), task("c")]
     client = RecordingClient(
         dataset(
@@ -244,6 +252,29 @@ async def test_a_scope_one_over_max_tasks_is_refused_with_the_count() -> None:
     assert scope.refusal is not None
     assert (scope.refusal.count, scope.refusal.ghosts_counted) == (4, True)
     assert scope.nodes == ()
+    assert client.get_calls == []
+
+
+async def test_the_ghost_phase_reads_no_more_endpoints_than_the_guard_allows() -> None:
+    """The whole render is bounded: <= max_tasks edge reads + max_tasks gets.
+
+    Stated as a property over a scope that DOES render, so the bound is
+    asserted where it binds rather than only on the refusal path.
+    """
+    tasks = [task("a"), task("b")]
+    client = RecordingClient(
+        dataset(
+            [*tasks, task("far-1", project="other"), task("far-2", project="other")],
+            [("a", "far-1", "blocks"), ("b", "far-2", "blocks")],
+        )
+    )
+
+    scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=4))
+
+    assert not scope.refused
+    assert len(client.edge_calls) <= 4
+    assert len(client.get_calls) <= 4
+    assert sorted(client.get_calls) == ["far-1", "far-2"]
 
 
 async def test_an_oversized_task_set_is_refused_before_the_fan_out() -> None:

@@ -173,6 +173,7 @@ classDiagram
   class EdgeCacheEntry {
     +task_id str
     +fetched_at datetime
+    +expires_at float
   }
   class EdgeRecord {
     +from_task_id str
