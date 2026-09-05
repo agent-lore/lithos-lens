@@ -528,6 +528,105 @@ def test_env_override_needs_attention_knob_rejects_junk(
         load_config(lithos_lens_config_env)
 
 
+def test_graph_knobs_default_to_the_shipped_values(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The graph pages must work with no [graph] table written at all."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.graph.cache_ttl_s == 30
+    assert config.graph.max_tasks == 300
+    assert config.graph.fetch_concurrency == 16
+    assert config.graph.mini_graph_max_nodes == 40
+
+
+def test_graph_knobs_are_read_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.graph]\n'
+        "cache_ttl_s = 5\nmax_tasks = 50\nfetch_concurrency = 4\n"
+        "mini_graph_max_nodes = 12\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.graph.cache_ttl_s == 5
+    assert config.graph.max_tasks == 50
+    assert config.graph.fetch_concurrency == 4
+    assert config.graph.mini_graph_max_nodes == 12
+
+
+@pytest.mark.parametrize(
+    ("env_var", "attribute"),
+    [
+        ("LITHOS_LENS_GRAPH_CACHE_TTL_S", "cache_ttl_s"),
+        ("LITHOS_LENS_GRAPH_MAX_TASKS", "max_tasks"),
+        ("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "fetch_concurrency"),
+        ("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "mini_graph_max_nodes"),
+    ],
+)
+def test_env_override_sets_each_graph_knob(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    attribute: str,
+) -> None:
+    """One override must not reset its neighbours: they share an apply pass."""
+    monkeypatch.setenv(env_var, "7")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert getattr(config.graph, attribute) == 7
+    untouched = {
+        "cache_ttl_s": 30,
+        "max_tasks": 300,
+        "fetch_concurrency": 16,
+        "mini_graph_max_nodes": 40,
+    }
+    del untouched[attribute]
+    for name, default in untouched.items():
+        assert getattr(config.graph, name) == default
+
+
+@pytest.mark.parametrize(
+    ("env_var", "over_max"),
+    [
+        ("LITHOS_LENS_GRAPH_MAX_TASKS", 2001),
+        ("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", 65),
+    ],
+)
+def test_env_override_graph_fan_out_knob_rejects_a_value_over_its_ceiling(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    over_max: int,
+) -> None:
+    """Both knobs size the per-request edge-read fan-out, so both are bounded
+    on the env path as well as the TOML one — a mistyped value must fail the
+    load rather than turn one page render into an unbounded read burst."""
+    monkeypatch.setenv(env_var, str(over_max))
+
+    with pytest.raises(ConfigError, match=env_var):
+        load_config(lithos_lens_config_env)
+
+
+def test_graph_fan_out_knob_over_its_ceiling_fails_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.graph]\n'
+        "fetch_concurrency = 65\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match="fetch_concurrency"):
+        load_config(config_path)
+
+
 def test_project_convention_settings_are_read_from_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

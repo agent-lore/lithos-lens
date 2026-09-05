@@ -246,9 +246,13 @@ def test_fake_mode_dashboard_renders_terminal_groups(
     assert 'data-task-id="influx-spike" data-task-status="cancelled"' in body
     assert "Spike Influx client options" in body
     assert 'class="badge badge-cancelled"' in body
-    # Exactly one row in each terminal group.
-    assert body.count('data-task-status="completed"') == 1
-    assert body.count('data-task-status="cancelled"') == 1
+    # The graph cluster's resolved predecessors are inside the window too —
+    # deliberately, since "a resolved predecessor inside the window" is one of
+    # the graph fixtures — so each terminal group carries exactly two rows.
+    assert 'data-task-id="loom-design-done" data-task-status="completed"' in body
+    assert 'data-task-id="loom-cancelled-pred" data-task-status="cancelled"' in body
+    assert body.count('data-task-status="completed"') == 2
+    assert body.count('data-task-status="cancelled"') == 2
 
 
 def test_fake_mode_missing_note_renders_not_found_banner(
@@ -493,11 +497,15 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
     all_ids = {t.id for t in await client.task_ready()}
+    # Both demo clusters: the influx (dashboard) one and the loom (graph) one.
     assert all_ids == {
         "influx-ingest-cutover",
         "influx-dashboards",
         "lens-graph-view",
         "influx-ingest-old",
+        "loom-schema",
+        "loom-docs-tidy",
+        "loom-metrics-note",
     }
 
     influx = {t.id for t in await client.task_ready(project="influx")}
@@ -517,13 +525,20 @@ async def test_fake_client_task_ready_scoped_by_project_and_tags() -> None:
 async def test_fake_client_task_blocked_scoped_by_project_and_tags() -> None:
     client = FakeLithosClient()
 
-    assert [b.task.id for b in await client.task_blocked()] == ["influx-backfill"]
+    assert [b.task.id for b in await client.task_blocked(project="influx")] == [
+        "influx-backfill"
+    ]
     assert [b.task.id for b in await client.task_blocked(tags=["area:data"])] == [
         "influx-backfill"
     ]
     # influx-backfill lacks these, so a scoped read must exclude it.
     assert await client.task_blocked(tags=["area:observability"]) == []
-    assert await client.task_blocked(project="lithos-lens") == []
+    # The graph cluster's cross-project dependent is the one lens-tagged
+    # blocked row: a loom task blocks it, which is what makes each project's
+    # graph render the other endpoint as a ghost.
+    assert [b.task.id for b in await client.task_blocked(project="lithos-lens")] == [
+        "lens-graph-page"
+    ]
 
 
 def test_fake_client_defaults_to_the_demo_dataset() -> None:

@@ -11,9 +11,9 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | M | 0 | 2 |
+| `lithos_lens.config` | L | 0 | 2 |
 | `lithos_lens.config_fields` | S | 0 | 5 |
-| `lithos_lens.config_schema` | S | 11 | 1 |
+| `lithos_lens.config_schema` | S | 12 | 1 |
 
 ## Public API
 
@@ -40,6 +40,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 - class `UIConfig`
 - class `HealthConfig`
 - class `KnowledgeConfig`
+- class `GraphConfig` — Task dependency graph pages (§5.7) — the four knobs T2 introduces.
 - class `LithosLensConfig`
 
 ## Dependencies

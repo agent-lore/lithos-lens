@@ -126,6 +126,10 @@ The current configuration model includes:
 - `tasks.claim_expiring_soon_minutes`
 - `tasks.stale_open_age_days`
 - `tasks.unclaimed_ready_age_minutes`
+- `graph.cache_ttl_s`
+- `graph.max_tasks`
+- `graph.fetch_concurrency`
+- `graph.mini_graph_max_nodes`
 - `knowledge.related_title_fanout_cap`
 - `knowledge.search_limit`
 - `knowledge.recent_limit`
@@ -254,6 +258,10 @@ silently.
 - **Link page size** — bounded neighbour lists on the detail page state the
   remainder they are not showing ("N more not shown"), because a "why can't
   this run?" list that quietly drops blockers is worse than a slow one.
+- **Graph scope size** — a dependency-graph scope larger than
+  `graph.max_tasks` (ghosts counted) is refused with its count rather than
+  rendered unreadably, and the per-node edge fan-out behind it runs under the
+  `graph.fetch_concurrency` semaphore with a per-read deadline (§5.10).
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 
@@ -371,6 +379,59 @@ Lens distinguishes several runtime states in the UI and internal health model:
 
 The Tasks dashboard surfaces these states so an operator can tell whether the
 page is live, reconnecting, or degraded.
+
+### 5.10 Task Dependency Graph Assembly
+
+The data layer the `/tasks/graph` pages are being built on (T2 slice A1)
+ships ahead of its routes: no graph page is registered yet, and nothing in the
+UI reads it.
+
+Lithos has no bulk graph fetch, so a graph is assembled one
+`lithos_task_edge_list(task_id, direction="both")` call per node. Those calls
+go through a **per-task edge cache** (`graph_cache.py`) on `AppState`:
+
+- one entry per `task_id`, holding that task's deduped edge list and the
+  instant it was read;
+- a TTL of `graph.cache_ttl_s`, and single-flight, so two concurrent readers
+  of the same task share one upstream call;
+- eviction driven by the event stream — the `EventHub` evicts a consumed task
+  event's `task_id` **before** it fans the event out to browsers, and a
+  `lens.refresh` flushes everything;
+- a failed read is never cached (not even as an empty list): an empty edge
+  list means "no edges", a failure means Lens does not know.
+
+Edge upserts emit no upstream event, so the TTL is the staleness bound for an
+edge another agent adds, and the cache records `fetched_at` so a page can say
+when its picture is from rather than imply freshness.
+
+A **scope** (`graph_scope.py`) is what one graph page would render, computed
+over the master task list plus that cache and fanning out only for misses:
+
+- **membership** — a project scope is the project's tasks per §5B.1, open only
+  unless `include_resolved`; an epic scope is
+  `lithos_task_children(recursive, include_closed)` plus the epic, with closed
+  children included by default;
+- **edge state**, read off both endpoints — `active` (dependent open,
+  predecessor open or cancelled), `inactive` with its reason (`satisfied` when
+  the predecessor completed, which takes precedence; else
+  `dependent_resolved`), or `unknown` when an endpoint's status could not be
+  read. Only `blocks` and `waits_on_gate` carry readiness meaning;
+- **ghosts**, one hop and leaf-only — a ghost's own edges are never read, so
+  the fan-out is bounded by the scope. Open far endpoints come from the master
+  list at no cost; only resolved ones need a `task_get`. An inactive edge
+  pointing out of the scope is dropped rather than ghosted, and context —
+  the immediate out-of-set parent and `discovered_from` source of an included
+  node — is added upstream only, never an out-of-set child or follow-on;
+- **completeness**, carried in the result rather than beside it — `incomplete`
+  names every node whose edge read failed, such a node is never classified
+  isolated, a ghost whose `task_get` failed is shown with `status unknown` and
+  its dependency edges as `unknown`, and `as_of` is the oldest contributing
+  `fetched_at`.
+
+The demo fixture set (fake-Lithos app mode) carries a second cluster for this
+layer: a dependency cycle, a cross-project `blocks` edge, a cancelled
+predecessor, resolved predecessors inside and outside the window, an epic with
+a child in another project, isolated tasks, and a chain of depth 5.
 
 ## 6. Current Lithos Dependencies
 
@@ -569,6 +630,10 @@ The following requirement areas are not yet implemented in the current state:
 - LLM-assisted curation, summaries, or browsing assistance (X1) — the LLM
   config block exists and is disabled by default; nothing consumes it
 - authentication
+
+- the task dependency graph **pages** (`/tasks/graph`, the shared side panel,
+  the detail mini-graph) — T2; the assembly layer beneath them is in place
+  (§5.10) but no route reads it yet
 
 One gap is narrower than a milestone and tracked as a task:
 
