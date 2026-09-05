@@ -19,7 +19,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
-| `lithos_lens.graph_cache` | M | 2 | 1 |
+| `lithos_lens.graph_cache` | M | 2 | 2 |
 | `lithos_lens.graph_scope` | L | 6 | 6 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -75,6 +75,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.graph_cache`
 - class `EdgeCacheEntry` — One task's edges, and when they were read.
+- def `graph_fanout_gate` — The process-wide gate every graph read passes through.
 - def `dedupe_edges` — Collapse edges that name the same (from, to, type), keeping order.
 - class `GraphCache` — Per-task edge entries with a TTL, single-flight, and event eviction.
 

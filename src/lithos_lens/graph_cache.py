@@ -77,6 +77,18 @@ DEFAULT_GRAPH_CACHE_TTL_S = 30
 # assembling it, and so the mini-graph still reuses what a project page warmed.
 MAX_GRAPH_CACHE_ENTRIES = 2000
 
+# How many of the shared MCP session's slots ALL graph reads together may
+# hold — every ``edge_list`` this cache issues and every ghost ``task_get``
+# the scope assembly makes, across every concurrent render. The session's own
+# gate is 16 (``mcp_transport.MAX_CONCURRENT_TOOL_CALLS`` — named rather than
+# imported: Foundation may not reach Core) and its deadline includes QUEUE
+# time, so a fan-out that fills it does not slow the dashboard and the detail
+# page, it times them out. A per-render semaphore bounds one page and reserves
+# nothing; this reserves half the session for everything else. The same call
+# MAX_CONCURRENT_RENDERS and MAX_EVENT_SUBSCRIBERS make: bound the share of a
+# shared resource one caller may hold.
+GRAPH_FANOUT_SESSION_SHARE = 8
+
 # Ceiling on concurrent upstream reads of ONE task id. Both terms that drive
 # duplicate flights are chosen outside Lens: how many renders arrive (browser
 # tabs, up to MAX_CONCURRENT_RENDERS) and how often the entry is evicted (one
@@ -134,6 +146,29 @@ class EdgeCacheEntry:
     edges: tuple[EdgeRecord, ...] = ()
     fetched_at: datetime = datetime.min.replace(tzinfo=UTC)
     expires_at: float = 0.0
+
+
+# The live fan-out gate and the loop it belongs to; see graph_fanout_gate().
+_fanout_gate: asyncio.Semaphore | None = None
+_fanout_gate_loop: asyncio.AbstractEventLoop | None = None
+
+
+def graph_fanout_gate() -> asyncio.Semaphore:
+    """The process-wide gate every graph read passes through.
+
+    Built lazily and rebuilt when the running loop changes, because an
+    ``asyncio.Semaphore`` binds to the loop that first waits on it: one built
+    at import would be pinned to whichever loop touched it first and raise for
+    every other. A process serves one loop, so in production this is built
+    once and shared by every render — which is the point. A per-render gate
+    bounds one page and reserves nothing.
+    """
+    global _fanout_gate, _fanout_gate_loop
+    loop = asyncio.get_running_loop()
+    if _fanout_gate is None or _fanout_gate_loop is not loop:
+        _fanout_gate = asyncio.Semaphore(GRAPH_FANOUT_SESSION_SHARE)
+        _fanout_gate_loop = loop
+    return _fanout_gate
 
 
 def dedupe_edges(edges: Sequence[EdgeRecord]) -> tuple[EdgeRecord, ...]:

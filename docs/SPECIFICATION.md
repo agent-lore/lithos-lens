@@ -264,12 +264,15 @@ silently.
   refused before any edge is read at all. Nothing else refuses a page, and
   nothing else decides what a page contains: the ghost-status reads behind the
   exact count are the classification itself (drop a completed predecessor,
-  ghost a cancelled one), so they are all made. That fan-out is bounded in
-  concurrency (the `graph.fetch_concurrency` semaphore) and in the duration of
-  each read, but its total is the number of out-of-set endpoints the scope's
-  edges name — chosen upstream, not by Lens. The upstream answer is a bulk
-  graph read; the local mitigation is the size guard on the edge phase that
-  produces those candidates (§5.10).
+  ghost a cancelled one), so they are all made. What is bounded is what they
+  can cost everything else: **all graph reads across all concurrent renders
+  share a fixed reservation of the MCP session** (half of it), on top of the
+  per-render `graph.fetch_concurrency` semaphore and a per-read deadline — so
+  a large graph fan-out queues behind itself rather than timing out the
+  dashboard, the detail page and the fleet's own traffic. The *total* number
+  of those reads is still the number of out-of-set endpoints the scope's edges
+  name, which is chosen upstream; the upstream answer is a bulk graph read
+  (§5.10).
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 
@@ -400,6 +403,10 @@ go through a **per-task edge cache** (`graph_cache.py`) on `AppState`:
 
 - one entry per `task_id`, holding that task's deduped edge list and the
   instant it was read;
+- a process-wide reservation on the shared MCP session that every graph read
+  passes through — the cache's `edge_list` calls and the scope's ghost
+  `task_get`s alike — so graph pages cannot take the whole session from the
+  surfaces that are not graph pages (§5.5);
 - a TTL of `graph.cache_ttl_s` measured on the monotonic clock (the wall-clock
   `fetched_at` is what the page shows, and a wall clock can step backwards),
   and single-flight, so concurrent readers of the same task share one upstream

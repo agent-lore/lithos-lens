@@ -26,7 +26,7 @@ from lithos_lens.events import EventHub, LensEvent
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_graph_dataset import edge_index
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.graph_cache import GraphCache
+from lithos_lens.graph_cache import GRAPH_FANOUT_SESSION_SHARE, GraphCache
 from lithos_lens.graph_scope import (
     COMPLETENESS_EDGES_UNKNOWN,
     COMPLETENESS_STATUS_UNKNOWN,
@@ -112,17 +112,30 @@ class RecordingClient:
         *,
         edge_failures: set[str] | None = None,
         gate: asyncio.Event | None = None,
+        get_gate: asyncio.Event | None = None,
     ) -> None:
         self._client = FakeLithosClient(dataset=data)
         self._edge_failures = edge_failures or set()
         self._gate = gate
+        self._get_gate = get_gate
         self.edge_calls: list[str] = []
         self.get_calls: list[str] = []
         self.children_calls: list[str] = []
+        #: The most ``task_get`` reads in flight at once — the figure the
+        #: process-wide fan-out reservation bounds across ALL renders.
+        self.get_peak = 0
+        self._get_inflight = 0
 
     async def task_get(self, task_id: str) -> TaskRecord:
         self.get_calls.append(task_id)
-        return await self._client.task_get(task_id)
+        self._get_inflight += 1
+        self.get_peak = max(self.get_peak, self._get_inflight)
+        try:
+            if self._get_gate is not None:
+                await self._get_gate.wait()
+            return await self._client.task_get(task_id)
+        finally:
+            self._get_inflight -= 1
 
     async def task_children(
         self,
@@ -366,6 +379,50 @@ async def test_the_edge_phase_reads_one_node_once_and_no_ghost_at_all() -> None:
     assert sorted(client.edge_calls) == ["a", "b"]
     # Named by two edges, read once — and never for its own edges.
     assert client.get_calls == ["far"]
+
+
+async def test_graph_reads_never_take_more_than_their_share_of_the_session() -> None:
+    """The bound that matters is on the SHARED session, not on one render.
+
+    Each scope's own semaphore is per render and reserves nothing, so N
+    concurrent renders contend for the whole 16-slot MCP session — and because
+    its deadline includes queue time, a big graph fan-out times out the
+    dashboard rather than merely slowing it. Two renders here have twelve ghost
+    reads between them, all held open at once; no more than the reservation may
+    be in flight, and every one of them still happens.
+    """
+    left, right = task("left"), task("right")
+    far = [
+        task(f"far-{index:02d}", status="cancelled", project="other")
+        for index in range(12)
+    ]
+    get_gate = asyncio.Event()
+    client = RecordingClient(
+        dataset(
+            [left, right, *far],
+            [
+                (ghost.id, "left" if index % 2 == 0 else "right", "blocks")
+                for index, ghost in enumerate(far)
+            ],
+        ),
+        get_gate=get_gate,
+    )
+
+    scopes = [
+        asyncio.create_task(project_scope(client, [left])),
+        asyncio.create_task(project_scope(client, [right])),
+    ]
+    # Let both renders reach the ghost phase and pile up on the gate.
+    for _ in range(50):
+        await asyncio.sleep(0)
+    held = client.get_peak
+    get_gate.set()
+    await asyncio.gather(*scopes)
+
+    assert held <= GRAPH_FANOUT_SESSION_SHARE
+    assert client.get_peak <= GRAPH_FANOUT_SESSION_SHARE
+    # The reservation costs latency, never a read: all twelve are resolved.
+    assert sorted(client.get_calls) == sorted(ghost.id for ghost in far)
 
 
 async def test_an_oversized_task_set_is_refused_before_the_fan_out() -> None:

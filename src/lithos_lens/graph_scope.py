@@ -53,7 +53,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
-from lithos_lens.graph_cache import EdgeCacheEntry, GraphCache
+from lithos_lens.graph_cache import EdgeCacheEntry, GraphCache, graph_fanout_gate
 from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
@@ -467,7 +467,7 @@ async def _read_edges(
     """One cache read per node; failures become ``incomplete``, not silence."""
 
     async def fetch(task_id: str) -> list[EdgeRecord]:
-        async with limiter:
+        async with graph_fanout_gate(), limiter:
             # Deadlined inside the gate, as the detail page's fan-out is: a
             # read that never answers would otherwise hold one of the few
             # slots for as long as the session stays half-open.
@@ -565,21 +565,18 @@ async def _resolve_far_endpoints(
     returned ``unresolved`` set: the ghost is still shown, with
     ``status unknown``, and every dependency edge touching it is ``unknown``.
 
-    Every candidate is read, without a count bound, and that is a decision
-    rather than an omission. The classification each read decides is not
-    cosmetic — it is drop-versus-ghost (D5/D6), so an endpoint left unread
+    Every candidate is read, without a COUNT bound, and that is a decision:
+    each read decides drop-versus-ghost (D5/D6), so an endpoint left unread
     would render as an ``unknown`` ghost where the contract requires a
-    completed predecessor's edge to be ABSENT, and could push a page that must
-    render past the size guard. A cap here cannot be made semantics-preserving:
-    the reads ARE the classification. So the honest statement is that this
-    fan-out is bounded in CONCURRENCY (the scope's semaphore) and in the
-    DURATION of each read (:data:`~lithos_lens.task_links.LINK_READ_TIMEOUT_S`,
-    applied inside the gate), and not in total — the total is
-    ``|out-of-set endpoints this scope's edges name that are not on the open
-    list|``, which is chosen by whoever wrote those edges. The upstream answer
-    is a bulk graph read (ROADMAP ledger gap #3), which removes the per-node
-    fan-out entirely; the mitigation available here is the page size guard,
-    which bounds the EDGE phase that produces these candidates.
+    completed predecessor's edge to be absent. The reads ARE the
+    classification, so no cap on them can preserve the page. What IS bounded
+    is what the reads can cost everyone else — the share of the session they
+    may hold (:data:`GRAPH_FANOUT_SESSION_SHARE`), the concurrency inside one
+    render, and each read's duration
+    (:data:`~lithos_lens.task_links.LINK_READ_TIMEOUT_S`, applied inside the
+    gates). The total is ``|endpoints this scope's edges name that are not on
+    the open list|``, chosen by whoever wrote those edges; the upstream answer
+    is a bulk graph read (ROADMAP ledger gap #3).
     """
     open_index = {task.id: task for task in master if task.status == "open"}
     resolved: dict[str, TaskRecord] = {}
@@ -592,7 +589,7 @@ async def _resolve_far_endpoints(
             pending.append(far_id)
 
     async def read(task_id: str) -> TaskRecord:
-        async with limiter:
+        async with graph_fanout_gate(), limiter:
             return await asyncio.wait_for(lithos.task_get(task_id), LINK_READ_TIMEOUT_S)
 
     results = await asyncio.gather(

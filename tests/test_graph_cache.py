@@ -21,10 +21,12 @@ from lithos_lens.config import MAX_GRAPH_INT_KNOBS, EventsConfig, LithosConfig
 from lithos_lens.events import LENS_REFRESH_EVENT, EventHub, LensEvent
 from lithos_lens.graph_cache import (
     DEFAULT_GRAPH_CACHE_TTL_S,
+    GRAPH_FANOUT_SESSION_SHARE,
     MAX_GRAPH_CACHE_ENTRIES,
     GraphCache,
     dedupe_edges,
 )
+from lithos_lens.mcp_transport import MAX_CONCURRENT_TOOL_CALLS
 from lithos_lens.task_graph import EdgeRecord
 
 pytestmark = pytest.mark.anyio
@@ -351,6 +353,19 @@ async def test_entries_are_bounded_and_the_least_recently_used_goes_first() -> N
     assert cache.size == 2
     assert cache.get("b") is None
     assert cache.get("a") is not None and cache.get("c") is not None
+
+
+def test_the_graph_share_leaves_the_session_room_for_everything_else() -> None:
+    """A reservation only reserves if it is smaller than what it reserves from.
+
+    The graph layer names the session's gate rather than importing it — the
+    layering contract forbids Foundation reaching Core — so the two numbers
+    can drift apart in the source. Pinned here, where a test may import both:
+    at the share's ceiling the dashboard, the detail page and the fleet's own
+    traffic would be queueing behind graph renders on a deadline that counts
+    queue time.
+    """
+    assert GRAPH_FANOUT_SESSION_SHARE < MAX_CONCURRENT_TOOL_CALLS
 
 
 def test_the_shipped_entry_bound_clears_the_largest_configurable_scope() -> None:
