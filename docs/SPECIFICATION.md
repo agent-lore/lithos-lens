@@ -261,12 +261,15 @@ silently.
 - **Graph scope size** — a dependency-graph scope whose rendered node set
   (ghosts counted) is larger than `graph.max_tasks` is refused with that exact
   count rather than rendered unreadably; a task set already over the guard is
-  refused before any edge is read at all. Nothing else refuses a page: the
-  ghost-status reads behind the exact count carry their own internal ceiling,
-  and past it an unread endpoint is reported as `status unknown` — the same
-  treatment a failed read gets — rather than being turned into a refusal
-  (§5.10). Every read runs under the `graph.fetch_concurrency` semaphore with
-  a per-read deadline.
+  refused before any edge is read at all. Nothing else refuses a page, and
+  nothing else decides what a page contains: the ghost-status reads behind the
+  exact count are the classification itself (drop a completed predecessor,
+  ghost a cancelled one), so they are all made. That fan-out is bounded in
+  concurrency (the `graph.fetch_concurrency` semaphore) and in the duration of
+  each read, but its total is the number of out-of-set endpoints the scope's
+  edges name — chosen upstream, not by Lens. The upstream answer is a bulk
+  graph read; the local mitigation is the size guard on the edge phase that
+  produces those candidates (§5.10).
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 
@@ -433,11 +436,9 @@ over the master task list plus that cache and fanning out only for misses:
   read. Only `blocks` and `waits_on_gate` carry readiness meaning;
 - **ghosts**, one hop and leaf-only — a ghost's own edges are never read, so
   the fan-out is bounded by the scope. Open far endpoints come from the master
-  list at no cost; only resolved ones need a `task_get`. Those reads carry an
-  internal ceiling — the term they scale with is how many out-of-set endpoints
-  the scope's edges name, which is chosen by whoever wrote those edges — and
-  an endpoint past it is treated exactly as one whose read failed: shown, with
-  `status unknown` and `unknown` dependency edges. An inactive edge
+  list at no cost; only resolved ones need a `task_get`, each far endpoint is
+  read once however many edges name it, and a read that FAILS leaves the ghost
+  shown with `status unknown` and `unknown` dependency edges. An inactive edge
   pointing out of the scope is dropped rather than ghosted, and context —
   the immediate out-of-set parent and `discovered_from` source of an included
   node — is added upstream only, never an out-of-set child or follow-on;

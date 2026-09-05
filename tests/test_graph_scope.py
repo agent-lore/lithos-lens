@@ -35,7 +35,6 @@ from lithos_lens.graph_scope import (
     EDGE_UNKNOWN,
     GHOST_CONTEXT,
     GHOST_DEPENDENCY,
-    MAX_GHOST_RESOLVE_READS,
     REASON_DEPENDENT_RESOLVED,
     REASON_SATISFIED,
     REFUSAL_NODES,
@@ -313,66 +312,60 @@ async def test_many_dropped_candidates_do_not_refuse_an_in_limit_scope() -> None
     assert sorted(client.get_calls) == ["done-0", "done-1", "done-2"]
 
 
-async def test_ghost_reads_past_the_budget_are_unknown_rather_than_refused() -> None:
-    """The read budget bounds the spend; it never refuses a page.
+async def test_every_candidate_is_resolved_however_many_a_scope_names() -> None:
+    """The reads ARE the classification, so none of them is optional.
 
-    How many out-of-set endpoints a scope names is chosen by whoever wrote the
-    edges, so the total spend needs a ceiling. Past it an endpoint is treated
-    exactly as one whose ``task_get`` failed — shown, ``status unknown``, its
-    dependency edges ``unknown`` — which is D2's existing treatment for "Lens
-    does not know this endpoint's status" and errs towards showing a
-    possibly-live blocker.
+    One in-scope task at ``max_tasks=1`` whose edges name fifty completed
+    out-of-scope predecessors: every one of those edges is satisfied history
+    pointing out of the scope, so the contractually correct graph is exactly
+    one node and it must render. Leaving any candidate unread — under a cap, a
+    budget, or a sampling rule — would fabricate it as an ``unknown`` ghost
+    where D5/D6 require the edge to be ABSENT, and two nodes would then breach
+    a guard of one. Asserted on the call log because the cost is the point:
+    this fan-out is bounded in concurrency and in per-read duration, not in
+    total, and the total is what an edge writer chooses.
     """
     tasks = [task("a")]
-    far = [
-        task(f"far-{index}", status="cancelled", project="other") for index in range(3)
+    preds = [
+        task(f"done-{index:02d}", status="completed", project="other")
+        for index in range(50)
     ]
     client = RecordingClient(
-        dataset([*tasks, *far], [(ghost.id, "a", "blocks") for ghost in far])
+        dataset([*tasks, *preds], [(pred.id, "a", "blocks") for pred in preds])
     )
 
-    scope = await project_scope(
-        client,
-        tasks,
-        limits=GraphScopeLimits(max_tasks=10, ghost_read_budget=1),
-    )
+    scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=1))
 
     assert not scope.refused
-    assert len(client.get_calls) == 1
-    unknown = [node for node in scope.nodes if node.status == UNKNOWN_STATUS]
-    assert len(unknown) == 2
-    assert all(node.completeness == COMPLETENESS_STATUS_UNKNOWN for node in unknown)
-    assert {edge.state for edge in scope.dependency_edges} == {
-        EDGE_ACTIVE,
-        EDGE_UNKNOWN,
-    }
+    assert scope.node_ids == ("a",)
+    assert scope.edges == ()
+    assert sorted(client.get_calls) == sorted(pred.id for pred in preds)
 
 
-def test_the_ghost_read_budget_defaults_to_the_module_safety_net() -> None:
-    """It is a runaway net rather than an operator knob, so it has one value."""
-    assert GraphScopeLimits().ghost_read_budget == MAX_GHOST_RESOLVE_READS
+async def test_the_edge_phase_reads_one_node_once_and_no_ghost_at_all() -> None:
+    """What IS bounded, stated where it binds: the edge phase and the hops.
 
-
-async def test_the_ghost_phase_reads_no_more_endpoints_than_the_guard_allows() -> None:
-    """The whole render is bounded: <= max_tasks edge reads + max_tasks gets.
-
-    Stated as a property over a scope that DOES render, so the bound is
-    asserted where it binds rather than only on the refusal path.
+    One `edge_list` per in-scope node, so that phase is bounded by the size
+    guard; a ghost's own edges are never read (D5), so the fan-out never
+    recurses; and each far endpoint is resolved once however many edges name
+    it. The ghost STATUS reads are bounded by the candidate set instead —
+    see `test_every_candidate_is_resolved_however_many_a_scope_names` for why
+    that is a decision rather than a gap.
     """
     tasks = [task("a"), task("b")]
     client = RecordingClient(
         dataset(
-            [*tasks, task("far-1", project="other"), task("far-2", project="other")],
-            [("a", "far-1", "blocks"), ("b", "far-2", "blocks")],
+            [*tasks, task("far", status="cancelled", project="other")],
+            [("far", "a", "blocks"), ("far", "b", "blocks")],
         )
     )
 
     scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=4))
 
     assert not scope.refused
-    assert len(client.edge_calls) <= 4
-    assert len(client.get_calls) <= 4
-    assert sorted(client.get_calls) == ["far-1", "far-2"]
+    assert sorted(client.edge_calls) == ["a", "b"]
+    # Named by two edges, read once — and never for its own edges.
+    assert client.get_calls == ["far"]
 
 
 async def test_an_oversized_task_set_is_refused_before_the_fan_out() -> None:

@@ -80,7 +80,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.graph_scope`
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
-- class `GraphScopeLimits` — What bounds one scope's reads: two ``[graph]`` knobs and a safety net.
+- class `GraphScopeLimits` — The two ``[graph]`` knobs that bound one scope's reads.
 - class `GraphNode` — One node of the assembled graph: a task, or a one-hop ghost of one.
 - class `GraphEdge` — One deduped edge, with the state a dependency edge carries.
 - class `ScopeRefusal` — A scope Lens would not render, why, and how large it was.

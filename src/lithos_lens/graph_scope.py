@@ -96,19 +96,6 @@ REFUSAL_TASKS = "tasks"
 #: exceeded the guard. This is §5.7's normative rule, and its count is EXACT.
 REFUSAL_NODES = "nodes"
 
-# Ceiling on the ``task_get`` reads ONE scope spends resolving ghost
-# candidates. Not config, and not a size guard: it never decides which scopes
-# render (:class:`ScopeRefusal`), only how much Lens will spend deciding. It
-# has to exist because the term it bounds — how many out-of-set endpoints a
-# scope's edges name — is chosen by whoever wrote those edges, while the reads
-# land on the process-wide MCP session whose deadline includes queue time, so
-# an unbounded total times out unrelated renders. The semaphore bounds
-# concurrency and leaves the total open; this is the total, the distinction
-# ``task_links`` already draws. Set far above any real scope (the live corpus
-# is ~330 open tasks) so it signals a runaway edge writer rather than trimming
-# routine work — the same call ``LINK_PAGE_SIZE`` makes.
-MAX_GHOST_RESOLVE_READS = 1000
-
 # What a ghost is there for. A dependency ghost is on the default canvas; a
 # context ghost only appears with its overlay, but is resolved on EVERY
 # request because the overlays are client-side state over a static payload.
@@ -151,16 +138,10 @@ class GraphScopeClient(Protocol):
 
 @dataclass(frozen=True)
 class GraphScopeLimits:
-    """What bounds one scope's reads: two ``[graph]`` knobs and a safety net.
-
-    ``ghost_read_budget`` is NOT config (see :data:`MAX_GHOST_RESOLVE_READS`);
-    it lives here so one object describes a render's whole read budget, and so
-    a test can bind it without reaching for the module constant.
-    """
+    """The two ``[graph]`` knobs that bound one scope's reads."""
 
     max_tasks: int = DEFAULT_GRAPH_MAX_TASKS
     fetch_concurrency: int = DEFAULT_GRAPH_FETCH_CONCURRENCY
-    ghost_read_budget: int = MAX_GHOST_RESOLVE_READS
 
 
 @dataclass(frozen=True)
@@ -455,7 +436,7 @@ async def assemble_scope(
 
     far_ids = _ghostable_endpoints(edges, in_scope)
     far_tasks, unresolved = await _resolve_far_endpoints(
-        lithos, far_ids, master, limiter, budget=limits.ghost_read_budget
+        lithos, far_ids, master, limiter
     )
     graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
     nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
@@ -575,35 +556,40 @@ async def _resolve_far_endpoints(
     far_ids: Sequence[str],
     master: Sequence[TaskRecord],
     limiter: asyncio.Semaphore,
-    *,
-    budget: int = MAX_GHOST_RESOLVE_READS,
 ) -> tuple[dict[str, TaskRecord], set[str]]:
-    """Resolve ghost candidates: the open snapshot first, ``task_get`` after.
+    """Resolve EVERY ghost candidate: the open snapshot first, ``task_get`` after.
 
     An OPEN far endpoint is already in the master list, so the common case —
     a live cross-project blocker — costs no read at all (D5). Only resolved
-    (or absent) endpoints need one, and one that fails leaves the id in the
+    (or absent) endpoints need one, and one that FAILS leaves the id in the
     returned ``unresolved`` set: the ghost is still shown, with
     ``status unknown``, and every dependency edge touching it is ``unknown``.
 
-    ``budget`` caps how many of those reads one scope makes. Candidates past
-    it are ``unresolved`` too — not dropped, and not a refusal: "Lens did not
-    read this endpoint" is the same claim as "the read failed", and D2 already
-    fixes its treatment. Ordering is the deterministic edge order the
-    candidates arrived in, so the same scope resolves the same set twice.
+    Every candidate is read, without a count bound, and that is a decision
+    rather than an omission. The classification each read decides is not
+    cosmetic — it is drop-versus-ghost (D5/D6), so an endpoint left unread
+    would render as an ``unknown`` ghost where the contract requires a
+    completed predecessor's edge to be ABSENT, and could push a page that must
+    render past the size guard. A cap here cannot be made semantics-preserving:
+    the reads ARE the classification. So the honest statement is that this
+    fan-out is bounded in CONCURRENCY (the scope's semaphore) and in the
+    DURATION of each read (:data:`~lithos_lens.task_links.LINK_READ_TIMEOUT_S`,
+    applied inside the gate), and not in total — the total is
+    ``|out-of-set endpoints this scope's edges name that are not on the open
+    list|``, which is chosen by whoever wrote those edges. The upstream answer
+    is a bulk graph read (ROADMAP ledger gap #3), which removes the per-node
+    fan-out entirely; the mitigation available here is the page size guard,
+    which bounds the EDGE phase that produces these candidates.
     """
     open_index = {task.id: task for task in master if task.status == "open"}
     resolved: dict[str, TaskRecord] = {}
     pending: list[str] = []
-    over_budget: list[str] = []
     for far_id in far_ids:
         known = open_index.get(far_id)
         if known is not None:
             resolved[far_id] = known
-        elif len(pending) < budget:
-            pending.append(far_id)
         else:
-            over_budget.append(far_id)
+            pending.append(far_id)
 
     async def read(task_id: str) -> TaskRecord:
         async with limiter:
@@ -612,7 +598,7 @@ async def _resolve_far_endpoints(
     results = await asyncio.gather(
         *(read(task_id) for task_id in pending), return_exceptions=True
     )
-    unresolved: set[str] = set(over_budget)
+    unresolved: set[str] = set()
     for task_id, result in zip(pending, results, strict=True):
         if isinstance(result, BaseException):
             unresolved.add(task_id)
