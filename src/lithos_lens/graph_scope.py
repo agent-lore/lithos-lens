@@ -88,6 +88,17 @@ EDGE_UNKNOWN = "unknown"
 REASON_SATISFIED = "satisfied"
 REASON_DEPENDENT_RESOLVED = "dependent_resolved"
 
+# Why a scope was refused. Each carries a count with a DIFFERENT meaning, so
+# the reason travels with it rather than being inferred from the number.
+#: The task set alone exceeded the guard — counted before any edge was read.
+REFUSAL_TASKS = "tasks"
+#: The rendered node set (tasks plus the ghosts that survived classification)
+#: exceeded the guard. This is §5.7's normative rule, and its count is EXACT.
+REFUSAL_NODES = "nodes"
+#: The scope's edges named more out-of-set endpoints than one render will
+#: resolve. A resource bound, not the size guard — see :class:`ScopeRefusal`.
+REFUSAL_GHOST_CANDIDATES = "ghost_candidates"
+
 # What a ghost is there for. A dependency ghost is on the default canvas; a
 # context ghost only appears with its overlay, but is resolved on EVERY
 # request because the overlays are client-side state over a static payload.
@@ -207,26 +218,37 @@ class GraphEdge:
 
 @dataclass(frozen=True)
 class ScopeRefusal:
-    """A scope too large to render, and how large it was (D2).
+    """A scope Lens would not render, why, and how large it was.
 
-    Both counts are taken BEFORE the reads they would authorise, because a
-    guard that spends the fan-out first and refuses afterwards bounds nothing:
+    Three reasons, because they are three different claims and only one of
+    them is §5.7's size guard:
 
-    - ``ghosts_counted`` false — the task set alone exceeded the guard, so no
-      edge was read. The count is a lower bound (ghosts would only add).
-    - ``ghosts_counted`` true — the tasks plus every out-of-set endpoint their
-      edges NAME exceeded it, so no ``task_get`` was made. That count is an
-      upper bound on what would have rendered, since some of those endpoints
-      resolve to completed predecessors whose edges are then dropped. Refusing
-      on the upper bound is the deliberate call: the alternative is one
-      credentialed read per named endpoint — a number chosen by whoever wrote
-      the edges, not by the operator — spent to decide a scope that is at the
-      guard's edge either way.
+    - :data:`REFUSAL_NODES` — the guard itself. ``count`` is the EXACT
+      rendered node count, tasks plus surviving ghosts, so a completed
+      out-of-scope predecessor (whose edge is dropped, not ghosted) never
+      inflates it. Deciding this exactly is what the ghost reads are for.
+    - :data:`REFUSAL_TASKS` — the task set alone was already over, so no
+      edge was read at all. ``count`` is a lower bound: ghosts would only
+      add to it, and resolving them to say so precisely would cost the very
+      fan-out the guard exists to prevent.
+    - :data:`REFUSAL_GHOST_CANDIDATES` — a resource bound rather than a size
+      one. ``count`` is how many distinct out-of-set endpoints the scope's
+      edges NAME, which is chosen by whoever wrote those edges
+      (``lithos_task_edge_list`` takes no limit and Lithos caps no task's
+      edge count), and each one would cost a ``task_get`` on the shared MCP
+      session. Past ``max_tasks`` of them Lens declines rather than spending
+      an unbounded number of credentialed reads to decide a scope this size.
+      Stated as its own reason precisely so it is not read as the node count.
     """
 
     count: int
     max_tasks: int
-    ghosts_counted: bool = True
+    reason: str = REFUSAL_NODES
+
+    @property
+    def ghosts_counted(self) -> bool:
+        """Whether ``count`` includes ghosts — only the exact node count does."""
+        return self.reason == REFUSAL_NODES
 
 
 @dataclass(frozen=True)
@@ -401,20 +423,21 @@ async def assemble_scope(
     """
     limits = limits or GraphScopeLimits()
     scope_tasks = _ordered(tasks)
-    if len(scope_tasks) > limits.max_tasks:
-        # Refuse BEFORE spending one read per node: the answer cannot change,
-        # and resolving ghosts to make the count exact would cost the fan-out
-        # the guard exists to prevent.
+
+    def refused(count: int, reason: str) -> TaskGraphScope:
         return TaskGraphScope(
             kind=kind,
             key=key,
             include_resolved=include_resolved,
             refusal=ScopeRefusal(
-                count=len(scope_tasks),
-                max_tasks=limits.max_tasks,
-                ghosts_counted=False,
+                count=count, max_tasks=limits.max_tasks, reason=reason
             ),
         )
+
+    if len(scope_tasks) > limits.max_tasks:
+        # Refuse BEFORE spending one read per node: ghosts could only add to a
+        # count that is already over, so no read can change the answer.
+        return refused(len(scope_tasks), REFUSAL_TASKS)
 
     limiter = asyncio.Semaphore(limits.fetch_concurrency)
     in_scope = {task.id: task for task in scope_tasks}
@@ -422,34 +445,30 @@ async def assemble_scope(
     edges = _dedupe_scope_edges(entries)
 
     far_ids = _ghostable_endpoints(edges, in_scope)
-    # The guard again, and this is where it has to bite: `far_ids` is the
-    # complete list of endpoints the ghost phase would resolve, and each one
-    # costs a `task_get` on the process-wide MCP session whose slots (and
-    # queue-inclusive deadline) every other render shares. Its length is
-    # chosen by whoever wrote the edges of the tasks in scope —
+    # A RESOURCE bound, checked before the ghost phase and reported as its own
+    # reason. `far_ids` is every out-of-set endpoint this scope's edges name,
+    # and each one costs a `task_get` on the process-wide MCP session whose
+    # slots — and whose queue-inclusive deadline — every other render shares.
+    # Its length is chosen by whoever wrote those edges, not by the operator:
     # `lithos_task_edge_list` takes no limit and Lithos caps no task's edge
-    # count — so the semaphore alone bounds the CONCURRENCY and leaves the
-    # TOTAL open, which is the distinction `task_links` already draws.
+    # count, so the semaphore bounds the CONCURRENCY and leaves the TOTAL open
+    # (the distinction `task_links` already draws). With this, one render costs
+    # at most `max_tasks` edge reads plus `max_tasks` status reads.
     #
-    # Checking here also makes the node count final: every ghost comes from
-    # this list, so a scope that passes cannot breach the guard afterwards,
-    # and the whole render is bounded at `max_tasks` edge reads plus
-    # `max_tasks` status reads.
-    if len(scope_tasks) + len(far_ids) > limits.max_tasks:
-        return TaskGraphScope(
-            kind=kind,
-            key=key,
-            include_resolved=include_resolved,
-            refusal=ScopeRefusal(
-                count=len(scope_tasks) + len(far_ids), max_tasks=limits.max_tasks
-            ),
-        )
+    # It is deliberately NOT the size guard — a candidate is not yet a ghost;
+    # see :class:`ScopeRefusal` for why the two carry different reasons.
+    if len(far_ids) > limits.max_tasks:
+        return refused(len(far_ids), REFUSAL_GHOST_CANDIDATES)
 
     far_tasks, unresolved = await _resolve_far_endpoints(
         lithos, far_ids, master, limiter
     )
     graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
     nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
+    # §5.7's guard, on the EXACT rendered node set: tasks plus the ghosts that
+    # actually survived classification, which is what "ghosts counted" means.
+    if len(nodes) > limits.max_tasks:
+        return refused(len(nodes), REFUSAL_NODES)
 
     return TaskGraphScope(
         kind=kind,

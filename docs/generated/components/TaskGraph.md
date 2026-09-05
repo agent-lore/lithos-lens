@@ -19,7 +19,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
-| `lithos_lens.graph_cache` | S | 2 | 1 |
+| `lithos_lens.graph_cache` | M | 2 | 1 |
 | `lithos_lens.graph_scope` | L | 6 | 6 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -83,7 +83,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `GraphScopeLimits` — The two ``[graph]`` knobs that bound one scope's reads.
 - class `GraphNode` — One node of the assembled graph: a task, or a one-hop ghost of one.
 - class `GraphEdge` — One deduped edge, with the state a dependency edge carries.
-- class `ScopeRefusal` — A scope too large to render, and how large it was (D2).
+- class `ScopeRefusal` — A scope Lens would not render, why, and how large it was.
 - class `TaskGraphScope` — The assembled graph, or the refusal that replaced it.
 - def `project_scope_tasks` — The project's tasks per §5B.1 — open only unless ``include_resolved``.
 - def `epic_scope_tasks` — The epic's recursive subtree plus the epic — closed children by default.

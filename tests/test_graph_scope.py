@@ -37,6 +37,9 @@ from lithos_lens.graph_scope import (
     GHOST_DEPENDENCY,
     REASON_DEPENDENT_RESOLVED,
     REASON_SATISFIED,
+    REFUSAL_GHOST_CANDIDATES,
+    REFUSAL_NODES,
+    REFUSAL_TASKS,
     UNKNOWN_STATUS,
     GraphScopeLimits,
     dependency_edge_state,
@@ -231,12 +234,9 @@ async def test_a_task_event_evicts_that_node_and_the_next_scope_refetches_it() -
 async def test_a_scope_one_over_max_tasks_is_refused_with_the_count() -> None:
     """Ghosts count: three in-scope tasks plus one ghost breaches a guard of 3.
 
-    And it is refused BEFORE the ghost reads. The endpoints a scope's edges
-    name are counted by whoever wrote those edges — `lithos_task_edge_list`
-    takes no limit — so a guard applied after `_resolve_far_endpoints` would
-    let one request spend an unbounded number of credentialed `task_get` calls
-    on the shared MCP session and then throw the result away. The call log is
-    the assertion because the bound IS the behaviour.
+    The count is the EXACT rendered node set — which is why the one candidate
+    is resolved first: until it is read, Lens does not know whether it becomes
+    a ghost (it does here: it is open) or is dropped as satisfied history.
     """
     tasks = [task("a"), task("b"), task("c")]
     client = RecordingClient(
@@ -250,8 +250,66 @@ async def test_a_scope_one_over_max_tasks_is_refused_with_the_count() -> None:
 
     assert scope.refused
     assert scope.refusal is not None
-    assert (scope.refusal.count, scope.refusal.ghosts_counted) == (4, True)
+    assert (scope.refusal.count, scope.refusal.reason) == (4, REFUSAL_NODES)
+    assert scope.refusal.ghosts_counted
     assert scope.nodes == ()
+    # Bounded either way: the deciding reads are capped by the guard.
+    assert len(client.get_calls) <= 3
+
+
+async def test_a_dropped_candidate_does_not_push_a_scope_over_the_guard() -> None:
+    """A candidate is not a ghost, and the guard counts ghosts.
+
+    A completed out-of-scope predecessor is named by an in-scope task's edges
+    — so it is a ghost CANDIDATE — but its edge is satisfied history pointing
+    out of the scope, so both the edge and the endpoint are dropped. Refusing
+    on the candidate count would refuse this scope with "4 tasks" when what
+    renders is exactly three, contradicting both §5.7's rule and the
+    dropped-predecessor rule that produced the discrepancy.
+    """
+    tasks = [task("a"), task("b"), task("c")]
+    client = RecordingClient(
+        dataset(
+            [*tasks, task("done-pred", status="completed", project="other")],
+            [("a", "b", "blocks"), ("b", "c", "blocks"), ("done-pred", "a", "blocks")],
+        )
+    )
+
+    scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=3))
+
+    assert not scope.refused
+    assert scope.node_ids == ("a", "b", "c")
+    assert all(edge.to_task_id != "done-pred" for edge in scope.edges)
+    assert all(edge.from_task_id != "done-pred" for edge in scope.edges)
+
+
+async def test_more_ghost_candidates_than_the_guard_allows_are_never_read() -> None:
+    """A resource bound, stated as its own reason rather than as a node count.
+
+    How many out-of-set endpoints a scope NAMES is chosen by whoever wrote the
+    edges — `lithos_task_edge_list` takes no limit — and each one would cost a
+    `task_get` on the process-wide MCP session, whose deadline includes queue
+    time, so unrelated renders time out rather than merely slowing. Past
+    `max_tasks` of them Lens declines instead of spending the reads.
+    """
+    tasks = [task("a"), task("b")]
+    far = [task(f"far-{index}", project="other") for index in range(3)]
+    client = RecordingClient(
+        dataset(
+            [*tasks, *far],
+            [(ghost.id, "a", "blocks") for ghost in far],
+        )
+    )
+
+    scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=2))
+
+    assert scope.refusal is not None
+    assert (scope.refusal.count, scope.refusal.reason) == (
+        3,
+        REFUSAL_GHOST_CANDIDATES,
+    )
+    # Not the node count, and it does not claim to be.
+    assert not scope.refusal.ghosts_counted
     assert client.get_calls == []
 
 
@@ -285,7 +343,8 @@ async def test_an_oversized_task_set_is_refused_before_the_fan_out() -> None:
     scope = await project_scope(client, tasks, limits=GraphScopeLimits(max_tasks=1))
 
     assert scope.refusal is not None
-    assert (scope.refusal.count, scope.refusal.ghosts_counted) == (2, False)
+    assert (scope.refusal.count, scope.refusal.reason) == (2, REFUSAL_TASKS)
+    assert not scope.refusal.ghosts_counted
     assert client.edge_calls == []
 
 

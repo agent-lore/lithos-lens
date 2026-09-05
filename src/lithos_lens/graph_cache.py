@@ -17,9 +17,18 @@ Three properties, each earning its keep:
   event lands on one of its endpoints. The page states its ``as_of`` rather
   than implying freshness, which is why :attr:`EdgeCacheEntry.fetched_at`
   is part of the entry and not an implementation detail.
-- **Single-flight** — two concurrent scopes over the same task share one
-  in-flight call rather than racing to make the same read twice. A cold
-  project page opened in two tabs is the ordinary case, not an exotic one.
+- **Single-flight, per generation** — concurrent scopes over the same task
+  share one in-flight call rather than racing to make the same read twice; a
+  cold project page opened in two tabs is the ordinary case, not an exotic
+  one. The collapse is per GENERATION, not absolute: an eviction retires the
+  flight (see below), so a reader arriving after an event starts one more
+  read rather than joining a result that predates it. Under a churning fleet
+  — evictions are upstream-driven and a graph page is opened at exactly the
+  tasks that churn — that is one extra concurrent read per eviction landing
+  inside one read's window, so it is bounded rather than left to the event
+  rate: at :data:`MAX_FLIGHTS_PER_TASK` live flights for one id, further
+  readers join the freshest read already out and take its (bounded)
+  staleness instead of adding to a queue every other render shares.
 - **Event eviction** — :meth:`evict` on any consumed task event,
   :meth:`flush` on ``lens.refresh``. The :class:`~lithos_lens.events.EventHub`
   calls both BEFORE it fans an event out to browsers, so the refresh a
@@ -65,6 +74,22 @@ DEFAULT_GRAPH_CACHE_TTL_S = 30
 # page scope — however it is configured — can evict its own working set while
 # assembling it, and so the mini-graph still reuses what a project page warmed.
 MAX_GRAPH_CACHE_ENTRIES = 2000
+
+# Ceiling on concurrent upstream reads of ONE task id. Both terms that drive
+# duplicate flights are chosen outside Lens: how many renders arrive (browser
+# tabs, up to MAX_CONCURRENT_RENDERS) and how often the entry is evicted (one
+# per consumed task event, at the fleet's rate). Each retired flight keeps
+# running — it holds a slot in the 16-wide process-wide MCP gate whose
+# CALL_TIMEOUT_S includes QUEUE time, so the overflow does not just slow the
+# graph page, it times out unrelated renders.
+#
+# Above this many live flights for one id, a reader joins the freshest one
+# instead of adding another. That trades a bounded staleness (the joined read
+# may predate the newest eviction, and is not cached, so the request after it
+# reads again) for a bounded amplification — the same shape of call
+# MAX_EVENT_SUBSCRIBERS makes: refusing to grow is the degradation, and it is
+# better than the failure it prevents.
+MAX_FLIGHTS_PER_TASK = 4
 
 #: How the cache reads a task's edges. The caller supplies it — bound to a
 #: Lithos client and, on a scope fan-out, wrapped in that scope's semaphore.
@@ -129,6 +154,21 @@ def dedupe_edges(edges: Sequence[EdgeRecord]) -> tuple[EdgeRecord, ...]:
     return tuple(unique)
 
 
+@dataclass
+class _Flight:
+    """One upstream read of one task, and whether it still counts.
+
+    ``retired`` is set by :meth:`GraphCache.evict` / :meth:`GraphCache.flush`:
+    the read is still running and its waiters still get its result, but it
+    may no longer be joined by a new reader nor stored as an entry, because
+    it describes the graph before the event that retired it.
+    """
+
+    generation: int
+    task: asyncio.Task[EdgeCacheEntry]
+    retired: bool = False
+
+
 class GraphCache:
     """Per-task edge entries with a TTL, single-flight, and event eviction.
 
@@ -143,20 +183,23 @@ class GraphCache:
         clock: Clock = _utcnow,
         ticks: Ticks = time.monotonic,
         max_entries: int = MAX_GRAPH_CACHE_ENTRIES,
+        max_flights_per_task: int = MAX_FLIGHTS_PER_TASK,
     ) -> None:
         self._ttl_s = ttl_s
         self._clock = clock
         self._ticks = ticks
         self._max_entries = max_entries
+        self._max_flights = max_flights_per_task
         # Insertion order IS recency order: every hit re-inserts its key (see
         # `_touch`), so the oldest key is the least recently USED one and the
         # bound evicts LRU rather than FIFO.
         self._entries: dict[str, EdgeCacheEntry] = {}
-        # One flight per task id, tagged with the generation it belongs to.
-        # Eviction RETIRES the current flight (drops it from this map) rather
-        # than marking it, so a caller arriving after the event starts a new
-        # read instead of joining the one that predates it — see `evict`.
-        self._inflight: dict[str, tuple[int, asyncio.Task[EdgeCacheEntry]]] = {}
+        # Every LIVE read of a task id, oldest first. At most one of them is
+        # joinable (not retired); the rest are reads an eviction overtook and
+        # that are still running. Both facts are needed at once — the joinable
+        # one to collapse concurrent readers, the whole list to bound how many
+        # duplicate reads one churning task id may have out (`_max_flights`).
+        self._flights: dict[str, list[_Flight]] = {}
         self._generation = 0
         #: Served from a live entry, or joined to an in-flight read. Both mean
         #: "no new upstream call", which is what the graph page reports.
@@ -201,8 +244,20 @@ class GraphCache:
             self.hits += 1
             return entry
 
-        flight = self._inflight.get(task_id)
-        if flight is None:
+        flights = self._flights.setdefault(task_id, [])
+        current = next((flight for flight in flights if not flight.retired), None)
+        if current is not None:
+            self.hits += 1
+            inflight = current.task
+        elif len(flights) >= self._max_flights:
+            # Every live read of this id has been overtaken by an eviction and
+            # the cap is reached: join the freshest of them rather than adding
+            # another to a gate every other render shares. Its result predates
+            # the latest eviction — bounded staleness, and it is not stored,
+            # so the next request after it completes reads again.
+            self.hits += 1
+            inflight = flights[-1].task
+        else:
             self.misses += 1
             self._generation += 1
             generation = self._generation
@@ -210,10 +265,7 @@ class GraphCache:
                 self._load(task_id, fetch, generation),
                 name=f"graph-cache-edges-{task_id}",
             )
-            self._inflight[task_id] = (generation, inflight)
-        else:
-            self.hits += 1
-            _, inflight = flight
+            flights.append(_Flight(generation=generation, task=inflight))
         # Shielded: one waiter being cancelled (a browser that went away
         # mid-render) must not cancel the read the OTHER waiters are on.
         return await asyncio.shield(inflight)
@@ -229,22 +281,38 @@ class GraphCache:
                 fetched_at=self._clock(),
                 expires_at=self._ticks() + self._ttl_s,
             )
-            if self._is_current(task_id, generation):
+            flight = self._flight(task_id, generation)
+            if flight is not None and not flight.retired:
                 self._store(entry)
             return entry
         finally:
-            if self._is_current(task_id, generation):
-                del self._inflight[task_id]
+            self._retire_finished(task_id, generation)
 
-    def _is_current(self, task_id: str, generation: int) -> bool:
-        """Whether this flight is still the one the cache is waiting on.
+    def _flight(self, task_id: str, generation: int) -> _Flight | None:
+        return next(
+            (
+                flight
+                for flight in self._flights.get(task_id, ())
+                if flight.generation == generation
+            ),
+            None,
+        )
 
-        False once :meth:`evict` or :meth:`flush` has retired it — possibly
-        with a NEWER flight already in its place, which a retired flight must
-        neither overwrite nor cancel out of the map.
+    def _retire_finished(self, task_id: str, generation: int) -> None:
+        """Drop one finished flight, leaving every other flight for that id.
+
+        Matched by generation rather than by task id, so a read that an
+        eviction overtook cannot remove the newer read that replaced it.
         """
-        flight = self._inflight.get(task_id)
-        return flight is not None and flight[0] == generation
+        flights = [
+            flight
+            for flight in self._flights.get(task_id, ())
+            if flight.generation != generation
+        ]
+        if flights:
+            self._flights[task_id] = flights
+        else:
+            self._flights.pop(task_id, None)
 
     def _store(self, entry: EdgeCacheEntry) -> None:
         self._entries[entry.task_id] = entry
@@ -269,7 +337,8 @@ class GraphCache:
             return
         if self._entries.pop(task_id, None) is not None:
             self.evictions += 1
-        self._inflight.pop(task_id, None)
+        for flight in self._flights.get(task_id, ()):
+            flight.retired = True
 
     def flush(self) -> None:
         """Drop every entry — what ``lens.refresh`` does.
@@ -285,4 +354,6 @@ class GraphCache:
         # :meth:`evict` retires one: a refresh says Lens missed events, so a
         # read started before it cannot be trusted to answer a request made
         # after it.
-        self._inflight.clear()
+        for flights in self._flights.values():
+            for flight in flights:
+                flight.retired = True

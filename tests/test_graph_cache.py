@@ -251,6 +251,36 @@ async def test_a_reader_arriving_after_an_eviction_starts_a_new_read() -> None:
     assert cache.get("a") is not None
 
 
+async def test_duplicate_flights_for_one_task_are_bounded() -> None:
+    """Retirement makes the collapse per-generation, so it needs its own bound.
+
+    Both terms are chosen outside Lens: how many renders arrive, and how often
+    the entry is evicted (one per consumed task event, at the fleet's rate).
+    Each retired read keeps running and keeps its slot in the process-wide MCP
+    gate, whose deadline includes queue time — so unbounded duplicates would
+    time out unrelated renders, not merely slow the graph page. At the cap a
+    reader joins the freshest read already out instead of adding another.
+    """
+    gate = asyncio.Event()
+    cache = GraphCache(clock=StepClock(), max_flights_per_task=2)
+    reader = Reader({"a": [edge("a", "b")]}, gate=gate)
+
+    waiters = []
+    for _ in range(4):
+        # Every reader arrives just after an eviction, so none of them may
+        # join the flight already out — the worst case for amplification.
+        waiters.append(asyncio.create_task(cache.edges_for("a", reader)))
+        await asyncio.sleep(0)
+        cache.evict("a")
+    gate.set()
+    await asyncio.gather(*waiters)
+
+    assert reader.calls == ["a", "a"]
+    # Every flight was retired, so none of them poisoned the cache with a
+    # result that predates the last eviction.
+    assert cache.get("a") is None
+
+
 async def test_entries_are_bounded_and_the_least_recently_used_goes_first() -> None:
     """WHICH ids are cached is chosen from outside, so the count needs a bound.
 

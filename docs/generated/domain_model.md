@@ -236,7 +236,7 @@ classDiagram
   class ScopeRefusal {
     +count int
     +max_tasks int
-    +ghosts_counted bool
+    +reason str
   }
   class TaskDetailClient
   class TaskDetailData {
