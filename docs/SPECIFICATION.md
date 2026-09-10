@@ -261,18 +261,34 @@ silently.
 - **Graph scope size** — a dependency-graph scope whose rendered node set
   (ghosts counted) is larger than `graph.max_tasks` is refused with that exact
   count rather than rendered unreadably; a task set already over the guard is
-  refused before any edge is read at all. Nothing else refuses a page, and
-  nothing else decides what a page contains: the ghost-status reads behind the
-  exact count are the classification itself (drop a completed predecessor,
-  ghost a cancelled one), so they are all made. What is bounded is what they
-  can cost everything else: **all graph reads across all concurrent renders
-  share a fixed reservation of the MCP session** (half of it), on top of the
-  per-render `graph.fetch_concurrency` semaphore and a per-read deadline — so
-  a large graph fan-out queues behind itself rather than timing out the
-  dashboard, the detail page and the fleet's own traffic. The *total* number
-  of those reads is still the number of out-of-set endpoints the scope's edges
-  name, which is chosen upstream; the upstream answer is a bulk graph read
-  (§5.10).
+  refused before any edge is read at all. Nothing else decides what a page
+  *contains*: the ghost-status reads behind the exact count are the
+  classification itself (drop a completed predecessor, ghost a cancelled one),
+  so within a render they are all made — leaving one unread would draw an
+  `unknown` ghost where the contract requires the edge to be absent.
+
+  A page is also refused when *classifying* it would cost more than one render
+  may spend — more out-of-set endpoints than the read budget, or longer than
+  the budget on that phase. This third refusal exists because the size guard is
+  an availability guard, and an availability guard that itself requires
+  unbounded work protects nothing: `task_edge_list` caps no edge count and edge
+  endpoints are chosen by whoever wrote them, so a scope whose *node* set is
+  comfortably inside `graph.max_tasks` can still name unboundedly many far
+  endpoints. Refusing is the honest answer where a cheap one is not available:
+  Lens says it did not classify the scope rather than rendering a graph whose
+  missing reads show up as fabricated `unknown` nodes.
+
+  What is bounded short of refusal is what the reads can cost everything else:
+  **all graph reads across all concurrent renders share a fixed reservation of
+  the MCP session** (half of it) — including an epic scope's own membership
+  reads, which run before the per-render limiter exists and are the one path
+  that could otherwise take the whole session — on top of the per-render
+  `graph.fetch_concurrency` semaphore and a per-read deadline, so a large graph
+  fan-out queues behind itself rather than timing out the dashboard, the detail
+  page and the fleet's own traffic. Note that a per-read deadline does not start
+  until the read acquires those gates, which is why the classification phase
+  carries its own budget rather than relying on them. The upstream answer to the
+  whole shape is a bulk graph read (§5.10).
 
 This is a pragmatic operational dashboard model rather than a full audit UI.
 

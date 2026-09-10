@@ -35,8 +35,10 @@ from lithos_lens.graph_scope import (
     EDGE_UNKNOWN,
     GHOST_CONTEXT,
     GHOST_DEPENDENCY,
+    MAX_GHOST_RESOLUTION_READS,
     REASON_DEPENDENT_RESOLVED,
     REASON_SATISFIED,
+    REFUSAL_CLASSIFICATION,
     REFUSAL_NODES,
     REFUSAL_TASKS,
     UNKNOWN_STATUS,
@@ -805,3 +807,136 @@ async def test_the_payload_carries_roots_and_per_node_completeness() -> None:
         "b": "ok",
         "loner": "ok",
     }
+
+
+# ── Bounded classification work ───────────────────────────────────────
+
+
+async def test_a_scope_naming_more_candidates_than_the_budget_is_refused() -> None:
+    """The guard cannot cost unbounded work to evaluate.
+
+    `task_edge_list` caps no edge count and edge endpoints are writer-chosen,
+    so a scope whose NODE set is tiny can still name arbitrarily many far
+    endpoints. Concurrency limits bound how many of those reads run at once,
+    never how many are queued — and each read's own deadline does not start
+    until it acquires the gates, so a deep queue defers the timeout meant to
+    contain it. One request could therefore enqueue unbounded work behind a
+    one-node result.
+
+    Refused rather than answered approximately, and the refusal must arrive
+    with NO read issued: the point is the queue that never forms.
+    """
+    over = MAX_GHOST_RESOLUTION_READS + 1
+    preds = [
+        task(f"done-{index:05d}", status="completed", project="other")
+        for index in range(over)
+    ]
+    client = RecordingClient(
+        dataset([task("a"), *preds], [(pred.id, "a", "blocks") for pred in preds])
+    )
+
+    scope = await project_scope(client, [task("a")])
+
+    assert scope.refused
+    assert scope.refusal is not None
+    assert scope.refusal.reason == REFUSAL_CLASSIFICATION
+    assert scope.refusal.count == over
+    assert client.get_calls == []
+
+
+async def test_the_candidate_budget_does_not_refuse_an_ordinary_scope() -> None:
+    """The bound is a safety net, not a page-size policy.
+
+    Fifty satisfied cross-project predecessors is ordinary history, and it must
+    still render as exactly one node with every candidate read — the contract
+    `test_every_candidate_is_resolved_however_many_a_scope_names` states. The
+    budget exists for the pathological case and has to stay far enough above
+    the ordinary one to be invisible here.
+    """
+    preds = [
+        task(f"done-{index:02d}", status="completed", project="other")
+        for index in range(50)
+    ]
+    client = RecordingClient(
+        dataset([task("a"), *preds], [(pred.id, "a", "blocks") for pred in preds])
+    )
+
+    scope = await project_scope(
+        client, [task("a")], limits=GraphScopeLimits(max_tasks=1)
+    )
+
+    assert not scope.refused
+    assert scope.node_ids == ("a",)
+    assert len(client.get_calls) == 50
+
+
+async def test_classification_that_outruns_its_deadline_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inside the count budget is not automatically inside the time budget.
+
+    A queue short enough to accept can still drain too slowly to serve, so the
+    phase carries its own deadline. Past it the scope refuses rather than
+    rendering whichever half of the classification happened to land — half a
+    classification is a graph with fabricated `unknown` ghosts in it, which is
+    the failure the refusal exists to avoid.
+    """
+    monkeypatch.setattr("lithos_lens.graph_scope.GHOST_RESOLUTION_BUDGET_S", 0.05)
+    preds = [
+        task(f"done-{index:02d}", status="completed", project="other")
+        for index in range(4)
+    ]
+    get_gate = asyncio.Event()  # never set: the reads never answer
+    client = RecordingClient(
+        dataset([task("a"), *preds], [(pred.id, "a", "blocks") for pred in preds]),
+        get_gate=get_gate,
+    )
+
+    scope = await project_scope(client, [task("a")])
+
+    assert scope.refused
+    assert scope.refusal is not None
+    assert scope.refusal.reason == REFUSAL_CLASSIFICATION
+
+
+async def test_concurrent_epic_scopes_stay_inside_the_session_reservation() -> None:
+    """Epic membership reads are fan-out too, and were the one path outside it.
+
+    `epic_scope_tasks` runs before the per-scope limiter exists — the scope is
+    what it is fetching — so its `task_get` and `task_children` had no gate at
+    all. N concurrent epic pages meant 2N unreserved calls, which is the whole
+    MCP session at a dozen tabs, and ordinary pages starved behind them however
+    small the graph share was configured.
+    """
+    epics = [task(f"epic-{index:02d}", project="other") for index in range(12)]
+    get_gate = asyncio.Event()
+    client = RecordingClient(
+        dataset([*epics], children={epic.id: () for epic in epics}),
+        get_gate=get_gate,
+    )
+
+    scopes = [
+        asyncio.create_task(
+            load_epic_scope(
+                client,
+                epic_id=epic.id,
+                master=[],
+                cache=GraphCache(clock=StepClock()),
+                limits=GraphScopeLimits(),
+            )
+        )
+        for epic in epics
+    ]
+    for _ in range(50):
+        await asyncio.sleep(0)
+    held = client.get_peak
+    get_gate.set()
+    await asyncio.gather(*scopes)
+
+    assert held <= GRAPH_FANOUT_SESSION_SHARE, (
+        f"{held} epic anchor reads started at once against a reservation of "
+        f"{GRAPH_FANOUT_SESSION_SHARE}"
+    )
+    assert client.get_peak <= GRAPH_FANOUT_SESSION_SHARE
+    # The reservation costs latency, never a read: every epic still resolves.
+    assert sorted(client.get_calls) == sorted(epic.id for epic in epics)

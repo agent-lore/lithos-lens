@@ -51,9 +51,16 @@ import asyncio
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Protocol
 
 from lithos_lens.graph_cache import EdgeCacheEntry, GraphCache, graph_fanout_gate
+from lithos_lens.graph_fanout import (
+    GHOST_RESOLUTION_BUDGET_S,
+    MAX_GHOST_RESOLUTION_READS,
+    GraphScopeClient,
+    partition_far_endpoints,
+    read_edges,
+    resolve_far_endpoints,
+)
 from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
@@ -95,6 +102,10 @@ REFUSAL_TASKS = "tasks"
 #: The rendered node set (tasks plus the ghosts that survived classification)
 #: exceeded the guard. This is §5.7's normative rule, and its count is EXACT.
 REFUSAL_NODES = "nodes"
+#: Classifying the scope's out-of-set endpoints would cost more work than Lens
+#: will spend on one render. See :data:`MAX_GHOST_RESOLUTION_READS`.
+REFUSAL_CLASSIFICATION = "classification"
+
 
 # What a ghost is there for. A dependency ghost is on the default canvas; a
 # context ghost only appears with its overlay, but is resolved on EVERY
@@ -112,28 +123,6 @@ UNKNOWN_STATUS = "unknown"
 # ``parent_child`` points parent -> child and ``discovered_from`` points
 # source -> discovered, so in both cases the ghostable side is ``from``.
 CONTEXT_EDGE_TYPES: tuple[str, ...] = (PARENT_EDGE_TYPE, PROVENANCE_EDGE_TYPE)
-
-
-class GraphScopeClient(Protocol):
-    """The narrow client surface scope assembly needs."""
-
-    async def task_get(self, task_id: str) -> TaskRecord: ...
-
-    async def task_children(
-        self,
-        task_id: str,
-        *,
-        recursive: bool = False,
-        include_closed: bool = False,
-    ) -> list[TaskRecord]: ...
-
-    async def task_edge_list(
-        self,
-        task_id: str,
-        *,
-        direction: str = "both",
-        types: list[str] | None = None,
-    ) -> list[EdgeRecord]: ...
 
 
 @dataclass(frozen=True)
@@ -217,18 +206,31 @@ class GraphEdge:
 class ScopeRefusal:
     """A scope Lens would not render, why, and how large it was.
 
-    Two reasons, and only the size of the RENDERED graph ever refuses a page:
-
     - :data:`REFUSAL_NODES` — §5.7's guard. ``count`` is the EXACT rendered
       node count, tasks plus the ghosts that survived classification, so a
       completed out-of-scope predecessor — whose edge and endpoint are both
       dropped — never inflates it. Deciding this exactly is what the ghost
-      reads are for, and no resource bound is allowed to answer it instead:
-      a page inside the guard renders, whatever it cost to find out.
+      reads are for.
     - :data:`REFUSAL_TASKS` — the task set alone was already over, so no
       edge was read at all. ``count`` is a lower bound: ghosts would only
       add to it, and resolving them to say so precisely would cost the very
       fan-out the guard exists to prevent.
+    - :data:`REFUSAL_CLASSIFICATION` — the scope named more out-of-set
+      endpoints than Lens will resolve for one render
+      (:data:`MAX_GHOST_RESOLUTION_READS`), or resolving them ran past
+      :data:`GHOST_RESOLUTION_BUDGET_S`. ``count`` is the number of
+      endpoints needing a read, not a node count.
+
+    An earlier version of this docstring said no resource bound was allowed
+    to answer the node guard, and that a page inside the guard renders
+    whatever it cost to find out. That is retracted. It is true of the
+    ANSWER — a bound must never masquerade as a node count — but it cannot
+    be true of the COST, because the cost is chosen by whoever wrote the
+    scope's edges rather than by whoever configured the page. A guard that
+    protects availability cannot itself require unbounded work to evaluate.
+    So the exactness promise now holds only where Lens actually renders:
+    inside the budget the count is exact, and past it Lens says it does not
+    know instead of guessing cheaply.
     """
 
     count: int
@@ -327,10 +329,25 @@ async def epic_scope_tasks(
     finished CHILDREN, and hiding the epic itself would leave the page
     describing a subtree with no root.
     """
-    epic, children = await asyncio.gather(
-        lithos.task_get(epic_id),
-        lithos.task_children(epic_id, recursive=True, include_closed=True),
-    )
+
+    async def read_anchor() -> TaskRecord:
+        async with graph_fanout_gate():
+            return await asyncio.wait_for(lithos.task_get(epic_id), LINK_READ_TIMEOUT_S)
+
+    async def read_children() -> Sequence[TaskRecord]:
+        async with graph_fanout_gate():
+            return await asyncio.wait_for(
+                lithos.task_children(epic_id, recursive=True, include_closed=True),
+                LINK_READ_TIMEOUT_S,
+            )
+
+    # Under the SAME global reservation the rest of the fan-out uses, and
+    # deadlined the same way. These two reads run before the per-scope limiter
+    # exists — the scope is what they are fetching — so without the shared gate
+    # they were the one graph path that could take the whole MCP session:
+    # N concurrent epic pages meant 2N unreserved calls, and ordinary pages
+    # starved behind them however small `GRAPH_FANOUT_SESSION_SHARE` was set.
+    epic, children = await asyncio.gather(read_anchor(), read_children())
     rows = [child for child in children if include_resolved or child.status == "open"]
     return _ordered([epic, *rows])
 
@@ -431,13 +448,25 @@ async def assemble_scope(
 
     limiter = asyncio.Semaphore(limits.fetch_concurrency)
     in_scope = {task.id: task for task in scope_tasks}
-    entries, incomplete = await _read_edges(lithos, scope_tasks, cache, limiter)
+    entries, incomplete = await read_edges(lithos, scope_tasks, cache, limiter)
     edges = _dedupe_scope_edges(entries)
 
     far_ids = _ghostable_endpoints(edges, in_scope)
-    far_tasks, unresolved = await _resolve_far_endpoints(
-        lithos, far_ids, master, limiter
-    )
+    far_tasks, pending = partition_far_endpoints(far_ids, master)
+    if len(pending) > MAX_GHOST_RESOLUTION_READS:
+        # Refuse BEFORE enqueueing one read. The check is on the QUEUE, not on
+        # concurrency, because the queue is what an edge writer controls.
+        return refused(len(pending), REFUSAL_CLASSIFICATION)
+    try:
+        unresolved = await asyncio.wait_for(
+            resolve_far_endpoints(lithos, pending, far_tasks, limiter),
+            GHOST_RESOLUTION_BUDGET_S,
+        )
+    except TimeoutError:
+        # Inside the count budget but not inside the time one: the reads are
+        # cancelled with the gather, and the scope refuses rather than
+        # rendering whichever half happened to land.
+        return refused(len(pending), REFUSAL_CLASSIFICATION)
     graph_edges, ghost_kinds = _classify_edges(edges, in_scope, far_tasks, unresolved)
     nodes = _build_nodes(scope_tasks, incomplete, far_tasks, unresolved, ghost_kinds)
     # §5.7's guard, on the EXACT rendered node set: tasks plus the ghosts that
@@ -456,37 +485,6 @@ async def assemble_scope(
         incomplete=incomplete,
         as_of=min((entry.fetched_at for entry in entries), default=None),
     )
-
-
-async def _read_edges(
-    lithos: GraphScopeClient,
-    tasks: Sequence[TaskRecord],
-    cache: GraphCache,
-    limiter: asyncio.Semaphore,
-) -> tuple[tuple[EdgeCacheEntry, ...], dict[str, str]]:
-    """One cache read per node; failures become ``incomplete``, not silence."""
-
-    async def fetch(task_id: str) -> list[EdgeRecord]:
-        async with graph_fanout_gate(), limiter:
-            # Deadlined inside the gate, as the detail page's fan-out is: a
-            # read that never answers would otherwise hold one of the few
-            # slots for as long as the session stays half-open.
-            return await asyncio.wait_for(
-                lithos.task_edge_list(task_id, direction="both"), LINK_READ_TIMEOUT_S
-            )
-
-    results = await asyncio.gather(
-        *(cache.edges_for(task.id, fetch) for task in tasks),
-        return_exceptions=True,
-    )
-    entries: list[EdgeCacheEntry] = []
-    incomplete: dict[str, str] = {}
-    for task, result in zip(tasks, results, strict=True):
-        if isinstance(result, BaseException):
-            incomplete[task.id] = _failure_reason(result)
-        else:
-            entries.append(result)
-    return tuple(entries), incomplete
 
 
 def _dedupe_scope_edges(entries: Sequence[EdgeCacheEntry]) -> tuple[EdgeRecord, ...]:
@@ -549,59 +547,6 @@ def _far_endpoint(edge: EdgeRecord, in_scope: Mapping[str, TaskRecord]) -> str:
     if edge.type in CONTEXT_EDGE_TYPES and to_in:
         return edge.from_task_id
     return ""
-
-
-async def _resolve_far_endpoints(
-    lithos: GraphScopeClient,
-    far_ids: Sequence[str],
-    master: Sequence[TaskRecord],
-    limiter: asyncio.Semaphore,
-) -> tuple[dict[str, TaskRecord], set[str]]:
-    """Resolve EVERY ghost candidate: the open snapshot first, ``task_get`` after.
-
-    An OPEN far endpoint is already in the master list, so the common case —
-    a live cross-project blocker — costs no read at all (D5). Only resolved
-    (or absent) endpoints need one, and one that FAILS leaves the id in the
-    returned ``unresolved`` set: the ghost is still shown, with
-    ``status unknown``, and every dependency edge touching it is ``unknown``.
-
-    Every candidate is read, without a COUNT bound, and that is a decision:
-    each read decides drop-versus-ghost (D5/D6), so an endpoint left unread
-    would render as an ``unknown`` ghost where the contract requires a
-    completed predecessor's edge to be absent. The reads ARE the
-    classification, so no cap on them can preserve the page. What IS bounded
-    is what the reads can cost everyone else — the share of the session they
-    may hold (:data:`GRAPH_FANOUT_SESSION_SHARE`), the concurrency inside one
-    render, and each read's duration
-    (:data:`~lithos_lens.task_links.LINK_READ_TIMEOUT_S`, applied inside the
-    gates). The total is ``|endpoints this scope's edges name that are not on
-    the open list|``, chosen by whoever wrote those edges; the upstream answer
-    is a bulk graph read (ROADMAP ledger gap #3).
-    """
-    open_index = {task.id: task for task in master if task.status == "open"}
-    resolved: dict[str, TaskRecord] = {}
-    pending: list[str] = []
-    for far_id in far_ids:
-        known = open_index.get(far_id)
-        if known is not None:
-            resolved[far_id] = known
-        else:
-            pending.append(far_id)
-
-    async def read(task_id: str) -> TaskRecord:
-        async with graph_fanout_gate(), limiter:
-            return await asyncio.wait_for(lithos.task_get(task_id), LINK_READ_TIMEOUT_S)
-
-    results = await asyncio.gather(
-        *(read(task_id) for task_id in pending), return_exceptions=True
-    )
-    unresolved: set[str] = set()
-    for task_id, result in zip(pending, results, strict=True):
-        if isinstance(result, BaseException):
-            unresolved.add(task_id)
-        else:
-            resolved[task_id] = result
-    return resolved, unresolved
 
 
 def _classify_edges(
@@ -760,16 +705,3 @@ def _ordered(tasks: Iterable[TaskRecord]) -> tuple[TaskRecord, ...]:
     for task in tasks:
         by_id.setdefault(task.id, task)
     return tuple(sorted(by_id.values(), key=lambda task: (task.created_at, task.id)))
-
-
-def _failure_reason(exc: BaseException) -> str:
-    """A short, stable reason for the ``incomplete`` map.
-
-    The Lithos error code when there is one (``LithosToolError`` carries it),
-    else the exception type. Matched duck-typed because the layering contract
-    forbids Foundation importing the client.
-    """
-    code: Any = getattr(exc, "code", "")
-    if isinstance(code, str) and code:
-        return code
-    return type(exc).__name__

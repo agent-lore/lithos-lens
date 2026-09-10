@@ -20,7 +20,8 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 2 | 2 |
-| `lithos_lens.graph_scope` | L | 6 | 6 |
+| `lithos_lens.graph_fanout` | S | 1 | 3 |
+| `lithos_lens.graph_scope` | L | 5 | 6 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -79,8 +80,13 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `dedupe_edges` — Collapse edges that name the same (from, to, type), keeping order.
 - class `GraphCache` — Per-task edge entries with a TTL, single-flight, and event eviction.
 
-### `lithos_lens.graph_scope`
+### `lithos_lens.graph_fanout`
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
+- def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
+- def `partition_far_endpoints` — Split ghost candidates into "already known" and "needs a read".
+- def `resolve_far_endpoints` — Read every pending candidate, filling ``resolved`` and returning failures.
+
+### `lithos_lens.graph_scope`
 - class `GraphScopeLimits` — The two ``[graph]`` knobs that bound one scope's reads.
 - class `GraphNode` — One node of the assembled graph: a task, or a one-hop ghost of one.
 - class `GraphEdge` — One deduped edge, with the state a dependency edge carries.
