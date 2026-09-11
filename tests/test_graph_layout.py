@@ -234,23 +234,29 @@ def test_scc_renders_identically_under_reversed_edge_order() -> None:
     Compared WHOLE, not field by field: ``Topology.edges`` is emitted to the
     payload like everything else, so an arrival-ordered edge list would make
     two renders of one graph unequal even with identical cycles and layers.
+
+    A and B are joined by BOTH dependency types, which is the only pair the
+    endpoint order cannot separate — drop the type from the edge sort and a
+    stable sort leaves that pair in fetch order, so reversing the input
+    reverses those two rows while every other field still matches.
     """
     tasks = _tasks("A", "B", "C")
-    specs = ("A>B", "B>C", "C>A")
-    forward = build_topology(tasks, _edges(*specs))
-    reversed_input = build_topology(
-        list(reversed(tasks)), list(reversed(_edges(*specs)))
-    )
+    edges = [_edge("A>B"), _edge("A>B", "waits_on_gate"), _edge("B>C"), _edge("C>A")]
+    forward = build_topology(tasks, edges)
+    reversed_input = build_topology(list(reversed(tasks)), list(reversed(edges)))
 
     assert forward == reversed_input
     assert forward.cycles[0].members == ("A", "B", "C")
     assert forward.cycles[0].path == ("A", "B", "C", "A")
-    # Edges come back in ``(created_at, id)`` order of predecessor then
-    # dependent, whichever end of the fetch they arrived from.
-    assert [(edge.from_task_id, edge.to_task_id) for edge in forward.edges] == [
-        ("A", "B"),
-        ("B", "C"),
-        ("C", "A"),
+    # Edges come back in ``(created_at, id)`` order of predecessor, then
+    # dependent, then type — whichever end of the fetch they arrived from.
+    assert [
+        (edge.from_task_id, edge.to_task_id, edge.type) for edge in forward.edges
+    ] == [
+        ("A", "B", "blocks"),
+        ("A", "B", "waits_on_gate"),
+        ("B", "C", "blocks"),
+        ("C", "A", "blocks"),
     ]
 
 
