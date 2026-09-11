@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -29,13 +30,13 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from lithos_lens import graph_scope
+from lithos_lens import graph_cycles, graph_scope
 from lithos_lens.config import DEFAULT_TASKS_FRONTIER_LIMIT, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_graph_dataset import edge_index
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.graph_cache import GraphCache
-from lithos_lens.graph_cycles import CycleSignal
+from lithos_lens.graph_cycles import MAX_CYCLE_READ_PROJECTS, CycleSignal
 from lithos_lens.graph_page import build_graph_page, graph_url, parse_graph_params
 from lithos_lens.graph_routes import GRAPH_SPAN
 from lithos_lens.graph_scope import load_project_scope
@@ -45,6 +46,7 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
+from lithos_lens.task_links import LINK_READ_TIMEOUT_S
 from lithos_lens.tasks import (
     ClaimRecord,
     TaskRecord,
@@ -155,6 +157,7 @@ class GraphFakeClient:
         get_failures: set[str] | None = None,
         blocked_failures: set[str] | None = None,
         blocked_rows: dict[str, list[BlockedTaskRecord]] | None = None,
+        blocked_delay: float = 0.0,
         list_failures: set[str] | None = None,
         children_failures: set[str] | None = None,
         edge_gate: asyncio.Event | None = None,
@@ -170,6 +173,7 @@ class GraphFakeClient:
         # rather than to its project.
         self._blocked_failures = blocked_failures or set()
         self._blocked_rows = blocked_rows or {}
+        self._blocked_delay = blocked_delay
         self._list_failures = list_failures or set()
         self._edge_gate = edge_gate
         self._children_failures = children_failures or set()
@@ -209,6 +213,8 @@ class GraphFakeClient:
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
         self.blocked_calls.append({"limit": limit, "project": project, "tags": tags})
+        if self._blocked_delay:
+            await asyncio.sleep(self._blocked_delay)
         key = project or (tags[0] if tags else "")
         if project in self._blocked_failures or key in self._blocked_failures:
             raise LithosToolError("blocked read failed", code="internal_error")
@@ -968,6 +974,104 @@ def test_a_downstream_ghost_s_project_joins_the_coverage_set(
         ("tags", f"project:{PROJECT}", LIMIT),
         ("tags", "project:other", LIMIT),
     ]
+
+
+def test_a_ghost_s_blocked_row_is_not_this_graph_s_cycle_authority(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A scoped read answers about a PROJECT, not about this graph (D4).
+
+    The epic's children are the in-scope set, and ``ghost`` is another loom
+    task that is not one of them — so the coverage read for loom returns its
+    blocked row quite legitimately, ``kind="cycle"`` and all. Believing it
+    would draw a cycle for a node whose edges this page never fetched, and
+    then mark the real child below it "blocked via cycle" on the strength of a
+    loop Lens cannot see and did not look for.
+    """
+    rows = [task("epic", task_type="epic"), task("child"), task("ghost")]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [("epic", "child", "parent_child"), ("ghost", "child", "blocks")],
+            children={"epic": ("child",)},
+            blocked={
+                "ghost": cycle_blocker(
+                    "far", "Dependency cycle: ghost -> far -> ghost."
+                )
+            },
+        )
+    )
+
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
+
+    # The ghost is still drawn — it is a live blocker — it just carries no
+    # verdict this graph did not read the edges to hold.
+    assert 'data-graph-node="ghost"' in html
+    assert "in-cycle" not in markers(html, "ghost")
+    assert "Dependency cycle: ghost -> far -> ghost." not in html
+    assert "blocked-via-cycle" not in markers(html, "child")
+    # And no callout invented from it, under any of the three headings.
+    assert "data-cycle-callout" not in html
+    assert 'data-cycle-group="ghost"' not in html
+
+
+def test_one_task_s_tags_cannot_unbound_the_cycle_read_fan_out(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The coverage set is derived from TAGS, so its size is chosen by whoever
+    wrote the task rather than by whoever configured the page. The bound is on
+    the QUEUE (:data:`MAX_CYCLE_READ_PROJECTS`) because the semaphores below it
+    limit only how many of those reads run at once, never how many are made.
+    """
+    noisy_tags = tuple(f"project:p{index:03d}" for index in range(200))
+    rows = [
+        task("epic", task_type="epic"),
+        task("noisy", extra_tags=noisy_tags),
+        task("far-flung", project="zzz-last"),
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [
+                ("epic", "noisy", "parent_child"),
+                ("epic", "far-flung", "parent_child"),
+            ],
+            children={"epic": ("noisy", "far-flung")},
+        )
+    )
+
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
+
+    assert len(fake.blocked_calls) == 2 * MAX_CYCLE_READ_PROJECTS
+    # The reads that WERE made still answer for the tasks they cover …
+    assert ("project", PROJECT, LIMIT) in blocked_log(fake)
+    assert "cycle-unknown" not in markers(html, "noisy")
+    # … and the projects left unread are said, never implied cycle-free.
+    assert "cycle-unknown" in markers(html, "far-flung")
+    assert 'data-graph-banner="cycle-coverage-capped"' in html
+    assert 'data-graph-banner="cycle-unknown-count"' in html
+
+
+def test_a_slow_blocked_read_cannot_hold_the_page_past_the_phase_budget(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline covers the whole phase, gate waits included.
+
+    ``LINK_READ_TIMEOUT_S`` starts only once both gates are HELD, so it bounds
+    a call and not a render queued behind someone else's fan-out. Past the
+    budget the reads are simply unmade, which is a state D4 already has a
+    semantic for — unknown, and said so.
+    """
+    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.05)
+    fake = GraphFakeClient(dataset([task("a")]), blocked_delay=LINK_READ_TIMEOUT_S)
+
+    started = time.monotonic()
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < LINK_READ_TIMEOUT_S / 2
+    assert 'data-graph-banner="cycle-unavailable"' in html
+    assert "cycle-unknown" in markers(html, "a")
 
 
 # ── Ghosts, completeness and the chain ──────────────────────────────────

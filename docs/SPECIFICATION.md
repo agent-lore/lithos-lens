@@ -607,6 +607,17 @@ filter the task cannot match is not coverage, which is what a single-convention
 posture makes load-bearing: under `"metadata"` only the `project=` half is
 issued, so a child carrying only `project:<slug>` is covered by nothing and is
 marked unknown rather than silently reported cycle-free.
+A scoped read answers about a **project**, not about this graph, so it returns
+rows for tasks the page never fetched and for ghosts whose own edges it never
+read: only rows naming an **in-scope, non-ghost** task are this graph's
+authority. A ghost carries neither cycle marker — believing its row would draw
+a cycle for a node Lens has no edges for and then mark the real work below it
+*blocked via cycle* on the strength of it.
+The phase is **bounded before it is queued**: the coverage set is derived from
+task tags, so its size is chosen by whoever wrote the task, and one render
+reads at most a fixed number of projects (the scope's own first) under one
+deadline covering the fan-out gates as well as the calls. These are internal
+safety nets, not `[graph]` knobs.
 Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
 with Lithos's own message whatever Tarjan found — and **only** such a task: the
 row's marker reads the verdict, never the condensation, so an SCC Lens can draw
@@ -621,8 +632,9 @@ promise); otherwise it says *shape unavailable*, which asserts nothing about
 where the loop runs or why the shape is missing — the blocker names one
 immediate predecessor, so an in-scope one leaves the rest of the path unknown,
 and a stale edge-empty cache entry is indistinguishable here from a failed edge
-read. A truncated read, a failed read and a task no scoped read can reach (no
-project under either convention) each produce a **banner**; which ROWS are then
+read. A truncated read, a failed read, a project the render's read bound left
+unread, and a task no scoped read can reach (no project under either
+convention) each produce a **banner**; which ROWS are then
 marked `cycle status unknown` follows the per-task rule above, not the banner —
 a task a truncated response returned keeps its verdict, and a task another
 complete applicable read covered stays known. Each partial-read banner

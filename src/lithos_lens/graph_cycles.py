@@ -21,6 +21,13 @@ coverage set is the point of this module:
   unscoped read to cover it: that read is global, capped and corpus-size
   dependent, so the coverage claim would stop meaning anything.
 
+The phase is BOUNDED before it is queued (:data:`MAX_CYCLE_READ_PROJECTS`,
+:data:`CYCLE_READ_BUDGET_S`), the same call the scope's own fan-out makes: the
+coverage set is derived from task TAGS, so whoever writes a task chooses how
+many projects one render would otherwise read. Past the bound the projects are
+left unread rather than the page refused — a read never made is already a state
+D4 has a semantic for — so the degradation stays "unknown", never "no cycle".
+
 Everything here degrades towards *unknown*, never towards *no cycle* — but the
 degradation is per TASK, not per project or per response. A task any response
 RETURNED is answered for, even by a response that went on to truncate. A task
@@ -57,6 +64,16 @@ from lithos_lens.tasks import (
 READ_BY_PROJECT = "project"
 READ_BY_TAG = "tags"
 
+#: Hard bounds on the cycle-read phase, the same internal safety nets
+#: :data:`~lithos_lens.graph_fanout.MAX_GHOST_RESOLUTION_READS` and
+#: :data:`~lithos_lens.graph_fanout.GHOST_RESOLUTION_BUDGET_S` are — not dials
+#: an operator tunes. The count bounds the QUEUE rather than the concurrency,
+#: because the queue is what a task's tags control; the budget covers the whole
+#: phase INCLUDING the waits for the two gates, which the per-call
+#: :data:`~lithos_lens.task_links.LINK_READ_TIMEOUT_S` by construction does not.
+MAX_CYCLE_READ_PROJECTS = 64
+CYCLE_READ_BUDGET_S = 10.0
+
 
 @dataclass(frozen=True)
 class ProjectRead:
@@ -85,15 +102,29 @@ class CycleSignal:
     """What Lithos said about cycles in this scope, and where it went quiet.
 
     ``flagged`` is the verdict itself (task id -> the blocker's own message);
-    ``blocked`` is one row per task, its blockers MERGED across every read that
+    ``verdicts`` is one row per task, its blockers MERGED across every read that
     named it, handed to ``build_topology`` so a flagged member with no fetched
     component is still condensed alone and layered. ``unknown`` names the
     in-scope tasks whose cycle status this page cannot claim either way.
     """
 
     coverage: tuple[str, ...] = ()
+    #: Projects in the coverage set that :data:`MAX_CYCLE_READ_PROJECTS` left
+    #: unread. Their tasks fall out of ``covers`` and into ``unknown`` on their
+    #: own; this names them so the page can SAY the coverage set was capped.
+    uncovered: tuple[str, ...] = ()
     reads: tuple[ProjectRead, ...] = ()
+    #: Every row any read returned, merged. NOT this page's cycle authority: a
+    #: project-scoped read legitimately names tasks this graph never fetched,
+    #: and ghosts whose own edges it never read. Kept whole because a
+    #: downstream ghost's sole-blocker fact is why its project is in the
+    #: coverage set at all (D10) — see ``verdicts`` for what may be believed.
     blocked: tuple[BlockedTaskRecord, ...] = ()
+    #: The subset of ``blocked`` naming an IN-SCOPE, non-ghost task: the only
+    #: rows this page may condense, flag or propagate ``blocked via cycle``
+    #: from. A ghost's row would invent a cycle for a node whose edges Lens
+    #: never fetched, and then blame in-scope work for it.
+    verdicts: tuple[BlockedTaskRecord, ...] = ()
     flagged: Mapping[str, str] = field(default_factory=dict)
     #: task id -> the tasks Lithos's ``kind="cycle"`` blockers NAME as its
     #: partners. The page needs the endpoint, not just the message: a cycle
@@ -181,24 +212,41 @@ async def load_cycle_signal(
     call under a single-convention posture, so the fan-out is two calls per
     covered project by default, not one. ``_read_kinds`` decides which, and the
     call log a test asserts on is exactly this plan.
+
+    The plan is capped BEFORE it is built (:data:`MAX_CYCLE_READ_PROJECTS`) and
+    the whole phase runs against one deadline (:data:`CYCLE_READ_BUDGET_S`),
+    because neither gate below bounds the work: a semaphore limits how many
+    calls run at once, not how many are queued, and the per-call timeout starts
+    only once both gates are held. A task carries as many ``<key>:<slug>`` tags
+    as its author wrote, so without both bounds one task decides how much every
+    render of this page costs.
     """
-    projects = coverage_projects(scope, convention=convention, tag_key=tag_key)
+    read_projects, uncovered = _read_plan(scope, convention=convention, tag_key=tag_key)
     limiter = asyncio.Semaphore(max(fetch_concurrency, 1))
-    plan = [(project, by) for project in projects for by in _read_kinds(convention)]
+    plan = [
+        (project, by) for project in read_projects for by in _read_kinds(convention)
+    ]
+    deadline = asyncio.get_running_loop().time() + CYCLE_READ_BUDGET_S
 
     async def read(project: str, by: str) -> ProjectRead:
-        async with graph_fanout_gate(), limiter:
-            try:
-                rows = await asyncio.wait_for(
-                    lithos.task_blocked(
-                        limit=frontier_limit,
-                        project=project if by == READ_BY_PROJECT else None,
-                        tags=[f"{tag_key}:{project}"] if by == READ_BY_TAG else None,
-                    ),
-                    LINK_READ_TIMEOUT_S,
-                )
-            except Exception as exc:  # noqa: BLE001 - every failure is "unknown"
-                return ProjectRead(project=project, by=by, error=_reason(exc))
+        try:
+            # Deadline OUTSIDE the gates: a render held behind a busy fan-out
+            # gate is exactly the case the per-call timeout cannot see, and the
+            # read it never got to make is "unknown" like any other.
+            async with asyncio.timeout_at(deadline):
+                async with graph_fanout_gate(), limiter:
+                    rows = await asyncio.wait_for(
+                        lithos.task_blocked(
+                            limit=frontier_limit,
+                            project=project if by == READ_BY_PROJECT else None,
+                            tags=[f"{tag_key}:{project}"]
+                            if by == READ_BY_TAG
+                            else None,
+                        ),
+                        LINK_READ_TIMEOUT_S,
+                    )
+        except Exception as exc:  # noqa: BLE001 - every failure is "unknown"
+            return ProjectRead(project=project, by=by, error=_reason(exc))
         return ProjectRead(
             project=project,
             by=by,
@@ -209,17 +257,47 @@ async def load_cycle_signal(
         )
 
     reads = tuple(await asyncio.gather(*(read(*call) for call in plan)))
-    return _signal(scope, projects, reads, tag_key=tag_key)
+    return _signal(scope, read_projects, reads, uncovered, tag_key=tag_key)
+
+
+def _read_plan(
+    scope: TaskGraphScope,
+    *,
+    convention: ProjectConvention,
+    tag_key: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The coverage set split into what this render reads and what it drops.
+
+    The scope's OWN project is read first when it has one, so the project whose
+    page this is keeps its verdict even when a task elsewhere in the scope
+    carries enough tags to fill the budget on its own. The rest is sorted, so
+    the cap is deterministic rather than dictated by set iteration order.
+    """
+    projects = coverage_projects(scope, convention=convention, tag_key=tag_key)
+    anchor = scope.key if scope.kind == "project" else ""
+    ordered = sorted(projects, key=lambda slug: (slug != anchor, slug))
+    return (
+        tuple(ordered[:MAX_CYCLE_READ_PROJECTS]),
+        tuple(sorted(ordered[MAX_CYCLE_READ_PROJECTS:])),
+    )
 
 
 def _signal(
     scope: TaskGraphScope,
     projects: Sequence[str],
     reads: Sequence[ProjectRead],
+    uncovered: Sequence[str],
     *,
     tag_key: str,
 ) -> CycleSignal:
     """Fold the reads into the verdict and the coverage it does not have.
+
+    A scoped read answers about a PROJECT, not about this graph, so it returns
+    rows for tasks the page never fetched and for ghosts whose edges it never
+    read. Those rows are kept (``blocked``) and are not authority
+    (``verdicts``): condensing a ghost's flagged row would draw a cycle for a
+    node Lens has no edges for and mark the real work below it "blocked via
+    cycle" on the strength of it.
 
     The fold is per TASK, not per response. §5B.7's pattern unions the pair,
     and the two calls are independent reads rather than one snapshot: a task
@@ -262,11 +340,13 @@ def _signal(
         BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id]))
         for task_id, task in rows.items()
     )
+    in_scope = {node.id for node in scope.nodes if not node.ghost}
+    verdicts = tuple(record for record in blocked if record.task.id in in_scope)
     cycle_blockers = {
         record.task.id: tuple(
             blocker for blocker in record.blockers if blocker.kind == CYCLE_BLOCKER_KIND
         )
-        for record in blocked
+        for record in verdicts
     }
     flagged = {
         task_id: blockers[0].message
@@ -294,8 +374,10 @@ def _signal(
 
     return CycleSignal(
         coverage=tuple(projects),
+        uncovered=tuple(uncovered),
         reads=tuple(reads),
         blocked=blocked,
+        verdicts=verdicts,
         flagged=flagged,
         cycle_partners=partners,
         unknown=frozenset(unknown),

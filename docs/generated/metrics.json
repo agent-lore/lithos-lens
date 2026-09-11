@@ -73,12 +73,12 @@
         "qualname": "lithos_lens.config._apply_env_overrides"
       },
       {
-        "complexity": 23,
-        "qualname": "lithos_lens.normalizers.normalize_task"
+        "complexity": 25,
+        "qualname": "lithos_lens.graph_cycles._signal"
       },
       {
-        "complexity": 21,
-        "qualname": "lithos_lens.graph_cycles._signal"
+        "complexity": 23,
+        "qualname": "lithos_lens.normalizers.normalize_task"
       },
       {
         "complexity": 20,
@@ -87,6 +87,10 @@
       {
         "complexity": 18,
         "qualname": "lithos_lens.graph_layout.build_topology"
+      },
+      {
+        "complexity": 16,
+        "qualname": "lithos_lens.graph_page._node_views"
       },
       {
         "complexity": 15,
@@ -99,16 +103,12 @@
       {
         "complexity": 14,
         "qualname": "lithos_lens.graph_page._callout"
-      },
-      {
-        "complexity": 14,
-        "qualname": "lithos_lens.graph_page._node_views"
       }
     ],
-    "total_functions": 576
+    "total_functions": 577
   },
   "domain": {
-    "associations": 76,
+    "associations": 77,
     "models": 69,
     "models_without_docstrings": 16
   },
@@ -290,13 +290,13 @@
       },
       "TaskGraph": {
         "classes": 56,
-        "functions": 247,
+        "functions": 248,
         "largest_module": "lithos_lens.graph_layout",
         "largest_module_lines": 799,
-        "lines": 7557,
+        "lines": 7656,
         "modules": 18,
         "public_symbols": 107,
-        "sloc": 5815
+        "sloc": 5881
       },
       "Tasks": {
         "classes": 13,
@@ -332,13 +332,13 @@
     "max_module": "lithos_lens.graph_layout",
     "max_module_lines": 799,
     "modules_over_800": [],
-    "total_lines": 17236,
+    "total_lines": 17335,
     "total_modules": 46,
-    "total_sloc": 13254
+    "total_sloc": 13320
   },
   "tests": {
     "ratio": 1.66,
-    "src_lines": 17236,
-    "test_lines": 28663
+    "src_lines": 17335,
+    "test_lines": 28767
   }
 }

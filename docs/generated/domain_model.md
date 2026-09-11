@@ -190,6 +190,7 @@ classDiagram
   }
   class CycleSignal {
     +coverage tuple[str, ...]
+    +uncovered tuple[str, ...]
     +flagged Mapping[str, str]
     +cycle_partners Mapping[str, tuple[str, ...]]
     +unknown frozenset[str]
@@ -427,6 +428,7 @@ classDiagram
   ChainView "1" --> "0..*" NodeView : nodes
   Condensation "1" --> "0..1" Cycle : cycle
   CycleSignal "1" --> "0..*" BlockedTaskRecord : blocked
+  CycleSignal "1" --> "0..*" BlockedTaskRecord : verdicts
   CycleSignal "1" --> "0..*" ProjectRead : reads
   CycleView "1" --> "0..*" NodeView : members
   CycleView "1" --> "0..*" NodeView : path

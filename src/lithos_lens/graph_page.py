@@ -40,6 +40,7 @@ from urllib.parse import urlencode
 
 from lithos_lens.graph_cache import GraphCache
 from lithos_lens.graph_cycles import (
+    MAX_CYCLE_READ_PROJECTS,
     CycleSignal,
     CycleSignalClient,
     load_cycle_signal,
@@ -177,7 +178,9 @@ def build_graph_page(
     topology = build_topology(
         [node.task for node in scope.nodes],
         [edge.edge for edge in scope.edges],
-        blocked=signal.blocked,
+        # Authority, not every row the scoped reads returned: see
+        # ``CycleSignal.verdicts``.
+        blocked=signal.verdicts,
         incomplete=scope.incomplete,
         unknown_status=[
             node.id
@@ -295,10 +298,12 @@ def _node_views(
             claims=_claims(node),
             isolated=node.id in isolated,
             cycle_id=cycle_of.get(node.id, ""),
-            flagged=node.id in signal.flagged,
-            cycle_message=signal.flagged.get(node.id, ""),
-            # Ghosts carry no cycle marker: no scoped read claims to cover the
-            # blockers of a task this page only sees the edge of.
+            # Ghosts carry NEITHER cycle marker. No scoped read claims to
+            # cover the blockers of a task this page only sees one edge of —
+            # so its absence is not "cycle-free", and a row a project-scoped
+            # read happened to return for it is not this graph's verdict.
+            flagged=not node.ghost and node.id in signal.flagged,
+            cycle_message="" if node.ghost else signal.flagged.get(node.id, ""),
             cycle_unknown=not node.ghost and node.id in signal.unknown,
             blocked_via_cycle=node.id in via_cycle,
             unresolvable=node.id in unresolvable,
@@ -507,6 +512,18 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                     "Cycle signal unavailable: the blocked read failed for "
                     f"{_join(signal.failed_projects)}. A failed read is not "
                     "evidence that a task is cycle-free."
+                ),
+            )
+        )
+    if signal.uncovered:
+        banners.append(
+            Banner(
+                id="cycle-coverage-capped",
+                text=(
+                    "Cycle signal incomplete: this graph spans more projects "
+                    f"than one render reads ({MAX_CYCLE_READ_PROJECTS}), so "
+                    f"{len(signal.uncovered)} of them were not read at all. A "
+                    "read never made is not evidence that a task is cycle-free."
                 ),
             )
         )
