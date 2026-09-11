@@ -484,6 +484,55 @@ layer: a dependency cycle, a cross-project `blocks` edge, a cancelled
 predecessor, resolved predecessors inside and outside the window, an epic with
 a child in another project, isolated tasks, and a chain of depth 5.
 
+### 5.11 Task Graph Topology
+
+`graph_layout` computes the shape of a fetched task graph — the input the T2
+graph page renders. It is pure: a node set, the fetched edges, and Lithos's own
+`task_blocked` verdict in; cycles, layers, roots, the longest blocking chain and
+the hierarchy tree out. **No route renders it yet** (the page is a later T2
+slice); what ships here is the computation and its rules.
+
+- **Dependency edges** (`blocks`, `waits_on_gate`) are classified from BOTH
+  endpoints: `active` (open dependent, open-or-cancelled predecessor — a
+  cancelled predecessor blocks forever, a completed one blocks nothing),
+  `inactive` with a reason (`satisfied` when the predecessor completed, else
+  `dependent_resolved`; satisfied wins when both hold, because the dependency
+  was met whatever the dependent then did), or `unknown` when either endpoint's
+  status could not be read.
+- **Cycles** — membership is Lithos's verdict and is never overridden: a task
+  carrying a `kind="cycle"` blocker is a cycle member here even when Lens's own
+  Tarjan pass finds no component, because a cycle closing through out-of-scope
+  tasks is invisible to a graph that never fetches a ghost's edges. The shape —
+  members ordered by `(created_at, id)` plus one representative path — is Lens's,
+  and is empty for a flagged member with no component, where Lithos's message is
+  all there is. The representative path is one linear DFS pass, not a search
+  over the component's paths: these edges are agent-written, and a walk whose
+  cost grew with the shape of the cycle would hand their author the render.
+- **Layers** are Kahn's algorithm over the graph with each cycle condensed to a
+  single node, so every cycle member gets a layer and its dependents are layered
+  below it and marked *blocked via cycle* — a cycle never takes downstream work
+  off the page. Layering uses every fetched dependency edge whatever its state,
+  because layers describe the planned sequence rather than what blocks now.
+  `roots` are the in-degree-zero condensations plus one representative per cycle.
+- **The longest blocking chain** is the longest path by node count over the
+  condensed **active** projection, so a completed three-chain never outranks the
+  open two-chain beside it; a cycle counts once, ghosts count, and ties break on
+  the smallest `(created_at, id)` sequence read forward, so the traced chain is
+  stable across renders and focusing a node already on it does not move it. The
+  active projection is condensed on its OWN components, not on the layering's:
+  a cycle whose loop closes through a completed task is one node to the layers
+  and a live chain here. The chain through a given node is available for focus
+  mode.
+- **The chain carries its own confidence.** It is a lower bound — rendered
+  "≥ N", never as an exact claim — whenever a node's edges could not be read OR
+  any `unknown` dependency edge exists **anywhere** in the fetched graph: an
+  unknown edge sits in neither projection, so a disconnected one could itself be
+  the longest active component, and "it is off the current chain" proves nothing.
+- **The hierarchy tree** is the `parent_child` forest, indented. These edges
+  carry no readiness meaning, so completion never drops one; a node whose parent
+  is out of scope is a root, and a malformed parent loop yields a shorter tree
+  rather than dropping tasks.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -683,8 +732,8 @@ The following requirement areas are not yet implemented in the current state:
 - authentication
 
 - the task dependency graph **pages** (`/tasks/graph`, the shared side panel,
-  the detail mini-graph) — T2; the assembly layer beneath them is in place
-  (§5.10) but no route reads it yet
+  the detail mini-graph) — T2; the two layers beneath them are in place — graph
+  assembly (§5.10) and topology (§5.11) — but no route reads either yet
 
 One gap is narrower than a milestone and tracked as a task:
 
