@@ -1082,6 +1082,44 @@ def test_a_coverage_set_over_the_guard_refuses_before_reading_any_of_it(
     assert fake.blocked_calls == []
 
 
+#: The phase budget the two contended tests below run against, and the slack
+#: they allow over it for the rest of the render (the edge fan-out and the
+#: template) plus CI jitter. The ceiling is deliberately a function of the
+#: BUDGET rather than of `LINK_READ_TIMEOUT_S`: an effective phase deadline of
+#: whole seconds is exactly the regression these tests exist to catch, and a
+#: per-call ceiling is five seconds wide enough to hide one.
+CONTENDED_BUDGET_S = 0.2
+PHASE_BUDGET_SLACK_S = 1.5
+#: Children enough that the read plan is several times the process-wide gate,
+#: so ONE render produces both outcomes: halves the gate let through and
+#: halves it never did. Both on one page is the point — a fixture that
+#: produced only unmade reads could not tell a working deadline apart from an
+#: implementation that marks the whole plan unmade without calling at all.
+CONTENDED_CHILDREN = 20
+
+
+def contended_cycle_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[GraphFakeClient, int]:
+    """An epic whose read plan far outruns the fan-out gate, against a client
+    that never answers. Returns the client and the plan's length."""
+    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", CONTENDED_BUDGET_S)
+    children = tuple(f"child-{index:03d}" for index in range(CONTENDED_CHILDREN))
+    rows = [task("epic", task_type="epic")] + [
+        task(child, project=f"p{index:03d}") for index, child in enumerate(children)
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [("epic", child, "parent_child") for child in children],
+            children={"epic": children},
+        ),
+        blocked_delay=LINK_READ_TIMEOUT_S,
+    )
+    # One pair per project: the epic's own plus one per child.
+    return fake, 2 * (CONTENDED_CHILDREN + 1)
+
+
 def test_the_phase_deadline_reports_queued_reads_as_never_made(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1092,37 +1130,30 @@ def test_the_phase_deadline_reports_queued_reads_as_never_made(
     A cancelled plan item is not an upstream failure. Counting one would put a
     call in the telemetry that never reached Lithos and tell the operator the
     server broke when it was Lens that ran out of time — so the two are
-    separate outcomes, in the banner and in the counter, and the counter's
-    total stays equal to the calls actually issued.
+    separate outcomes, in the banner and in the counter.
     """
-    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.2)
-    span = 20  # 40 plan items against an 8-slot process gate
-    rows = [task("epic", task_type="epic")] + [
-        task(f"child-{index:03d}", project=f"p{index:03d}") for index in range(span)
-    ]
-    fake = GraphFakeClient(
-        dataset(
-            rows,
-            [("epic", f"child-{index:03d}", "parent_child") for index in range(span)],
-            children={"epic": tuple(f"child-{index:03d}" for index in range(span))},
-        ),
-        blocked_delay=LINK_READ_TIMEOUT_S,
-    )
+    fake, plan = contended_cycle_fixture(monkeypatch)
 
     started = time.monotonic()
     html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
     elapsed = time.monotonic() - started
 
-    # The phase is bounded by ITS budget, not by the per-call timeout: without
-    # a deadline over the queue this is 5 x ceil(42 / 8) seconds.
-    assert elapsed < LINK_READ_TIMEOUT_S
-    # Only the gate's width ever reached the client, and the plan is far wider.
-    assert len(fake.blocked_calls) <= GRAPH_FANOUT_SESSION_SHARE
-    assert len(fake.blocked_calls) < 2 * (span + 1)
-    # The page distinguishes the two: the calls that were sent and did not
-    # answer, and the ones that were never sent at all.
-    assert 'data-graph-banner="cycle-unmade"' in html
+    # Bounded by ITS budget, not by the per-call timeout: with no deadline over
+    # the queue this render takes LINK_READ_TIMEOUT_S x ceil(plan / gate).
+    assert elapsed < CONTENDED_BUDGET_S + PHASE_BUDGET_SLACK_S, elapsed
+    # Neither side of the distinction may be vacuous. "Nothing was issued"
+    # would satisfy a one-sided bound while never calling Lithos at all, and
+    # "everything was issued" would leave the queued case untested.
+    issued = len(fake.blocked_calls)
+    assert 0 < issued <= GRAPH_FANOUT_SESSION_SHARE < plan
+
+    banners = re.findall(r'data-graph-banner="([^"]+)"', html)
     text = re.sub(r"<[^>]+>", " ", html)
+    # The calls the gate let through were sent and did not answer …
+    assert "cycle-unavailable" in banners
+    # … and the rest were never sent at all, which is a different sentence
+    # about a different party. Both are on this one page.
+    assert "cycle-unmade" in banners
     assert "Those reads were never sent" in text
     assert "cycle-unknown" in markers(html, "child-000")
 
@@ -1136,35 +1167,23 @@ def test_the_cycle_read_counter_totals_the_calls_actually_issued(
     """`lens_tasks_graph_cycle_reads_total` counts scoped blocked CALLS, so a
     plan item the deadline caught still queued may not appear in any of its
     three outcomes. It gets a span field instead."""
-    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.2)
-    span_size = 20
-    rows = [task("epic", task_type="epic")] + [
-        task(f"child-{index:03d}", project=f"p{index:03d}")
-        for index in range(span_size)
-    ]
-    fake = GraphFakeClient(
-        dataset(
-            rows,
-            [
-                ("epic", f"child-{index:03d}", "parent_child")
-                for index in range(span_size)
-            ],
-            children={
-                "epic": tuple(f"child-{index:03d}" for index in range(span_size))
-            },
-        ),
-        blocked_delay=LINK_READ_TIMEOUT_S,
-    )
+    fake, plan = contended_cycle_fixture(monkeypatch)
 
     get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
 
-    counted = sum(
-        point.value
+    issued = len(fake.blocked_calls)
+    assert 0 < issued < plan
+    recorded = {
+        str(dict(point.attributes or {})["outcome"]): point.value
         for point in metric_points(metric_reader, "lens_tasks_graph_cycle_reads_total")
-    )
+    }
+    # Asserted as the WHOLE label set, not as a total: every issued call was
+    # sent and timed out, so `failed` carries all of them and no other outcome
+    # appears. A total alone would pass an implementation that filed issued
+    # timeouts under `ok`, or one that counted unmade reads as failures.
+    assert recorded == {"failed": issued}
     attributes = dict(graph_span(spans).attributes or {})
-    assert counted == len(fake.blocked_calls)
-    assert attributes["lens.graph.cycle_reads_unmade"] == 2 * (span_size + 1) - counted
+    assert attributes["lens.graph.cycle_reads_unmade"] == plan - issued
     assert attributes["lens.graph.cycle_signal_incomplete"] is True
 
 
