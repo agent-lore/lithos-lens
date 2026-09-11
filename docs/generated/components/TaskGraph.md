@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted) and the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload).
 
 **Tier:** Foundation
 
@@ -20,9 +20,12 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 2 | 2 |
+| `lithos_lens.graph_cycles` | S | 3 | 2 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
 | `lithos_lens.graph_layout` | L | 6 | 4 |
+| `lithos_lens.graph_page` | M | 1 | 6 |
 | `lithos_lens.graph_scope` | L | 5 | 6 |
+| `lithos_lens.graph_view` | S | 10 | 0 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -81,6 +84,13 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `dedupe_edges` — Collapse edges that name the same (from, to, type), keeping order.
 - class `GraphCache` — Per-task edge entries with a TTL, single-flight, and event eviction.
 
+### `lithos_lens.graph_cycles`
+- class `ProjectRead` — One half of a project's read pair, and what came back.
+- class `CycleSignal` — What Lithos said about cycles in this scope, and where it went quiet.
+- class `CycleSignalClient` — The one client method this module needs.
+- def `coverage_projects` — Every project the page must read, sorted (D4).
+- def `load_cycle_signal` — Read ``lithos_task_blocked`` once per project in the coverage set.
+
 ### `lithos_lens.graph_fanout`
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
 - def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
@@ -99,6 +109,15 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `longest_blocking_chain` — The longest chain of blocking work in this graph, by node count (D7).
 - def `hierarchy_rows` — The scope's ``parent_child`` forest, flattened into indented rows.
 
+### `lithos_lens.graph_page`
+- class `GraphPageClient` — The client surface one graph page needs: the scope reads plus blocked.
+- def `load_graph_page` — Assemble one scope, read its cycle signal, and fold both into the page.
+- def `build_graph_page` — Pure fold of scope + cycle verdict into everything the page renders.
+- def `parse_graph_params` — Parse `/tasks/graph`'s URL state, defaults resolved by scope kind.
+- def `graph_url` — Build a `/tasks/graph` URL — a fresh scope, or this one with one toggle.
+- def `observed_projects` — Every project slug the snapshot observes, under BOTH conventions (§5B.1).
+- def `open_epics` — The picker's right column: open epics, newest first.
+
 ### `lithos_lens.graph_scope`
 - class `GraphScopeLimits` — The two ``[graph]`` knobs that bound one scope's reads.
 - class `GraphNode` — One node of the assembled graph: a task, or a one-hop ghost of one.
@@ -111,6 +130,18 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `load_epic_scope` — Assemble `/tasks/graph?epic=<id>` (closed children included by default).
 - def `assemble_scope` — Fan out for cache misses and build the scope from what came back.
 - def `dependency_edge_state` — Classify one ``blocks`` / ``waits_on_gate`` edge from both endpoints.
+
+### `lithos_lens.graph_view`
+- class `GraphPageParams` — One graph page's URL state (D8), parsed once.
+- class `NodeView` — One rendered node, with every marker the text layer states.
+- class `EdgeView` — One dependency edge as the text renders it, under its dependent.
+- class `LayerGroup` — One condensation inside a layer: a lone task, or a cycle's members.
+- class `LayerView`
+- class `CycleView` — A cycle for the callout: Lens's own, or one only Lithos can see.
+- class `ChainView` — The longest blocking chain line (D7), with its honesty attached.
+- class `HierarchyRowView`
+- class `Banner` — One honesty banner. ``id`` is the test/CSS hook, ``text`` the sentence.
+- class `GraphPageView` — Everything `/tasks/graph` renders for one scope.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.

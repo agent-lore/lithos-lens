@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge and task-graph route groups extracted from it.
 
 **Tier:** Entrypoints
 
@@ -11,11 +11,15 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.graph_routes` | S | 0 | 1 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 12 |
 | `lithos_lens.web` | M | 0 | 1 |
 
 ## Public API
+
+### `lithos_lens.graph_routes`
+- def `register_graph_routes` — Attach `GET /tasks/graph` (scope picker + one scope's graph).
 
 ### `lithos_lens.knowledge_routes`
 - def `register_knowledge_routes` — Attach the knowledge landing, wiki-link resolver and note routes.

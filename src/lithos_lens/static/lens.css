@@ -1491,3 +1491,102 @@ button,
 .blocker-expand {
   display: inline-flex;
 }
+
+/* ── Task graph page (§5.7, T2-A3) ──────────────────────────────────────
+
+   The text baseline's chrome. Everything here is legibility for a page that
+   is read top-to-bottom: layers as ordered lists, one line per node, its
+   incoming edges indented under it. The Cytoscape canvas (T2-A4) sits above
+   this and never replaces it — the text stays in the DOM. */
+.graph-toolbar {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+}
+
+.graph-picker-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2.5rem;
+}
+
+.graph-legend ul,
+.graph-node-edges {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+
+.graph-legend li {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.1rem 0;
+}
+
+.graph-node {
+  line-height: 1.7;
+  padding: 0.15rem 0;
+}
+
+/* A ghost is one hop outside the scope and its own edges are never fetched,
+   so it reads as context rather than as work on this board. */
+.graph-node-ghost {
+  color: var(--muted);
+}
+
+/* Not "no status" — a status Lens asked for and did not get. Dashed, because
+   the honest rendering of an unread endpoint is visibly provisional. */
+.graph-node-unknown > a,
+.badge-unknown {
+  border-bottom: 1px dashed var(--warning-border);
+}
+
+.badge-unknown {
+  border-color: rgba(213, 138, 31, 0.55);
+  color: var(--warning-border);
+}
+
+.badge-claim {
+  border-color: rgba(65, 87, 111, 0.35);
+  color: var(--closed);
+}
+
+.graph-marker {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  white-space: nowrap;
+}
+
+.graph-cycle-group {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.6rem;
+}
+
+.graph-node-edges {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-left: 1rem;
+}
+
+.graph-edge {
+  list-style: none;
+}
+
+/* Faded history: an edge whose predecessor completed, or whose dependent
+   resolved. It is still drawn — the plan happened — but it constrains
+   nothing now, and the reason travels beside it in text. */
+.graph-edge-inactive {
+  opacity: 0.6;
+}
+
+.graph-edge-unknown {
+  border-left: 2px dashed var(--warning-border);
+  padding-left: 0.4rem;
+}

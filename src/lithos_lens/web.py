@@ -35,6 +35,7 @@ from lithos_lens.fake_lithos import (
     fake_lithos_enabled,
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
+from lithos_lens.graph_routes import register_graph_routes
 from lithos_lens.knowledge import (
     render_markdown,
 )
@@ -330,6 +331,12 @@ def create_app(
             )
             await state.events.publish(event)
             return JSONResponse({"published": True}, status_code=202)
+
+    # BEFORE the dynamic `/tasks/{task_id}` below: Starlette matches routes in
+    # registration order, so a graph route attached after it would never be
+    # reached — `/tasks/graph` would render a task detail for a task with the
+    # id "graph".
+    register_graph_routes(app, state, templates)
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:

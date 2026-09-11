@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+
+{% block title %}Task graph | Lithos Lens{% endblock %}
+
+{#
+  The no-JS baseline of §5.7, in D3's order: cycle callout and cycle-signal
+  banners, legend, longest blocking chain, topological layers, the isolated
+  disclosure, the hierarchy tree, then the embedded payload A4's Cytoscape
+  layer draws from. The order is the point — a cycle that makes work
+  unreachable is read before the layers that work sits in.
+
+  Every marker below is a field on the view, never a condition computed here:
+  "in a cycle" is Lithos's verdict, "cycle status unknown" is the ABSENCE of
+  one, and a template that derived either would be a second implementation of
+  a rule the PRD states once.
+#}
+
+{% macro node_row(view, node) %}
+  <li
+    class="graph-node{{ ' graph-node-ghost' if node.ghost }}{{ ' graph-node-unknown' if node.status_unknown }}"
+    data-graph-node="{{ node.id }}"
+    data-layer="{{ node.layer }}"
+    data-status="{{ node.status }}"
+    data-task-type="{{ node.task_type }}"
+    {% if node.ghost %}data-ghost="{{ node.ghost_kind }}"{% endif %}
+    {% if node.focused %}data-focused="true"{% endif %}
+  >
+    <a data-node-detail href="{{ task_detail_url(request, node.id) }}">{{ node.label }}</a>
+    <span class="badge badge-{{ node.status }}" data-node-status>{{ node.status }}</span>
+    <span class="badge badge-type" data-node-type>{{ node.task_type }}</span>
+    {% for agent in node.claims %}<span class="badge badge-claim" data-node-claim>claimed by {{ agent }}</span>{% endfor %}
+    {% if node.ghost %}
+      {# One hop, leaf-only (D5): the chip says whose work this is, and the
+         second link is the way to cross the boundary on purpose. #}
+      <span data-node-ghost-marker>ghost{{ " · context" if node.ghost_kind == "context" }}</span>
+      {% for slug in node.projects %}
+        <span class="tag-chip" data-ghost-project="{{ slug }}">{{ slug }}</span>
+        <a data-ghost-graph href="{{ graph_url(project=slug) }}">graph</a>
+      {% endfor %}
+    {% endif %}
+    {% if node.in_cycle %}<span class="graph-marker" data-marker="in-cycle" title="{{ node.cycle_message }}">in a cycle</span>{% endif %}
+    {% if node.blocked_via_cycle %}<span class="graph-marker" data-marker="blocked-via-cycle">blocked via cycle</span>{% endif %}
+    {% if node.unresolvable %}<span class="graph-marker" data-marker="unresolvable">blocked by unresolvable predecessor</span>{% endif %}
+    {% if node.edges_unknown %}<span class="graph-marker" data-marker="edges-unknown">edges unknown</span>{% endif %}
+    {% if node.cycle_unknown %}<span class="graph-marker" data-marker="cycle-unknown">cycle status unknown</span>{% endif %}
+    {% if node.cycle_message %}<span data-cycle-message>{{ node.cycle_message }}</span>{% endif %}
+    {% set incoming = view.incoming.get(node.id, ()) %}
+    {% if incoming %}
+      <ul class="graph-node-edges" data-node-edges>
+        {% for edge in incoming %}
+          <li
+            class="graph-edge graph-edge-{{ edge.state }}"
+            data-edge="{{ edge.from_id }}->{{ edge.to_id }}"
+            data-edge-type="{{ edge.type }}"
+            data-edge-state="{{ edge.state }}"
+            {% if edge.reason %}data-edge-reason="{{ edge.reason }}"{% endif %}
+          >
+            {{ "waits on gate" if edge.type == "waits_on_gate" else "blocked by" }}
+            <a href="{{ task_detail_url(request, edge.from_id) }}">{{ edge.from_label }}</a>
+            {% if edge.inactive %}<span data-edge-label>inactive — {{ edge.reason | replace("_", " ") }}</span>{% endif %}
+            {% if edge.unknown %}<span data-edge-label>unresolvable — this predecessor's status could not be read</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </li>
+{% endmacro %}
+
+{% block content %}
+  <section class="hero">
+    <p class="eyebrow">Dependency graph</p>
+    <h1>Graph{% if params.scoped %} · {{ params.key }}{% endif %}</h1>
+    <p>One scope's dependency structure, assembled from Lithos's task edges.</p>
+  </section>
+
+  {% if offline %}
+    <section class="banner banner-warning" role="status">
+      <strong>Lithos is offline or degraded.</strong>
+      <span>The task graph is unavailable. Lens is running and will retry on refresh.</span>
+    </section>
+  {% elif error %}
+    <section class="banner banner-warning" role="status" data-graph-error>
+      <strong>Graph unavailable.</strong>
+      <span>{{ error }}</span>
+    </section>
+  {% elif not params.scoped %}
+    {# A graph needs exactly one scope (§5.7), so the unscoped route offers the
+       two the snapshot can name rather than guessing one. #}
+    <section class="panel" data-graph-picker>
+      <h2>Pick a scope</h2>
+      <p>A graph renders one project or one epic at a time.</p>
+      <div class="graph-picker-columns">
+        <div>
+          <h3>Projects</h3>
+          {% if projects %}
+            <ul>
+              {% for slug in projects %}
+                <li><a data-picker-project="{{ slug }}" href="{{ graph_url(project=slug) }}">{{ slug }}</a></li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p>No project is visible in the current snapshot.</p>
+          {% endif %}
+        </div>
+        <div>
+          <h3>Open epics</h3>
+          {% if epics %}
+            <ul>
+              {% for epic in epics %}
+                <li><a data-picker-epic="{{ epic.id }}" href="{{ graph_url(epic=epic.id) }}">{{ epic.title or epic.id }}</a></li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p>No open epic is visible in the current snapshot.</p>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+  {% elif view.refused %}
+    {# Refused, not degraded: a graph this large is unreadable however it is
+       drawn, and the count is the guard's own evidence. #}
+    <section class="panel banner-warning" role="alert" data-graph-refusal data-refusal-reason="{{ view.refusal.reason }}">
+      <h2>Narrow your scope</h2>
+      <p>
+        This scope holds <strong data-refusal-count>{{ view.refusal.count }}</strong>
+        {{ "nodes (ghosts counted)" if view.refusal.ghosts_counted else "tasks" }},
+        over the <strong>{{ view.refusal.max_tasks }}</strong> this page will render.
+        {% if view.refusal.reason == "classification" %}
+          Classifying its out-of-scope endpoints would cost more reads than one render may spend,
+          so Lens will not guess at them.
+        {% endif %}
+      </p>
+      <p>Pick a single epic, or a smaller project, and try again.</p>
+      <a class="button-secondary" href="/tasks/graph">Back to the scope picker</a>
+    </section>
+  {% else %}
+    <section class="graph-toolbar" data-graph-toolbar>
+      <span data-graph-scope="{{ params.kind }}">{{ params.kind }}: {{ params.key }}</span>
+      <a data-toggle-resolved href="{{ graph_url(params, include_resolved=not params.include_resolved) }}">
+        {{ "Hide resolved tasks" if params.include_resolved else "Show resolved tasks" }}
+      </a>
+      <a data-toggle-isolated href="{{ graph_url(params, isolated=not params.show_isolated) }}">
+        {{ "Hide isolated tasks" if params.show_isolated else "Show isolated tasks" }}
+      </a>
+      {% if view.as_of %}
+        {# The OLDEST contributing fetch, not this request's clock: edge upserts
+           emit no event upstream, so this is the page's staleness bound. #}
+        <span data-graph-as-of>as of <time datetime="{{ view.as_of.isoformat() }}">{{ view.as_of.strftime("%H:%M:%S") }}</time></span>
+      {% endif %}
+    </section>
+
+    {% if view.cycles or view.external_cycles %}
+      <section class="banner banner-warning" role="alert" data-cycle-callout>
+        <strong>{{ view.cycles | length + view.external_cycles | length }} dependency cycle{{ "s" if view.cycle_count != 1 }}</strong>
+        {% if view.cycles %}
+          <ul data-cycle-list>
+            {% for cycle in view.cycles %}
+              <li data-cycle="{{ cycle.id }}">
+                <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                {% if cycle.path %}
+                  {# The walk already closes back on its first member, so the
+                     template adds no return step of its own. #}
+                  <span data-cycle-path>{% for node in cycle.path %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+                {% endif %}
+                {% if cycle.message %}<span data-cycle-message>{{ cycle.message }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if view.external_cycles %}
+          {# Lithos's verdict on a loop that closes through two or more ghosts:
+             Lens never fetches a ghost's edges (D5), so there is no component
+             to draw and no path to name — only the message, and the promise
+             that the task is not silently reported cycle-free. #}
+          <div data-cycle-external>
+            <strong>Through tasks outside this scope</strong>
+            <ul>
+              {% for cycle in view.external_cycles %}
+                <li data-cycle="{{ cycle.id }}">
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-message>{{ cycle.message }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {% for banner in view.banners %}
+      <section class="banner banner-warning" role="status" data-graph-banner="{{ banner.id }}">
+        <span>{{ banner.text }}</span>
+      </section>
+    {% endfor %}
+
+    <section class="panel graph-legend" data-graph-legend>
+      <h2>Legend</h2>
+      <ul>
+        {% for edge_type in view.edge_types %}
+          <li data-legend-edge="{{ edge_type }}">{{ edge_legend.get(edge_type, edge_type ~ " edge") }}</li>
+        {% endfor %}
+        <li data-legend-convention="ghost">A ghost is a task outside this scope, shown once with its project; its own edges are never fetched.</li>
+        <li data-legend-convention="cycle">A cycle is bracketed in its layer; everything below it is marked "blocked via cycle".</li>
+      </ul>
+    </section>
+
+    <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">
+      <h2>Longest blocking chain <small>within this graph</small></h2>
+      {% if view.chain.length %}
+        <p>
+          Longest blocking chain
+          ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
+          <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+        </p>
+      {% else %}
+        <p data-chain-empty>No active blocking chain in this graph.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel" data-graph-layers>
+      <h2>Layers</h2>
+      {% for layer in view.layers %}
+        <h3>Layer {{ layer.index }}</h3>
+        <ol data-graph-layer="{{ layer.index }}">
+          {% for group in layer.groups %}
+            {% if group.bracketed %}
+              <li class="graph-cycle-group" data-cycle-group="{{ group.id }}">
+                <span data-cycle-group-label>cycle</span>
+                <ol>
+                  {% for node in group.members %}{{ node_row(view, node) }}{% endfor %}
+                </ol>
+              </li>
+            {% else %}
+              {% for node in group.members %}{{ node_row(view, node) }}{% endfor %}
+            {% endif %}
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p data-layers-empty>This scope has no tasks with dependency edges.</p>
+      {% endfor %}
+    </section>
+
+    {% if view.isolated %}
+      {# Collapsed on a project graph, open on an epic one: hiding an epic's
+         edge-less children would misrepresent its progress (D8). #}
+      <details class="panel" data-isolated-disclosure {% if params.show_isolated %}open{% endif %}>
+        <summary><span data-isolated-count>{{ view.isolated | length }}</span> isolated tasks</summary>
+        <ol data-isolated-list>
+          {% for node in view.isolated %}{{ node_row(view, node) }}{% endfor %}
+        </ol>
+      </details>
+    {% endif %}
+
+    <section class="panel" data-hierarchy>
+      <h2>Hierarchy</h2>
+      {% if view.hierarchy %}
+        <ul data-hierarchy-tree>
+          {% for row in view.hierarchy %}
+            <li data-hierarchy-node="{{ row.node.id }}" data-depth="{{ row.depth }}" style="margin-left: {{ row.depth }}rem">
+              <a href="{{ task_detail_url(request, row.node.id) }}">{{ row.node.label }}</a>
+              <span class="badge badge-{{ row.node.status }}">{{ row.node.status }}</span>
+              {% if row.node.ghost %}<span data-hierarchy-ghost>ghost</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p data-hierarchy-empty>No parent/child edges in this scope.</p>
+      {% endif %}
+    </section>
+
+    {# A4 draws from exactly this: same nodes, same layers, same chain. #}
+    <script type="application/json" data-graph-payload>{{ view.payload_json | safe }}</script>
+  {% endif %}
+{% endblock %}

@@ -16,6 +16,7 @@
       </div>
       <nav aria-label="Primary">
         <a class="{{ 'active' if active_view == 'tasks' else '' }}"{% if active_view == 'tasks' %} aria-current="page"{% endif %} href="/tasks">Tasks</a>
+        <a class="{{ 'active' if active_view == 'graph' else '' }}"{% if active_view == 'graph' %} aria-current="page"{% endif %} href="/tasks/graph">Graph</a>
         <a class="{{ 'active' if active_view == 'knowledge' else '' }}"{% if active_view == 'knowledge' %} aria-current="page"{% endif %} href="/knowledge">Knowledge</a>
         <a aria-disabled="true" href="#">Settings</a>
         <form class="nav-search" method="get" action="/knowledge" role="search">
