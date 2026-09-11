@@ -90,7 +90,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `CycleSignal` — What Lithos said about cycles in this scope, and where it went quiet.
 - class `CycleSignalClient` — The one client method this module needs.
 - def `coverage_projects` — Every project the page must read, sorted (D4).
-- def `load_cycle_signal` — Read ``lithos_task_blocked`` once per project in the coverage set.
+- def `load_cycle_signal` — Run one ``lithos_task_blocked`` read PLAN per project in the coverage set.
 
 ### `lithos_lens.graph_fanout`
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.

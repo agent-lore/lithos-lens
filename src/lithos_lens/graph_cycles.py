@@ -174,7 +174,14 @@ async def load_cycle_signal(
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
     fetch_concurrency: int = 16,
 ) -> CycleSignal:
-    """Read ``lithos_task_blocked`` once per project in the coverage set."""
+    """Run one ``lithos_task_blocked`` read PLAN per project in the coverage set.
+
+    A plan is a pair of calls under the default ``"both"`` posture — one
+    ``project=`` (metadata) and one ``tags=`` (tag convention) — and a single
+    call under a single-convention posture, so the fan-out is two calls per
+    covered project by default, not one. ``_read_kinds`` decides which, and the
+    call log a test asserts on is exactly this plan.
+    """
     projects = coverage_projects(scope, convention=convention, tag_key=tag_key)
     limiter = asyncio.Semaphore(max(fetch_concurrency, 1))
     plan = [(project, by) for project in projects for by in _read_kinds(convention)]
