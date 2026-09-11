@@ -21,10 +21,14 @@ coverage set is the point of this module:
   unscoped read to cover it: that read is global, capped and corpus-size
   dependent, so the coverage claim would stop meaning anything.
 
-Everything here degrades towards *unknown*, never towards *no cycle*: a
-truncated read, a failed read and a read that was never made all leave their
-tasks unknown, because the alternative — absence from a response Lens knows to
-be partial — reads on the page as "this task is fine".
+Everything here degrades towards *unknown*, never towards *no cycle* — but the
+degradation is per TASK, not per project or per response. A task any response
+RETURNED is answered for, even by a response that went on to truncate. A task
+no response returned is cycle-free only if some read that could actually have
+matched it answered in full; a truncated read, a failed read and a read that
+was never made establish nothing about the tasks they did not name, because
+absence from a response Lens knows to be partial reads on the page as "this
+task is fine".
 """
 
 from __future__ import annotations
@@ -66,7 +70,13 @@ class ProjectRead:
 
     @property
     def ok(self) -> bool:
-        """Answered in full: the only outcome that can cover a task."""
+        """Answered in full — the only outcome that can establish ABSENCE.
+
+        Rows a response DID return are answers whatever this says: a task named
+        by a truncated response is still one Lithos reported on. This flag is
+        about what the response's silence means, which is nothing unless the
+        read was complete (and matched the task — see ``_signal``).
+        """
         return not self.error and not self.truncated
 
 

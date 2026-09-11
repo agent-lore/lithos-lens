@@ -164,9 +164,10 @@ class GraphFakeClient:
         self._edge_failures = edge_failures or set()
         self._get_failures = get_failures or set()
         # Keyed by the READ, not by the project: "loom" fails the metadata
-        # half and "project:loom" the tag half, so a test can break exactly
-        # one side of a pair — which is the only way to tell "both halves must
-        # be complete" apart from "either half is enough".
+        # half and "project:loom" the tag half, so a test can break exactly one
+        # side of a pair — which is the only way to exercise the rule that
+        # coverage belongs to the read that could actually match a task,
+        # rather than to its project.
         self._blocked_failures = blocked_failures or set()
         self._blocked_rows = blocked_rows or {}
         self._list_failures = list_failures or set()
@@ -592,16 +593,18 @@ def test_one_truncated_half_of_a_pair_still_leaves_an_absent_task_unknown(
     lithos_lens_config_env: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """§5B.7 unions the pair, so coverage needs BOTH halves complete.
+    """Silence from a truncated read establishes nothing — per TASK.
 
-    A task claimed by tag only is absent from the ``project=`` response for a
-    reason that has nothing to do with blocking, so a complete metadata read
-    says nothing about what the truncated tag read did not return.
+    The tag half truncates and the metadata half answers in full. A task
+    claimed by TAG only is absent from the metadata response for a reason that
+    has nothing to do with blocking, so that complete read cannot cover it and
+    it stays unknown; a task claimed by METADATA is covered by the very same
+    read, and is not dragged into unknown by the other half's truncation.
     """
     limit = 2
     monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", str(limit))
     filler = [task(f"blocked-{index}") for index in range(limit)]
-    tasks = [task("absent"), *filler]
+    tasks = [task("absent"), metadata_task("meta-absent", project=PROJECT), *filler]
     fake = GraphFakeClient(
         dataset(tasks),
         blocked_rows={
@@ -617,14 +620,18 @@ def test_one_truncated_half_of_a_pair_still_leaves_an_absent_task_unknown(
 
     assert 'data-graph-banner="cycle-truncated"' in html
     assert "cycle-unknown" in markers(html, "absent")
+    # The complete metadata read DOES cover the task that claims its project
+    # that way: coverage is per read and per convention, not per project.
+    assert "cycle-unknown" not in markers(html, "meta-absent")
 
 
-def test_one_failed_half_of_a_pair_leaves_the_project_s_tasks_unknown(
+def test_one_failed_half_of_a_pair_leaves_the_tasks_it_could_have_matched_unknown(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Same rule, the other failure mode: half a pair is not coverage."""
+    """Same rule, the other failure mode — and the same per-task boundary."""
     fake = GraphFakeClient(
-        dataset([task("a")]), blocked_failures={f"project:{PROJECT}"}
+        dataset([task("a"), metadata_task("meta", project=PROJECT)]),
+        blocked_failures={f"project:{PROJECT}"},
     )
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
@@ -634,7 +641,10 @@ def test_one_failed_half_of_a_pair_leaves_the_project_s_tasks_unknown(
         ("tags", f"project:{PROJECT}", LIMIT),
     ]
     assert 'data-graph-banner="cycle-unavailable"' in html
+    # The tag read failed, so the tag-only task is unknown …
     assert "cycle-unknown" in markers(html, "a")
+    # … while the metadata read answered in full and covers its own.
+    assert "cycle-unknown" not in markers(html, "meta")
 
 
 def test_a_cycle_blocker_from_either_half_of_the_pair_is_kept(
@@ -1327,9 +1337,12 @@ def test_the_legend_explains_exactly_the_visible_edge_types_in_words(
             "project; its own edges are never fetched.",
         ),
         (
+            # The two renderings a cycle can get, distinguished: only a cycle
+            # the fetched edges actually show draws a bracketed group.
             "cycle",
-            "A cycle is bracketed in its layer; everything below it is marked "
-            '"blocked via cycle".',
+            "A cycle these edges show is bracketed in its layer, and everything "
+            'below it is marked "blocked via cycle"; one Lithos reports that '
+            "they do not show is named in the callout above instead.",
         ),
     ]
 

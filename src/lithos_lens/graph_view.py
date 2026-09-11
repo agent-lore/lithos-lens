@@ -150,9 +150,10 @@ class LayerGroup:
 
         A Lithos-flagged member with no component in the fetched topology is
         condensed alone so it still gets a layer (D4) — but there is nothing to
-        bracket: its loop closes through ghosts this scope never fetched, so
-        the callout's "through tasks outside this scope" is where it belongs
-        and a group here would draw a cycle of one.
+        bracket: these edges show no loop, whatever the reason, and a group
+        here would draw a cycle of one. Such a cycle is named in the callout
+        instead, under whichever heading its blocker's endpoint supports
+        (``graph_page._callout``).
         """
         return self.cycle is not None and self.cycle.scc
 
@@ -232,9 +233,12 @@ class GraphPageView:
     #: Flagged cycles whose loop demonstrably leaves the scope (every partner
     #: Lithos names is outside the in-scope task set).
     external_cycles: tuple[CycleView, ...] = ()
-    #: Flagged cycles inside the scope that Lens has no edges for — a stale
-    #: edge-empty cache entry, or a failed edge read. Neither drawable nor
-    #: provably external, and said so rather than filed under the wrong one.
+    #: Flagged cycles the fetched edges do not show and that nothing proves to
+    #: leave the scope: the blocker names an in-scope predecessor, or names
+    #: none. Neither drawable nor provably external — and the category asserts
+    #: nothing further, because one named predecessor says nothing about the
+    #: rest of the path and a stale edge-empty cache entry is indistinguishable
+    #: here from an unread one.
     unshaped_cycles: tuple[CycleView, ...] = ()
     chain: ChainView = field(default_factory=ChainView)
     banners: tuple[Banner, ...] = ()

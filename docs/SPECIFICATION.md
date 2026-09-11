@@ -622,13 +622,15 @@ where the loop runs or why the shape is missing — the blocker names one
 immediate predecessor, so an in-scope one leaves the rest of the path unknown,
 and a stale edge-empty cache entry is indistinguishable here from a failed edge
 read. A truncated read, a failed read and a task no scoped read can reach (no
-project under either convention) each produce a banner and a `cycle status
-unknown` marker — never an implied "no cycle". Each partial-read banner states
-what that read was rather than which rows were marked (any per-task rule there
-is false for some combination of outcomes), and one further banner states the
-rule with its real count: *N tasks are marked cycle status unknown — no
-response returned them, and no complete read that could have matched them was
-made*.
+project under either convention) each produce a **banner**; which ROWS are then
+marked `cycle status unknown` follows the per-task rule above, not the banner —
+a task a truncated response returned keeps its verdict, and a task another
+complete applicable read covered stays known. Each partial-read banner
+therefore states what that read was rather than which rows were marked (any
+per-task rule there is false for some combination of outcomes), and one further
+banner states the rule with its real count: *N tasks are marked cycle status
+unknown — no response returned them, and no complete read that could have
+matched them was made*. Never an implied "no cycle".
 
 **Every partial claim is labelled.** A node whose edge read failed renders in
 the layering with `edges unknown` and is never folded into the isolated

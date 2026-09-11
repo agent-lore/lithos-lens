@@ -246,7 +246,7 @@
           <li data-legend-edge="{{ edge_type }}">{{ edge_legend.get(edge_type, edge_type ~ " edge") }}</li>
         {% endfor %}
         <li data-legend-convention="ghost">A ghost is a task outside this scope, shown once with its project; its own edges are never fetched.</li>
-        <li data-legend-convention="cycle">A cycle is bracketed in its layer; everything below it is marked "blocked via cycle".</li>
+        <li data-legend-convention="cycle">A cycle these edges show is bracketed in its layer, and everything below it is marked "blocked via cycle"; one Lithos reports that they do not show is named in the callout above instead.</li>
       </ul>
     </section>
 
