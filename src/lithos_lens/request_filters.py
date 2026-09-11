@@ -261,13 +261,17 @@ def task_detail_url(request: Request, task_id: str) -> str:
     route, so the two agree on what a task link looks like.
 
     Encoding is not enough for an id that COLLIDES with a page under
-    ``/tasks/`` (``graph``): ASGI decodes before routing, so ``/tasks/graph``
-    is the graph page whatever the link meant. ``task_detail_path`` sends
-    those few ids through the ``/tasks/id/<id>`` alias instead.
+    ``/tasks/`` (``graph``), or that no single segment can carry at all
+    (``a/b``): ASGI decodes before routing, so both reach some other route with
+    the wrong ``task_id``. ``task_detail_path`` sends those through the query
+    alias, which is why the preserved filters are APPENDED here rather than
+    assumed to be the first parameters.
     """
     params = _preserved_filter_params(request)
-    suffix = f"?{urlencode(params)}" if params else ""
-    return f"{task_detail_path(task_id)}{suffix}"
+    path = task_detail_path(task_id)
+    if not params:
+        return path
+    return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 
 def blocker_expand_url(request: Request, task_id: str, chain: Sequence[str]) -> str:

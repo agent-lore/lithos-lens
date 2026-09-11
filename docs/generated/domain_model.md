@@ -166,6 +166,7 @@ classDiagram
   class CacheTally {
     +hits int
     +misses int
+    +ghost_reads int
   }
   class ChainView {
     +exact bool
@@ -190,6 +191,7 @@ classDiagram
   class CycleSignal {
     +coverage tuple[str, ...]
     +flagged Mapping[str, str]
+    +cycle_partners Mapping[str, tuple[str, ...]]
     +unknown frozenset[str]
     +projectless tuple[str, ...]
   }
@@ -445,6 +447,7 @@ classDiagram
   GraphPageView "1" --> "1" ChainView : chain
   GraphPageView "1" --> "0..*" CycleView : cycles
   GraphPageView "1" --> "0..*" CycleView : external_cycles
+  GraphPageView "1" --> "0..*" CycleView : unshaped_cycles
   GraphPageView "1" --> "0..*" EdgeView : incoming
   GraphPageView "1" --> "1" GraphPageParams : params
   GraphPageView "1" --> "0..*" HierarchyRowView : hierarchy

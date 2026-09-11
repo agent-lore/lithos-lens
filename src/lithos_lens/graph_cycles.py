@@ -85,6 +85,11 @@ class CycleSignal:
     reads: tuple[ProjectRead, ...] = ()
     blocked: tuple[BlockedTaskRecord, ...] = ()
     flagged: Mapping[str, str] = field(default_factory=dict)
+    #: task id -> the tasks Lithos's ``kind="cycle"`` blockers NAME as its
+    #: partners. The page needs the endpoint, not just the message: a cycle
+    #: Lens cannot shape is only "outside this scope" when the partner is, and
+    #: a stale edge cache makes the missing shape prove nothing on its own.
+    cycle_partners: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     unknown: frozenset[str] = frozenset()
     projectless: tuple[str, ...] = ()
 
@@ -229,14 +234,21 @@ def _signal(
         BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id]))
         for task_id, task in rows.items()
     )
-    flagged = {
-        record.task.id: next(
-            blocker.message
-            for blocker in record.blockers
-            if blocker.kind == CYCLE_BLOCKER_KIND
+    cycle_blockers = {
+        record.task.id: tuple(
+            blocker for blocker in record.blockers if blocker.kind == CYCLE_BLOCKER_KIND
         )
         for record in blocked
-        if any(blocker.kind == CYCLE_BLOCKER_KIND for blocker in record.blockers)
+    }
+    flagged = {
+        task_id: blockers[0].message
+        for task_id, blockers in cycle_blockers.items()
+        if blockers
+    }
+    partners = {
+        task_id: tuple(blocker.task_id for blocker in blockers if blocker.task_id)
+        for task_id, blockers in cycle_blockers.items()
+        if blockers
     }
 
     unknown: set[str] = set()
@@ -258,6 +270,7 @@ def _signal(
         reads=tuple(reads),
         blocked=blocked,
         flagged=flagged,
+        cycle_partners=partners,
         unknown=frozenset(unknown),
         projectless=tuple(projectless),
     )

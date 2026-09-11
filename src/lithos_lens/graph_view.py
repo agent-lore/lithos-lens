@@ -220,7 +220,13 @@ class GraphPageView:
     isolated: tuple[NodeView, ...] = ()
     hierarchy: tuple[HierarchyRowView, ...] = ()
     cycles: tuple[CycleView, ...] = ()
+    #: Flagged cycles whose loop demonstrably leaves the scope (every partner
+    #: Lithos names is outside the in-scope task set).
     external_cycles: tuple[CycleView, ...] = ()
+    #: Flagged cycles inside the scope that Lens has no edges for — a stale
+    #: edge-empty cache entry, or a failed edge read. Neither drawable nor
+    #: provably external, and said so rather than filed under the wrong one.
+    unshaped_cycles: tuple[CycleView, ...] = ()
     chain: ChainView = field(default_factory=ChainView)
     banners: tuple[Banner, ...] = ()
     edge_types: tuple[str, ...] = ()
@@ -250,7 +256,7 @@ class GraphPageView:
 
     @property
     def cycle_count(self) -> int:
-        return len(self.cycles) + len(self.external_cycles)
+        return len(self.cycles) + len(self.external_cycles) + len(self.unshaped_cycles)
 
     @property
     def fanout(self) -> int:

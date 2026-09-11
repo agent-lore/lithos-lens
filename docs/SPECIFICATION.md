@@ -66,13 +66,20 @@ The current application exposes these routes:
   Renders the task dashboard and accepts filter query parameters.
 - `GET /tasks/events`
   Browser-facing Server-Sent Events endpoint for live task updates.
-- `GET /tasks/{task_id}` (and `GET /tasks/id/{task_id}`)
-  Renders a task detail page. The alias exists because task ids are arbitrary
-  non-empty strings, so one can collide with a static page under `/tasks/`
-  (`tasks.RESERVED_TASK_PATH_SEGMENTS`): Starlette matches the static route
-  first, and without the alias a task called `graph` would have no reachable
-  detail page while every link to it silently opened the graph. `task_detail_path`
-  is the one place that decides which of the two a link uses.
+- `GET /tasks/{task_id}` (and `GET /tasks/id?task_id=<id>`)
+  Renders a task detail page. The alias carries the ids no path can address,
+  — the ids that collide with a static page under `/tasks/`
+  (`tasks.RESERVED_TASK_PATH_SEGMENTS`: `graph`, `events`, and the alias's own
+  `id`). Starlette matches the static route first, so without it a task called
+  `graph` would have no reachable detail page while every link to it silently
+  opened the graph. The alias is a single static segment carrying the id in the
+  QUERY, deliberately: ASGI percent-decodes before routing, so a
+  `/tasks/id/<id>` form would itself be matched by an id like `id/graph` and
+  serve the wrong task at HTTP 200. Slash-bearing and dot-segment ids keep the
+  documented path and stay unroutable (Lithos b1a65c6d, closed won't-fix —
+  every id Lens can be handed is a server-generated UUID).
+  `tasks.task_detail_path` is the one place that decides, shared by the board,
+  the graph page and the knowledge produced-by chip.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -560,7 +567,9 @@ canonicalises; `overlays=hierarchy,provenance` is carried for the client layer.
 A scope over `graph.max_tasks` (ghosts counted), or one whose out-of-set
 endpoints would cost more classification reads than one render may spend, is
 **refused** with a "narrow your scope" panel naming the count — never rendered
-degraded.
+degraded. Three of the four refusals happen after the edge fan-out, and each
+still reports what discovering it cost (below), because a guard whose telemetry
+claims a hundred reads were free cannot be tuned.
 
 **What the page states, in this order:** the cycle callout and any
 cycle-signal banner; the legend (one plain-language line per edge type
@@ -594,12 +603,20 @@ tag only is absent from the `project=` response for reasons unrelated to
 blocking.
 Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
 with Lithos's own message whatever Tarjan found; a cycle Lens can see is
-bracketed in its layer and its dependents marked *blocked via cycle*, while one
-that closes through two or more ghosts is listed in the callout under "through
-tasks outside this scope" and draws no group. A truncated read, a failed read
-and a task no scoped read can reach (no project under either convention) each
-produce a banner and a `cycle status unknown` marker — never an implied "no
-cycle".
+bracketed in its layer and its dependents marked *blocked via cycle*. A flagged
+cycle with no fetched component is split on the blocker's own endpoint rather
+than on the absence of shape: when every partner Lithos names is outside the
+in-scope task set the callout says "through tasks outside this scope" (D4's
+bounded promise), and otherwise it says *shape unavailable* — the loop is
+inside the scope and Lens simply has no edges for it (a stale edge-empty cache
+entry an unnotified upsert overtook, or a failed edge read), which is not
+evidence about where the cycle runs. A truncated read, a failed read and a task
+no scoped read can reach (no project under either convention) each produce a
+banner and a `cycle status unknown` marker — never an implied "no cycle". The
+banners state the rule that actually applies (a task absent from a partial
+response is unknown *unless a complete read covered it*) plus the count of
+tasks left unknown, because coverage is per task and a project-wide claim would
+contradict the markers beside it.
 
 **Every partial claim is labelled.** A node whose edge read failed renders in
 the layering with `edges unknown` and is never folded into the isolated
@@ -628,7 +645,9 @@ outcome, node / edge / ghost / cycle / isolated counts, chain length and
 exactness, whether the cycle signal was incomplete, and this render's own cache
 hits, misses, ghost reads and fan-out (counted per request through a tally
 passed down the call, never as a delta of the process-wide cache counters,
-which a concurrent render also moves). Two counters accompany it:
+which a concurrent render also moves; ghost reads are counted where the call is
+ISSUED, so a classification phase stopped by its deadline reports what it
+actually spent). A refusal carries the same counts plus its reason. Two counters accompany it:
 `lens_tasks_graph_renders_total` (`scope`, `outcome`) and
 `lens_tasks_graph_cycle_reads_total` (`outcome`). The scope KEY is a span
 attribute only: one Prometheus series per project is the cardinality failure

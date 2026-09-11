@@ -39,7 +39,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).
 
 ### `lithos_lens.tasks`
-- def `task_detail_path` — The path that addresses ``task_id``'s detail page, unambiguously.
+- def `task_detail_path` — The URL that addresses ``task_id``'s detail page, unambiguously.
 - class `SectionState`
 - class `TaskRecord`
 - class `ClaimRecord`

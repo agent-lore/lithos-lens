@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,7 +45,12 @@ from lithos_lens.lithos_client import (
     LithosToolError,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
-from lithos_lens.tasks import ClaimRecord, TaskRecord, TaskStatusName
+from lithos_lens.tasks import (
+    ClaimRecord,
+    TaskRecord,
+    TaskStatusName,
+    task_detail_path,
+)
 from lithos_lens.web import create_app
 from tests.conftest import metric_value
 
@@ -340,15 +346,29 @@ def section_order(html: str) -> list[str]:
     """The page's own section markers, in the order they are rendered (D3)."""
     markers = (
         ("callout", "data-cycle-callout"),
+        ("banner", "data-graph-banner"),
         ("legend", "data-graph-legend"),
         ("chain", "data-longest-chain"),
         ("layers", "data-graph-layers"),
         ("isolated", "data-isolated-disclosure"),
-        ("hierarchy", "data-hierarchy-tree"),
+        # The SECTION, not its tree: D3 renders it whatever the scope holds,
+        # and a graph with no `parent_child` edge still owes its empty state.
+        ("hierarchy", "data-hierarchy"),
         ("payload", "data-graph-payload"),
     )
     found = [(html.index(hook), name) for name, hook in markers if hook in html]
     return [name for _, name in sorted(found)]
+
+
+def chain_line(html: str) -> str:
+    """The rendered chain sentence, tags removed and whitespace collapsed.
+
+    Tags are dropped rather than replaced with a space: the sentence D3
+    specifies is "Longest blocking chain (5): A → B", and a helper that spaced
+    out every inline ``<span>`` would let "( 5 )" pass for it.
+    """
+    paragraph = only_group(r"data-longest-chain[^>]*>.*?(<p>.*?</p>)", html)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", paragraph)).strip()
 
 
 def rendered_layers(html: str) -> dict[str, int]:
@@ -415,6 +435,20 @@ def test_a_cycle_names_its_members_in_order_with_one_representative_path(
     # The whole reason cycle members are condensed rather than dropped: the
     # work below a cycle keeps a layer, and is marked unreachable.
     assert "blocked-via-cycle" in markers(html, "downstream")
+    # Lithos's verdict travels with the row even when LENS can draw the shape
+    # (D4): the message is Lithos's, and a page that dropped it for the cases
+    # it can draw would be keeping it only where it has nothing else to say.
+    assert "in-cycle" in markers(html, "cyc-a")
+    assert "in-cycle" in markers(html, "cyc-b")
+    # The message itself, read out of the row's own element rather than out of
+    # the marker's tooltip — a page that kept only the tooltip would show it
+    # to a mouse and to nobody else.
+    for member, message in (
+        ("cyc-a", "Dependency cycle: cyc-a -> cyc-b."),
+        ("cyc-b", "Dependency cycle: cyc-b -> cyc-a."),
+    ):
+        row = node_block(html, member)
+        assert only_group(r"data-cycle-message>(.*?)</span>", row).strip() == message
 
 
 def test_a_cross_scope_cycle_is_listed_as_external_and_draws_no_group(
@@ -448,6 +482,35 @@ def test_a_cross_scope_cycle_is_listed_as_external_and_draws_no_group(
     assert "Dependency cycle: a -> ghost-b -> ghost-c -> a." in external.group(1)
     # No SCC in the fetched topology, so no bracketed group is drawn for it.
     assert 'data-cycle-group="a"' not in html
+    assert "in-cycle" in markers(html, "a")
+
+
+def test_a_flagged_cycle_with_an_in_scope_partner_is_shape_unavailable(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Missing SHAPE is not evidence of a cycle leaving the scope (D4).
+
+    Reachable: two in-scope tasks with warm edge-empty cache entries, then an
+    edge upsert — which emits no invalidating event — creates their cycle. The
+    fresh blocked row names an IN-SCOPE partner while the stale edge cache has
+    no component, so "through tasks outside this scope" would be a claim about
+    where the loop runs that nothing supports.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [task("a"), task("b")],
+            blocked={"a": cycle_blocker("b", "Dependency cycle: a -> b -> a.")},
+        )
+    )
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    unavailable = only_group(r"data-cycle-shape-unavailable>(.*?)</div>", html)
+
+    assert "Shape unavailable" in html
+    assert 'data-cycle="a"' in unavailable
+    assert "Dependency cycle: a -> b -> a." in unavailable
+    assert "Through tasks outside this scope" not in html
+    # Still Lithos's verdict on the row itself, whatever Lens could draw.
     assert "in-cycle" in markers(html, "a")
 
 
@@ -591,6 +654,55 @@ def test_a_cycle_blocker_from_either_half_of_the_pair_is_kept(
     assert "data-cycle-external" in html
 
 
+def test_a_partial_read_banner_claims_only_the_tasks_it_actually_left_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Coverage is per task, so the banner may not talk about whole projects.
+
+    The metadata half answers in full and names A; the tag half fails. A is
+    therefore KNOWN — and a banner saying "their tasks are marked cycle status
+    unknown" would contradict the markers rendered beside it.
+    """
+    rows = [task("a")]
+    fake = GraphFakeClient(
+        dataset(rows),
+        blocked_rows={
+            PROJECT: [
+                BlockedTaskRecord(
+                    task=rows[0], blockers=cycle_blocker("elsewhere", "Cycle: a.")
+                )
+            ]
+        },
+        blocked_failures={f"project:{PROJECT}"},
+    )
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    banner = only_group(r'data-graph-banner="cycle-unavailable">(.*?)</section>', html)
+
+    assert "the blocked read failed for loom" in banner
+    assert "A task no complete read covered is marked" in banner
+    # Nothing was actually left unknown, so no count banner and no marker.
+    assert 'data-graph-banner="cycle-unknown-count"' not in html
+    assert "cycle-unknown" not in markers(html, "a")
+    assert "in-cycle" in markers(html, "a")
+
+
+def test_the_tasks_a_partial_read_did_leave_unknown_are_counted(
+    lithos_lens_config_env: Path,
+) -> None:
+    """And when it DOES leave tasks unknown, the page states how many."""
+    fake = GraphFakeClient(
+        dataset([task("a"), task("b")]),
+        blocked_failures={PROJECT, f"project:{PROJECT}"},
+    )
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert "2 tasks on this page have an unknown cycle status" in html
+    assert markers(html, "a") >= {"cycle-unknown"}
+    assert markers(html, "b") >= {"cycle-unknown"}
+
+
 def test_an_epic_reads_every_project_its_children_span(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -674,6 +786,64 @@ def test_the_tag_side_read_uses_the_configured_project_tag_key(
     ]
 
 
+def test_a_metadata_only_scope_includes_its_tasks_and_reads_its_pair(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5B.1 has TWO live conventions and the graph must honour both.
+
+    Every other scoped fixture here claims its project through the
+    ``project:<slug>`` tag, so a membership rule or a coverage set that read
+    only tags would pass them all. This one carries `metadata.project` and
+    nothing else, on the in-scope task AND on a downstream ghost.
+    """
+    rows = [
+        metadata_task("a", project="meta-loom"),
+        metadata_task("ghost", project="meta-other"),
+    ]
+    fake = GraphFakeClient(dataset(rows, [("a", "ghost", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=meta-loom")
+
+    assert 'data-graph-node="a"' in html
+    assert 'data-ghost-project="meta-other"' in html
+    assert blocked_log(fake) == [
+        ("project", "meta-loom", LIMIT),
+        ("project", "meta-other", LIMIT),
+        ("tags", "project:meta-loom", LIMIT),
+        ("tags", "project:meta-other", LIMIT),
+    ]
+
+
+def test_a_task_whose_two_conventions_disagree_is_read_under_both(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5B.1: the slugs are a UNION, so BOTH projects get a read pair.
+
+    Reading only one would leave the task's cycle status resting on a project
+    it may not even be blocked in, while the other project's graph shows it.
+    """
+    rows = [
+        task("anchor"),
+        metadata_task("split", project="meta-side", extra_tags=("project:tag-side",)),
+    ]
+    fake = GraphFakeClient(dataset(rows, [("anchor", "split", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    # The split task is a downstream ghost of the anchor: both its slugs are in
+    # the coverage set, and neither is dropped for the other.
+    assert 'data-ghost-project="meta-side"' in html
+    assert 'data-ghost-project="tag-side"' in html
+    assert blocked_log(fake) == [
+        ("project", PROJECT, LIMIT),
+        ("project", "meta-side", LIMIT),
+        ("project", "tag-side", LIMIT),
+        ("tags", f"project:{PROJECT}", LIMIT),
+        ("tags", "project:meta-side", LIMIT),
+        ("tags", "project:tag-side", LIMIT),
+    ]
+
+
 def test_a_downstream_ghost_s_project_joins_the_coverage_set(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -725,6 +895,7 @@ def test_the_chain_line_names_the_depth_five_chain(
     )
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
 
     assert 'data-chain-bound="exact"' in html
     chain = re.search(r"data-chain-nodes>(.*?)</span>", html, re.DOTALL)
@@ -740,6 +911,11 @@ def test_the_chain_line_names_the_depth_five_chain(
         "→",
         "Five",
     ]
+    # The literal line D3 asks for, numerals and all — and the label that keeps
+    # it a claim about THIS graph rather than a corpus-wide critical path.
+    assert "Longest blocking chain within this graph" in text
+    assert "Longest blocking chain ( 5 ): One → Two → Three → Four → Five" in text, text
+    assert "≥" not in text
 
 
 def test_an_unreadable_edge_read_lowers_the_chain_and_marks_that_node(
@@ -764,8 +940,11 @@ def test_an_unreadable_edge_read_lowers_the_chain_and_marks_that_node(
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
 
     assert 'data-chain-bound="lower_bound"' in html
-    assert "≥" in html
-    assert "1 tasks' edges unreadable" in html
+    assert chain_line(html) == (
+        "Longest blocking chain (≥ 5, incomplete: 1 tasks' edges unreadable): "
+        "One → Two → Three → Four → Five"
+    )
+    assert "within this graph" in re.sub(r"<[^>]+>", " ", html)
     assert "edges-unknown" in markers(html, "three")
     assert 'data-graph-banner="edges-incomplete"' in html
     # In the layering, NOT folded into the disclosure: "no edges" is a claim
@@ -898,19 +1077,44 @@ def test_the_isolated_disclosure_is_collapsed_on_a_project_and_open_on_an_epic(
     assert only_group(r"data-isolated-count>(\d+)<", epic_html) == "3"
 
 
-def test_the_legend_lists_exactly_the_visible_edge_types(
+def test_the_legend_explains_exactly_the_visible_edge_types_in_words(
     lithos_lens_config_env: Path,
 ) -> None:
-    tasks = [task("epic", task_type="epic"), task("a"), task("b")]
+    """A legend hook with no sentence in it is not a legend (D3/D8).
+
+    Direction is what the text baseline cannot show, so each visible type gets
+    the plain-language line that says which way the arrow runs — and a type
+    this graph does not contain gets no line at all.
+    """
+    tasks = [task("epic", task_type="epic"), task("gate", task_type="gate"), task("a")]
     fake = GraphFakeClient(
-        dataset(tasks, [("a", "b", "blocks"), ("epic", "a", "parent_child")])
+        dataset(
+            tasks,
+            [
+                ("gate", "a", "waits_on_gate"),
+                ("epic", "a", "parent_child"),
+                ("epic", "gate", "discovered_from"),
+            ],
+        )
     )
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    lines = dict(re.findall(r'data-legend-edge="([^"]+)">(.*?)</li>', html, re.DOTALL))
+    conventions = dict(
+        re.findall(r'data-legend-convention="([^"]+)">(.*?)</li>', html, re.DOTALL)
+    )
 
-    assert re.findall(r'data-legend-edge="([^"]+)"', html) == ["blocks", "parent_child"]
-    assert 'data-legend-convention="ghost"' in html
-    assert 'data-legend-convention="cycle"' in html
+    assert list(lines) == ["waits_on_gate", "parent_child", "discovered_from"]
+    assert "blocks" not in lines, "a type this graph has no edge of"
+    assert lines["waits_on_gate"].strip() == "A ⇢ B means B waits on gate A."
+    assert (
+        lines["parent_child"].strip()
+        == "A ▸ B means A is B's parent (hierarchy, never satisfied)."
+    )
+    assert lines["discovered_from"].strip() == "A ⋯ B means B was discovered from A."
+    assert set(conventions) == {"ghost", "cycle"}
+    assert "outside this scope" in conventions["ghost"]
+    assert "blocked via cycle" in conventions["cycle"]
 
 
 def test_the_payload_node_set_and_layers_match_the_text(
@@ -941,6 +1145,93 @@ def test_the_payload_node_set_and_layers_match_the_text(
     # isolation.
     assert data["isolated"] == ["epic", "lonely"]
     assert data["as_of"]
+
+
+def test_the_payload_carries_D3_s_whole_schema(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A4 renders from these fields alone, and the scope/layout suites test the
+    objects BEFORE serialisation — so without this a field can be renamed,
+    dropped or filled wrong while every other test stays green.
+
+    One fixture with every branch in it: an SCC cycle, a downstream ghost whose
+    `task_get` failed (an `unknown` edge and a `status_unknown` node), a node
+    whose edge read failed (`edges_unknown`, and the chain's lower bound), a
+    satisfied edge, and a hierarchy edge.
+    """
+    rows = [
+        task("epic", task_type="epic"),
+        task("cyc-a"),
+        task("cyc-b"),
+        task("broken"),
+        task("open-task"),
+        task("done", status="completed"),
+        task("ghost", project="other", status="completed"),
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [
+                ("cyc-a", "cyc-b", "blocks"),
+                ("cyc-b", "cyc-a", "blocks"),
+                ("cyc-b", "ghost", "blocks"),
+                ("done", "open-task", "blocks"),
+                ("epic", "open-task", "parent_child"),
+            ],
+        ),
+        edge_failures={"broken"},
+        get_failures={"ghost"},
+    )
+
+    html = get(
+        lithos_lens_config_env,
+        fake,
+        f"/tasks/graph?project={PROJECT}&include_resolved=1",
+    )
+    data = payload(html)
+
+    assert set(data) == {
+        "scope",
+        "nodes",
+        "edges",
+        "layers",
+        "cycles",
+        "ghosts",
+        "longest_chain",
+        "roots",
+        "isolated",
+        "incomplete",
+        "as_of",
+    }
+    completeness = {node["id"]: node["completeness"] for node in data["nodes"]}
+    assert completeness["broken"] == "edges_unknown"
+    assert completeness["ghost"] == "status_unknown"
+    assert completeness["cyc-a"] == "ok"
+    assert data["ghosts"] == ["ghost"]
+    assert data["incomplete"] == {"broken": "internal_error"}
+    # Every dependency edge with its state, and a reason on the inactive one.
+    states = {
+        (edge["from"], edge["to"]): (edge["type"], edge["state"], edge["reason"])
+        for edge in data["edges"]
+    }
+    assert states[("cyc-a", "cyc-b")] == ("blocks", "active", "")
+    assert states[("done", "open-task")] == ("blocks", "inactive", "satisfied")
+    assert states[("cyc-b", "ghost")] == ("blocks", "unknown", "")
+    assert states[("epic", "open-task")] == ("parent_child", "", "")
+    # The cycle Lens can draw, with the members and the walk the text names.
+    assert [cycle["id"] for cycle in data["cycles"]] == ["cyc-a"]
+    assert data["cycles"][0]["members"] == ["cyc-a", "cyc-b"]
+    assert data["cycles"][0]["scc"] is True
+    assert data["cycles"][0]["path"][0] == "cyc-a"
+    # The chain, its bound, and the roots the canvas lays out from.
+    assert data["longest_chain"]["bound"] == "lower_bound"
+    assert data["longest_chain"]["length"] == len(data["longest_chain"]["nodes"])
+    assert "cyc-a" in data["roots"]
+    assert set(data["roots"]) <= {node["id"] for node in data["nodes"]}
+    # And it still agrees with the text about where every node is rendered.
+    assert {node["id"]: node["layer"] for node in data["nodes"]} == rendered_layers(
+        html
+    )
 
 
 # ── The route's own shape: picker and refusal ───────────────────────────
@@ -1190,17 +1481,74 @@ def test_a_task_whose_id_collides_with_the_graph_route_stays_reachable(
     page — and without the alias every link to that task would silently open
     the graph instead of its detail page, which is worse than a 404.
     """
-    fake = GraphFakeClient(dataset([task("graph"), task("other")]))
+    rows = [task("graph", title="Task named graph"), task("other")]
+    fake = GraphFakeClient(dataset(rows))
 
     with client_for(lithos_lens_config_env, fake) as client:
         graph_page = client.get(f"/tasks/graph?project={PROJECT}")
-        detail = client.get("/tasks/id/graph")
+        detail = client.get("/tasks/id?task_id=graph")
 
     assert "data-graph-layers" in graph_page.text
-    assert 'data-node-detail href="/tasks/id/graph' in unescape(graph_page.text)
+    assert 'data-node-detail href="/tasks/id?task_id=graph' in unescape(graph_page.text)
     assert detail.status_code == 200
-    assert "Task detail" in detail.text
-    assert "Graph" in detail.text
+    assert "Task named graph" in detail.text
+
+
+@pytest.mark.parametrize(
+    ("task_id", "expected"),
+    [
+        # A page word under /tasks/ …
+        ("graph", "/tasks/id?task_id=graph"),
+        # … and the alias route's own segment, which needs the alias too.
+        ("id", "/tasks/id?task_id=id"),
+        # Ordinary ids keep the documented path, reserved characters encoded.
+        ("plain", "/tasks/plain"),
+        ("task?42#x", "/tasks/task%3F42%23x"),
+    ],
+)
+def test_a_detail_link_addresses_the_task_it_names(
+    lithos_lens_config_env: Path, task_id: str, expected: str
+) -> None:
+    """One rule for every surface, and it must reach the task it NAMES."""
+    assert task_detail_path(task_id) == expected
+
+    rows = [
+        replace(task("placeholder"), id=task_id, title=f"Task {task_id}"),
+        task("graph", title="Task named graph"),
+    ]
+    fake = GraphFakeClient(dataset(rows))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(expected)
+
+    assert response.status_code == 200
+    assert f"Task {task_id}" in unescape(response.text)
+
+
+def test_an_id_shaped_like_the_alias_is_never_served_as_a_DIFFERENT_task(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The alias must not become a second way to misroute.
+
+    A path-shaped alias (``/tasks/id/<id>``) would be MATCHED by an id like
+    ``id/graph``: ASGI decodes ``%2F`` into a separator before routing, so the
+    link would serve the task called ``graph`` at HTTP 200 — a silently wrong
+    entity. The alias is therefore a single static segment carrying the id in
+    the query, and a slash-bearing id keeps the documented path, where it stays
+    unroutable exactly as `tests/test_blocker_chain.py` records (Lithos
+    b1a65c6d, closed won't-fix): this change does not overturn that decision as
+    a side effect of fixing the page-word collision.
+    """
+    task_id = "id/graph"
+    assert task_detail_path(task_id) == f"/tasks/{quote(task_id, safe='')}"
+
+    fake = GraphFakeClient(dataset([task("graph", title="Task named graph")]))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(task_detail_path(task_id))
+
+    assert response.status_code == 404
+    assert "Task named graph" not in response.text
 
 
 # ── D3's order, and the row anatomy it promises ─────────────────────────
@@ -1209,13 +1557,20 @@ def test_a_task_whose_id_collides_with_the_graph_route_stays_reachable(
 def test_the_page_renders_D3_s_sections_in_order(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The order IS the requirement: a cycle that makes work unreachable is
-    read before the layers that work sits in, and the payload comes last."""
+    """The order IS the requirement: a cycle that makes work unreachable — and
+    any banner saying the cycle signal is partial — is read before the layers
+    that work sits in, and the payload comes last.
+
+    The fixture produces every section at once: an SCC callout, a cycle-signal
+    banner (a downstream ghost in a second project whose reads fail), isolates,
+    and a hierarchy.
+    """
     rows = [
         task("epic", task_type="epic"),
         task("cyc-a"),
         task("cyc-b"),
         task("lonely"),
+        task("ghost", project="other"),
     ]
     fake = GraphFakeClient(
         dataset(
@@ -1223,16 +1578,20 @@ def test_the_page_renders_D3_s_sections_in_order(
             [
                 ("cyc-a", "cyc-b", "blocks"),
                 ("cyc-b", "cyc-a", "blocks"),
+                ("cyc-b", "ghost", "blocks"),
                 ("epic", "cyc-a", "parent_child"),
             ],
             blocked={"cyc-a": cycle_blocker("cyc-b", "Dependency cycle.")},
-        )
+        ),
+        blocked_failures={"other", "project:other"},
     )
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
 
+    assert 'data-graph-banner="cycle-unavailable"' in html, "no banner to order"
     assert section_order(html) == [
         "callout",
+        "banner",
         "legend",
         "chain",
         "layers",
@@ -1240,8 +1599,29 @@ def test_the_page_renders_D3_s_sections_in_order(
         "hierarchy",
         "payload",
     ]
-    # The cycle-signal banner belongs with the callout, above the legend.
-    assert html.index("data-cycle-callout") < html.index("data-graph-legend")
+
+
+def test_the_hierarchy_section_is_rendered_even_with_no_parent_child_edges(
+    lithos_lens_config_env: Path,
+) -> None:
+    """ "Always rendered" is the requirement, so the empty case is the test."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    empty = get(lithos_lens_config_env, fake, "/tasks/graph?project=nothing-here")
+
+    # No hierarchy edges: a forest of roots, every node still listed.
+    assert "data-hierarchy" in html
+    assert re.findall(r'data-hierarchy-node="([^"]+)"', html) == ["a", "b"]
+    assert set(re.findall(r'data-hierarchy-node="[^"]+" data-depth="(\d+)"', html)) == {
+        "0"
+    }
+    # And with nothing in the scope at all, the section states that rather
+    # than disappearing.
+    assert "data-hierarchy" in empty
+    assert "data-hierarchy-empty" in empty
+    assert "No parent/child edges in this scope." in empty
+    assert section_order(empty)[-2:] == ["hierarchy", "payload"]
 
 
 def test_every_rendered_row_carries_its_status_and_type(
@@ -1581,6 +1961,39 @@ def test_a_refusal_records_its_reason_and_count(
         ).value
         == 1
     )
+
+
+def test_a_refusal_after_the_fan_out_reports_what_it_spent(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three of the four refusals happen AFTER the edge reads.
+
+    Reporting zero there would tell the operator that a page which spent a
+    hundred reads was free — backwards for the guard whose own telemetry is
+    the evidence for tuning it, and for the ledger-gap-#3 fan-out figure.
+    """
+    monkeypatch.setattr(graph_scope, "MAX_GHOST_RESOLUTION_READS", 0)
+    fake = GraphFakeClient(
+        dataset(
+            [task("a"), task("ghost", project="other", status="completed")],
+            [("ghost", "a", "blocks")],
+        )
+    )
+
+    get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    attributes = dict(graph_span(spans).attributes or {})
+    assert attributes["lens.graph.outcome"] == "refused"
+    assert attributes["lens.graph.refusal_reason"] == "classification"
+    # One in-scope node was read cold before the refusal was even decidable.
+    assert fake.edge_calls == ["a"]
+    assert attributes["lens.graph.cache_misses"] == 1
+    assert attributes["lens.graph.fanout"] == 1
+    # And the ghost read the budget refused was never issued.
+    assert attributes["lens.graph.ghost_reads"] == 0
+    assert fake.get_calls == []
 
 
 def test_the_picker_and_an_offline_page_carry_their_own_outcomes(

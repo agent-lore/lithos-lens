@@ -123,6 +123,11 @@ class CacheTally:
 
     hits: int = 0
     misses: int = 0
+    #: ``task_get``s actually ISSUED while classifying far endpoints. Counted
+    #: as each call is made rather than from the candidate list, so a phase
+    #: that timed out reports what it really spent instead of zero (nothing
+    #: ran) or the whole queue (everything did).
+    ghost_reads: int = 0
 
 
 #: Injectable WALL clock: it stamps ``fetched_at``, which is what the page

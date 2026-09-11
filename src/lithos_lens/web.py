@@ -63,6 +63,8 @@ from lithos_lens.task_detail import load_task_detail
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
+    TASK_DETAIL_ALIAS_KEY,
+    TASK_DETAIL_ALIAS_PATH,
     default_since,
     format_display_date,
     format_tag,
@@ -338,13 +340,18 @@ def create_app(
     # id "graph".
     register_graph_routes(app, state, templates)
 
-    # Two paths, one handler. The alias carries the few ids that collide with
-    # a page under `/tasks/` (`tasks.RESERVED_TASK_PATH_SEGMENTS`): a task may
-    # legitimately be called "graph", and the static route above would
-    # otherwise make its detail page unreachable — links to it would open the
-    # graph instead of 404ing, which is worse than either. The two never
-    # overlap: this one takes a second path segment.
-    @app.get("/tasks/id/{task_id}", response_class=HTMLResponse)
+    # The id-in-the-query alias (`tasks.task_detail_path`), for the ids no path
+    # can address: a page word like "graph" that the static route above claims,
+    # and anything holding a "/" or a dot segment, which ASGI decodes back into
+    # separators and routes somewhere else entirely. The path here is FIXED, so
+    # the value cannot become part of the route. Registered before the dynamic
+    # route would match "/tasks/id", and a bare visit with no parameter is the
+    # detail page of a task whose id really is "id".
+    @app.get(TASK_DETAIL_ALIAS_PATH, response_class=HTMLResponse)
+    async def task_detail_by_id(request: Request) -> HTMLResponse:
+        requested = request.query_params.get(TASK_DETAIL_ALIAS_KEY)
+        return await task_detail(request, requested if requested else "id")
+
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
         if filter_query_oversized(request):

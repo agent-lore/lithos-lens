@@ -20,10 +20,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
-| `lithos_lens.graph_cycles` | S | 3 | 2 |
+| `lithos_lens.graph_cycles` | M | 3 | 2 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
 | `lithos_lens.graph_layout` | L | 6 | 4 |
-| `lithos_lens.graph_page` | M | 1 | 6 |
+| `lithos_lens.graph_page` | L | 1 | 6 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
 | `lithos_lens.graph_view` | S | 10 | 0 |
 | `lithos_lens.task_detail` | M | 3 | 2 |

@@ -470,8 +470,17 @@ async def assemble_scope(
     """
     limits = limits or GraphScopeLimits()
     scope_tasks = _ordered(tasks)
+    # THIS render's reads, counted separately from the cache's cumulative
+    # totals: the cache is process-wide, so a delta taken around this call
+    # would fold a concurrent page's fan-out into this one's.
+    tally = CacheTally()
 
     def refused(count: int, reason: str) -> TaskGraphScope:
+        # A refusal still reports what discovering it COST. Three of the four
+        # refusals below happen after the edge fan-out, and returning zero
+        # there would tell the operator a page that spent a hundred reads was
+        # free — exactly backwards for the guard whose own telemetry is the
+        # evidence for tuning it.
         return TaskGraphScope(
             kind=kind,
             key=key,
@@ -479,6 +488,9 @@ async def assemble_scope(
             refusal=ScopeRefusal(
                 count=count, max_tasks=limits.max_tasks, reason=reason
             ),
+            cache_hits=tally.hits,
+            cache_misses=tally.misses,
+            ghost_reads=tally.ghost_reads,
         )
 
     if len(scope_tasks) > limits.max_tasks:
@@ -488,10 +500,6 @@ async def assemble_scope(
 
     limiter = asyncio.Semaphore(limits.fetch_concurrency)
     in_scope = {task.id: task for task in scope_tasks}
-    # THIS render's reads, counted separately from the cache's cumulative
-    # totals: the cache is process-wide, so a delta taken around this call
-    # would fold a concurrent page's fan-out into this one's.
-    tally = CacheTally()
     entries, incomplete = await read_edges(lithos, scope_tasks, cache, limiter, tally)
     edges = _dedupe_scope_edges(entries)
 
@@ -503,7 +511,7 @@ async def assemble_scope(
         return refused(len(pending), REFUSAL_CLASSIFICATION)
     try:
         unresolved = await asyncio.wait_for(
-            resolve_far_endpoints(lithos, pending, far_tasks, limiter),
+            resolve_far_endpoints(lithos, pending, far_tasks, limiter, tally),
             GHOST_RESOLUTION_BUDGET_S,
         )
     except TimeoutError:
@@ -530,7 +538,7 @@ async def assemble_scope(
         as_of=min((entry.fetched_at for entry in entries), default=None),
         cache_hits=tally.hits,
         cache_misses=tally.misses,
-        ghost_reads=len(pending),
+        ghost_reads=tally.ghost_reads,
     )
 
 

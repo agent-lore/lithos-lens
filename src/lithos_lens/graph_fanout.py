@@ -140,6 +140,7 @@ async def resolve_far_endpoints(
     pending: Sequence[str],
     resolved: dict[str, TaskRecord],
     limiter: asyncio.Semaphore,
+    tally: CacheTally | None = None,
 ) -> set[str]:
     """Read every pending candidate, filling ``resolved`` and returning failures.
 
@@ -160,6 +161,11 @@ async def resolve_far_endpoints(
 
     async def read(task_id: str) -> TaskRecord:
         async with graph_fanout_gate(), limiter:
+            # Counted where the call is MADE, not where it was queued: this
+            # phase can be cancelled by its deadline, and the caller reports
+            # what the render actually spent.
+            if tally is not None:
+                tally.ghost_reads += 1
             return await asyncio.wait_for(lithos.task_get(task_id), LINK_READ_TIMEOUT_S)
 
     results = await asyncio.gather(

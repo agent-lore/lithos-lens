@@ -176,9 +176,9 @@
       </section>
     {% endif %}
 
-    {% if view.cycles or view.external_cycles %}
+    {% if view.cycle_count %}
       <section class="banner banner-warning" role="alert" data-cycle-callout>
-        <strong>{{ view.cycles | length + view.external_cycles | length }} dependency cycle{{ "s" if view.cycle_count != 1 }}</strong>
+        <strong>{{ view.cycle_count }} dependency cycle{{ "s" if view.cycle_count != 1 }}</strong>
         {% if view.cycles %}
           <ul data-cycle-list>
             {% for cycle in view.cycles %}
@@ -198,11 +198,30 @@
           {# Lithos's verdict on a loop that closes through two or more ghosts:
              Lens never fetches a ghost's edges (D5), so there is no component
              to draw and no path to name — only the message, and the promise
-             that the task is not silently reported cycle-free. #}
+             that the task is not silently reported cycle-free. Every partner
+             Lithos names is outside this scope, which is what makes the
+             heading a fact rather than an inference from missing shape. #}
           <div data-cycle-external>
             <strong>Through tasks outside this scope</strong>
             <ul>
               {% for cycle in view.external_cycles %}
+                <li data-cycle="{{ cycle.id }}">
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-message>{{ cycle.message }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+        {% if view.unshaped_cycles %}
+          {# Inside this scope, and Lens has no edges for it: a stale edge-empty
+             cache entry an unnotified edge upsert overtook, or an edge read
+             that failed. Filing it under "outside this scope" would be a claim
+             about where the cycle runs that nothing here supports. #}
+          <div data-cycle-shape-unavailable>
+            <strong>Shape unavailable — Lens could not read these cycles' edges</strong>
+            <ul>
+              {% for cycle in view.unshaped_cycles %}
                 <li data-cycle="{{ cycle.id }}">
                   <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
                   <span data-cycle-message>{{ cycle.message }}</span>

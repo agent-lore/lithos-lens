@@ -191,7 +191,7 @@ def build_graph_page(
         scope, topology, signal, params=params, tag_key=tag_key, folded=folded
     )
     layers = _layers(topology, views, folded)
-    cycles, external = _callout(topology, views)
+    cycles, external, unshaped = _callout(topology, views, signal, scope)
     return GraphPageView(
         params=params,
         nodes=tuple(views.values()),
@@ -201,6 +201,7 @@ def build_graph_page(
         hierarchy=_hierarchy(scope, views),
         cycles=cycles,
         external_cycles=external,
+        unshaped_cycles=unshaped,
         chain=_chain_view(chain, views, scope),
         banners=_banners(scope, signal),
         edge_types=_edge_types(scope),
@@ -381,18 +382,32 @@ def _incoming(
 
 
 def _callout(
-    topology: Topology, views: Mapping[str, NodeView]
-) -> tuple[tuple[CycleView, ...], tuple[CycleView, ...]]:
-    """The callout, split by what Lens can actually draw (D4).
+    topology: Topology,
+    views: Mapping[str, NodeView],
+    signal: CycleSignal,
+    scope: TaskGraphScope,
+) -> tuple[tuple[CycleView, ...], tuple[CycleView, ...], tuple[CycleView, ...]]:
+    """The callout, split three ways by what Lens can actually SHOW (D4).
 
     A cycle with a fetched component gets its members and one representative
-    path. One Lithos flagged but Tarjan cannot see closes through two or more
-    ghosts, so there is no path to draw and Lithos's own message is all there
-    is — it goes under "through tasks outside this scope" rather than being
-    dropped or drawn as a group it is not.
+    path. For one Lithos flagged that Tarjan cannot see, the missing component
+    is not itself evidence of anything — so the split is made on the blocker's
+    own endpoint rather than on the absence of shape:
+
+    - every task Lithos names as the cycle partner is outside the in-scope task
+      set (a ghost, or nothing this page fetched) — the loop demonstrably
+      leaves the scope, which is D4's bounded promise and the honest
+      "through tasks outside this scope";
+    - a partner IS an in-scope task, or none is named — then the loop is inside
+      the scope and Lens simply has no edges for it (a stale edge-empty cache
+      entry an unnotified edge upsert overtook, or a failed edge read). Saying
+      "outside this scope" there is a claim about where the cycle runs that
+      nothing supports, so it renders as *shape unavailable* instead.
     """
+    in_scope = {node.id for node in scope.nodes if not node.ghost}
     drawn: list[CycleView] = []
     external: list[CycleView] = []
+    unshaped: list[CycleView] = []
     for cycle in topology.cycles:
         view = CycleView(
             id=cycle.id,
@@ -401,8 +416,19 @@ def _callout(
             scc=cycle.scc,
             message=cycle.message,
         )
-        (drawn if cycle.scc else external).append(view)
-    return tuple(drawn), tuple(external)
+        if cycle.scc:
+            drawn.append(view)
+            continue
+        partners = tuple(
+            partner
+            for member in cycle.members
+            for partner in signal.cycle_partners.get(member, ())
+        )
+        outside = bool(partners) and not any(
+            partner in in_scope for partner in partners
+        )
+        (external if outside else unshaped).append(view)
+    return tuple(drawn), tuple(external), tuple(unshaped)
 
 
 def _hierarchy(
@@ -451,14 +477,20 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 ),
             )
         )
+    # What a partial read actually cost this page: the tasks it left unknown.
+    # NOT "the tasks of that project" — coverage is per task (a task the other
+    # half of the pair returned, or another complete project covers, is known),
+    # so a banner claiming otherwise would contradict the markers beside it.
+    partial = sorted(set(signal.unknown) - set(signal.projectless))
     if signal.truncated_projects:
         banners.append(
             Banner(
                 id="cycle-truncated",
                 text=(
                     "Cycle signal incomplete: the blocked read truncated for "
-                    f"{_join(signal.truncated_projects)}. Tasks absent from that "
-                    "response are marked cycle status unknown, not cycle-free."
+                    f"{_join(signal.truncated_projects)}. A task it did not "
+                    "return is marked cycle status unknown unless a complete "
+                    "read covered it — never cycle-free."
                 ),
             )
         )
@@ -468,8 +500,18 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 id="cycle-unavailable",
                 text=(
                     "Cycle signal unavailable: the blocked read failed for "
-                    f"{_join(signal.failed_projects)}. Their tasks are marked "
-                    "cycle status unknown."
+                    f"{_join(signal.failed_projects)}. A task no complete read "
+                    "covered is marked cycle status unknown."
+                ),
+            )
+        )
+    if partial:
+        banners.append(
+            Banner(
+                id="cycle-unknown-count",
+                text=(
+                    f"{len(partial)} tasks on this page have an unknown cycle "
+                    "status because the reads above did not cover them."
                 ),
             )
         )
