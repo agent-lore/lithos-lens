@@ -380,6 +380,22 @@ _READY_UNCLAIMED_SCOPE_CASES = [
         None,
         id="a-prefix-that-is-not-configured-does-not-match",
     ),
+    pytest.param(
+        # Two tags match, and they are in the OPPOSITE order to the prefixes.
+        # The fact must name the task's first matching TAG, not the first
+        # configured PREFIX: the chip explains this task, so it should quote
+        # what the task carries rather than what the config happens to list
+        # first. Every other case here has exactly one matching tag, so
+        # iterating prefixes outer instead would pass all of them and silently
+        # change this.
+        ("dispatch:robot-day", _TRIGGER),
+        (),
+        {"hours": 3},
+        ("trigger:", "dispatch:"),
+        "attention",
+        'On the ready frontier with "dispatch:robot-day", unclaimed for 3h.',
+        id="the-fact-names-the-first-matching-tag-not-the-first-prefix",
+    ),
 ]
 
 
