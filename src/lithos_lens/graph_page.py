@@ -295,6 +295,7 @@ def _node_views(
             claims=_claims(node),
             isolated=node.id in isolated,
             cycle_id=cycle_of.get(node.id, ""),
+            flagged=node.id in signal.flagged,
             cycle_message=signal.flagged.get(node.id, ""),
             # Ghosts carry no cycle marker: no scoped read claims to cover the
             # blockers of a task this page only sees the edge of.
@@ -392,17 +393,20 @@ def _callout(
     A cycle with a fetched component gets its members and one representative
     path. For one Lithos flagged that Tarjan cannot see, the missing component
     is not itself evidence of anything — so the split is made on the blocker's
-    own endpoint rather than on the absence of shape:
+    own endpoint rather than on the absence of shape, and only ONE of the two
+    answers is a claim:
 
     - every task Lithos names as the cycle partner is outside the in-scope task
       set (a ghost, or nothing this page fetched) — the loop demonstrably
       leaves the scope, which is D4's bounded promise and the honest
       "through tasks outside this scope";
-    - a partner IS an in-scope task, or none is named — then the loop is inside
-      the scope and Lens simply has no edges for it (a stale edge-empty cache
-      entry an unnotified edge upsert overtook, or a failed edge read). Saying
-      "outside this scope" there is a claim about where the cycle runs that
-      nothing supports, so it renders as *shape unavailable* instead.
+    - otherwise — a named partner is in scope, or none is named — Lens says
+      only that it has no shape for this cycle. It does NOT say the loop is
+      inside the scope: the blocker names one immediate predecessor, and
+      ``A(in) -> X(ghost) -> Y(ghost) -> B(in) -> A`` has an in-scope
+      predecessor while most of its path lies outside. Nor does it say why the
+      shape is missing — a stale edge-empty cache entry an unnotified upsert
+      overtook and a failed edge read look identical from here.
     """
     in_scope = {node.id for node in scope.nodes if not node.ghost}
     drawn: list[CycleView] = []
@@ -477,10 +481,12 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 ),
             )
         )
-    # What a partial read actually cost this page: the tasks it left unknown.
-    # NOT "the tasks of that project" — coverage is per task (a task the other
-    # half of the pair returned, or another complete project covers, is known),
-    # so a banner claiming otherwise would contradict the markers beside it.
+    # Each partial read states what IT is, and nothing about which rows ended
+    # up marked: coverage is per task and per read (a task another read
+    # returned, or that a complete read which could match it did not return,
+    # is known), so any per-task rule in these two sentences would be false for
+    # some combination of outcomes. The rule is stated once, with its real
+    # count, in the banner below them.
     partial = sorted(set(signal.unknown) - set(signal.projectless))
     if signal.truncated_projects:
         banners.append(
@@ -488,9 +494,8 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 id="cycle-truncated",
                 text=(
                     "Cycle signal incomplete: the blocked read truncated for "
-                    f"{_join(signal.truncated_projects)}. A task it did not "
-                    "return is marked cycle status unknown unless a complete "
-                    "read covered it — never cycle-free."
+                    f"{_join(signal.truncated_projects)}. A truncated response "
+                    "is not evidence that a task is cycle-free."
                 ),
             )
         )
@@ -500,8 +505,8 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 id="cycle-unavailable",
                 text=(
                     "Cycle signal unavailable: the blocked read failed for "
-                    f"{_join(signal.failed_projects)}. A task no complete read "
-                    "covered is marked cycle status unknown."
+                    f"{_join(signal.failed_projects)}. A failed read is not "
+                    "evidence that a task is cycle-free."
                 ),
             )
         )
@@ -510,8 +515,9 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
             Banner(
                 id="cycle-unknown-count",
                 text=(
-                    f"{len(partial)} tasks on this page have an unknown cycle "
-                    "status because the reads above did not cover them."
+                    f"{len(partial)} tasks on this page are marked cycle status "
+                    "unknown: no response returned them, and no complete read "
+                    "that could have matched them was made."
                 ),
             )
         )
@@ -573,6 +579,10 @@ def _payload_json(
                 "projects": list(node.projects),
                 "completeness": node.completeness,
                 "cycle": node.cycle_id,
+                # Shape and verdict are separate fields because they are
+                # separate facts (D4): the canvas groups on ``cycle`` and marks
+                # on ``flagged``.
+                "flagged": node.flagged,
                 "cycle_unknown": node.cycle_unknown,
                 "blocked_via_cycle": node.blocked_via_cycle,
                 "isolated": node.isolated,
@@ -662,9 +672,29 @@ def parse_graph_params(query: Mapping[str, str]) -> GraphPageParams:
 
 
 def _flag(raw: str | None, default: bool) -> bool:
-    if raw is None or not raw.strip():
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    """Parse a documented ``1|0`` toggle, keeping the DEFAULT when it is neither.
+
+    The two toggles default by scope kind and in opposite directions (D6/D8),
+    so "anything I do not recognise is false" is the one reading that must not
+    be used: ``include_resolved=2`` on an epic would silently hide its closed
+    children, and ``isolated=garbage`` would silently collapse a disclosure
+    that is open by default. A malformed value is not a request for the
+    opposite behaviour — it carries no request at all — so the scope's own
+    default stands.
+    """
+    value = (raw or "").strip().lower()
+    if value in _TRUE_FLAGS:
+        return True
+    if value in _FALSE_FLAGS:
+        return False
+    return default
+
+
+#: The spellings a `1|0` toggle accepts. Both sets are explicit so a value in
+#: neither can be told apart from a valid false — which is what lets the
+#: default survive a malformed URL.
+_TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
+_FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
 
 
 def _split(raw: str | None) -> tuple[str, ...]:

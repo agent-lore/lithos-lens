@@ -586,8 +586,10 @@ Each node row carries its status, type, claims and, for a ghost, its project
 chip with links to the ghost's detail page and to its own project's graph. Its
 incoming dependency edges are listed under it, because the text has no arrows
 to read direction from: an `inactive` edge is faded and labelled with its
-reason (`satisfied` / `dependent resolved`) and an `unknown` one says the
-predecessor's status could not be read.
+reason (`satisfied` / `dependent resolved`), and an `unknown` one names the
+endpoint whose status could not be read — the predecessor, or the dependent
+itself when it is the unresolved downstream ghost (both causes are D6's, and
+the line states the one it has rather than always blaming the predecessor).
 
 **Cycle authority is Lithos's** (§5.7). The page reads `lithos_task_blocked`
 **scoped**, one read pair per project in the coverage set — every §5B.1
@@ -596,27 +598,37 @@ project among the in-scope tasks AND the downstream ghosts — where a pair is
 each at `tasks.frontier_limit`, with `len == limit` treated as truncation. The
 pair is unioned **per task**: the two calls are independent reads rather than
 one snapshot, so a task's blockers are merged across every response that names
-it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict), and
-a task is cycle-status *known* when it appears in any response — or when some
-project it belongs to was read in full, both halves, since a task claimed by
-tag only is absent from the `project=` response for reasons unrelated to
-blocking.
+it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict). A
+task is cycle-status *known* when it appears in any response, or when some read
+that **could have matched it** answered in full — and that is a question about
+the convention each read expresses (§5B.1): `project=<slug>` is the metadata
+convention, `tags=["<key>:<slug>"]` the tag one. An empty response from a
+filter the task cannot match is not coverage, which is what a single-convention
+posture makes load-bearing: under `"metadata"` only the `project=` half is
+issued, so a child carrying only `project:<slug>` is covered by nothing and is
+marked unknown rather than silently reported cycle-free.
 Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
-with Lithos's own message whatever Tarjan found; a cycle Lens can see is
-bracketed in its layer and its dependents marked *blocked via cycle*. A flagged
-cycle with no fetched component is split on the blocker's own endpoint rather
-than on the absence of shape: when every partner Lithos names is outside the
-in-scope task set the callout says "through tasks outside this scope" (D4's
-bounded promise), and otherwise it says *shape unavailable* — the loop is
-inside the scope and Lens simply has no edges for it (a stale edge-empty cache
-entry an unnotified upsert overtook, or a failed edge read), which is not
-evidence about where the cycle runs. A truncated read, a failed read and a task
-no scoped read can reach (no project under either convention) each produce a
-banner and a `cycle status unknown` marker — never an implied "no cycle". The
-banners state the rule that actually applies (a task absent from a partial
-response is unknown *unless a complete read covered it*) plus the count of
-tasks left unknown, because coverage is per task and a project-wide claim would
-contradict the markers beside it.
+with Lithos's own message whatever Tarjan found — and **only** such a task: the
+row's marker reads the verdict, never the condensation, so an SCC Lens can draw
+while every blocked read failed renders its group and its `cycle status
+unknown` markers without a row ever claiming membership Lithos did not report.
+A cycle Lens can see is bracketed in its layer and its dependents marked
+*blocked via cycle*. A flagged cycle with no fetched component is split on the
+blocker's own endpoint rather than on the absence of shape, and only one of the
+two answers is a claim: when every partner Lithos names is outside the in-scope
+task set the callout says "through tasks outside this scope" (D4's bounded
+promise); otherwise it says *shape unavailable*, which asserts nothing about
+where the loop runs or why the shape is missing — the blocker names one
+immediate predecessor, so an in-scope one leaves the rest of the path unknown,
+and a stale edge-empty cache entry is indistinguishable here from a failed edge
+read. A truncated read, a failed read and a task no scoped read can reach (no
+project under either convention) each produce a banner and a `cycle status
+unknown` marker — never an implied "no cycle". Each partial-read banner states
+what that read was rather than which rows were marked (any per-task rule there
+is false for some combination of outcomes), and one further banner states the
+rule with its real count: *N tasks are marked cycle status unknown — no
+response returned them, and no complete read that could have matched them was
+made*.
 
 **Every partial claim is labelled.** A node whose edge read failed renders in
 the layering with `edges unknown` and is never folded into the isolated

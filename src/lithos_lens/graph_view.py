@@ -71,7 +71,15 @@ class NodeView:
     completeness: str = ""
     claims: tuple[str, ...] = ()
     isolated: bool = False
+    #: The condensation this node is drawn in — Lens's SHAPE, used for the
+    #: bracketed group and the payload. NOT the verdict: see ``flagged``.
     cycle_id: str = ""
+    #: Lithos said this task is in a cycle (a ``kind="cycle"`` blocker). D4
+    #: makes membership Lithos's and the shape Lens's, so the row's marker
+    #: reads THIS and never the condensation: an SCC Lens can see while every
+    #: blocked read failed is a shape with no verdict behind it, and a row
+    #: claiming "in a cycle" beside "cycle status unknown" contradicts itself.
+    flagged: bool = False
     cycle_message: str = ""
     cycle_unknown: bool = False
     blocked_via_cycle: bool = False
@@ -88,7 +96,8 @@ class NodeView:
 
     @property
     def in_cycle(self) -> bool:
-        return bool(self.cycle_id)
+        """Lithos's verdict — the only thing that puts the marker on a row."""
+        return self.flagged
 
 
 @dataclass(frozen=True)

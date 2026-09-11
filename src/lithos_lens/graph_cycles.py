@@ -212,17 +212,28 @@ def _signal(
     floor while the message rendered beside it, so blockers are merged across
     every row that names the task.
 
-    Coverage is per task too. A task PRESENT in any response has been answered
-    about, whatever else that response truncated; a task absent is known to be
-    cycle-free only when some project it belongs to was read in full — both
-    halves of that pair, because a task claimed by TAG only is absent from the
-    ``project=`` response for a reason that has nothing to do with blocking.
+    Coverage is per task too, and per READ rather than per project. A task
+    PRESENT in any response has been answered about, whatever else that
+    response truncated. A task ABSENT from every response is known cycle-free
+    only when some read that COULD have returned it answered in full — which
+    is a question about the convention that read expresses (§5B.1):
+    ``project=<slug>`` is the metadata convention, ``tags=["<key>:<slug>"]``
+    the tag one. An empty response from a filter the task cannot match is not
+    coverage — under a single-convention posture that is the whole hazard,
+    because the other half of the pair is never issued at all.
     """
-    complete_projects = {
-        project
-        for project in projects
-        if all(read.ok for read in reads if read.project == project)
-    }
+
+    def covers(read: ProjectRead, task: TaskRecord) -> bool:
+        """Whether ``read`` would have returned ``task`` had it been blocked."""
+        if not read.ok:
+            return False
+        convention: ProjectConvention = (
+            "metadata" if read.by == READ_BY_PROJECT else "tag"
+        )
+        return read.project in task_projects(
+            task, convention=convention, tag_key=tag_key
+        )
+
     rows: dict[str, TaskRecord] = {}
     blockers: dict[str, list[BlockerRecord]] = {}
     for read in reads:
@@ -256,13 +267,12 @@ def _signal(
     for node in scope.nodes:
         if node.ghost or node.id in rows:
             continue
-        slugs = task_projects(node.task, convention="both", tag_key=tag_key)
-        if not slugs:
+        if not task_projects(node.task, convention="both", tag_key=tag_key):
             # No scoped read can reach it, and Lens does not issue the unscoped
             # one (D4). Unknown, and said so rather than implied.
             projectless.append(node.id)
             unknown.add(node.id)
-        elif not any(slug in complete_projects for slug in slugs):
+        elif not any(covers(read, node.task) for read in reads):
             unknown.add(node.id)
 
     return CycleSignal(

@@ -342,6 +342,7 @@ classDiagram
     +claims tuple[str, ...]
     +isolated bool
     +cycle_id str
+    +flagged bool
     +cycle_message str
     +cycle_unknown bool
     +blocked_via_cycle bool

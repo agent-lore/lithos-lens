@@ -506,10 +506,18 @@ def test_a_flagged_cycle_with_an_in_scope_partner_is_shape_unavailable(
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
     unavailable = only_group(r"data-cycle-shape-unavailable>(.*?)</div>", html)
 
-    assert "Shape unavailable" in html
     assert 'data-cycle="a"' in unavailable
     assert "Dependency cycle: a -> b -> a." in unavailable
     assert "Through tasks outside this scope" not in html
+    # The category is NEUTRAL: the blocker names one immediate predecessor, so
+    # an in-scope one leaves the rest of the path unknown. The page may not
+    # claim the loop is inside the scope either.
+    heading = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", unavailable)).strip()
+    assert heading.startswith(
+        "Shape unavailable — Lithos reports these cycles, and this graph's "
+        "edges do not show them"
+    ), heading
+    assert "inside this scope" not in heading
     # Still Lithos's verdict on the row itself, whatever Lens could draw.
     assert "in-cycle" in markers(html, "a")
 
@@ -571,6 +579,13 @@ def test_a_failed_blocked_read_banners_and_leaves_the_scc_cycle_rendered(
     assert 'data-graph-banner="cycle-unavailable"' in html
     assert 'data-cycle-group="cyc-a"' in html
     assert "cycle-unknown" in markers(html, "cyc-a")
+    # …and the row does NOT claim membership. D4 makes membership Lithos's and
+    # the shape Lens's: with both reads failed there is no verdict, so a row
+    # reading "in a cycle" beside "cycle status unknown" would contradict
+    # itself AND put Lens's own inference where the authority belongs.
+    assert "in-cycle" not in markers(html, "cyc-a")
+    assert "in-cycle" not in markers(html, "cyc-b")
+    assert "data-cycle-message" not in node_block(html, "cyc-a")
 
 
 def test_one_truncated_half_of_a_pair_still_leaves_an_absent_task_unknown(
@@ -680,11 +695,53 @@ def test_a_partial_read_banner_claims_only_the_tasks_it_actually_left_unknown(
     banner = only_group(r'data-graph-banner="cycle-unavailable">(.*?)</section>', html)
 
     assert "the blocked read failed for loom" in banner
-    assert "A task no complete read covered is marked" in banner
+    # The banner states what the READ was, not which rows ended up marked: any
+    # per-task rule here is false for some combination of outcomes.
+    assert "A failed read is not evidence that a task is cycle-free." in banner
+    assert "marked cycle status unknown" not in banner
     # Nothing was actually left unknown, so no count banner and no marker.
     assert 'data-graph-banner="cycle-unknown-count"' not in html
     assert "cycle-unknown" not in markers(html, "a")
     assert "in-cycle" in markers(html, "a")
+
+
+def test_a_truncated_half_that_returned_a_task_does_not_contradict_its_marker(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The combination the per-task banner rules used to get wrong.
+
+    The metadata half TRUNCATES after returning A (so no complete read covered
+    A at all), the tag half fails, and B is absent from both. A is known —
+    Lithos answered about it — while B is not, and the page must say exactly
+    that rather than a rule that contradicts A's own row.
+    """
+    limit = 1
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", str(limit))
+    rows = [task("a"), task("b")]
+    fake = GraphFakeClient(
+        dataset(rows),
+        blocked_rows={
+            PROJECT: [
+                BlockedTaskRecord(
+                    task=rows[0], blockers=cycle_blocker("elsewhere", "Cycle: a.")
+                )
+            ]
+        },
+        blocked_failures={f"project:{PROJECT}"},
+    )
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert 'data-graph-banner="cycle-truncated"' in html
+    assert 'data-graph-banner="cycle-unavailable"' in html
+    assert "in-cycle" in markers(html, "a")
+    assert "cycle-unknown" not in markers(html, "a")
+    assert "cycle-unknown" in markers(html, "b")
+    # One task, and the sentence that names the rule it was marked under.
+    count = only_group(r'data-graph-banner="cycle-unknown-count">(.*?)</section>', html)
+    assert "1 tasks on this page are marked cycle status unknown" in count
+    assert "no complete read that could have matched them was made" in count
 
 
 def test_the_tasks_a_partial_read_did_leave_unknown_are_counted(
@@ -698,7 +755,7 @@ def test_the_tasks_a_partial_read_did_leave_unknown_are_counted(
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
 
-    assert "2 tasks on this page have an unknown cycle status" in html
+    assert "2 tasks on this page are marked cycle status unknown" in html
     assert markers(html, "a") >= {"cycle-unknown"}
     assert markers(html, "b") >= {"cycle-unknown"}
 
@@ -765,6 +822,48 @@ def test_a_projectless_child_is_unknown_with_no_read_attempted_for_it(
     ], "an unscoped or extra blocked read was issued"
     assert "cycle-unknown" in markers(html, "orphan")
     assert 'data-graph-banner="cycle-projectless"' in html
+
+
+@pytest.mark.parametrize(
+    ("posture", "child", "issued"),
+    [
+        # Only ``project=`` is issued, and it expresses the METADATA
+        # convention (§5B.1) — so a child that claims its project by TAG could
+        # never appear in the response, and an empty one is not coverage.
+        ("metadata", "tag", [("project", "other", LIMIT)]),
+        # The mirror image: only the tag read is issued, and a metadata-only
+        # child is invisible to it.
+        ("tag", "metadata", [("tags", "project:other", LIMIT)]),
+    ],
+)
+def test_a_single_convention_posture_never_reads_coverage_it_did_not_get(
+    lithos_lens_config_env: Path, posture: str, child: str, issued: list[Any]
+) -> None:
+    """An empty response from a filter that cannot match the task is not
+    coverage — it is silence, and D4 says silence is `cycle status unknown`."""
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    rows = [
+        task("epic", task_type="epic", project=None),
+        task("child", project="other")
+        if child == "tag"
+        else metadata_task("child", project="other"),
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [("epic", "child", "parent_child")],
+            children={"epic": ("child",)},
+        )
+    )
+
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
+
+    assert blocked_log(fake) == issued
+    assert "cycle-unknown" in markers(html, "child")
+    assert 'data-graph-banner="cycle-unknown-count"' in html
 
 
 def test_the_tag_side_read_uses_the_configured_project_tag_key(
@@ -1077,20 +1176,130 @@ def test_the_isolated_disclosure_is_collapsed_on_a_project_and_open_on_an_epic(
     assert only_group(r"data-isolated-count>(\d+)<", epic_html) == "3"
 
 
+def test_isolated_1_and_0_flip_each_scope_s_default_and_the_toggle_says_so(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The toggle is a URL parameter (D8), so both values must actually work.
+
+    Defaults that cannot be overridden are not defaults, and a toggle link
+    that points at the value already in force is a dead control.
+    """
+    tasks = [task("epic", task_type="epic"), task("lonely-one"), task("lonely-two")]
+    edges = [
+        ("epic", "lonely-one", "parent_child"),
+        ("epic", "lonely-two", "parent_child"),
+    ]
+    fake = GraphFakeClient(
+        dataset(tasks, edges, children={"epic": ("lonely-one", "lonely-two")})
+    )
+
+    opened = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&isolated=1"
+    )
+    collapsed = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic&isolated=0")
+
+    # Project scope defaults collapsed; isolated=1 opens it.
+    assert re.search(r"data-isolated-disclosure\s+open", opened), "isolated=1 ignored"
+    # Epic scope defaults open; isolated=0 collapses it.
+    assert re.search(r"data-isolated-disclosure\s*>", collapsed), "isolated=0 ignored"
+    # And each page's toggle points at the OTHER value, keeping its scope.
+    opened_toggle = only_group(r'data-toggle-isolated href="([^"]+)"', opened)
+    collapsed_toggle = only_group(r'data-toggle-isolated href="([^"]+)"', collapsed)
+    assert f"project={PROJECT}" in opened_toggle and "isolated=0" in opened_toggle
+    assert "epic=epic" in collapsed_toggle and "isolated=1" in collapsed_toggle
+    assert "Hide isolated tasks" in opened
+    assert "Show isolated tasks" in collapsed
+
+
+@pytest.mark.parametrize("value", ["2", "garbage", "-1", "%20"])
+def test_a_malformed_toggle_keeps_the_scope_s_default_rather_than_inverting_it(
+    lithos_lens_config_env: Path, value: str
+) -> None:
+    """A value outside the documented `1|0` domain carries no request.
+
+    The two toggles default by scope kind in OPPOSITE directions, so reading
+    "anything I do not recognise is false" would silently hide an epic's closed
+    children and collapse a disclosure the scope opens by default — behaviour
+    with the opposite meaning to the one D6/D8 specify.
+    """
+    tasks = [
+        task("epic", task_type="epic"),
+        task("done", status="completed"),
+        task("lonely"),
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            tasks,
+            [("epic", "done", "parent_child"), ("epic", "lonely", "parent_child")],
+            children={"epic": ("done", "lonely")},
+        )
+    )
+
+    junk = get(
+        lithos_lens_config_env,
+        fake,
+        f"/tasks/graph?epic=epic&include_resolved={value}&isolated={value}",
+    )
+    explicit = get(
+        lithos_lens_config_env,
+        fake,
+        "/tasks/graph?epic=epic&include_resolved=0&isolated=0",
+    )
+
+    # An epic shows its closed children and opens the disclosure by DEFAULT,
+    # and junk leaves both exactly there …
+    assert 'data-graph-node="done"' in junk, "include_resolved default inverted"
+    assert re.search(r"data-isolated-disclosure\s+open", junk), "isolated inverted"
+    # … while a RECOGNISED false value still takes effect, so this is a parser
+    # that reads its domain rather than one that ignores the parameter.
+    assert 'data-graph-node="done"' not in explicit
+    assert re.search(r"data-isolated-disclosure\s*>", explicit)
+
+
+def legend_lines(html: str) -> list[tuple[str, str]]:
+    """Every legend row as ``(type, sentence)``, in order and NOT deduplicated.
+
+    A dict would hide the failure D8's "one line per visible edge type" is
+    about: two lines for the same type, or a repeated convention, reads as a
+    legend that cannot be trusted to enumerate anything.
+    """
+    return [
+        (edge_type, re.sub(r"\s+", " ", line).strip())
+        for edge_type, line in re.findall(
+            r'data-legend-edge="([^"]+)">(.*?)</li>', html, re.DOTALL
+        )
+    ]
+
+
+def legend_conventions(html: str) -> list[tuple[str, str]]:
+    return [
+        (name, re.sub(r"\s+", " ", line).strip())
+        for name, line in re.findall(
+            r'data-legend-convention="([^"]+)">(.*?)</li>', html, re.DOTALL
+        )
+    ]
+
+
 def test_the_legend_explains_exactly_the_visible_edge_types_in_words(
     lithos_lens_config_env: Path,
 ) -> None:
     """A legend hook with no sentence in it is not a legend (D3/D8).
 
     Direction is what the text baseline cannot show, so each visible type gets
-    the plain-language line that says which way the arrow runs — and a type
-    this graph does not contain gets no line at all.
+    the plain-language line that says which way the arrow runs — once, in
+    legend order, and only for the types this graph actually contains.
     """
-    tasks = [task("epic", task_type="epic"), task("gate", task_type="gate"), task("a")]
+    tasks = [
+        task("epic", task_type="epic"),
+        task("gate", task_type="gate"),
+        task("a"),
+        task("b"),
+    ]
     fake = GraphFakeClient(
         dataset(
             tasks,
             [
+                ("a", "b", "blocks"),
                 ("gate", "a", "waits_on_gate"),
                 ("epic", "a", "parent_child"),
                 ("epic", "gate", "discovered_from"),
@@ -1099,22 +1308,42 @@ def test_the_legend_explains_exactly_the_visible_edge_types_in_words(
     )
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
-    lines = dict(re.findall(r'data-legend-edge="([^"]+)">(.*?)</li>', html, re.DOTALL))
-    conventions = dict(
-        re.findall(r'data-legend-convention="([^"]+)">(.*?)</li>', html, re.DOTALL)
-    )
 
-    assert list(lines) == ["waits_on_gate", "parent_child", "discovered_from"]
-    assert "blocks" not in lines, "a type this graph has no edge of"
-    assert lines["waits_on_gate"].strip() == "A ⇢ B means B waits on gate A."
-    assert (
-        lines["parent_child"].strip()
-        == "A ▸ B means A is B's parent (hierarchy, never satisfied)."
-    )
-    assert lines["discovered_from"].strip() == "A ⋯ B means B was discovered from A."
-    assert set(conventions) == {"ghost", "cycle"}
-    assert "outside this scope" in conventions["ghost"]
-    assert "blocked via cycle" in conventions["cycle"]
+    # All four types at once, so the DEPENDENCY lines — the default view, and
+    # the ones an operator reads direction off — are covered too.
+    assert legend_lines(html) == [
+        ("blocks", "A → B means A blocks B: B cannot start until A is done."),
+        ("waits_on_gate", "A ⇢ B means B waits on gate A."),
+        (
+            "parent_child",
+            "A ▸ B means A is B's parent (hierarchy, never satisfied).",
+        ),
+        ("discovered_from", "A ⋯ B means B was discovered from A."),
+    ]
+    assert legend_conventions(html) == [
+        (
+            "ghost",
+            "A ghost is a task outside this scope, shown once with its "
+            "project; its own edges are never fetched.",
+        ),
+        (
+            "cycle",
+            "A cycle is bracketed in its layer; everything below it is marked "
+            '"blocked via cycle".',
+        ),
+    ]
+
+
+def test_the_legend_omits_the_edge_types_a_graph_does_not_contain(
+    lithos_lens_config_env: Path,
+) -> None:
+    """ "Exactly the visible edge types" — the omission half of the rule."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert [edge_type for edge_type, _ in legend_lines(html)] == ["blocks"]
+    assert [name for name, _ in legend_conventions(html)] == ["ghost", "cycle"]
 
 
 def test_the_payload_node_set_and_layers_match_the_text(
@@ -1203,6 +1432,11 @@ def test_the_payload_carries_D3_s_whole_schema(
         "incomplete",
         "as_of",
     }
+    # Shape and verdict are separate fields because they are separate facts:
+    # the canvas groups on `cycle` and marks on `flagged`.
+    verdicts = {node["id"]: (node["cycle"], node["flagged"]) for node in data["nodes"]}
+    assert verdicts["cyc-a"] == ("cyc-a", False), "no blocked row flagged it"
+    assert verdicts["open-task"] == ("", False)
     completeness = {node["id"]: node["completeness"] for node in data["nodes"]}
     assert completeness["broken"] == "edges_unknown"
     assert completeness["ghost"] == "status_unknown"

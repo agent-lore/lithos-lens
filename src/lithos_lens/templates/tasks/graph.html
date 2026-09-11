@@ -214,12 +214,12 @@
           </div>
         {% endif %}
         {% if view.unshaped_cycles %}
-          {# Inside this scope, and Lens has no edges for it: a stale edge-empty
-             cache entry an unnotified edge upsert overtook, or an edge read
-             that failed. Filing it under "outside this scope" would be a claim
-             about where the cycle runs that nothing here supports. #}
+          {# Deliberately neutral: Lithos reported the cycle, the fetched edges
+             do not show it, and neither where it runs nor why the shape is
+             missing follows from that. Filing it under "outside this scope"
+             would be the claim only an outside-named predecessor supports. #}
           <div data-cycle-shape-unavailable>
-            <strong>Shape unavailable — Lens could not read these cycles' edges</strong>
+            <strong>Shape unavailable — Lithos reports these cycles, and this graph's edges do not show them</strong>
             <ul>
               {% for cycle in view.unshaped_cycles %}
                 <li data-cycle="{{ cycle.id }}">
