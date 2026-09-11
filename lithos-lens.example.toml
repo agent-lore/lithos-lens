@@ -36,6 +36,15 @@ default_status_groups = ["open", "completed", "cancelled"]
 project_convention = "both"   # metadata | tag | both — which project convention ?project= honours
 project_tag_key = "project"   # tag key reserved for the tag convention
 
+[lithos-lens.graph]
+# Task dependency graph pages (REQUIREMENTS §5.7). There is no bulk graph fetch
+# upstream, so a page assembles its edges with one lithos_task_edge_list call
+# per node, shared through a per-task cache.
+cache_ttl_s = 30            # per-task edge cache TTL; task events evict, lens.refresh flushes
+max_tasks = 300             # page-scope size guard, ghosts counted (1-2000); above it the page is refused
+fetch_concurrency = 16      # semaphore over the per-task edge_list fan-out (1-64)
+mini_graph_max_nodes = 40   # detail mini-graph cap, the focal task included
+
 [lithos-lens.knowledge]
 related_title_fanout_cap = 20   # cap on lithos_read title lookups per related panel (1-100)
 search_limit = 20               # /knowledge?q= hybrid-search result cards (1-200)

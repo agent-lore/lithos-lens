@@ -30,6 +30,10 @@ from lithos_lens.config_fields import (
 from lithos_lens.config_schema import (
     DEFAULT_DATA_DIR,
     DEFAULT_ENVIRONMENT,
+    DEFAULT_GRAPH_CACHE_TTL_S,
+    DEFAULT_GRAPH_FETCH_CONCURRENCY,
+    DEFAULT_GRAPH_MAX_TASKS,
+    DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES,
     DEFAULT_GREETING,
     DEFAULT_HEALTH_REFRESH_INTERVAL_S,
     DEFAULT_KNOWLEDGE_RECENT_LIMIT,
@@ -49,10 +53,12 @@ from lithos_lens.config_schema import (
     DEFAULT_TASKS_STALE_OPEN_AGE_DAYS,
     DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES,
     DEFAULT_TASKS_VISIBLE_CAP,
+    MAX_GRAPH_INT_KNOBS,
     MAX_KNOWLEDGE_LANDING_LIMIT,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
     MAX_TASKS_INT_KNOBS,
     EventsConfig,
+    GraphConfig,
     HealthConfig,
     KnowledgeConfig,
     LithosConfig,
@@ -85,6 +91,10 @@ _VISIBLE_CAP_WARNED = False
 __all__ = [
     "DEFAULT_DATA_DIR",
     "DEFAULT_ENVIRONMENT",
+    "DEFAULT_GRAPH_CACHE_TTL_S",
+    "DEFAULT_GRAPH_FETCH_CONCURRENCY",
+    "DEFAULT_GRAPH_MAX_TASKS",
+    "DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES",
     "DEFAULT_GREETING",
     "DEFAULT_HEALTH_REFRESH_INTERVAL_S",
     "DEFAULT_KNOWLEDGE_RECENT_LIMIT",
@@ -104,11 +114,13 @@ __all__ = [
     "DEFAULT_TASKS_STALE_OPEN_AGE_DAYS",
     "DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES",
     "DEFAULT_TASKS_VISIBLE_CAP",
+    "MAX_GRAPH_INT_KNOBS",
     "MAX_KNOWLEDGE_LANDING_LIMIT",
     "MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
     "MAX_TASKS_INT_KNOBS",
     "EventsConfig",
     "ConfigError",
+    "GraphConfig",
     "HealthConfig",
     "KnowledgeConfig",
     "LithosLensConfig",
@@ -219,6 +231,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
     ui = _parse_ui(lithos_lens_section.get("ui", {}), config_path)
     health = _parse_health(lithos_lens_section.get("health", {}), config_path)
     knowledge = _parse_knowledge(lithos_lens_section.get("knowledge", {}), config_path)
+    graph = _parse_graph(lithos_lens_section.get("graph", {}), config_path)
 
     cfg = LithosLensConfig(
         environment=environment,
@@ -233,6 +246,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
         ui=ui,
         health=health,
         knowledge=knowledge,
+        graph=graph,
     )
     return _apply_env_overrides(cfg)
 
@@ -519,6 +533,36 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
     )
 
 
+def _parse_graph(data: Any, config_path: Path) -> GraphConfig:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{config_path}: [lithos-lens.graph] must be a table")
+
+    # Same shape as [tasks]: four positive integers parsed identically, two of
+    # which carry a ceiling (MAX_GRAPH_INT_KNOBS is the list — do not infer it
+    # from the key names) because they size the per-request edge-read fan-out.
+    def positive_int(key: str, default: int) -> int:
+        return optional_int(
+            data,
+            key,
+            default,
+            config_path,
+            "lithos-lens.graph",
+            minimum=1,
+            maximum=MAX_GRAPH_INT_KNOBS.get(key),
+        )
+
+    return GraphConfig(
+        cache_ttl_s=positive_int("cache_ttl_s", DEFAULT_GRAPH_CACHE_TTL_S),
+        max_tasks=positive_int("max_tasks", DEFAULT_GRAPH_MAX_TASKS),
+        fetch_concurrency=positive_int(
+            "fetch_concurrency", DEFAULT_GRAPH_FETCH_CONCURRENCY
+        ),
+        mini_graph_max_nodes=positive_int(
+            "mini_graph_max_nodes", DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES
+        ),
+    )
+
+
 def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     env_override = os.environ.get("LITHOS_LENS_ENVIRONMENT", "")
     data_dir_override = os.environ.get("LITHOS_LENS_DATA_DIR", "")
@@ -540,6 +584,10 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     knowledge_fanout_cap_override = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
     )
+    graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
+    graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
+    graph_concurrency_env = os.environ.get("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
+    graph_mini_nodes_env = os.environ.get("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "")
     llm_enabled_override = os.environ.get("LITHOS_LENS_LLM_ENABLED", "")
     llm_model_override = os.environ.get("LITHOS_LENS_LLM_MODEL", "")
     llm_provider_override = os.environ.get("LITHOS_LENS_LLM_PROVIDER", "")
@@ -603,6 +651,26 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     }
     if tasks_env_overrides:
         new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
+    # The [graph] overrides follow the same shipped convention as [tasks]
+    # (LITHOS_LENS_GRAPH_<FIELD>), collected in one pass and applied in a
+    # single replace(). The literal os.environ.get reads above are what the
+    # docs<->code env guardrail matches on by AST, so each appears verbatim.
+    graph_env_overrides = {
+        field: _parse_env_int(
+            f"LITHOS_LENS_GRAPH_{field.upper()}",
+            raw,
+            maximum=MAX_GRAPH_INT_KNOBS.get(field),
+        )
+        for field, raw in (
+            ("cache_ttl_s", graph_cache_ttl_env),
+            ("max_tasks", graph_max_tasks_env),
+            ("fetch_concurrency", graph_concurrency_env),
+            ("mini_graph_max_nodes", graph_mini_nodes_env),
+        )
+        if raw
+    }
+    if graph_env_overrides:
+        new_cfg = replace(new_cfg, graph=replace(new_cfg.graph, **graph_env_overrides))
     if knowledge_fanout_cap_override:
         new_knowledge = replace(
             new_cfg.knowledge,

@@ -12,6 +12,7 @@ classDiagram
     +lithos LithosConfig
     +status EventStatus
     +last_event_id str
+    +graph_cache GraphCache | None
   }
   class LensEvent {
     +id str
@@ -169,6 +170,11 @@ classDiagram
     +errors tuple[str, ...]
     +epic_scope str
   }
+  class EdgeCacheEntry {
+    +task_id str
+    +fetched_at datetime
+    +expires_at float
+  }
   class EdgeRecord {
     +from_task_id str
     +to_task_id str
@@ -197,6 +203,19 @@ classDiagram
     +next_ready_at str
     +errors tuple[str, ...]
   }
+  class GraphEdge {
+    +state str
+    +reason str
+  }
+  class GraphNode {
+    +ghost bool
+    +ghost_kind str
+    +completeness str
+  }
+  class GraphScopeLimits {
+    +max_tasks int
+    +fetch_concurrency int
+  }
   class LinkPage {
     +total int
   }
@@ -214,6 +233,11 @@ classDiagram
     +shown int
     +total int
   }
+  class ScopeRefusal {
+    +count int
+    +max_tasks int
+    +reason str
+  }
   class TaskDetailClient
   class TaskDetailData {
     +status_state SectionState
@@ -222,6 +246,15 @@ classDiagram
     +children_state SectionState
     +not_found bool
     +errors tuple[str, ...]
+  }
+  class TaskGraphScope {
+    +kind str
+    +key str
+    +include_resolved bool
+    +roots tuple[str, ...]
+    +isolated tuple[str, ...]
+    +incomplete Mapping[str, str]
+    +as_of datetime | None
   }
   class TaskSummary {
     +attention int
@@ -262,11 +295,14 @@ classDiagram
   DashboardData "1" --> "0..*" SectionRow : sections
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
+  EdgeCacheEntry "1" --> "0..*" EdgeRecord : edges
   FindingView "1" --> "1" FindingRecord : finding
   GateGroup "1" --> "0..*" GateRow : rows
   GateRow "1" --> "1" TaskRecord : task
   GateRow "1" --> "0..*" TaskRecord : waiters
   GateSection "1" --> "0..*" GateGroup : groups
+  GraphEdge "1" --> "1" EdgeRecord : edge
+  GraphNode "1" --> "1" TaskRecord : task
   LinkPage "1" --> "0..*" LinkedTask : links
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
@@ -277,6 +313,9 @@ classDiagram
   TaskDetailData "1" --> "0..*" TaskRecord : children
   TaskDetailData "1" --> "0..1" TaskRecord : task
   TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status
+  TaskGraphScope "1" --> "0..*" GraphEdge : edges
+  TaskGraphScope "1" --> "0..*" GraphNode : nodes
+  TaskGraphScope "1" --> "0..1" ScopeRefusal : refusal
 ```
 
 ## Tasks

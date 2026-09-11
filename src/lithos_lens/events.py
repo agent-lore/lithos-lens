@@ -19,6 +19,7 @@ import httpx
 from lithos_lens import metrics
 from lithos_lens.config import EventsConfig, LithosConfig
 from lithos_lens.errors import EventSubscriberLimit, UnsupportedEventEncoding
+from lithos_lens.graph_cache import GraphCache
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,10 @@ class EventHub:
     status: EventStatus = "disabled"
     #: Id of the last event received from Lithos, replayed via `Last-Event-ID`.
     last_event_id: str = ""
+    #: The per-task edge cache to invalidate before each fan-out, wired by
+    #: `AppState`. Optional so a hub can be constructed without one (the
+    #: event tests, and fake mode before the graph surfaces exist).
+    graph_cache: GraphCache | None = None
 
     def __post_init__(self) -> None:
         self._subscribers: set[asyncio.Queue[LensEvent]] = set()
@@ -333,6 +338,7 @@ class EventHub:
         self._subscribers.discard(queue)
 
     async def publish(self, event: LensEvent) -> None:
+        self._invalidate_graph_cache(event)
         metrics.events_published().add(1, {"type": metric_event_type(event.type)})
         for queue in list(self._subscribers):
             try:
@@ -351,6 +357,26 @@ class EventHub:
                 metrics.events_dropped().add(1, {"reason": "subscriber_queue_full"})
             else:
                 metrics.events_delivered().add(1)
+
+    def _invalidate_graph_cache(self, event: LensEvent) -> None:
+        """Evict what this event invalidated, BEFORE browsers hear about it.
+
+        Ordering is the whole point of the hook living here rather than in a
+        subscriber: every task event makes a tab re-read the board, so a cache
+        evicted after the fan-out would answer that re-read from the entry the
+        event just invalidated — and hold it for a full TTL, since edge writes
+        emit no event of their own (ROADMAP ledger #1) to correct it.
+
+        `lens.refresh` flushes everything: it is published exactly when Lens
+        knows it MISSED events, so there are no task ids to evict — they are
+        in the events that never arrived.
+        """
+        if self.graph_cache is None:
+            return
+        if event.type == LENS_REFRESH_EVENT:
+            self.graph_cache.flush()
+        elif event.task_id:
+            self.graph_cache.evict(event.task_id)
 
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
