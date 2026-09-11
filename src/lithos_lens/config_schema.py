@@ -54,6 +54,11 @@ DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS = 24
 DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES = 10
 DEFAULT_TASKS_STALE_OPEN_AGE_DAYS = 7
 DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES = 60
+# Rule 6 judges only work a fleet is EXPECTED to pick up: a ready task carrying
+# a tag with one of these prefixes (loom dispatches on `trigger:story-develop`).
+# An EMPTY list opts out — every ready task is judged again, the pre-2026-09
+# behaviour — which is why the knob is a list and not a bool.
+DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES: tuple[str, ...] = ("trigger:",)
 # Ceilings for every [lithos-lens.tasks] knob that reaches ``timedelta()`` —
 # the four Needs-attention thresholds and the resolved-window size — in their
 # own units (a year / a week / ten years / a week / ten years). A value beyond
@@ -86,6 +91,30 @@ DEFAULT_KNOWLEDGE_RECENT_LIMIT = 20
 # let one landing-page request materialize an unbounded lithos_search /
 # lithos_list result set (the same bound the related-panel fan-out cap enforces).
 MAX_KNOWLEDGE_LANDING_LIMIT = 200
+
+# ── [lithos-lens.graph] — task dependency graph pages (§5.7) ───────────
+DEFAULT_GRAPH_CACHE_TTL_S = 30
+DEFAULT_GRAPH_MAX_TASKS = 300
+DEFAULT_GRAPH_FETCH_CONCURRENCY = 16
+DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES = 40
+# Ceilings for the two [lithos-lens.graph] knobs that size the per-request
+# ``lithos_task_edge_list`` fan-out. There is no bulk graph fetch upstream, so
+# ONE graph page issues one edge read per node, and these two knobs are the
+# only thing bounding that: ``max_tasks`` bounds the TOTAL reads a page may
+# make (above it the page is refused, not degraded) and ``fetch_concurrency``
+# bounds how many of them contend for the shared MCP session at once. Left
+# unbounded, a mistyped value turns one request into an unbounded burst
+# against a session every other page render shares -- the same hazard
+# MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP bounds for the related panel.
+#
+# ``cache_ttl_s`` and ``mini_graph_max_nodes`` are deliberately NOT here:
+# neither sizes a fan-out. A long TTL buys staleness, which the page states
+# as its ``as_of`` time rather than hiding, and the mini-graph cap only
+# selects from nodes already fetched.
+MAX_GRAPH_INT_KNOBS: dict[str, int] = {
+    "max_tasks": 2000,
+    "fetch_concurrency": 64,
+}
 
 
 def parse_log_level(value: str) -> LogLevel:
@@ -135,6 +164,10 @@ class TasksConfig:
     claim_expiring_soon_minutes: int = DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
     stale_open_age_days: int = DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
     unclaimed_ready_age_minutes: int = DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
+    # Tag prefixes that mark a ready task as fleet-dispatched (rule 6 scope).
+    dispatch_trigger_tag_prefixes: tuple[str, ...] = (
+        DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES
+    )
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
     # Which project convention the /tasks project filter honours (§5B.1):
     # "metadata" (metadata.project), "tag" (project:<slug>), or "both" (union).
@@ -201,6 +234,24 @@ class KnowledgeConfig:
 
 
 @dataclass(frozen=True)
+class GraphConfig:
+    """Task dependency graph pages (§5.7) — the four knobs T2 introduces.
+
+    ``cache_ttl_s`` is the staleness bound on the per-task edge cache, and it
+    is a real bound rather than a formality: edge upserts emit no event
+    upstream (ROADMAP ledger #1), so an edge another agent adds is invisible
+    until this expires or a task event lands on one of its endpoints.
+    ``max_tasks`` counts ghosts, and a page scope above it is refused rather
+    than rendered unreadably.
+    """
+
+    cache_ttl_s: int = DEFAULT_GRAPH_CACHE_TTL_S
+    max_tasks: int = DEFAULT_GRAPH_MAX_TASKS
+    fetch_concurrency: int = DEFAULT_GRAPH_FETCH_CONCURRENCY
+    mini_graph_max_nodes: int = DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES
+
+
+@dataclass(frozen=True)
 class LithosLensConfig:
     environment: str
     greeting: str
@@ -214,3 +265,4 @@ class LithosLensConfig:
     ui: UIConfig
     health: HealthConfig
     knowledge: KnowledgeConfig
+    graph: GraphConfig

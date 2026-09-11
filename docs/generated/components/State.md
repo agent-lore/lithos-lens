@@ -21,7 +21,7 @@ Application state and startup/shutdown orchestration (AppState, HealthSnapshot).
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Events](Events.md), [LithosClient](LithosClient.md)
+- Depends on: [Config](Config.md), [Events](Events.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md)
 - Used by: [Web](Web.md)
 
 [← all generated docs](../README.md)

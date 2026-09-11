@@ -333,7 +333,10 @@ predicate.**
 
 A ghost is the far endpoint of an edge whose near endpoint is in scope.
 Lens never fetches a ghost's own edges, so a ghost is always a leaf on its
-far side and fan-out is bounded by the scope. Ghosts participate in
+far side and fan-out is bounded by the scope — bounded in DEPTH, that is.
+The number of ghosts one scope may NAME is not bounded by its node count,
+because `task_edge_list` caps no edge count; the implementation therefore
+carries an internal ghost-read budget and refuses past it (§5.7). Ghosts participate in
 layering and in the longest chain (a chain may start at a ghost). Open
 ghosts get title/status from the master open list; only resolved far
 endpoints need a `task_get`, through the same semaphore. Ghosts count

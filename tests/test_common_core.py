@@ -424,6 +424,99 @@ def test_env_override_sets_each_needs_attention_knob(
         assert getattr(config.tasks, name) == default
 
 
+def test_dispatch_trigger_tag_prefixes_default_to_the_loom_convention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Rule 6's scope ships configured: an operator who writes no [tasks] table
+    gets the ``trigger:`` prefix loom dispatches on."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ("trigger:",)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('["trigger:", "dispatch:"]', ("trigger:", "dispatch:")),
+        # The documented opt-out: rule 6 goes back to judging every ready task.
+        ("[]", ()),
+    ],
+)
+def test_dispatch_trigger_tag_prefixes_read_from_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+    expected: tuple[str, ...],
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        f"dispatch_trigger_tag_prefixes = {value}\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == expected
+
+
+@pytest.mark.parametrize("bad", ['"trigger:"', '["trigger:", ""]', "[1]"])
+def test_dispatch_trigger_tag_prefixes_rejects_junk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """A blank prefix would match every tag — silently widening rule 6 back to
+    every ready task while the config still reads as scoped."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        f"dispatch_trigger_tag_prefixes = {bad}\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match="dispatch_trigger_tag_prefixes"):
+        load_config(config_path)
+
+
+def test_env_override_sets_dispatch_trigger_tag_prefixes(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Comma-separated, and it must not disturb its integer neighbours — they
+    share the [tasks] apply pass."""
+    monkeypatch.setenv(
+        "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "trigger:, dispatch:"
+    )
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ("trigger:", "dispatch:")
+    assert config.tasks.unclaimed_ready_age_minutes == 60
+
+
+def test_env_override_dispatch_trigger_tag_prefixes_empty_value_is_the_opt_out(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty list is the whole point of the knob (rule 6 back to every ready
+    task), and the only comma-separated spelling of it is an empty value — so
+    this override is gated on the variable being PRESENT, not on it being
+    non-blank like its integer neighbours."""
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.dispatch_trigger_tag_prefixes == ()
+
+
+def test_env_override_dispatch_trigger_tag_prefixes_rejects_a_blank_entry(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES", "trigger:,")
+
+    with pytest.raises(
+        ConfigError, match="LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES"
+    ):
+        load_config(lithos_lens_config_env)
+
+
 @pytest.mark.parametrize(
     ("key", "over_max"),
     [
@@ -526,6 +619,105 @@ def test_env_override_needs_attention_knob_rejects_junk(
 
     with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS"):
         load_config(lithos_lens_config_env)
+
+
+def test_graph_knobs_default_to_the_shipped_values(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The graph pages must work with no [graph] table written at all."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.graph.cache_ttl_s == 30
+    assert config.graph.max_tasks == 300
+    assert config.graph.fetch_concurrency == 16
+    assert config.graph.mini_graph_max_nodes == 40
+
+
+def test_graph_knobs_are_read_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.graph]\n'
+        "cache_ttl_s = 5\nmax_tasks = 50\nfetch_concurrency = 4\n"
+        "mini_graph_max_nodes = 12\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.graph.cache_ttl_s == 5
+    assert config.graph.max_tasks == 50
+    assert config.graph.fetch_concurrency == 4
+    assert config.graph.mini_graph_max_nodes == 12
+
+
+@pytest.mark.parametrize(
+    ("env_var", "attribute"),
+    [
+        ("LITHOS_LENS_GRAPH_CACHE_TTL_S", "cache_ttl_s"),
+        ("LITHOS_LENS_GRAPH_MAX_TASKS", "max_tasks"),
+        ("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "fetch_concurrency"),
+        ("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "mini_graph_max_nodes"),
+    ],
+)
+def test_env_override_sets_each_graph_knob(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    attribute: str,
+) -> None:
+    """One override must not reset its neighbours: they share an apply pass."""
+    monkeypatch.setenv(env_var, "7")
+
+    config = load_config(lithos_lens_config_env)
+
+    assert getattr(config.graph, attribute) == 7
+    untouched = {
+        "cache_ttl_s": 30,
+        "max_tasks": 300,
+        "fetch_concurrency": 16,
+        "mini_graph_max_nodes": 40,
+    }
+    del untouched[attribute]
+    for name, default in untouched.items():
+        assert getattr(config.graph, name) == default
+
+
+@pytest.mark.parametrize(
+    ("env_var", "over_max"),
+    [
+        ("LITHOS_LENS_GRAPH_MAX_TASKS", 2001),
+        ("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", 65),
+    ],
+)
+def test_env_override_graph_fan_out_knob_rejects_a_value_over_its_ceiling(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_var: str,
+    over_max: int,
+) -> None:
+    """Both knobs size the per-request edge-read fan-out, so both are bounded
+    on the env path as well as the TOML one — a mistyped value must fail the
+    load rather than turn one page render into an unbounded read burst."""
+    monkeypatch.setenv(env_var, str(over_max))
+
+    with pytest.raises(ConfigError, match=env_var):
+        load_config(lithos_lens_config_env)
+
+
+def test_graph_fan_out_knob_over_its_ceiling_fails_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.graph]\n'
+        "fetch_concurrency = 65\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match="fetch_concurrency"):
+        load_config(config_path)
 
 
 def test_project_convention_settings_are_read_from_config(

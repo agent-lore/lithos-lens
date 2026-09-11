@@ -482,6 +482,44 @@ def test_load_dashboard_partitions_and_counts() -> None:
     assert data.errors == ()
 
 
+def test_load_dashboard_names_a_cancelled_predecessor_from_the_terminal_read() -> None:
+    """The unsatisfiable row is the one that most needs a readable blocker.
+
+    A cancelled predecessor is by definition NOT in the open snapshot, so the
+    chip and the reason sentence both fell back to the raw task id — on the
+    board's highest-severity row, while the same page rendered that task's
+    title in the Cancelled group. The terminal reads are already made, so the
+    join resolves the name from them.
+    """
+    stranded = _task("stranded", claims=())
+    dead = _task("dead", claims=(), status="cancelled")
+    fake = _FrontierFake(
+        open_tasks=[stranded],
+        ready=[],
+        blocked=[
+            _blocked(
+                stranded,
+                BlockerRecord(
+                    kind="blocker_unsatisfiable",
+                    task_id="dead",
+                    type="blocks",
+                    status="cancelled",
+                ),
+            )
+        ],
+        cancelled=[dead],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    (row,) = data.sections["attention"]
+    assert row.task.id == "stranded"
+    assert [chip.label for chip in row.blockers] == ["Title dead"]
+    (reason,) = row.attention
+    assert reason.rule == "unsatisfiable"
+    assert '"Title dead"' in reason.detail
+
+
 def test_load_dashboard_resolves_blocker_title_when_predecessor_filtered_out() -> None:
     """Regression (f-001): the blocker chip must render the predecessor's TITLE
     even when a tag filter hides the predecessor from the visible sections. The

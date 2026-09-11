@@ -28,7 +28,7 @@ from lithos_lens.blocker_chain import (
 )
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.errors import EventSubscriberLimit
-from lithos_lens.events import LensEvent
+from lithos_lens.events import CONSUMED_EVENT_TYPES, LensEvent
 from lithos_lens.fake_lithos import (
     FakeEventHub,
     FakeLithosClient,
@@ -307,9 +307,23 @@ def create_app(
         @app.post("/tasks/events/publish")
         async def publish_test_event(request: Request) -> JSONResponse:
             data = await request.json()
+            event_type = str(data.get("type") or "task.created")
+            # The seam takes UPSTREAM types only — the same "map it rather
+            # than trust it" treatment `metric_event_type` already applies to
+            # this exact path, and now for a second reason: since T2 the hub
+            # invalidates the graph cache before it fans out, so `lens.refresh`
+            # arriving here would flush process-wide server state on an
+            # unauthenticated, CSRF-reachable request rather than merely
+            # pushing a frame to browsers. `lens.*` is Lens's own synthetic
+            # namespace; nothing outside the hub may mint one.
+            if event_type not in CONSUMED_EVENT_TYPES:
+                return JSONResponse(
+                    {"published": False, "error": f"unsupported type {event_type!r}"},
+                    status_code=400,
+                )
             event = LensEvent(
                 id=str(data.get("id") or ""),
-                type=str(data.get("type") or "task.created"),
+                type=event_type,
                 task_id=str(data.get("task_id") or ""),
                 payload=dict(data.get("payload") or {}),
                 requires_refresh=bool(data.get("requires_refresh", True)),
@@ -545,6 +559,9 @@ async def _render_tasks(
                 claim_expiring_soon_minutes=tasks_config.claim_expiring_soon_minutes,
                 stale_open_age_days=tasks_config.stale_open_age_days,
                 unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
+                dispatch_trigger_tag_prefixes=(
+                    tasks_config.dispatch_trigger_tag_prefixes
+                ),
             ),
         )
         logger.debug(

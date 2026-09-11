@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, and the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted) and the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness.
 
 **Tier:** Foundation
 
@@ -19,7 +19,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
+| `lithos_lens.graph_cache` | M | 2 | 2 |
+| `lithos_lens.graph_fanout` | S | 1 | 3 |
 | `lithos_lens.graph_layout` | L | 6 | 4 |
+| `lithos_lens.graph_scope` | L | 5 | 6 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -27,7 +30,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ## Public API
 
 ### `lithos_lens.attention`
-- class `AttentionPolicy` — Thresholds for the age-based Needs-attention rules (3-6).
+- class `AttentionPolicy` — Tuning for the Needs-attention rules that have any (3-6).
 - def `flag_attention` — Evaluate the six-rule severity model over a classified partition.
 
 ### `lithos_lens.blocker_chain`
@@ -72,6 +75,18 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `attach_gate_waiters` — Fill each gate's waiter list, preferring the Lithos-computed source.
 - def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
 
+### `lithos_lens.graph_cache`
+- class `EdgeCacheEntry` — One task's edges, and when they were read.
+- def `graph_fanout_gate` — The process-wide gate every graph read passes through.
+- def `dedupe_edges` — Collapse edges that name the same (from, to, type), keeping order.
+- class `GraphCache` — Per-task edge entries with a TTL, single-flight, and event eviction.
+
+### `lithos_lens.graph_fanout`
+- class `GraphScopeClient` — The narrow client surface scope assembly needs.
+- def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
+- def `partition_far_endpoints` — Split ghost candidates into "already known" and "needs a read".
+- def `resolve_far_endpoints` — Read every pending candidate, filling ``resolved`` and returning failures.
+
 ### `lithos_lens.graph_layout`
 - class `DependencyEdge` — One fetched ``blocks``/``waits_on_gate`` edge, classified per D6.
 - class `Cycle` — A cycle in the scope: Lithos's verdict, or Lens's own SCC, or both.
@@ -83,6 +98,19 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `build_topology` — Condense the fetched scope into cycles, layers and roots.
 - def `longest_blocking_chain` — The longest chain of blocking work in this graph, by node count (D7).
 - def `hierarchy_rows` — The scope's ``parent_child`` forest, flattened into indented rows.
+
+### `lithos_lens.graph_scope`
+- class `GraphScopeLimits` — The two ``[graph]`` knobs that bound one scope's reads.
+- class `GraphNode` — One node of the assembled graph: a task, or a one-hop ghost of one.
+- class `GraphEdge` — One deduped edge, with the state a dependency edge carries.
+- class `ScopeRefusal` — A scope Lens would not render, why, and how large it was.
+- class `TaskGraphScope` — The assembled graph, or the refusal that replaced it.
+- def `project_scope_tasks` — The project's tasks per §5B.1 — open only unless ``include_resolved``.
+- def `epic_scope_tasks` — The epic's recursive subtree plus the epic — closed children by default.
+- def `load_project_scope` — Assemble `/tasks/graph?project=<slug>` (open-only by default).
+- def `load_epic_scope` — Assemble `/tasks/graph?epic=<id>` (closed children included by default).
+- def `assemble_scope` — Fan out for cache misses and build the scope from what came back.
+- def `dependency_edge_state` — Classify one ``blocks`` / ``waits_on_gate`` edge from both endpoints.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.
@@ -117,6 +145,6 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 ## Dependencies
 
 - Depends on: [Tasks](Tasks.md)
-- Used by: [LithosClient](LithosClient.md), [Web](Web.md)
+- Used by: [Events](Events.md), [LithosClient](LithosClient.md), [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

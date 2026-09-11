@@ -24,6 +24,7 @@ __all__ = [
     "optional_path",
     "optional_status_groups",
     "optional_str",
+    "optional_str_list",
 ]
 
 
@@ -117,3 +118,29 @@ def optional_status_groups(
     if not groups:
         raise ConfigError(f"{config_path}: [{section}].{key} must not be empty")
     return tuple(groups)
+
+
+def optional_str_list(
+    data: dict[str, Any],
+    key: str,
+    default: tuple[str, ...],
+    config_path: Path,
+    section: str,
+) -> tuple[str, ...]:
+    """A list-of-strings knob, EMPTY-LIST-permitting but not blank-permitting.
+
+    An empty list is a meaningful value here (it is how an operator opts out of
+    a list-scoped rule), so unlike ``optional_status_groups`` it is accepted;
+    a blank entry never is — a knob matched by prefix would match everything.
+    """
+    if key not in data:
+        return default
+    value = data[key]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{config_path}: [{section}].{key} must be a list of strings")
+    items = [item.strip() for item in value]
+    if any(not item for item in items):
+        raise ConfigError(
+            f"{config_path}: [{section}].{key} must not contain an empty string"
+        )
+    return tuple(items)
