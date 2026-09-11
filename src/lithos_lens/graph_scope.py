@@ -48,7 +48,7 @@ is blocked and on cycle membership (D4, slice A3).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
@@ -110,6 +110,10 @@ REFUSAL_NODES = "nodes"
 #: Classifying the scope's out-of-set endpoints would cost more work than Lens
 #: will spend on one render. See :data:`MAX_GHOST_RESOLUTION_READS`.
 REFUSAL_CLASSIFICATION = "classification"
+#: The scope names more §5B.1 projects than D4's complete read pair per project
+#: may cost one render. ``count`` is PROJECTS, not tasks; raised in
+#: ``graph_page``, where the assembled scope (ghosts included) is known.
+REFUSAL_COVERAGE = "coverage"
 
 
 # What a ghost is there for. A dependency ghost is on the default canvas; a
@@ -225,6 +229,11 @@ class ScopeRefusal:
       (:data:`MAX_GHOST_RESOLUTION_READS`), or resolving them ran past
       :data:`GHOST_RESOLUTION_BUDGET_S`. ``count`` is the number of
       endpoints needing a read, not a node count.
+    - :data:`REFUSAL_COVERAGE` — the scope names more §5B.1 projects than
+      ``max_tasks``, so D4's read pair per project is more than one render
+      may spend. ``count`` is PROJECTS. The comparison is deliberate: one
+      project per task is §5B.1's shape, so more projects than tasks means
+      tags rather than structure.
 
     An earlier version of this docstring said no resource bound was allowed
     to answer the node guard, and that a page inside the guard renders
@@ -329,7 +338,7 @@ async def epic_scope_tasks(
     epic_id: str,
     *,
     include_resolved: bool = True,
-) -> tuple[TaskRecord, ...]:
+) -> tuple[tuple[TaskRecord, ...], frozenset[str]]:
     """The epic's recursive subtree plus the epic — closed children by default.
 
     The anchor is read directly (``task_get``) rather than taken from the
@@ -339,6 +348,11 @@ async def epic_scope_tasks(
     scope whatever its own status — ``include_resolved=0`` hides an epic's
     finished CHILDREN, and hiding the epic itself would leave the page
     describing a subtree with no root.
+
+    Returns the node set AND the ids the filter removed: the subtree is
+    RECURSIVE, so a closed child can be the parent of an open grandchild that
+    stays, and that grandchild's incoming ``parent_child`` edge would
+    otherwise re-admit it as a context ghost — putting the hidden child back.
     """
 
     async def read_anchor() -> TaskRecord:
@@ -360,7 +374,9 @@ async def epic_scope_tasks(
     # starved behind them however small `GRAPH_FANOUT_SESSION_SHARE` was set.
     epic, children = await asyncio.gather(read_anchor(), read_children())
     rows = [child for child in children if include_resolved or child.status == "open"]
-    return _ordered([epic, *rows])
+    kept = {child.id for child in rows} | {epic.id}
+    excluded = frozenset(child.id for child in children if child.id not in kept)
+    return _ordered([epic, *rows]), excluded
 
 
 # ── Assembly ───────────────────────────────────────────────────────────
@@ -407,19 +423,19 @@ async def load_epic_scope(
     include_resolved: bool = True,
 ) -> TaskGraphScope:
     """Assemble `/tasks/graph?epic=<id>` (closed children included by default)."""
-    tasks = with_master_claims(
-        await epic_scope_tasks(lithos, epic_id, include_resolved=include_resolved),
-        master,
+    subtree, excluded = await epic_scope_tasks(
+        lithos, epic_id, include_resolved=include_resolved
     )
     return await assemble_scope(
         lithos,
-        tasks=tasks,
+        tasks=with_master_claims(subtree, master),
         master=master,
         cache=cache,
         limits=limits,
         kind="epic",
         key=epic_id,
         include_resolved=include_resolved,
+        excluded=excluded,
     )
 
 
@@ -459,6 +475,7 @@ async def assemble_scope(
     kind: str = "",
     key: str = "",
     include_resolved: bool = False,
+    excluded: Collection[str] = (),
 ) -> TaskGraphScope:
     """Fan out for cache misses and build the scope from what came back.
 
@@ -467,6 +484,11 @@ async def assemble_scope(
     semaphore covers this scope's whole fan-out — both the ``edge_list``
     misses and the ghost ``task_get``s — so the bound is per render rather
     than per phase.
+
+    ``excluded`` names ids the scope rule REMOVED rather than never saw, and
+    every edge naming one is dropped below. Project scope passes nothing —
+    there a completed parent outside the open-only set is a genuine
+    out-of-scope task whose context ghost §5.7 requires.
     """
     limits = limits or GraphScopeLimits()
     scope_tasks = _ordered(tasks)
@@ -502,6 +524,16 @@ async def assemble_scope(
     in_scope = {task.id: task for task in scope_tasks}
     entries, incomplete = await read_edges(lithos, scope_tasks, cache, limiter, tally)
     edges = _dedupe_scope_edges(entries)
+    if excluded:
+        # An id the scope rule REMOVED is not an out-of-set task, so it may
+        # not ghost — and its edge goes with it, or the tree keeps a row
+        # pointing at a node the page does not draw. Dropping the edge IS the
+        # mechanism: `_far_endpoint` never sees it as a candidate.
+        edges = tuple(
+            edge
+            for edge in edges
+            if edge.from_task_id not in excluded and edge.to_task_id not in excluded
+        )
 
     far_ids = _ghostable_endpoints(edges, in_scope)
     far_tasks, pending = partition_far_endpoints(far_ids, master)

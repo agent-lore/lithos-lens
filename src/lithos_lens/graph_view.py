@@ -244,8 +244,11 @@ class GraphPageView:
     banners: tuple[Banner, ...] = ()
     edge_types: tuple[str, ...] = ()
     edge_count: int = 0
-    #: The coverage set actually read (D4) and how those reads ended, carried
-    #: so the route can count them without re-deriving the plan.
+    #: D4's coverage set — every project this render planned to read — and how
+    #: those reads ended, carried so the route can count them without
+    #: re-deriving the plan. ``reads_ok + reads_truncated + reads_failed`` is
+    #: the number of calls actually ISSUED; ``reads_unmade`` is the rest of the
+    #: plan, which the phase deadline caught still queued.
     coverage: tuple[str, ...] = ()
     #: What this render cost, counted per request rather than sampled off the
     #: process-wide cache counters (which a concurrent page also moves).
@@ -255,6 +258,7 @@ class GraphPageView:
     reads_ok: int = 0
     reads_truncated: int = 0
     reads_failed: int = 0
+    reads_unmade: int = 0
     as_of: datetime | None = None
     refusal: ScopeRefusal | None = None
     payload_json: str = "{}"

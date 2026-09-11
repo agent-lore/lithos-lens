@@ -488,7 +488,14 @@ over the master task list plus that cache and fanning out only for misses:
   shown with `status unknown` and `unknown` dependency edges. An inactive edge
   pointing out of the scope is dropped rather than ghosted, and context —
   the immediate out-of-set parent and `discovered_from` source of an included
-  node — is added upstream only, never an out-of-set child or follow-on;
+  node — is added upstream only, never an out-of-set child or follow-on. A
+  task the scope rule REMOVED is not an out-of-set task and names no ghost:
+  an epic subtree is recursive, so `include_resolved=0` can exclude a closed
+  child that is itself the parent of an open grandchild, and the upstream
+  context rule would otherwise re-admit through that grandchild the very
+  child the toggle promised to hide (edge included). Project scope excludes
+  nothing this way — there a completed parent outside the open-only task set
+  is a genuine out-of-scope task, and its context ghost is required;
 - **completeness**, carried in the result rather than beside it — `incomplete`
   names every node whose edge read failed, such a node is never classified
   isolated, a ghost whose `task_get` failed is shown with `status unknown` and
@@ -613,11 +620,19 @@ read: only rows naming an **in-scope, non-ghost** task are this graph's
 authority. A ghost carries neither cycle marker — believing its row would draw
 a cycle for a node Lens has no edges for and then mark the real work below it
 *blocked via cycle* on the strength of it.
-The phase is **bounded before it is queued**: the coverage set is derived from
-task tags, so its size is chosen by whoever wrote the task, and one render
-reads at most a fixed number of projects (the scope's own first) under one
-deadline covering the fan-out gates as well as the calls. These are internal
-safety nets, not `[graph]` knobs.
+The coverage set is read **whole or not at all**. It is derived from task tags,
+so its size is chosen by whoever wrote the task rather than by whoever
+configured the page — so a scope naming more projects than `max_tasks` (one
+project per task is §5B.1's shape, so more projects than tasks means tags
+rather than structure) is **refused before the first call**, with a project
+count, rather than read in part and rendered: a prefix of the coverage set
+would report the projects it skipped as cycle-free. Inside that guard the phase
+is bounded in TIME by one deadline covering the fan-out gates as well as the
+calls — an internal safety net, not a `[graph]` knob. A read that deadline
+catches still **queued** is reported as *never made*, distinct from a read that
+was issued and failed: both leave their tasks `cycle status unknown`, but only
+one of them is a question Lithos was ever asked, and the banner and the counter
+both say which.
 Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
 with Lithos's own message whatever Tarjan found — and **only** such a task: the
 row's marker reads the verdict, never the condensation, so an SCC Lens can draw
@@ -632,9 +647,9 @@ promise); otherwise it says *shape unavailable*, which asserts nothing about
 where the loop runs or why the shape is missing — the blocker names one
 immediate predecessor, so an in-scope one leaves the rest of the path unknown,
 and a stale edge-empty cache entry is indistinguishable here from a failed edge
-read. A truncated read, a failed read, a project the render's read bound left
-unread, and a task no scoped read can reach (no project under either
-convention) each produce a **banner**; which ROWS are then
+read. A truncated read, a read the phase deadline left unissued, a failed read,
+and a task no scoped read can reach (no project under either convention) each
+produce a **banner**; which ROWS are then
 marked `cycle status unknown` follows the per-task rule above, not the banner —
 a task a truncated response returned keeps its verdict, and a task another
 complete applicable read covered stays known. Each partial-read banner
@@ -675,7 +690,10 @@ which a concurrent render also moves; ghost reads are counted where the call is
 ISSUED, so a classification phase stopped by its deadline reports what it
 actually spent). A refusal carries the same counts plus its reason. Two counters accompany it:
 `lens_tasks_graph_renders_total` (`scope`, `outcome`) and
-`lens_tasks_graph_cycle_reads_total` (`outcome`). The scope KEY is a span
+`lens_tasks_graph_cycle_reads_total` (`outcome`), whose total is the scoped
+blocked calls actually ISSUED — a plan item the phase deadline caught still
+queued is not one of its three outcomes, and is carried by the span field
+`lens.graph.cycle_reads_unmade` instead. The scope KEY is a span
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
 

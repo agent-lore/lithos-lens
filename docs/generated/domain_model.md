@@ -190,7 +190,6 @@ classDiagram
   }
   class CycleSignal {
     +coverage tuple[str, ...]
-    +uncovered tuple[str, ...]
     +flagged Mapping[str, str]
     +cycle_partners Mapping[str, tuple[str, ...]]
     +unknown frozenset[str]
@@ -294,6 +293,7 @@ classDiagram
     +reads_ok int
     +reads_truncated int
     +reads_failed int
+    +reads_unmade int
     +as_of datetime | None
     +payload_json str
   }
@@ -359,6 +359,7 @@ classDiagram
     +by str
     +truncated bool
     +error str
+    +unmade bool
   }
   class ScopeRefusal {
     +count int

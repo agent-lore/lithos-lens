@@ -40,9 +40,9 @@ from urllib.parse import urlencode
 
 from lithos_lens.graph_cache import GraphCache
 from lithos_lens.graph_cycles import (
-    MAX_CYCLE_READ_PROJECTS,
     CycleSignal,
     CycleSignalClient,
+    coverage_projects,
     load_cycle_signal,
 )
 from lithos_lens.graph_fanout import GraphScopeClient
@@ -56,8 +56,10 @@ from lithos_lens.graph_layout import (
 from lithos_lens.graph_scope import (
     COMPLETENESS_STATUS_UNKNOWN,
     EDGE_UNKNOWN,
+    REFUSAL_COVERAGE,
     GraphNode,
     GraphScopeLimits,
+    ScopeRefusal,
     TaskGraphScope,
     load_epic_scope,
     load_project_scope,
@@ -156,6 +158,24 @@ async def load_graph_page(
             cache_misses=scope.cache_misses,
             ghost_reads=scope.ghost_reads,
         )
+    # D4 admits no sampling: every project in the coverage set gets its read
+    # pair, or this page does not answer "is this in a cycle?" at all. The set
+    # comes from task TAGS, so it is bounded here — BEFORE one call is queued —
+    # and answered with a refusal rather than by quietly reading some of it.
+    # The guard is ``max_tasks``: one project per task is §5B.1's shape.
+    coverage = coverage_projects(scope, convention=convention, tag_key=tag_key)
+    if len(coverage) > limits.max_tasks:
+        return GraphPageView(
+            params=params,
+            refusal=ScopeRefusal(
+                count=len(coverage),
+                max_tasks=limits.max_tasks,
+                reason=REFUSAL_COVERAGE,
+            ),
+            cache_hits=scope.cache_hits,
+            cache_misses=scope.cache_misses,
+            ghost_reads=scope.ghost_reads,
+        )
     signal = await load_cycle_signal(
         lithos,
         scope,
@@ -178,9 +198,7 @@ def build_graph_page(
     topology = build_topology(
         [node.task for node in scope.nodes],
         [edge.edge for edge in scope.edges],
-        # Authority, not every row the scoped reads returned: see
-        # ``CycleSignal.verdicts``.
-        blocked=signal.verdicts,
+        blocked=signal.verdicts,  # authority only; see ``CycleSignal.verdicts``
         incomplete=scope.incomplete,
         unknown_status=[
             node.id
@@ -216,6 +234,7 @@ def build_graph_page(
         reads_ok=sum(1 for read in signal.reads if read.ok),
         reads_truncated=sum(1 for read in signal.reads if read.truncated),
         reads_failed=sum(1 for read in signal.reads if read.error),
+        reads_unmade=sum(1 for read in signal.reads if read.unmade),
         payload_json=_payload_json(
             scope, topology, chain, views, layers, params, folded
         ),
@@ -298,10 +317,10 @@ def _node_views(
             claims=_claims(node),
             isolated=node.id in isolated,
             cycle_id=cycle_of.get(node.id, ""),
-            # Ghosts carry NEITHER cycle marker. No scoped read claims to
-            # cover the blockers of a task this page only sees one edge of —
-            # so its absence is not "cycle-free", and a row a project-scoped
-            # read happened to return for it is not this graph's verdict.
+            # Ghosts carry NEITHER cycle marker: no scoped read covers the
+            # blockers of a task this page sees one edge of, so its absence
+            # is not "cycle-free" and a row naming it is not this graph's
+            # verdict either.
             flagged=not node.ghost and node.id in signal.flagged,
             cycle_message="" if node.ghost else signal.flagged.get(node.id, ""),
             cycle_unknown=not node.ghost and node.id in signal.unknown,
@@ -515,15 +534,16 @@ def _banners(scope: TaskGraphScope, signal: CycleSignal) -> tuple[Banner, ...]:
                 ),
             )
         )
-    if signal.uncovered:
+    if signal.unmade_projects:
         banners.append(
             Banner(
-                id="cycle-coverage-capped",
+                id="cycle-unmade",
                 text=(
-                    "Cycle signal incomplete: this graph spans more projects "
-                    f"than one render reads ({MAX_CYCLE_READ_PROJECTS}), so "
-                    f"{len(signal.uncovered)} of them were not read at all. A "
-                    "read never made is not evidence that a task is cycle-free."
+                    "Cycle signal incomplete: this render ran out of time "
+                    "before the blocked read for "
+                    f"{_join(signal.unmade_projects)} could be made. Those "
+                    "reads were never sent, and a read never made is not "
+                    "evidence that a task is cycle-free."
                 ),
             )
         )

@@ -35,8 +35,8 @@ from lithos_lens.config import DEFAULT_TASKS_FRONTIER_LIMIT, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_graph_dataset import edge_index
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.graph_cache import GraphCache
-from lithos_lens.graph_cycles import MAX_CYCLE_READ_PROJECTS, CycleSignal
+from lithos_lens.graph_cache import GRAPH_FANOUT_SESSION_SHARE, GraphCache
+from lithos_lens.graph_cycles import CycleSignal
 from lithos_lens.graph_page import build_graph_page, graph_url, parse_graph_params
 from lithos_lens.graph_routes import GRAPH_SPAN
 from lithos_lens.graph_scope import load_project_scope
@@ -54,7 +54,7 @@ from lithos_lens.tasks import (
     task_detail_path,
 )
 from lithos_lens.web import create_app
-from tests.conftest import metric_value
+from tests.conftest import metric_points, metric_value
 
 pytestmark = pytest.mark.anyio
 
@@ -1015,63 +1015,157 @@ def test_a_ghost_s_blocked_row_is_not_this_graph_s_cycle_authority(
     assert 'data-cycle-group="ghost"' not in html
 
 
-def test_one_task_s_tags_cannot_unbound_the_cycle_read_fan_out(
+def test_every_project_in_the_coverage_set_gets_its_own_read_pair(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The coverage set is derived from TAGS, so its size is chosen by whoever
-    wrote the task rather than by whoever configured the page. The bound is on
-    the QUEUE (:data:`MAX_CYCLE_READ_PROJECTS`) because the semaphores below it
-    limit only how many of those reads run at once, never how many are made.
+    """D4 admits no sampling, and the set is not small by construction.
+
+    Sixty-five children in sixty-five distinct projects is a legitimate epic
+    well inside the 300-node guard, so every one of those projects owes a
+    metadata call and a tag call. An implementation that reads a prefix of the
+    coverage set and renders anyway would report the tail cycle-free.
     """
-    noisy_tags = tuple(f"project:p{index:03d}" for index in range(200))
-    rows = [
-        task("epic", task_type="epic"),
-        task("noisy", extra_tags=noisy_tags),
-        task("far-flung", project="zzz-last"),
+    span = 65
+    rows = [task("epic", task_type="epic")] + [
+        task(f"child-{index:03d}", project=f"p{index:03d}") for index in range(span)
     ]
     fake = GraphFakeClient(
         dataset(
             rows,
-            [
-                ("epic", "noisy", "parent_child"),
-                ("epic", "far-flung", "parent_child"),
-            ],
-            children={"epic": ("noisy", "far-flung")},
+            [("epic", f"child-{index:03d}", "parent_child") for index in range(span)],
+            children={"epic": tuple(f"child-{index:03d}" for index in range(span))},
         )
     )
 
     html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
 
-    assert len(fake.blocked_calls) == 2 * MAX_CYCLE_READ_PROJECTS
-    # The reads that WERE made still answer for the tasks they cover …
-    assert ("project", PROJECT, LIMIT) in blocked_log(fake)
-    assert "cycle-unknown" not in markers(html, "noisy")
-    # … and the projects left unread are said, never implied cycle-free.
-    assert "cycle-unknown" in markers(html, "far-flung")
-    assert 'data-graph-banner="cycle-coverage-capped"' in html
-    assert 'data-graph-banner="cycle-unknown-count"' in html
+    # The epic's own project plus one per child, each read exactly twice.
+    expected = sorted(
+        [("project", PROJECT, LIMIT), ("tags", f"project:{PROJECT}", LIMIT)]
+        + [("project", f"p{index:03d}", LIMIT) for index in range(span)]
+        + [("tags", f"project:p{index:03d}", LIMIT) for index in range(span)]
+    )
+    assert blocked_log(fake) == expected
+    assert len(fake.blocked_calls) == 2 * (span + 1)
+    # A complete plan claims nothing it did not read, so no row is unknown …
+    assert "data-graph-refusal" not in html
+    assert "cycle-unknown" not in html
+    # … and no project is read twice on the same side of the pair.
+    assert len(set(blocked_log(fake))) == len(expected)
 
 
-def test_a_slow_blocked_read_cannot_hold_the_page_past_the_phase_budget(
+def test_a_coverage_set_over_the_guard_refuses_before_reading_any_of_it(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The deadline covers the whole phase, gate waits included.
-
-    ``LINK_READ_TIMEOUT_S`` starts only once both gates are HELD, so it bounds
-    a call and not a render queued behind someone else's fan-out. Past the
-    budget the reads are simply unmade, which is a state D4 already has a
-    semantic for — unknown, and said so.
+    """The coverage set comes from TAGS, so its size is chosen by whoever wrote
+    the task. Past the guard Lens REFUSES rather than reading a prefix: D4's
+    contract is every project in the set, and a partial read that still renders
+    would report the projects it skipped as cycle-free. The guard is
+    ``max_tasks`` because one project per task is §5B.1's shape — a scope
+    naming more projects than it renders tasks is naming them from tags.
     """
-    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.05)
-    fake = GraphFakeClient(dataset([task("a")]), blocked_delay=LINK_READ_TIMEOUT_S)
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "8")
+    noisy = task(
+        "noisy", extra_tags=tuple(f"project:p{index:03d}" for index in range(9))
+    )
+    fake = GraphFakeClient(dataset([task("a"), noisy]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    text = re.sub(r"<[^>]+>", " ", html)
+
+    assert 'data-refusal-reason="coverage"' in html
+    # loom + p000..p008: a PROJECT count, not a node count.
+    assert only_group(r"data-refusal-count>(\d+)<", html) == "10"
+    assert "projects between them" in text
+    assert "data-graph-layers" not in html
+    # Refused BEFORE the first pair is queued — that is the point of the guard.
+    assert fake.blocked_calls == []
+
+
+def test_the_phase_deadline_reports_queued_reads_as_never_made(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """More plan items than the process-wide gate is wide, against a client
+    that never answers: the budget has to cover the QUEUE, and what it catches
+    still waiting was never sent.
+
+    A cancelled plan item is not an upstream failure. Counting one would put a
+    call in the telemetry that never reached Lithos and tell the operator the
+    server broke when it was Lens that ran out of time — so the two are
+    separate outcomes, in the banner and in the counter, and the counter's
+    total stays equal to the calls actually issued.
+    """
+    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.2)
+    span = 20  # 40 plan items against an 8-slot process gate
+    rows = [task("epic", task_type="epic")] + [
+        task(f"child-{index:03d}", project=f"p{index:03d}") for index in range(span)
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [("epic", f"child-{index:03d}", "parent_child") for index in range(span)],
+            children={"epic": tuple(f"child-{index:03d}" for index in range(span))},
+        ),
+        blocked_delay=LINK_READ_TIMEOUT_S,
+    )
 
     started = time.monotonic()
-    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
     elapsed = time.monotonic() - started
 
-    assert elapsed < LINK_READ_TIMEOUT_S / 2
-    assert 'data-graph-banner="cycle-unavailable"' in html
-    assert "cycle-unknown" in markers(html, "a")
+    # The phase is bounded by ITS budget, not by the per-call timeout: without
+    # a deadline over the queue this is 5 x ceil(42 / 8) seconds.
+    assert elapsed < LINK_READ_TIMEOUT_S
+    # Only the gate's width ever reached the client, and the plan is far wider.
+    assert len(fake.blocked_calls) <= GRAPH_FANOUT_SESSION_SHARE
+    assert len(fake.blocked_calls) < 2 * (span + 1)
+    # The page distinguishes the two: the calls that were sent and did not
+    # answer, and the ones that were never sent at all.
+    assert 'data-graph-banner="cycle-unmade"' in html
+    text = re.sub(r"<[^>]+>", " ", html)
+    assert "Those reads were never sent" in text
+    assert "cycle-unknown" in markers(html, "child-000")
+
+
+def test_the_cycle_read_counter_totals_the_calls_actually_issued(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`lens_tasks_graph_cycle_reads_total` counts scoped blocked CALLS, so a
+    plan item the deadline caught still queued may not appear in any of its
+    three outcomes. It gets a span field instead."""
+    monkeypatch.setattr(graph_cycles, "CYCLE_READ_BUDGET_S", 0.2)
+    span_size = 20
+    rows = [task("epic", task_type="epic")] + [
+        task(f"child-{index:03d}", project=f"p{index:03d}")
+        for index in range(span_size)
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            rows,
+            [
+                ("epic", f"child-{index:03d}", "parent_child")
+                for index in range(span_size)
+            ],
+            children={
+                "epic": tuple(f"child-{index:03d}" for index in range(span_size))
+            },
+        ),
+        blocked_delay=LINK_READ_TIMEOUT_S,
+    )
+
+    get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
+
+    counted = sum(
+        point.value
+        for point in metric_points(metric_reader, "lens_tasks_graph_cycle_reads_total")
+    )
+    attributes = dict(graph_span(spans).attributes or {})
+    assert counted == len(fake.blocked_calls)
+    assert attributes["lens.graph.cycle_reads_unmade"] == 2 * (span_size + 1) - counted
+    assert attributes["lens.graph.cycle_signal_incomplete"] is True
 
 
 # ── Ghosts, completeness and the chain ──────────────────────────────────
@@ -1251,6 +1345,56 @@ def test_include_resolved_zero_hides_an_epic_s_closed_children_everywhere(
     assert 'data-graph-node="done"' not in html
     assert 'data-hierarchy-node="done"' not in html
     assert 'data-hierarchy-node="next"' in html
+
+
+def test_include_resolved_zero_hides_a_closed_child_that_is_itself_a_parent(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The recursive shape, where the toggle and the context rule collide.
+
+    ``epic -> completed-parent -> open-grandchild``: the grandchild survives
+    the filter and its incoming ``parent_child`` edge names the closed child
+    the toggle just removed, which is upstream — the one direction context
+    ghosts ARE added from. The child must stay gone in the nodes, the payload,
+    the hierarchy tree and the call log, while the grandchild stays.
+    """
+    tasks = [
+        task("epic", task_type="epic"),
+        task("completed-parent", status="completed"),
+        task("open-grandchild"),
+    ]
+    fake = GraphFakeClient(
+        dataset(
+            tasks,
+            [
+                ("epic", "completed-parent", "parent_child"),
+                ("completed-parent", "open-grandchild", "parent_child"),
+            ],
+            children={
+                "epic": ("completed-parent",),
+                "completed-parent": ("open-grandchild",),
+            },
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, "/tasks/graph?epic=epic&include_resolved=0"
+    )
+    data = payload(html)
+
+    assert 'data-graph-node="completed-parent"' not in html
+    assert 'data-hierarchy-node="completed-parent"' not in html
+    assert "completed-parent" not in [node["id"] for node in data["nodes"]]
+    assert "completed-parent" not in fake.get_calls
+    # The open grandchild is untouched by any of it.
+    assert 'data-graph-node="open-grandchild"' in html
+    assert 'data-hierarchy-node="open-grandchild"' in html
+    # And with the toggle off, both are back — the filter is the only thing
+    # that removed it, so this pins the fix to the filter rather than to the
+    # ghost rule the project graph still needs.
+    both = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
+    assert 'data-graph-node="completed-parent"' in both
+    assert 'data-hierarchy-node="completed-parent"' in both
 
 
 def test_the_hierarchy_tree_shows_a_completed_parent_of_an_open_child(
@@ -2223,6 +2367,8 @@ def test_the_render_records_its_whole_shape_on_the_assembly_span(
         "lens.graph.cache_misses": 4,
         "lens.graph.ghost_reads": 0,
         "lens.graph.fanout": 4,
+        # Every planned pair was issued, so none is outstanding.
+        "lens.graph.cycle_reads_unmade": 0,
         "lens.graph.cycle_signal_incomplete": False,
     }
     assert (

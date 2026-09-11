@@ -138,6 +138,18 @@
           reads of tasks outside it — more work than one render may spend — so Lens
           will not guess at them rather than draw endpoints it never resolved.
         </p>
+      {% elif view.refusal.reason == "coverage" %}
+        {# A PROJECT count, not a node count. Lens must read every project this
+           scope names to answer "is this in a cycle?" honestly, so reading
+           only some of them is not an option it may take quietly. #}
+        <p>
+          The tasks in this scope name
+          <strong data-refusal-count>{{ view.refusal.count }}</strong>
+          projects between them, more than the
+          <strong>{{ view.refusal.max_tasks }}</strong> tasks this page will render.
+          Lens has to check every one of them before it can say whether a task is
+          in a cycle, and it will not read some and leave the rest unanswered.
+        </p>
       {% else %}
         <p>
           This scope holds <strong data-refusal-count>{{ view.refusal.count }}</strong>

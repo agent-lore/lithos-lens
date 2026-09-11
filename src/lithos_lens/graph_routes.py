@@ -209,6 +209,11 @@ def _record(
         span.set_attribute("lens.graph.cache_misses", view.cache_misses)
         span.set_attribute("lens.graph.ghost_reads", view.ghost_reads)
         span.set_attribute("lens.graph.fanout", view.fanout)
+        # Planned-but-unissued reads get a span field rather than a counter
+        # bucket: `tasks_graph_cycle_reads` counts calls that reached Lithos,
+        # so an outcome for calls that did not would break the one thing that
+        # counter is for.
+        span.set_attribute("lens.graph.cycle_reads_unmade", view.reads_unmade)
         span.set_attribute(
             "lens.graph.cycle_signal_incomplete",
             any(banner.id.startswith("cycle-") for banner in view.banners),
@@ -222,7 +227,10 @@ def _record(
     if view is not None:
         # The coverage reads get their own counter rather than a span field
         # only: "how often is the cycle signal partial in this deployment?" is
-        # a fleet question, and `outcome` is a three-value enum.
+        # a fleet question, and `outcome` is a three-value enum. Its total is
+        # the number of scoped blocked calls ISSUED — the three outcomes below
+        # are exhaustive over those, and a read the phase deadline left
+        # unissued is not one of them (see `lens.graph.cycle_reads_unmade`).
         for read_outcome, count in (
             ("ok", view.reads_ok),
             ("truncated", view.reads_truncated),
