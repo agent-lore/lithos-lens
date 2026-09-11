@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.frontier.load_dashboard._partition_state"
       }
     ],
-    "total_functions": 520
+    "total_functions": 519
   },
   "domain": {
     "associations": 54,
@@ -290,13 +290,13 @@
       },
       "TaskGraph": {
         "classes": 41,
-        "functions": 199,
-        "largest_module": "lithos_lens.frontier",
-        "largest_module_lines": 768,
-        "lines": 6052,
+        "functions": 198,
+        "largest_module": "lithos_lens.graph_layout",
+        "largest_module_lines": 791,
+        "lines": 6077,
         "modules": 15,
         "public_symbols": 83,
-        "sloc": 4581
+        "sloc": 4596
       },
       "Tasks": {
         "classes": 13,
@@ -329,16 +329,16 @@
         "sloc": 936
       }
     },
-    "max_module": "lithos_lens.config",
-    "max_module_lines": 790,
+    "max_module": "lithos_lens.graph_layout",
+    "max_module_lines": 791,
     "modules_over_800": [],
-    "total_lines": 15372,
+    "total_lines": 15397,
     "total_modules": 42,
-    "total_sloc": 11743
+    "total_sloc": 11758
   },
   "tests": {
     "ratio": 1.7,
-    "src_lines": 15372,
-    "test_lines": 26201
+    "src_lines": 15397,
+    "test_lines": 26233
   }
 }

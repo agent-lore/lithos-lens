@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.task_links import BLOCKER_EDGE_TYPES, PARENT_EDGE_TYPE
@@ -54,6 +54,12 @@ CYCLE_BLOCKER_KIND = "cycle"
 # failed (D2). Not a Lithos status: ``TaskRecord.status`` cannot hold it, which
 # is why the callers pass those ids separately.
 STATUS_UNKNOWN = "unknown"
+
+# Any total order over node ids, used as a sort key. ``_sort_key``'s
+# ``(created_at, id)`` for the fetched graph; the chain instead ranks a node by
+# its index in the already-sorted node list, which is the same order (see
+# :func:`longest_blocking_chain`).
+NodeOrder = Mapping[str, Any]
 
 EdgeState = Literal["active", "inactive", "unknown"]
 InactiveReason = Literal["satisfied", "dependent_resolved"]
@@ -128,9 +134,9 @@ class Condensation:
     layer: int = 0
     cycle: Cycle | None = None
     blocked_via_cycle: bool = False
-    # The representative's own ``created_at``, carried so the chain's
-    # tie-breaks order condensations by the same ``(created_at, id)`` as
-    # everything else without re-reading the task records.
+    # The representative's own ``created_at``, carried so a caller can order
+    # condensations by the same ``(created_at, id)`` as everything else
+    # without re-reading the task records.
     created_at: str = ""
 
 
@@ -289,7 +295,7 @@ def classify_dependency_edges(
 def _adjacency(
     nodes: Sequence[str],
     edges: Sequence[DependencyEdge],
-    key: Mapping[str, tuple[str, str]],
+    key: NodeOrder,
 ) -> dict[str, tuple[str, ...]]:
     """predecessor -> dependents, each list sorted by ``(created_at, id)``.
 
@@ -614,66 +620,86 @@ def _chain_bound(topology: Topology) -> ChainBound:
 
 
 def _active_condensed(
-    topology: Topology,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Successor/predecessor maps of the ACTIVE projection, condensed."""
-    member_of = {
-        member: condensation.id
-        for condensation in topology.condensations
-        for member in condensation.members
-    }
-    successors: dict[str, list[str]] = {c.id: [] for c in topology.condensations}
-    predecessors: dict[str, list[str]] = {c.id: [] for c in topology.condensations}
+    topology: Topology, order_of: NodeOrder
+) -> tuple[list[str], dict[str, str], dict[str, list[str]], dict[str, list[str]]]:
+    """Condense the ACTIVE projection on ITS OWN strongly connected components.
+
+    Deliberately NOT the display condensation. That one is built from every
+    dependency edge whatever its state, so one of its groups can hold tasks the
+    active projection does not connect at all: an open ``A -> B`` whose loop
+    closes back through a completed ``C`` is a single all-edge SCC and a live
+    two-chain at the same time. Reusing those groups here would discard
+    ``A -> B`` as an edge inside a group and report a chain of one, so D7's
+    "condensed DAG of the active projection" gets its own Tarjan over the
+    active edges alone — the all-edge condensation stays where it belongs, in
+    the cycles and the layers.
+
+    Returns the condensation ids in topological order, member -> group, and the
+    successor/predecessor maps of the condensed active DAG.
+    """
+    nodes = list(topology.nodes)
+    active = [edge for edge in topology.edges if edge.state == "active"]
+    adjacency = _adjacency(nodes, active, order_of)
+    member_of: dict[str, str] = {}
+    groups: list[str] = []
+    # Tarjan emits components in REVERSE topological order of the
+    # condensation, so walking them backwards is the topological order the DP
+    # below needs — no second Kahn pass.
+    for component in reversed(_strongly_connected(nodes, adjacency)):
+        representative = min(component, key=order_of.__getitem__)
+        groups.append(representative)
+        for member in component:
+            member_of[member] = representative
+    successors: dict[str, list[str]] = {group: [] for group in groups}
+    predecessors: dict[str, list[str]] = {group: [] for group in groups}
     for predecessor, dependent in sorted(
         {
             (member_of[edge.from_task_id], member_of[edge.to_task_id])
-            for edge in topology.edges
-            if edge.state == "active"
-            and member_of[edge.from_task_id] != member_of[edge.to_task_id]
-        }
+            for edge in active
+            if member_of[edge.from_task_id] != member_of[edge.to_task_id]
+        },
+        key=lambda pair: (order_of[pair[0]], order_of[pair[1]]),
     ):
         successors[predecessor].append(dependent)
         predecessors[dependent].append(predecessor)
-    return successors, predecessors
+    return groups, member_of, successors, predecessors
 
 
-def _longest_from(
+def _longest_paths(
     order: Sequence[str],
     neighbours: Mapping[str, Sequence[str]],
-    key: Mapping[str, tuple[str, str]],
-) -> tuple[dict[str, int], dict[str, str]]:
-    """Longest path length per node over ``neighbours``, plus the step taken.
+    key: NodeOrder,
+    *,
+    against_the_render: bool = False,
+) -> dict[str, tuple[str, ...]]:
+    """The longest path from each node over ``neighbours``, in walk order.
 
     ``order`` must be reverse-topological for the direction being walked. Ties
-    break on the smallest ``(created_at, id)`` at each step, which is what
-    makes the traced chain the same one on every render.
+    break on the smallest ``(created_at, id)`` sequence READ FORWARD — whole
+    paths compared, not one step at a time — which is what makes the traced
+    chain the same one on every render.
+
+    Whole paths matter only when the walk runs AGAINST the render, i.e. the
+    predecessor walk into a focused node: comparing the steps nearest the
+    focus first starts the tie-break at the wrong end of the chain, so with
+    equal ``A -> D -> F`` and ``B -> C -> F`` (``A < B < C < D``) it renders
+    ``B -> C -> F`` where the global walk renders ``A -> D -> F``. Focusing a
+    node that is already ON the longest chain must not move the chain.
     """
-    length = dict.fromkeys(neighbours, 1)
-    step: dict[str, str] = {}
+    step = -1 if against_the_render else 1
+    best: dict[str, tuple[str, ...]] = {}
     for node in order:
-        best = 0
-        chosen = ""
+        chosen: tuple[str, ...] = ()
         for neighbour in neighbours[node]:
-            candidate = length[neighbour]
-            # ``not chosen`` first: the tie-break below reads ``key[chosen]``,
-            # which only exists once a first neighbour has been taken.
-            if (
-                not chosen
-                or candidate > best
-                or (candidate == best and key[neighbour] < key[chosen])
+            candidate = best[neighbour]
+            if len(candidate) > len(chosen) or (
+                len(candidate) == len(chosen)
+                and [key[n] for n in candidate[::step]]
+                < [key[n] for n in chosen[::step]]
             ):
-                best, chosen = candidate, neighbour
-        if chosen:
-            length[node] = best + 1
-            step[node] = chosen
-    return length, step
-
-
-def _walk(start: str, step: Mapping[str, str]) -> list[str]:
-    walked = [start]
-    while walked[-1] in step:
-        walked.append(step[walked[-1]])
-    return walked
+                chosen = candidate
+        best[node] = (node, *chosen)
+    return best
 
 
 def longest_blocking_chain(topology: Topology, *, through: str = "") -> BlockingChain:
@@ -690,26 +716,25 @@ def longest_blocking_chain(topology: Topology, *, through: str = "") -> Blocking
     path: the scope is a page's worth of tasks and their one-hop ghosts.
     """
     bound = _chain_bound(topology)
-    if not topology.condensations:
+    if not topology.nodes:
         return BlockingChain(bound=bound)
-    # The layer order is topological for every dependency edge, so it is
-    # topological for the active subset too.
-    order = [c.id for c in topology.condensations]
-    key = {c.id: _sort_key(c.id, c.created_at) for c in topology.condensations}
-    successors, predecessors = _active_condensed(topology)
-    down, next_step = _longest_from(list(reversed(order)), successors, key)
+    # ``Topology.nodes`` is already sorted by ``(created_at, id)``, so a node's
+    # index in it IS that order. The chain ranks by that index because it
+    # condenses the active projection itself, and a group of that condensation
+    # is represented by whichever node it holds — not necessarily one the
+    # topology carries a ``created_at`` for.
+    order_of = {node: index for index, node in enumerate(topology.nodes)}
+    groups, member_of, successors, predecessors = _active_condensed(topology, order_of)
+    down = _longest_paths(list(reversed(groups)), successors, order_of)
     if not through:
-        start = min(order, key=lambda node: (-down[node], key[node]))
-        return BlockingChain(nodes=tuple(_walk(start, next_step)), bound=bound)
-    focus = topology.condensation_of(through)
+        start = min(groups, key=lambda node: (-len(down[node]), order_of[node]))
+        return BlockingChain(nodes=down[start], bound=bound)
+    focus = member_of.get(through)
     if focus is None:
         return BlockingChain(bound=bound)
-    _, previous_step = _longest_from(order, predecessors, key)
-    upward = _walk(focus.id, previous_step)
-    return BlockingChain(
-        nodes=tuple(reversed(upward)) + tuple(_walk(focus.id, next_step))[1:],
-        bound=bound,
-    )
+    up = _longest_paths(groups, predecessors, order_of, against_the_render=True)
+    chain = tuple(reversed(up[focus])) + down[focus][1:]
+    return BlockingChain(nodes=chain, bound=bound)
 
 
 def hierarchy_rows(

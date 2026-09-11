@@ -517,8 +517,12 @@ slice); what ships here is the computation and its rules.
 - **The longest blocking chain** is the longest path by node count over the
   condensed **active** projection, so a completed three-chain never outranks the
   open two-chain beside it; a cycle counts once, ghosts count, and ties break on
-  the smallest `(created_at, id)` at each step so the traced chain is stable
-  across renders. The chain through a given node is available for focus mode.
+  the smallest `(created_at, id)` sequence read forward, so the traced chain is
+  stable across renders and focusing a node already on it does not move it. The
+  active projection is condensed on its OWN components, not on the layering's:
+  a cycle whose loop closes through a completed task is one node to the layers
+  and a live chain here. The chain through a given node is available for focus
+  mode.
 - **The chain carries its own confidence.** It is a lower bound — rendered
   "≥ N", never as an exact claim — whenever a node's edges could not be read OR
   any `unknown` dependency edge exists **anywhere** in the fetched graph: an

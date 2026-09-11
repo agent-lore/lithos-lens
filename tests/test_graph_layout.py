@@ -342,6 +342,38 @@ def test_a_cyclic_condensation_counts_once_in_the_chain() -> None:
     assert chain.length == 3
 
 
+def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:
+    """D7: a cycle whose loop closes through a completed task is still live.
+
+    ``A(open) -> B(open) -> C(completed) -> A`` is ONE all-edge SCC — which is
+    what the layers must draw — but only ``A -> B`` is active, so the chain is
+    the open two-chain and not a single collapsed node.
+    """
+    topology = build_topology(
+        _tasks("A", "B", "C:completed"), _edges("A>B", "B>C", "C>A")
+    )
+
+    # The display condensation still holds all three: cycles/layers are D4's.
+    assert _layer_ids(topology) == [["A"]]
+    assert topology.cycles[0].members == ("A", "B", "C")
+
+    chain = longest_blocking_chain(topology)
+    assert chain.nodes == ("A", "B")
+    assert chain.length == 2
+    assert chain.bound == "exact"
+
+
+def test_focusing_a_node_on_the_longest_chain_keeps_that_chain() -> None:
+    """Equal prefixes tie-break on the chain read FORWARD, not on the step
+    nearest the focus: ``A -> D`` beats ``B -> C`` even though ``C < D``."""
+    topology = build_topology(
+        _tasks("A", "B", "C", "D", "F"), _edges("A>D", "D>F", "B>C", "C>F")
+    )
+
+    assert longest_blocking_chain(topology).nodes == ("A", "D", "F")
+    assert longest_blocking_chain(topology, through="F").nodes == ("A", "D", "F")
+
+
 def test_ghosts_count_toward_the_chain() -> None:
     """D7: a chain may start at a ghost, so the scope's ghost records count."""
     topology = build_topology(_tasks("A", "B", "C"), _edges("A>B", "B>C"))
