@@ -292,11 +292,11 @@
         "classes": 41,
         "functions": 198,
         "largest_module": "lithos_lens.graph_layout",
-        "largest_module_lines": 791,
-        "lines": 6077,
+        "largest_module_lines": 797,
+        "lines": 6083,
         "modules": 15,
         "public_symbols": 83,
-        "sloc": 4596
+        "sloc": 4603
       },
       "Tasks": {
         "classes": 13,
@@ -330,15 +330,15 @@
       }
     },
     "max_module": "lithos_lens.graph_layout",
-    "max_module_lines": 791,
+    "max_module_lines": 797,
     "modules_over_800": [],
-    "total_lines": 15397,
+    "total_lines": 15403,
     "total_modules": 42,
-    "total_sloc": 11758
+    "total_sloc": 11765
   },
   "tests": {
     "ratio": 1.71,
-    "src_lines": 15397,
-    "test_lines": 26373
+    "src_lines": 15403,
+    "test_lines": 26392
   }
 }

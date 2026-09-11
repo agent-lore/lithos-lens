@@ -229,6 +229,12 @@ def test_every_cycle_shape_is_one_condensation(
 
 
 def test_scc_renders_identically_under_reversed_edge_order() -> None:
+    """D4: the render is a function of the graph, not of the fetch order.
+
+    Compared WHOLE, not field by field: ``Topology.edges`` is emitted to the
+    payload like everything else, so an arrival-ordered edge list would make
+    two renders of one graph unequal even with identical cycles and layers.
+    """
     tasks = _tasks("A", "B", "C")
     specs = ("A>B", "B>C", "C>A")
     forward = build_topology(tasks, _edges(*specs))
@@ -236,10 +242,16 @@ def test_scc_renders_identically_under_reversed_edge_order() -> None:
         list(reversed(tasks)), list(reversed(_edges(*specs)))
     )
 
-    assert forward.cycles == reversed_input.cycles
+    assert forward == reversed_input
     assert forward.cycles[0].members == ("A", "B", "C")
     assert forward.cycles[0].path == ("A", "B", "C", "A")
-    assert forward.layers == reversed_input.layers
+    # Edges come back in ``(created_at, id)`` order of predecessor then
+    # dependent, whichever end of the fetch they arrived from.
+    assert [(edge.from_task_id, edge.to_task_id) for edge in forward.edges] == [
+        ("A", "B"),
+        ("B", "C"),
+        ("C", "A"),
+    ]
 
 
 def test_scc_members_and_path_follow_created_at_before_id() -> None:
@@ -259,7 +271,14 @@ def test_scc_members_and_path_follow_created_at_before_id() -> None:
     (cycle,) = topology.cycles
     assert cycle.members == ("A", "C", "B")
     assert cycle.path == ("A", "C", "A")
-    assert topology.cycles == reversed_input.cycles
+    assert topology == reversed_input
+    # The edge order is the members' order too: C before B, created before it.
+    assert [(edge.from_task_id, edge.to_task_id) for edge in topology.edges] == [
+        ("A", "C"),
+        ("A", "B"),
+        ("C", "A"),
+        ("B", "A"),
+    ]
 
 
 def test_lithos_flagged_member_with_no_scc_is_condensed_alone_and_marked() -> None:

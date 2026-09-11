@@ -55,10 +55,9 @@ CYCLE_BLOCKER_KIND = "cycle"
 # is why the callers pass those ids separately.
 STATUS_UNKNOWN = "unknown"
 
-# Any total order over node ids, used as a sort key. ``_sort_key``'s
-# ``(created_at, id)`` for the fetched graph; the chain instead ranks a node by
-# its index in the already-sorted node list, which is the same order (see
-# :func:`longest_blocking_chain`).
+# Any total order over node ids, used as a sort key: ``_sort_key``'s
+# ``(created_at, id)`` for the fetched graph, or — in the chain — a node's index
+# in the already-sorted node list, which is the same order.
 NodeOrder = Mapping[str, Any]
 
 EdgeState = Literal["active", "inactive", "unknown"]
@@ -262,10 +261,20 @@ def classify_dependency_edges(
     read, in which case Lens cannot classify the edge in EITHER direction and
     says so, rather than guessing an answer every downstream claim would
     inherit.
+
+    The result is ORDERED — predecessor, then dependent, then type, all by
+    ``(created_at, id)`` — and not by the order the edges were fetched, because
+    it is emitted whole as ``Topology.edges``: in arrival order two renders of
+    one graph compare unequal, which is what D4's reversed-input rule forbids.
     """
+    created_at = {task.id: task.created_at for task in tasks}
     statuses = _status_map(tasks, edges, unknown_status)
+    order = {node: _sort_key(node, created_at.get(node, "")) for node in statuses}
     classified: list[DependencyEdge] = []
-    for edge in _dedupe_edges(edges, DEPENDENCY_EDGE_TYPES):
+    for edge in sorted(
+        _dedupe_edges(edges, DEPENDENCY_EDGE_TYPES),
+        key=lambda e: (order[e.from_task_id], order[e.to_task_id], e.type),
+    ):
         predecessor = statuses.get(edge.from_task_id, STATUS_UNKNOWN)
         dependent = statuses.get(edge.to_task_id, STATUS_UNKNOWN)
         state: EdgeState
@@ -624,15 +633,13 @@ def _active_condensed(
 ) -> tuple[list[str], dict[str, str], dict[str, list[str]], dict[str, list[str]]]:
     """Condense the ACTIVE projection on ITS OWN strongly connected components.
 
-    Deliberately NOT the display condensation. That one is built from every
-    dependency edge whatever its state, so one of its groups can hold tasks the
-    active projection does not connect at all: an open ``A -> B`` whose loop
-    closes back through a completed ``C`` is a single all-edge SCC and a live
-    two-chain at the same time. Reusing those groups here would discard
-    ``A -> B`` as an edge inside a group and report a chain of one, so D7's
-    "condensed DAG of the active projection" gets its own Tarjan over the
-    active edges alone — the all-edge condensation stays where it belongs, in
-    the cycles and the layers.
+    Deliberately NOT the display condensation, which is built from every
+    dependency edge whatever its state: an open ``A -> B`` whose loop closes
+    back through a completed ``C`` is one all-edge SCC and a live two-chain at
+    once, and reusing that group here would discard ``A -> B`` as intra-group
+    and report a chain of one. So D7's "condensed DAG of the active projection"
+    gets its own Tarjan over the active edges alone, and the all-edge
+    condensation stays where it belongs — in the cycles and the layers.
 
     Returns the condensation ids in topological order, member -> group, and the
     successor/predecessor maps of the condensed active DAG.
@@ -719,10 +726,9 @@ def longest_blocking_chain(topology: Topology, *, through: str = "") -> Blocking
     if not topology.nodes:
         return BlockingChain(bound=bound)
     # ``Topology.nodes`` is already sorted by ``(created_at, id)``, so a node's
-    # index in it IS that order. The chain ranks by that index because it
-    # condenses the active projection itself, and a group of that condensation
-    # is represented by whichever node it holds — not necessarily one the
-    # topology carries a ``created_at`` for.
+    # index in it IS that order. The chain ranks by index because it condenses
+    # the active projection itself, and a group of THAT condensation can be
+    # represented by any node, not just one carrying a ``created_at`` here.
     order_of = {node: index for index, node in enumerate(topology.nodes)}
     groups, member_of, successors, predecessors = _active_condensed(topology, order_of)
     down = _longest_paths(list(reversed(groups)), successors, order_of)
