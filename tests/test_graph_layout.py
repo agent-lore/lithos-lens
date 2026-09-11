@@ -11,7 +11,10 @@ chain it is nowhere near.
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
+from types import FrameType
+from typing import Any
 
 import pytest
 
@@ -55,6 +58,22 @@ def _tasks(*specs: str) -> list[TaskRecord]:
     for spec in specs:
         task_id, _, status = spec.partition(":")
         built.append(_task(task_id, status=status or "open"))  # type: ignore[arg-type]
+    return built
+
+
+def _dated(*specs: str) -> list[TaskRecord]:
+    """``"A@3"`` is task A created on 2026-08-03, open.
+
+    ``_tasks`` dates A, B, C... in id order, which cannot tell the required
+    ``(created_at, id)`` apart from a plain id sort. These fixtures pull the
+    two APART — the winner's id sorts later than the loser's — and repeating a
+    day pins the id fallback.
+    """
+    built = []
+    for spec in specs:
+        task_id, _, day = spec.partition("@")
+        stamp = f"2026-08-{int(day):02d}T09:00:00+00:00"
+        built.append(_task(task_id, created_at=stamp))
     return built
 
 
@@ -187,15 +206,16 @@ def test_edge_endpoint_with_no_record_is_a_node_of_unknown_status() -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "specs"),
+    ("label", "specs", "path"),
     [
-        ("self-loop", ("A>A",)),
-        ("two-cycle", ("A>B", "B>A")),
-        ("three-cycle", ("A>B", "B>C", "C>A")),
+        # A self-loop closes on itself: the path is ``(A, A)``, not ``(A,)``.
+        ("self-loop", ("A>A",), ("A", "A")),
+        ("two-cycle", ("A>B", "B>A"), ("A", "B", "A")),
+        ("three-cycle", ("A>B", "B>C", "C>A"), ("A", "B", "C", "A")),
     ],
 )
 def test_every_cycle_shape_is_one_condensation(
-    label: str, specs: tuple[str, ...]
+    label: str, specs: tuple[str, ...], path: tuple[str, ...]
 ) -> None:
     members = sorted({end for spec in specs for end in spec.split(">")})
     topology = build_topology(_tasks(*members), _edges(*specs))
@@ -203,6 +223,7 @@ def test_every_cycle_shape_is_one_condensation(
     (cycle,) = topology.cycles
     assert cycle.members == tuple(members)
     assert cycle.scc is True
+    assert cycle.path == path
     # One condensation, so one layer, however many members it holds.
     assert _layer_ids(topology) == [["A"]]
 
@@ -219,6 +240,26 @@ def test_scc_renders_identically_under_reversed_edge_order() -> None:
     assert forward.cycles[0].members == ("A", "B", "C")
     assert forward.cycles[0].path == ("A", "B", "C", "A")
     assert forward.layers == reversed_input.layers
+
+
+def test_scc_members_and_path_follow_created_at_before_id() -> None:
+    """D4's order is ``(created_at, id)`` all the way down.
+
+    A forks to B and C, both of which close back on it. C is named later and
+    created EARLIER, so it leads the member list and the DFS tries it first —
+    an id sort would answer ``("A", "B", ...)`` to both.
+    """
+    tasks = _dated("A@1", "B@3", "C@2")
+    specs = ("A>B", "A>C", "B>A", "C>A")
+    topology = build_topology(tasks, _edges(*specs))
+    reversed_input = build_topology(
+        list(reversed(tasks)), list(reversed(_edges(*specs)))
+    )
+
+    (cycle,) = topology.cycles
+    assert cycle.members == ("A", "C", "B")
+    assert cycle.path == ("A", "C", "A")
+    assert topology.cycles == reversed_input.cycles
 
 
 def test_lithos_flagged_member_with_no_scc_is_condensed_alone_and_marked() -> None:
@@ -269,6 +310,18 @@ def test_roots_list_every_in_degree_zero_condensation() -> None:
     topology = build_topology(_tasks("A", "B", "C", "D"), _edges("A>C", "B>C", "C>D"))
 
     assert topology.roots == ("A", "B")
+
+
+def test_a_cyclic_condensation_is_a_root_even_with_an_incoming_edge() -> None:
+    """D4: a cycle contributes a root of its own on top of the in-degree-zero
+    ones. Here C feeds the cycle, so ``{A, B}`` is NOT in-degree-zero — and a
+    layout given no root inside it draws the cycle from wherever it starts."""
+    topology = build_topology(_tasks("A", "B", "C"), _edges("C>A", "A>B", "B>A"))
+
+    (cycle,) = topology.cycles
+    assert cycle.members == ("A", "B")
+    assert _layer_ids(topology) == [["C"], ["A"]]
+    assert topology.roots == ("C", "A")
 
 
 # --------------------------------------------------------------------------
@@ -322,13 +375,24 @@ def test_chain_through_an_unknown_id_is_empty_not_an_error() -> None:
     assert longest_blocking_chain(topology, through="nope").nodes == ()
 
 
-def test_chain_ties_break_on_created_at_then_id() -> None:
+@pytest.mark.parametrize(
+    ("label", "specs", "expected"),
+    [
+        # C is named after B and created BEFORE it, so the C branch wins: an
+        # implementation that sorted on id alone would answer ("A", "B", "D").
+        ("created_at wins", ("A@1", "B@3", "C@2", "D@5", "E@4"), ("A", "C", "E")),
+        # Same day on both branches: the id is the documented fallback, so the
+        # answer is pinned rather than left to the order the edges arrived in.
+        ("id breaks the draw", ("A@1", "B@2", "C@2", "D@3", "E@3"), ("A", "B", "D")),
+    ],
+)
+def test_chain_ties_break_on_created_at_then_id(
+    label: str, specs: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
     """Two equal-length branches: the smaller ``(created_at, id)`` wins each step."""
-    topology = build_topology(
-        _tasks("A", "B", "C", "D", "E"), _edges("A>B", "A>C", "B>D", "C>E")
-    )
+    topology = build_topology(_dated(*specs), _edges("A>B", "A>C", "B>D", "C>E"))
 
-    assert longest_blocking_chain(topology).nodes == ("A", "B", "D")
+    assert longest_blocking_chain(topology).nodes == expected
 
 
 def test_a_cyclic_condensation_counts_once_in_the_chain() -> None:
@@ -340,6 +404,11 @@ def test_a_cyclic_condensation_counts_once_in_the_chain() -> None:
     # B and C are one condensation, represented by B: A -> {B,C} -> D is 3.
     assert chain.nodes == ("A", "B", "D")
     assert chain.length == 3
+    # Focus resolves by MEMBERSHIP, so the member that is not the
+    # representative names the same condensation and traces the same chain.
+    for member in ("B", "C"):
+        focused = longest_blocking_chain(topology, through=member)
+        assert (focused.nodes, focused.length) == (chain.nodes, 3)
 
 
 def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:
@@ -364,14 +433,21 @@ def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:
 
 
 def test_focusing_a_node_on_the_longest_chain_keeps_that_chain() -> None:
-    """Equal prefixes tie-break on the chain read FORWARD, not on the step
-    nearest the focus: ``A -> D`` beats ``B -> C`` even though ``C < D``."""
+    """Equal prefixes tie-break the way the chain reads: FORWARD, and on
+    ``(created_at, id)``.
+
+    ``B -> C -> F`` and ``A -> D -> F`` are equal-length, and B was created
+    first, so B's branch is the global answer — an id sort would take A's.
+    Focusing F must not switch branches, which it does if the tie-break starts
+    from the step nearest the focus: D is the smaller immediate predecessor.
+    """
     topology = build_topology(
-        _tasks("A", "B", "C", "D", "F"), _edges("A>D", "D>F", "B>C", "C>F")
+        _dated("A@2", "B@1", "C@4", "D@3", "F@5"),
+        _edges("B>C", "C>F", "A>D", "D>F"),
     )
 
-    assert longest_blocking_chain(topology).nodes == ("A", "D", "F")
-    assert longest_blocking_chain(topology, through="F").nodes == ("A", "D", "F")
+    assert longest_blocking_chain(topology).nodes == ("B", "C", "F")
+    assert longest_blocking_chain(topology, through="F").nodes == ("B", "C", "F")
 
 
 def test_ghosts_count_toward_the_chain() -> None:
@@ -396,6 +472,21 @@ def test_completed_three_chain_loses_to_the_open_two_chain() -> None:
 def test_incomplete_node_flags_the_chain_as_a_lower_bound() -> None:
     tasks, edges = _depth_five()
     topology = build_topology(tasks, edges, incomplete=["D"])
+
+    chain = longest_blocking_chain(topology)
+    assert chain.nodes == ("A", "B", "C", "D", "E")
+    assert chain.bound == "lower_bound"
+
+
+def test_incomplete_node_off_the_chain_still_lowers_the_bound() -> None:
+    """D7: the bound is a property of the SCOPE, not of the selected chain.
+
+    G is disconnected — nowhere near the five the chain returns — and its
+    unread edges could still have been the longer chain, exactly as a
+    disconnected ``unknown`` edge could.
+    """
+    tasks, edges = _depth_five()
+    topology = build_topology([*tasks, _task("G")], edges, incomplete=["G"])
 
     chain = longest_blocking_chain(topology)
     assert chain.nodes == ("A", "B", "C", "D", "E")
@@ -518,24 +609,73 @@ def _exponential_scc(depth: int) -> tuple[list[TaskRecord], list[EdgeRecord]]:
     return tasks, edges
 
 
+# Budget for one ``build_topology``, in executed lines of the module under
+# test per node-plus-edge. The bounded walk costs about 64 (11.3k lines for
+# this fixture's 177 elements), so 400 leaves six times the headroom for
+# ordinary refactoring while still being LINEAR — which is the whole claim.
+_LINES_PER_ELEMENT = 400
+
+
+class _LineBudget:
+    """Trips as soon as ``graph_layout`` executes more than ``limit`` lines.
+
+    The structural oracle for the bounded walk. Exhaustive backtracking is not
+    "slower" than the fix, it is a different complexity class, so the
+    assertion is on the WORK DONE and not on the clock: a descheduled
+    container cannot fail it, and a reintroduced blowup fails it in
+    milliseconds rather than hanging the suite for the ``2**24`` descents it
+    would otherwise attempt.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.lines = 0
+        self._previous: Any = None
+
+    def __enter__(self) -> _LineBudget:
+        self._previous = sys.gettrace()
+        sys.settrace(self)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        sys.settrace(self._previous)
+
+    # ``Any`` returns, not ``object``: sys.settrace's own signature is
+    # recursive (a trace function returns a trace function), which is not
+    # expressible here, and ``object`` would not be assignable to it.
+    def __call__(self, frame: FrameType, event: str, arg: object) -> Any:
+        """Global hook: ask for line events from the module under test only."""
+        if frame.f_globals.get("__name__") == "lithos_lens.graph_layout":
+            return self._count
+        return None
+
+    def _count(self, frame: FrameType, event: str, arg: object) -> Any:
+        self.lines += 1
+        if self.lines > self.limit:
+            raise AssertionError(
+                f"graph_layout executed over {self.limit} lines on a "
+                "graph of this size: the representative-path walk is no "
+                "longer bounded by the component"
+            )
+        return self._count
+
+
 def test_representative_path_walk_is_bounded_by_the_component_size() -> None:
     """Regression for the exhaustive-backtracking DoS: un-marking a node when
     the walk backtracked made the path search enumerate simple paths, so an
     agent-written cycle of ~80 tasks (well inside ``[graph].max_tasks``) burned
     minutes of event loop per render. Keeping the visited mark bounds it at one
     expansion per member. Black-box through ``build_topology``, the entry point
-    a page scope actually reaches, and asserting the answer is unchanged as
-    well as fast — the trap costs nothing to skip, it only costs to explore."""
-    import time
-
+    a page scope actually reaches, asserting the answer is unchanged AND that
+    the work stayed linear — the trap costs nothing to skip, only to explore."""
     tasks, edges = _exponential_scc(24)
+    budget = _LineBudget(_LINES_PER_ELEMENT * (len(tasks) + len(edges)))
 
-    start = time.perf_counter()
-    topology = build_topology(tasks, edges)
-    elapsed = time.perf_counter() - start
+    with budget:
+        topology = build_topology(tasks, edges)
 
     (cycle,) = topology.cycles
     assert cycle.path == ("s", "m", "w", "s")
     assert cycle.members[0] == "s"
     assert len(cycle.members) == len(tasks)
-    assert elapsed < 2.0  # pre-fix: 14.8 s here, and 2x per 3 nodes added
+    assert budget.lines <= budget.limit
