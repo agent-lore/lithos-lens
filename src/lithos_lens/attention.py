@@ -9,7 +9,8 @@ Six ordered rules over the joined dashboard snapshot (REQUIREMENTS §5.2.2):
 4. ``claim-expiring`` — an active claim is about to lapse (expired claims are
    unobservable upstream, so this is the only observable signal);
 5. ``stale-open`` — a workable open task nobody resolved;
-6. ``ready-unclaimed`` — a ready-frontier row the fleet has not picked up.
+6. ``ready-unclaimed`` — a ready-frontier row a fleet was expected to pick
+   up (it carries a dispatch trigger tag) and has not.
 
 A row that fires any rule is promoted into the ``attention`` section and
 REMOVED from the section it would otherwise occupy (the single-placement
@@ -72,7 +73,9 @@ STRUCTURAL_SOURCE_SECTIONS: tuple[SectionName, ...] = ("claims_unknown",)
 
 @dataclass(frozen=True)
 class AttentionPolicy:
-    """Thresholds for the age-based Needs-attention rules (3-6).
+    """Tuning for the Needs-attention rules that have any (3-6).
+
+    Four thresholds plus rule 6's dispatch-trigger scope.
 
     The defaults mirror the ``[lithos-lens.tasks]`` config defaults —
     ``config.py`` is the operator-facing source of truth and
@@ -86,6 +89,14 @@ class AttentionPolicy:
     claim_expiring_soon_minutes: int = 10
     stale_open_age_days: int = 7
     unclaimed_ready_age_minutes: int = 60
+    # Rule 6's SCOPE, not a threshold: only a ready task carrying a tag with one
+    # of these prefixes is work some fleet was expected to pick up (loom
+    # dispatches on ``trigger:story-develop``). Untagged ready work waits for a
+    # human to schedule it, so its age says nothing about a stalled fleet —
+    # flagging it emptied the Ready section and made Needs attention the de-facto
+    # Ready list. An EMPTY tuple restores the pre-2026-09 "every ready task"
+    # behaviour for deployments that want it.
+    dispatch_trigger_tag_prefixes: tuple[str, ...] = ("trigger:",)
 
 
 def flag_attention(
@@ -232,18 +243,47 @@ def _attention_reasons(
             )
         )
     if section == "ready" and not row.claims:
-        # Rule 6 is ready-aware on purpose: an unclaimed BLOCKED task is
-        # correct behavior, not a warning (the pre-graph rule flagged it and
-        # was a structural false positive).
-        unpicked_after = timedelta(minutes=policy.unclaimed_ready_age_minutes)
-        if age is not None and age > unpicked_after:
-            reasons.append(
-                AttentionReason(
-                    rule="ready-unclaimed",
-                    detail=f"On the ready frontier, unclaimed for {_humanize(age)}.",
-                )
-            )
+        unpicked = _ready_unclaimed_reason(row.task.tags, age, policy=policy)
+        if unpicked is not None:
+            reasons.append(unpicked)
     return tuple(reasons)
+
+
+def _ready_unclaimed_reason(
+    tags: Sequence[str],
+    age: timedelta | None,
+    *,
+    policy: AttentionPolicy,
+) -> AttentionReason | None:
+    """Rule 6: ready work a fleet was expected to pick up, and has not.
+
+    Ready-aware on purpose — an unclaimed BLOCKED task is correct behavior, not
+    a warning (the pre-graph rule flagged it and was a structural false
+    positive) — and dispatch-aware for the same reason: with no trigger tag
+    nobody promised to pick the task up, so its age is not evidence about a
+    fleet. An empty prefix list judges every ready task (the old behavior).
+
+    Tag order decides which trigger the fact names, not prefix order: the chip
+    should name the tag the task actually carries first. A blank prefix would
+    match every tag, so ``config.py`` rejects one at load rather than letting it
+    widen the rule here.
+    """
+    trigger = next(
+        (tag for tag in tags if tag.startswith(policy.dispatch_trigger_tag_prefixes)),
+        None,
+    )
+    if policy.dispatch_trigger_tag_prefixes and trigger is None:
+        return None
+    unpicked_after = timedelta(minutes=policy.unclaimed_ready_age_minutes)
+    if age is None or age <= unpicked_after:
+        return None
+    frontier = "On the ready frontier"
+    if trigger is not None:
+        frontier += f' with "{trigger}"'
+    return AttentionReason(
+        rule="ready-unclaimed",
+        detail=f"{frontier}, unclaimed for {_humanize(age)}.",
+    )
 
 
 def _waiting_human_gates(

@@ -32,6 +32,12 @@ gate_waiting_attention_hours = 24   # human gate waiting on a person
 claim_expiring_soon_minutes = 10    # claim about to lapse (expired claims are unobservable)
 stale_open_age_days = 7             # workable open task nobody resolved
 unclaimed_ready_age_minutes = 60    # ready frontier row the fleet has not picked up
+# Rule 6's SCOPE: only ready tasks carrying a tag with one of these prefixes are
+# work a fleet was expected to pick up (loom dispatches on `trigger:...`).
+# Untagged ready work waits for a human to schedule it, so its age says nothing
+# about a stalled fleet and it stays in Ready. Set [] to judge every ready task
+# (the pre-2026-09 behaviour).
+dispatch_trigger_tag_prefixes = ["trigger:"]
 default_status_groups = ["open", "completed", "cancelled"]
 project_convention = "both"   # metadata | tag | both — which project convention ?project= honours
 project_tag_key = "project"   # tag key reserved for the tag convention
