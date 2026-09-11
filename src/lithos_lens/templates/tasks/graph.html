@@ -58,7 +58,12 @@
             {{ "waits on gate" if edge.type == "waits_on_gate" else "blocked by" }}
             <a href="{{ task_detail_url(request, edge.from_id) }}">{{ edge.from_label }}</a>
             {% if edge.inactive %}<span data-edge-label>inactive — {{ edge.reason | replace("_", " ") }}</span>{% endif %}
-            {% if edge.unknown %}<span data-edge-label>unresolvable — this predecessor's status could not be read</span>{% endif %}
+            {% if edge.unknown %}
+              {# Two causes, one line each (D6): the edge is unknown because an
+                 ENDPOINT could not be read, and which one decides what is true
+                 to say about it. #}
+              <span data-edge-label>unresolvable — {{ "this predecessor's status could not be read" if edge.from_unknown else "this task's own status could not be read" if edge.to_unknown else "an endpoint's status could not be classified" }}</span>
+            {% endif %}
           </li>
         {% endfor %}
       </ul>
@@ -121,15 +126,25 @@
        drawn, and the count is the guard's own evidence. #}
     <section class="panel banner-warning" role="alert" data-graph-refusal data-refusal-reason="{{ view.refusal.reason }}">
       <h2>Narrow your scope</h2>
-      <p>
-        This scope holds <strong data-refusal-count>{{ view.refusal.count }}</strong>
-        {{ "nodes (ghosts counted)" if view.refusal.ghosts_counted else "tasks" }},
-        over the <strong>{{ view.refusal.max_tasks }}</strong> this page will render.
-        {% if view.refusal.reason == "classification" %}
-          Classifying its out-of-scope endpoints would cost more reads than one render may spend,
-          so Lens will not guess at them.
-        {% endif %}
-      </p>
+      {% if view.refusal.reason == "classification" %}
+        {# NOT a node count, and not a comparison against max_tasks: this
+           refusal counts the out-of-set ENDPOINTS that would need a read to
+           classify, and it also fires on the phase deadline — where the count
+           can sit far below the node limit. Saying "N tasks, over the 300"
+           here would be numerically false. #}
+        <p>
+          Classifying this scope needs
+          <strong data-refusal-count>{{ view.refusal.count }}</strong>
+          reads of tasks outside it — more work than one render may spend — so Lens
+          will not guess at them rather than draw endpoints it never resolved.
+        </p>
+      {% else %}
+        <p>
+          This scope holds <strong data-refusal-count>{{ view.refusal.count }}</strong>
+          {{ "nodes (ghosts counted)" if view.refusal.ghosts_counted else "tasks" }},
+          over the <strong>{{ view.refusal.max_tasks }}</strong> this page will render.
+        </p>
+      {% endif %}
       <p>Pick a single epic, or a smaller project, and try again.</p>
       <a class="button-secondary" href="/tasks/graph">Back to the scope picker</a>
     </section>
@@ -148,6 +163,18 @@
         <span data-graph-as-of>as of <time datetime="{{ view.as_of.isoformat() }}">{{ view.as_of.strftime("%H:%M:%S") }}</time></span>
       {% endif %}
     </section>
+
+    {% if not view.nodes %}
+      {# A real answer, not an error: the scope exists and holds nothing Lens
+         was asked to draw — an epic with no children, a project whose work is
+         all resolved while `include_resolved` is off. #}
+      <section class="banner" role="status" data-graph-empty>
+        <strong>Nothing to draw in this scope.</strong>
+        <span>
+          No task matched it{{ "" if params.include_resolved else " — resolved tasks are hidden" }}.
+        </span>
+      </section>
+    {% endif %}
 
     {% if view.cycles or view.external_cycles %}
       <section class="banner banner-warning" role="alert" data-cycle-callout>

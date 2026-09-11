@@ -19,12 +19,12 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | M | 5 | 5 |
-| `lithos_lens.graph_cache` | M | 2 | 2 |
+| `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | S | 3 | 2 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
 | `lithos_lens.graph_layout` | L | 6 | 4 |
 | `lithos_lens.graph_page` | M | 1 | 6 |
-| `lithos_lens.graph_scope` | L | 5 | 6 |
+| `lithos_lens.graph_scope` | L | 5 | 7 |
 | `lithos_lens.graph_view` | S | 10 | 0 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -79,6 +79,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
 
 ### `lithos_lens.graph_cache`
+- class `CacheTally` — One RENDER's reads through the process-wide cache.
 - class `EdgeCacheEntry` — One task's edges, and when they were read.
 - def `graph_fanout_gate` — The process-wide gate every graph read passes through.
 - def `dedupe_edges` — Collapse edges that name the same (from, to, type), keeping order.
@@ -128,6 +129,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `epic_scope_tasks` — The epic's recursive subtree plus the epic — closed children by default.
 - def `load_project_scope` — Assemble `/tasks/graph?project=<slug>` (open-only by default).
 - def `load_epic_scope` — Assemble `/tasks/graph?epic=<id>` (closed children included by default).
+- def `with_master_claims` — Carry the master list's inline claims onto records fetched elsewhere.
 - def `assemble_scope` — Fan out for cache misses and build the scope from what came back.
 - def `dependency_edge_state` — Classify one ``blocks`` / ``waits_on_gate`` edge from both endpoints.
 

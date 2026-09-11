@@ -38,24 +38,24 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
-| Knowledge | 4 | 1111 | 842 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
+| Knowledge | 4 | 1113 | 844 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
 | LithosClient | 5 | 2591 | 2078 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 18 | 7221 | 5564 | 4 | 1 | 0.20 | 46 (`lithos_lens.frontier.load_dashboard`) | 14 |
-| Tasks | 3 | 1069 | 786 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
+| TaskGraph | 18 | 7405 | 5714 | 4 | 1 | 0.20 | 46 (`lithos_lens.frontier.load_dashboard`) | 15 |
+| Tasks | 3 | 1099 | 804 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 2 | 1069 | 775 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 1421 | 1114 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 4 | 1460 | 1140 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **46**, lines: **16799**, SLOC: **12938**
+- Modules: **46**, lines: **17054**, SLOC: **13134**
 - Largest module: `lithos_lens.graph_layout` (797 lines)
 - Modules over 800 lines: **0**
 
 ## Complexity
 
-- Functions: **570**, cyclomatic > 10: **28**
+- Functions: **574**, cyclomatic > 10: **29**
 
 Top 10 most complex functions:
 
@@ -64,13 +64,13 @@ Top 10 most complex functions:
 | 46 | `lithos_lens.frontier.load_dashboard` |
 | 32 | `lithos_lens.config._apply_env_overrides` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
+| 21 | `lithos_lens.graph_cycles._signal` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 18 | `lithos_lens.graph_layout.build_topology` |
-| 15 | `lithos_lens.graph_cycles._signal` |
 | 15 | `lithos_lens.task_filtering.matches_filters` |
 | 14 | `lithos_lens.events._iter_sse_lines` |
+| 14 | `lithos_lens.graph_page._node_views` |
 | 14 | `lithos_lens.request_filters._parse_preserved_filters` |
-| 13 | `lithos_lens.fake_lithos.FakeLithosClient.list_notes` |
 
 ## Seams
 
@@ -82,5 +82,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **68** (75 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.63** (27306 test lines / 16799 source lines)
+- Domain models: **69** (75 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.64** (28003 test lines / 17054 source lines)

@@ -66,8 +66,13 @@ The current application exposes these routes:
   Renders the task dashboard and accepts filter query parameters.
 - `GET /tasks/events`
   Browser-facing Server-Sent Events endpoint for live task updates.
-- `GET /tasks/{task_id}`
-  Renders a task detail page.
+- `GET /tasks/{task_id}` (and `GET /tasks/id/{task_id}`)
+  Renders a task detail page. The alias exists because task ids are arbitrary
+  non-empty strings, so one can collide with a static page under `/tasks/`
+  (`tasks.RESERVED_TASK_PATH_SEGMENTS`): Starlette matches the static route
+  first, and without the alias a task called `graph` would have no reachable
+  detail page while every link to it silently opened the graph. `task_detail_path`
+  is the one place that decides which of the two a link uses.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -579,7 +584,14 @@ predecessor's status could not be read.
 **scoped**, one read pair per project in the coverage set — every §5B.1
 project among the in-scope tasks AND the downstream ghosts — where a pair is
 `project=<slug>` plus, under the `"both"` convention, `tags=["<project_tag_key>:<slug>"]`,
-each at `tasks.frontier_limit`, with `len == limit` treated as truncation.
+each at `tasks.frontier_limit`, with `len == limit` treated as truncation. The
+pair is unioned **per task**: the two calls are independent reads rather than
+one snapshot, so a task's blockers are merged across every response that names
+it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict), and
+a task is cycle-status *known* when it appears in any response — or when some
+project it belongs to was read in full, both halves, since a task claimed by
+tag only is absent from the `project=` response for reasons unrelated to
+blocking.
 Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
 with Lithos's own message whatever Tarjan found; a cycle Lens can see is
 bracketed in its layer and its dependents marked *blocked via cycle*, while one
@@ -591,21 +603,36 @@ cycle".
 
 **Every partial claim is labelled.** A node whose edge read failed renders in
 the layering with `edges unknown` and is never folded into the isolated
-disclosure; a node with an `unknown` incoming edge is marked *blocked by
-unresolvable predecessor*; and the chain line reads "≥ N, incomplete: K tasks'
+disclosure; a task Lithos flags as a cycle member is layered rather than folded
+even when no edge of its own was fetched (D4 beats the edge-absence heuristic,
+and the TTL makes that state reachable: edge upserts emit no event); a node
+whose incoming edge is `unknown` **because its predecessor could not be read**
+is marked *blocked by unresolvable predecessor* — an edge into an unreadable
+ghost is equally unknown and says so about the endpoint it is actually about; and the chain line reads "≥ N, incomplete: K tasks'
 edges unreadable, J edges unresolvable" whenever either applies. The chain is
 labelled *within this graph* — Lens claims no corpus-wide critical path.
 
-**Reads per render:** one `lithos_task_list(status="open")` (plus the two
-resolved windows only when a project scope asks to include them), the scope's
-cached `edge_list` fan-out and ghost `task_get`s (§5.10), `task_children` for
-an epic scope, and the coverage set's blocked read pair. Telemetry is on the
-request's own server span (`lens.graph.*`: scope kind and key, outcome, node /
-edge / ghost / cycle / isolated counts, chain length and exactness, cache hits,
-misses and fan-out) plus two counters — `lens_tasks_graph_renders_total`
-(`scope`, `outcome`) and `lens_tasks_graph_cycle_reads_total` (`outcome`). The
-scope KEY is a span attribute only: one Prometheus series per project is the
-cardinality failure §8's rule exists to prevent.
+**Reads per render:** one `lithos_task_list(status="open", with_claims=true)`,
+plus the two bounded `resolved_since` windows for the **picker** (§5B.1's
+project universe is open tasks *plus* the resolved window, so a project whose
+last task finished yesterday is still offered) and for a project scope that
+asks to include resolved tasks; the scope's cached `edge_list` fan-out and
+ghost `task_get`s (§5.10); `task_children` for an epic scope, whose open
+children are merged with their master rows so the claims those reads do not
+carry are not rendered as "unclaimed"; and the coverage set's blocked read
+pair.
+
+Each render opens one **`lens.tasks.graph`** span — the multi-phase exception
+to §8's no-child-span rule — carrying `lens.graph.*`: scope kind and key,
+outcome, node / edge / ghost / cycle / isolated counts, chain length and
+exactness, whether the cycle signal was incomplete, and this render's own cache
+hits, misses, ghost reads and fan-out (counted per request through a tally
+passed down the call, never as a delta of the process-wide cache counters,
+which a concurrent render also moves). Two counters accompany it:
+`lens_tasks_graph_renders_total` (`scope`, `outcome`) and
+`lens_tasks_graph_cycle_reads_total` (`outcome`). The scope KEY is a span
+attribute only: one Prometheus series per project is the cardinality failure
+§8's rule exists to prevent.
 
 ## 6. Current Lithos Dependencies
 

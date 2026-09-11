@@ -19,11 +19,12 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from opentelemetry.trace import Span
 
 from lithos_lens import metrics
 from lithos_lens.graph_page import (
     EDGE_LEGEND,
-    SCOPE_EPIC,
+    SCOPE_PROJECT,
     GraphPageParams,
     GraphPageView,
     graph_url,
@@ -35,9 +36,12 @@ from lithos_lens.graph_page import (
 from lithos_lens.graph_scope import GraphScopeLimits
 from lithos_lens.state import AppState
 from lithos_lens.tasks import TaskRecord, default_since
-from lithos_lens.telemetry import get_current_span
+from lithos_lens.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
+
+#: The assembly span every graph render opens (the PRD's telemetry point).
+GRAPH_SPAN = "lens.tasks.graph"
 
 
 def register_graph_routes(
@@ -57,6 +61,14 @@ def register_graph_routes(
         The no-JS baseline is the WHOLE page here (D3): layers, callout,
         chain, hierarchy and the embedded payload are all server-rendered, and
         A4's Cytoscape layer is enhancement over the same payload.
+
+        The whole assembly runs inside one ``lens.tasks.graph`` span. That is
+        the exception `telemetry.get_current_span` describes rather than a
+        violation of it: this handler is not one unit of work but a multi-phase
+        fan-out — the master read, one ``edge_list`` per node through the
+        shared cache, the ghost ``task_get``s, the coverage set's blocked reads
+        — and "which phase was slow, and how much did this page actually
+        fetch?" is a question the server span cannot answer.
         """
         params = parse_graph_params(dict(request.query_params))
         snapshot = await state.refresh_health()
@@ -71,78 +83,89 @@ def register_graph_routes(
             "error": "",
             "offline": snapshot.lithos != "ok",
         }
-        if snapshot.lithos != "ok":
-            _record(params, outcome="offline")
-            return templates.TemplateResponse(request, "tasks/graph.html", context)
+        with get_tracer().start_as_current_span(GRAPH_SPAN) as span:
+            if snapshot.lithos != "ok":
+                _record(span, params, outcome="offline")
+                return templates.TemplateResponse(request, "tasks/graph.html", context)
 
-        tasks_config = state.config.tasks
-        try:
-            master = await _master_rows(state, params)
-        except Exception:
-            logger.warning("graph page master read failed", exc_info=True)
-            context["error"] = "Task data is unavailable. Lens will retry on refresh."
-            _record(params, outcome="error")
-            return templates.TemplateResponse(request, "tasks/graph.html", context)
+            tasks_config = state.config.tasks
+            try:
+                master = await _master_rows(state, params)
+            except Exception:
+                logger.warning("graph page master read failed", exc_info=True)
+                context["error"] = (
+                    "Task data is unavailable. Lens will retry on refresh."
+                )
+                _record(span, params, outcome="error")
+                return templates.TemplateResponse(request, "tasks/graph.html", context)
 
-        if not params.scoped:
-            context["projects"] = observed_projects(
-                master, tag_key=tasks_config.project_tag_key
+            if not params.scoped:
+                context["projects"] = observed_projects(
+                    master, tag_key=tasks_config.project_tag_key
+                )
+                context["epics"] = open_epics(master)
+                _record(span, params, outcome="picker")
+                return templates.TemplateResponse(request, "tasks/graph.html", context)
+
+            try:
+                view = await load_graph_page(
+                    state.lithos_client,
+                    params=params,
+                    master=master,
+                    cache=state.graph_cache,
+                    limits=GraphScopeLimits(
+                        max_tasks=state.config.graph.max_tasks,
+                        fetch_concurrency=state.config.graph.fetch_concurrency,
+                    ),
+                    frontier_limit=tasks_config.frontier_limit,
+                    convention=tasks_config.project_convention,
+                    tag_key=tasks_config.project_tag_key,
+                )
+            except Exception:
+                # An epic scope reads its anchor up front, so a deep link to a
+                # deleted epic arrives here as a coded error rather than as an
+                # empty graph. Either way the page says so instead of 500ing.
+                logger.warning(
+                    "graph page scope failed",
+                    exc_info=True,
+                    extra={"lens_scope_kind": params.kind},
+                )
+                context["error"] = "This scope could not be loaded from Lithos."
+                _record(span, params, outcome="error")
+                return templates.TemplateResponse(request, "tasks/graph.html", context)
+
+            context["view"] = view
+            _record(
+                span,
+                params,
+                outcome="refused" if view.refused else "rendered",
+                view=view,
             )
-            context["epics"] = open_epics(master)
-            _record(params, outcome="picker")
             return templates.TemplateResponse(request, "tasks/graph.html", context)
-
-        cache = state.graph_cache
-        before = (cache.hits, cache.misses)
-        try:
-            view = await load_graph_page(
-                state.lithos_client,
-                params=params,
-                master=master,
-                cache=cache,
-                limits=GraphScopeLimits(
-                    max_tasks=state.config.graph.max_tasks,
-                    fetch_concurrency=state.config.graph.fetch_concurrency,
-                ),
-                frontier_limit=tasks_config.frontier_limit,
-                convention=tasks_config.project_convention,
-                tag_key=tasks_config.project_tag_key,
-            )
-        except Exception:
-            # An epic scope reads its anchor up front, so a deep link to a
-            # deleted epic arrives here as a coded error rather than as an
-            # empty graph. Either way the page says so instead of 500ing.
-            logger.warning(
-                "graph page scope failed",
-                exc_info=True,
-                extra={"lens_scope_kind": params.kind},
-            )
-            context["error"] = "This scope could not be loaded from Lithos."
-            _record(params, outcome="error")
-            return templates.TemplateResponse(request, "tasks/graph.html", context)
-
-        context["view"] = view
-        _record(
-            params,
-            outcome="refused" if view.refused else "rendered",
-            view=view,
-            cache_hits=cache.hits - before[0],
-            cache_misses=cache.misses - before[1],
-        )
-        return templates.TemplateResponse(request, "tasks/graph.html", context)
 
 
 async def _master_rows(state: AppState, params: GraphPageParams) -> list[TaskRecord]:
-    """The snapshot the page needs — open always, resolved only when it counts.
+    """The snapshot the page needs — open always, resolved when a branch reads it.
 
     The open list is what makes an OPEN far endpoint cost no `task_get` (D5)
-    and what the picker enumerates. Resolved rows are fetched only for a
-    project scope asking to include them: an epic's closed children come from
-    `task_children`, and ghost resolution reads its own endpoints, so loading
-    two more windows for every epic page would be work no branch consumes.
+    and what the picker enumerates. The two bounded `resolved_since` windows
+    are added for exactly two branches:
+
+    - the **picker**, because §5B.1's project universe is open tasks PLUS the
+      resolved window, and a project whose last task finished yesterday is a
+      project the operator can still want a graph of;
+    - a **project scope** asking to include resolved tasks, which is where
+      those rows become nodes.
+
+    An epic scope needs neither: its closed children come from
+    `task_children`, and ghost classification reads its own endpoints, so two
+    more list calls per epic page would be work no branch consumes.
     """
     rows = list(await state.lithos_client.list_tasks(status="open", with_claims=True))
-    if params.kind == SCOPE_EPIC or not params.include_resolved:
+    wants_resolved = not params.scoped or (
+        params.kind == SCOPE_PROJECT and params.include_resolved
+    )
+    if not wants_resolved:
         return rows
     since = default_since(state.config.tasks.default_time_range_days)
     for status in ("completed", "cancelled"):
@@ -153,12 +176,11 @@ async def _master_rows(state: AppState, params: GraphPageParams) -> list[TaskRec
 
 
 def _record(
+    span: Span,
     params: GraphPageParams,
     *,
     outcome: str,
     view: GraphPageView | None = None,
-    cache_hits: int = 0,
-    cache_misses: int = 0,
 ) -> None:
     """`lens.tasks.graph`: span attributes for one page, counter for the fleet.
 
@@ -166,8 +188,11 @@ def _record(
     attribute and never a metric label — one series per project is exactly the
     unbounded cardinality `metrics.py` forbids, while on a span it is what
     makes a slow render findable.
+
+    Every count comes off the VIEW, which carries what this render did. The
+    earlier version subtracted the process-wide cache counters around the call
+    and therefore attributed a concurrent page's misses to this one.
     """
-    span = get_current_span()
     span.set_attribute("lens.graph.scope_kind", params.kind or "none")
     span.set_attribute("lens.graph.scope_key", params.key)
     span.set_attribute("lens.graph.outcome", outcome)
@@ -180,9 +205,10 @@ def _record(
         span.set_attribute("lens.graph.isolated", len(view.isolated))
         span.set_attribute("lens.graph.chain_length", view.chain.length)
         span.set_attribute("lens.graph.chain_exact", view.chain.exact)
-        span.set_attribute("lens.graph.cache_hits", cache_hits)
-        span.set_attribute("lens.graph.cache_misses", cache_misses)
-        span.set_attribute("lens.graph.fanout", cache_misses)
+        span.set_attribute("lens.graph.cache_hits", view.cache_hits)
+        span.set_attribute("lens.graph.cache_misses", view.cache_misses)
+        span.set_attribute("lens.graph.ghost_reads", view.ghost_reads)
+        span.set_attribute("lens.graph.fanout", view.fanout)
         span.set_attribute(
             "lens.graph.cycle_signal_incomplete",
             any(banner.id.startswith("cycle-") for banner in view.banners),

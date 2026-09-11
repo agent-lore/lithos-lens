@@ -107,6 +107,11 @@ class EdgeView:
     type: str
     state: str = ""
     reason: str = ""
+    #: Which endpoint's status could not be read. An ``unknown`` edge has two
+    #: causes (D6) and the line states the one it has, rather than always
+    #: blaming the predecessor.
+    from_unknown: bool = False
+    to_unknown: bool = False
 
     @property
     def active(self) -> bool:
@@ -223,6 +228,11 @@ class GraphPageView:
     #: The coverage set actually read (D4) and how those reads ended, carried
     #: so the route can count them without re-deriving the plan.
     coverage: tuple[str, ...] = ()
+    #: What this render cost, counted per request rather than sampled off the
+    #: process-wide cache counters (which a concurrent page also moves).
+    cache_hits: int = 0
+    cache_misses: int = 0
+    ghost_reads: int = 0
     reads_ok: int = 0
     reads_truncated: int = 0
     reads_failed: int = 0
@@ -241,3 +251,8 @@ class GraphPageView:
     @property
     def cycle_count(self) -> int:
         return len(self.cycles) + len(self.external_cycles)
+
+    @property
+    def fanout(self) -> int:
+        """Upstream reads this render issued: edge misses plus ghost reads."""
+        return self.cache_misses + self.ghost_reads

@@ -38,12 +38,13 @@ from lithos_lens.graph_cache import graph_fanout_gate
 from lithos_lens.graph_layout import CYCLE_BLOCKER_KIND
 from lithos_lens.graph_scope import TaskGraphScope
 from lithos_lens.task_filtering import task_projects
-from lithos_lens.task_graph import BlockedTaskRecord
+from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.task_links import BLOCKER_EDGE_TYPES, LINK_READ_TIMEOUT_S
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
     ProjectConvention,
+    TaskRecord,
 )
 
 #: Which half of a read pair a call is. Kept as data rather than as two code
@@ -74,10 +75,10 @@ class CycleSignal:
     """What Lithos said about cycles in this scope, and where it went quiet.
 
     ``flagged`` is the verdict itself (task id -> the blocker's own message);
-    ``blocked`` is the deduped row set, handed to ``build_topology`` so a
-    flagged member with no fetched component is still condensed alone and
-    layered. ``unknown`` names the in-scope tasks whose cycle status this page
-    cannot claim either way.
+    ``blocked`` is one row per task, its blockers MERGED across every read that
+    named it, handed to ``build_topology`` so a flagged member with no fetched
+    component is still condensed alone and layered. ``unknown`` names the
+    in-scope tasks whose cycle status this page cannot claim either way.
     """
 
     coverage: tuple[str, ...] = ()
@@ -196,28 +197,52 @@ def _signal(
     *,
     tag_key: str,
 ) -> CycleSignal:
-    """Fold the reads into the verdict and the coverage it does not have."""
-    covered_projects = {
+    """Fold the reads into the verdict and the coverage it does not have.
+
+    The fold is per TASK, not per response. §5B.7's pattern unions the pair,
+    and the two calls are independent reads rather than one snapshot: a task
+    can arrive in the ``tags=`` response carrying the ``kind="cycle"`` blocker
+    that the ``project=`` response — read a moment earlier — did not have yet.
+    Keeping whichever row landed first would drop Lithos's verdict on the
+    floor while the message rendered beside it, so blockers are merged across
+    every row that names the task.
+
+    Coverage is per task too. A task PRESENT in any response has been answered
+    about, whatever else that response truncated; a task absent is known to be
+    cycle-free only when some project it belongs to was read in full — both
+    halves of that pair, because a task claimed by TAG only is absent from the
+    ``project=`` response for a reason that has nothing to do with blocking.
+    """
+    complete_projects = {
         project
         for project in projects
-        # Both halves of the pair have to answer in full. A task in the project
-        # by TAG only is absent from the ``project=`` response, so a complete
-        # read on one side says nothing about membership claimed on the other.
         if all(read.ok for read in reads if read.project == project)
     }
-    blocked: dict[str, BlockedTaskRecord] = {}
-    flagged: dict[str, str] = {}
+    rows: dict[str, TaskRecord] = {}
+    blockers: dict[str, list[BlockerRecord]] = {}
     for read in reads:
         for row in read.rows:
-            blocked.setdefault(row.task.id, row)
-            for blocker in row.blockers:
-                if blocker.kind == CYCLE_BLOCKER_KIND and row.task.id not in flagged:
-                    flagged[row.task.id] = blocker.message
+            rows.setdefault(row.task.id, row.task)
+            merged = blockers.setdefault(row.task.id, [])
+            merged.extend(blocker for blocker in row.blockers if blocker not in merged)
+    blocked = tuple(
+        BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id]))
+        for task_id, task in rows.items()
+    )
+    flagged = {
+        record.task.id: next(
+            blocker.message
+            for blocker in record.blockers
+            if blocker.kind == CYCLE_BLOCKER_KIND
+        )
+        for record in blocked
+        if any(blocker.kind == CYCLE_BLOCKER_KIND for blocker in record.blockers)
+    }
 
     unknown: set[str] = set()
     projectless: list[str] = []
     for node in scope.nodes:
-        if node.ghost:
+        if node.ghost or node.id in rows:
             continue
         slugs = task_projects(node.task, convention="both", tag_key=tag_key)
         if not slugs:
@@ -225,13 +250,13 @@ def _signal(
             # one (D4). Unknown, and said so rather than implied.
             projectless.append(node.id)
             unknown.add(node.id)
-        elif not any(slug in covered_projects for slug in slugs):
+        elif not any(slug in complete_projects for slug in slugs):
             unknown.add(node.id)
 
     return CycleSignal(
         coverage=tuple(projects),
         reads=tuple(reads),
-        blocked=tuple(blocked.values()),
+        blocked=blocked,
         flagged=flagged,
         unknown=frozenset(unknown),
         projectless=tuple(projectless),

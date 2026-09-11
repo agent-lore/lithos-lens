@@ -163,6 +163,10 @@ classDiagram
   class Breadcrumb {
     +incomplete bool
   }
+  class CacheTally {
+    +hits int
+    +misses int
+  }
   class ChainView {
     +exact bool
     +unreadable_nodes int
@@ -237,6 +241,8 @@ classDiagram
     +type str
     +state str
     +reason str
+    +from_unknown bool
+    +to_unknown bool
   }
   class FindingView {
     +note_title str
@@ -279,6 +285,9 @@ classDiagram
     +edge_types tuple[str, ...]
     +edge_count int
     +coverage tuple[str, ...]
+    +cache_hits int
+    +cache_misses int
+    +ghost_reads int
     +reads_ok int
     +reads_truncated int
     +reads_failed int
@@ -369,6 +378,9 @@ classDiagram
     +isolated tuple[str, ...]
     +incomplete Mapping[str, str]
     +as_of datetime | None
+    +cache_hits int
+    +cache_misses int
+    +ghost_reads int
   }
   class TaskSummary {
     +attention int

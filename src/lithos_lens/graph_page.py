@@ -21,8 +21,9 @@ Jinja, because each one is a CLAIM with a rule behind it:
 - ``edges unknown`` marks a node whose edge read failed, which is also why it
   is not in the isolated disclosure: Lens has no evidence it is edge-less (D8);
 - ``blocked by unresolvable predecessor`` marks a node whose incoming
-  dependency edge is ``unknown``, so it is excluded from the active projection
-  in both directions rather than guessed at (D6);
+  dependency edge is ``unknown`` BECAUSE ITS PREDECESSOR could not be read —
+  not merely because the edge is unknown, which is equally true of an edge
+  into an unreadable ghost and would be a false cause there (D6);
 - the chain is a LOWER BOUND whenever any node's edges are unreadable or any
   ``unknown`` edge exists anywhere in the fetched graph (D7).
 
@@ -147,7 +148,13 @@ async def load_graph_page(
             tag_key=tag_key,
         )
     if scope.refused:
-        return GraphPageView(params=params, refusal=scope.refusal)
+        return GraphPageView(
+            params=params,
+            refusal=scope.refusal,
+            cache_hits=scope.cache_hits,
+            cache_misses=scope.cache_misses,
+            ghost_reads=scope.ghost_reads,
+        )
     signal = await load_cycle_signal(
         lithos,
         scope,
@@ -179,18 +186,18 @@ def build_graph_page(
         ],
     )
     chain = longest_blocking_chain(topology)
-    views = _node_views(scope, topology, signal, params=params, tag_key=tag_key)
-    isolated_ids = set(scope.isolated)
-    layers = _layers(topology, views, isolated_ids)
+    folded = _folded_isolates(scope, topology)
+    views = _node_views(
+        scope, topology, signal, params=params, tag_key=tag_key, folded=folded
+    )
+    layers = _layers(topology, views, folded)
     cycles, external = _callout(topology, views)
     return GraphPageView(
         params=params,
         nodes=tuple(views.values()),
         layers=layers,
         incoming=_incoming(scope, views),
-        isolated=tuple(
-            views[node_id] for node_id in scope.isolated if node_id in views
-        ),
+        isolated=tuple(views[node_id] for node_id in folded if node_id in views),
         hierarchy=_hierarchy(scope, views),
         cycles=cycles,
         external_cycles=external,
@@ -198,13 +205,39 @@ def build_graph_page(
         banners=_banners(scope, signal),
         edge_types=_edge_types(scope),
         as_of=scope.as_of,
+        cache_hits=scope.cache_hits,
+        cache_misses=scope.cache_misses,
+        ghost_reads=scope.ghost_reads,
         coverage=signal.coverage,
         reads_ok=sum(1 for read in signal.reads if read.ok),
         reads_truncated=sum(1 for read in signal.reads if read.truncated),
         reads_failed=sum(1 for read in signal.reads if read.error),
-        payload_json=_payload_json(scope, topology, chain, views, layers, params),
+        payload_json=_payload_json(
+            scope, topology, chain, views, layers, params, folded
+        ),
         edge_count=len(scope.edges),
     )
+
+
+def _folded_isolates(scope: TaskGraphScope, topology: Topology) -> tuple[str, ...]:
+    """The in-scope tasks this page folds into the disclosure.
+
+    ``scope.isolated`` — no fetched dependency edge in any state (D8) — MINUS
+    every task Lithos flagged as a cycle member. D4 requires a flagged member
+    with no component to be condensed alone and LAYERED, and the two rules
+    collide in a state the TTL makes reachable: an edge upsert emits no event
+    (ledger gap #1), so a warm, successful, edge-empty cache entry can be
+    served for a task the uncached blocked read is calling cyclic. The
+    authority wins over the absence of evidence — folding it away would put a
+    task Lithos says cannot run behind a collapsed disclosure.
+    """
+    cyclic = {
+        member
+        for condensation in topology.condensations
+        if condensation.cycle is not None
+        for member in condensation.members
+    }
+    return tuple(node_id for node_id in scope.isolated if node_id not in cyclic)
 
 
 def _node_views(
@@ -214,6 +247,7 @@ def _node_views(
     *,
     params: GraphPageParams,
     tag_key: str,
+    folded: Sequence[str],
 ) -> dict[str, NodeView]:
     """One :class:`NodeView` per scope node, markers resolved."""
     layer_of: dict[str, int] = {}
@@ -226,12 +260,25 @@ def _node_views(
                 cycle_of[member] = condensation.cycle.id
             if condensation.blocked_via_cycle:
                 via_cycle.add(member)
+    # "Blocked by an unresolvable PREDECESSOR" is a claim about the other end
+    # of the edge, so it is read off the predecessor's completeness rather than
+    # off the edge's state: an edge is equally ``unknown`` when it is the
+    # DEPENDENT whose status could not be read (an in-scope task pointing at a
+    # downstream ghost), and marking that ghost as blocked by an unreadable
+    # predecessor would invent a cause for a node whose predecessor is known.
+    unresolved = {
+        node.id
+        for node in scope.nodes
+        if node.completeness == COMPLETENESS_STATUS_UNKNOWN
+    }
     unresolvable = {
         edge.to_task_id
         for edge in scope.edges
-        if edge.dependency and edge.state == EDGE_UNKNOWN
+        if edge.dependency
+        and edge.state == EDGE_UNKNOWN
+        and edge.from_task_id in unresolved
     }
-    isolated = set(scope.isolated)
+    isolated = set(folded)
     views: dict[str, NodeView] = {}
     for node in scope.nodes:
         views[node.id] = NodeView(
@@ -266,14 +313,17 @@ def _claims(node: GraphNode) -> tuple[str, ...]:
 def _layers(
     topology: Topology,
     views: Mapping[str, NodeView],
-    isolated: set[str],
+    folded: Sequence[str],
 ) -> tuple[LayerView, ...]:
-    """Topology layers as render groups, with the isolates folded out.
+    """Topology layers as render groups, with the folded isolates left out.
 
-    An isolated task is in the disclosure instead, so it is dropped from its
-    layer here — but it keeps the layer the payload reports, so the two
-    renderings agree on where every node sits.
+    A folded task is in the disclosure instead, so it is dropped from its layer
+    here — but it keeps the layer the payload reports, so the two renderings
+    agree on where every node sits. What is NOT folded (see
+    :func:`_folded_isolates`) stays in its layer, which is how a Lithos-flagged
+    cycle member with no fetched edge still gets one.
     """
+    isolated = set(folded)
     by_id = {condensation.id: condensation for condensation in topology.condensations}
     layers: list[LayerView] = []
     for index, group_ids in enumerate(topology.layers):
@@ -303,12 +353,18 @@ def _layers(
 def _incoming(
     scope: TaskGraphScope, views: Mapping[str, NodeView]
 ) -> dict[str, tuple[EdgeView, ...]]:
-    """Every node's incoming dependency edges, keyed by dependent."""
+    """Every node's incoming dependency edges, keyed by dependent.
+
+    Each edge carries WHICH endpoint Lens could not resolve, because an
+    ``unknown`` edge has two causes (D6) and only one of them is about the
+    predecessor — the line renders the cause it actually has.
+    """
     incoming: dict[str, list[EdgeView]] = {node_id: [] for node_id in views}
     for edge in scope.edges:
         if not edge.dependency or edge.to_task_id not in incoming:
             continue
         predecessor = views.get(edge.from_task_id)
+        dependent = views[edge.to_task_id]
         incoming[edge.to_task_id].append(
             EdgeView(
                 from_id=edge.from_task_id,
@@ -317,6 +373,8 @@ def _incoming(
                 type=edge.type,
                 state=edge.state,
                 reason=edge.reason,
+                from_unknown=bool(predecessor and predecessor.status_unknown),
+                to_unknown=dependent.status_unknown,
             )
         )
     return {node_id: tuple(edges) for node_id, edges in incoming.items()}
@@ -444,6 +502,7 @@ def _payload_json(
     views: Mapping[str, NodeView],
     layers: Sequence[LayerView],
     params: GraphPageParams,
+    folded: Sequence[str],
 ) -> str:
     """D3's embedded payload — the same node set, layers and chain as the text.
 
@@ -507,7 +566,10 @@ def _payload_json(
             "bound": chain.bound,
         },
         "roots": list(topology.roots),
-        "isolated": list(scope.isolated),
+        # The list the PAGE folds, not the raw D8 set: a flagged cycle member
+        # is layered rather than folded, and the payload has to agree with the
+        # text about where every node is rendered.
+        "isolated": list(folded),
         "incomplete": dict(scope.incomplete),
         "as_of": scope.as_of.isoformat() if scope.as_of else None,
     }

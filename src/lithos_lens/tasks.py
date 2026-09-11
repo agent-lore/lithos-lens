@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import quote
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 # Sections of the graph-native dashboard. The three workable sections are
@@ -122,6 +123,35 @@ MAX_FILTER_QUERY_BYTES = 1024
 # re-emitting the others), so it needs a bound of its own even under the byte
 # ceiling above.
 MAX_FILTER_TAG_CHIPS = 12
+
+# Static path segments under ``/tasks/`` that address a PAGE rather than a
+# task. Task ids are arbitrary non-empty strings (``normalize_task``), so a
+# task really can be called ``graph``, and Starlette matches the static route
+# first — the detail page would be unreachable for it and every link to it
+# would silently open the graph instead. Those ids are addressed through the
+# ``/tasks/id/<id>`` alias, which no page can shadow.
+RESERVED_TASK_PATH_SEGMENTS: frozenset[str] = frozenset({"graph", "events"})
+TASK_DETAIL_ALIAS_PREFIX = "/tasks/id"
+
+
+def task_detail_path(task_id: str) -> str:
+    """The path that addresses ``task_id``'s detail page, unambiguously.
+
+    One definition for every surface that links a task (the board, the graph
+    page, a knowledge note's produced-by chip), because a link that resolves to
+    a different page than the caller intended is exactly the failure the
+    reserved set exists to prevent — and a second copy of this rule would drift
+    the first time a page is added under ``/tasks/``.
+
+    ``safe=""`` encodes every reserved character: nothing upstream excludes
+    ``?``, ``#`` or ``/`` from an id, and an unencoded one would truncate the
+    path or invent a segment.
+    """
+    segment = quote(task_id, safe="")
+    if task_id in RESERVED_TASK_PATH_SEGMENTS:
+        return f"{TASK_DETAIL_ALIAS_PREFIX}/{segment}"
+    return f"/tasks/{segment}"
+
 
 # The two query keys that carry tags. ``tag`` is the filter itself and is fully
 # literal; ``add_tag`` is the filter bar's text box, folded into the tag set at

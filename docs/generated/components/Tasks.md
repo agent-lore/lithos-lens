@@ -13,7 +13,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 11 |
-| `lithos_lens.tasks` | M | 13 | 11 |
+| `lithos_lens.tasks` | M | 13 | 12 |
 
 ## Public API
 
@@ -39,6 +39,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).
 
 ### `lithos_lens.tasks`
+- def `task_detail_path` — The path that addresses ``task_id``'s detail page, unambiguously.
 - class `SectionState`
 - class `TaskRecord`
 - class `ClaimRecord`

@@ -338,6 +338,13 @@ def create_app(
     # id "graph".
     register_graph_routes(app, state, templates)
 
+    # Two paths, one handler. The alias carries the few ids that collide with
+    # a page under `/tasks/` (`tasks.RESERVED_TASK_PATH_SEGMENTS`): a task may
+    # legitimately be called "graph", and the static route above would
+    # otherwise make its detail page unreachable — links to it would open the
+    # graph instead of 404ing, which is worse than either. The two never
+    # overlap: this one takes a second path segment.
+    @app.get("/tasks/id/{task_id}", response_class=HTMLResponse)
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
         if filter_query_oversized(request):

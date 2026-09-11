@@ -52,7 +52,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
-from lithos_lens.graph_cache import EdgeCacheEntry, GraphCache, graph_fanout_gate
+from lithos_lens.graph_cache import (
+    CacheTally,
+    EdgeCacheEntry,
+    GraphCache,
+    graph_fanout_gate,
+)
 from lithos_lens.graph_fanout import (
     GHOST_RESOLUTION_BUDGET_S,
     MAX_GHOST_RESOLUTION_READS,
@@ -265,6 +270,12 @@ class TaskGraphScope:
     #: Oldest contributing ``fetched_at``; ``None`` when nothing contributed.
     as_of: datetime | None = None
     refusal: ScopeRefusal | None = None
+    #: What THIS assembly cost: entries served warm, upstream ``edge_list``
+    #: calls it issued, and ``task_get``s spent classifying far endpoints.
+    #: Per render, so two concurrent pages never claim each other's fan-out.
+    cache_hits: int = 0
+    cache_misses: int = 0
+    ghost_reads: int = 0
 
     @property
     def refused(self) -> bool:
@@ -396,7 +407,10 @@ async def load_epic_scope(
     include_resolved: bool = True,
 ) -> TaskGraphScope:
     """Assemble `/tasks/graph?epic=<id>` (closed children included by default)."""
-    tasks = await epic_scope_tasks(lithos, epic_id, include_resolved=include_resolved)
+    tasks = with_master_claims(
+        await epic_scope_tasks(lithos, epic_id, include_resolved=include_resolved),
+        master,
+    )
     return await assemble_scope(
         lithos,
         tasks=tasks,
@@ -406,6 +420,32 @@ async def load_epic_scope(
         kind="epic",
         key=epic_id,
         include_resolved=include_resolved,
+    )
+
+
+def with_master_claims(
+    tasks: Sequence[TaskRecord],
+    master: Sequence[TaskRecord],
+) -> tuple[TaskRecord, ...]:
+    """Carry the master list's inline claims onto records fetched elsewhere.
+
+    ``lithos_task_children`` and ``lithos_task_get`` return no ``claims`` (the
+    vendored contracts have no such field), so an epic scope built from them
+    knows nothing about who holds its children — while the very same open rows
+    on the master list, read ``with_claims=True``, do. Without this the epic
+    graph renders a claimed child as unclaimed, which is worse than saying
+    nothing: it is the row anatomy §5.7 requires, filled with a wrong answer.
+
+    ``claims=None`` means "not requested" and only that case is filled; a
+    record that already carries claims (even an empty tuple — "no active
+    claims") is left exactly as its own read reported it.
+    """
+    known = {task.id: task.claims for task in master if task.claims is not None}
+    return tuple(
+        replace(task, claims=known[task.id])
+        if task.claims is None and task.id in known
+        else task
+        for task in tasks
     )
 
 
@@ -448,7 +488,11 @@ async def assemble_scope(
 
     limiter = asyncio.Semaphore(limits.fetch_concurrency)
     in_scope = {task.id: task for task in scope_tasks}
-    entries, incomplete = await read_edges(lithos, scope_tasks, cache, limiter)
+    # THIS render's reads, counted separately from the cache's cumulative
+    # totals: the cache is process-wide, so a delta taken around this call
+    # would fold a concurrent page's fan-out into this one's.
+    tally = CacheTally()
+    entries, incomplete = await read_edges(lithos, scope_tasks, cache, limiter, tally)
     edges = _dedupe_scope_edges(entries)
 
     far_ids = _ghostable_endpoints(edges, in_scope)
@@ -484,6 +528,9 @@ async def assemble_scope(
         isolated=_isolated(scope_tasks, graph_edges, incomplete),
         incomplete=incomplete,
         as_of=min((entry.fetched_at for entry in entries), default=None),
+        cache_hits=tally.hits,
+        cache_misses=tally.misses,
+        ghost_reads=len(pending),
     )
 
 
