@@ -506,6 +506,25 @@
       </section>
     </div>
 
+    {#
+      The side panel's host (§5.5, T2-A6). Server-rendered OPEN when the
+      request carries `?selected=<id>` — the no-JS baseline — and otherwise
+      empty, waiting for a row click to fetch `?fragment=panel` into it.
+
+      Deliberately OUTSIDE `data-refresh-fragment="dashboard-data"`: the board
+      is replaced wholesale on every reconcile, and a panel inside it would be
+      torn down and rebuilt under the operator's cursor. The panel carries its
+      own `data-refresh-fragment="panel"` instead, so the same refresh swaps
+      only the panel's own markup and its blocker/dependent statuses stay live.
+    #}
+    <div class="task-panel-host" data-panel-host>
+      {% if panel %}
+        {% with detail = panel %}
+          {% include "tasks/panel.html" %}
+        {% endwith %}
+      {% endif %}
+    </div>
+
   {% else %}
     <section class="status-grid" aria-label="Service status">
       <article>
@@ -545,6 +564,10 @@
            and an unrecognized value falling back to all statuses. A second
            reading of that vocabulary would be a copy to drift. #}
         boardAdmitsOpen: {{ ("open" in dashboard.filters.statuses) | tojson }},
+        {# The dashboard's ONE selection parameter (§5.5). The graph page has
+           its own (`focus`) and passes it here instead, so the panel code in
+           tasks.js is shared and neither page hard-codes the other's. #}
+        selectionParam: {{ panel_selection_key | tojson }},
         eventsUrl: "/tasks/events"
       };
     </script>

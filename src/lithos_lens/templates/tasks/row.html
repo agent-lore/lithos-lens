@@ -1,4 +1,9 @@
-<article class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" title="{{ row.task.title }}">
+{# `data-panel-url` is this row's side-panel fragment (§5.5, T2-A6), built
+   SERVER-side so the id encoding (a task called `graph` goes through the alias
+   route) and the board's preserved filters have one definition. tasks.js reads
+   it on a row click; with JavaScript off the title link below is the ordinary
+   navigation it has always been. #}
+<article class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" data-panel-url="{{ panel_fragment_url(request, row.task.id) }}" title="{{ row.task.title }}">
   <div>
     <a class="task-title" href="{{ task_detail_url(request, row.task.id) }}">{{ row.task.title }}</a>
     {% if row.task.description %}

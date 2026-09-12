@@ -374,6 +374,7 @@ classDiagram
     +children_state SectionState
     +not_found bool
     +errors tuple[str, ...]
+    +projects tuple[str, ...]
   }
   class TaskGraphScope {
     +kind str
@@ -468,6 +469,7 @@ classDiagram
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
   TaskDetailData "1" --> "1" LinkPage : blockers
+  TaskDetailData "1" --> "1" LinkPage : dependents
   TaskDetailData "1" --> "1" LinkPage : discovered_from
   TaskDetailData "1" --> "1" LinkPage : spawned
   TaskDetailData "1" --> "1" PageTail : children_tail

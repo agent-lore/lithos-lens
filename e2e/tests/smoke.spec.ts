@@ -349,10 +349,28 @@ test("the optimistic skeleton is suppressed on a filtered board", async ({ page,
   ).toHaveCount(0);
 });
 
-test("clicking a task opens its detail page", async ({ page }) => {
+test("clicking a task opens its panel, and Expand opens the full page", async ({
+  page,
+}) => {
   await page.goto("/tasks?since=2026-08-01");
 
   await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+
+  // §5.5 (T2-A6): a row click opens the side panel and pushes `selected` onto
+  // the URL — the operator keeps their place in the list. The full page is
+  // what Expand is for, and this is the transition the PRD's problem statement
+  // is about ("every row click is a page navigation").
+  await expect(
+    page.locator('[data-panel-task="influx-ingest-cutover"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-ingest-cutover/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  // The panel answers both directions of the relationship, not just upstream.
+  await expect(
+    page.locator('[data-panel-dependents] [data-link-target="influx-backfill"]'),
+  ).toBeVisible();
+
+  await page.locator("[data-panel-expand]").click();
 
   await expect(page).toHaveURL(/\/tasks\/influx-ingest-cutover/);
   await expect(
@@ -362,6 +380,22 @@ test("clicking a task opens its detail page", async ({ page }) => {
   // agent appears in both the summary line and the claims list, so scope to
   // the first match rather than tripping strict mode.
   await expect(page.getByText("worker-a").first()).toBeVisible();
+});
+
+test("closing the side panel keeps the board's filters", async ({ page }) => {
+  // The no-JS baseline first: `?selected=` renders the panel open server-side.
+  await page.goto("/tasks?project=influx&selected=influx-backfill");
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+
+  await page.locator("[data-panel-close]").click();
+
+  // Closing clears the selection and NOTHING else: the project scope, and the
+  // board under it, are exactly where they were.
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/tasks\?project=influx$/);
+  await expect(page.locator(".task-board")).toBeVisible();
 });
 
 test("knowledge note renders server-side markdown", async ({ page }) => {

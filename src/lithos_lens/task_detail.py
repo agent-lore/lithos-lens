@@ -43,6 +43,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     BLOCKER_EDGE_TYPES,
@@ -61,9 +62,12 @@ from lithos_lens.task_links import (
     outgoing_targets,
 )
 from lithos_lens.tasks import (
+    DEFAULT_PROJECT_CONVENTION,
+    DEFAULT_PROJECT_TAG_KEY,
     REOPENED_FINDING_PREFIX,
     FindingRecord,
     NoteRecord,
+    ProjectConvention,
     SectionState,
     TaskRecord,
     TaskStatusRecord,
@@ -134,6 +138,12 @@ class TaskDetailData:
     # BOUNDED page of the edge set with a counted tail (``task_links``), never
     # the whole set: the edge count is agent-controlled.
     blockers: LinkPage = LinkPage()
+    # The downstream half of the same relationship: outgoing
+    # ``blocks``/``waits_on_gate``, level 1, with each dependent's live status
+    # (REQUIREMENTS §5.5.2's "Blocks" line). Bounded by the same page as the
+    # blockers above — the outgoing edge count is agent-written too, and a gate
+    # is exactly where a large one is expected.
+    dependents: LinkPage = LinkPage()
     discovered_from: LinkPage = LinkPage()
     spawned: LinkPage = LinkPage()
     breadcrumb: Breadcrumb = Breadcrumb()
@@ -152,6 +162,10 @@ class TaskDetailData:
     children_state: SectionState = SectionState.OK
     not_found: bool = False
     errors: tuple[str, ...] = ()
+    #: Every project slug this task claims under the configured convention
+    #: (§5B.1), for the panel's project chip. Resolved here rather than in the
+    #: template so the convention has one reading.
+    projects: tuple[str, ...] = ()
 
     @property
     def gate_type(self) -> str:
@@ -180,6 +194,9 @@ class TaskDetailData:
 async def load_task_detail(
     lithos: TaskDetailClient,
     task_id: str,
+    *,
+    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskDetailData:
     errors: list[str] = []
     # §5.5's data contract: task_get + task_status + task_edge_list +
@@ -267,7 +284,7 @@ async def load_task_detail(
     else:
         edges = tuple(cast(list[EdgeRecord], edges_result))
 
-    blockers, discovered_from, spawned, breadcrumb = await _load_relations(
+    blockers, dependents, discovered_from, spawned, breadcrumb = await _load_relations(
         lithos, task_id, edges, limiter=limiter
     )
 
@@ -276,6 +293,7 @@ async def load_task_detail(
         task_status=task_status,
         findings=finding_views,
         blockers=blockers,
+        dependents=dependents,
         discovered_from=discovered_from,
         spawned=spawned,
         breadcrumb=breadcrumb,
@@ -286,6 +304,7 @@ async def load_task_detail(
         relations_state=relations_state,
         children_state=children_state,
         errors=tuple(errors),
+        projects=task_projects(task, convention=convention, tag_key=tag_key),
     )
 
 
@@ -295,8 +314,8 @@ async def _load_relations(
     edges: tuple[EdgeRecord, ...],
     *,
     limiter: asyncio.Semaphore,
-) -> tuple[LinkPage, LinkPage, LinkPage, Breadcrumb]:
-    """Turn one edge list into the page's three link pages and its breadcrumb.
+) -> tuple[LinkPage, LinkPage, LinkPage, LinkPage, Breadcrumb]:
+    """Turn one edge list into the page's four link pages and its breadcrumb.
 
     The edge list is one round trip returning N rows, parsed locally in O(N);
     resolving those rows' live statuses is N round trips on the shared MCP
@@ -327,10 +346,19 @@ async def _load_relations(
     and is not rendered. Closing it needs either a per-task ``task_blocked``
     upstream or the T1-S8 multi-level walk, whichever lands first.
     """
-    blockers, discovered_from, spawned = await asyncio.gather(
+    blockers, dependents, discovered_from, spawned = await asyncio.gather(
         load_link_page(
             lithos,
             incoming_targets(task_id, edges, BLOCKER_EDGE_TYPES),
+            limiter=limiter,
+        ),
+        # The same edge types read the other way round: what this task blocks
+        # (§5.5.2's "Blocks" line, and T2-A6's panel). One edge list already in
+        # hand, so this costs no extra round trip of its own — only the same
+        # bounded, shared-limiter status fan-out the blocker page makes.
+        load_link_page(
+            lithos,
+            outgoing_targets(task_id, edges, BLOCKER_EDGE_TYPES),
             limiter=limiter,
         ),
         load_link_page(
@@ -345,7 +373,7 @@ async def _load_relations(
         ),
     )
     breadcrumb = await load_parent_breadcrumb(lithos, task_id, edges)
-    return blockers, discovered_from, spawned, breadcrumb
+    return blockers, dependents, discovered_from, spawned, breadcrumb
 
 
 async def resolve_finding_notes(

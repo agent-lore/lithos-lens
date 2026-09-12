@@ -51,6 +51,7 @@ from lithos_lens.request_filters import (
     filter_query_oversized,
     knowledge_tag_url,
     note_url,
+    panel_fragment_url,
     tag_chip_class,
     task_card_url,
     task_detail_url,
@@ -59,10 +60,13 @@ from lithos_lens.request_filters import (
     tasks_url,
 )
 from lithos_lens.state import AppState
-from lithos_lens.task_detail import load_task_detail
+from lithos_lens.task_detail import TaskDetailData, load_task_detail
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
+    PANEL_FRAGMENT_KEY,
+    PANEL_FRAGMENT_VALUE,
+    PANEL_SELECTION_KEY,
     TASK_DETAIL_ALIAS_KEY,
     TASK_DETAIL_ALIAS_PATH,
     default_since,
@@ -187,6 +191,10 @@ def create_app(
     templates.env.globals["epic_scope_url"] = epic_scope_url
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
+    # The side panel's fetch URL, built server-side per row (§5.5): the id
+    # encoding and the preserved filters have one definition, in request_filters.
+    templates.env.globals["panel_fragment_url"] = panel_fragment_url
+    templates.env.globals["panel_selection_key"] = PANEL_SELECTION_KEY
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
     templates.env.globals["note_url"] = note_url
     templates.env.globals["board_is_filtered"] = board_is_filtered
@@ -354,15 +362,26 @@ def create_app(
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
+        """The task's full page — or, with ``?fragment=panel``, its side panel.
+
+        ONE route and one set of reads behind both (§5.5: "single template
+        path, two host pages"). The fragment is the same data rendered through
+        ``tasks/panel.html``, which extends no layout, so a row click on the
+        dashboard and a node click on the graph page (T2-A4) fetch the partial
+        and nothing else. Every degraded state — offline, an over-budget filter
+        query, and above all an unknown id — is answered in the panel's own
+        markup rather than as a status code the click handler would have to
+        interpret.
+        """
+        panel = request.query_params.get(PANEL_FRAGMENT_KEY) == PANEL_FRAGMENT_VALUE
+        template = "tasks/panel.html" if panel else "tasks/detail.html"
         if filter_query_oversized(request):
-            return await _reject_oversized_filters(
-                request, templates, state, "tasks/detail.html"
-            )
+            return await _reject_oversized_filters(request, templates, state, template)
         snapshot = await state.refresh_health()
         if snapshot.lithos != "ok":
             return templates.TemplateResponse(
                 request,
-                "tasks/detail.html",
+                template,
                 {
                     "config": state.config,
                     "health": snapshot,
@@ -371,10 +390,12 @@ def create_app(
                     "offline": True,
                 },
             )
-        detail = await load_task_detail(state.lithos_client, task_id)
+        detail = await _load_detail(state, task_id)
+        if panel:
+            metrics.tasks_panel_opens().add(1, {"source": "fragment"})
         return templates.TemplateResponse(
             request,
-            "tasks/detail.html",
+            template,
             {
                 "config": state.config,
                 "health": snapshot,
@@ -403,7 +424,7 @@ def create_app(
                     "offline": True,
                 },
             )
-        detail = await load_task_detail(state.lithos_client, task_id)
+        detail = await _load_detail(state, task_id)
         return templates.TemplateResponse(
             request,
             "tasks/findings.html",
@@ -518,6 +539,7 @@ async def _reject_oversized_filters(
             "active_view": "tasks",
             "dashboard": None,
             "detail": None,
+            "panel": None,
             "offline": False,
             "filter_query_rejected": True,
             "max_filter_query_bytes": MAX_FILTER_QUERY_BYTES,
@@ -525,6 +547,45 @@ async def _reject_oversized_filters(
         },
         status_code=400,
     )
+
+
+async def _load_detail(state: AppState, task_id: str) -> TaskDetailData:
+    """One task's detail data, under the deployment's project convention.
+
+    The convention is config (§5B.1) and the panel's project chip is rendered
+    from it, so it is threaded in here — once — rather than re-read in a
+    template that would have to decide between `metadata.project` and the
+    `<tag_key>:<slug>` tag on its own.
+    """
+    tasks_config = state.config.tasks
+    return await load_task_detail(
+        state.lithos_client,
+        task_id,
+        convention=tasks_config.project_convention,
+        tag_key=tasks_config.project_tag_key,
+    )
+
+
+async def _selected_panel(request: Request, state: AppState) -> TaskDetailData | None:
+    """The side panel this request asked to open, if it asked (§5.5, T2-A6).
+
+    ``?selected=<id>`` is the DASHBOARD's single selection parameter, and this
+    is its no-JS baseline: a deep link or a shared URL renders the board with
+    the panel already open, because the same reads that back the fragment route
+    run here too. Deliberately NOT a preserved filter (`request_filters`) — it
+    names one open panel, not a slice of the board, so closing it clears the
+    parameter and leaves every filter in place, and no generated link carries a
+    selection into navigation it has nothing to do with.
+
+    An unknown id lands here as ``TaskDetailData.not_found`` and renders the
+    not-found PANEL beside a perfectly good board: a bad id in a shared URL
+    must not cost the operator the dashboard.
+    """
+    selected = (request.query_params.get(PANEL_SELECTION_KEY) or "").strip()
+    if not selected:
+        return None
+    metrics.tasks_panel_opens().add(1, {"source": "url"})
+    return await _load_detail(state, selected)
 
 
 async def _render_tasks(
@@ -538,6 +599,7 @@ async def _render_tasks(
         )
     snapshot = await state.refresh_health()
     dashboard = None
+    panel: TaskDetailData | None = None
     if snapshot.lithos == "ok":
         query_items = list(request.query_params.multi_items())
         filters = parse_filters(
@@ -571,19 +633,32 @@ async def _render_tasks(
             },
         )
         tasks_config = state.config.tasks
-        dashboard = await load_dashboard(
-            state.lithos_client,
-            filters=filters,
-            frontier_limit=tasks_config.frontier_limit,
-            attention=AttentionPolicy(
-                gate_waiting_attention_hours=tasks_config.gate_waiting_attention_hours,
-                claim_expiring_soon_minutes=tasks_config.claim_expiring_soon_minutes,
-                stale_open_age_days=tasks_config.stale_open_age_days,
-                unclaimed_ready_age_minutes=tasks_config.unclaimed_ready_age_minutes,
-                dispatch_trigger_tag_prefixes=(
-                    tasks_config.dispatch_trigger_tag_prefixes
+        # Concurrently: the board is a frontier fan-out and the panel is one
+        # task's reads, and neither needs the other's answer. Serialising them
+        # would add a whole panel render to the latency of every deep link that
+        # arrives with `?selected=`.
+        dashboard, panel = await asyncio.gather(
+            load_dashboard(
+                state.lithos_client,
+                filters=filters,
+                frontier_limit=tasks_config.frontier_limit,
+                attention=AttentionPolicy(
+                    gate_waiting_attention_hours=(
+                        tasks_config.gate_waiting_attention_hours
+                    ),
+                    claim_expiring_soon_minutes=(
+                        tasks_config.claim_expiring_soon_minutes
+                    ),
+                    stale_open_age_days=tasks_config.stale_open_age_days,
+                    unclaimed_ready_age_minutes=(
+                        tasks_config.unclaimed_ready_age_minutes
+                    ),
+                    dispatch_trigger_tag_prefixes=(
+                        tasks_config.dispatch_trigger_tag_prefixes
+                    ),
                 ),
             ),
+            _selected_panel(request, state),
         )
         logger.debug(
             "tasks dashboard loaded",
@@ -617,6 +692,7 @@ async def _render_tasks(
             "health": snapshot,
             "active_view": "tasks",
             "dashboard": dashboard,
+            "panel": panel,
             "max_tag_chips": MAX_FILTER_TAG_CHIPS,
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },

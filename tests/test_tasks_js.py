@@ -13,6 +13,13 @@ arms:
 - a stamp already in the past on arrival (browser/Lens clock skew) must back
   off to the poll interval instead of the sub-second floor.
 
+T2-A6 adds a second harness for the SIDE PANEL, which lives in the same file
+for the same reason: what it pins is browser behaviour with no server half —
+which URL a row click fetches, and above all that CLOSING the panel clears only
+the selection and leaves the board's filters (``?project=``) exactly as they
+were. A Python test can assert what the close LINK says; only this can assert
+what ``history.pushState`` is handed.
+
 Node is the same runtime the ``e2e/`` Playwright suite needs; the tests skip
 when it is absent rather than failing a pure-Python environment.
 """
@@ -58,6 +65,9 @@ const document = {
   },
   querySelectorAll() { return { length: 0, forEach() {} }; },
   createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  // The panel (T2-A6) binds its click/keydown handlers at load; this harness
+  // never fires one, but the IIFE must be able to install them.
+  addEventListener() {},
 };
 
 class EventSource {
@@ -69,6 +79,7 @@ const sandbox = {
   document,
   EventSource,
   console,
+  URL,
   // Controlled clock: the harness asserts on exact delays, and advances time
   // by a timer's own delay when it fires (so a chained sleep converges).
   Date: new Proxy(Date, {
@@ -86,6 +97,7 @@ sandbox.window = {
   clearTimeout() {},
   setInterval: () => 0,
   clearInterval() {},
+  addEventListener() {},
   location: { href: "http://lens.test/tasks" },
 };
 sandbox.window.window = sandbox.window;
@@ -218,3 +230,226 @@ def test_a_second_gate_due_soon_is_not_delayed_to_the_poll_interval() -> None:
     assert result["delays"][1] == 3_500, (
         f"second gate was scheduled {result['delays'][1]}ms out, not 3500ms"
     )
+
+
+# ── the side panel (T2-A6): row click, close, Escape, back ──────────────────
+
+# A second stub DOM, deliberately minimal: the panel code touches a handful of
+# nodes (the host, the clicked row, the links inside a click's ancestry), so the
+# harness hands each synthetic event an explicit `closest` map rather than
+# pretending to be a DOM. `history.pushState` is recorded AND applied to
+# `location.href`, because the next action reads the URL the previous one wrote
+# — that chain is the thing under test.
+PANEL_HARNESS = """
+const fs = require("fs");
+const vm = require("vm");
+
+const [sourcePath, initialHref, panelHtml, actionsRaw] = process.argv.slice(1);
+const actions = JSON.parse(actionsRaw);
+
+let href = initialHref;
+const pushed = [];
+const fetches = [];
+const prevented = [];
+const listeners = {};
+
+const host = { innerHTML: "", dataset: {} };
+const row = {
+  dataset: {
+    taskId: "open-unclaimed",
+    panelUrl: "/tasks/open-unclaimed?project=influx&fragment=panel",
+  },
+};
+const titleLink = { classList: { contains: (name) => name === "task-title" } };
+const tagLink = { classList: { contains: () => false } };
+const closeLink = {};
+const panel = {};
+
+function clickEvent(map, label) {
+  return {
+    button: 0,
+    defaultPrevented: false,
+    target: { closest: (selector) => map[selector] || null },
+    preventDefault() { prevented.push(label); },
+  };
+}
+
+const EVENTS = {
+  row: () => clickEvent({ "[data-task-row]": row, "a[href]": titleLink }, "row"),
+  tag: () => clickEvent({ "[data-task-row]": row, "a[href]": tagLink }, "tag"),
+  close: () => clickEvent({ "[data-panel-close]": closeLink }, "close"),
+  expand: () =>
+    clickEvent({ "[data-task-panel]": panel, "a[href]": tagLink }, "expand"),
+};
+
+const document = {
+  querySelector(selector) {
+    if (selector === "[data-panel-host]") return host;
+    if (selector.indexOf("[data-task-row]") === 0) return row;
+    return null;
+  },
+  querySelectorAll() { return { length: 0, forEach() {} }; },
+  createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+};
+
+class EventSource {
+  addEventListener() {}
+  close() {}
+}
+
+const sandbox = {
+  document,
+  EventSource,
+  console,
+  URL,
+  DOMParser: class { parseFromString() { return document; } },
+  fetch: (url) => {
+    fetches.push(url);
+    return Promise.resolve({ ok: true, text: () => Promise.resolve(panelHtml) });
+  },
+};
+sandbox.window = {
+  LithosLensTasks: { eventsUrl: "/tasks/events", selectionParam: "selected" },
+  setTimeout: () => 0,
+  clearTimeout() {},
+  setInterval: () => 0,
+  clearInterval() {},
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  location: { get href() { return href; } },
+  history: {
+    pushState(state, title, url) {
+      pushed.push(url);
+      href = new URL(url, "http://lens.test").href;
+    },
+  },
+};
+sandbox.window.window = sandbox.window;
+Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
+
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(sourcePath, "utf8"), sandbox);
+
+function fire(type, event) {
+  (listeners[type] || []).forEach((listener) => listener(event));
+}
+
+(async () => {
+  for (const action of actions) {
+    if (action === "escape") fire("keydown", { key: "Escape" });
+    else if (action === "back") {
+      // What the browser does on Back: restore the PREVIOUS URL, then notify.
+      // Nothing is pushed, which is half of what the assertion checks.
+      pushed.pop();
+      href = new URL(pushed.length ? pushed[pushed.length - 1] : initialHref,
+                     "http://lens.test").href;
+      fire("popstate", {});
+    } else fire("click", EVENTS[action]());
+    // The open path awaits a fetch, so drain the microtask queue between
+    // actions or the next one runs against a half-applied panel.
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  console.log(JSON.stringify({
+    pushed, fetches, prevented, href, panel: host.innerHTML,
+  }));
+})();
+"""
+
+PANEL_HTML = '<aside data-task-panel data-refresh-fragment="panel">panel</aside>'
+
+
+def _panel_run(
+    actions: list[str], href: str = "http://lens.test/tasks?project=influx"
+) -> dict:
+    """Load tasks.js against a board with one row, then fire ``actions``."""
+    assert NODE is not None
+    result = subprocess.run(
+        [
+            NODE,
+            "-e",
+            PANEL_HARNESS,
+            "--",
+            str(TASKS_JS),
+            href,
+            PANEL_HTML,
+            json.dumps(actions),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_clicking_a_row_fetches_its_panel_fragment_and_pushes_the_selection() -> None:
+    """§5.5: a row click opens the panel instead of navigating. It fetches the
+    URL the SERVER put on the row — so the id encoding and the board's filters
+    are the server's decision — and only then pushes `selected` onto the URL, so
+    a failed fetch can never leave the address bar claiming an open panel."""
+    result = _panel_run(["row"])
+
+    assert result["fetches"] == ["/tasks/open-unclaimed?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=open-unclaimed"]
+    assert result["panel"] == PANEL_HTML
+    assert result["prevented"] == ["row"]
+
+
+def test_closing_the_panel_keeps_the_boards_project_filter() -> None:
+    """THE acceptance criterion for the close path: closing clears the
+    selection and preserves list state. Rebuilt from the live URL rather than
+    from a remembered query string, so every filter — `project` here, but tags,
+    the epic scope and the since window alike — survives."""
+    result = _panel_run(["row", "close"])
+
+    assert result["pushed"][-1] == "/tasks?project=influx"
+    assert result["href"] == "http://lens.test/tasks?project=influx"
+    assert result["panel"] == ""
+
+
+def test_escape_closes_the_panel_the_same_way() -> None:
+    """Escape is the keyboard half of the close button, not a second path with
+    its own URL handling."""
+    result = _panel_run(["row", "escape"])
+
+    assert result["pushed"][-1] == "/tasks?project=influx"
+    assert result["panel"] == ""
+
+
+def test_escape_with_no_panel_open_pushes_nothing() -> None:
+    """An Escape on a board with no selection must not write a history entry —
+    it would make Back a no-op the operator has to press twice."""
+    result = _panel_run(["escape"])
+
+    assert result["pushed"] == []
+
+
+def test_back_restores_the_previous_state_without_a_reload_or_a_push() -> None:
+    """The URL is the state: Back through an opened panel closes it, from the
+    URL alone, and pushes nothing of its own."""
+    result = _panel_run(["row", "back"])
+
+    assert result["panel"] == ""
+    assert result["pushed"] == []
+    assert result["fetches"] == ["/tasks/open-unclaimed?project=influx&fragment=panel"]
+
+
+def test_a_tag_chip_inside_a_row_keeps_its_own_navigation() -> None:
+    """A row click is the TITLE link and the row itself. The tag chips inside
+    the row are filter links and must still filter, or the panel would swallow
+    the only way to scope the board from a row."""
+    result = _panel_run(["tag"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
+
+
+def test_links_inside_the_panel_navigate_normally() -> None:
+    """Expand is the whole point of the panel's link set: it LEAVES for the
+    full page. A handler that swallowed clicks inside the panel would strand
+    the operator in a summary."""
+    result = _panel_run(["expand"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []

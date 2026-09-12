@@ -1011,6 +1011,75 @@ button,
   gap: 0.75rem;
 }
 
+/* The side panel (§5.5, T2-A6) — ONE implementation for dashboard rows and, from
+   T2-A4, graph nodes. On the dashboard it OVERLAYS the right edge rather than
+   reflowing the board: the operator's place in the list is the thing the panel
+   exists to preserve, and a column that pushed the rows sideways would lose it
+   on every click. Fixed, so it stays put while the board scrolls under it, and
+   scrollable in itself so a long blocker list cannot run off the screen.
+
+   The width is clamped to the viewport, not just to 24rem: at 320px an overlay
+   wider than the page would make the document itself scroll sideways (the e2e
+   capture asserts it does not). The host is `:empty` whenever no task is
+   selected, which is what keeps a closed panel out of the layout entirely. */
+.task-panel-host:empty {
+  display: none;
+}
+
+.task-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  box-shadow: 0 0.75rem 2rem rgba(30, 39, 35, 0.18);
+  display: grid;
+  gap: 1rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  padding: 1.25rem;
+  position: fixed;
+  right: 1rem;
+  top: 5rem;
+  width: min(24rem, calc(100vw - 2rem));
+  z-index: 5;
+}
+
+/* Same reason `.detail-panel > *` carries it: a grid item defaults to
+   min-width: auto, so one unbreakable token (an ISO expiry in a claim line)
+   would size the panel's column wider than the panel. */
+.task-panel > * {
+  min-width: 0;
+}
+
+.task-panel h2 {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.task-panel h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.4rem;
+}
+
+.task-panel-header {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.task-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Expand and Close sit side by side. The shared control rule above stretches
+   every button to `width: 100%` — right for the filter form it was written
+   for, wrong in a 24rem panel, where it turned two links into two stacked
+   bars taller than the header they belong to. */
+.task-panel-actions .button-secondary {
+  flex: 1 1 auto;
+  width: auto;
+}
+
 /* Task-detail graph surfaces (T1-S7): the parent breadcrumb, the level-1
    blocker chain / provenance link lists, and the children table. The link list
    is the shared rendering for every bounded neighbour page (link_page.html),

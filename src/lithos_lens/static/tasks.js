@@ -1,6 +1,11 @@
 (function () {
   const config = window.LithosLensTasks || {};
   const eventsUrl = config.eventsUrl || "/tasks/events";
+  // The HOST page's one selection parameter (REQUIREMENTS §5.5): `selected` on
+  // the dashboard, `focus` on the graph page, which passes its own. The panel
+  // below is one implementation for both, so the parameter is configuration
+  // rather than a second copy of the panel code per page.
+  const selectionParam = config.selectionParam || "selected";
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
   let eventSource = null;
@@ -12,6 +17,9 @@
   let gateRefreshTimer = null;
   let gateCountdownTimer = null;
   let lastGateRefreshAt = 0;
+  // Which task the open panel is showing, "" when it is closed. Seeded from
+  // the URL at load, because `?selected=` renders the panel server-side.
+  let selectedTaskId = "";
   // setTimeout stores its delay in a signed 32-bit int: anything larger wraps
   // and fires (near) immediately, so a gate more than ~24.8 days out must be
   // reached by chaining sleeps rather than by one oversized timeout.
@@ -118,6 +126,11 @@
     if (config.detailTaskId) {
       replaceFragment(doc, "detail");
     }
+    // The open panel carries live blocker and dependent statuses, and the
+    // reconcile already fetched this URL — which, after a row click, names the
+    // selection. Swapped separately from the board so the panel is not torn
+    // down and rebuilt under the cursor on every event.
+    replaceFragment(doc, "panel");
     setupDatePickers();
     // The replaced fragment carries a fresh board (new gate rows, a new
     // ready_at, or none), so the countdown text and the one-shot timer are
@@ -167,6 +180,110 @@
 
   function rowFor(taskId) {
     return document.querySelector(`[data-task-row][data-task-id="${cssEscape(taskId)}"]`);
+  }
+
+  // ── The side panel (§5.5): fetch the fragment, push the selection ────────
+  //
+  // The panel is SERVER-rendered markup throughout — `?selected=<id>` renders
+  // it into the board, and a row click fetches the same partial from
+  // `/tasks/{id}?fragment=panel`. Nothing here builds panel HTML, so the no-JS
+  // baseline and the clicked panel cannot drift.
+
+  function panelHost() {
+    return document.querySelector("[data-panel-host]");
+  }
+
+  function panelUrlFor(taskId) {
+    // The row carries the URL the SERVER built (`data-panel-url`): it encodes
+    // the id through the same path rule every task link uses — a task called
+    // `graph` goes through the alias route — and carries the board's preserved
+    // filters, so the panel's Expand and Close links come back inside the
+    // scope the operator is browsing. Only a task with no row here (a deep
+    // link to something the filters exclude) falls back to a plain URL.
+    const row = rowFor(taskId);
+    if (row && row.dataset.panelUrl) return row.dataset.panelUrl;
+    return `/tasks/${encodeURIComponent(taskId)}?fragment=panel`;
+  }
+
+  // This page's URL with the selection parameter set to `taskId`, or removed
+  // when it is empty. Built from the live URL rather than from a remembered
+  // query string, so closing the panel preserves every filter, the epic scope
+  // and the resolved-since window exactly as they arrived.
+  function selectionUrl(taskId) {
+    const url = new URL(window.location.href);
+    if (taskId) url.searchParams.set(selectionParam, taskId);
+    else url.searchParams.delete(selectionParam);
+    return url.pathname + url.search;
+  }
+
+  async function openPanel(taskId, options) {
+    const host = panelHost();
+    if (!host || !taskId) return;
+    const push = !options || options.push !== false;
+    const response = await fetch(panelUrlFor(taskId), {
+      headers: { "X-Lithos-Lens-Refresh": "panel" }
+    });
+    // A failed fetch leaves the panel — and the URL — as they were. The route
+    // answers an unknown id with the not-found PANEL at 200, so this is a
+    // transport failure, not "no such task".
+    if (!response.ok) return;
+    host.innerHTML = await response.text();
+    // Same reason replaceFragment does it: these nodes were parsed out of a
+    // fetched document, and htmx only wires the ones it swapped itself.
+    if (window.htmx) window.htmx.process(host);
+    selectedTaskId = taskId;
+    // Pushed AFTER the swap, so a URL never claims a panel that failed to open.
+    if (push) window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
+  }
+
+  function closePanel(options) {
+    const host = panelHost();
+    if (host) host.innerHTML = "";
+    selectedTaskId = "";
+    if (!options || options.push !== false) {
+      window.history.pushState({ selected: "" }, "", selectionUrl(""));
+    }
+  }
+
+  function handlePanelClick(event) {
+    // Modified and non-primary clicks keep their browser meaning: open in a
+    // new tab has to stay open in a new tab, on a row as much as on a link.
+    if (event.defaultPrevented) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest("[data-panel-close]")) {
+      event.preventDefault();
+      closePanel();
+      return;
+    }
+    // Inside the panel, every link is an ordinary link — Expand navigates to
+    // the full page, and a blocker or parent opens that task's own page.
+    if (target.closest("[data-task-panel]")) return;
+    const row = target.closest("[data-task-row]");
+    if (!row) return;
+    const link = target.closest("a[href]");
+    // The title link IS the row click (§5.5: clicking a row opens the panel,
+    // Expand navigates). A tag chip is its own filter link and keeps it.
+    if (link && !link.classList.contains("task-title")) return;
+    event.preventDefault();
+    openPanel(row.dataset.taskId);
+  }
+
+  function handlePanelKeydown(event) {
+    if (event.key !== "Escape" || !selectedTaskId) return;
+    closePanel();
+  }
+
+  function handlePanelPopstate() {
+    // Back and forward walk the selection without a reload: the URL is the
+    // state, so whatever it names now is what the panel shows.
+    const url = new URL(window.location.href);
+    const taskId = url.searchParams.get(selectionParam) || "";
+    if (taskId === selectedTaskId) return;
+    if (taskId) openPanel(taskId, { push: false });
+    else closePanel({ push: false });
   }
 
   function insertSkeletonRow(message) {
@@ -489,5 +606,12 @@
   setupDatePickers();
   renderGateCountdowns();
   scheduleGateRefresh();
+  // The server already rendered the panel for whatever `?selected=` named, so
+  // the client starts from the URL rather than from an empty selection — an
+  // Escape on a deep-linked panel has to close the panel that is on screen.
+  selectedTaskId = new URL(window.location.href).searchParams.get(selectionParam) || "";
+  document.addEventListener("click", handlePanelClick);
+  document.addEventListener("keydown", handlePanelKeydown);
+  window.addEventListener("popstate", handlePanelPopstate);
   connect();
 })();
