@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
-from urllib.parse import quote
 
-from lithos_lens.tasks import NoteRecord, TaskRecord
+from lithos_lens.tasks import NoteRecord, TaskRecord, task_detail_path
 
 
 @dataclass(frozen=True)
@@ -47,9 +46,12 @@ class ProducedByTask:
 
         Ids the route cannot carry never get here: ``load_produced_by`` only
         builds a chip for a routable ``task_id`` (see ``_is_routable_task_id``
-        for the excluded cases — literal ``/`` and the dot segments).
+        for the excluded cases — literal ``/`` and the dot segments). An id
+        that collides with a PAGE under ``/tasks/`` is routable but not at that
+        path, so ``task_detail_path`` sends it through the alias — one rule,
+        shared with the board and the graph page.
         """
-        return f"/tasks/{quote(self.task_id, safe='')}"
+        return task_detail_path(self.task_id)
 
 
 def _is_routable_task_id(task_id: str) -> bool:

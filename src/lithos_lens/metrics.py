@@ -474,3 +474,48 @@ def knowledge_resolves() -> Any:
             description="Wiki-link resolutions by the arm that decided.",
         ),
     )
+
+
+# ── Task graph (T2) ───────────────────────────────────────────────────
+
+
+def tasks_graph_renders() -> Any:
+    """Counter of `/tasks/graph` renders by scope kind and terminal outcome.
+
+    Labels: ``scope`` in ``project`` | ``epic`` | ``none`` (the picker), and
+    ``outcome`` in ``rendered`` | ``refused`` | ``picker`` | ``offline`` |
+    ``error``.
+
+    ``refused`` is its own outcome rather than an error: a scope over
+    ``[graph].max_tasks`` is a page Lens deliberately did not draw, and the
+    rate of those is the evidence for whether the guard is set anywhere near
+    how operators actually scope. The scope KEY — a project slug or an epic id
+    — is deliberately absent: one series per project is the unbounded
+    cardinality this module's rule forbids, and the span carries it instead.
+    """
+    return _instrument(
+        "lens_tasks_graph_renders_total",
+        lambda meter: meter.create_counter(
+            "lens_tasks_graph_renders_total",
+            description="Task-graph page renders by scope kind and outcome.",
+        ),
+    )
+
+
+def tasks_graph_cycle_reads() -> Any:
+    """Counter of the graph page's scoped `lithos_task_blocked` reads.
+
+    Labels: ``outcome`` in ``ok`` | ``truncated`` | ``failed``.
+
+    Cycle membership is Lithos's verdict, so a truncated or failed read is not
+    a slow page — it is a page that cannot say whether a task is in a cycle,
+    and marks it unknown. Counting the reads is how "how often is this signal
+    partial here?" is answerable without reading banners off screenshots.
+    """
+    return _instrument(
+        "lens_tasks_graph_cycle_reads_total",
+        lambda meter: meter.create_counter(
+            "lens_tasks_graph_cycle_reads_total",
+            description="Scoped blocked reads behind the graph page's cycle signal.",
+        ),
+    )

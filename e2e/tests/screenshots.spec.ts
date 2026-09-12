@@ -1,7 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { TRUNCATED_BASE_URL, TRUNCATED_FRONTIER_LIMIT } from "../servers";
+import {
+  GRAPH_BASE_URL,
+  GRAPH_DEGRADED_SCOPE,
+  GRAPH_REFUSED_SCOPE,
+  TRUNCATED_BASE_URL,
+  TRUNCATED_FRONTIER_LIMIT,
+} from "../servers";
 
 /**
  * Responsive screenshot capture — the artifacts-dir contract.
@@ -150,6 +156,120 @@ const PAGES: ReadonlyArray<{
     url: "/tasks/influx-shard-epic",
     ready: async (page) => {
       await expect(page.locator('[data-link-tail="children"]')).toBeVisible();
+    },
+  },
+  {
+    // The graph page with nothing to render yet (T2-A3): the scope picker is
+    // what `/tasks/graph` IS until an operator chooses, so it is the first
+    // thing anyone sees and the only state with no scope behind it.
+    slug: "graph-picker",
+    url: "/tasks/graph",
+    ready: async (page) => {
+      await expect(page.locator("[data-graph-picker]")).toBeVisible();
+      // Both columns populated — an empty one is a legitimate render, and an
+      // artifact of it would show nothing this page is for.
+      await expect(
+        page.locator("[data-picker-project]").first(),
+      ).toBeVisible();
+      await expect(page.locator("[data-picker-epic]").first()).toBeVisible();
+    },
+  },
+  {
+    // THE artifact the PRD names ("project graph with cycle + ghost +
+    // isolated disclosure + legend"). The demo's loom cluster carries every
+    // branch of graph assembly at once, and the `ready()` below waits on each
+    // one separately: this sandbox cannot look at the PNG, so a capture that
+    // silently lost a section must FAIL here rather than produce a
+    // healthy-looking image a later reviewer reads as proof it did not.
+    slug: "graph-project",
+    url: "/tasks/graph?project=lithos-loom",
+    ready: async (page) => {
+      await expect(page.locator("[data-graph-layers]")).toBeVisible();
+      // 1. The cycle callout, and the SCC Lens can actually SHAPE — bracketed
+      //    in its layer, which is the convention the legend explains.
+      await expect(page.locator("[data-cycle-callout]")).toBeVisible();
+      await expect(
+        page.locator('[data-cycle-group="loom-cycle-b"]'),
+      ).toBeVisible();
+      await expect(page.locator('[data-marker="in-cycle"]').first()).toBeVisible();
+      // 2. A ghost with its project chip — the cross-project `blocks` edge,
+      //    and the one row on this page that belongs to another scope.
+      await expect(
+        page.locator('[data-ghost-project="lithos-lens"]'),
+      ).toBeVisible();
+      // 3. The legend and the chain line, both of which the text baseline
+      //    needs because it has no arrows to read direction from.
+      await expect(page.locator("[data-graph-legend]")).toBeVisible();
+      await expect(
+        page.locator('[data-longest-chain][data-chain-bound="exact"]'),
+      ).toBeVisible();
+      // 4. Depth: the demo's chain is five deep, so layer 4 must exist — a
+      //    flattened graph would still render, and would be the wrong picture.
+      await expect(page.locator('[data-graph-layer="4"]')).toBeVisible();
+      // 5. The disclosure, CLOSED: collapsed on a project scope is the
+      //    acceptance criterion, and `open` is the other artifact below.
+      await expect(page.locator("[data-isolated-disclosure]")).toHaveJSProperty(
+        "open",
+        false,
+      );
+      // 6. The hierarchy tree, which is rendered whatever the overlays say.
+      await expect(
+        page.locator("[data-hierarchy-tree] [data-hierarchy-node]").first(),
+      ).toBeVisible();
+      // 7. And it is the HEALTHY picture: no cycle-signal banner belongs on
+      //    the artifact the PRD promises, or "signal incomplete" reads as
+      //    this page's normal state.
+      await expect(page.locator("[data-graph-banner]")).toHaveCount(0);
+      await expect(page.locator("[data-graph-refusal]")).toHaveCount(0);
+    },
+  },
+  {
+    // D4's honesty, which is a claim about APPEARANCE and so cannot be settled
+    // by the pytest suite's HTML substrings: when the scoped blocked read came
+    // back capped, the page has to SAY so and mark the rows it cannot answer
+    // for — never an implied "no cycle". Served by the third instance, whose
+    // `frontier_limit` caps every read (see `servers.ts`).
+    slug: "graph-degraded",
+    url: `${GRAPH_BASE_URL}/tasks/graph?epic=${GRAPH_DEGRADED_SCOPE}`,
+    ready: async (page) => {
+      // Still a graph, not an error page: degraded means partial, not absent.
+      await expect(page.locator("[data-graph-layers]")).toBeVisible();
+      // 1. The banner naming what the read did …
+      await expect(
+        page.locator('[data-graph-banner="cycle-truncated"]'),
+      ).toBeVisible();
+      // 2. … and the one stating the rule with its real count.
+      await expect(
+        page.locator('[data-graph-banner="cycle-unknown-count"]'),
+      ).toBeVisible();
+      // 3. The per-row marking those banners are about. A page that showed
+      //    the banner and left the rows unmarked would read as "no cycle".
+      await expect(
+        page.locator('[data-marker="cycle-unknown"]').first(),
+      ).toBeVisible();
+      // 4. An epic scope, so the disclosure starts OPEN — the other half of
+      //    the criterion `graph-project` captures closed.
+      await expect(page.locator("[data-isolated-disclosure]")).toHaveJSProperty(
+        "open",
+        true,
+      );
+    },
+  },
+  {
+    // The refusal (§5.7): a scope over the node guard is turned away rather
+    // than drawn, and the panel has to be readable at every width — it is the
+    // only thing on the page. Same instance, a scope one side of the guard.
+    slug: "graph-refused",
+    url: `${GRAPH_BASE_URL}/tasks/graph?project=${GRAPH_REFUSED_SCOPE}`,
+    ready: async (page) => {
+      const refusal = page.locator("[data-graph-refusal]");
+      await expect(refusal).toBeVisible();
+      await expect(refusal).toContainText("Narrow your scope");
+      // The count is the guard's own evidence, so the artifact must carry it.
+      await expect(page.locator("[data-refusal-count]")).toBeVisible();
+      // And nothing was drawn: a refusal that still rendered layers would be
+      // the guard failing open.
+      await expect(page.locator("[data-graph-layers]")).toHaveCount(0);
     },
   },
   {

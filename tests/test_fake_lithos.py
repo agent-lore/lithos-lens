@@ -27,8 +27,10 @@ from lithos_lens.fake_lithos import (
     FakeLithosClient,
     fake_lithos_enabled,
 )
+from lithos_lens.graph_scope import project_scope_tasks
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.main import DEFAULT_HOST, DEFAULT_PORT, resolve_host, resolve_port
+from lithos_lens.task_filtering import task_projects
 from lithos_lens.tasks import TaskRecord
 from lithos_lens.web import create_app
 from tests.conftest import load_contract
@@ -462,7 +464,10 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
     config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
     entries = _web_server_entries(config.read_text())
 
-    assert len(entries) >= 2, "the truncation instance is a second server"
+    assert len(entries) >= 3, (
+        "three instances: the healthy board, the truncated board, and the "
+        "graph page's degraded states"
+    )
     for index, entry in enumerate(entries):
         pinned = re.search(r'LENS_HOST:\s*"([^"]+)"', entry)
         assert pinned, f"webServer entry {index} does not pin LENS_HOST"
@@ -511,6 +516,68 @@ def test_the_truncation_instance_limit_still_separates_the_two_frontiers() -> No
     assert f"{truncating[0]} frontier truncated at" in spec, (
         f"the {truncating[0]} frontier is the one that truncates, but "
         "screenshots.spec.ts asserts a different side's banner"
+    )
+
+
+def test_the_graph_instance_separates_the_degraded_and_refused_scopes() -> None:
+    """The graph captures only prove anything at the right two guards.
+
+    The third e2e instance photographs both of the graph page's degraded
+    states, and it can only do that because ``GRAPH_REFUSAL_MAX_TASKS`` sits
+    between the two scopes the captures drive: the epic renders (so its
+    partial-cycle-signal banners are on screen) and the project is refused.
+    Move either scope's size — T2-A1's cluster moved the dashboard's the same
+    way — and one capture silently becomes a second copy of the other.
+
+    Checked here rather than only in Playwright for the reason the truncation
+    guard above gives: `make check` runs on every change and `make e2e` does
+    not.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    servers = (repo_root / "e2e/servers.ts").read_text()
+
+    def declared(name: str) -> str:
+        match = re.search(rf'{name} = "([^"]+)"', servers)
+        assert match, f"e2e/servers.ts no longer declares {name}"
+        return match.group(1)
+
+    guard = int(declared("GRAPH_REFUSAL_MAX_TASKS"))
+    limit = int(declared("GRAPH_DEGRADED_FRONTIER_LIMIT"))
+    epic_id = declared("GRAPH_DEGRADED_SCOPE")
+    project = declared("GRAPH_REFUSED_SCOPE")
+
+    dataset = demo_dataset()
+    # The project graph opens open-only, which is the set its guard counts.
+    refused = project_scope_tasks(dataset.tasks, project, include_resolved=False)
+    # The epic graph is the recursive subtree plus the anchor, closed children
+    # included (that scope's default).
+    subtree: list[str] = []
+    queue = [epic_id]
+    while queue:
+        for child in dataset.children.get(queue.pop(), ()):
+            if child not in subtree:
+                subtree.append(child)
+                queue.append(child)
+    rendered = len(subtree) + 1
+
+    assert rendered <= guard < len(refused), (
+        f"graph guard {guard} against {rendered} tasks in epic {epic_id!r} and "
+        f"{len(refused)} in project {project!r}: it must let the epic render "
+        "and refuse the project, or the two captures photograph one state."
+    )
+    # …and the rendered one must actually be DEGRADED, which needs a scoped
+    # blocked read that comes back full. Every covered task is in `project`.
+    blocked = [
+        task.id
+        for task in dataset.tasks
+        if task.id in dataset.blocked
+        and task.status == "open"
+        and project in task_projects(task, convention="both")
+    ]
+    assert len(blocked) >= limit, (
+        f"frontier_limit {limit} against {len(blocked)} blocked tasks in "
+        f"{project!r}: the read answers in full, so the graph-degraded capture "
+        "would photograph a healthy page."
     )
 
 

@@ -133,6 +133,10 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class Banner {
+    +id str
+    +text str
+  }
   class BlockedTaskRecord
   class BlockerExpansion {
     +expandable bool
@@ -159,6 +163,16 @@ classDiagram
   class Breadcrumb {
     +incomplete bool
   }
+  class CacheTally {
+    +hits int
+    +misses int
+    +ghost_reads int
+  }
+  class ChainView {
+    +exact bool
+    +unreadable_nodes int
+    +unresolvable_edges int
+  }
   class Condensation {
     +id str
     +members tuple[str, ...]
@@ -172,6 +186,18 @@ classDiagram
     +path tuple[str, ...]
     +scc bool
     +flagged bool
+    +message str
+  }
+  class CycleSignal {
+    +coverage tuple[str, ...]
+    +flagged Mapping[str, str]
+    +cycle_partners Mapping[str, tuple[str, ...]]
+    +unknown frozenset[str]
+    +projectless tuple[str, ...]
+  }
+  class CycleView {
+    +id str
+    +scc bool
     +message str
   }
   class DashboardData {
@@ -210,6 +236,16 @@ classDiagram
     +created_by str
     +created_at str
   }
+  class EdgeView {
+    +from_id str
+    +from_label str
+    +to_id str
+    +type str
+    +state str
+    +reason str
+    +from_unknown bool
+    +to_unknown bool
+  }
   class FindingView {
     +note_title str
     +note_error str
@@ -238,6 +274,29 @@ classDiagram
     +ghost_kind str
     +completeness str
   }
+  class GraphPageClient
+  class GraphPageParams {
+    +kind str
+    +key str
+    +include_resolved bool
+    +focus str
+    +overlays tuple[str, ...]
+    +show_isolated bool
+  }
+  class GraphPageView {
+    +edge_types tuple[str, ...]
+    +edge_count int
+    +coverage tuple[str, ...]
+    +cache_hits int
+    +cache_misses int
+    +ghost_reads int
+    +reads_ok int
+    +reads_truncated int
+    +reads_failed int
+    +reads_unmade int
+    +as_of datetime | None
+    +payload_json str
+  }
   class GraphScopeLimits {
     +max_tasks int
     +fetch_concurrency int
@@ -246,6 +305,17 @@ classDiagram
     +task_id str
     +depth int
     +has_children bool
+  }
+  class HierarchyRowView {
+    +depth int
+    +has_children bool
+  }
+  class LayerGroup {
+    +id str
+    +blocked_via_cycle bool
+  }
+  class LayerView {
+    +index int
   }
   class LinkPage {
     +total int
@@ -260,9 +330,36 @@ classDiagram
     +unresolved bool
     +gate_elapsed bool
   }
+  class NodeView {
+    +id str
+    +label str
+    +status str
+    +task_type str
+    +layer int
+    +ghost bool
+    +ghost_kind str
+    +projects tuple[str, ...]
+    +completeness str
+    +claims tuple[str, ...]
+    +isolated bool
+    +cycle_id str
+    +flagged bool
+    +cycle_message str
+    +cycle_unknown bool
+    +blocked_via_cycle bool
+    +unresolvable bool
+    +focused bool
+  }
   class PageTail {
     +shown int
     +total int
+  }
+  class ProjectRead {
+    +project str
+    +by str
+    +truncated bool
+    +error str
+    +unmade bool
   }
   class ScopeRefusal {
     +count int
@@ -286,6 +383,9 @@ classDiagram
     +isolated tuple[str, ...]
     +incomplete Mapping[str, str]
     +as_of datetime | None
+    +cache_hits int
+    +cache_misses int
+    +ghost_reads int
   }
   class TaskSummary {
     +attention int
@@ -326,7 +426,13 @@ classDiagram
   BlockedTaskRecord "1" --> "1" TaskRecord : task
   BlockerLevel "1" --> "1" LinkPage : page
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
+  ChainView "1" --> "0..*" NodeView : nodes
   Condensation "1" --> "0..1" Cycle : cycle
+  CycleSignal "1" --> "0..*" BlockedTaskRecord : blocked
+  CycleSignal "1" --> "0..*" BlockedTaskRecord : verdicts
+  CycleSignal "1" --> "0..*" ProjectRead : reads
+  CycleView "1" --> "0..*" NodeView : members
+  CycleView "1" --> "0..*" NodeView : path
   DashboardData "1" --> "0..*" AgentRecord : agents
   DashboardData "1" --> "0..*" EpicRollup : epics
   DashboardData "1" --> "0..*" GateGroup : gate_groups
@@ -341,7 +447,24 @@ classDiagram
   GateSection "1" --> "0..*" GateGroup : groups
   GraphEdge "1" --> "1" EdgeRecord : edge
   GraphNode "1" --> "1" TaskRecord : task
+  GraphPageView "1" --> "0..*" Banner : banners
+  GraphPageView "1" --> "1" ChainView : chain
+  GraphPageView "1" --> "0..*" CycleView : cycles
+  GraphPageView "1" --> "0..*" CycleView : external_cycles
+  GraphPageView "1" --> "0..*" CycleView : unshaped_cycles
+  GraphPageView "1" --> "0..*" EdgeView : incoming
+  GraphPageView "1" --> "1" GraphPageParams : params
+  GraphPageView "1" --> "0..*" HierarchyRowView : hierarchy
+  GraphPageView "1" --> "0..*" LayerView : layers
+  GraphPageView "1" --> "0..*" NodeView : isolated
+  GraphPageView "1" --> "0..*" NodeView : nodes
+  GraphPageView "1" --> "0..1" ScopeRefusal : refusal
+  HierarchyRowView "1" --> "1" NodeView : node
+  LayerGroup "1" --> "0..1" Cycle : cycle
+  LayerGroup "1" --> "0..*" NodeView : members
+  LayerView "1" --> "0..*" LayerGroup : groups
   LinkPage "1" --> "0..*" LinkedTask : links
+  ProjectRead "1" --> "0..*" BlockedTaskRecord : rows
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings
   TaskDetailData "1" --> "1" LinkPage : blockers

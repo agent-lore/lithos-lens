@@ -109,6 +109,27 @@ MAX_FLIGHTS_PER_TASK = 4
 #: Lithos client and, on a scope fan-out, wrapped in that scope's semaphore.
 EdgeFetch = Callable[[str], Awaitable[Sequence[EdgeRecord]]]
 
+
+@dataclass
+class CacheTally:
+    """One RENDER's reads through the process-wide cache.
+
+    The cache's own ``hits`` / ``misses`` are cumulative and shared by every
+    concurrent request, so subtracting them around a call attributes another
+    request's fan-out to this one — two overlapping graph pages would each
+    report the other's misses. A tally is passed down the call that owns it and
+    counts only what that call did.
+    """
+
+    hits: int = 0
+    misses: int = 0
+    #: ``task_get``s actually ISSUED while classifying far endpoints. Counted
+    #: as each call is made rather than from the candidate list, so a phase
+    #: that timed out reports what it really spent instead of zero (nothing
+    #: ran) or the whole queue (everything did).
+    ghost_reads: int = 0
+
+
 #: Injectable WALL clock: it stamps ``fetched_at``, which is what the page
 #: shows as its ``as_of`` line. It does NOT decide expiry — see :data:`Ticks`.
 Clock = Callable[[], datetime]
@@ -272,7 +293,9 @@ class GraphCache:
     def _touch(self, task_id: str) -> None:
         self._entries[task_id] = self._entries.pop(task_id)
 
-    async def edges_for(self, task_id: str, fetch: EdgeFetch) -> EdgeCacheEntry:
+    async def edges_for(
+        self, task_id: str, fetch: EdgeFetch, tally: CacheTally | None = None
+    ) -> EdgeCacheEntry:
         """The task's edges, from the cache or from one shared upstream read.
 
         Raises whatever ``fetch`` raises, to every waiter, and stores nothing:
@@ -283,12 +306,16 @@ class GraphCache:
             entry = self.get(task_id)
             if entry is not None:
                 self.hits += 1
+                if tally is not None:
+                    tally.hits += 1
                 return entry
 
             flights = self._flights.setdefault(task_id, [])
             current = next((flight for flight in flights if not flight.retired), None)
             if current is not None:
                 self.hits += 1
+                if tally is not None:
+                    tally.hits += 1
                 # Shielded: one waiter being cancelled (a browser that went
                 # away mid-render) must not cancel the read the OTHER waiters
                 # are on.
@@ -308,6 +335,8 @@ class GraphCache:
                 continue
 
             self.misses += 1
+            if tally is not None:
+                tally.misses += 1
             self._generation += 1
             generation = self._generation
             inflight = asyncio.create_task(

@@ -14,7 +14,12 @@ import asyncio
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from lithos_lens.graph_cache import EdgeCacheEntry, GraphCache, graph_fanout_gate
+from lithos_lens.graph_cache import (
+    CacheTally,
+    EdgeCacheEntry,
+    GraphCache,
+    graph_fanout_gate,
+)
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import LINK_READ_TIMEOUT_S
 from lithos_lens.tasks import TaskRecord
@@ -74,8 +79,14 @@ async def read_edges(
     tasks: Sequence[TaskRecord],
     cache: GraphCache,
     limiter: asyncio.Semaphore,
+    tally: CacheTally | None = None,
 ) -> tuple[tuple[EdgeCacheEntry, ...], dict[str, str]]:
-    """One cache read per node; failures become ``incomplete``, not silence."""
+    """One cache read per node; failures become ``incomplete``, not silence.
+
+    ``tally`` counts THIS render's hits and misses, so the page can report its
+    own fan-out rather than a slice of a process-wide counter (see
+    :class:`~lithos_lens.graph_cache.CacheTally`).
+    """
 
     async def fetch(task_id: str) -> list[EdgeRecord]:
         async with graph_fanout_gate(), limiter:
@@ -87,7 +98,7 @@ async def read_edges(
             )
 
     results = await asyncio.gather(
-        *(cache.edges_for(task.id, fetch) for task in tasks),
+        *(cache.edges_for(task.id, fetch, tally) for task in tasks),
         return_exceptions=True,
     )
     entries: list[EdgeCacheEntry] = []
@@ -129,6 +140,7 @@ async def resolve_far_endpoints(
     pending: Sequence[str],
     resolved: dict[str, TaskRecord],
     limiter: asyncio.Semaphore,
+    tally: CacheTally | None = None,
 ) -> set[str]:
     """Read every pending candidate, filling ``resolved`` and returning failures.
 
@@ -149,6 +161,11 @@ async def resolve_far_endpoints(
 
     async def read(task_id: str) -> TaskRecord:
         async with graph_fanout_gate(), limiter:
+            # Counted where the call is MADE, not where it was queued: this
+            # phase can be cancelled by its deadline, and the caller reports
+            # what the render actually spent.
+            if tally is not None:
+                tally.ghost_reads += 1
             return await asyncio.wait_for(lithos.task_get(task_id), LINK_READ_TIMEOUT_S)
 
     results = await asyncio.gather(

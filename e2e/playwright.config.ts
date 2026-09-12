@@ -1,6 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 import {
   BASE_URL,
+  GRAPH_BASE_URL,
+  GRAPH_DEGRADED_FRONTIER_LIMIT,
+  GRAPH_PORT,
+  GRAPH_REFUSAL_MAX_TASKS,
   PORT,
   TRUNCATED_BASE_URL,
   TRUNCATED_FRONTIER_LIMIT,
@@ -15,10 +19,11 @@ import {
  * driven end to end against the in-memory fixtures in
  * `src/lithos_lens/fake_lithos.py` — no Lithos MCP server required.
  * `LITHOS_LENS_CONFIG` points at the checked-in example config so discovery
- * never depends on the developer's machine. There are two instances (ports and
- * rationale in `servers.ts`): the default board, and one running at a low
+ * never depends on the developer's machine. There are three instances (ports
+ * and rationale in `servers.ts`): the default board, one running at a low
  * `frontier_limit` so the truncated board can be captured without degrading the
- * healthy one.
+ * healthy one, and one whose graph guards are tight enough to photograph the
+ * graph page's partial-signal and refused states.
  *
  * Run with `make e2e` (installs deps + Chromium), or from this directory:
  *   npm install && npm run install-browsers && npm test
@@ -88,13 +93,14 @@ export default defineConfig({
       dependencies: ["app", "live-events"],
     },
   ],
-  // TWO instances (see servers.ts): the default board, and a second one whose
-  // frontier_limit is low enough that the demo fixtures truncate. Separate
-  // PROCESSES, so the second one also sits outside the event-leak problem the
+  // THREE instances (see servers.ts): the default board, a second one whose
+  // frontier_limit is low enough that the demo fixtures truncate, and a third
+  // whose graph guards produce the partial-signal and refused states. Separate
+  // PROCESSES, so the extra two also sit outside the event-leak problem the
   // projects above are sequenced around — `EventHub.publish` fans to the tabs
-  // of ITS server only, and no driving phase talks to this one.
+  // of ITS server only, and no driving phase talks to either.
   //
-  // BOTH pin `LENS_HOST` to loopback. Lens defaults to every interface, which
+  // ALL THREE pin `LENS_HOST` to loopback. Lens defaults to every interface, which
   // is the accepted posture for the container (REQUIREMENTS §5C.1) but the
   // wrong one here: fake mode registers `POST /tasks/events/publish`, an
   // unauthenticated write seam with no Origin check, so on a shared segment
@@ -133,6 +139,24 @@ export default defineConfig({
         // The whole point of the second instance. Well clear of the env path's
         // `minimum = 1` floor, so the instance boots.
         LITHOS_LENS_TASKS_FRONTIER_LIMIT: TRUNCATED_FRONTIER_LIMIT,
+      },
+    },
+    {
+      command: "uv run --directory .. lithos-lens",
+      url: GRAPH_BASE_URL,
+      reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
+      timeout: 120_000,
+      env: {
+        LITHOS_LENS_FAKE_LITHOS: "1",
+        LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
+        LENS_PORT: String(GRAPH_PORT),
+        LENS_HOST: "127.0.0.1",
+        // The two knobs the graph page's degraded states are behind. At this
+        // limit EVERY scoped blocked read comes back capped, so any scope this
+        // instance renders carries the partial-cycle-signal banners; the node
+        // guard then separates the scope that renders from the one refused.
+        LITHOS_LENS_TASKS_FRONTIER_LIMIT: GRAPH_DEGRADED_FRONTIER_LIMIT,
+        LITHOS_LENS_GRAPH_MAX_TASKS: GRAPH_REFUSAL_MAX_TASKS,
       },
     },
   ],

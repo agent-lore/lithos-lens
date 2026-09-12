@@ -67,7 +67,10 @@ so you do not need to start a server yourself.
 `LENS_HOST` is not decoration. Lens binds every interface by default — the
 accepted posture for the container it ships as — but fake mode registers
 `POST /tasks/events/publish`, an unauthenticated write seam, and the suite runs
-two such instances. Loopback keeps a run on a shared network from having a
+three such instances (the healthy board, one at a low `frontier_limit` for the
+truncated board, and one whose graph guards are tight enough to photograph the
+graph page's partial-signal and refused states — see
+[`servers.ts`](./servers.ts)). Loopback keeps a run on a shared network from having a
 foreign event fanned into the tabs being photographed. Use it for any fake-mode
 instance you start by hand, too.
 
@@ -81,9 +84,9 @@ deterministic layout:
 e2e/artifacts/<page>-<width>.png
 ```
 
-with `<page>` one of `dashboard`, `task-detail`, `note`, `note-quarantined`,
-`note-missing` and `<width>` one of `320`, `768`, `1024`, `1440` — 20 files
-per run:
+with `<width>` one of `320`, `768`, `1024`, `1440` and `<page>` one of the
+slugs in `PAGES` — four files each, so the run's file count is four times the
+length of that array:
 
 ```
 e2e/artifacts/dashboard-320.png
@@ -91,6 +94,14 @@ e2e/artifacts/dashboard-768.png
 ...
 e2e/artifacts/note-missing-1440.png
 ```
+
+The covered pages are the healthy dashboard and its truncated twin, four
+task-detail shapes, the graph page (`graph-picker`, `graph-project`,
+`graph-degraded`, `graph-refused`) and three note states. Each entry's
+`ready()` waits on **every** marker its picture exists to prove — this is the
+only place some of those claims are visible at all, and a capture that
+silently lost one must fail the suite rather than hand a reviewer a
+healthy-looking image.
 
 **This path layout is a downstream contract**: loom's visual-review flow
 ([agent-lore/lithos-loom#283](https://github.com/agent-lore/lithos-loom/issues/283))

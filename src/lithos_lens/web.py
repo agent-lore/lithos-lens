@@ -35,6 +35,7 @@ from lithos_lens.fake_lithos import (
     fake_lithos_enabled,
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
+from lithos_lens.graph_routes import register_graph_routes
 from lithos_lens.knowledge import (
     render_markdown,
 )
@@ -62,6 +63,8 @@ from lithos_lens.task_detail import load_task_detail
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
+    TASK_DETAIL_ALIAS_KEY,
+    TASK_DETAIL_ALIAS_PATH,
     default_since,
     format_display_date,
     format_tag,
@@ -330,6 +333,24 @@ def create_app(
             )
             await state.events.publish(event)
             return JSONResponse({"published": True}, status_code=202)
+
+    # BEFORE the dynamic `/tasks/{task_id}` below: Starlette matches routes in
+    # registration order, so a graph route attached after it would never be
+    # reached — `/tasks/graph` would render a task detail for a task with the
+    # id "graph".
+    register_graph_routes(app, state, templates)
+
+    # The id-in-the-query alias (`tasks.task_detail_path`), for the ids no path
+    # can address: a page word like "graph" that the static route above claims,
+    # and anything holding a "/" or a dot segment, which ASGI decodes back into
+    # separators and routes somewhere else entirely. The path here is FIXED, so
+    # the value cannot become part of the route. Registered before the dynamic
+    # route would match "/tasks/id", and a bare visit with no parameter is the
+    # detail page of a task whose id really is "id".
+    @app.get(TASK_DETAIL_ALIAS_PATH, response_class=HTMLResponse)
+    async def task_detail_by_id(request: Request) -> HTMLResponse:
+        requested = request.query_params.get(TASK_DETAIL_ALIAS_KEY)
+        return await task_detail(request, requested if requested else "id")
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:

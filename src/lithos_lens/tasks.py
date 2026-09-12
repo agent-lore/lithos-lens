@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import quote, urlencode
 
 TaskStatusName = Literal["open", "completed", "cancelled"]
 # Sections of the graph-native dashboard. The three workable sections are
@@ -122,6 +123,54 @@ MAX_FILTER_QUERY_BYTES = 1024
 # re-emitting the others), so it needs a bound of its own even under the byte
 # ceiling above.
 MAX_FILTER_TAG_CHIPS = 12
+
+# Static path segments under ``/tasks/`` that address a PAGE rather than a
+# task. Task ids are arbitrary non-empty strings (``normalize_task``), so a
+# task really can be called ``graph``, and Starlette matches the static route
+# first — the detail page would be unreachable for it and every link to it
+# would silently open the graph instead.
+#: ``id`` is in the set for a different reason than the others: it is the
+#: alias route's OWN segment, so a task really called ``id`` has to be
+#: addressed through the alias too rather than through the path that serves it.
+RESERVED_TASK_PATH_SEGMENTS: frozenset[str] = frozenset({"graph", "events", "id"})
+
+#: The one route that can address ANY id, because the id rides in the QUERY.
+#: A path cannot: ASGI percent-decodes before routing, so ``%2F`` becomes a
+#: separator again and an id like ``id/graph`` or ``abc/findings`` matches some
+#: OTHER two-segment route with the wrong ``task_id`` — a silently wrong entity,
+#: which is worse than a 404. A query value survives that decode intact.
+TASK_DETAIL_ALIAS_PATH = "/tasks/id"
+TASK_DETAIL_ALIAS_KEY = "task_id"
+
+
+def task_detail_path(task_id: str) -> str:
+    """The URL that addresses ``task_id``'s detail page, unambiguously.
+
+    One definition for every surface that links a task (the board, the graph
+    page, a knowledge note's produced-by chip), because a link that resolves to
+    a different page — or a different TASK — than the caller intended is
+    exactly the failure this exists to prevent, and a second copy of the rule
+    would drift the first time a page is added under ``/tasks/``.
+
+    Ordinary ids keep the documented ``/tasks/<id>`` path with ``safe=""``
+    encoding; a page word goes through :data:`TASK_DETAIL_ALIAS_PATH` with the
+    id in the QUERY, where percent-decoding cannot turn it into a different
+    route. The alias is deliberately a SINGLE static segment for that reason:
+    a ``/tasks/id/<id>`` form would be matched by an id like ``id/graph``
+    (ASGI decodes ``%2F`` back into a separator before routing) and would serve
+    the wrong task at HTTP 200, which is worse than not serving it at all.
+
+    An id holding a literal ``/`` or a dot segment still resolves to the
+    documented path and still 404s. That is the repository's recorded decision
+    (Lithos task b1a65c6d, closed won't-fix — every id Lens can be handed is a
+    server-generated UUID, and `tests/test_blocker_chain.py` pins it); this
+    helper deliberately does not overturn it as a side effect of fixing the
+    page-word collision.
+    """
+    if task_id in RESERVED_TASK_PATH_SEGMENTS:
+        return f"{TASK_DETAIL_ALIAS_PATH}?{urlencode({TASK_DETAIL_ALIAS_KEY: task_id})}"
+    return f"/tasks/{quote(task_id, safe='')}"
+
 
 # The two query keys that carry tags. ``tag`` is the filter itself and is fully
 # literal; ``add_tag`` is the filter bar's text box, folded into the tag set at

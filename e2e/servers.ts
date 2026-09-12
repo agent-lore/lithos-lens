@@ -33,3 +33,36 @@ export const TRUNCATED_PORT = Number(
 );
 export const TRUNCATED_BASE_URL = `http://127.0.0.1:${TRUNCATED_PORT}`;
 export const TRUNCATED_FRONTIER_LIMIT = "8";
+
+/**
+ * A THIRD instance, for the graph page's two degraded states (T2-A3).
+ *
+ * Both are config-driven — a scoped blocked read that truncates, and a scope
+ * over the node guard — so neither can be reached by a query parameter, and
+ * neither may be produced on the healthy instance: `graph-project-*.png` is the
+ * PRD's promised artifact (§"Visual (e2e…)"), and a board whose NORMAL state
+ * carries "Cycle signal incomplete" is the false picture this gate exists to
+ * prevent. The truncation instance cannot serve them either: its limit is
+ * pinned at the value separating the two dashboard frontiers, and at `8` no
+ * project's blocked read caps, so its graph page renders healthy.
+ *
+ * One instance covers both because the two states live at different SCOPES:
+ * `GRAPH_REFUSAL_MAX_TASKS` sits strictly between the `loom-epic` subtree and
+ * the `lithos-loom` project, so the epic renders (degraded, at a limit of 1
+ * every read caps) while the project is turned away. That pairing is the whole
+ * subject of both captures, and like the truncation limit above it is coupled
+ * to fixture SIZES that grow silently —
+ * `tests/test_fake_lithos.py::test_the_graph_instance_separates_the_degraded_and_refused_scopes`
+ * pins it on every `make check`, because `make e2e` does not run there.
+ */
+export const GRAPH_PORT = Number(process.env.LENS_E2E_GRAPH_PORT ?? 8125);
+export const GRAPH_BASE_URL = `http://127.0.0.1:${GRAPH_PORT}`;
+// Every scoped blocked read comes back capped, so the cycle signal is partial
+// on any scope this instance renders. `1` is the env path's floor.
+export const GRAPH_DEGRADED_FRONTIER_LIMIT = "1";
+// Between the two scopes the captures use — see the block above.
+export const GRAPH_REFUSAL_MAX_TASKS = "9";
+// The scope each capture drives, named here so the parity test and the
+// capture cannot drift apart about which one is which.
+export const GRAPH_DEGRADED_SCOPE = "loom-epic";
+export const GRAPH_REFUSED_SCOPE = "lithos-loom";

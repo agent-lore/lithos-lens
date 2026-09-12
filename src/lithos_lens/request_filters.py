@@ -44,6 +44,7 @@ from lithos_lens.tasks import (
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
+    task_detail_path,
 )
 
 _PRESERVED_FILTER_KEYS = (
@@ -258,10 +259,19 @@ def task_detail_url(request: Request, task_id: str) -> str:
     would invent a segment. ``safe=""`` matches the encoding
     ``knowledge_produced_by.ProducedByChip.url`` already uses for the same
     route, so the two agree on what a task link looks like.
+
+    Encoding is not enough for an id that COLLIDES with a page under
+    ``/tasks/`` (``graph``), or that no single segment can carry at all
+    (``a/b``): ASGI decodes before routing, so both reach some other route with
+    the wrong ``task_id``. ``task_detail_path`` sends those through the query
+    alias, which is why the preserved filters are APPENDED here rather than
+    assumed to be the first parameters.
     """
     params = _preserved_filter_params(request)
-    suffix = f"?{urlencode(params)}" if params else ""
-    return f"/tasks/{quote(task_id, safe='')}{suffix}"
+    path = task_detail_path(task_id)
+    if not params:
+        return path
+    return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 
 def blocker_expand_url(request: Request, task_id: str, chain: Sequence[str]) -> str:

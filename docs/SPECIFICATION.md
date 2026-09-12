@@ -66,12 +66,29 @@ The current application exposes these routes:
   Renders the task dashboard and accepts filter query parameters.
 - `GET /tasks/events`
   Browser-facing Server-Sent Events endpoint for live task updates.
-- `GET /tasks/{task_id}`
-  Renders a task detail page.
+- `GET /tasks/{task_id}` (and `GET /tasks/id?task_id=<id>`)
+  Renders a task detail page. The alias carries the ids no path can address,
+  — the ids that collide with a static page under `/tasks/`
+  (`tasks.RESERVED_TASK_PATH_SEGMENTS`: `graph`, `events`, and the alias's own
+  `id`). Starlette matches the static route first, so without it a task called
+  `graph` would have no reachable detail page while every link to it silently
+  opened the graph. The alias is a single static segment carrying the id in the
+  QUERY, deliberately: ASGI percent-decodes before routing, so a
+  `/tasks/id/<id>` form would itself be matched by an id like `id/graph` and
+  serve the wrong task at HTTP 200. Slash-bearing and dot-segment ids keep the
+  documented path and stay unroutable (Lithos b1a65c6d, closed won't-fix —
+  every id Lens can be handed is a server-generated UUID).
+  `tasks.task_detail_path` is the one place that decides, shared by the board,
+  the graph page and the knowledge produced-by chip.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
   Renders one expanded level of a task's blocker chain (HTMX fragment).
+- `GET /tasks/graph`
+  Renders the dependency graph of one scope — `?project=<slug>` or
+  `?epic=<id>` — and, with no scope, a picker of the projects and open epics
+  the snapshot observes. Registered BEFORE `/tasks/{task_id}`, which would
+  otherwise match `graph` as a task id.
 - `GET /knowledge`
   Renders the knowledge landing page: hybrid search, recently-updated notes,
   and tag browse.
@@ -417,9 +434,8 @@ page is live, reconnecting, or degraded.
 
 ### 5.10 Task Dependency Graph Assembly
 
-The data layer the `/tasks/graph` pages are being built on (T2 slice A1)
-ships ahead of its routes: no graph page is registered yet, and nothing in the
-UI reads it.
+This is the data layer under `/tasks/graph` (§5.12), shared with every future
+graph surface (the detail mini-graph, the side panel's impact line).
 
 Lithos has no bulk graph fetch, so a graph is assembled one
 `lithos_task_edge_list(task_id, direction="both")` call per node. Those calls
@@ -472,7 +488,14 @@ over the master task list plus that cache and fanning out only for misses:
   shown with `status unknown` and `unknown` dependency edges. An inactive edge
   pointing out of the scope is dropped rather than ghosted, and context —
   the immediate out-of-set parent and `discovered_from` source of an included
-  node — is added upstream only, never an out-of-set child or follow-on;
+  node — is added upstream only, never an out-of-set child or follow-on. A
+  task the scope rule REMOVED is not an out-of-set task and names no ghost:
+  an epic subtree is recursive, so `include_resolved=0` can exclude a closed
+  child that is itself the parent of an open grandchild, and the upstream
+  context rule would otherwise re-admit through that grandchild the very
+  child the toggle promised to hide (edge included). Project scope excludes
+  nothing this way — there a completed parent outside the open-only task set
+  is a genuine out-of-scope task, and its context ghost is required;
 - **completeness**, carried in the result rather than beside it — `incomplete`
   names every node whose edge read failed, such a node is never classified
   isolated, a ghost whose `task_get` failed is shown with `status unknown` and
@@ -486,11 +509,10 @@ a child in another project, isolated tasks, and a chain of depth 5.
 
 ### 5.11 Task Graph Topology
 
-`graph_layout` computes the shape of a fetched task graph — the input the T2
-graph page renders. It is pure: a node set, the fetched edges, and Lithos's own
+`graph_layout` computes the shape of a fetched task graph — what `/tasks/graph`
+(§5.12) renders. It is pure: a node set, the fetched edges, and Lithos's own
 `task_blocked` verdict in; cycles, layers, roots, the longest blocking chain and
-the hierarchy tree out. **No route renders it yet** (the page is a later T2
-slice); what ships here is the computation and its rules.
+the hierarchy tree out.
 
 - **Dependency edges** (`blocks`, `waits_on_gate`) are classified from BOTH
   endpoints: `active` (open dependent, open-or-cancelled predecessor — a
@@ -532,6 +554,148 @@ slice); what ships here is the computation and its rules.
   carry no readiness meaning, so completion never drops one; a node whose parent
   is out of scope is a root, and a malformed parent loop yields a shorter tree
   rather than dropping tasks.
+
+### 5.12 Task Graph Page
+
+`GET /tasks/graph` renders one scope's dependency graph as **server-rendered
+text**. That is the first-class baseline, not a fallback: the page is complete
+and reviewable with no JavaScript, and the Cytoscape rendering (a later T2
+slice) is enhancement drawn from the same embedded payload, so the picture and
+the text cannot disagree.
+
+**Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
+page renders a picker listing every project the snapshot observes under both
+§5B.1 conventions plus its open epics. `include_resolved` and `isolated`
+default by scope KIND, opposite ways round — a project graph is about what can
+still run (resolved hidden, isolates folded), an epic graph about an
+initiative's progress (closed children shown, isolates open). `focus=` is the
+page's single selection parameter and `selected=` is accepted as an alias it
+canonicalises; `overlays=hierarchy,provenance` is carried for the client layer.
+A scope over `graph.max_tasks` (ghosts counted), or one whose out-of-set
+endpoints would cost more classification reads than one render may spend, is
+**refused** with a "narrow your scope" panel naming the count — never rendered
+degraded. Three of the four refusals happen after the edge fan-out, and each
+still reports what discovering it cost (below), because a guard whose telemetry
+claims a hundred reads were free cannot be tuned.
+
+**What the page states, in this order:** the cycle callout and any
+cycle-signal banner; the legend (one plain-language line per edge type
+actually present, plus the ghost and cycle conventions); the longest blocking
+chain; the topological layers as one `<ol>` per layer; the "N isolated tasks"
+disclosure; the `parent_child` hierarchy tree, always rendered; and a
+`<script type="application/json">` payload carrying nodes (with completeness
+and layer), edges (with state and reason), layers, cycles, ghosts, the longest
+chain with its `exact | lower_bound` flag, roots, isolated, incomplete and
+`as_of`. The toolbar states `as_of` — the OLDEST contributing fetch — because
+edge upserts emit no upstream event and the TTL is the staleness bound.
+
+Each node row carries its status, type, claims and, for a ghost, its project
+chip with links to the ghost's detail page and to its own project's graph. Its
+incoming dependency edges are listed under it, because the text has no arrows
+to read direction from: an `inactive` edge is faded and labelled with its
+reason (`satisfied` / `dependent resolved`), and an `unknown` one names the
+endpoint whose status could not be read — the predecessor, or the dependent
+itself when it is the unresolved downstream ghost (both causes are D6's, and
+the line states the one it has rather than always blaming the predecessor).
+
+**Cycle authority is Lithos's** (§5.7). The page reads `lithos_task_blocked`
+**scoped**, one read pair per project in the coverage set — every §5B.1
+project among the in-scope tasks AND the downstream ghosts — where a pair is
+`project=<slug>` plus, under the `"both"` convention, `tags=["<project_tag_key>:<slug>"]`,
+each at `tasks.frontier_limit`, with `len == limit` treated as truncation. The
+pair is unioned **per task**: the two calls are independent reads rather than
+one snapshot, so a task's blockers are merged across every response that names
+it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict). A
+task is cycle-status *known* when it appears in any response, or when some read
+that **could have matched it** answered in full — and that is a question about
+the convention each read expresses (§5B.1): `project=<slug>` is the metadata
+convention, `tags=["<key>:<slug>"]` the tag one. An empty response from a
+filter the task cannot match is not coverage, which is what a single-convention
+posture makes load-bearing: under `"metadata"` only the `project=` half is
+issued, so a child carrying only `project:<slug>` is covered by nothing and is
+marked unknown rather than silently reported cycle-free.
+A scoped read answers about a **project**, not about this graph, so it returns
+rows for tasks the page never fetched and for ghosts whose own edges it never
+read: only rows naming an **in-scope, non-ghost** task are this graph's
+authority. A ghost carries neither cycle marker — believing its row would draw
+a cycle for a node Lens has no edges for and then mark the real work below it
+*blocked via cycle* on the strength of it.
+The coverage set is read **whole or not at all**. It is derived from task tags,
+so its size is chosen by whoever wrote the task rather than by whoever
+configured the page — so a scope naming more projects than `max_tasks` (one
+project per task is §5B.1's shape, so more projects than tasks means tags
+rather than structure) is **refused before the first call**, with a project
+count, rather than read in part and rendered: a prefix of the coverage set
+would report the projects it skipped as cycle-free. Inside that guard the phase
+is bounded in TIME by one deadline covering the fan-out gates as well as the
+calls — an internal safety net, not a `[graph]` knob. A read that deadline
+catches still **queued** is reported as *never made*, distinct from a read that
+was issued and failed: both leave their tasks `cycle status unknown`, but only
+one of them is a question Lithos was ever asked, and the banner and the counter
+both say which.
+Every covered task carrying a `kind="cycle"` blocker is marked *in a cycle*
+with Lithos's own message whatever Tarjan found — and **only** such a task: the
+row's marker reads the verdict, never the condensation, so an SCC Lens can draw
+while every blocked read failed renders its group and its `cycle status
+unknown` markers without a row ever claiming membership Lithos did not report.
+A cycle Lens can see is bracketed in its layer and its dependents marked
+*blocked via cycle*. A flagged cycle with no fetched component is split on the
+blocker's own endpoint rather than on the absence of shape, and only one of the
+two answers is a claim: when every partner Lithos names is outside the in-scope
+task set the callout says "through tasks outside this scope" (D4's bounded
+promise); otherwise it says *shape unavailable*, which asserts nothing about
+where the loop runs or why the shape is missing — the blocker names one
+immediate predecessor, so an in-scope one leaves the rest of the path unknown,
+and a stale edge-empty cache entry is indistinguishable here from a failed edge
+read. A truncated read, a read the phase deadline left unissued, a failed read,
+and a task no scoped read can reach (no project under either convention) each
+produce a **banner**; which ROWS are then
+marked `cycle status unknown` follows the per-task rule above, not the banner —
+a task a truncated response returned keeps its verdict, and a task another
+complete applicable read covered stays known. Each partial-read banner
+therefore states what that read was rather than which rows were marked (any
+per-task rule there is false for some combination of outcomes), and one further
+banner states the rule with its real count: *N tasks are marked cycle status
+unknown — no response returned them, and no complete read that could have
+matched them was made*. Never an implied "no cycle".
+
+**Every partial claim is labelled.** A node whose edge read failed renders in
+the layering with `edges unknown` and is never folded into the isolated
+disclosure; a task Lithos flags as a cycle member is layered rather than folded
+even when no edge of its own was fetched (D4 beats the edge-absence heuristic,
+and the TTL makes that state reachable: edge upserts emit no event); a node
+whose incoming edge is `unknown` **because its predecessor could not be read**
+is marked *blocked by unresolvable predecessor* — an edge into an unreadable
+ghost is equally unknown and says so about the endpoint it is actually about; and the chain line reads "≥ N, incomplete: K tasks'
+edges unreadable, J edges unresolvable" whenever either applies. The chain is
+labelled *within this graph* — Lens claims no corpus-wide critical path.
+
+**Reads per render:** one `lithos_task_list(status="open", with_claims=true)`,
+plus the two bounded `resolved_since` windows for the **picker** (§5B.1's
+project universe is open tasks *plus* the resolved window, so a project whose
+last task finished yesterday is still offered) and for a project scope that
+asks to include resolved tasks; the scope's cached `edge_list` fan-out and
+ghost `task_get`s (§5.10); `task_children` for an epic scope, whose open
+children are merged with their master rows so the claims those reads do not
+carry are not rendered as "unclaimed"; and the coverage set's blocked read
+pair.
+
+Each render opens one **`lens.tasks.graph`** span — the multi-phase exception
+to §8's no-child-span rule — carrying `lens.graph.*`: scope kind and key,
+outcome, node / edge / ghost / cycle / isolated counts, chain length and
+exactness, whether the cycle signal was incomplete, and this render's own cache
+hits, misses, ghost reads and fan-out (counted per request through a tally
+passed down the call, never as a delta of the process-wide cache counters,
+which a concurrent render also moves; ghost reads are counted where the call is
+ISSUED, so a classification phase stopped by its deadline reports what it
+actually spent). A refusal carries the same counts plus its reason. Two counters accompany it:
+`lens_tasks_graph_renders_total` (`scope`, `outcome`) and
+`lens_tasks_graph_cycle_reads_total` (`outcome`), whose total is the scoped
+blocked calls actually ISSUED — a plan item the phase deadline caught still
+queued is not one of its three outcomes, and is carried by the span field
+`lens.graph.cycle_reads_unmade` instead. The scope KEY is a span
+attribute only: one Prometheus series per project is the cardinality failure
+§8's rule exists to prevent.
 
 ## 6. Current Lithos Dependencies
 
@@ -617,6 +781,11 @@ Lens's failure modes rather than its routes:
   `content_encoding_refused`, `subscriber_limit`); the current subscriber count
   against its ceiling; and `lens_event_stream_up`.
 - **Admission control** — metered requests by outcome (`admitted` | `refused`).
+- **Task graph** — page renders by scope kind and outcome (`rendered` |
+  `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
+  behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how
+  often is this signal partial here?" is answerable without reading banners off
+  screenshots.
 
 The drop counters do not replace the rate-limited warnings §8 describes above,
 they complete them: rate limiting is correct for the log and it necessarily
@@ -731,9 +900,10 @@ The following requirement areas are not yet implemented in the current state:
   config block exists and is disabled by default; nothing consumes it
 - authentication
 
-- the task dependency graph **pages** (`/tasks/graph`, the shared side panel,
-  the detail mini-graph) — T2; the two layers beneath them are in place — graph
-  assembly (§5.10) and topology (§5.11) — but no route reads either yet
+- the task dependency graph's **interactive** layer — T2: `/tasks/graph`
+  renders its server-rendered text baseline (§5.12) over the assembly (§5.10)
+  and topology (§5.11) beneath it, but the Cytoscape canvas, exploration mode,
+  the shared side panel and the detail mini-graph are later slices
 
 One gap is narrower than a milestone and tracked as a task:
 

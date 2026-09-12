@@ -11,7 +11,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.metrics` | M | 0 | 16 |
+| `lithos_lens.metrics` | M | 0 | 18 |
 | `lithos_lens.telemetry` | M | 0 | 6 |
 
 ## Public API
@@ -33,6 +33,8 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `knowledge_related_fanout` — Histogram of `lithos_read` calls spent resolving related-panel titles.
 - def `knowledge_searches` — Counter of `/knowledge` landing requests by branch.
 - def `knowledge_resolves` — Counter of wiki-link resolutions by the arm that decided.
+- def `tasks_graph_renders` — Counter of `/tasks/graph` renders by scope kind and terminal outcome.
+- def `tasks_graph_cycle_reads` — Counter of the graph page's scoped `lithos_task_blocked` reads.
 
 ### `lithos_lens.telemetry`
 - def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.

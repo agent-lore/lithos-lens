@@ -97,9 +97,11 @@ class Cycle:
     representative walk of the cycle — a DFS from the smallest member over
     adjacency sorted the same way, closing back on that member — not an
     enumeration of every cycle through the component. It is empty when
-    ``scc`` is false: a Lithos-flagged member with no component in the fetched
-    topology closes its loop through tasks this scope never fetched, so Lens
-    has no path to draw and ``message`` (Lithos's own text) is all there is.
+    ``scc`` is false: the fetched topology holds no component for that member,
+    so there is no walk to report and ``message`` (Lithos's own text) is all
+    there is. WHY it is absent — a loop through tasks this scope never fetched,
+    or edges Lens holds stale or unread — is not decided here; the page splits
+    those cases on the blocker's own endpoint (``graph_page._callout``).
     """
 
     id: str

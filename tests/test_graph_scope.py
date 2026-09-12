@@ -504,6 +504,51 @@ async def test_include_resolved_0_on_an_epic_hides_a_completed_child_unread() ->
     ]
 
 
+async def test_include_resolved_0_hides_a_completed_child_that_is_itself_a_parent() -> (
+    None
+):
+    """The subtree is RECURSIVE, so the filter and the context rule collide.
+
+    ``epic -> completed-parent -> open-grandchild``: the grandchild stays, and
+    its incoming ``parent_child`` edge points at a task the filter just took
+    out. "Context is added upstream only" is exactly what re-admits it here —
+    upstream is where the excluded child sits. An id the scope rule REMOVED is
+    not an out-of-scope task, so it names no ghost and its edge goes with it.
+    """
+    epic = task("epic", task_type="epic")
+    grandchild = task("open-grandchild")
+    tasks = [epic, task("completed-parent", status="completed"), grandchild]
+    client = RecordingClient(
+        dataset(
+            tasks,
+            [
+                ("epic", "completed-parent", "parent_child"),
+                ("completed-parent", "open-grandchild", "parent_child"),
+            ],
+            children={
+                "epic": ("completed-parent",),
+                "completed-parent": ("open-grandchild",),
+            },
+        )
+    )
+
+    scope = await load_epic_scope(
+        client,
+        epic_id="epic",
+        master=[epic, grandchild],
+        cache=GraphCache(clock=StepClock()),
+        include_resolved=False,
+    )
+
+    assert set(scope.node_ids) == {"epic", "open-grandchild"}
+    assert all(not node.ghost for node in scope.nodes)
+    # The edge into the excluded parent goes with it — a hierarchy edge naming
+    # a node the page does not draw is a dangling row in the tree.
+    assert [(edge.from_task_id, edge.to_task_id) for edge in scope.edges] == []
+    # And re-admission would show up first as a read, so the log is asserted.
+    assert "completed-parent" not in client.get_calls
+
+
 # ── Ghosts: dependency, context, and one hop ───────────────────────────
 
 
