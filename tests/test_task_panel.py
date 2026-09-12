@@ -537,3 +537,30 @@ def test_the_panel_task_hook_names_exactly_one_element(
 
     assert response.text.count("data-panel-task=") == 1
     assert response.text.count("data-panel-selected=") == 1
+
+
+def test_the_close_link_keeps_every_part_of_the_boards_state(
+    lithos_lens_config_env: Path,
+) -> None:
+    """ "Close preserves list state" is the whole board, not one filter: the
+    epic scope the build criterion names, a repeated multi-select, a tag whose
+    value carries a colon, the agent and the resolved-since window all survive,
+    and only `selected` goes. The no-JS half of the browser test in
+    `test_tasks_js.py` — the link an operator without JavaScript clicks."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    fake = _related_fixture()
+    query = (
+        "status=open&project=influx&project=loom&tag=area%3Adata&tag=ops"
+        "&agent=planner&epic=parent-epic&since=2026-08-01"
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/tasks?{query}&selected=open-unclaimed")
+
+    panel = response.text.split("data-task-panel", 1)[1]
+    close_url = (
+        panel.split("data-panel-close", 1)[0].rsplit('href="', 1)[1].split('"')[0]
+    )
+    closed = sorted(parse_qsl(urlsplit(close_url.replace("&amp;", "&")).query))
+    assert closed == sorted(parse_qsl(query))

@@ -20,6 +20,13 @@
   // Which task the open panel is showing, "" when it is closed. Seeded from
   // the URL at load, because `?selected=` renders the panel server-side.
   let selectedTaskId = "";
+  // Which task the panel is MEANT to be showing — set the moment an open
+  // starts, cleared the moment one closes. Between it and `selectedTaskId`
+  // sits an in-flight request, and that gap is where the URL and the panel can
+  // disagree: a Forward back onto the selection already on screen still has to
+  // supersede an open running under it, or that open's late response paints a
+  // panel the URL has moved away from.
+  let desiredTaskId = "";
   // Every panel INTENT — an open, a close — takes the next generation, and no
   // response may write the panel unless its generation is still the current
   // one. Without it the panel is whichever request happened to answer LAST
@@ -128,10 +135,15 @@
 
   async function runRefresh() {
     // Which selection this render is FOR. The reconcile fetches the live URL,
-    // so the panel it comes back with is the one that was open when it left —
-    // and a click that lands while it is in flight has already replaced it.
+    // so the panel it comes back with is the one THAT URL named — which is not
+    // always the selection the operator has by the time it answers. Both facts
+    // are captured: the URL, because a click already in flight when this left
+    // pushes a new one without touching the generation; and the generation,
+    // because a close-and-reopen can land back on the same URL with a fresher
+    // panel of its own.
+    const refreshUrl = window.location.href;
     const panelGenerationAtFetch = panelGeneration;
-    const response = await fetch(window.location.href, {
+    const response = await fetch(refreshUrl, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
     if (!response.ok) return;
@@ -147,7 +159,10 @@
     // down and rebuilt under the cursor on every event, and only while the
     // selection is still the one it was rendered for (the board fragment above
     // does not depend on the selection, so it is applied either way).
-    if (panelGeneration === panelGenerationAtFetch) {
+    if (
+      panelGeneration === panelGenerationAtFetch &&
+      selectionIn(refreshUrl) === selectionIn(window.location.href)
+    ) {
       replaceFragment(doc, "panel");
     }
     setupDatePickers();
@@ -245,6 +260,13 @@
     return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
   }
 
+  // Which task a URL selects, "" for none. One reading, shared by the load-time
+  // seed, the popstate handler and the reconcile's staleness check — the three
+  // places that have to agree on what the address bar currently means.
+  function selectionIn(url) {
+    return new URL(url, window.location.href).searchParams.get(selectionParam) || "";
+  }
+
   // This page's URL with the selection parameter set to `taskId`, or removed
   // when it is empty. Built from the live URL rather than from a remembered
   // query string, so closing the panel preserves every filter, the epic scope
@@ -263,6 +285,7 @@
     // Claimed BEFORE the fetch: from here on, anything that changes the
     // selection supersedes this request, whichever order the responses land in.
     panelGeneration += 1;
+    desiredTaskId = taskId;
     const generation = panelGeneration;
     const response = await fetch(panelUrlFor(taskId), {
       headers: { "X-Lithos-Lens-Refresh": "panel" }
@@ -293,6 +316,7 @@
     // Closing is an intent like any other, so it takes a generation too: an
     // open still in flight under it must not reopen the panel afterwards.
     panelGeneration += 1;
+    desiredTaskId = "";
     const host = panelHost();
     if (host) host.innerHTML = "";
     selectedTaskId = "";
@@ -328,19 +352,25 @@
   }
 
   function handlePanelKeydown(event) {
-    if (event.key !== "Escape" || !selectedTaskId) return;
+    // `desiredTaskId` as well as the visible one: Escape during an open is a
+    // cancel, and leaving that open to land afterwards would reopen a panel
+    // the operator has just dismissed.
+    if (event.key !== "Escape" || !(selectedTaskId || desiredTaskId)) return;
     closePanel();
   }
 
   function handlePanelPopstate() {
     // Back and forward walk the selection without a reload: the URL is the
-    // state, so whatever it names now is what the panel shows. Compared
-    // against what is on SCREEN rather than against an in-flight intent — a
-    // mismatch only ever starts the correct transition, and the generation
-    // guard above is what settles which one wins.
-    const url = new URL(window.location.href);
-    const taskId = url.searchParams.get(selectionParam) || "";
-    if (taskId === selectedTaskId) return;
+    // state, so whatever it names now is what the panel shows.
+    //
+    // Compared against the INTENT, not against what is on screen. Forward onto
+    // a selection still displayed — Back to A and straight Forward to B before
+    // A has answered — leaves the screen already correct but an open for A
+    // running under it, and a handler that returned early there would let A's
+    // response land beneath B's URL. Re-entering the transition supersedes it,
+    // which is the whole job here; the generation guard settles the rest.
+    const taskId = selectionIn(window.location.href);
+    if (taskId === desiredTaskId) return;
     if (taskId) openPanel(taskId, { push: false });
     else closePanel({ push: false });
   }
@@ -668,7 +698,8 @@
   // The server already rendered the panel for whatever `?selected=` named, so
   // the client starts from the URL rather than from an empty selection — an
   // Escape on a deep-linked panel has to close the panel that is on screen.
-  selectedTaskId = new URL(window.location.href).searchParams.get(selectionParam) || "";
+  selectedTaskId = selectionIn(window.location.href);
+  desiredTaskId = selectedTaskId;
   document.addEventListener("click", handlePanelClick);
   document.addEventListener("keydown", handlePanelKeydown);
   window.addEventListener("popstate", handlePanelPopstate);

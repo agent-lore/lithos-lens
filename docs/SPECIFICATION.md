@@ -379,10 +379,15 @@ REQUIREMENTS), rendered from one template that extends no layout:
 - **The latest intent owns the panel.** Panels are fetched, so two can be in
   flight at once and answer in either order. Every open and every close takes a
   generation, and no response writes the panel or the URL unless its generation
-  is still current — so a slow first click cannot repaint over a second one, a
-  response that lands after a close cannot reopen it, and a reconcile fetched
-  for one selection cannot paint its panel over another (the board fragment
-  still applies: it does not depend on the selection).
+  is still current — checked at *both* suspension points, since the response
+  arriving and its body being read are separate moments. What the panel is MEANT
+  to show is tracked separately from what it is showing, and `popstate` compares
+  against the intent: a Forward back onto the selection already on screen still
+  supersedes an open running under it. A reconcile is validated against the URL
+  it actually fetched as well as its generation — a click in flight has not
+  pushed its URL yet, so a reconcile started in that window carries the previous
+  selection's panel under the next one's generation. The board fragment applies
+  either way: it does not depend on the selection.
 - **The browser never assembles a panel URL.** Rows carry one built by the
   server, and the host carries the one built for the request's own selection —
   which is what reopens a deep-linked task that has no row on this board. The

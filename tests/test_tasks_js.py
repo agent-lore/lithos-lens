@@ -250,7 +250,7 @@ PANEL_HARNESS = """
 const fs = require("fs");
 const vm = require("vm");
 
-const [sourcePath, initialHref, actionsRaw] = process.argv.slice(1);
+const [sourcePath, initialHref, actionsRaw, selectionParam] = process.argv.slice(1);
 const actions = JSON.parse(actionsRaw);
 
 const entries = [initialHref];
@@ -288,7 +288,7 @@ const host = {
 // the panel already in the host, and the host carrying the URL the SERVER
 // built for that selection — the only source for a task with no row.
 const initialSelection =
-  new URL(initialHref).searchParams.get("selected") || "";
+  new URL(initialHref).searchParams.get(selectionParam) || "";
 if (initialSelection) {
   host.dataset.panelSelected = initialSelection;
   host.dataset.panelUrl =
@@ -362,7 +362,7 @@ function bodyFor(url) {
     const id = decodeURIComponent(alias ? alias[1] : path ? path[1] : "");
     return "panel:" + id;
   }
-  const selected = new URL(url, "http://lens.test").searchParams.get("selected");
+  const selected = new URL(url, "http://lens.test").searchParams.get(selectionParam);
   const doc = { "dashboard-data": "board:fresh" };
   if (selected) doc.panel = "panel:" + selected + ":fresh";
   return JSON.stringify(doc);
@@ -387,17 +387,29 @@ const sandbox = {
       };
     }
   },
-  fetch: (url) => new Promise((resolve) => {
+  // Headers and BODY are separate suspension points, and the panel code checks
+  // itself at both: `await fetch(...)` resolves when the response arrives,
+  // `await response.text()` when it has been read. A harness that answered them
+  // together could only ever exercise the first check.
+  fetch: (url) => new Promise((resolveResponse) => {
+    let resolveBody = () => {};
+    const body = new Promise((resolve) => { resolveBody = resolve; });
     fetches.push({
       url,
-      settle: () => resolve({ ok: true, text: () => Promise.resolve(bodyFor(url)) }),
+      headers: () => resolveResponse({ ok: true, text: () => body }),
+      body: () => resolveBody(bodyFor(url)),
+      settle() { this.headers(); this.body(); },
     });
   }),
 };
 sandbox.window = {
   LithosLensTasks: {
     eventsUrl: "/tasks/events",
-    selectionParam: "selected",
+    // The HOST page's selection parameter — `selected` on the dashboard,
+    // `focus` on the graph page. Driven from the test, because "one panel
+    // implementation for rows and nodes" is exactly the promise a hard-coded
+    // key here would stop protecting.
+    selectionParam,
     panelAliasPath: "/tasks/id",
     panelAliasKey: "task_id",
   },
@@ -469,8 +481,18 @@ const ACTIONS = {
       fire("click", clickEvent(
         { "[data-task-row]": rows[argument], "a[href]": titleLink }, "row:" + argument,
       ));
+    } else if (name === "click-body") {
+      // The row itself, away from any link — "clicking a ROW opens the panel"
+      // (§5.5), not only clicking its title.
+      fire("click", clickEvent(
+        { "[data-task-row]": rows[argument] }, "row-body:" + argument,
+      ));
     } else if (name === "settle") {
       fetches[Number(argument)].settle();
+    } else if (name === "headers") {
+      fetches[Number(argument)].headers();
+    } else if (name === "body") {
+      fetches[Number(argument)].body();
     } else if (name === "drop") {
       delete rows[argument];
     } else {
@@ -496,15 +518,34 @@ const ACTIONS = {
 BOARD_HREF = "http://lens.test/tasks?project=influx"
 
 
-def _panel_run(actions: list[str], href: str = BOARD_HREF) -> dict:
+def _panel_run(
+    actions: list[str],
+    href: str = BOARD_HREF,
+    selection_param: str = "selected",
+) -> dict:
     """Load tasks.js against a two-row board, then run ``actions`` in order.
 
-    Every fetch stays unanswered until an explicit ``settle:<n>`` action, so a
-    test says exactly which response lands when.
+    Every fetch stays unanswered until an explicit action: ``settle:<n>``
+    answers one whole, ``headers:<n>`` and ``body:<n>`` answer its two halves
+    separately. So a test says exactly which response lands when, and where in
+    a response's own lifetime the next thing happens.
+
+    ``selection_param`` is the HOST page's one selection parameter — the
+    dashboard's ``selected``, the graph page's ``focus`` — because the panel is
+    one implementation for both and nothing in it may assume either spelling.
     """
     assert NODE is not None
     result = subprocess.run(
-        [NODE, "-e", PANEL_HARNESS, "--", str(TASKS_JS), href, json.dumps(actions)],
+        [
+            NODE,
+            "-e",
+            PANEL_HARNESS,
+            "--",
+            str(TASKS_JS),
+            href,
+            json.dumps(actions),
+            selection_param,
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -635,6 +676,66 @@ def test_back_past_an_in_flight_selection_leaves_the_url_it_landed_on() -> None:
     ]
 
 
+def test_forward_onto_the_visible_selection_still_supersedes_an_open() -> None:
+    """Back to A and straight Forward to B, before A has answered. B is still
+    what is on SCREEN, so a handler comparing against the screen has nothing to
+    do and returns — leaving A's open running under B's URL, and A's response
+    free to paint itself there. The comparison is against the INTENT for
+    exactly this schedule."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "click:beta",
+            "settle:1",
+            "back",  # -> ?selected=alpha, starts alpha's fetch
+            "forward",  # -> ?selected=beta again, before it answers
+            "settle:2",  # …and only now does alpha answer
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+    assert result["panel"] == "panel:beta"
+
+
+def test_a_reconcile_started_before_a_click_pushed_does_not_paint_it() -> None:
+    """The reconcile fetches the LIVE URL, and a click already in flight has
+    not pushed its own yet — so a reconcile started in that window carries the
+    previous selection's panel while the generation it captured is the new
+    click's. Generation alone therefore cannot spot it; the URL it fetched can."""
+    result = _panel_run(
+        [
+            "click:beta",
+            "settle:0",
+            "click:alpha",  # in flight, so the URL still says beta
+            "event",
+            "timers",  # the reconcile leaves, fetching ?selected=beta
+            "settle:1",  # alpha lands and pushes ?selected=alpha
+            "settle:2",  # …then the reconcile answers, with beta's panel
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == "panel:alpha"
+    # The board fragment is applied either way: it does not depend on the
+    # selection, and dropping it would leave the board stale for no reason.
+    assert result["board"] == "board:fresh"
+
+
+def test_a_body_that_arrives_after_a_newer_panel_is_rendered_is_dropped() -> None:
+    """The second suspension point, on its own. A's response ARRIVES, then B is
+    clicked and fully rendered, and only then is A's body read. Between those
+    two awaits the panel and the URL have both moved on, so the check after
+    `response.text()` is what stops A's markup landing on top of B."""
+    result = _panel_run(
+        ["click:alpha", "headers:0", "click:beta", "settle:1", "body:0"]
+    )
+
+    assert result["panel"] == "panel:beta"
+    assert result["pushed"] == ["/tasks?project=influx&selected=beta"]
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+
+
 def test_back_to_an_earlier_selection_shows_that_task_without_a_push() -> None:
     """Back and forward walk the exploration: a previous NON-EMPTY selection is
     re-fetched and re-shown, and no history entry is written for the move."""
@@ -748,3 +849,110 @@ def test_a_page_word_id_is_never_refetched_through_a_browser_built_path() -> Non
     ]
     assert result["panel"] == "panel:graph"
     assert not any(url.startswith("/tasks/graph") for url in result["fetches"])
+
+
+# --- One panel, two hosts: the selection parameter is the host's ------------
+
+# What the graph page (T2-A4) will hand this code: its own selection parameter
+# and its own URL state around it. The panel is ONE implementation for rows and
+# nodes, so every transition below runs against `focus` here and `selected`
+# above, from the same source.
+GRAPH_HREF = (
+    "http://lens.test/tasks/graph"
+    "?project=lithos-loom&overlays=hierarchy&isolated=1&focus=alpha"
+)
+
+
+def test_a_node_click_pushes_the_hosts_own_selection_parameter() -> None:
+    """On the graph page the parameter is `focus`, and nothing may write
+    `selected` there: §5.5 gives each host exactly one selection parameter, and
+    two on one URL is two selections."""
+    result = _panel_run(["click:beta", "settle:0"], GRAPH_HREF, selection_param="focus")
+
+    assert result["pushed"] == [
+        "/tasks/graph?project=lithos-loom&overlays=hierarchy&isolated=1&focus=beta"
+    ]
+    assert "selected=" not in result["href"]
+
+
+def test_closing_on_the_graph_page_clears_focus_and_keeps_the_graph_state() -> None:
+    """Close clears the host's selection and nothing else — here that means the
+    scope, the overlays and the isolated toggle all survive, exactly as the
+    dashboard's filters do."""
+    result = _panel_run(
+        ["click:beta", "settle:0", "close"], GRAPH_HREF, selection_param="focus"
+    )
+
+    assert result["pushed"][-1] == (
+        "/tasks/graph?project=lithos-loom&overlays=hierarchy&isolated=1"
+    )
+    assert result["panel"] == ""
+
+
+def test_back_on_the_graph_page_restores_the_focus_in_the_url() -> None:
+    """…and back/forward read the same parameter they wrote."""
+    result = _panel_run(
+        ["close", "back", "settle:0"], GRAPH_HREF, selection_param="focus"
+    )
+
+    assert result["fetches"] == ["/tasks/alpha?project=influx&fragment=panel"]
+    assert result["panel"] == "panel:alpha"
+    assert result["href"] == GRAPH_HREF
+
+
+# --- The interaction contract: a ROW opens the panel, not just its title ----
+
+
+def test_clicking_the_row_away_from_any_link_opens_the_panel() -> None:
+    """§5.5 says "clicking a row opens a panel". The title link is the obvious
+    target, but it is not the contract: a click on the row's own body — its
+    meta line, its whitespace — opens the same panel, and a handler that only
+    caught the title would leave most of the row inert."""
+    result = _panel_run(["click-body:alpha", "settle:0"])
+
+    assert result["fetches"] == ["/tasks/alpha?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    assert result["panel"] == "panel:alpha"
+    assert result["prevented"] == ["row-body:alpha"]
+
+
+def test_escape_closes_a_server_rendered_panel_with_no_click_before_it() -> None:
+    """A deep link renders the panel server-side, so the browser never opened
+    it — the selection comes off the URL at load. Escape has to close THAT
+    panel too, which is what the load-time seed is for: without it the first
+    Escape on a shared link does nothing."""
+    result = _panel_run(
+        ["escape"], "http://lens.test/tasks?project=influx&selected=ghost"
+    )
+
+    assert result["panel"] == ""
+    assert result["pushed"] == ["/tasks?project=influx"]
+
+
+# --- Close preserves the WHOLE list state, not just one filter -------------
+
+COMPOSITE_HREF = (
+    "http://lens.test/tasks"
+    "?status=open&project=influx&project=loom&tag=area%3Adata&tag=ops"
+    "&agent=worker-a&epic=epic-1&since=2026-08-01&selected=alpha"
+)
+
+
+def test_closing_removes_only_the_selection_from_a_full_board_url() -> None:
+    """ "Close preserves list state" is the whole query, not the one filter the
+    headline example happens to use: the epic scope the build criterion names,
+    a repeated multi-select, a tag whose value carries a colon, and the
+    resolved-since window. Asserted as a multimap, so a rebuild that dropped a
+    duplicate or reordered the pairs fails even if it kept every key."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    result = _panel_run(["close"], COMPOSITE_HREF)
+
+    expected = [
+        (key, value)
+        for key, value in parse_qsl(urlsplit(COMPOSITE_HREF).query)
+        if key != "selected"
+    ]
+    closed = parse_qsl(urlsplit(result["pushed"][-1]).query)
+    assert closed == expected
+    assert "selected" not in dict(closed)

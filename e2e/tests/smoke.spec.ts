@@ -382,6 +382,22 @@ test("clicking a task opens its panel, and Expand opens the full page", async ({
   await expect(page.getByText("worker-a").first()).toBeVisible();
 });
 
+test("clicking a row away from its links opens the panel too", async ({ page }) => {
+  // §5.5's contract is "clicking a ROW opens a panel" — the title link is the
+  // obvious target, not the whole of it. This clicks the row's meta line,
+  // which carries badges and timestamps and no anchor at all.
+  await page.goto("/tasks?since=2026-08-01");
+  const row = page.locator('[data-task-row][data-task-id="influx-backfill"]');
+  await expect(row).toBeVisible();
+
+  await row.locator(".task-row-meta").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-backfill/);
+});
+
 test("closing the side panel keeps the board's filters", async ({ page }) => {
   // The no-JS baseline first: `?selected=` renders the panel open server-side.
   await page.goto("/tasks?project=influx&selected=influx-backfill");
