@@ -409,14 +409,38 @@ test("a panel fetch that fails leaves the board exactly as it was", async ({
   page.on("pageerror", (error) => errors.push(String(error)));
   // Matched by predicate, not by glob: `fragment=panel` sits in the QUERY, and
   // a `**/…` pattern only matches after a path separator.
-  await page.route(
-    (url) => url.searchParams.get("fragment") === "panel",
-    (route) => route.abort(),
+  const isPanelFragment = (url: URL) =>
+    url.searchParams.get("fragment") === "panel";
+  let aborted = 0;
+  await page.route(isPanelFragment, (route) => {
+    aborted += 1;
+    return route.abort();
+  });
+
+  // Armed BEFORE the click, and awaited after it: the failing REQUEST is what
+  // this test synchronises on. Every assertion below is also true in the
+  // instant after the click and before the request fails, so a wall-clock
+  // sleep would let the test pass on a run where the route never matched at
+  // all — and would inspect `errors` too early on a slow worker. Waiting on
+  // the event itself removes both.
+  const requestFailed = page.waitForEvent("requestfailed", (request) =>
+    isPanelFragment(new URL(request.url())),
   );
 
   await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
-  // Give the rejection a moment to become observable.
-  await page.waitForTimeout(250);
+  await requestFailed;
+  expect(aborted).toBe(1);
+  // The rejection reaches the page's own handlers in the microtask checkpoint
+  // that follows the failure, so one frame later it has either been caught or
+  // been reported. A double rAF is how the rest of this suite waits for the
+  // page to settle, and it costs a round trip, which is what orders the
+  // `pageerror` delivery below against this assertion.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
 
   await expect(page.locator("[data-task-panel]")).toHaveCount(0);
   await expect(page).toHaveURL(/\/tasks\?since=2026-08-01$/);
