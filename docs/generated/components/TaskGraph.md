@@ -162,7 +162,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.task_links`
 - class `TaskLinkClient` — The narrow client surface the neighbour reads need.
-- class `LinkTarget` — One neighbour id to resolve, with the edge type that named it.
+- class `LinkTarget` — One neighbour id to resolve, with the edge type and DIRECTION that named it.
 - class `LinkedTask` — One neighbour of a task, carrying the live status actually read for it.
 - class `PageTail` — What a bounded page did NOT render, and how much of it there was.
 - def `bounded_page` — Take the first :data:`LINK_PAGE_SIZE` items and COUNT the rest.

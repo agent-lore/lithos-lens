@@ -195,6 +195,12 @@ def create_app(
     # encoding and the preserved filters have one definition, in request_filters.
     templates.env.globals["panel_fragment_url"] = panel_fragment_url
     templates.env.globals["panel_selection_key"] = PANEL_SELECTION_KEY
+    # The one route that can address ANY id (`tasks.task_detail_path`). The
+    # board hands both halves to the browser so the panel's last-resort fetch
+    # URL is spelled by the server rather than guessed in JavaScript — a task
+    # called `graph` reached through the path form fetches the graph PAGE.
+    templates.env.globals["task_detail_alias_path"] = TASK_DETAIL_ALIAS_PATH
+    templates.env.globals["task_detail_alias_key"] = TASK_DETAIL_ALIAS_KEY
     templates.env.globals["knowledge_tag_url"] = knowledge_tag_url
     templates.env.globals["note_url"] = note_url
     templates.env.globals["board_is_filtered"] = board_is_filtered
@@ -566,6 +572,11 @@ async def _load_detail(state: AppState, task_id: str) -> TaskDetailData:
     )
 
 
+def _selected_id(request: Request) -> str:
+    """The task id this request asked to open a panel for, if any."""
+    return (request.query_params.get(PANEL_SELECTION_KEY) or "").strip()
+
+
 async def _selected_panel(request: Request, state: AppState) -> TaskDetailData | None:
     """The side panel this request asked to open, if it asked (§5.5, T2-A6).
 
@@ -581,7 +592,7 @@ async def _selected_panel(request: Request, state: AppState) -> TaskDetailData |
     not-found PANEL beside a perfectly good board: a bad id in a shared URL
     must not cost the operator the dashboard.
     """
-    selected = (request.query_params.get(PANEL_SELECTION_KEY) or "").strip()
+    selected = _selected_id(request)
     if not selected:
         return None
     metrics.tasks_panel_opens().add(1, {"source": "url"})
@@ -693,6 +704,10 @@ async def _render_tasks(
             "active_view": "tasks",
             "dashboard": dashboard,
             "panel": panel,
+            # The id AS REQUESTED, which is not always `panel.task.id`: an
+            # unknown id has no task at all, and the host still has to carry
+            # the URL that would reopen it.
+            "selected_id": _selected_id(request),
             "max_tag_chips": MAX_FILTER_TAG_CHIPS,
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },

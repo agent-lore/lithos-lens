@@ -27,6 +27,7 @@ makes.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from lithos_lens.task_links import LINK_PAGE_SIZE
@@ -35,11 +36,13 @@ from tests.test_tasks_mvp import TaskFakeLithosClient
 
 
 def _related_fixture() -> TaskFakeLithosClient:
-    """``open-unclaimed`` with a blocker above it and two dependents below.
+    """``open-unclaimed`` with a blocker above it and three dependents below.
 
     Both directions of the SAME edge types, which is the point of the slice:
     the chain answers "why can't this run?" and the Blocks line answers "what
-    is waiting on it?".
+    is waiting on it?". One dependent is deliberately COMPLETED — the two
+    directions read opposite ways round, and a finished dependent is the case
+    where a verdict written for predecessors would be wrong on this list.
     """
     fake = TaskFakeLithosClient()
     fake.tasks.extend(
@@ -47,12 +50,14 @@ def _related_fixture() -> TaskFakeLithosClient:
             _task("pred-open", title="Design schema"),
             _task("dep-ship", title="Ship the harness"),
             _task("dep-gate-waiter", title="Announce the harness"),
+            _task("dep-done", title="Land the migration", status="completed"),
             _task("parent-epic", title="Ingest epic", task_type="epic"),
         ]
     )
     _link(fake, "pred-open", "open-unclaimed", "blocks")
     _link(fake, "open-unclaimed", "dep-ship", "blocks")
     _link(fake, "open-unclaimed", "dep-gate-waiter", "waits_on_gate")
+    _link(fake, "open-unclaimed", "dep-done", "blocks")
     _link(fake, "parent-epic", "open-unclaimed", "parent_child")
     return fake
 
@@ -84,16 +89,25 @@ def test_selected_renders_the_panel_open_on_the_dashboard(
     assert 'data-link-target="pred-open"' in blockers
     assert "Design schema" in blockers
     assert 'class="badge badge-open">open</span>' in blockers
-    # Dependents — the downstream half, on the same terms.
+    # Dependents — the downstream half, each with the status it was READ with.
     dependents = text.split("data-panel-dependents", 1)[1].split("data-panel-claims")[0]
+    assert "Blocks:" in dependents
     assert 'data-link-list="dependents"' in dependents
     assert 'data-link-target="dep-ship"' in dependents
     assert 'data-link-target="dep-gate-waiter"' in dependents
     assert "Ship the harness" in dependents
+    ship = dependents.split('data-link-target="dep-ship"', 1)[1].split("</li>")[0]
+    assert 'class="badge badge-open">open</span>' in ship
+    done = dependents.split('data-link-target="dep-done"', 1)[1].split("</li>")[0]
+    assert 'class="badge badge-completed">completed</span>' in done
     # The parent breadcrumb and the findings link complete §5.5.1's panel.
     assert "data-panel-parent" in text
     assert "Ingest epic" in text
-    assert "data-panel-findings" in text
+    findings = text.split("data-panel-findings", 1)[1].split("</p>")[0]
+    assert ">0 findings</a>" in findings
+    # D10's downstream-impact line is A7's, and its slot is named and empty —
+    # the dashboard passes no scope, so there is no number to stand behind.
+    assert "data-panel-impact-slot></div>" in text
 
 
 def test_the_panel_names_the_task_project_and_type(
@@ -271,11 +285,19 @@ def test_the_detail_page_lists_its_level_1_dependents_under_blocks(
 
     assert response.status_code == 200
     section = response.text.split("data-dependents", 1)[1]
-    assert "<h2>Blocks</h2>" in section
+    # The label §5.5.2 and the PRD both name, verbatim — colon included.
+    assert "Blocks:" in section
     assert 'data-link-list="dependents"' in section
     assert 'data-link-target="dep-ship"' in section
     assert 'data-link-target="dep-gate-waiter"' in section
     assert "Ship the harness" in section
+    # "one line per dependent WITH STATUS" — the status each was read with,
+    # and no predecessor verdict on a downstream line.
+    ship = section.split('data-link-target="dep-ship"', 1)[1].split("</li>")[0]
+    assert 'class="badge badge-open">open</span>' in ship
+    done = section.split('data-link-target="dep-done"', 1)[1].split("</li>")[0]
+    assert 'class="badge badge-completed">completed</span>' in done
+    assert "data-link-satisfied" not in done
     # Level 1 only: the downstream walk is the graph page's job, so no line
     # here offers the blocker chain's per-level expander.
     dependents = section.split('data-link-list="dependents"', 1)[1].split("</ul>")[0]
@@ -304,3 +326,214 @@ def test_the_dependents_page_is_bounded_like_every_other_neighbour_list(
     assert f"{extra} more dependents not shown." in text
     # One page of status reads for them, not one per edge.
     assert fake.get_calls[1:] == [f"dep-{index:03d}" for index in range(LINK_PAGE_SIZE)]
+
+
+# --- §5.5.1's other required fields: claims, findings, the gate subtype -----
+
+
+def test_the_panel_renders_the_tasks_active_claims(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5.5.1's Active claims row, read from `lithos_task_status`. The claim
+    is the answer to "is anyone on this?", so the panel names the aspect, the
+    agent and the expiry rather than a count."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=open-claimed")
+
+    claims = response.text.split("data-panel-claims", 1)[1].split("</section>")[0]
+    assert 'data-panel-claim="implementation"' in claims
+    assert "implementation / worker-a / expires" in claims
+    assert "No active claims." not in claims
+
+
+def test_the_panel_links_its_finding_count_to_the_timeline(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A COUNT plus a link, not the timeline (§5.5.1): the panel is a summary,
+    and the full page carries §5.6. The count is the findings actually read,
+    and the link opens the page AT them."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=open-claimed")
+
+    findings = response.text.split("data-panel-findings", 1)[1].split("</p>")[0]
+    # The fixture stages two findings on this task.
+    assert ">2 findings</a>" in findings
+    assert 'href="/tasks/open-claimed#findings"' in findings
+    # The timeline itself stays on the full page.
+    assert "findings-timeline" not in response.text.split("data-task-panel", 1)[1]
+
+
+def test_the_panel_names_a_gates_subtype(lithos_lens_config_env: Path) -> None:
+    """§5.5.1's type badge is "task / epic / gate + `gate_type`". A gate whose
+    kind is not named is a gate the operator cannot judge — a human gate waits
+    on a person, a timer gate on the clock."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        _task(
+            "gate-review",
+            title="Human review",
+            task_type="gate",
+            metadata={"gate_type": "human"},
+        )
+    )
+    _link(fake, "gate-review", "open-unclaimed", "waits_on_gate")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=gate-review")
+
+    header = response.text.split("data-panel-task=", 1)[1].split("</header>")[0]
+    assert 'data-task-type="gate"' in header
+    assert 'data-gate-type="human">human gate' in header
+    # And its waiter is the Blocks list: what resolving this gate would free.
+    dependents = response.text.split("data-panel-dependents", 1)[1]
+    assert 'data-link-target="open-unclaimed"' in dependents
+
+
+# --- A dependent is not a blocker: the verdicts read one way round ----------
+
+
+def test_a_finished_dependent_is_not_labelled_as_a_satisfied_dependency(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The two blocker edge types render BOTH lists, and the verdicts written
+    for predecessors say the opposite thing downstream: "satisfied" means this
+    task's own dependency was met, and a completed DEPENDENT met nothing of the
+    sort. It carries its status and no verdict."""
+    fake = _related_fixture()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=open-unclaimed")
+
+    dependents = response.text.split("data-panel-dependents", 1)[1].split(
+        "data-panel-claims"
+    )[0]
+    done = dependents.split('data-link-target="dep-done"', 1)[1].split("</li>")[0]
+    assert 'class="badge badge-completed">completed</span>' in done
+    assert "data-link-satisfied" not in done
+    # The blocker list above is untouched by that rule — a completed
+    # PREDECESSOR is still marked satisfied there.
+    assert "Blocked by" in response.text
+
+
+def test_a_cancelled_dependent_is_not_called_unsatisfiable(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The loudest version of the same error: "unsatisfiable" says THIS task
+    can never run. A cancelled task waiting on it says nothing about whether it
+    can run — only that one of the things that wanted it went away."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task("dep-cancelled", title="Dropped work", status="cancelled"))
+    _link(fake, "open-unclaimed", "dep-cancelled", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=open-unclaimed")
+
+    dependents = response.text.split("data-panel-dependents", 1)[1].split(
+        "data-panel-claims"
+    )[0]
+    assert 'class="badge badge-cancelled">cancelled</span>' in dependents
+    assert "data-link-unsatisfiable" not in dependents
+    # …and the section heading still reports the task as unblocked.
+    assert "Nothing is blocking this task." in response.text
+
+
+# --- Reserved and URL-reserved ids reach their own panel --------------------
+
+
+def test_a_page_word_id_is_addressed_through_the_alias_route(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A task really can be called `graph` (ids are arbitrary strings), and
+    `/tasks/graph` is the graph PAGE. The row's panel URL therefore goes
+    through the query alias — and fetching it returns that task's panel, not a
+    page swapped into the panel host."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        replace(_task("graph", title="Draw the graph"), tags=("project:influx",))
+    )
+    _link(fake, "graph", "open-unclaimed", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get("/tasks?project=influx")
+        row = board.text.split('data-task-id="graph"', 1)[1]
+        panel_url = row.split('data-panel-url="', 1)[1].split('"')[0]
+        panel = client.get(panel_url.replace("&amp;", "&"))
+
+    resolved = panel_url.replace("&amp;", "&")
+    assert resolved.startswith("/tasks/id?task_id=graph")
+    assert "fragment=panel" in resolved
+    # …and the board's scope rides along, like every other generated tasks URL.
+    assert "project=influx" in resolved
+    assert panel.status_code == 200
+    assert panel.text.lstrip().startswith("<aside")
+    assert 'data-panel-task="graph"' in panel.text
+    assert "Draw the graph" in panel.text
+    # The graph page would have come back with these; the panel must not.
+    assert "data-graph-picker" not in panel.text
+    assert "<!doctype html>" not in panel.text.lower()
+
+
+def test_a_url_reserved_id_is_encoded_into_one_path_segment(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Ids are arbitrary non-empty strings, so `?` and `#` in one would
+    truncate the path and address something else entirely. The server builds
+    the URL, so the encoding is the same decision every task link makes."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task("od?d#id", title="Odd id task"))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get("/tasks")
+        row = board.text.split('data-task-id="od?d#id"', 1)[1]
+        panel_url = row.split('data-panel-url="', 1)[1].split('"')[0]
+        panel = client.get(panel_url.replace("&amp;", "&"))
+
+    assert panel_url.startswith("/tasks/od%3Fd%23id?")
+    assert panel.status_code == 200
+    assert "Odd id task" in panel.text
+
+
+def test_the_panel_host_carries_the_selections_own_fetch_url(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A deep-linked task need not have a row: a filter can exclude it, or it
+    resolved outside the window. Back and Forward still have to reopen it, so
+    the HOST carries the URL the server built for the selection — including for
+    an id no row could ever supply, and for one that does not exist at all."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task("graph", title="Draw the graph"))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        # `graph` carries no `project:influx` tag, so this board excludes it.
+        scoped = client.get("/tasks?project=influx&selected=graph")
+        unknown = client.get("/tasks?selected=no-such-task")
+
+    host = scoped.text.split("data-panel-host", 1)[1].split(">")[0]
+    assert 'data-panel-selected="graph"' in host
+    assert "/tasks/id?task_id=graph" in host.replace("&amp;", "&")
+    assert 'data-task-id="graph"' not in scoped.text
+    # Even an unknown id: the host's job is to be able to re-ask the question.
+    unknown_host = unknown.text.split("data-panel-host", 1)[1].split(">")[0]
+    assert 'data-panel-selected="no-such-task"' in unknown_host
+
+
+def test_the_panel_task_hook_names_exactly_one_element(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The host and the panel header carry DIFFERENT hooks on purpose, and this
+    is why: a board with the panel open is addressed by `[data-panel-task]` in
+    the browser suite, and two elements answering to it is a strict-mode
+    failure there and an ambiguous selector everywhere else. The host names the
+    id the REQUEST carried (an unknown task has one); the header names the task
+    that actually resolved."""
+    fake = _related_fixture()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=open-unclaimed")
+
+    assert response.text.count("data-panel-task=") == 1
+    assert response.text.count("data-panel-selected=") == 1

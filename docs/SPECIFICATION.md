@@ -337,9 +337,12 @@ two cannot disagree about why a task is where it is. It shows:
   unsatisfiable one, or a cycle
 - **the blocker chain**, expandable one level at a time to a bounded depth; a
   level that would revisit the chain reports the cycle instead of walking it
-- **Blocks** — the level-1 dependents (outgoing `blocks` / `waits_on_gate`)
+- **Blocks:** — the level-1 dependents (outgoing `blocks` / `waits_on_gate`)
   with the live status each was read with, beneath the chain, so the text
-  baseline covers both directions of the same relationship
+  baseline covers both directions of the same relationship. The two blocker
+  edge types read opposite ways round here: a *dependent* is never a reason
+  this task cannot run, so the "satisfied" and "unsatisfiable" verdicts — which
+  are claims about this task's own predecessors — are not applied to it
 - **provenance** in both directions (`discovered_from`)
 - **children**, for an epic
 - **findings**, with links to any note a finding produced
@@ -373,6 +376,19 @@ REQUIREMENTS), rendered from one template that extends no layout:
   live URL. `selected` is deliberately not a preserved filter, so no generated
   link carries one selection into the next page. Back and forward re-apply the
   URL's selection without a reload.
+- **The latest intent owns the panel.** Panels are fetched, so two can be in
+  flight at once and answer in either order. Every open and every close takes a
+  generation, and no response writes the panel or the URL unless its generation
+  is still current — so a slow first click cannot repaint over a second one, a
+  response that lands after a close cannot reopen it, and a reconcile fetched
+  for one selection cannot paint its panel over another (the board fragment
+  still applies: it does not depend on the selection).
+- **The browser never assembles a panel URL.** Rows carry one built by the
+  server, and the host carries the one built for the request's own selection —
+  which is what reopens a deep-linked task that has no row on this board. The
+  residual fallback uses the query-alias route, whose path and key the server
+  hands down, because that is the one form that addresses every id: a task
+  called `graph` fetched as `/tasks/graph` would return the graph PAGE.
 - **Expand** leaves for the full page. Every other link inside the panel is an
   ordinary link too; the click handler intercepts the row title and the row
   itself, never a tag chip or a link within the panel.

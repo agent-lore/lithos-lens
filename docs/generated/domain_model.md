@@ -328,6 +328,7 @@ classDiagram
     +task_type str
     +gate_type str
     +unresolved bool
+    +downstream bool
     +gate_elapsed bool
   }
   class NodeView {

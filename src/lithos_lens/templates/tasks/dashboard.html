@@ -517,7 +517,16 @@
       own `data-refresh-fragment="panel"` instead, so the same refresh swaps
       only the panel's own markup and its blocker/dependent statuses stay live.
     #}
-    <div class="task-panel-host" data-panel-host>
+    {# `data-panel-url` on the HOST, not only on the rows: a deep-linked task
+       need not be on this board at all (a filter excludes it, or it resolved
+       outside the window), and Back or Forward to it must still fetch the
+       panel through the id's canonical route. The rows cover every task the
+       operator can click; this covers the one the URL named.
+
+       `data-panel-selected`, not `data-panel-task`: this is the id the REQUEST
+       named, which an unknown task still has and the panel header (which names
+       the task actually resolved) does not. Two hooks for two facts. #}
+    <div class="task-panel-host" data-panel-host{% if selected_id %} data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}>
       {% if panel %}
         {% with detail = panel %}
           {% include "tasks/panel.html" %}
@@ -568,6 +577,12 @@
            its own (`focus`) and passes it here instead, so the panel code in
            tasks.js is shared and neither page hard-codes the other's. #}
         selectionParam: {{ panel_selection_key | tojson }},
+        {# The query-alias route, for the panel's last-resort fetch URL: the
+           one form that addresses every id, including the page words a path
+           segment would send somewhere else entirely. Passed down so the
+           spelling stays in tasks.py rather than being restated in JS. #}
+        panelAliasPath: {{ task_detail_alias_path | tojson }},
+        panelAliasKey: {{ task_detail_alias_key | tojson }},
         eventsUrl: "/tasks/events"
       };
     </script>

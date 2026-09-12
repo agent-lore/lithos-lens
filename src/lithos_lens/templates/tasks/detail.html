@@ -132,7 +132,11 @@
              Rendered on the same terms as the chain — while the task is open,
              or whenever the edges exist — so a finished task still shows what
              it once held up rather than dropping the record. #}
-          <h2>Blocks</h2>
+          {# "Blocks:" with the colon, verbatim: REQUIREMENTS §5.5.2 and the
+             PRD (D11) both name this the "Blocks:" line, and it LABELS the
+             list under it the way the provenance eyebrows do rather than
+             titling a section. #}
+          <h2>Blocks:</h2>
           {% if detail.relations_state == "error" %}
             <p class="warning-text">Dependents unavailable. Refresh this task to retry.</p>
           {% elif detail.dependents.total %}

@@ -20,6 +20,17 @@
   // Which task the open panel is showing, "" when it is closed. Seeded from
   // the URL at load, because `?selected=` renders the panel server-side.
   let selectedTaskId = "";
+  // Every panel INTENT — an open, a close — takes the next generation, and no
+  // response may write the panel unless its generation is still the current
+  // one. Without it the panel is whichever request happened to answer LAST
+  // rather than whatever the operator asked for most recently: click row A
+  // then row B, let B answer first, and A's older response would overwrite B
+  // and push `selected=A` over it. The same counter supersedes an in-flight
+  // open when the panel is closed under it (Back past a selection), and stops
+  // a reconcile fetched for one selection from painting its panel over
+  // another. Cancelling the fetch would not do: the response is already on its
+  // way, and it is the WRITE that has to be ordered, not the read.
+  let panelGeneration = 0;
   // setTimeout stores its delay in a signed 32-bit int: anything larger wraps
   // and fires (near) immediately, so a gate more than ~24.8 days out must be
   // reached by chaining sleeps rather than by one oversized timeout.
@@ -116,6 +127,10 @@
   }
 
   async function runRefresh() {
+    // Which selection this render is FOR. The reconcile fetches the live URL,
+    // so the panel it comes back with is the one that was open when it left —
+    // and a click that lands while it is in flight has already replaced it.
+    const panelGenerationAtFetch = panelGeneration;
     const response = await fetch(window.location.href, {
       headers: { "X-Lithos-Lens-Refresh": "tasks" }
     });
@@ -129,8 +144,12 @@
     // The open panel carries live blocker and dependent statuses, and the
     // reconcile already fetched this URL — which, after a row click, names the
     // selection. Swapped separately from the board so the panel is not torn
-    // down and rebuilt under the cursor on every event.
-    replaceFragment(doc, "panel");
+    // down and rebuilt under the cursor on every event, and only while the
+    // selection is still the one it was rendered for (the board fragment above
+    // does not depend on the selection, so it is applied either way).
+    if (panelGeneration === panelGenerationAtFetch) {
+      replaceFragment(doc, "panel");
+    }
     setupDatePickers();
     // The replaced fragment carries a fresh board (new gate rows, a new
     // ready_at, or none), so the countdown text and the one-shot timer are
@@ -194,15 +213,36 @@
   }
 
   function panelUrlFor(taskId) {
-    // The row carries the URL the SERVER built (`data-panel-url`): it encodes
-    // the id through the same path rule every task link uses — a task called
-    // `graph` goes through the alias route — and carries the board's preserved
-    // filters, so the panel's Expand and Close links come back inside the
-    // scope the operator is browsing. Only a task with no row here (a deep
-    // link to something the filters exclude) falls back to a plain URL.
+    // Both sources here are URLs the SERVER built, and that is the point: task
+    // ids are arbitrary strings, and the id that collides with a page under
+    // `/tasks/` (`graph`) must be addressed through the query alias or the
+    // fetch lands on the graph PAGE and that page gets swapped into the panel.
+    // `tasks.task_detail_path` owns that rule; the browser does not restate it.
+    //
+    // The row's `data-panel-url` also carries the board's preserved filters,
+    // so the panel comes back with Expand and Close links inside the scope the
+    // operator is browsing.
     const row = rowFor(taskId);
     if (row && row.dataset.panelUrl) return row.dataset.panelUrl;
-    return `/tasks/${encodeURIComponent(taskId)}?fragment=panel`;
+    // No row for it: a deep link to a task the board's filters exclude. The
+    // host keeps the URL the server built for the SELECTION it rendered, so
+    // Back and Forward can reopen exactly that task — the case where there has
+    // never been a row to read it off.
+    const host = panelHost();
+    if (host && host.dataset.panelSelected === taskId && host.dataset.panelUrl) {
+      return host.dataset.panelUrl;
+    }
+    // Last resort, for a task this tab has no server-built URL for (its row
+    // left the board on a reconcile). The QUERY ALIAS is the one route that
+    // addresses EVERY id — the path form is what the reserved ids cannot use —
+    // and its path and key come from the server rather than being spelled out
+    // here. The board's filters are lost, which costs the panel's own links
+    // their scope; opening the right task without them beats opening the wrong
+    // page with them.
+    const alias = new URLSearchParams();
+    alias.set(config.panelAliasKey || "task_id", taskId);
+    alias.set("fragment", "panel");
+    return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
   }
 
   // This page's URL with the selection parameter set to `taskId`, or removed
@@ -220,14 +260,27 @@
     const host = panelHost();
     if (!host || !taskId) return;
     const push = !options || options.push !== false;
+    // Claimed BEFORE the fetch: from here on, anything that changes the
+    // selection supersedes this request, whichever order the responses land in.
+    panelGeneration += 1;
+    const generation = panelGeneration;
     const response = await fetch(panelUrlFor(taskId), {
       headers: { "X-Lithos-Lens-Refresh": "panel" }
     });
+    // Superseded while in flight — a newer click, a close, or a Back past this
+    // selection. Dropped in silence: the newer intent already owns the panel
+    // and the URL, and writing either here would undo it.
+    if (generation !== panelGeneration) return;
     // A failed fetch leaves the panel — and the URL — as they were. The route
     // answers an unknown id with the not-found PANEL at 200, so this is a
     // transport failure, not "no such task".
     if (!response.ok) return;
-    host.innerHTML = await response.text();
+    const markup = await response.text();
+    // Checked again after the second await: reading the body is a suspension
+    // point of its own, and the gap between "headers arrived" and "body read"
+    // is long enough for another click to land in it.
+    if (generation !== panelGeneration) return;
+    host.innerHTML = markup;
     // Same reason replaceFragment does it: these nodes were parsed out of a
     // fetched document, and htmx only wires the ones it swapped itself.
     if (window.htmx) window.htmx.process(host);
@@ -237,6 +290,9 @@
   }
 
   function closePanel(options) {
+    // Closing is an intent like any other, so it takes a generation too: an
+    // open still in flight under it must not reopen the panel afterwards.
+    panelGeneration += 1;
     const host = panelHost();
     if (host) host.innerHTML = "";
     selectedTaskId = "";
@@ -278,7 +334,10 @@
 
   function handlePanelPopstate() {
     // Back and forward walk the selection without a reload: the URL is the
-    // state, so whatever it names now is what the panel shows.
+    // state, so whatever it names now is what the panel shows. Compared
+    // against what is on SCREEN rather than against an in-flight intent — a
+    // mismatch only ever starts the correct transition, and the generation
+    // guard above is what settles which one wins.
     const url = new URL(window.location.href);
     const taskId = url.searchParams.get(selectionParam) || "";
     if (taskId === selectedTaskId) return;

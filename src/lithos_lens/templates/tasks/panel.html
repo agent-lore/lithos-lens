@@ -102,8 +102,9 @@
     </section>
 
     <section data-panel-dependents>
-      {# The downstream half of the relationship the chain shows upstream. #}
-      <h3>Blocks</h3>
+      {# The downstream half of the relationship the chain shows upstream,
+         under the same "Blocks:" label the full page uses (§5.5.2). #}
+      <h3>Blocks:</h3>
       {% if detail.relations_state == "error" %}
         <p class="warning-text">Dependents unavailable. Refresh to retry.</p>
       {% elif detail.dependents.total %}
