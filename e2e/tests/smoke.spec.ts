@@ -398,6 +398,32 @@ test("clicking a row away from its links opens the panel too", async ({ page }) 
   await expect(page).toHaveURL(/selected=influx-backfill/);
 });
 
+test("a panel fetch that fails leaves the board exactly as it was", async ({
+  page,
+}) => {
+  // The real failure path, in a real browser: the fragment request is aborted,
+  // so `fetch` REJECTS rather than answering. A click pushes its URL only on
+  // success, so nothing may move — and nothing may be left dangling either.
+  await page.goto("/tasks?since=2026-08-01");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  // Matched by predicate, not by glob: `fragment=panel` sits in the QUERY, and
+  // a `**/…` pattern only matches after a path separator.
+  await page.route(
+    (url) => url.searchParams.get("fragment") === "panel",
+    (route) => route.abort(),
+  );
+
+  await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+  // Give the rejection a moment to become observable.
+  await page.waitForTimeout(250);
+
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/tasks\?since=2026-08-01$/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("closing the side panel keeps the board's filters", async ({ page }) => {
   // The no-JS baseline first: `?selected=` renders the panel open server-side.
   await page.goto("/tasks?project=influx&selected=influx-backfill");

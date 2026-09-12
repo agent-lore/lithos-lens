@@ -388,6 +388,16 @@ REQUIREMENTS), rendered from one template that extends no layout:
   pushed its URL yet, so a reconcile started in that window carries the previous
   selection's panel under the next one's generation. The board fragment applies
   either way: it does not depend on the selection.
+- **A panel that never arrives.** A rejected fetch, a non-OK response and a body
+  that fails to read are one outcome, and what it costs depends on who asked. A
+  click has pushed nothing yet, so the panel and the URL still agree and both
+  stay — only the intent is walked back to what is on screen, or the next
+  Forward onto the task that failed would match it and leave the previous task's
+  panel under its URL. Back and forward move the URL *before* the panel code
+  runs, so there the panel on screen already names a different task than the
+  address bar: it is cleared, along with the selection, because an empty panel
+  under a URL the operator can retry is a missing answer and the previous task's
+  panel is a wrong one.
 - **The browser never assembles a panel URL.** Rows carry one built by the
   server, and the host carries the one built for the request's own selection —
   which is what reopens a deep-linked task that has no row on this board. The

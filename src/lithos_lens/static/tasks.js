@@ -287,22 +287,37 @@
     panelGeneration += 1;
     desiredTaskId = taskId;
     const generation = panelGeneration;
-    const response = await fetch(panelUrlFor(taskId), {
-      headers: { "X-Lithos-Lens-Refresh": "panel" }
-    });
-    // Superseded while in flight — a newer click, a close, or a Back past this
-    // selection. Dropped in silence: the newer intent already owns the panel
-    // and the URL, and writing either here would undo it.
-    if (generation !== panelGeneration) return;
-    // A failed fetch leaves the panel — and the URL — as they were. The route
-    // answers an unknown id with the not-found PANEL at 200, so this is a
-    // transport failure, not "no such task".
-    if (!response.ok) return;
-    const markup = await response.text();
+    // `null` means "no panel to show", whatever went wrong — a transport
+    // failure, a non-OK answer, or a body that never finished reading. The
+    // three are one outcome here and share one recovery below; an EMPTY body
+    // is deliberately not one of them, so a legitimately empty 200 still
+    // renders as the empty panel it is.
+    let markup = null;
+    try {
+      const response = await fetch(panelUrlFor(taskId), {
+        headers: { "X-Lithos-Lens-Refresh": "panel" }
+      });
+      // Superseded while in flight — a newer click, a close, or a Back past
+      // this selection. Dropped in silence: the newer intent already owns the
+      // panel and the URL, and writing either here would undo it.
+      if (generation !== panelGeneration) return;
+      // The route answers an unknown id with the not-found PANEL at 200, so a
+      // non-OK response is a transport-level failure, not "no such task".
+      if (response.ok) markup = await response.text();
+    } catch (error) {
+      // Caught rather than propagated: nothing awaits this call (a click
+      // handler and a popstate handler start it), so a rejection could only
+      // become an unhandled one — and the recovery is the same either way.
+      markup = null;
+    }
     // Checked again after the second await: reading the body is a suspension
     // point of its own, and the gap between "headers arrived" and "body read"
     // is long enough for another click to land in it.
     if (generation !== panelGeneration) return;
+    if (markup === null) {
+      panelFetchFailed(push);
+      return;
+    }
     host.innerHTML = markup;
     // Same reason replaceFragment does it: these nodes were parsed out of a
     // fetched document, and htmx only wires the ones it swapped itself.
@@ -310,6 +325,32 @@
     selectedTaskId = taskId;
     // Pushed AFTER the swap, so a URL never claims a panel that failed to open.
     if (push) window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
+  }
+
+  function panelFetchFailed(push) {
+    // No panel arrived, and what that COSTS depends on who asked — because the
+    // two callers differ on whether the URL has already moved.
+    if (push) {
+      // A click. Its URL is pushed only on success, so the address bar and the
+      // panel still agree and both stay. Only the INTENT has to be walked back
+      // to what is actually on screen: left claiming the task that failed, the
+      // next Forward onto that very selection would match the intent, return
+      // early, and leave the previous task's panel sitting under it.
+      desiredTaskId = selectedTaskId;
+      return;
+    }
+    // Back or forward. The browser moved the URL BEFORE this ran, so the panel
+    // on screen already names a different task than the address bar does —
+    // the one state the panel must never be left in. It is cleared rather than
+    // kept: an empty panel under a selection the operator can retry (reload,
+    // or navigate to it again) is a missing answer, while the previous task's
+    // panel under this URL is a wrong one. The selection is dropped with it,
+    // so navigating back here really does retry instead of matching a stale
+    // intent and doing nothing.
+    const host = panelHost();
+    if (host) host.innerHTML = "";
+    selectedTaskId = "";
+    desiredTaskId = "";
   }
 
   function closePanel(options) {

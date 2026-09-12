@@ -253,6 +253,13 @@ const vm = require("vm");
 const [sourcePath, initialHref, actionsRaw, selectionParam] = process.argv.slice(1);
 const actions = JSON.parse(actionsRaw);
 
+// Registered before anything runs, which also overrides Node's default of
+// crashing the process: an unhandled rejection is a RESULT this harness
+// reports, because "the panel never leaves a rejection dangling" is part of
+// what the failure paths promise.
+const unhandled = [];
+process.on("unhandledRejection", (reason) => { unhandled.push(String(reason)); });
+
 const entries = [initialHref];
 let cursor = 0;
 const pushed = [];
@@ -391,14 +398,31 @@ const sandbox = {
   // itself at both: `await fetch(...)` resolves when the response arrives,
   // `await response.text()` when it has been read. A harness that answered them
   // together could only ever exercise the first check.
-  fetch: (url) => new Promise((resolveResponse) => {
+  //
+  // Each request can also FAIL in each of the three ways a real one can: a
+  // rejected fetch (no connection), a non-OK answer, and a body that never
+  // finishes reading. They are separate outcomes in the browser and separate
+  // actions here.
+  fetch: (url) => new Promise((resolveResponse, rejectResponse) => {
     let resolveBody = () => {};
-    const body = new Promise((resolve) => { resolveBody = resolve; });
+    let rejectBody = () => {};
+    const body = new Promise((resolve, reject) => {
+      resolveBody = resolve;
+      rejectBody = reject;
+    });
+    // The HARNESS's own handler, so a body rejected for a request the code
+    // under test abandoned is not reported as ITS unhandled rejection. The
+    // awaiting code still sees the rejection; this only keeps the books
+    // honest about whose it is.
+    body.catch(() => {});
     fetches.push({
       url,
       headers: () => resolveResponse({ ok: true, text: () => body }),
       body: () => resolveBody(bodyFor(url)),
       settle() { this.headers(); this.body(); },
+      fail: () => resolveResponse({ ok: false, text: () => body }),
+      reject: () => rejectResponse(new Error("network is down")),
+      rejectBody: () => rejectBody(new Error("connection reset mid-body")),
     });
   }),
 };
@@ -493,6 +517,12 @@ const ACTIONS = {
       fetches[Number(argument)].headers();
     } else if (name === "body") {
       fetches[Number(argument)].body();
+    } else if (name === "fail") {
+      fetches[Number(argument)].fail();
+    } else if (name === "reject") {
+      fetches[Number(argument)].reject();
+    } else if (name === "reject-body") {
+      fetches[Number(argument)].rejectBody();
     } else if (name === "drop") {
       delete rows[argument];
     } else {
@@ -504,6 +534,10 @@ const ACTIONS = {
     // answers one.
     await new Promise((resolve) => setImmediate(resolve));
   }
+  // One more turn, so a rejection left dangling by the last action is reported
+  // before the results are: Node raises `unhandledRejection` a tick after the
+  // rejection itself.
+  await new Promise((resolve) => setImmediate(resolve));
   console.log(JSON.stringify({
     pushed,
     fetches: fetches.map((entry) => entry.url),
@@ -511,6 +545,7 @@ const ACTIONS = {
     href: href(),
     panel: host.innerHTML,
     board,
+    unhandled,
   }));
 })();
 """
@@ -956,3 +991,79 @@ def test_closing_removes_only_the_selection_from_a_full_board_url() -> None:
     closed = parse_qsl(urlsplit(result["pushed"][-1]).query)
     assert closed == expected
     assert "selected" not in dict(closed)
+
+
+# --- A panel that never arrives: three failures, two navigation modes -------
+
+# Back and Forward move the URL BEFORE the panel code runs, so a failed fetch
+# there is not the same event as a failed click: the address bar already names
+# the new task while the previous one is still on screen. Each failure class is
+# exercised on that path, because they enter the code at three different points.
+OPEN_A_THEN_B = ["click:alpha", "settle:0", "click:beta", "settle:1"]
+
+
+def test_a_failed_response_on_back_never_leaves_the_previous_task_on_screen() -> None:
+    """The reviewer's schedule: A, then B, then Back to A — and A's fragment
+    answers non-200. The URL says A. Leaving B's panel under it is the one
+    state the panel must never be in, so it is cleared: a missing answer beats
+    a wrong one, and the URL stays intact for a reload to retry."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "fail:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_rejected_fetch_on_back_is_handled_the_same_way() -> None:
+    """A transport failure never reaches the `response.ok` test at all — it
+    rejects the fetch. Same outcome required, and nothing left dangling: with
+    no caller awaiting `openPanel`, an uncaught rejection is an unhandled one."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "reject:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_body_that_fails_to_read_on_back_is_handled_the_same_way() -> None:
+    """The third class, and the one that gets furthest in: the response
+    arrives, `ok` is true, and the connection dies while the body is read."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "headers:2", "reject-body:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_failed_click_leaves_the_panel_and_the_url_exactly_as_they_were() -> None:
+    """The other navigation mode. A click pushes only on success, so nothing
+    has moved: the panel on screen still describes the URL, and both stay."""
+    result = _panel_run(["click:alpha", "settle:0", "click:beta", "fail:1"])
+
+    assert result["panel"] == "panel:alpha"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    assert result["unhandled"] == []
+
+
+def test_a_failed_click_does_not_leave_its_task_claimed_as_the_intent() -> None:
+    """What the failed click must NOT leave behind. The intent is compared
+    against on every history move, so a click that failed while claiming B
+    makes the next Forward ONTO B match it, return early, and leave A's panel
+    sitting under B's URL. The intent is walked back to what is on screen, so
+    that Forward re-fetches instead."""
+    result = _panel_run(
+        OPEN_A_THEN_B
+        + [
+            "back",  # -> ?selected=alpha
+            "settle:2",  # …shown; the forward entry (beta) is still in history
+            "click:beta",  # a click that fails, pushing nothing
+            "fail:3",
+            "forward",  # -> ?selected=beta, which the stale intent would match
+            "settle:4",
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+    assert result["panel"] == "panel:beta"
+    assert result["unhandled"] == []
