@@ -366,6 +366,7 @@ classDiagram
     +state str
     +label str
     +tone str
+    +severity int
   }
   class ScopeRefusal {
     +count int

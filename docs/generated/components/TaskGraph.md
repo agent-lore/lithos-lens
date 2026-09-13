@@ -147,7 +147,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `GraphPageView` — Everything `/tasks/graph` renders for one scope.
 
 ### `lithos_lens.pr_reconciliation`
-- class `ReconciliationStyle` — How ONE reconciliation state renders: its text and its colour tone.
+- class `ReconciliationStyle` — How ONE reconciliation state renders: its text, its colour, its rank.
 - def `known_states` — The rendered vocabulary, most severe first — the mapping, read-only.
 - def `reconciliation_of` — The PR reconciliation state to RENDER for a gate, or None for none.
 

@@ -309,7 +309,31 @@ def test_a_failing_pr_gate_escalates_only_after_the_human_gate_threshold() -> No
 
 
 @pytest.mark.parametrize(
-    "state", ["ready_to_merge", "awaiting_review", "behind", "reconciling"]
+    ("hours", "promoted"),
+    [(23.99, False), (24, False), (24.01, True)],
+    ids=["just below", "exactly at", "just above"],
+)
+def test_the_failing_pr_threshold_is_strict_at_the_boundary(
+    hours: float, promoted: bool
+) -> None:
+    """ "OLDER than 24h", like every other age rule here: a state sitting exactly
+    ON its threshold has not crossed it yet and fires one tick later. Pinned at
+    the boundary because `>=` and `>` are one character apart and every value
+    either side of it agrees."""
+    gate = _pr_gate(state="gate_failed", since=_ago(hours=hours), detail="ci is red.")
+
+    assert bool(_section_ids(_flag([gate]), "attention")) is promoted
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "ready_to_merge",
+        "awaiting_review",
+        "behind",
+        "reconciling",
+        "resolving_conflict",
+    ],
 )
 def test_a_pr_that_is_merely_moving_stays_in_the_gates_section(state: str) -> None:
     """Only the two ESCALATIONS promote. `behind` and `reconciling` are loom

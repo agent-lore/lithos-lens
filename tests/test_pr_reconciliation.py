@@ -1,4 +1,4 @@
-"""T2b — loom's PR reconciliation state (``reconciliation.py``).
+"""T2b — loom's PR reconciliation state (``pr_reconciliation.py``).
 
 The vocabulary is loom's, not ours: lens treats it as opaque strings with a
 known list (lithos-loom ``docs/SPECIFICATION.md`` §2.2, PRD S7). So the tests
@@ -86,15 +86,35 @@ def test_every_state_loom_documents_has_one_rendering_in_severity_order() -> Non
 
 
 def test_severity_ranks_follow_the_mapping_and_leave_room_below_it() -> None:
-    """Ordering is the mapping's index, so the two cannot disagree — and both
-    "a word we do not know" and "no state at all" rank below every real one."""
+    """Ordering comes from the mapping's stated ranks, so the two cannot
+    disagree — and both "a word we do not know" and "no state at all" rank
+    below every real one."""
     ranks = [
         reconciliation_of(_pr_gate(state=style.state), gate_type=PR_GATE_TYPE)
         for style in known_states()
     ]
     severities = [state.severity for state in ranks if state is not None]
-    assert severities == sorted(severities) == list(range(len(known_states())))
+    assert len(severities) == len(known_states())
+    assert severities == sorted(severities)
     assert max(severities) < UNKNOWN_STATE_SEVERITY < NO_STATE_SEVERITY
+
+
+def test_the_two_in_flight_states_are_one_tier_and_nothing_else_ties() -> None:
+    """§5.2.3 ranks "the in-flight pair" as ONE position: `reconciling` and
+    `resolving_conflict` are both "loom is working on it", so neither outranks
+    the other and age decides between them (``test_gates`` pins the tie-break).
+
+    Deriving the rank from the list index made them differ by one forever,
+    which reads as an ordering rule nobody wrote — so the ranks are asserted as
+    the tiering they are, and every OTHER state is asserted distinct so a
+    future typo cannot silently merge two real tiers.
+    """
+    rank = {style.state: style.severity for style in known_states()}
+
+    assert rank["reconciling"] == rank["resolving_conflict"]
+    assert rank["behind"] < rank["reconciling"] < rank["awaiting_review"]
+    others = [state for state in rank if state not in {"resolving_conflict"}]
+    assert len(set(rank[state] for state in others)) == len(others)
 
 
 def test_the_badge_carries_the_state_and_the_age_of_the_change() -> None:
@@ -163,39 +183,33 @@ def test_the_pr_match_is_not_weakened_by_the_length_bound() -> None:
     assert reconciliation_of(gate, gate_type=PR_GATE_TYPE, now=_NOW) is None
 
 
-def test_a_gate_carrying_no_pr_url_on_either_side_still_shows_its_state() -> None:
-    """Both absent compares equal, which is the honest reading: there is no
-    second PR for the state to be about."""
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        ("pr_url", "reconciliation_pr_url"),
+        ("pr_url",),
+        ("reconciliation_pr_url",),
+    ],
+    ids=["neither url", "no gate url", "no state url"],
+)
+@pytest.mark.parametrize("blanked", [False, True], ids=["absent", "empty"])
+def test_an_unconfirmable_pr_renders_no_badge(
+    dropped: tuple[str, ...], blanked: bool
+) -> None:
+    """The match is POSITIVE evidence, not the absence of a contradiction.
+
+    loom writes ``reconciliation_pr_url`` with every state exactly so "is this
+    state about this PR?" has an answer; with either url missing (or blank)
+    there is nothing to answer it with, and a badge would answer it anyway —
+    the failure mode being a `needs_human` escalation promoted on a state that
+    might belong to a PR this gate no longer points at. Nothing is hidden: the
+    raw keys stay among the row's advisory chips.
+    """
     gate = _pr_gate()
     metadata = {
-        key: value
+        key: ("   " if blanked and key in dropped else value)
         for key, value in gate.metadata.items()
-        if key not in {"pr_url", "reconciliation_pr_url"}
-    }
-    state = reconciliation_of(
-        TaskRecord(
-            id=gate.id,
-            title=gate.title,
-            status="open",
-            task_type="gate",
-            metadata=metadata,
-        ),
-        gate_type=PR_GATE_TYPE,
-        now=_NOW,
-    )
-
-    assert state is not None and state.slug == "needs_human"
-
-
-def test_a_gate_url_with_no_state_url_beside_it_is_not_a_match() -> None:
-    """The other half of the same rule: loom writes ``reconciliation_pr_url``
-    with every state, so a state missing it cannot be confirmed to describe the
-    PR this gate points at — and an unconfirmable state is not shown."""
-    gate = _pr_gate()
-    metadata = {
-        key: value
-        for key, value in gate.metadata.items()
-        if key != "reconciliation_pr_url"
+        if blanked or key not in dropped
     }
 
     assert (
@@ -254,22 +268,42 @@ def test_a_since_in_the_future_reads_as_zero_rather_than_negative() -> None:
     assert state is not None and state.badge_text == "needs human · 0m"
 
 
-def test_peer_written_values_are_bounded_before_they_reach_the_markup() -> None:
-    """``metadata`` is peer-written whatever loom's own contract says, and all
-    three of these reach the page — the state as a label, the detail as a
-    tooltip, the stamp as an attribute."""
+def test_the_two_values_with_a_stated_domain_are_bounded_to_it() -> None:
+    """``metadata`` is peer-written whatever loom's own contract says, and both
+    of these reach the page — the detail as a tooltip, the stamp as an
+    attribute the browser re-reads. Each is capped at its OWN stated domain
+    (loom documents the detail as one line of ≤200 chars; an ISO instant is
+    ~25), not at a number Lens invented."""
     state = reconciliation_of(
-        _pr_gate(state="x" * 500, detail="d" * 5_000, since="s" * 500),
+        _pr_gate(detail="d" * 5_000, since="s" * 500),
         gate_type=PR_GATE_TYPE,
         now=_NOW,
     )
 
     assert state is not None
-    assert len(state.state) == 40 and state.state.endswith("…")
     assert len(state.detail) == 200 and state.detail.endswith("…")
     assert len(state.since) == 40 and state.since.endswith("…")
-    # …and an unrecognisable state is still rendered, as its own bounded text.
-    assert state.tone == "unknown"
+
+
+def test_an_unknown_state_is_never_shortened_however_long_it_is() -> None:
+    """The opaque-string contract is the whole point of the unknown tone: loom
+    owns the vocabulary and may extend it, and a capped badge would render a
+    DIFFERENT value ("a_very_long_futur…") for any state that outgrew the cap —
+    exactly the upstream truth the operator came to the badge for.
+
+    The markup tokens stay closed at any length, so an unbounded value buys no
+    class and no selector hook; that is what makes the text safe to render."""
+    long_state = "awaiting_" + "second_" * 20 + "review"
+    state = reconciliation_of(
+        _pr_gate(state=long_state), gate_type=PR_GATE_TYPE, now=_NOW
+    )
+
+    assert state is not None
+    assert len(long_state) > 100
+    assert state.state == long_state
+    assert state.label == long_state
+    assert state.badge_text == f"{long_state} · 2h"
+    assert (state.slug, state.tone) == ("unknown", "unknown")
 
 
 def test_the_badge_text_drops_the_age_separator_when_there_is_no_age() -> None:

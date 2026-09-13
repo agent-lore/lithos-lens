@@ -765,7 +765,11 @@ def _pr_gate(
 def test_pr_gates_order_by_state_severity_then_by_age() -> None:
     """§5.2.3 ordering for PR gates: the state the operator has to act on leads,
     whatever the gate's age — and age still breaks ties inside a state, so the
-    group is not reordered arbitrarily when two PRs are in the same condition."""
+    group is not reordered arbitrarily when two PRs are in the same condition.
+
+    The two in-flight states (`reconciling`, `resolving_conflict`) are ONE tier,
+    so `conflict` sits between the two `reconciling` rows purely on age.
+    """
     gates = collect_gates(
         [
             _pr_gate(
@@ -779,7 +783,17 @@ def test_pr_gates_order_by_state_severity_then_by_age() -> None:
                 "older-human", state="needs_human", created_at="2026-08-01T00:00:00Z"
             ),
             _pr_gate("failed", state="gate_failed", created_at="2026-08-25T00:00:00Z"),
-            _pr_gate("flight", state="reconciling", created_at="2026-07-05T00:00:00Z"),
+            _pr_gate(
+                "flight-old", state="reconciling", created_at="2026-07-05T00:00:00Z"
+            ),
+            _pr_gate(
+                "flight-new", state="reconciling", created_at="2026-07-20T00:00:00Z"
+            ),
+            _pr_gate(
+                "conflict",
+                state="resolving_conflict",
+                created_at="2026-07-10T00:00:00Z",
+            ),
             _pr_gate(
                 "review", state="awaiting_review", created_at="2026-07-02T00:00:00Z"
             ),
@@ -792,7 +806,9 @@ def test_pr_gates_order_by_state_severity_then_by_age() -> None:
         "newer-human",
         "failed",
         "behind",
-        "flight",
+        "flight-old",
+        "conflict",
+        "flight-new",
         "review",
         "ready",
     ]
@@ -801,6 +817,45 @@ def test_pr_gates_order_by_state_severity_then_by_age() -> None:
     assert [gate.task.id for gate in group_gates(gates)[0].rows] == [
         gate.task.id for gate in gates
     ]
+
+
+@pytest.mark.parametrize("reversed_input", [False, True], ids=["as-listed", "reversed"])
+def test_the_in_flight_pair_is_ordered_by_age_in_either_direction(
+    reversed_input: bool,
+) -> None:
+    """`reconciling` and `resolving_conflict` are the same severity tier, so the
+    OLDER row leads whichever of the two it is — and whichever order the open
+    list happened to hand them over in.
+
+    Both directions are asserted because a rank derived from the vocabulary's
+    list position passes one of them by accident: it pins `reconciling` ahead
+    of `resolving_conflict` forever, which looks correct exactly when the older
+    row is the `reconciling` one.
+    """
+    rows = [
+        _pr_gate(
+            "conflict", state="resolving_conflict", created_at="2026-06-01T00:00:00Z"
+        ),
+        _pr_gate("reconciling", state="reconciling", created_at="2026-08-01T00:00:00Z"),
+    ]
+    older_first = collect_gates(
+        list(reversed(rows)) if reversed_input else rows, now=_NOW
+    )
+    assert [gate.task.id for gate in older_first] == ["conflict", "reconciling"]
+
+    # …and with the ages swapped, so does the other one.
+    swapped = [
+        _pr_gate(
+            "conflict", state="resolving_conflict", created_at="2026-08-01T00:00:00Z"
+        ),
+        _pr_gate("reconciling", state="reconciling", created_at="2026-06-01T00:00:00Z"),
+    ]
+    assert [
+        gate.task.id
+        for gate in collect_gates(
+            list(reversed(swapped)) if reversed_input else swapped, now=_NOW
+        )
+    ] == ["reconciling", "conflict"]
 
 
 def test_a_pr_gate_with_no_state_sorts_after_every_gate_that_has_one() -> None:

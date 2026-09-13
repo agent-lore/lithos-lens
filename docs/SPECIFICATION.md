@@ -214,7 +214,15 @@ fires immediately when loom's `reconciliation_state` is `needs_human` (loom has
 already concluded it cannot proceed alone — there is no wait to serve), and after
 `gate_waiting_attention_hours` of `gate_failed`, dated from the state's own
 `reconciliation_since`. The supporting fact is loom's `reconciliation_detail`
-verbatim, and the promoted row keeps its state badge.
+verbatim, and the promoted row keeps its state badge. Its chip reads **`PR needs
+a decision`** — the slug is the markup hook, not the wording.
+
+The two **gate** rules (`gate-waiting`, `pr-needs-decision`) are evaluated on the
+flat fallback board too. They read the master open list's metadata and the clock,
+which a failed frontier read does not touch, so an outage must not silently
+suppress the board's most urgent line; the rules whose evidence the outage *did*
+destroy stay silent there, because their source sections and blocker records are
+empty.
 
 `ready-unclaimed` carries one further condition beyond its threshold: the ready
 task must carry a tag with one of `tasks.dispatch_trigger_tag_prefixes`, the
@@ -238,10 +246,12 @@ The dashboard also renders:
   `reconciling` / `resolving_conflict` / `awaiting_review` / `ready_to_merge`,
   written by loom as flat gate metadata (PRD S7) — as a coloured badge with the
   age of the state and loom's one-line reason, and PR gates order by that state's
-  severity before age. The badge renders only when `reconciliation_pr_url`
-  matches the gate's `pr_url`, so a state about a replaced PR is withheld (its
-  raw keys stay visible as advisory metadata); a state Lens does not recognise
-  renders as grey text rather than failing. The vocabulary and its colours are
+  severity before age (the two in-flight states are one tier, ordered against
+  each other by age). The badge renders only when `reconciliation_pr_url` and
+  the gate's `pr_url` are both present and equal, so a state about a replaced
+  PR — or one Lens cannot tie to a PR at all — is withheld (its raw keys stay
+  visible as advisory metadata); a state Lens does not recognise renders as its
+  own text, verbatim, in grey rather than failing. The vocabulary and its colours are
   one mapping in `pr_reconciliation.py`, which the templates read — the same
   badge appears in the side panel's gate context, on the detail page, and on a
   gate the severity model promoted

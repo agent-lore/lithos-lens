@@ -416,11 +416,6 @@ async def load_dashboard(
             partition = reclassify_conservative(partition, state.effective_overlap)
         # Needs attention last: it promotes rows OUT of the sections above, so
         # it must see their final (post-reconciliation) membership.
-        #
-        # Graph branch only. Every source section it promotes from
-        # (in_progress / ready / blocked) is empty in the flat fallback, so the
-        # call would be a no-op there — and the rules it could still evaluate
-        # are the ones whose inputs the fallback has already lost.
         partition = flag_attention(
             partition,
             state.visible,
@@ -457,6 +452,28 @@ async def load_dashboard(
         capped_frontiers = ()
         open_index = {task.id: task for task in open_snapshot}
         reconciliation_pending = False
+        # The severity model still runs, and on the fallback it is the GATE
+        # rules that survive: rule 3 (a human gate waiting too long) and rule
+        # 3b (a PR loom escalated) are evaluated from the master open list's
+        # metadata and the clock alone, neither of which the failed frontier
+        # read touched. Withholding them would mean an outage silently
+        # suppressing the board's most urgent line — a `needs_human` PR is
+        # supposed to promote immediately, and "immediately, unless a frontier
+        # read failed" is not the promise §5.2.2 makes.
+        #
+        # Everything else is a no-op here rather than suppressed: the sections
+        # the workable rules promote out of (in_progress / ready / blocked, and
+        # claims_unknown) are all empty in the flat partition, and no blocker
+        # records exist to prove rules 1-2 with, so the rules whose evidence
+        # the outage DID destroy cannot fire.
+        partition = flag_attention(
+            partition,
+            visible_open,
+            blocked=(),
+            policy=policy,
+            now=evaluated_at,
+            index=_blocker_names(open_index),
+        )
 
     if strip.failed:
         errors.append("Could not load epic progress.")

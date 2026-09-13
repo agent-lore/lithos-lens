@@ -64,9 +64,12 @@
     <div class="attention-list" data-attention-list aria-label="Needs attention because">
       <span class="attention-label">Needs attention</span>
       {% for reason in row.attention %}
-        {# Chip text is the rule slug; the supporting fact rides alongside it so
-           the reason never depends on colour (or a hover) alone. #}
-        <span class="attention-chip attention-chip-{{ reason.rule }}" data-attention-rule="{{ reason.rule }}">{{ reason.rule }}</span>
+        {# Chip TEXT is the rule's wording (``AttentionReason.label``, which is
+           the slug itself for every rule that reads as English); the slug stays
+           the markup token, so a class and a sentence are no longer the same
+           string. The supporting fact rides alongside the chip so the reason
+           never depends on colour (or a hover) alone. #}
+        <span class="attention-chip attention-chip-{{ reason.rule }}" data-attention-rule="{{ reason.rule }}">{{ reason.label }}</span>
       {% endfor %}
     </div>
     <p class="attention-detail" data-attention-detail>{{ row.attention | map(attribute="detail") | select | join(" ") }}</p>

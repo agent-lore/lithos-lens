@@ -541,7 +541,7 @@ Rule 3b (2026-09, T2b) is rule 3 seen through a different gate type: a PR loom c
 - Rule 6 is also **dispatch-aware** (2026-09). It fires only for a ready task carrying a tag with one of the `dispatch_trigger_tag_prefixes` — the tags a fleet dispatches on (loom picks up `trigger:story-develop`). Untagged ready work waits for a human to schedule it, so its age says nothing about a stalled fleet: on the live corpus every ready task tripped the rule, single-placement emptied Ready, and Needs attention became the de-facto Ready list. Rule 5 (stale open) still covers "open too long" for that work. Setting the knob to `[]` restores the every-ready-task behaviour for deployments that want it. Rule 6's supporting fact names the trigger tag: `On the ready frontier with "trigger:story-develop", unclaimed for 3h.`
 
 Chrome requirements (carried over):
-- Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone.
+- Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone. The rule slug is the stable markup token (class + `data-attention-rule`); the chip's **text** is the rule's wording, which for rule 3b is **`PR needs a decision`**.
 - Rows triggering any rule appear **only** here (single-placement rule).
 - When the section is empty, render a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance; do not hide entirely by default).
 - A header toggle lets the operator hide the section for routine review; persisted via cookie + URL param.
@@ -569,14 +569,14 @@ The vocabulary is **loom's closed set** and Lens treats it as opaque strings wit
 | `needs_human` | `needs human` | red — and promotes into Needs attention (rule 3b) |
 | `gate_failed` | `gate failed` | amber — promotes after `gate_waiting_attention_hours` |
 | `behind` | `behind` | amber |
-| `reconciling` | `reconciling` | blue |
-| `resolving_conflict` | `resolving conflict` | blue |
+| `reconciling` | `reconciling` | blue — one tier with the next row |
+| `resolving_conflict` | `resolving conflict` | blue — same rank as `reconciling`; age alone orders the two |
 | `awaiting_review` | `awaiting review` | neutral |
 | `ready_to_merge` | `ready to merge` | green |
 
 Three rules keep the badge honest:
-- **It must be about this PR.** The badge renders only when `reconciliation_pr_url` equals the gate's own `pr_url` — a replacement PR on the same gate starts fresh, and until loom's next sweep the gate still carries the previous PR's state. A withheld state is not hidden: its raw keys stay among the advisory chips and in the detail page's metadata table.
-- **An unknown state is not an error.** loom owns the vocabulary and may extend it; a value Lens does not recognise renders as its own text in a grey `unknown` tone, and every markup hook built from it collapses to `unknown`. A non-string value renders no badge and stays visible as advisory metadata.
+- **It must be about this PR.** The badge renders only when `reconciliation_pr_url` and the gate's own `pr_url` are **both present and exactly equal** — positive evidence, not the absence of a contradiction. A replacement PR on the same gate starts fresh and the gate carries the previous PR's state until loom's next sweep; with either URL missing there is nothing to check the state against, so Lens cannot say which PR it describes and does not badge or promote it. A withheld state is not hidden: its raw keys stay among the advisory chips and in the detail page's metadata table.
+- **An unknown state is not an error.** loom owns the vocabulary and may extend it; a value Lens does not recognise renders as its own text — **verbatim, never shortened**, since a truncated badge would show a different value than the one upstream holds — in a grey `unknown` tone, and every markup hook built from it collapses to `unknown` whatever its length. A non-string value renders no badge and stays visible as advisory metadata.
 - **Colour is never the only signal** — the badge always carries the state's text, and the age comes from `reconciliation_since` alone (an unreadable stamp yields no age rather than a guessed one).
 
 A gate whose badge renders stops repeating those four keys as advisory chips; the other metadata chips are unchanged. The same badge, with the detail as text beside it, appears in the side panel's gate context and on the detail page (§5.5.4), and travels with a gate promoted into Needs attention.

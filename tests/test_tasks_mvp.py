@@ -3854,7 +3854,14 @@ def test_a_needs_human_pr_gate_badges_red_and_enters_needs_attention(
     # The badge says the state AND how long it has held it.
     assert ">needs human · 2h<" in body
     # Promoted: the reason chip and its supporting fact, on the attention row.
-    assert 'data-attention-rule="pr-needs-decision"' in body
+    # The chip's TEXT is §5.2.2's wording, not the slug — the slug stays the
+    # markup hook, and a chip reading "pr-needs-decision" is an internal token
+    # leaking onto the operator's board.
+    assert (
+        '<span class="attention-chip attention-chip-pr-needs-decision"'
+        ' data-attention-rule="pr-needs-decision">PR needs a decision</span>'
+    ) in body
+    assert ">pr-needs-decision<" not in body
     assert "Reviewer requested changes Lens cannot resolve." in body
     # Single placement — promoted out of the Gates section, not rendered twice —
     # and the badge travelled with the row, so it is the ATTENTION row that
@@ -3954,6 +3961,51 @@ def test_pr_gates_render_in_state_severity_order(
     assert rendered == ["pr-failed", "pr-behind", "pr-flight", "pr-review", "pr-merge"]
 
 
+def test_pr_and_human_gate_escalations_survive_a_frontier_outage(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The gate rules read the master open list and the clock — neither of which
+    a failed frontier read touched — so they must still fire on the flat board.
+
+    This is the shape the promise breaks in: "a `needs_human` PR promotes
+    immediately" quietly becomes "…unless a frontier read failed", and the one
+    line the operator most needs goes missing in exactly the situation where
+    something is already wrong. The rules whose evidence the outage DID destroy
+    (the blocker-derived and claim-derived ones) stay silent, which is the
+    other half of the contract.
+    """
+    fake = NoFrontierClient()
+    _add_pr_gate(
+        fake,
+        "gate-pr-stuck",
+        state="needs_human",
+        detail="Reviewer requested changes Lens cannot resolve.",
+    )
+    _add_gate(fake, "gate-waited", gate_type="human", created_at=_ago(days=3))
+    _add_pr_gate(fake, "gate-pr-done", state="ready_to_merge")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert response.status_code == 200
+    assert 'data-task-group="open"' in body  # the flat board, as before
+    # Both gate rules fired, with their wording and their facts…
+    assert ">PR needs a decision</span>" in body
+    assert "Reviewer requested changes Lens cannot resolve." in body
+    assert 'data-attention-rule="gate-waiting"' in body
+    # …and single placement still holds: promoted rows left the Gates section.
+    assert 'data-gate-row data-task-id="gate-pr-stuck"' not in body
+    assert 'data-gate-row data-task-id="gate-waited"' not in body
+    # The healthy PR is untouched — an outage is not a reason to escalate it.
+    assert 'data-gate-row data-task-id="gate-pr-done"' in body
+    assert "badge-reconciliation-ok" in body
+    # Rules whose evidence the outage destroyed stay silent: no blocker records
+    # exist, so nothing claims a cancelled blocker or a cycle.
+    assert 'data-attention-rule="unsatisfiable"' not in body
+    assert 'data-attention-rule="cycle"' not in body
+
+
 def test_a_long_failing_pr_gate_escalates_like_a_waiting_human_gate(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -3973,5 +4025,6 @@ def test_a_long_failing_pr_gate_escalates_like_a_waiting_human_gate(
         body = client.get("/tasks?since=2026-04-01").text
 
     assert 'data-attention-rule="pr-needs-decision"' in body
+    assert ">PR needs a decision</span>" in body
     assert "required check `e2e` has failed 6 times." in body
     assert 'data-gate-row data-task-id="gate-pr-failing"' not in body

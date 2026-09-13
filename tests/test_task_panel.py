@@ -511,14 +511,21 @@ def test_the_panel_shows_no_pr_badge_for_a_state_about_another_pr(
     with _client(lithos_lens_config_env, fake) as client:
         panel = client.get("/tasks/gate-pr-replaced?fragment=panel").text
 
-    assert "badge-reconciliation" not in panel
-    assert "data-reconciliation-detail" not in panel
-    # …and the raw keys are still on the page's metadata table, where the gate's
-    # full metadata has always been.
-    page = None
     with _client(lithos_lens_config_env, fake) as client:
         page = client.get("/tasks/gate-pr-replaced").text
-    assert "reconciliation_state" in page
+
+    # Both surfaces, because the requirement is about the state being asserted
+    # anywhere — a detail page that badged it while the panel did not would be
+    # the same wrong claim on a bigger canvas.
+    for body in (panel, page):
+        assert "badge-reconciliation" not in body
+        assert "data-reconciliation-state" not in body
+        assert "data-reconciliation-detail" not in body
+    # …and the raw keys are still on the page's metadata table, where the gate's
+    # full metadata has always been, so the stale state stays inspectable — it
+    # is the CLAIM that is withheld, not the data.
+    assert "<dt>reconciliation_state</dt>" in page
+    assert "<dd>About the replaced PR.</dd>" in page
 
 
 # --- A dependent is not a blocker: the verdicts read one way round ----------

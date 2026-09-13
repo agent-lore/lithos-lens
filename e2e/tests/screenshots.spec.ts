@@ -75,9 +75,11 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.locator('[data-reconciliation-state="ready_to_merge"]'),
       ).toHaveClass(/badge-reconciliation-ok/);
+      // The chip the artifact must show reads as English, not as the slug the
+      // markup hooks are built from.
       await expect(
         page.locator('[data-attention-rule="pr-needs-decision"]'),
-      ).toBeVisible();
+      ).toHaveText("PR needs a decision");
     },
   },
   {

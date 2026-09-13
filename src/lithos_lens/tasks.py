@@ -9,10 +9,11 @@ runs one way.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
@@ -307,8 +308,9 @@ class BlockerChip:
     target_id: str = ""
 
 
-# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug IS the
-# reason chip's text, so the vocabulary is fixed here and rendered verbatim.
+# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug is the
+# stable MARKUP token — the chip's class and its ``data-attention-rule`` hook —
+# and, for the rules whose slug already reads as English, its text too.
 #
 # ``pr-needs-decision`` (rule 3b, T2b) sits beside ``gate-waiting`` because it
 # is the same escalation seen through a different gate type: a PR loom has
@@ -326,19 +328,39 @@ ATTENTION_RULES: tuple[str, ...] = (
     "ready-unclaimed",
 )
 
+# Chip TEXT for the rules whose slug is not the wording §5.2.2 specifies. The
+# slug stays the markup token (class + data attribute), so a stylesheet rule, a
+# test hook and a chip's English can no longer be the same string by accident:
+# rule 3b's reason is "PR needs a decision", which is not a legal class token.
+# A rule absent from this map renders its own slug, which is what the six
+# original rules want ("unsatisfiable", "cycle", …).
+ATTENTION_RULE_LABELS: Mapping[str, str] = MappingProxyType(
+    {"pr-needs-decision": "PR needs a decision"}
+)
+
 
 @dataclass(frozen=True)
 class AttentionReason:
     """One fired Needs-attention rule on a promoted row.
 
-    ``rule`` is a slug from :data:`ATTENTION_RULES` (also the chip text);
-    ``detail`` is the one-line supporting fact the chip carries (e.g. ``Blocker
-    "Design schema" was cancelled``), which the detail page's "Why this task is
-    here" block reuses.
+    ``rule`` is a slug from :data:`ATTENTION_RULES` — the chip's markup token,
+    and its text too unless :data:`ATTENTION_RULE_LABELS` gives the rule
+    different wording (see :attr:`label`). ``detail`` is the one-line supporting
+    fact the chip carries (e.g. ``Blocker "Design schema" was cancelled``),
+    which the detail page's "Why this task is here" block reuses.
     """
 
     rule: str
     detail: str = ""
+
+    @property
+    def label(self) -> str:
+        """The chip's TEXT — the rule's wording, defaulting to its slug.
+
+        Kept beside the vocabulary rather than in the template so the operator
+        wording §5.2.2 specifies has one definition and one place to be tested.
+        """
+        return ATTENTION_RULE_LABELS.get(self.rule, self.rule)
 
     @property
     def severity(self) -> int:
