@@ -18,7 +18,7 @@ for the convention-conflict warnings).
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
@@ -239,6 +239,58 @@ def filters_narrow_the_board(
     return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
         filters.statuses
     ) != set(TASK_STATUSES)
+
+
+def board_visible_ids(
+    open_snapshot: Sequence[TaskRecord],
+    closed_groups: Mapping[TaskStatusName, Sequence[TaskRecord]],
+    *,
+    filters: TaskFilters,
+) -> frozenset[str] | None:
+    """The ids a board renders under its filters, or ``None`` if unnarrowed.
+
+    The epic strip's scope (§5.2.1). Every chip links to the CURRENT filters
+    plus ``?epic=<id>``, so a chip is only worth drawing when the epic has a
+    descendant among these ids — which is precisely the set of rows that
+    survives the filters the rest of the page applies. Built from the same
+    reads and the same predicate the sections use, one status at a time, so
+    the strip and the board cannot disagree about what is on screen:
+
+    - only the statuses actually shown contribute (``?status=completed`` hides
+      the open sections, so an open row cannot make a chip non-empty there);
+    - terminal rows carry the same open-snapshot dedup the sections apply, so
+      a row read skew returned twice is counted where it renders;
+    - the ``?epic=`` scope itself is deliberately NOT applied (``scope_ids`` is
+      ``None``): the strip must stay the same whichever chip is selected, or
+      selecting one epic would erase the others and strand the operator inside
+      it.
+
+    ``None`` — an unnarrowed board — means nothing is filtered out of view, so
+    there is no scope to apply and the caller keeps its whole set. Narrowing is
+    :func:`filters_narrow_the_board`'s definition, shared with the empty-state
+    and healthy-stripe claims: ``since`` windows the resolved reads (the
+    dashboard's normal posture) and does not narrow.
+    """
+    if not filters_narrow_the_board(filters, scope_applied=False):
+        return None
+    visible: set[str] = set()
+    if "open" in filters.statuses:
+        visible.update(
+            task.id
+            for task in open_snapshot
+            if matches_filters(task, filters=filters, status="open", scope_ids=None)
+        )
+    open_ids = {task.id for task in open_snapshot}
+    for status, rows in closed_groups.items():
+        if status not in filters.statuses:
+            continue
+        visible.update(
+            task.id
+            for task in rows
+            if task.id not in open_ids
+            and matches_filters(task, filters=filters, status=status, scope_ids=None)
+        )
+    return frozenset(visible)
 
 
 def loaded_task_rows(

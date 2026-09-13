@@ -214,6 +214,7 @@ classDiagram
     +nothing_to_show bool
     +frontier_unplaced bool
     +errors tuple[str, ...]
+    +epics_hidden int
     +epic_scope str
   }
   class DependencyEdge {

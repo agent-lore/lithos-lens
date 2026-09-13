@@ -154,8 +154,15 @@ class DashboardData:
     # and placed it.
     frontier_unplaced: bool = False
     errors: tuple[str, ...] = ()
-    # One rollup per open epic, in open-snapshot (newest-first) order.
+    # One rollup per open epic ON THIS BOARD, in open-snapshot (newest-first)
+    # order: under narrowing filters the strip lists only the epics with a
+    # descendant among the rendered rows (§5.2.1), so every chip leads
+    # somewhere.
     epics: tuple[EpicRollup, ...] = ()
+    # Open epics the filters left with nothing on this board. Said out loud
+    # beside the strip rather than absorbed silently — a short strip otherwise
+    # reads as "these are all the epics".
+    epics_hidden: int = 0
     # The epic id the sections are actually scoped to — empty when no ``?epic=``
     # was asked for OR when the requested epic is no longer an open epic, which
     # the template explains instead of rendering a silently empty board.
@@ -176,6 +183,27 @@ class DashboardData:
         """The epic chip the board is scoped to, if any (the template's handle
         on it — e.g. to explain a confirmed-childless epic's empty board)."""
         return next((epic for epic in self.epics if epic.selected), None)
+
+    @property
+    def epic_scope_unmatched(self) -> bool:
+        """True when the board is scoped to an epic the other filters empty.
+
+        The residual dead end after §5.2.1's scoping: the SELECTED chip is kept
+        whatever the filters leave of it (it is the live scope), and a shared
+        ``?epic=`` URL can arrive with any filters at all. Both land on a board
+        whose sections are all empty for a reason no section can state —
+        "nothing under this epic matches these filters" — which is what this
+        drives.
+
+        Distinct from the confirmed-childless epic beside it (an empty scope,
+        not an emptied one) and from a scope that was never applied. A board
+        that renders ANYTHING — a section row, a gate, or rolled-up children —
+        is not this case, and says so itself.
+        """
+        scoped = self.scoped_epic
+        if scoped is None or not scoped.descendant_ids or self.rolled_up_open:
+            return False
+        return not any(self.sections.values()) and not self.gate_groups
 
     @property
     def rolled_up_only(self) -> bool:

@@ -514,10 +514,20 @@ The Operator View renders, top-to-bottom, the following sections. Each is render
 
 #### 5.2.1 Epic strip
 
-- One chip per **open epic**, showing title and a done/total progress fraction computed from `lithos_task_children(epic_id, recursive=true, include_closed=true)` — completed descendants over all descendants.
+- One chip per **open epic that has work on this board**, showing title and a done/total progress fraction computed from `lithos_task_children(epic_id, recursive=true, include_closed=true)` — completed descendants over all descendants.
 - Clicking an epic chip scopes the entire dashboard to that epic's descendant set (URL: `?epic=<id>`), composing with the other filters.
 - Epics never appear in the workable sections or their counts (Lithos excludes them from both frontiers).
-- The epic count is expected to stay small (tens); the per-epic children calls are gathered concurrently.
+
+**Scoping rule (2026-09).** A chip's link is *the active filters plus `?epic=<id>`*, so the strip MUST follow those filters or most of it leads to boards that cannot match anything. The rule, stated so the two possible readings cannot be confused:
+
+- An open epic is listed when **at least one of its recursive descendants is among the rows this board renders** under the active tag/project/agent/status filters. Membership is decided by the **descendants**, never by the epic's own tags or `metadata.project` — an epic tagged for the filtered project whose children are not is exactly the dead-end chip this rule exists to remove, and a cross-project epic with children in the filtered project is exactly the chip an operator is looking for. It costs no extra read: the subtree is already in hand for the counts.
+- The rows "this board renders" are computed with the same predicate the sections use, over the statuses actually shown, **without** the `?epic=` scope itself — so the strip is identical whichever chip is selected and the operator can always move between epics.
+- On an **unnarrowed** board (no tag/project/agent filter and no status subset — `since` windows the resolved reads and does not narrow, as elsewhere in §5.4.2) the strip is unscoped: one chip per open epic, the whole-corpus summary. A childless open epic keeps its `0/0` chip there.
+- The **selected** epic always keeps its chip, even when the other filters leave nothing under it: the chip is the live scope and the way back out.
+- The strip MUST NOT shorten silently. The open epics it omitted are counted beside the chips (`N more epics have no tasks on this board`), and that count stands alone when the filters emptied every chip — a strip that simply vanished would read as a corpus with no epics.
+- When the board is scoped to an epic the other filters empty — the kept selected chip, or a shared `?epic=` URL — the page MUST say so (`No tasks under this epic match these filters`, with a link to the epic without the other filters) rather than render a set of "no match" section lines that never mention the epic.
+
+The read count follows the number of **open epics** (one recursive children call each), not the number of chips: scoping is applied to the display, after the subtrees are read. That count is bounded in flight rather than capped — see `epic_strip.EPIC_FANOUT_BATCH` — because a capped strip would drop epics rather than describe them. (This replaces the original "the epic count is expected to stay small (tens)": at ~20 projects the corpus outgrew it, and the strip became a wall of chips most of which matched nothing on the board showing them.)
 
 #### 5.2.2 Needs attention — severity model v2
 

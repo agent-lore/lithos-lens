@@ -15,10 +15,11 @@ On top of that join sits the Needs-attention severity model
 the sections computed here.
 
 Open epics roll up instead: EVERY open epic gets a ``lithos_task_children``
-read and a progress chip (``build_epic_rollup``), issued in bounded batches
-(``EPIC_FANOUT_BATCH``) so the fan-out cannot flood the shared MCP session or
-hold every subtree at once. The selected chip's descendant set scopes every
-section (``?epic=``). Those children reads are independent of the open read
+read, issued in bounded batches (``EPIC_FANOUT_BATCH``) so the fan-out cannot
+flood the shared MCP session or hold every subtree at once, and the epics with
+work on THIS board get a progress chip (``build_epic_rollup``; the scoping rule
+is §5.2.1). The selected chip's descendant set scopes every section
+(``?epic=``). Those children reads are independent of the open read
 like every other call here, so a chip's counts may be one generation newer than
 the sections — harmless, because counts are display-only and never decide a
 row's placement. The SCOPE does decide placement, and there the generation gap
@@ -59,6 +60,7 @@ from lithos_lens.frontier_join import (
 )
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
+    board_visible_ids,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
     loaded_task_rows,
@@ -289,6 +291,26 @@ async def load_dashboard(
         """
         return {**terminal_index, **open_index}
 
+    def _strip_scope() -> frozenset[str] | None:
+        """What the epic chips describe: the ids this board renders (§5.2.1).
+
+        A closure over the snapshot and the terminal reads because the skew
+        retry rebinds both: the strip has to follow the generation the sections
+        were built from, here as much as in the fan-out itself. A FAILED
+        terminal read contributes no rows rather than an empty list of them.
+        """
+        return board_visible_ids(
+            open_snapshot,
+            {
+                status: cast(list[TaskRecord], result)
+                for status, result in zip(
+                    ("completed", "cancelled"), closed_results, strict=True
+                )
+                if not isinstance(result, BaseException)
+            },
+            filters=filters,
+        )
+
     def _partition_state(
         snapshot: list[TaskRecord],
         ready_rows: list[TaskRecord],
@@ -368,7 +390,12 @@ async def load_dashboard(
     # snapshot the sections were built from. The children reads themselves stay
     # independent reads (see the module docstring): counts can be a generation
     # newer, which is why only a non-empty subtree is allowed to scope.
-    strip = await load_epic_rollups(lithos, open_snapshot, selected=filters.epic)
+    strip = await load_epic_rollups(
+        lithos,
+        open_snapshot,
+        selected=filters.epic,
+        visible_ids=_strip_scope(),
+    )
     scope_ids = epic_scope_ids(strip.rollups)
 
     # §14: a failed frontier read renders the master open list flat. Half a
@@ -417,9 +444,14 @@ async def load_dashboard(
                 )
                 _read_terminal()
                 # Re-read the strip against the adopted snapshot, so the chips
-                # list the epics of the generation the sections were built from.
+                # list the epics of the generation the sections were built from
+                # — and re-derive what the board shows from it, for the same
+                # reason: the chips describe THIS generation's board.
                 strip = await load_epic_rollups(
-                    lithos, open_snapshot, selected=filters.epic
+                    lithos,
+                    open_snapshot,
+                    selected=filters.epic,
+                    visible_ids=_strip_scope(),
                 )
                 scope_ids = epic_scope_ids(strip.rollups)
                 state = _partition_state(
@@ -677,6 +709,7 @@ async def load_dashboard(
         frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
         epics=strip.rollups,
+        epics_hidden=strip.hidden,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its
         # children read failed, or an empty subtree Lens could not confirm —
         # shows the whole board with the template's explanation. A CONFIRMED

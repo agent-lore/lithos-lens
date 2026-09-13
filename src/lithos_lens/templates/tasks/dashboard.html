@@ -280,14 +280,18 @@
       {% endif %}
 
       {#
-        Epic rollup strip: one progress chip per open epic, counted over its
-        RECURSIVE subtree (lithos_task_children), so epics roll up instead of
-        polluting the open sections. A chip links to ?epic=<id>, which scopes
-        every section to that epic's descendants; the selected chip links back
-        out, so clicking it again clears the scope. The counts are whole-subtree
-        facts and deliberately ignore the other filters.
+        Epic rollup strip: one progress chip per open epic ON THIS BOARD,
+        counted over its RECURSIVE subtree (lithos_task_children), so epics roll
+        up instead of polluting the open sections. A chip links to ?epic=<id>,
+        which scopes every section to that epic's descendants; the selected chip
+        links back out, so clicking it again clears the scope.
+
+        The chip's PRESENCE follows the active filters (§5.2.1) — a chip whose
+        subtree holds nothing on this board would link to an empty one, so it is
+        not drawn, and the count of those is said below. Its COUNTS do not: the
+        fraction is a whole-subtree fact about the epic, not about the slice.
       #}
-      {% if dashboard.epics %}
+      {% if dashboard.epics or dashboard.epics_hidden %}
         <section class="epic-strip" aria-label="Epics" data-epic-strip>
           {% for epic in dashboard.epics %}
             <a class="epic-chip{{ " epic-chip-selected" if epic.selected else "" }}"
@@ -304,6 +308,24 @@
               <span class="epic-chip-count" data-epic-progress>{{ epic.progress_label }}</span>
             </a>
           {% endfor %}
+          {% if dashboard.epics_hidden %}
+            {# Never a silent strip: an epic with no work on this board is a
+               chip that would lead nowhere, so it is dropped — but dropping it
+               without a word is how the strip would start under-reporting its
+               own subject. The note stands alone when the filters emptied
+               EVERY chip, which is when a missing strip misleads most. #}
+            <span class="epic-strip-note" data-epic-strip-hidden>{{ dashboard.epics_hidden }} {{ "more " if dashboard.epics else "" }}{{ "epic has" if dashboard.epics_hidden == 1 else "epics have" }} no tasks on this board</span>
+          {% endif %}
+        </section>
+      {% endif %}
+      {% if dashboard.epic_scope_unmatched %}
+        {# The scoped chip is kept whatever the filters leave of it, and a
+           shared ?epic= link arrives with whatever filters it was copied
+           under. Either way every section below is empty for a reason none of
+           them can state — so state it here, with the way out. #}
+        <section class="banner banner-warning" role="status" data-epic-scope-unmatched>
+          <strong>No tasks under this epic match these filters.</strong>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; has work in its subtree, but none of it survives the other filters on this board, so every section is empty. <a href="/tasks?epic={{ dashboard.epic_scope | urlencode }}">Show this epic without the other filters</a>.</span>
         </section>
       {% endif %}
       {% if dashboard.scoped_epic and not dashboard.scoped_epic.descendant_ids %}

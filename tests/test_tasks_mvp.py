@@ -947,6 +947,84 @@ def test_tag_filter_composes_with_project_agent_and_epic_scope(
     assert "Lens roadmap item" not in narrowed.text
 
 
+def _epic_row(task_id: str, title: str) -> TaskRecord:
+    return TaskRecord(
+        id=task_id,
+        title=title,
+        status="open",
+        created_by="planner",
+        created_at=_ago(hours=2),
+        task_type="epic",
+    )
+
+
+def test_epic_strip_drops_the_chips_the_filters_would_empty(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Repro (prod 2026-09-11): the strip drew a chip for every open epic in
+    the corpus on a tag-filtered board, and each chip's link carries that
+    filter — so the off-tag ones led to boards with no rows and four "no match"
+    lines. The filtered strip draws only the epics with work on this board, and
+    says how many it left out."""
+    fake = _roadmap_fake()
+    fake.tasks.append(_epic_row("epic-roadmap", "Roadmap epic"))
+    fake.tasks.append(_epic_row("epic-side", "Side quest epic"))
+    fake.children["epic-roadmap"] = ["loom-ready", "lens-ready"]
+    fake.children["epic-side"] = ["loom-offscope"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        filtered = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+        whole = client.get("/tasks?since=2026-04-01")
+
+    text = unescape(filtered.text)
+
+    assert filtered.status_code == 200
+    assert 'data-epic-chip="epic-roadmap"' in text
+    assert 'data-epic-chip="epic-side"' not in text
+    # Not a silent strip: the chips it did not draw are counted.
+    assert "1 more epic has no tasks on this board" in text
+    # The unfiltered board still summarises the whole corpus.
+    assert 'data-epic-chip="epic-side"' in whole.text
+    assert "data-epic-strip-hidden" not in whole.text
+
+    # …and when the filters empty EVERY chip the note stands alone, rather
+    # than the strip vanishing as if the corpus had no epics.
+    with _client(lithos_lens_config_env, fake) as client:
+        nothing = client.get("/tasks?tag=loom-candidate&since=2026-04-01")
+
+    assert "data-epic-chip" not in nothing.text
+    assert "2 epics have no tasks on this board" in unescape(nothing.text)
+
+
+def test_an_epic_scope_the_filters_empty_says_so(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The selected chip stays whatever the filters leave of it, so the board
+    explains the empty sections instead of leaving the operator to work out
+    that the epic was never in this filter — and offers the way out."""
+    fake = _roadmap_fake()
+    fake.tasks.append(_epic_row("epic-side", "Side quest epic"))
+    fake.children["epic-side"] = ["loom-offscope"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?epic=epic-side&tag=roadmap-2026-08&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "data-epic-scope-unmatched" in text
+    assert "No tasks under this epic match these filters." in text
+    assert 'href="/tasks?epic=epic-side"' in text
+    # The chip is still there to click back out of.
+    assert 'data-epic-chip="epic-side"' in text
+    # …and the wrong explanations are not: the scope WAS applied, and the epic
+    # is not childless.
+    assert "data-epic-scope-missing" not in text
+    assert "data-epic-scope-empty" not in text
+
+
 def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(
     lithos_lens_config_env: Path,
 ) -> None:

@@ -51,7 +51,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `EpicChildrenClient` — The narrow client surface the strip needs.
 - def `build_epic_rollup` — Roll one epic's recursive children up into its progress chip.
 - def `load_epic_rollups` — Fan ``lithos_task_children`` out over EVERY open epic in the snapshot.
-- class `EpicStrip` — One epic-strip load: the chips plus the read-failure flag.
+- class `EpicStrip` — One epic-strip load: the chips, the read-failure flag, and what it hid.
 - def `epic_scope_ids` — The selected epic's descendant ids, or ``None`` when nothing is scoped.
 
 ### `lithos_lens.frontier`
