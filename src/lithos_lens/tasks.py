@@ -142,6 +142,16 @@ RESERVED_TASK_PATH_SEGMENTS: frozenset[str] = frozenset({"graph", "events", "id"
 TASK_DETAIL_ALIAS_PATH = "/tasks/id"
 TASK_DETAIL_ALIAS_KEY = "task_id"
 
+#: §5.5's selection vocabulary. Each host page has exactly ONE selection
+#: parameter — the dashboard's is ``selected``, the graph page's is ``focus``
+#: (T2-A7) — and both open the SAME panel, fetched from the detail route as
+#: ``?fragment=panel``. Named here, with the rest of the task URL vocabulary,
+#: so the board, the fragment route and ``tasks.js`` cannot drift on the
+#: spelling of a parameter all three have to agree on.
+PANEL_SELECTION_KEY = "selected"
+PANEL_FRAGMENT_KEY = "fragment"
+PANEL_FRAGMENT_VALUE = "panel"
+
 
 def task_detail_path(task_id: str) -> str:
     """The URL that addresses ``task_id``'s detail page, unambiguously.

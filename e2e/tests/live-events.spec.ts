@@ -122,3 +122,50 @@ test("finding.posted reveals the finding chip on the task's row", async ({ page,
   await expect(chip).toBeVisible();
   await expect(chip).toHaveText("1 new finding");
 });
+
+test("a task event refreshes the open side panel without losing the selection", async ({
+  page,
+  request,
+}) => {
+  // T2-A6: the panel states BLOCKER and DEPENDENT statuses, so it has to ride
+  // the same reconcile the board does — a panel left as a snapshot answers
+  // "what is blocking this?" with what WAS blocking it. It carries its own
+  // refresh fragment, so the swap is observable even against fixtures whose
+  // data never changes: mark the node that is on screen, and watch it go.
+  await page.goto("/tasks?project=lithos-loom&selected=loom-worker");
+  await expect(page.locator('[data-panel-task="loom-worker"]')).toBeVisible();
+  await expect(page.locator('[data-live-state="live"]')).toBeVisible();
+  await expect(
+    page.locator('[data-panel-dependents] [data-link-list="dependents"] li').first(),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    document
+      .querySelector("[data-task-panel]")
+      ?.setAttribute("data-e2e-stale", "1");
+  });
+
+  const publish = await request.post("/tasks/events/publish", {
+    data: {
+      id: `evt-e2e-panel-${Date.now()}`,
+      type: "task.updated",
+      task_id: "loom-worker",
+      requires_refresh: true,
+    },
+  });
+  expect(publish.status()).toBe(202);
+
+  // The marked node is gone: the reconcile replaced the panel…
+  await expect(page.locator("[data-task-panel][data-e2e-stale]")).toHaveCount(0);
+  // …with a fresh one for the same task, relationship lines and all…
+  await expect(page.locator('[data-panel-task="loom-worker"]')).toBeVisible();
+  await expect(
+    page.locator('[data-panel-blockers] [data-link-list="blockers"] li').first(),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-panel-dependents] [data-link-list="dependents"] li').first(),
+  ).toBeVisible();
+  // …and neither the selection nor the board moved under it.
+  await expect(page).toHaveURL(/\?project=lithos-loom&selected=loom-worker$/);
+  await expect(page.locator(".task-board")).toBeVisible();
+});

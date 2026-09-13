@@ -132,10 +132,18 @@ class TaskLinkClient(Protocol):
 
 
 class LinkTarget(NamedTuple):
-    """One neighbour id to resolve, with the edge type that named it."""
+    """One neighbour id to resolve, with the edge type and DIRECTION that named it.
+
+    The direction is carried because the two blocker edge types mean opposite
+    things read the two ways: ``other -> task`` is a reason this task cannot
+    run, ``task -> other`` is something waiting on it. Selected from the
+    endpoint ids (:func:`incoming_targets` / :func:`outgoing_targets`), so it
+    never depends on the payload's server-computed ``direction`` label.
+    """
 
     task_id: str
     edge_type: str
+    downstream: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,9 @@ class LinkedTask:
     task_type: str = ""
     gate_type: str = ""
     unresolved: bool = False
+    #: True when the edge points AWAY from the task this page belongs to — a
+    #: dependent, not a predecessor. See :attr:`blocking`.
+    downstream: bool = False
     #: A TIMER gate whose ``ready_at`` has passed. Lithos resolves those on
     #: their own without closing the task, so the gate stays ``open`` while it
     #: no longer holds anything back — see :attr:`satisfied`.
@@ -175,8 +186,17 @@ class LinkedTask:
         follow-on is merely cancelled — nothing waits on it — so calling it
         unsatisfiable would assert a dependency that does not exist, in the
         page's loudest treatment, on a section that is purely historical.
+
+        DIRECTION is half the test, not an afterthought. The same two edge
+        types render the "Blocks" list (T2-A6) with the arrow the other way
+        round, and there the far task is a DEPENDENT: a completed one is not a
+        "satisfied" dependency of this task, and a cancelled one is emphatically
+        not "unsatisfiable — this task can never run", which is what those two
+        chips say. Nothing downstream is ever a reason this task cannot run, so
+        it is never blocking, and every verdict derived from this falls out
+        correctly instead of being re-decided per template.
         """
-        return self.edge_type in BLOCKER_EDGE_TYPES
+        return self.edge_type in BLOCKER_EDGE_TYPES and not self.downstream
 
     @property
     def satisfied(self) -> bool:
@@ -388,7 +408,7 @@ def incoming_targets(
     missing is the failure this page exists to prevent.
     """
     return tuple(
-        LinkTarget(edge.from_task_id, edge.type)
+        LinkTarget(edge.from_task_id, edge.type, downstream=False)
         for edge in edges
         if edge.type in types and edge.to_task_id == task_id and edge.from_task_id
     )
@@ -399,9 +419,15 @@ def outgoing_targets(
     edges: Sequence[EdgeRecord],
     types: Sequence[str],
 ) -> tuple[LinkTarget, ...]:
-    """Neighbours on edges pointing AWAY from ``task_id`` (``task_id -> other``)."""
+    """Neighbours on edges pointing AWAY from ``task_id`` (``task_id -> other``).
+
+    Marked ``downstream``: on the blocker edge types these are the task's
+    DEPENDENTS, and :attr:`LinkedTask.blocking` — with the satisfied and
+    unsatisfiable verdicts hanging off it — reads the opposite way round from
+    them (see that property).
+    """
     return tuple(
-        LinkTarget(edge.to_task_id, edge.type)
+        LinkTarget(edge.to_task_id, edge.type, downstream=True)
         for edge in edges
         if edge.type in types and edge.from_task_id == task_id and edge.to_task_id
     )
@@ -545,12 +571,16 @@ def _timer_gate_elapsed(task: TaskRecord) -> bool:
 def _linked_task(target: LinkTarget, result: Any) -> LinkedTask:
     if isinstance(result, BaseException):
         return LinkedTask(
-            task_id=target.task_id, edge_type=target.edge_type, unresolved=True
+            task_id=target.task_id,
+            edge_type=target.edge_type,
+            downstream=target.downstream,
+            unresolved=True,
         )
     task = cast(TaskRecord, result)
     return LinkedTask(
         task_id=task.id or target.task_id,
         edge_type=target.edge_type,
+        downstream=target.downstream,
         title=task.title,
         status=task.status,
         task_type=task.task_type,

@@ -63,7 +63,9 @@ The current application exposes these routes:
 - `GET /health`
   Returns Lens health information suitable for container or service checks.
 - `GET /tasks`
-  Renders the task dashboard and accepts filter query parameters.
+  Renders the task dashboard and accepts filter query parameters. With
+  `?selected=<task_id>` the side panel is rendered open beside the board
+  (§5.6.1).
 - `GET /tasks/events`
   Browser-facing Server-Sent Events endpoint for live task updates.
 - `GET /tasks/{task_id}` (and `GET /tasks/id?task_id=<id>`)
@@ -80,6 +82,10 @@ The current application exposes these routes:
   every id Lens can be handed is a server-generated UUID).
   `tasks.task_detail_path` is the one place that decides, shared by the board,
   the graph page and the knowledge produced-by chip.
+- `GET /tasks/{task_id}?fragment=panel`
+  Renders the task's side-panel partial (§5.6.1) — the same reads as the detail
+  page through a template that extends no layout. This is what a dashboard row
+  click fetches.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -331,15 +337,112 @@ two cannot disagree about why a task is where it is. It shows:
   unsatisfiable one, or a cycle
 - **the blocker chain**, expandable one level at a time to a bounded depth; a
   level that would revisit the chain reports the cycle instead of walking it
+- **Blocks:** — the level-1 dependents (outgoing `blocks` / `waits_on_gate`)
+  with the live status each was read with, beneath the chain, so the text
+  baseline covers both directions of the same relationship. The two blocker
+  edge types read opposite ways round here: a *dependent* is never a reason
+  this task cannot run, so the "satisfied" and "unsatisfiable" verdicts — which
+  are claims about this task's own predecessors — are not applied to it
 - **provenance** in both directions (`discovered_from`)
 - **children**, for an epic
 - **findings**, with links to any note a finding produced
 - related note links where available
 
 Every bounded list on the page states its own remainder through one shared
-tail, so the page-size claim has a single definition.
+tail, so the page-size claim has a single definition. The dependents list is
+one of them: the outgoing edge count is agent-written like the incoming one.
 
 Detail rendering is read-only in the current implementation.
+
+#### 5.6.1 Side panel
+
+The same reads back a **side panel**, so a relationship can be read without
+leaving the board. One implementation for two host pages (§5.5 of
+REQUIREMENTS), rendered from one template that extends no layout:
+
+- `GET /tasks?selected=<task_id>` renders the board with the panel already
+  open. That is the no-JS baseline — a shared link, a screen reader and a
+  browser with scripting off all land on the same thing — and `selected` is the
+  dashboard's *only* selection parameter. The graph page's is `focus` (§5.12);
+  neither page carries the other's.
+- `GET /tasks/{task_id}?fragment=panel` answers with the partial and nothing
+  else. A row click fetches it — from the URL the SERVER wrote onto the row, so
+  the id encoding and the board's preserved filters have one definition — swaps
+  it into the board and pushes `selected` onto the URL with `pushState`. The
+  push happens after the swap, so a failed fetch never leaves the address bar
+  claiming an open panel.
+- Closing (the Close link, or Escape) clears `selected` and nothing else: the
+  filters, the epic scope, the resolved-since window and the **fragment** are
+  rebuilt from the live URL. The fragment counts because the summary cards link
+  to a section of the board (`#task-group-blocked`), so it is generated state
+  saying where the operator is. `selected` is deliberately not a preserved
+  filter, so no generated link carries one selection into the next page. Back
+  and forward re-apply the URL's selection without a reload.
+- **An open that does not move the URL writes no history entry.** Reopening the
+  task the address bar already names — clicking the selected row again, or
+  retrying one whose Back-navigation fetch failed under its own URL — still
+  fetches, because the panel may be absent or stale. It does not push: a second
+  identical entry is invisible until the operator leaves, and then the Back that
+  should clear the selection lands on the twin, matches the intent, and appears
+  to do nothing until pressed again.
+- **The latest intent owns the panel.** Panels are fetched, so two can be in
+  flight at once and answer in either order. Every open and every close takes a
+  generation, and no response writes the panel or the URL unless its generation
+  is still current — checked at *both* suspension points, since the response
+  arriving and its body being read are separate moments. What the panel is MEANT
+  to show is tracked separately from what it is showing, and `popstate` compares
+  against the intent: a Forward back onto the selection already on screen still
+  supersedes an open running under it. A reconcile is validated against the URL
+  it actually fetched as well as its generation — a click in flight has not
+  pushed its URL yet, so a reconcile started in that window carries the previous
+  selection's panel under the next one's generation. The board fragment applies
+  either way: it does not depend on the selection.
+- **A panel that never arrives.** A rejected fetch, a non-OK response and a body
+  that fails to read are one outcome, and what it costs depends on who asked. A
+  click has pushed nothing yet, so the panel and the URL still agree and both
+  stay — only the intent is walked back to what is on screen, or the next
+  Forward onto the task that failed would match it and leave the previous task's
+  panel under its URL. Back and forward move the URL *before* the panel code
+  runs, so there the panel on screen already names a different task than the
+  address bar: it is cleared, along with the selection, because an empty panel
+  under a URL the operator can retry is a missing answer and the previous task's
+  panel is a wrong one.
+- **The browser never assembles a panel URL.** Rows carry one built by the
+  server, and the host carries the one built for the request's own selection —
+  which is what reopens a deep-linked task that has no row on this board. The
+  residual fallback uses the query-alias route, whose path and key the server
+  hands down, because that is the one form that addresses every id: a task
+  called `graph` fetched as `/tasks/graph` would return the graph PAGE.
+- The header carries the identity §5.5.1 asks for, and says so even when the
+  answer is empty: a task belonging to no project under the configured
+  convention renders an explicit `(no project)` chip rather than nothing, so
+  projectless work is distinguishable from a field that failed to render.
+- **Every row on the board opens one**, the Gates section included: a gate is a
+  task, and "what is this gate holding up?" is the Blocks list the panel
+  already answers. The contract a row opts into is `data-task-id` plus the
+  server-built `data-panel-url` — not the `data-task-row` hook the live-event
+  handlers use to rewrite claim and status chrome in place, which a gate row
+  does not carry.
+- **Expand** leaves for the full page. Every other link inside the panel is an
+  ordinary link too; the click handler intercepts the row title and the row
+  itself, never a tag chip or a link within the panel. Nor a `<summary>`: the
+  gate row's waiter list is a `<details>` that expands with no JavaScript, and
+  its disclosure control keeps that behaviour.
+
+The panel states: the header (title, status, type badge with `gate_type`,
+project chip under the configured convention, creating agent), the parent
+breadcrumb, the blockers with live status (level 1, no per-level expander —
+the walk lives on the full page), **Blocks** (the level-1 dependents), the
+active claims, and the finding COUNT linked to the full timeline. The
+downstream-impact line (`frees N in this graph, M immediately`) needs a scope
+and is not computed here; its slot is present and empty.
+
+An unknown id renders the **not-found panel** at HTTP 200 on both routes —
+never a 500, and never at the cost of the board beside it — and a read that
+merely failed says so instead, because "this task does not exist" is Lithos's
+answer rather than a transport outcome. The open panel carries its own refresh
+fragment, so the reconcile that keeps the board live keeps the panel's blocker
+and dependent statuses live too without rebuilding it under the cursor.
 
 ### 5.7 Knowledge Surface
 
@@ -696,6 +799,13 @@ queued is not one of its three outcomes, and is carried by the span field
 `lens.graph.cycle_reads_unmade` instead. The scope KEY is a span
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
+
+The side panel (§5.6.1) is counted by **`lens_tasks_panel_opens_total`**
+(`source` in `url` | `fragment`) — the SSR baseline and the click-fetched
+partial, which are the two things the request can actually distinguish. The
+PRD's finer row-vs-node split is the client's knowledge, not a fact on the
+request, and the task id is absent for the same cardinality reason as the
+graph's scope key.
 
 ## 6. Current Lithos Dependencies
 

@@ -41,6 +41,8 @@ from fastapi import Request
 from lithos_lens.tasks import (
     ADD_TAG_FILTER_KEY,
     MAX_FILTER_QUERY_BYTES,
+    PANEL_FRAGMENT_KEY,
+    PANEL_FRAGMENT_VALUE,
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
@@ -271,6 +273,25 @@ def task_detail_url(request: Request, task_id: str) -> str:
     path = task_detail_path(task_id)
     if not params:
         return path
+    return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
+
+
+def panel_fragment_url(request: Request, task_id: str) -> str:
+    """Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
+
+    Emitted onto every row as ``data-panel-url`` so the click handler in
+    ``tasks.js`` fetches a URL the SERVER built. Two things fall out of that
+    which a URL assembled in the browser would get wrong: the id is addressed
+    through :func:`~lithos_lens.tasks.task_detail_path`, so a task called
+    ``graph`` reaches the alias route instead of the graph page; and the
+    board's preserved filters ride along through the same allowlist every other
+    generated tasks URL uses, so the panel's own Expand and Close links come
+    back carrying the scope the operator is browsing under rather than dropping
+    it the moment the panel opens.
+    """
+    params = _preserved_filter_params(request)
+    params.append((PANEL_FRAGMENT_KEY, PANEL_FRAGMENT_VALUE))
+    path = task_detail_path(task_id)
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 

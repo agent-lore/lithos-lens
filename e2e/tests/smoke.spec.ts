@@ -299,6 +299,34 @@ test("task.created event inserts a skeleton row on an unfiltered board", async (
     "href",
     "/tasks/e2e-just-created",
   );
+
+  // …and the optimistic row takes part in the side panel like every other row
+  // on the board (§5.5). It is the ONE row no template rendered, so its half
+  // of the contract is written by tasks.js — through the query-alias route,
+  // the only form the browser may build for an arbitrary id. Without it the
+  // row is still visible and still clickable, and the click navigates away
+  // instead of opening the panel.
+  await expect(skeleton).toHaveAttribute(
+    "data-panel-url",
+    "/tasks/id?task_id=e2e-just-created&fragment=panel",
+  );
+  const fragment = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).searchParams.get("fragment") === "panel",
+  );
+
+  await skeleton.locator("a.task-title").click();
+
+  expect(new URL((await fragment).url()).searchParams.get("task_id")).toBe(
+    "e2e-just-created",
+  );
+  // The board is still here — a navigation would have replaced it — and the
+  // selection is on the URL. The panel itself is the NOT-FOUND one: the id
+  // came off an event and no such task exists in the fixture, which is the
+  // panel this route is specified to answer with and not an HTTP 500.
+  await expect(page).toHaveURL(/selected=e2e-just-created/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  await expect(page.locator("[data-task-panel]")).toBeVisible();
 });
 
 test("the optimistic skeleton is suppressed on a filtered board", async ({ page, request }) => {
@@ -349,10 +377,28 @@ test("the optimistic skeleton is suppressed on a filtered board", async ({ page,
   ).toHaveCount(0);
 });
 
-test("clicking a task opens its detail page", async ({ page }) => {
+test("clicking a task opens its panel, and Expand opens the full page", async ({
+  page,
+}) => {
   await page.goto("/tasks?since=2026-08-01");
 
   await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+
+  // §5.5 (T2-A6): a row click opens the side panel and pushes `selected` onto
+  // the URL — the operator keeps their place in the list. The full page is
+  // what Expand is for, and this is the transition the PRD's problem statement
+  // is about ("every row click is a page navigation").
+  await expect(
+    page.locator('[data-panel-task="influx-ingest-cutover"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-ingest-cutover/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  // The panel answers both directions of the relationship, not just upstream.
+  await expect(
+    page.locator('[data-panel-dependents] [data-link-target="influx-backfill"]'),
+  ).toBeVisible();
+
+  await page.locator("[data-panel-expand]").click();
 
   await expect(page).toHaveURL(/\/tasks\/influx-ingest-cutover/);
   await expect(
@@ -362,6 +408,149 @@ test("clicking a task opens its detail page", async ({ page }) => {
   // agent appears in both the summary line and the claims list, so scope to
   // the first match rather than tripping strict mode.
   await expect(page.getByText("worker-a").first()).toBeVisible();
+});
+
+test("clicking a row away from its links opens the panel too", async ({ page }) => {
+  // §5.5's contract is "clicking a ROW opens a panel" — the title link is the
+  // obvious target, not the whole of it. This clicks the row's meta line,
+  // which carries badges and timestamps and no anchor at all.
+  await page.goto("/tasks?since=2026-08-01");
+  const row = page.locator('[data-task-row][data-task-id="influx-backfill"]');
+  await expect(row).toBeVisible();
+
+  await row.locator(".task-row-meta").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-backfill/);
+});
+
+test("clicking a gate row opens its panel, and the waiter list still opens", async ({
+  page,
+}) => {
+  // §5.5's "clicking a row opens a panel" covers the Gates section too: a gate
+  // is a task, and "what is this gate holding up?" is the Blocks list the
+  // panel already answers. Gate rows carry gate chrome rather than claim
+  // chrome, so they do not carry `data-task-row` — which is exactly how the
+  // section fell out of the shared click contract.
+  await page.goto("/tasks?since=2026-08-01");
+  const gate = page.locator(
+    '[data-gate-row][data-task-id="influx-read-swap-approval"]',
+  );
+  await expect(gate).toBeVisible();
+
+  // The waiter disclosure is a <details> that works with no JS, so the row
+  // handler must leave its <summary> alone. Toggled BEFORE the panel click:
+  // a handler that swallowed it would both fail to expand the list and open
+  // the panel early.
+  const waiters = gate.locator("[data-gate-waiters]");
+  await waiters.locator("summary").click();
+  await expect(waiters.locator(".gate-waiter-list")).toBeVisible();
+  await expect(page).not.toHaveURL(/selected=/);
+
+  await gate.locator(".task-title").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-read-swap-approval"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-read-swap-approval/);
+  // Still the board — a gate click used to be a full-page navigation.
+  await expect(page.locator(".task-board")).toBeVisible();
+});
+
+test("a panel fetch that fails leaves the board exactly as it was", async ({
+  page,
+}) => {
+  // The real failure path, in a real browser: the fragment request is aborted,
+  // so `fetch` REJECTS rather than answering. A click pushes its URL only on
+  // success, so nothing may move — and nothing may be left dangling either.
+  await page.goto("/tasks?since=2026-08-01");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  // Matched by predicate, not by glob: `fragment=panel` sits in the QUERY, and
+  // a `**/…` pattern only matches after a path separator.
+  const isPanelFragment = (url: URL) =>
+    url.searchParams.get("fragment") === "panel";
+  let aborted = 0;
+  await page.route(isPanelFragment, (route) => {
+    aborted += 1;
+    return route.abort();
+  });
+
+  // Armed BEFORE the click, and awaited after it: the failing REQUEST is what
+  // this test synchronises on. Every assertion below is also true in the
+  // instant after the click and before the request fails, so a wall-clock
+  // sleep would let the test pass on a run where the route never matched at
+  // all — and would inspect `errors` too early on a slow worker. Waiting on
+  // the event itself removes both.
+  const requestFailed = page.waitForEvent("requestfailed", (request) =>
+    isPanelFragment(new URL(request.url())),
+  );
+
+  await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+  await requestFailed;
+  expect(aborted).toBe(1);
+  // The rejection reaches the page's own handlers in the microtask checkpoint
+  // that follows the failure, so one frame later it has either been caught or
+  // been reported. A double rAF is how the rest of this suite waits for the
+  // page to settle, and it costs a round trip, which is what orders the
+  // `pageerror` delivery below against this assertion.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/tasks\?since=2026-08-01$/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("a board section anchor survives opening and closing the panel", async ({
+  page,
+}) => {
+  // The summary cards link to a SECTION of the board, so `#task-group-blocked`
+  // is generated dashboard state that says where the operator is. Driven from
+  // the card rather than typed into `goto`, so the anchor under test is the
+  // one the app actually emits.
+  await page.goto("/tasks?since=2026-08-01");
+  await page.locator('a.metric-card[href$="#task-group-blocked"]').click();
+  await expect(page).toHaveURL(/#task-group-blocked$/);
+
+  const row = page.locator('[data-task-row][data-task-id="influx-backfill"]');
+  await row.locator(".task-title").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-backfill#task-group-blocked$/);
+
+  await page.locator("[data-panel-close]").click();
+
+  // Only the selection cleared. The anchor is list state like any filter.
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/selected=/);
+  await expect(page).toHaveURL(/#task-group-blocked$/);
+});
+
+
+test("closing the side panel keeps the board's filters", async ({ page }) => {
+  // The no-JS baseline first: `?selected=` renders the panel open server-side.
+  await page.goto("/tasks?project=influx&selected=influx-backfill");
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+
+  await page.locator("[data-panel-close]").click();
+
+  // Closing clears the selection and NOTHING else: the project scope, and the
+  // board under it, are exactly where they were.
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/tasks\?project=influx$/);
+  await expect(page.locator(".task-board")).toBeVisible();
 });
 
 test("knowledge note renders server-side markdown", async ({ page }) => {

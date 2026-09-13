@@ -105,10 +105,10 @@
         "qualname": "lithos_lens.events._iter_sse_lines"
       }
     ],
-    "total_functions": 578
+    "total_functions": 583
   },
   "domain": {
-    "associations": 77,
+    "associations": 78,
     "models": 69,
     "models_without_docstrings": 16
   },
@@ -177,7 +177,7 @@
       }
     },
     "cross_component_edges": 35,
-    "cross_component_module_edges": 93,
+    "cross_component_module_edges": 94,
     "longest_component_chain": 8,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -293,52 +293,52 @@
         "functions": 249,
         "largest_module": "lithos_lens.graph_layout",
         "largest_module_lines": 799,
-        "lines": 7753,
+        "lines": 7811,
         "modules": 18,
         "public_symbols": 107,
-        "sloc": 5937
+        "sloc": 5978
       },
       "Tasks": {
         "classes": 13,
         "functions": 37,
         "largest_module": "lithos_lens.tasks",
-        "largest_module_lines": 669,
-        "lines": 1118,
+        "largest_module_lines": 679,
+        "lines": 1128,
         "modules": 3,
         "public_symbols": 42,
-        "sloc": 814
+        "sloc": 817
       },
       "Telemetry": {
         "classes": 0,
-        "functions": 37,
+        "functions": 38,
         "largest_module": "lithos_lens.telemetry",
         "largest_module_lines": 548,
-        "lines": 1069,
+        "lines": 1091,
         "modules": 2,
-        "public_symbols": 24,
-        "sloc": 775
+        "public_symbols": 25,
+        "sloc": 793
       },
       "Web": {
         "classes": 1,
-        "functions": 42,
+        "functions": 46,
         "largest_module": "lithos_lens.web",
-        "largest_module_lines": 629,
-        "lines": 1479,
+        "largest_module_lines": 720,
+        "lines": 1591,
         "modules": 4,
-        "public_symbols": 15,
-        "sloc": 1150
+        "public_symbols": 16,
+        "sloc": 1236
       }
     },
     "max_module": "lithos_lens.graph_layout",
     "max_module_lines": 799,
     "modules_over_800": [],
-    "total_lines": 17440,
+    "total_lines": 17642,
     "total_modules": 46,
-    "total_sloc": 13377
+    "total_sloc": 13525
   },
   "tests": {
-    "ratio": 1.68,
-    "src_lines": 17440,
-    "test_lines": 29343
+    "ratio": 1.75,
+    "src_lines": 17642,
+    "test_lines": 30939
   }
 }

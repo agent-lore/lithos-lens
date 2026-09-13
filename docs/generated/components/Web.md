@@ -13,8 +13,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 |---|---|---:|---:|
 | `lithos_lens.graph_routes` | S | 0 | 1 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
-| `lithos_lens.request_filters` | M | 0 | 12 |
-| `lithos_lens.web` | M | 0 | 1 |
+| `lithos_lens.request_filters` | M | 0 | 13 |
+| `lithos_lens.web` | L | 0 | 1 |
 
 ## Public API
 
@@ -30,6 +30,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `task_tag_url`
 - def `task_tag_clear_url` — Link an active-filter chip to the same board WITHOUT that one tag.
 - def `task_detail_url` — Link a task id as ONE path segment, with every reserved character encoded.
+- def `panel_fragment_url` — Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
 - def `blocker_expand_url` — Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
 - def `note_url` — Link a finding's document, id-encoded, carrying the task back-link.
 - def `epic_scope_url` — Link an epic chip to the dashboard scoped to that epic — or unscoped.

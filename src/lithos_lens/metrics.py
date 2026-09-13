@@ -519,3 +519,25 @@ def tasks_graph_cycle_reads() -> Any:
             description="Scoped blocked reads behind the graph page's cycle signal.",
         ),
     )
+
+
+def tasks_panel_opens() -> Any:
+    """Counter of side-panel renders by where the request came from (§5.5).
+
+    Labels: ``source`` in ``url`` (the SSR baseline — `/tasks?selected=<id>`,
+    i.e. a deep link or a shared URL) | ``fragment`` (`?fragment=panel`, which
+    is what a row or node click fetches).
+
+    Those two are what the SERVER can actually tell apart, so they are what it
+    counts. The PRD's finer "row vs node" split is the client's knowledge, not
+    a fact on the request, and inventing a label the request does not carry
+    would make the series a guess. The task id is deliberately absent: one
+    series per task is the unbounded cardinality this module's rule forbids.
+    """
+    return _instrument(
+        "lens_tasks_panel_opens_total",
+        lambda meter: meter.create_counter(
+            "lens_tasks_panel_opens_total",
+            description="Task side-panel renders by request source.",
+        ),
+    )
