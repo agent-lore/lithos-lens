@@ -363,6 +363,12 @@ classDiagram
     +error str
     +unmade bool
   }
+  class ReconciliationStyle {
+    +state str
+    +label str
+    +tone str
+    +severity int
+  }
   class ScopeRefusal {
     +count int
     +max_tasks int
@@ -417,6 +423,8 @@ classDiagram
   <<Tasks>> EpicRollup
   class FindingRecord
   <<Tasks>> FindingRecord
+  class Reconciliation
+  <<Tasks>> Reconciliation
   class SectionRow
   <<Tasks>> SectionRow
   class TaskFilters
@@ -445,6 +453,7 @@ classDiagram
   EdgeCacheEntry "1" --> "0..*" EdgeRecord : edges
   FindingView "1" --> "1" FindingRecord : finding
   GateGroup "1" --> "0..*" GateRow : rows
+  GateRow "1" --> "0..1" Reconciliation : pr_reconciliation
   GateRow "1" --> "1" TaskRecord : task
   GateRow "1" --> "0..*" TaskRecord : waiters
   GateSection "1" --> "0..*" GateGroup : groups
@@ -475,6 +484,7 @@ classDiagram
   TaskDetailData "1" --> "1" LinkPage : discovered_from
   TaskDetailData "1" --> "1" LinkPage : spawned
   TaskDetailData "1" --> "1" PageTail : children_tail
+  TaskDetailData "1" --> "0..1" Reconciliation : pr_reconciliation
   TaskDetailData "1" --> "0..*" TaskRecord : children
   TaskDetailData "1" --> "0..1" TaskRecord : task
   TaskDetailData "1" --> "0..1" TaskStatusRecord : task_status
@@ -539,6 +549,16 @@ classDiagram
     +updated str
     +tags tuple[str, ...]
   }
+  class Reconciliation {
+    +state str
+    +label str
+    +slug str
+    +tone str
+    +severity int
+    +detail str
+    +since str
+    +age str
+  }
   class SectionRow {
     +claimed_but_blocked bool
     +claims_unknown bool
@@ -578,6 +598,7 @@ classDiagram
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers
   SectionRow "1" --> "0..*" ClaimRecord : claims
+  SectionRow "1" --> "0..1" Reconciliation : pr_reconciliation
   SectionRow "1" --> "1" TaskRecord : task
   TaskRecord "1" --> "0..*" ClaimRecord : claims
   TaskStatusRecord "1" --> "0..*" ClaimRecord : claims

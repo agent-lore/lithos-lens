@@ -18,7 +18,9 @@ test("health endpoint reports Lithos ok", async ({ request }) => {
 test("dashboard renders the task board with fixture rows", async ({ page }) => {
   await page.goto("/tasks?since=2026-08-01");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Tasks" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Tasks" }),
+  ).toBeVisible();
 
   // The workable board and its flagship fixture task are present. Open tasks
   // are partitioned into In progress / Ready / Blocked sections by the Lithos
@@ -63,7 +65,10 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   expect(await cancelled.locator("[data-task-row]").count()).toBe(2);
 });
 
-test("the gates section counts its timer gate down in the browser", async ({ page, request }) => {
+test("the gates section counts its timer gate down in the browser", async ({
+  page,
+  request,
+}) => {
   // T1-S4 story 6: Lithos emits NO event when a timer gate lapses, so the
   // countdown and the one-shot self-refresh are browser-side and can only be
   // proved here. The server renders the absolute stamp as the no-JS baseline;
@@ -106,9 +111,7 @@ test("elements marked hidden stay hidden", async ({ page }) => {
   // an empty box. tasks.js toggles both via the same attribute.
   await page.goto("/tasks?since=2026-08-01");
 
-  const row = page.locator(
-    '[data-task-row][data-task-id="influx-dashboards"]',
-  );
+  const row = page.locator('[data-task-row][data-task-id="influx-dashboards"]');
   await expect(row).toBeVisible();
   await expect(row.locator("[data-finding-count]")).toBeHidden();
   await expect(row.locator("[data-claim-list]")).toBeHidden();
@@ -120,18 +123,22 @@ test("elements marked hidden stay hidden", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("nothing marked hidden is painted, anywhere on the page", async ({ page }) => {
+test("nothing marked hidden is painted, anywhere on the page", async ({
+  page,
+}) => {
   // The generic complement to the test above, which names two elements. This
   // one sweeps EVERY `[hidden]` element, so a future component rule that sets
   // `display` on a class is caught wherever it lands rather than only on the
   // two the reset was written for. From T1-S6, which found the original bug.
   await page.goto("/tasks?since=2026-08-01");
 
-  const painted = await page.locator("[hidden]").evaluateAll((elements) =>
-    elements
-      .filter((element) => getComputedStyle(element).display !== "none")
-      .map((element) => element.outerHTML.slice(0, 80)),
-  );
+  const painted = await page
+    .locator("[hidden]")
+    .evaluateAll((elements) =>
+      elements
+        .filter((element) => getComputedStyle(element).display !== "none")
+        .map((element) => element.outerHTML.slice(0, 80)),
+    );
 
   expect(painted).toEqual([]);
 });
@@ -156,7 +163,10 @@ test("the needs-attention stripe is inset like its siblings, not welded to the c
   // Needs-attention section, which the fixtures deliberately do not produce.
   const boards = [
     // The scoped stripe, on a narrowed board of the ordinary instance.
-    { url: "/tasks?since=2026-08-01&tag=area%3Adata", marker: "[data-attention-scoped]" },
+    {
+      url: "/tasks?since=2026-08-01&tag=area%3Adata",
+      marker: "[data-attention-scoped]",
+    },
     // The "cannot assess" stripe, which only the truncated instance renders —
     // and only where the Needs-attention list is EMPTY while the tail still
     // has a row: an empty list is what the three stripe branches choose
@@ -189,8 +199,12 @@ test("the needs-attention stripe is inset like its siblings, not welded to the c
         };
       });
 
-      expect(inset.left, `${marker} left inset at ${width}px`).toBe(inset.title);
-      expect(inset.right, `${marker} right inset at ${width}px`).toBe(inset.title);
+      expect(inset.left, `${marker} left inset at ${width}px`).toBe(
+        inset.title,
+      );
+      expect(inset.right, `${marker} right inset at ${width}px`).toBe(
+        inset.title,
+      );
       // Belt and braces: the title itself must be inset, or the assertions
       // above would hold for a stripe welded to a card that has no padding.
       expect(inset.title).toBeGreaterThan(4);
@@ -216,7 +230,9 @@ test("a page shorter than the viewport still fills it", async ({ page }) => {
   expect(body).toBeGreaterThanOrEqual(viewport);
 });
 
-test("epic strip rolls the subtree up and scopes the board", async ({ page }) => {
+test("epic strip rolls the subtree up and scopes the board", async ({
+  page,
+}) => {
   // T1-S5 item: the demo epic covers six subtree tasks — one completed, one
   // cancelled (cancelled work leaves the denominator), so the chip reads 1/5.
   await page.goto("/tasks?since=2026-08-01");
@@ -236,7 +252,9 @@ test("epic strip rolls the subtree up and scopes the board", async ({ page }) =>
   ).toHaveCount(0);
 });
 
-test("blocked row renders styled blocker chips with a visible label", async ({ page }) => {
+test("blocked row renders styled blocker chips with a visible label", async ({
+  page,
+}) => {
   // T1-S2 item: the blocked fixture (influx-backfill, waiting on the cutover)
   // must show a labelled, STYLED chip strip — browser truth via computed style,
   // consistent with the chip system.
@@ -263,7 +281,10 @@ test("blocked row renders styled blocker chips with a visible label", async ({ p
   expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
 });
 
-test("task.created event inserts a skeleton row on an unfiltered board", async ({ page, request }) => {
+test("task.created event inserts a skeleton row on an unfiltered board", async ({
+  page,
+  request,
+}) => {
   // Drives the REAL SSE path via the fake-mode publish seam: publish ->
   // in-process hub -> /tasks/events -> EventSource -> tasks.js skeleton.
   //
@@ -329,7 +350,10 @@ test("task.created event inserts a skeleton row on an unfiltered board", async (
   await expect(page.locator("[data-task-panel]")).toBeVisible();
 });
 
-test("the optimistic skeleton is suppressed on a filtered board", async ({ page, request }) => {
+test("the optimistic skeleton is suppressed on a filtered board", async ({
+  page,
+  request,
+}) => {
   // a3fd5f01: `task.created` carries no tags, no project and no creator, so
   // the client cannot evaluate the new task against the active scope. It used
   // to insert the row anyway — asserting membership on a board that never
@@ -368,7 +392,9 @@ test("the optimistic skeleton is suppressed on a filtered board", async ({ page,
   expect(claimed.status()).toBe(202);
 
   await expect(
-    page.locator('[data-task-row][data-task-id="influx-ingest-cutover"] [data-claim-aspect="e2e-probe"]'),
+    page.locator(
+      '[data-task-row][data-task-id="influx-ingest-cutover"] [data-claim-aspect="e2e-probe"]',
+    ),
   ).toHaveCount(1);
 
   // Only now is this meaningful.
@@ -395,7 +421,9 @@ test("clicking a task opens its panel, and Expand opens the full page", async ({
   await expect(page.locator(".task-board")).toBeVisible();
   // The panel answers both directions of the relationship, not just upstream.
   await expect(
-    page.locator('[data-panel-dependents] [data-link-target="influx-backfill"]'),
+    page.locator(
+      '[data-panel-dependents] [data-link-target="influx-backfill"]',
+    ),
   ).toBeVisible();
 
   await page.locator("[data-panel-expand]").click();
@@ -410,7 +438,9 @@ test("clicking a task opens its panel, and Expand opens the full page", async ({
   await expect(page.getByText("worker-a").first()).toBeVisible();
 });
 
-test("clicking a row away from its links opens the panel too", async ({ page }) => {
+test("clicking a row away from its links opens the panel too", async ({
+  page,
+}) => {
   // §5.5's contract is "clicking a ROW opens a panel" — the title link is the
   // obvious target, not the whole of it. This clicks the row's meta line,
   // which carries badges and timestamps and no anchor at all.
@@ -536,7 +566,6 @@ test("a board section anchor survives opening and closing the panel", async ({
   await expect(page).toHaveURL(/#task-group-blocked$/);
 });
 
-
 test("closing the side panel keeps the board's filters", async ({ page }) => {
   // The no-JS baseline first: `?selected=` renders the panel open server-side.
   await page.goto("/tasks?project=influx&selected=influx-backfill");
@@ -553,6 +582,119 @@ test("closing the side panel keeps the board's filters", async ({ page }) => {
   await expect(page.locator(".task-board")).toBeVisible();
 });
 
+test("PR reconciliation tones are visibly distinct colours (computed style)", async ({
+  page,
+}) => {
+  // T2b: "one colour per state" is an acceptance criterion, and every other
+  // test of it reads a Python tone token or a class name — all of which stay
+  // green if the stylesheet is deleted, if danger and ok are swapped, or if
+  // every tone is given the same declarations. This asserts browser truth:
+  // what the page actually paints.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const styleOf = (locator: ReturnType<typeof page.locator>) =>
+    locator.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return {
+        color: cs.color,
+        background: cs.backgroundColor,
+        borderColor: cs.borderTopColor,
+        borderStyle: cs.borderTopStyle,
+        weight: cs.fontWeight,
+      };
+    });
+
+  // Channels of an "rgb(r, g, b)" / "rgba(...)" computed value.
+  const rgb = (value: string) =>
+    value.match(/\d+/g)!.slice(0, 3).map(Number) as [number, number, number];
+
+  // The two states the demo board actually carries, in the two places they
+  // render: the promoted attention row and the Gates section.
+  const danger = page.locator('[data-reconciliation-state="needs_human"]');
+  const ok = page.locator('[data-reconciliation-state="ready_to_merge"]');
+  await expect(danger).toBeVisible();
+  await expect(ok).toBeVisible();
+
+  const dangerStyle = await styleOf(danger);
+  const okStyle = await styleOf(ok);
+  const [dr, dg, db] = rgb(dangerStyle.color);
+  const [orr, og, ob] = rgb(okStyle.color);
+  // Red reads red and green reads green — the two states an operator must not
+  // confuse, asserted as hue rather than as a class name.
+  expect(dr).toBeGreaterThan(dg);
+  expect(dr).toBeGreaterThan(db);
+  expect(og).toBeGreaterThan(orr);
+  expect(og).toBeGreaterThan(ob);
+  expect(dangerStyle.color).not.toBe(okStyle.color);
+
+  // Every tone in the mapping, probed on this page so the assertions run
+  // against the stylesheet the app actually served. The badge markup is the
+  // template's, so a probe cannot pass a class the page could not produce.
+  const tones = [
+    "danger",
+    "warn",
+    "behind-is-warn-too",
+    "info",
+    "neutral",
+    "ok",
+    "unknown",
+  ];
+  const probes = await page.evaluate((toneList) => {
+    const host = document.createElement("div");
+    host.id = "tone-probes";
+    document.body.appendChild(host);
+    const read: Record<string, Record<string, string>> = {};
+    for (const tone of toneList) {
+      const span = document.createElement("span");
+      span.className = `badge badge-reconciliation badge-reconciliation-${tone}`;
+      span.textContent = tone;
+      host.appendChild(span);
+      const cs = getComputedStyle(span);
+      read[tone] = {
+        color: cs.color,
+        background: cs.backgroundColor,
+        borderColor: cs.borderTopColor,
+        borderStyle: cs.borderTopStyle,
+        weight: cs.fontWeight,
+      };
+    }
+    return read;
+  }, tones);
+
+  // `behind-is-warn-too` is not a tone: it is the control. An undefined tone
+  // suffix must fall through to the base badge, so if it matched any real
+  // tone's declarations the "distinct per tone" assertion below would be
+  // meaningless.
+  const control = probes["behind-is-warn-too"];
+  const real = ["danger", "warn", "info", "neutral", "ok", "unknown"];
+  for (const tone of real) {
+    expect(JSON.stringify(probes[tone])).not.toBe(JSON.stringify(control));
+  }
+  // …and no two tones paint the same. (neutral and unknown share the muted
+  // text colour on purpose; the dashed border and the weight are what say
+  // "this word is not one I know", which is why the whole declaration set is
+  // compared rather than the colour alone.)
+  const painted = real.map((tone) => JSON.stringify(probes[tone]));
+  expect(new Set(painted).size).toBe(real.length);
+
+  // The rendered badges are painted BY these tone rules, not by something else
+  // that happens to look right.
+  expect(JSON.stringify(dangerStyle)).toBe(JSON.stringify(probes.danger));
+  expect(JSON.stringify(okStyle)).toBe(JSON.stringify(probes.ok));
+
+  // Per-tone hue, where the tone carries one: amber warns on its background,
+  // blue is blue, and grey is grey — an unknown state must never arrive
+  // wearing a real state's colour.
+  const [wr, wg, wb] = rgb(probes.warn.background);
+  expect(wr).toBeGreaterThan(wb);
+  expect(wg).toBeGreaterThan(wb);
+  const [ir, , ib] = rgb(probes.info.color);
+  expect(ib).toBeGreaterThan(ir);
+  const grey = rgb(probes.unknown.color);
+  expect(Math.max(...grey) - Math.min(...grey)).toBeLessThan(24);
+  expect(probes.unknown.borderStyle).toBe("dashed");
+});
+
 test("knowledge note renders server-side markdown", async ({ page }) => {
   await page.goto("/note/note-influx-plan");
 
@@ -561,7 +703,9 @@ test("knowledge note renders server-side markdown", async ({ page }) => {
   // page-title assertion to the article header instead of tripping strict
   // mode on the duplicate.
   await expect(
-    page.locator("article header").getByRole("heading", { name: "Influx migration plan" }),
+    page
+      .locator("article header")
+      .getByRole("heading", { name: "Influx migration plan" }),
   ).toBeVisible();
   // And the markdown really rendered (list items, not a plaintext <pre>).
   await expect(
@@ -569,7 +713,9 @@ test("knowledge note renders server-side markdown", async ({ page }) => {
   ).toContainText("Stage 1: dual-write");
 });
 
-test("knowledge note renders metadata chips, lede and authorship", async ({ page }) => {
+test("knowledge note renders metadata chips, lede and authorship", async ({
+  page,
+}) => {
   // K1-S3: frontmatter drives the chip row, lede and authorship line.
   await page.goto("/note/note-influx-plan");
 
@@ -592,7 +738,9 @@ test("knowledge note renders metadata chips, lede and authorship", async ({ page
   await expect(page.locator(".note-authorship")).toContainText("By worker-a");
 });
 
-test("clicking a note tag opens the filtered knowledge landing", async ({ page }) => {
+test("clicking a note tag opens the filtered knowledge landing", async ({
+  page,
+}) => {
   await page.goto("/note/note-influx-plan");
 
   await page
@@ -607,7 +755,9 @@ test("clicking a note tag opens the filtered knowledge landing", async ({ page }
   ).toBeVisible();
 });
 
-test("quarantined note is visibly quarantined (computed style)", async ({ page }) => {
+test("quarantined note is visibly quarantined (computed style)", async ({
+  page,
+}) => {
   await page.goto("/note/note-influx-legacy-ingest");
 
   const chip = page.locator(".note-status-quarantined");
@@ -622,7 +772,9 @@ test("quarantined note is visibly quarantined (computed style)", async ({ page }
   expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
 });
 
-test("knowledge note renders the related panel with edge badges", async ({ page }) => {
+test("knowledge note renders the related panel with edge badges", async ({
+  page,
+}) => {
   // K1-S4: the note page carries a related <aside> fed by one lithos_related
   // call; the fixtures give the plan note a link, an unresolved contradicts
   // edge, and an unresolved provenance stub.
@@ -634,7 +786,9 @@ test("knowledge note renders the related panel with edge badges", async ({ page 
     panel.getByRole("link", { name: "Influx rollback route" }).first(),
   ).toBeVisible();
   await expect(panel.locator(".edge-direction")).toHaveText("incoming");
-  await expect(panel.locator(".edge-conflict")).toHaveText("conflict: unresolved");
+  await expect(panel.locator(".edge-conflict")).toHaveText(
+    "conflict: unresolved",
+  );
 });
 
 test("missing knowledge note shows the not-found banner", async ({ page }) => {
@@ -645,12 +799,17 @@ test("missing knowledge note shows the not-found banner", async ({ page }) => {
   await expect(page.getByText("Document not found.")).toBeVisible();
 });
 
-test("live-updates status banner is present on the dashboard", async ({ page }) => {
+test("live-updates status banner is present on the dashboard", async ({
+  page,
+}) => {
   await page.goto("/tasks?since=2026-08-01");
   await expect(page.locator("[data-live-status]")).toBeVisible();
 });
 
-test("a slow render does not let the next reconcile overlap it", async ({ page, request }) => {
+test("a slow render does not let the next reconcile overlap it", async ({
+  page,
+  request,
+}) => {
   // 7e2a1ed1: `refreshFragments` had a `latestRefreshToken` guard that
   // discarded a stale RESULT — after the server had already rendered it. Every
   // per-request bound on the server is per-INVOCATION, so two overlapping
@@ -721,7 +880,10 @@ test("a slow render does not let the next reconcile overlap it", async ({ page, 
   }
 });
 
-test("a skeleton link does not propagate a retired query param", async ({ page, request }) => {
+test("a skeleton link does not propagate a retired query param", async ({
+  page,
+  request,
+}) => {
   // `claimed_state` is parsed away and never read, so it is NOT a preserved
   // filter — the board is unfiltered and the optimistic row is allowed. Its
   // link must still come out bare: every other detail link re-emits filters

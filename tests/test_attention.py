@@ -228,6 +228,192 @@ def test_non_human_gates_never_escalate(gate_type: str) -> None:
     assert _section_ids(_flag([gate]), "attention") == []
 
 
+# --- T2b: rule 3b, loom's PR reconciliation escalations -------------------
+
+_PR_URL = "https://example.invalid/pull/84"
+
+
+def _pr_gate(
+    *,
+    state: str,
+    since: str,
+    detail: str = "",
+    state_pr_url: str = _PR_URL,
+    created_at: str | None = None,
+) -> TaskRecord:
+    return _task(
+        "gate-pr",
+        task_type="gate",
+        claims=(),
+        created_at=created_at or _ago(hours=2),
+        metadata={
+            "gate_type": "pr",
+            "pr_url": _PR_URL,
+            "reconciliation_state": state,
+            "reconciliation_detail": detail,
+            "reconciliation_since": since,
+            "reconciliation_pr_url": state_pr_url,
+        },
+    )
+
+
+def test_a_pr_needing_a_human_escalates_immediately_with_looms_own_reason() -> None:
+    """Rule 3b: `needs_human` is loom's OWN conclusion that it cannot proceed
+    alone, reached on a ten-minute sweep — so unlike rule 3 there is no wait to
+    serve, and the supporting fact is loom's line verbatim (it names the review
+    or the conflict, which Lens cannot derive)."""
+    gate = _pr_gate(
+        state="needs_human",
+        since=_ago(minutes=4),
+        detail="Reviewer requested changes Lens cannot resolve.",
+    )
+
+    (row,) = _flag([gate])["attention"]
+
+    assert row.task.id == "gate-pr"
+    assert _rules(row) == ["pr-needs-decision"]
+    assert row.attention[0].detail == "Reviewer requested changes Lens cannot resolve."
+
+
+def test_a_needs_human_pr_says_so_even_when_loom_wrote_no_detail() -> None:
+    """The fact is loom's when loom wrote one; a chip with no supporting fact at
+    all would be the one thing §5.2.2 forbids."""
+    (row,) = _flag([_pr_gate(state="needs_human", since=_ago(minutes=4))])["attention"]
+
+    assert row.attention[0].detail
+
+
+def test_a_failing_pr_gate_escalates_only_after_the_human_gate_threshold() -> None:
+    """`gate_failed` is loom's business while it is transient. Past the SAME
+    threshold rule 3 uses, "nobody is coming" is the same judgement — and the
+    clock is the STATE's, so a month-old PR gate that failed an hour ago is an
+    hour-old failure."""
+    fresh = _pr_gate(state="gate_failed", since=_ago(hours=3), created_at=_ago(days=40))
+    assert _section_ids(_flag([fresh]), "attention") == []
+
+    stuck = _pr_gate(
+        state="gate_failed",
+        since=_ago(hours=30),
+        detail="required check `e2e` has failed 6 times.",
+        created_at=_ago(days=40),
+    )
+    (row,) = _flag([stuck])["attention"]
+    assert _rules(row) == ["pr-needs-decision"]
+    # Both halves: how long Lens measured, then loom's own line.
+    assert "1d" in row.attention[0].detail
+    assert "required check `e2e` has failed 6 times." in row.attention[0].detail
+
+    # Knob respected, exactly like rule 3.
+    relaxed = _flag([stuck], policy=AttentionPolicy(gate_waiting_attention_hours=48))
+    assert _section_ids(relaxed, "attention") == []
+
+
+def test_a_stale_gate_failed_escalates_on_a_long_but_valid_stamp() -> None:
+    """Rule 3b reads the state's own clock, so anything that stops
+    ``reconciliation_since`` parsing stops the escalation — silently, and only
+    for the gates that have been failing longest.
+
+    A sub-microsecond ISO stamp is longer than 40 characters and parses fine;
+    a display bound applied before the parse turned it into an ellipsis, and
+    this rule's never-fire-on-an-unreadable-timestamp policy then (correctly,
+    from bad input) declined to promote a two-day-old failure.
+    """
+    stamp = _ago(days=2).replace("+00:00", ".000000000000000000001+00:00")
+    assert len(stamp) > 40
+    gate = _pr_gate(state="gate_failed", since=stamp, detail="ci is red.")
+
+    (row,) = _flag([gate])["attention"]
+
+    assert _rules(row) == ["pr-needs-decision"]
+    assert "2d" in row.attention[0].detail
+
+
+@pytest.mark.parametrize(
+    ("hours", "promoted"),
+    [(23.99, False), (24, False), (24.01, True)],
+    ids=["just below", "exactly at", "just above"],
+)
+def test_the_failing_pr_threshold_is_strict_at_the_boundary(
+    hours: float, promoted: bool
+) -> None:
+    """ "OLDER than 24h", like every other age rule here: a state sitting exactly
+    ON its threshold has not crossed it yet and fires one tick later. Pinned at
+    the boundary because `>=` and `>` are one character apart and every value
+    either side of it agrees."""
+    gate = _pr_gate(state="gate_failed", since=_ago(hours=hours), detail="ci is red.")
+
+    assert bool(_section_ids(_flag([gate]), "attention")) is promoted
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "ready_to_merge",
+        "awaiting_review",
+        "behind",
+        "reconciling",
+        "resolving_conflict",
+    ],
+)
+def test_a_pr_that_is_merely_moving_stays_in_the_gates_section(state: str) -> None:
+    """Only the two ESCALATIONS promote. `behind` and `reconciling` are loom
+    working; `ready_to_merge` is done. Promoting those would make Needs
+    attention a list of every open PR."""
+    gate = _pr_gate(state=state, since=_ago(days=9), detail="loom is on it.")
+
+    assert _section_ids(_flag([gate]), "attention") == []
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["needs_human ", " needs_human", "gate_failed\n"],
+    ids=["trailing space", "leading space", "failed with newline"],
+)
+def test_a_state_that_only_looks_escalating_does_not_promote(state: str) -> None:
+    """Rule 3b fires on loom's vocabulary, matched exactly.
+
+    A promotion is the most disruptive thing this rule can do — it pulls the
+    gate out of the Gates section and puts it at the top of the board — so it
+    must rest on a state loom actually wrote, not on one Lens tidied into
+    shape. The gate still renders, with an unknown-state badge.
+    """
+    gate = _pr_gate(state=state, since=_ago(days=9), detail="cannot vouch for this.")
+
+    assert _section_ids(_flag([gate]), "attention") == []
+
+
+def test_a_needs_human_state_about_another_pr_does_not_escalate() -> None:
+    """Same rule as the badge, from the same code: a state describing a PR this
+    gate no longer points at is not evidence about this gate — and promoting on
+    it would pull a healthy gate out of the Gates section on stale data."""
+    gate = _pr_gate(
+        state="needs_human",
+        since=_ago(hours=1),
+        state_pr_url="https://example.invalid/pull/12",
+    )
+
+    assert _section_ids(_flag([gate]), "attention") == []
+
+
+def test_a_failed_state_with_an_unreadable_since_never_fires() -> None:
+    """The module's never-fire policy: a timestamp Lens cannot parse must not
+    trigger an age rule, whichever surface wrote it."""
+    gate = _pr_gate(state="gate_failed", since="a while ago", created_at=_ago(days=40))
+
+    assert _section_ids(_flag([gate]), "attention") == []
+
+
+def test_a_promoted_pr_gate_outranks_the_claim_and_age_rules() -> None:
+    """Severity order (§5.2.2): a PR waiting on a decision sits with the gate
+    rules, above the rules about work already in flight."""
+    gate = _pr_gate(state="needs_human", since=_ago(minutes=5), detail="decide.")
+    stale = _task("stale", claims=(), created_at=_ago(days=30))
+
+    sections = _flag([gate, stale], ready_ids={"stale"})
+
+    assert _section_ids(sections, "attention") == ["gate-pr", "stale"]
+
+
 def test_claim_expiring_soon_is_promoted_out_of_in_progress() -> None:
     """Rule 4: the observable replacement for the retired expired-claim rule —
     flag the claim BEFORE it silently vanishes from every Lithos read."""

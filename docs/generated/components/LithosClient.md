@@ -11,7 +11,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.fake_dataset` | M | 1 | 1 |
+| `lithos_lens.fake_dataset` | L | 1 | 1 |
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | M | 3 | 0 |

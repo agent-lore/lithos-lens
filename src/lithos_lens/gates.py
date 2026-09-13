@@ -24,8 +24,14 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from lithos_lens.frontier_join import WORKABLE_TASK_TYPE
+from lithos_lens.pr_reconciliation import (
+    NO_STATE_SEVERITY,
+    PR_GATE_TYPE,
+    RECONCILIATION_KEYS,
+    reconciliation_of,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
-from lithos_lens.tasks import TaskRecord, parse_timestamp
+from lithos_lens.tasks import Reconciliation, TaskRecord, parse_timestamp
 
 # Gates are open tasks too, but they gate rather than get worked: Lithos keeps
 # them out of both frontiers, so they are collected off the master open list
@@ -43,7 +49,7 @@ GATE_BLOCKER_KIND = "gate"
 # raw server string is kept (an unknown future type still renders its badge
 # TEXT); only ``human`` (the work waiting on a person, sorted first) and
 # ``timer`` (the countdown + self-refresh) get dedicated dashboard treatment.
-KNOWN_GATE_TYPES = frozenset({"human", "timer", "ci", "pr", "external_task"})
+KNOWN_GATE_TYPES = frozenset({"human", "timer", "ci", PR_GATE_TYPE, "external_task"})
 HUMAN_GATE_TYPE = "human"
 TIMER_GATE_TYPE = "timer"
 
@@ -144,6 +150,13 @@ class GateRow:
     attribute would have the browser tick down to a LOCAL-time instant this
     module refused to schedule a refresh for. Only a stamp both sides agree on
     drives a countdown.
+
+    ``pr_reconciliation`` is a ``pr`` gate's loom-written state (the
+    ``pr_reconciliation`` module, PRD S7) when there is one to show — the row's
+    first-class state badge, and the key the PR gates in a group are ordered by.
+    It is ``None`` for every other gate type, and for a PR gate whose state
+    describes a different PR; the four raw keys then stay in ``advisory``
+    instead, so a stale state is inspectable without being asserted.
     """
 
     task: TaskRecord
@@ -154,6 +167,7 @@ class GateRow:
     waiters_state: GateWaiterState = GateWaiterState.KNOWN
     advisory: tuple[tuple[str, str], ...] = ()
     advisory_more: int = 0
+    pr_reconciliation: Reconciliation | None = None
 
     @property
     def waiting(self) -> int:
@@ -209,6 +223,20 @@ class GateRow:
         return "No open tasks are waiting on this gate."
 
     @property
+    def reconciliation_rank(self) -> int:
+        """Where this gate sorts among PR gates: state severity, then nothing.
+
+        Constant for every gate that has no reconciliation state — a timer or
+        human group is ordered by age exactly as before — so this key can be
+        applied to every row rather than only to the PR ones.
+        """
+        return (
+            self.pr_reconciliation.severity
+            if self.pr_reconciliation is not None
+            else NO_STATE_SEVERITY
+        )
+
+    @property
     def is_human(self) -> bool:
         return self.gate_type == HUMAN_GATE_TYPE
 
@@ -243,7 +271,8 @@ class GateGroup:
     """One gate-type group in the Gates section (§5.2.3: grouped by gate type).
 
     ``gate_type`` is the raw shared type of the group's rows (``label`` for
-    display, ``type_slug`` for markup); ``rows`` are its gates, oldest first.
+    display, ``type_slug`` for markup); ``rows`` are its gates, ordered by PR
+    reconciliation severity (constant outside a ``pr`` group) then oldest first.
     """
 
     gate_type: str
@@ -300,7 +329,7 @@ async def load_gates(
     attention promotes a long-waiting human gate out of here) — the
     single-placement rule, enforced at the one point that can see both.
     """
-    gates = collect_gates(visible_open, placed_ids=placed_ids)
+    gates = collect_gates(visible_open, placed_ids=placed_ids, now=now)
     if not gates:
         return GateSection()
     gates = await attach_gate_waiters(
@@ -326,31 +355,51 @@ def collect_gates(
     open_tasks: Sequence[TaskRecord],
     *,
     placed_ids: frozenset[str] = frozenset(),
+    now: datetime | None = None,
 ) -> tuple[GateRow, ...]:
     """Collect the open gates off the master open list (§5.2.3).
 
     Pure and waiter-free: waiter identities need the blocked frontier (or, on
     the degraded paths, a per-gate edge read), which ``attach_gate_waiters``
-    supplies. Rows come back human-first then oldest first; ``group_gates``
-    turns that order into the rendered type groups.
+    supplies. Rows come back human-first, then by PR reconciliation severity,
+    then oldest first; ``group_gates`` turns that order into the rendered type
+    groups.
+
+    ``now`` is what dates the reconciliation badge ("needs human · 2h") and is
+    optional for the same reason it is injectable elsewhere: without it the
+    badge simply carries no age.
     """
     rows: list[GateRow] = []
     for task in open_tasks:
         if task.task_type != GATE_TASK_TYPE or task.id in placed_ids:
             continue
-        advisory, advisory_more = _advisory_metadata(task.metadata)
+        gate_type = _chrome_text(task.metadata.get("gate_type"))
+        reconciliation = reconciliation_of(task, gate_type=gate_type, now=now)
+        # The four reconciliation keys stop being advisory exactly when the
+        # badge renders them: a row that repeated `reconciliation_state` as a
+        # chip would push the gate's own keys (`repo`, `pr_number`) off a
+        # three-chip row to say the same thing twice. When there is no badge —
+        # no state, or a state about another PR — they stay, because then the
+        # chips are the only place the operator can see them at all.
+        advisory, advisory_more = _advisory_metadata(
+            task.metadata,
+            skip=RECONCILIATION_KEYS if reconciliation is not None else frozenset(),
+        )
         raw_ready_at = _chrome_text(task.metadata.get("ready_at"))
         rows.append(
             GateRow(
                 task=task,
-                gate_type=_chrome_text(task.metadata.get("gate_type")),
+                gate_type=gate_type,
                 ready_at=_normalized_instant(raw_ready_at),
                 ready_instant=_schedulable_instant(raw_ready_at),
                 advisory=advisory,
                 advisory_more=advisory_more,
+                pr_reconciliation=reconciliation,
             )
         )
-    return tuple(sorted(rows, key=lambda row: (not row.is_human, _age_key(row.task))))
+    return tuple(
+        sorted(rows, key=lambda row: (not row.is_human, *_gate_order_key(row)))
+    )
 
 
 def _age_key(task: TaskRecord) -> tuple[bool, str]:
@@ -366,8 +415,21 @@ def _age_key(task: TaskRecord) -> tuple[bool, str]:
     return (not task.created_at, task.created_at)
 
 
+def _gate_order_key(row: GateRow) -> tuple[int, bool, str]:
+    """Order within a gate group: state severity first, then oldest first.
+
+    Severity is the PR reconciliation rank (§5.2.3): `needs_human` leads, then
+    `gate_failed`, `behind`, the two in-flight states, `awaiting_review`, and
+    `ready_to_merge` last — the one place the board says which PR wants a person
+    before the ones that are merely moving. It is constant for every gate
+    carrying no state, so a human/timer/CI group keeps the pure oldest-first
+    order it has always had.
+    """
+    return (row.reconciliation_rank, *_age_key(row.task))
+
+
 def group_gates(gates: Sequence[GateRow]) -> tuple[GateGroup, ...]:
-    """Group gate rows by gate type — human first, oldest first within a group.
+    """Group gate rows by gate type — human first, by severity then age within.
 
     Ordering between the non-human groups follows the same "oldest first"
     principle as the rows: a group is placed by its oldest gate, so the type
@@ -378,16 +440,20 @@ def group_gates(gates: Sequence[GateRow]) -> tuple[GateGroup, ...]:
     for gate in gates:
         groups.setdefault(gate.gate_type, []).append(gate)
     ordered = [
-        GateGroup(
-            gate_type=gate_type,
-            rows=tuple(sorted(rows, key=lambda row: _age_key(row.task))),
-        )
+        GateGroup(gate_type=gate_type, rows=tuple(sorted(rows, key=_gate_order_key)))
         for gate_type, rows in groups.items()
     ]
-    # `rows[0]` is now the group's oldest KNOWN stamp when it has one, so a
-    # group with a mix places by the gate that really has been waiting; a group
-    # with none at all still sorts last, which is the honest answer.
-    ordered.sort(key=lambda group: (not group.is_human, _age_key(group.rows[0].task)))
+    # Placed by the group's OLDEST gate, taken over all its rows rather than off
+    # `rows[0]`: since T2b the first row of a PR group is its most severe state,
+    # not its oldest member, so reading the head would order the section by
+    # whichever PR happens to need a human. A group whose stamps are all unknown
+    # still sorts last, which is the honest answer.
+    ordered.sort(
+        key=lambda group: (
+            not group.is_human,
+            min(_age_key(row.task) for row in group.rows),
+        )
+    )
     return tuple(ordered)
 
 
@@ -587,6 +653,8 @@ def _blocked_waiter_ids(
 
 def _advisory_metadata(
     metadata: Mapping[str, Any],
+    *,
+    skip: frozenset[str] = frozenset(),
 ) -> tuple[tuple[tuple[str, str], ...], int]:
     """The gate's advisory metadata for the row, plus the count left over.
 
@@ -598,8 +666,14 @@ def _advisory_metadata(
     ``_ADVISORY_ROW_LIMIT`` pairs are built (the rest are counted for the
     "+N more" link), and both key and value are length-capped. The full table
     is the detail page's job.
+
+    ``skip`` is the caller's list of keys some OTHER chrome is already
+    rendering this time round — the reconciliation keys behind a state badge —
+    on top of the always-chrome ``_GATE_CHROME_KEYS``. It is a parameter rather
+    than a constant because that chrome is conditional: the same four keys are
+    advisory again on a row whose badge did not render.
     """
-    keys = [key for key in metadata if key not in _GATE_CHROME_KEYS]
+    keys = [key for key in metadata if key not in _GATE_CHROME_KEYS and key not in skip]
     # nsmallest, not sorted(): the row needs the first few keys in a stable
     # order, and fully sorting a peer-sized metadata dict on every render is
     # work the row never uses.

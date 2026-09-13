@@ -560,6 +560,61 @@ button,
   color: var(--accent);
 }
 
+/* loom's PR reconciliation state (§5.2.3, PRD S7): ONE badge per tone, and the
+   tone comes from the Python mapping in reconciliation.py — nothing here reads
+   a state name, so a state loom adds lands in `unknown` rather than unstyled.
+   Colour is never the only signal: the badge always carries the state's text,
+   and the `needs human` case is also promoted into Needs attention. */
+.badge-reconciliation {
+  font-weight: 700;
+}
+
+.badge-reconciliation-danger {
+  background: rgba(189, 79, 43, 0.12);
+  border-color: rgba(189, 79, 43, 0.55);
+  color: var(--cancelled);
+}
+
+.badge-reconciliation-warn {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--ink);
+}
+
+.badge-reconciliation-info {
+  background: rgba(65, 87, 111, 0.1);
+  border-color: rgba(65, 87, 111, 0.45);
+  color: var(--closed);
+}
+
+.badge-reconciliation-neutral {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.badge-reconciliation-ok {
+  background: rgba(53, 106, 77, 0.12);
+  border-color: rgba(53, 106, 77, 0.5);
+  color: var(--ok);
+}
+
+/* A state Lens has no mapping for: grey, and dashed so the row says "this word
+   is not one I know" rather than dressing an unknown state as a known one. */
+.badge-reconciliation-unknown {
+  border-color: var(--line);
+  border-style: dashed;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* The detail line under the gate context header (§5.5.4) — the badge's tooltip
+   as text, because a title attribute is not readable by keyboard. */
+.reconciliation-detail {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+}
+
 /* Tabular figures so a ticking countdown does not reflow the row. */
 .gate-countdown {
   font-variant-numeric: tabular-nums;

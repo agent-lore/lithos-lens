@@ -528,6 +528,7 @@ A **severity-ordered single list** of open rows that trigger any of the followin
 | 1 | **Unsatisfiable blocker** | A predecessor or gate was **cancelled** — this task can never become ready without intervention | `task_blocked` blockers, `kind="blocker_unsatisfiable"` | — (intrinsic) |
 | 2 | **Dependency cycle** | The blocking chain forms a cycle; the blocker `message` names the members | `task_blocked` blockers, `kind="cycle"` | — (intrinsic) |
 | 3 | **Human gate waiting** | An open `gate_type="human"` gate has waited longer than the threshold | gate rows + `created_at` | `gate_waiting_attention_hours` (24) |
+| 3b | **PR needs a decision** | An open `gate_type="pr"` gate whose loom-written `reconciliation_state` is `needs_human` (**immediately** — no wait), or has been `gate_failed` for longer than the threshold | gate rows + `reconciliation_state` / `reconciliation_since` (§5.2.3) | `gate_waiting_attention_hours` (24), for the `gate_failed` half only |
 | 4 | **Claim expiring soon** | An active claim's `expires_at − now` is below the threshold — likely-abandoned work, surfaced *before* the claim silently vanishes | inline claims | `claim_expiring_soon_minutes` (10) |
 | 5 | **Stale open** | A workable open task older than the threshold | master list `created_at` | `stale_open_age_days` (7) |
 | 6 | **Ready but unclaimed** | A task on the ready frontier, with zero claims, **carrying a dispatch trigger tag**, older than the threshold — a fleet was expected to pick this up and has not | ready join + tags | `unclaimed_ready_age_minutes` (60), `dispatch_trigger_tag_prefixes` (`["trigger:"]`) |
@@ -535,10 +536,12 @@ A **severity-ordered single list** of open rows that trigger any of the followin
 Deliberate changes from the pre-graph model, both forced by observed Lithos semantics:
 - The old **`expired-claim` rule is removed** — it can never fire (expired claims are unobservable; see §5.1). Rule 4 is the observable replacement. A Lens-side claim ledger was considered and rejected: it dies on Lens restart and lies after Lithos restarts.
 - The old **`unclaimed-old` rule becomes ready-aware** (rule 6). A **blocked** task being unclaimed is *correct behaviour*, not a warning — flagging it was a structural false positive.
+Rule 3b (2026-09, T2b) is rule 3 seen through a different gate type: a PR loom can no longer move on its own is a decision waiting on a person. It fires with **no age threshold** on `needs_human` because loom recomputes that state on every sweep and writes it only once it has concluded it cannot proceed alone — the escalation has already happened upstream, and making the operator wait a day to hear about it would be Lens re-deciding a question loom answered. `gate_failed` does wait, on the same knob rule 3 uses, and is dated from `reconciliation_since` (when the state last changed), not from the gate's `created_at`: a long-lived PR gate that failed an hour ago is an hour-old failure. The supporting fact is loom's `reconciliation_detail` verbatim — it names the check, the conflict or the review, which Lens cannot derive. A state whose `reconciliation_pr_url` names a different PR never promotes (§5.2.3). The promoted row carries its **state badge** with it, so single placement costs the operator no information.
+
 - Rule 6 is also **dispatch-aware** (2026-09). It fires only for a ready task carrying a tag with one of the `dispatch_trigger_tag_prefixes` — the tags a fleet dispatches on (loom picks up `trigger:story-develop`). Untagged ready work waits for a human to schedule it, so its age says nothing about a stalled fleet: on the live corpus every ready task tripped the rule, single-placement emptied Ready, and Needs attention became the de-facto Ready list. Rule 5 (stale open) still covers "open too long" for that work. Setting the knob to `[]` restores the every-ready-task behaviour for deployments that want it. Rule 6's supporting fact names the trigger tag: `On the ready frontier with "trigger:story-develop", unclaimed for 3h.`
 
 Chrome requirements (carried over):
-- Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone.
+- Each row carries one or more **reason chips** naming the rule(s) fired (e.g. `unsatisfiable`, `cycle`, `gate-waiting`, `claim-expiring`, `stale-open`, `ready-unclaimed`). Chips use semantic colour plus text, never colour alone. The rule slug is the stable markup token (class + `data-attention-rule`); the chip's **text** is the rule's wording, which for rule 3b is **`PR needs a decision`**.
 - Rows triggering any rule appear **only** here (single-placement rule).
 - When the section is empty, render a thin `All systems healthy — 0 issues` stripe (kept visible for reassurance; do not hide entirely by default).
 - A header toggle lets the operator hide the section for routine review; persisted via cookie + URL param.
@@ -546,15 +549,38 @@ Chrome requirements (carried over):
 
 #### 5.2.3 Gates
 
-All open `task_type="gate"` tasks, grouped by gate type with **human gates first**, oldest first within each group.
+All open `task_type="gate"` tasks, grouped by gate type with **human gates first**, oldest first within each group. Within the `pr` group, rows order by **reconciliation state severity** first (see below) and then by age — the PR that wants a person leads whatever its age.
 
 | Element | Requirement |
 |---------|-------------|
 | Gate type badge | `human` / `timer` / `ci` / `pr` / `external_task` |
+| PR reconciliation badge *(`pr` gates)* | loom's current state for the PR, as a first-class badge with a colour per state and the age of the state beside it (`needs human · 2h`); `reconciliation_detail` is its tooltip **and** text in the gate context (§5.5.4). See the vocabulary below. |
 | Waiter count | "blocks N tasks" — from outgoing `waits_on_gate` edges (or the blocked-set blocker entries); clicking expands the waiter list |
 | Timer countdown | For `timer` gates, a live countdown to `ready_at` |
 | Advisory metadata | Type-specific keys (`approval_required_from`, `provider`, `repo`, `pr_number`, `external_id`, `required_state`, …) summarised on the row, full table on the detail page. These are advisory — Lithos does not read them, and Lens renders them verbatim. |
 | Approve action *(writes enabled)* | Human gates carry the approve/complete action from §5C.2 |
+
+**PR reconciliation state (T2b).** lithos-loom writes four flat scalar metadata keys on every still-open `pr` gate, on every sweep: `reconciliation_state`, `reconciliation_detail` (one line, ≤200 chars — why), `reconciliation_since` (ISO time the state last *changed*) and `reconciliation_pr_url` (the PR the state describes). The state is *derived*, not tracked: it answers "what is this PR doing right now?", so findings remain the history. Contract source: lithos-loom `docs/SPECIFICATION.md` §2.2 "Reconciliation state (PRD S7)" — no new Lithos API, it is task metadata Lens already reads.
+
+The vocabulary is **loom's closed set** and Lens treats it as opaque strings with a known list, rendered through **one mapping in Python** (`pr_reconciliation.py`); the templates read that mapping and never string-match a state. Most severe first — which is also the ordering key for `pr` gates in this section:
+
+| State | Badge | Colour |
+|-------|-------|--------|
+| `needs_human` | `needs human` | red — and promotes into Needs attention (rule 3b) |
+| `gate_failed` | `gate failed` | amber — promotes after `gate_waiting_attention_hours` |
+| `behind` | `behind` | amber |
+| `reconciling` | `reconciling` | blue — one tier with the next row |
+| `resolving_conflict` | `resolving conflict` | blue — same rank as `reconciling`; age alone orders the two |
+| `awaiting_review` | `awaiting review` | neutral |
+| `ready_to_merge` | `ready to merge` | green |
+
+Four rules keep the badge honest:
+- **It must be current.** loom rewrites the four keys on every sweep of every still-**open** `pr` gate and stops as soon as the gate is completed or cancelled, so on a resolved gate they are the last snapshot before it closed. The badge states the present, so it is not rendered there at all — on the panel or the detail page, which (unlike the board) can address a resolved gate by id. The keys stay in the detail page's metadata table, where history belongs.
+- **It must be about this PR.** The badge renders only when `reconciliation_pr_url` and the gate's own `pr_url` are **both present and exactly equal** — positive evidence, not the absence of a contradiction, and compared as written (no trimming or other normalisation: deciding that two different strings name the same PR is the judgement this check exists to refuse). A replacement PR on the same gate starts fresh and the gate carries the previous PR's state until loom's next sweep; with either URL missing there is nothing to check the state against, so Lens cannot say which PR it describes and does not badge or promote it. A withheld state is not hidden: its raw keys stay among the advisory chips and in the detail page's metadata table.
+- **An unknown state is not an error.** loom owns the vocabulary and may extend it; a value Lens does not recognise renders as its own text — **verbatim: never shortened, never trimmed, never otherwise normalised**, since an edited badge would show a different value than the one upstream holds — in a grey `unknown` tone, and every markup hook built from it collapses to `unknown` whatever its length. The vocabulary is matched **exactly**, so a value that merely resembles a known state (`"needs_human "`) is unknown: it takes the grey badge, sorts with the unknown states, and never escalates. A non-string value renders no badge and stays visible as advisory metadata.
+- **Colour is never the only signal** — the badge always carries the state's text, and the age comes from `reconciliation_since` alone (an unreadable stamp yields no age rather than a guessed one).
+
+A gate whose badge renders stops repeating those four keys as advisory chips; the other metadata chips are unchanged. The same badge, with the detail as text beside it, appears in the side panel's gate context and on the detail page (§5.5.4), and travels with a gate promoted into Needs attention.
 
 **Timer self-refresh requirement.** Timer-gate resolution is evaluated at query time and emits **no event**. The dashboard MUST embed `min(ready_at)` over visible open timer gates and self-schedule a one-shot refresh at that instant, so timer expiry moves waiters from Blocked to Ready without manual reload.
 
@@ -671,7 +697,7 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 
 #### 5.5.4 Gate context
 
-For `task_type="gate"` tasks: the `gate_type` badge; a live countdown to `ready_at` for timer gates; the advisory metadata rendered as a key-value table (verbatim — Lithos does not interpret these keys and neither does Lens); and the **waiter list** — tasks blocked by this gate, via `lithos_task_edge_list(task_id, direction="outgoing", types=["waits_on_gate"])`, each with live status. The detail page should make it easy to judge what resolving the gate would unblock.
+For `task_type="gate"` tasks: the `gate_type` badge; for `pr` gates the **PR reconciliation badge** and its detail line (§5.2.3 — the same badge template the board renders, under the same "is this state about this PR?" rule); a live countdown to `ready_at` for timer gates; the advisory metadata rendered as a key-value table (verbatim — Lithos does not interpret these keys and neither does Lens); and the **waiter list** — tasks blocked by this gate, via `lithos_task_edge_list(task_id, direction="outgoing", types=["waits_on_gate"])`, each with live status. The detail page should make it easy to judge what resolving the gate would unblock.
 
 ### 5.6 Findings Timeline
 

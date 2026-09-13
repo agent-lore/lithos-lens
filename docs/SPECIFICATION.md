@@ -201,13 +201,28 @@ there, so an unsatisfiable task cannot be mistaken for one merely waiting):
 Completed and cancelled tasks render in their own lists over a resolved-at
 window.
 
-**Needs attention** applies six ordered rules, most severe first. Two are
+**Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
 can never become ready) and `cycle` (the blocking chain closes on itself) — and
-four are threshold-driven from config: `gate-waiting`, `claim-expiring`,
-`stale-open`, and `ready-unclaimed`. A promoted row carries one chip per rule
-that fired, with a one-line supporting fact, and the list sorts by severity then
-oldest-first within a tier.
+the rest are threshold-driven from config: `gate-waiting`, `pr-needs-decision`,
+`claim-expiring`, `stale-open`, and `ready-unclaimed`. A promoted row carries one
+chip per rule that fired, with a one-line supporting fact, and the list sorts by
+severity then oldest-first within a tier.
+
+`pr-needs-decision` is the gate-waiting escalation seen through a PR gate: it
+fires immediately when loom's `reconciliation_state` is `needs_human` (loom has
+already concluded it cannot proceed alone — there is no wait to serve), and after
+`gate_waiting_attention_hours` of `gate_failed`, dated from the state's own
+`reconciliation_since`. The supporting fact is loom's `reconciliation_detail`
+verbatim, and the promoted row keeps its state badge. Its chip reads **`PR needs
+a decision`** — the slug is the markup hook, not the wording.
+
+The two **gate** rules (`gate-waiting`, `pr-needs-decision`) are evaluated on the
+flat fallback board too. They read the master open list's metadata and the clock,
+which a failed frontier read does not touch, so an outage must not silently
+suppress the board's most urgent line; the rules whose evidence the outage *did*
+destroy stay silent there, because their source sections and blocker records are
+empty.
 
 `ready-unclaimed` carries one further condition beyond its threshold: the ready
 task must carry a tag with one of `tasks.dispatch_trigger_tag_prefixes`, the
@@ -226,7 +241,22 @@ The dashboard also renders:
 - a **Gates section** for open gates (timer, CI, PR, external, human), showing
   what each is waiting on; a human gate past its threshold is promoted into
   Needs attention instead, and the browser schedules a single refresh at the
-  earliest still-future timer deadline
+  earliest still-future timer deadline. A `pr` gate also carries loom's
+  **reconciliation state** — `needs_human` / `gate_failed` / `behind` /
+  `reconciling` / `resolving_conflict` / `awaiting_review` / `ready_to_merge`,
+  written by loom as flat gate metadata (PRD S7) — as a coloured badge with the
+  age of the state and loom's one-line reason, and PR gates order by that state's
+  severity before age (the two in-flight states are one tier, ordered against
+  each other by age). The badge renders only when `reconciliation_pr_url` and
+  the gate's `pr_url` are both present and equal, so a state about a replaced
+  PR — or one Lens cannot tie to a PR at all — is withheld (its raw keys stay
+  visible as advisory metadata), and only while the gate is **open**, since
+  loom stops sweeping a resolved gate and its keys freeze into history; a state
+  Lens does not recognise renders as its own text, verbatim, in grey rather
+  than failing. The vocabulary and its colours are
+  one mapping in `pr_reconciliation.py`, which the templates read — the same
+  badge appears in the side panel's gate context, on the detail page, and on a
+  gate the severity model promoted
 - an **Epic rollup strip** summarizing epics by child progress, with a scope
   link that filters the board to one epic
 - **summary counters** for each section, marked as approximate when the
@@ -344,6 +374,9 @@ two cannot disagree about why a task is where it is. It shows:
   this task cannot run, so the "satisfied" and "unsatisfiable" verdicts — which
   are claims about this task's own predecessors — are not applied to it
 - **provenance** in both directions (`discovered_from`)
+- **gate context**, for a gate: its `gate_type`, and for a `pr` gate loom's
+  reconciliation badge with its detail line — the same badge the board renders,
+  from the same template and under the same "is this state about this PR?" rule
 - **children**, for an epic
 - **findings**, with links to any note a finding produced
 - related note links where available

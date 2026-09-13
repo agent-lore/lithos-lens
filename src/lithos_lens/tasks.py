@@ -9,10 +9,11 @@ runs one way.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
@@ -307,15 +308,34 @@ class BlockerChip:
     target_id: str = ""
 
 
-# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug IS the
-# reason chip's text, so the vocabulary is fixed here and rendered verbatim.
+# Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug is the
+# stable MARKUP token — the chip's class and its ``data-attention-rule`` hook —
+# and, for the rules whose slug already reads as English, its text too.
+#
+# ``pr-needs-decision`` (rule 3b, T2b) sits beside ``gate-waiting`` because it
+# is the same escalation seen through a different gate type: a PR loom has
+# stopped being able to move on its own is a decision waiting on a person,
+# exactly like a human gate. It ranks just below it — a human gate past its
+# threshold has been ignored for a day, where a PR escalation may be minutes
+# old — and above the claim/age rules, which are about work in flight.
 ATTENTION_RULES: tuple[str, ...] = (
     "unsatisfiable",
     "cycle",
     "gate-waiting",
+    "pr-needs-decision",
     "claim-expiring",
     "stale-open",
     "ready-unclaimed",
+)
+
+# Chip TEXT for the rules whose slug is not the wording §5.2.2 specifies. The
+# slug stays the markup token (class + data attribute), so a stylesheet rule, a
+# test hook and a chip's English can no longer be the same string by accident:
+# rule 3b's reason is "PR needs a decision", which is not a legal class token.
+# A rule absent from this map renders its own slug, which is what the six
+# original rules want ("unsatisfiable", "cycle", …).
+ATTENTION_RULE_LABELS: Mapping[str, str] = MappingProxyType(
+    {"pr-needs-decision": "PR needs a decision"}
 )
 
 
@@ -323,14 +343,24 @@ ATTENTION_RULES: tuple[str, ...] = (
 class AttentionReason:
     """One fired Needs-attention rule on a promoted row.
 
-    ``rule`` is a slug from :data:`ATTENTION_RULES` (also the chip text);
-    ``detail`` is the one-line supporting fact the chip carries (e.g. ``Blocker
-    "Design schema" was cancelled``), which the detail page's "Why this task is
-    here" block reuses.
+    ``rule`` is a slug from :data:`ATTENTION_RULES` — the chip's markup token,
+    and its text too unless :data:`ATTENTION_RULE_LABELS` gives the rule
+    different wording (see :attr:`label`). ``detail`` is the one-line supporting
+    fact the chip carries (e.g. ``Blocker "Design schema" was cancelled``),
+    which the detail page's "Why this task is here" block reuses.
     """
 
     rule: str
     detail: str = ""
+
+    @property
+    def label(self) -> str:
+        """The chip's TEXT — the rule's wording, defaulting to its slug.
+
+        Kept beside the vocabulary rather than in the template so the operator
+        wording §5.2.2 specifies has one definition and one place to be tested.
+        """
+        return ATTENTION_RULE_LABELS.get(self.rule, self.rule)
 
     @property
     def severity(self) -> int:
@@ -338,6 +368,48 @@ class AttentionReason:
         if self.rule in ATTENTION_RULES:
             return ATTENTION_RULES.index(self.rule)
         return len(ATTENTION_RULES)
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    """One PR gate's loom-written reconciliation state, ready to render.
+
+    A DATA HOLDER, deliberately: ``pr_reconciliation.reconciliation_of`` owns
+    the one mapping from loom's closed vocabulary (PRD S7) to the ``label``,
+    ``tone`` and ``severity`` below and fills them in. It lives here, beside
+    :class:`SectionRow`, so a gate the severity model promotes can carry the
+    same badge into Needs attention as the Gates section shows — a view model
+    in the mapping's own module could not, because that module reads the
+    records defined here and the import would close a cycle.
+
+    ``state`` is loom's raw value (bounded) and is the only field the mapping is
+    keyed on; ``slug`` and ``tone`` are the markup-safe tokens derived from it
+    (both ``unknown`` outside the vocabulary, so a peer-written state cannot
+    borrow another state's colour or inject a class), and ``label`` is the badge
+    TEXT — the mapped wording, or the raw value itself when Lens does not know
+    it. ``detail`` is loom's one-line why, carried verbatim; ``since`` the
+    normalized stamp the state last changed at, and ``age`` its coarse age,
+    empty when that stamp could not be read rather than guessed.
+    """
+
+    state: str
+    label: str = ""
+    slug: str = ""
+    tone: str = ""
+    severity: int = 0
+    detail: str = ""
+    since: str = ""
+    age: str = ""
+
+    @property
+    def badge_text(self) -> str:
+        """The whole badge in one string: ``needs human · 2h``.
+
+        Built here rather than in a template so the three surfaces that show
+        this badge — gate row, side panel, detail page — cannot render it
+        differently, and so the age-less form is exercised by the same tests.
+        """
+        return f"{self.label} · {self.age}" if self.age else self.label
 
 
 @dataclass(frozen=True)
@@ -356,6 +428,11 @@ class SectionRow:
     ``attention`` holds the Needs-attention reasons that fired for the row
     (empty for every row outside that section): a flagged row is promoted OUT
     of the section it would otherwise occupy, so the reasons travel with it.
+    ``pr_reconciliation`` travels with it for the same reason — a ``pr`` gate
+    promoted on its reconciliation state keeps the state BADGE it would have
+    worn in the Gates section, so single placement costs the operator nothing.
+    (Unrelated to ``reconciliation_pending`` below, which is about the two
+    frontier reads disagreeing, not about a pull request.)
     """
 
     task: TaskRecord
@@ -364,6 +441,7 @@ class SectionRow:
     claimed_but_blocked: bool = False
     claims_unknown: bool = False
     attention: tuple[AttentionReason, ...] = ()
+    pr_reconciliation: Reconciliation | None = None
     # The frontier reads are independent (no cross-call snapshot); when they
     # disagree even after the single retry, the row is classified
     # conservatively as Blocked and flagged so the template can render the
@@ -613,6 +691,24 @@ def parse_timestamp(value: str) -> datetime | None:
         return parsed.astimezone(UTC)
     except (ValueError, OverflowError):
         return None
+
+
+def humanize_age(delta: timedelta) -> str:
+    """Coarse age text for a chip or a badge: ``12d`` / ``5h`` / ``9m``.
+
+    Shared by the Needs-attention reason chips (``attention.py``) and the PR
+    reconciliation badge (``reconciliation.py``), which state ages side by side
+    in the same list — two roundings of "how long has this been true" would read
+    as a contradiction on the row that carries both. Negative deltas (a stamp in
+    the future, i.e. clock skew between loom and Lens) clamp to zero rather than
+    rendering a negative age.
+    """
+    seconds = max(int(delta.total_seconds()), 0)
+    if seconds >= 86400:
+        return f"{seconds // 86400}d"
+    if seconds >= 3600:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 60}m"
 
 
 def parse_date(value: str) -> date | None:

@@ -367,6 +367,77 @@ def demo_dataset() -> FakeLithosDataset:
                 },
                 tags=("project:influx", "area:data"),
             ),
+            # T2b's two PR gates: the escalated end of loom's reconciliation
+            # vocabulary and the finished end, so the board (and the e2e
+            # capture) shows both the red badge and the green one. The
+            # `needs_human` gate is ALSO the demo's rule-3b promotion — it
+            # renders in Needs attention carrying its badge, which is the
+            # single-placement half of the story.
+            #
+            # `reconciliation_since` is relative for the same reason the timer
+            # gate's `ready_at` is: the badge states the age of the state, and
+            # a fixed stamp would drift into "needs human · 412d".
+            #
+            # DELIBERATELY NOT `area:data`, which every other Influx fixture
+            # carries. `?tag=area:data` is the fixtures' one narrowed board with
+            # an EMPTY Needs-attention section, and the e2e suite photographs
+            # the "Nothing needs attention in this view" stripe there (the
+            # scoped branch of §5.2.2's three, which only an empty list on a
+            # filtered board reaches). A gate that promotes under rule 3b inside
+            # that slice deletes the state the capture exists to show, so the
+            # pair lives in its own area. Anything added here that fires an
+            # attention rule must stay out of `area:data` for the same reason.
+            TaskRecord(
+                id="influx-schema-pr",
+                title="Merge the Influx schema migration PR",
+                description="loom opened the PR; a reviewer asked for changes.",
+                status="open",
+                task_type="gate",
+                created_by="loom",
+                created_at=_ago(hours=9),
+                metadata={
+                    "project": "influx",
+                    "gate_type": "pr",
+                    "repo": "agent-lore/influx",
+                    "pr_number": 412,
+                    "pr_url": "https://example.invalid/agent-lore/influx/pull/412",
+                    # The four keys loom writes on every sweep. The state is
+                    # about THIS pr_url, so the badge renders.
+                    "reconciliation_state": "needs_human",
+                    "reconciliation_detail": (
+                        "Reviewer requested a different retention default; "
+                        "loom cannot decide this."
+                    ),
+                    "reconciliation_since": _ago(hours=3),
+                    "reconciliation_pr_url": (
+                        "https://example.invalid/agent-lore/influx/pull/412"
+                    ),
+                },
+                tags=("project:influx", "area:delivery"),
+            ),
+            TaskRecord(
+                id="influx-dashboards-pr",
+                title="Merge the Influx dashboard rewrite PR",
+                description="All required checks are green; merge is queued.",
+                status="open",
+                task_type="gate",
+                created_by="loom",
+                created_at=_ago(hours=2),
+                metadata={
+                    "project": "influx",
+                    "gate_type": "pr",
+                    "repo": "agent-lore/influx",
+                    "pr_number": 418,
+                    "pr_url": "https://example.invalid/agent-lore/influx/pull/418",
+                    "reconciliation_state": "ready_to_merge",
+                    "reconciliation_detail": "All required checks passed.",
+                    "reconciliation_since": _ago(minutes=25),
+                    "reconciliation_pr_url": (
+                        "https://example.invalid/agent-lore/influx/pull/418"
+                    ),
+                },
+                tags=("project:influx", "area:delivery"),
+            ),
             TaskRecord(
                 id="influx-ingest-old",
                 title="Retire legacy Influx ingest shim",

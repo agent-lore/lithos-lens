@@ -56,6 +56,9 @@
         <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
         <span class="badge badge-type" data-task-type="{{ detail.task.task_type }}">{{ detail.task.task_type }}</span>
         {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
+        {# §5.5.4 gate context: a `pr` gate carries loom's reconciliation state,
+           the same badge the board's Gates section shows (one template). #}
+        {% if detail.pr_reconciliation %}{% with reconciliation = detail.pr_reconciliation %}{% include "tasks/reconciliation_badge.html" %}{% endwith %}{% endif %}
         {# The project chip: read off `task_projects` under the configured
            convention (§5B.1), so a task carrying both spellings shows both
            rather than whichever this template happened to look at.
@@ -75,6 +78,11 @@
         {% endfor %}
         {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
       </div>
+      {# The badge's tooltip is not a reading of it: loom's line says WHICH check,
+         conflict or review the state is about, and a title attribute is invisible
+         to a keyboard and to a screen reader. §5.5.4 is where the gate is judged,
+         so here it is text. #}
+      {% if detail.pr_reconciliation and detail.pr_reconciliation.detail %}<p class="reconciliation-detail" data-reconciliation-detail>{{ detail.pr_reconciliation.detail }}</p>{% endif %}
       <div class="task-panel-actions">
         {# Expand LEAVES the board for the full page; close just clears the
            host's selection parameter. Both are real links, so the panel works

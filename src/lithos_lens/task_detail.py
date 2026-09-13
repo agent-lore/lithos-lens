@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from lithos_lens.pr_reconciliation import reconciliation_of
 from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
@@ -68,6 +70,7 @@ from lithos_lens.tasks import (
     FindingRecord,
     NoteRecord,
     ProjectConvention,
+    Reconciliation,
     SectionState,
     TaskRecord,
     TaskStatusRecord,
@@ -166,6 +169,12 @@ class TaskDetailData:
     #: (§5B.1), for the panel's project chip. Resolved here rather than in the
     #: template so the convention has one reading.
     projects: tuple[str, ...] = ()
+    #: A ``pr`` gate's loom-written reconciliation state (§5.5.4 gate context),
+    #: or None for every other task. Built by the same function the Gates
+    #: section badges from, so the badge the panel and this page show is the
+    #: board's badge — including its refusal to show a state about a PR this
+    #: gate no longer points at.
+    pr_reconciliation: Reconciliation | None = None
 
     @property
     def gate_type(self) -> str:
@@ -197,7 +206,12 @@ async def load_task_detail(
     *,
     convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+    now: datetime | None = None,
 ) -> TaskDetailData:
+    # ``now`` dates the PR reconciliation badge and is injectable for the same
+    # reason ``load_dashboard``'s is: the age it renders is testable without
+    # freezing the clock.
+    evaluated_at = now or datetime.now(UTC)
     errors: list[str] = []
     # §5.5's data contract: task_get + task_status + task_edge_list +
     # finding_list "gathered concurrently". task_get used to be awaited to
@@ -305,6 +319,9 @@ async def load_task_detail(
         children_state=children_state,
         errors=tuple(errors),
         projects=task_projects(task, convention=convention, tag_key=tag_key),
+        pr_reconciliation=reconciliation_of(
+            task, gate_type=gate_type_of(task), now=evaluated_at
+        ),
     )
 
 

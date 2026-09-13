@@ -6,6 +6,10 @@ Six ordered rules over the joined dashboard snapshot (REQUIREMENTS §5.2.2):
    never become ready without intervention;
 2. ``cycle`` — the blocking chain forms a cycle;
 3. ``gate-waiting`` — an open human gate has waited past its threshold;
+3b. ``pr-needs-decision`` — an open ``pr`` gate whose loom-written
+   reconciliation state is ``needs_human`` (immediately: loom has already
+   decided it cannot proceed alone) or has been ``gate_failed`` past the same
+   threshold rule 3 uses;
 4. ``claim-expiring`` — an active claim is about to lapse (expired claims are
    unobservable upstream, so this is the only observable signal);
 5. ``stale-open`` — a workable open task nobody resolved;
@@ -29,7 +33,8 @@ promoted at all: they are in neither frontier, so there are no blocker records
 to prove anything with.
 
 ``flag_attention`` is pure; ``frontier.load_dashboard`` applies it as the last
-step of the join.
+step of the join — and passes the ids it promoted to the Gates section, so a
+promoted gate leaves that section (single placement).
 """
 
 from __future__ import annotations
@@ -38,19 +43,29 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-# Rule 3 escalates only a HUMAN gate — the one waiting on a person; timer/ci/pr/
+# Rule 3 escalates only a HUMAN gate — the one waiting on a person; timer/ci/
 # external gates resolve on their own and stay in the Gates section. Both names
 # come from ``gates``, which owns the gate vocabulary, so the two surfaces
-# cannot drift apart on what "a human gate" is.
+# cannot drift apart on what "a human gate" is. Rule 3b is the PR gate loom has
+# stopped making progress on, read from the same reconciliation mapping the
+# Gates section badges (§5.2.3) rather than from a second reading of the keys.
 from lithos_lens.gates import GATE_TASK_TYPE, HUMAN_GATE_TYPE
+from lithos_lens.pr_reconciliation import (
+    GATE_FAILED_STATE,
+    NEEDS_HUMAN_STATE,
+    PR_GATE_TYPE,
+    reconciliation_of,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.tasks import (
     ATTENTION_RULES,
     AttentionReason,
     ClaimRecord,
+    Reconciliation,
     SectionName,
     SectionRow,
     TaskRecord,
+    humanize_age,
     parse_timestamp,
 )
 
@@ -62,6 +77,12 @@ ATTENTION_SOURCE_SECTIONS: tuple[SectionName, ...] = (
     "ready",
     "blocked",
 )
+
+# Rule 3b's slug, which is also its chip text (:data:`ATTENTION_RULES`). Both
+# escalating reconciliation states promote under the ONE reason — what the
+# operator has to do is the same in either case, and loom's detail line (the
+# supporting fact) is what says which of the two it was.
+PR_DECISION_RULE = "pr-needs-decision"
 
 # The degraded group that is still eligible for the STRUCTURAL rules (1-2).
 # Missing claims do not weaken a cancelled blocker or a dependency cycle: both
@@ -162,7 +183,7 @@ def flag_attention(
             else:
                 kept.append(row)
         sections[section] = tuple(kept)
-    promoted.extend(_waiting_human_gates(visible_open, policy=policy, now=now))
+    promoted.extend(_waiting_gates(visible_open, policy=policy, now=now))
     sections["attention"] = tuple(sorted(promoted, key=_attention_sort_key))
     return sections
 
@@ -226,7 +247,7 @@ def _attention_reasons(
                 detail=(
                     f"Claim expiring — {claim.agent or 'unknown agent'} · "
                     f"{claim.aspect or 'unknown aspect'} · "
-                    f"{_humanize(remaining)} remaining."
+                    f"{humanize_age(remaining)} remaining."
                 ),
             )
         )
@@ -239,7 +260,7 @@ def _attention_reasons(
         reasons.append(
             AttentionReason(
                 rule="stale-open",
-                detail=f"Open {_humanize(age)} with no resolution.",
+                detail=f"Open {humanize_age(age)} with no resolution.",
             )
         )
     if section == "ready" and not row.claims:
@@ -282,33 +303,37 @@ def _ready_unclaimed_reason(
         frontier += f' with "{trigger}"'
     return AttentionReason(
         rule="ready-unclaimed",
-        detail=f"{frontier}, unclaimed for {_humanize(age)}.",
+        detail=f"{frontier}, unclaimed for {humanize_age(age)}.",
     )
 
 
-def _waiting_human_gates(
+def _waiting_gates(
     visible_open: Sequence[TaskRecord],
     *,
     policy: AttentionPolicy,
     now: datetime,
 ) -> list[SectionRow]:
-    """Rule 3: open human gates that have waited LONGER than the threshold.
+    """Rules 3 and 3b: the gates that want a person, by gate type.
 
     Gates are not part of the workable partition, so a flagged gate is promoted
     from the (T1-S4) Gates section into this list; an unflagged one is
-    untouched here.
+    untouched here. The two rules are mutually exclusive by construction — a
+    gate has one ``gate_type`` — so a gate carries exactly one reason.
     """
-    waiting_after = timedelta(hours=policy.gate_waiting_attention_hours)
     rows: list[SectionRow] = []
     for task in visible_open:
         if task.task_type != GATE_TASK_TYPE:
             continue
-        if str(task.metadata.get("gate_type") or "") != HUMAN_GATE_TYPE:
+        gate_type = str(task.metadata.get("gate_type") or "")
+        state: Reconciliation | None = None
+        if gate_type == HUMAN_GATE_TYPE:
+            reasons = _human_gate_reasons(task, policy=policy, now=now)
+        elif gate_type == PR_GATE_TYPE:
+            state = reconciliation_of(task, gate_type=gate_type, now=now)
+            reasons = _pr_gate_reasons(state, policy=policy, now=now)
+        else:
             continue
-        age = _age(task.created_at, now=now)
-        # Strict: "waited LONGER than the threshold" — exactly at it is not yet
-        # late (same boundary policy as the other age rules).
-        if age is None or age <= waiting_after:
+        if not reasons:
             continue
         rows.append(
             SectionRow(
@@ -319,17 +344,94 @@ def _waiting_human_gates(
                 # a confident "unclaimed" chip (SectionRow.claim_state), which
                 # is the one thing the claims-unknown contract forbids.
                 claims_unknown=task.claims is None,
-                attention=(
-                    AttentionReason(
-                        rule="gate-waiting",
-                        detail=(
-                            f"Human gate has waited {_humanize(age)} for a decision."
-                        ),
-                    ),
-                ),
+                attention=reasons,
+                # The badge travels with the row it was promoted from: single
+                # placement takes the gate out of the Gates section, so without
+                # this the one state the operator most needs to see would be
+                # the one state the board stops showing.
+                pr_reconciliation=state,
             )
         )
     return rows
+
+
+def _human_gate_reasons(
+    task: TaskRecord,
+    *,
+    policy: AttentionPolicy,
+    now: datetime,
+) -> tuple[AttentionReason, ...]:
+    """Rule 3: an open human gate that has waited LONGER than the threshold."""
+    age = _age(task.created_at, now=now)
+    # Strict: "waited LONGER than the threshold" — exactly at it is not yet
+    # late (same boundary policy as the other age rules).
+    if age is None or age <= timedelta(hours=policy.gate_waiting_attention_hours):
+        return ()
+    return (
+        AttentionReason(
+            rule="gate-waiting",
+            detail=f"Human gate has waited {humanize_age(age)} for a decision.",
+        ),
+    )
+
+
+def _pr_gate_reasons(
+    state: Reconciliation | None,
+    *,
+    policy: AttentionPolicy,
+    now: datetime,
+) -> tuple[AttentionReason, ...]:
+    """Rule 3b: a PR gate loom has escalated, or one stuck on a failed gate.
+
+    ``needs_human`` fires IMMEDIATELY, with no age threshold at all — unlike
+    rule 3, the wait is not what makes it interesting. loom recomputes this
+    state on every sweep and writes ``needs_human`` only once it has concluded
+    it cannot proceed on its own, so the escalation has already happened
+    upstream; making the operator wait 24 h to be told about a decision loom is
+    blocked on would be Lens re-deciding a question loom already answered.
+
+    ``gate_failed`` does wait, and on the SAME knob rule 3 uses: a failing check
+    is loom's own business until it stops being transient, and "past a day" is
+    the same "nobody is coming" judgement the human-gate threshold encodes. It
+    is measured from ``reconciliation_since`` — when the state last changed —
+    not from the gate's ``created_at``, because a long-lived PR gate that failed
+    ten minutes ago is not a day-old failure. An unreadable ``since`` never
+    fires (the module's never-fire policy for unparseable timestamps).
+
+    The supporting fact is loom's ``reconciliation_detail`` verbatim wherever it
+    wrote one: it names the check, the conflict or the review that is the actual
+    reason, which is a thing Lens cannot derive.
+
+    Takes the ALREADY-BUILT state rather than the task: the caller needs it too
+    (the promoted row carries the badge), and building it twice would mean two
+    readings of the "is this state about this PR?" rule.
+    """
+    if state is None:
+        return ()
+    if state.state == NEEDS_HUMAN_STATE:
+        return (
+            AttentionReason(
+                rule=PR_DECISION_RULE,
+                detail=state.detail or "loom escalated this PR: it needs a decision.",
+            ),
+        )
+    if state.state == GATE_FAILED_STATE:
+        age = _age(state.since, now=now)
+        if age is None or age <= timedelta(hours=policy.gate_waiting_attention_hours):
+            return ()
+        return (
+            AttentionReason(
+                rule=PR_DECISION_RULE,
+                detail=_failed_gate_detail(state, age),
+            ),
+        )
+    return ()
+
+
+def _failed_gate_detail(state: Reconciliation, age: timedelta) -> str:
+    """The fact for a long-failing PR gate: how long, then loom's own line."""
+    fact = f"A required gate on this PR has been failing for {humanize_age(age)}."
+    return f"{fact} {state.detail}" if state.detail else fact
 
 
 def _expiring_claim(
@@ -388,13 +490,3 @@ def _age(created_at: str, *, now: datetime) -> timedelta | None:
     """How long ago ``created_at`` was, or ``None`` when it is unreadable."""
     parsed = parse_timestamp(created_at)
     return None if parsed is None else now - parsed
-
-
-def _humanize(delta: timedelta) -> str:
-    """Coarse age text for a reason chip: ``12d`` / ``5h`` / ``9m``."""
-    seconds = max(int(delta.total_seconds()), 0)
-    if seconds >= 86400:
-        return f"{seconds // 86400}d"
-    if seconds >= 3600:
-        return f"{seconds // 3600}h"
-    return f"{seconds // 60}m"

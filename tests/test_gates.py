@@ -735,6 +735,225 @@ def test_chrome_metadata_keys_are_not_repeated_as_advisory_chips() -> None:
     assert row.advisory_more == 0
 
 
+# --- T2b: PR reconciliation state on the gate row ------------------------
+
+
+def _pr_gate(
+    task_id: str,
+    *,
+    state: str,
+    created_at: str = "2026-08-01T09:00:00+00:00",
+    since: str = "2026-08-29T10:00:00+00:00",
+    detail: str = "",
+    pr_url: str = "https://example.invalid/pull/1",
+    state_pr_url: str | None = None,
+) -> TaskRecord:
+    return _gate(
+        task_id,
+        gate_type="pr",
+        created_at=created_at,
+        metadata={
+            "pr_url": pr_url,
+            "reconciliation_state": state,
+            "reconciliation_detail": detail,
+            "reconciliation_since": since,
+            "reconciliation_pr_url": pr_url if state_pr_url is None else state_pr_url,
+        },
+    )
+
+
+def test_pr_gates_order_by_state_severity_then_by_age() -> None:
+    """§5.2.3 ordering for PR gates: the state the operator has to act on leads,
+    whatever the gate's age — and age still breaks ties inside a state, so the
+    group is not reordered arbitrarily when two PRs are in the same condition.
+
+    The two in-flight states (`reconciling`, `resolving_conflict`) are ONE tier,
+    so `conflict` sits between the two `reconciling` rows purely on age.
+    """
+    gates = collect_gates(
+        [
+            _pr_gate(
+                "ready", state="ready_to_merge", created_at="2026-07-01T00:00:00Z"
+            ),
+            _pr_gate(
+                "newer-human", state="needs_human", created_at="2026-08-20T00:00:00Z"
+            ),
+            _pr_gate("behind", state="behind", created_at="2026-08-02T00:00:00Z"),
+            _pr_gate(
+                "older-human", state="needs_human", created_at="2026-08-01T00:00:00Z"
+            ),
+            _pr_gate("failed", state="gate_failed", created_at="2026-08-25T00:00:00Z"),
+            _pr_gate(
+                "flight-old", state="reconciling", created_at="2026-07-05T00:00:00Z"
+            ),
+            _pr_gate(
+                "flight-new", state="reconciling", created_at="2026-07-20T00:00:00Z"
+            ),
+            _pr_gate(
+                "conflict",
+                state="resolving_conflict",
+                created_at="2026-07-10T00:00:00Z",
+            ),
+            _pr_gate(
+                "review", state="awaiting_review", created_at="2026-07-02T00:00:00Z"
+            ),
+        ],
+        now=_NOW,
+    )
+
+    assert [gate.task.id for gate in gates] == [
+        "older-human",
+        "newer-human",
+        "failed",
+        "behind",
+        "flight-old",
+        "conflict",
+        "flight-new",
+        "review",
+        "ready",
+    ]
+    # …and grouping preserves it: the section renders the group, not the
+    # collector's list.
+    assert [gate.task.id for gate in group_gates(gates)[0].rows] == [
+        gate.task.id for gate in gates
+    ]
+
+
+@pytest.mark.parametrize("reversed_input", [False, True], ids=["as-listed", "reversed"])
+def test_the_in_flight_pair_is_ordered_by_age_in_either_direction(
+    reversed_input: bool,
+) -> None:
+    """`reconciling` and `resolving_conflict` are the same severity tier, so the
+    OLDER row leads whichever of the two it is — and whichever order the open
+    list happened to hand them over in.
+
+    Both directions are asserted because a rank derived from the vocabulary's
+    list position passes one of them by accident: it pins `reconciling` ahead
+    of `resolving_conflict` forever, which looks correct exactly when the older
+    row is the `reconciling` one.
+    """
+    rows = [
+        _pr_gate(
+            "conflict", state="resolving_conflict", created_at="2026-06-01T00:00:00Z"
+        ),
+        _pr_gate("reconciling", state="reconciling", created_at="2026-08-01T00:00:00Z"),
+    ]
+    older_first = collect_gates(
+        list(reversed(rows)) if reversed_input else rows, now=_NOW
+    )
+    assert [gate.task.id for gate in older_first] == ["conflict", "reconciling"]
+
+    # …and with the ages swapped, so does the other one.
+    swapped = [
+        _pr_gate(
+            "conflict", state="resolving_conflict", created_at="2026-08-01T00:00:00Z"
+        ),
+        _pr_gate("reconciling", state="reconciling", created_at="2026-06-01T00:00:00Z"),
+    ]
+    assert [
+        gate.task.id
+        for gate in collect_gates(
+            list(reversed(swapped)) if reversed_input else swapped, now=_NOW
+        )
+    ] == ["reconciling", "conflict"]
+
+
+def test_a_pr_gate_with_no_state_sorts_after_every_gate_that_has_one() -> None:
+    """A PR gate loom has not swept yet says nothing about needing anyone. It
+    must not displace one that does — and it is still ordered, by age, among
+    its own kind."""
+    gates = collect_gates(
+        [
+            _gate("unswept-old", gate_type="pr", created_at="2026-01-01T00:00:00Z"),
+            _gate("unswept-new", gate_type="pr", created_at="2026-08-01T00:00:00Z"),
+            _pr_gate(
+                "merge", state="ready_to_merge", created_at="2026-08-28T00:00:00Z"
+            ),
+        ],
+        now=_NOW,
+    )
+
+    assert [gate.task.id for gate in gates] == ["merge", "unswept-old", "unswept-new"]
+
+
+def test_gate_groups_are_still_placed_by_their_oldest_member() -> None:
+    """A PR group's FIRST row is its most severe state, not its oldest gate, so
+    the between-group ordering reads every row rather than the head — otherwise
+    a section's group order would shuffle whenever a PR needed a human."""
+    gates = collect_gates(
+        [
+            # The CI group's gate is older than the PR group's oldest, so CI
+            # leads — even though the PR group's head row is younger than it.
+            _gate("ci-old", gate_type="ci", created_at="2026-06-01T00:00:00Z"),
+            _pr_gate(
+                "pr-old", state="ready_to_merge", created_at="2026-07-01T00:00:00Z"
+            ),
+            _pr_gate("pr-new", state="needs_human", created_at="2026-08-28T00:00:00Z"),
+        ],
+        now=_NOW,
+    )
+
+    assert [group.gate_type for group in group_gates(gates)] == ["ci", "pr"]
+
+
+def test_the_badge_replaces_the_reconciliation_keys_among_the_advisory_chips() -> None:
+    """The badge renders all four keys, so repeating them as chips would push
+    the gate's own keys off a three-chip row to say the same thing twice."""
+    row = collect_gates([_pr_gate("g", state="needs_human", detail="why")], now=_NOW)[0]
+    with_repo = collect_gates(
+        [
+            _gate(
+                "h",
+                gate_type="pr",
+                metadata={
+                    "pr_url": "u",
+                    "reconciliation_pr_url": "u",
+                    "reconciliation_state": "behind",
+                    "repo": "lens",
+                    "pr_number": 84,
+                },
+            )
+        ],
+        now=_NOW,
+    )[0]
+
+    assert row.pr_reconciliation is not None
+    assert [key for key, _ in row.advisory] == ["pr_url"]
+    assert row.advisory_more == 0
+    assert [key for key, _ in with_repo.advisory] == ["pr_number", "pr_url", "repo"]
+
+
+def test_a_stale_state_keeps_its_keys_as_advisory_chips() -> None:
+    """No badge means the chips are the ONLY place the operator can see what
+    loom wrote — so a state about a replaced PR is inspectable without the row
+    asserting it."""
+    row = collect_gates(
+        [_pr_gate("g", state="needs_human", state_pr_url="https://other/pull/9")],
+        now=_NOW,
+    )[0]
+
+    assert row.pr_reconciliation is None
+    # Nothing is skipped: all five keys are advisory again, so the row shows the
+    # first three alphabetically and COUNTS the rest for the detail-page link —
+    # the ordinary treatment any un-chromed metadata gets.
+    assert [key for key, _ in row.advisory] == [
+        "pr_url",
+        "reconciliation_detail",
+        "reconciliation_pr_url",
+    ]
+    assert row.advisory_more == 2
+
+
+def test_collecting_without_a_clock_still_badges_the_state() -> None:
+    """``now`` only dates the badge. A caller that has no clock to give (the
+    pure collector in a unit test) gets the state without an age, never no
+    state at all."""
+    row = collect_gates([_pr_gate("g", state="needs_human")])[0]
+
+    assert row.pr_reconciliation is not None
+    assert row.pr_reconciliation.badge_text == "needs human"
+
+
 # --- the timer self-refresh instant (criterion 8) -------------------------
 
 

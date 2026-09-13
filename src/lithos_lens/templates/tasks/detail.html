@@ -58,6 +58,9 @@
           <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
           <span class="badge badge-type" data-task-type="{{ detail.task.task_type }}">{{ detail.task.task_type }}</span>
           {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
+          {# §5.5.4 gate context: a `pr` gate carries loom's reconciliation state,
+             the same badge the board's Gates section shows (one template). #}
+          {% if detail.pr_reconciliation %}{% with reconciliation = detail.pr_reconciliation %}{% include "tasks/reconciliation_badge.html" %}{% endwith %}{% endif %}
           {# Attributed, not asserted: any client can post a [Reopened]
              finding, so the badge names who reported it (tasks.py trust
              note on REOPENED_FINDING_PREFIX). #}
@@ -67,6 +70,11 @@
           {% if detail.task.resolved_at %}<span data-resolved-at>Resolved <time datetime="{{ detail.task.resolved_at }}">{{ detail.task.resolved_at }}</time></span>{% endif %}
           {% if detail.task.outcome %}<span data-outcome>Outcome: {{ detail.task.outcome }}</span>{% endif %}
         </div>
+        {# The badge's tooltip is not a reading of it: loom's line says WHICH check,
+           conflict or review the state is about, and a title attribute is invisible
+           to a keyboard and to a screen reader. §5.5.4 is where the gate is judged,
+           so here it is text. #}
+        {% if detail.pr_reconciliation and detail.pr_reconciliation.detail %}<p class="reconciliation-detail" data-reconciliation-detail>{{ detail.pr_reconciliation.detail }}</p>{% endif %}
       </header>
 
       {% if detail.errors %}

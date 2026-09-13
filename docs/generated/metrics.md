@@ -14,14 +14,14 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 35 | 35 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 800 | 800 | 0 |
+| `max_module_lines` | 817 | 850 | 33 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 0 | 0 | 0 |
+| `modules_over_800_lines` | 1 | 1 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **35** (94 module-level)
+- Cross-component edges: **35** (95 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 10 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -39,23 +39,24 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
 | Knowledge | 4 | 1113 | 844 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
-| LithosClient | 5 | 2591 | 2078 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
+| LithosClient | 5 | 2662 | 2127 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 18 | 7815 | 5980 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 17 |
-| Tasks | 3 | 1128 | 817 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
+| TaskGraph | 19 | 8329 | 6346 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 18 |
+| Tasks | 3 | 1224 | 886 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 2 | 1091 | 793 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 4 | 1591 | 1236 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **46**, lines: **17646**, SLOC: **13527**
-- Largest module: `lithos_lens.frontier` (800 lines)
-- Modules over 800 lines: **0**
+- Modules: **47**, lines: **18327**, SLOC: **14011**
+- Largest module: `lithos_lens.frontier` (817 lines)
+- Modules over 800 lines: **1**
+  - `lithos_lens.frontier`
 
 ## Complexity
 
-- Functions: **583**, cyclomatic > 10: **31**
+- Functions: **596**, cyclomatic > 10: **32**
 
 Top 10 most complex functions:
 
@@ -82,5 +83,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **69** (78 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.76** (31129 test lines / 17646 source lines)
+- Domain models: **71** (81 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.77** (32418 test lines / 18327 source lines)
