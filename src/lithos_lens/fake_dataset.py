@@ -377,6 +377,16 @@ def demo_dataset() -> FakeLithosDataset:
             # `reconciliation_since` is relative for the same reason the timer
             # gate's `ready_at` is: the badge states the age of the state, and
             # a fixed stamp would drift into "needs human · 412d".
+            #
+            # DELIBERATELY NOT `area:data`, which every other Influx fixture
+            # carries. `?tag=area:data` is the fixtures' one narrowed board with
+            # an EMPTY Needs-attention section, and the e2e suite photographs
+            # the "Nothing needs attention in this view" stripe there (the
+            # scoped branch of §5.2.2's three, which only an empty list on a
+            # filtered board reaches). A gate that promotes under rule 3b inside
+            # that slice deletes the state the capture exists to show, so the
+            # pair lives in its own area. Anything added here that fires an
+            # attention rule must stay out of `area:data` for the same reason.
             TaskRecord(
                 id="influx-schema-pr",
                 title="Merge the Influx schema migration PR",
@@ -403,7 +413,7 @@ def demo_dataset() -> FakeLithosDataset:
                         "https://example.invalid/agent-lore/influx/pull/412"
                     ),
                 },
-                tags=("project:influx", "area:data"),
+                tags=("project:influx", "area:delivery"),
             ),
             TaskRecord(
                 id="influx-dashboards-pr",
@@ -426,7 +436,7 @@ def demo_dataset() -> FakeLithosDataset:
                         "https://example.invalid/agent-lore/influx/pull/418"
                     ),
                 },
-                tags=("project:influx", "area:data"),
+                tags=("project:influx", "area:delivery"),
             ),
             TaskRecord(
                 id="influx-ingest-old",

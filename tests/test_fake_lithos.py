@@ -504,6 +504,49 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
         )
 
 
+def test_the_scoped_stripe_board_still_has_an_empty_needs_attention_list(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrowed board the capture photographs must stay attention-free.
+
+    §5.2.2's empty Needs-attention section has THREE branches and the capture
+    covers two of them; the scoped one ("Nothing needs attention in this view")
+    is reachable only from a FILTERED board whose list is empty, so the suite
+    points at a fixture slice chosen for that property. Nothing in the fixtures
+    says so, and a new fixture that fires an attention rule inside that slice
+    replaces the stripe with a row — the capture then photographs the wrong
+    branch, or fails on a missing element.
+
+    Which is exactly what happened: T2b's `needs_human` PR gate landed in
+    `area:data` carrying the tags every other Influx fixture has, and took the
+    stripe off that board. Checked here rather than only in Playwright for the
+    reason the truncation guard below gives — `make check` runs on every change
+    and `make e2e` does not — and the tag is READ OUT of the spec, so pointing
+    the capture at a different slice moves this assertion with it.
+    """
+    spec = (Path(__file__).resolve().parents[1] / "e2e/tests/smoke.spec.ts").read_text()
+    board = re.search(
+        r'url:\s*"(/tasks\?[^"]*)",\s*\n\s*marker:\s*"\[data-attention-scoped\]"',
+        spec,
+    )
+    assert board, (
+        "e2e/tests/smoke.spec.ts no longer names a board for the scoped "
+        "Needs-attention stripe"
+    )
+
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        body = client.get(board.group(1)).text
+
+    assert "data-attention-scoped" in body, (
+        f"the capture's board {board.group(1)!r} no longer renders the scoped "
+        "stripe — a fixture inside that slice now fires an attention rule"
+    )
+    # The stripe is the EMPTY-list branch, so no row may be promoted there.
+    assert "data-attention-rule" not in body
+
+
 def test_the_truncation_instance_limit_still_separates_the_two_frontiers() -> None:
     """The truncated-board capture only proves anything at the right limit.
 
