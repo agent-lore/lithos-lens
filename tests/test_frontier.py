@@ -2423,6 +2423,10 @@ def test_a_failed_terminal_read_leaves_the_strip_unscoped() -> None:
     assert any("completed" in message for message in data.errors)
     assert [rollup.task.id for rollup in data.epics] == ["epic-1"]
     assert data.epics_hidden == 0
+    # Recorded per status, not as one flag: the window that did not answer is
+    # the one whose empty section must say so (the others answered).
+    assert data.unread_statuses == frozenset({"completed"})
+    assert data.rows_incomplete is True
 
     # …and the same board with that epic selected does not turn the outage
     # into "nothing here matches your filters" either.

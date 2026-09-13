@@ -13,7 +13,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 |---|---|---:|---:|
 | `lithos_lens.attention` | M | 1 | 1 |
 | `lithos_lens.blocker_chain` | M | 2 | 2 |
-| `lithos_lens.dashboard` | S | 2 | 0 |
+| `lithos_lens.dashboard` | M | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |

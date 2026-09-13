@@ -533,6 +533,16 @@
                        claim is scoped to what is on screen, not to the system. #}
                     <p class="healthy-stripe" data-attention-scoped>Nothing needs attention in this view.</p>
                   {% endif %}
+                {% elif section in dashboard.unread_statuses %}
+                  {# This window did not answer (the load-error banner above
+                     names the read), so an empty group here is UNKNOWN, not a
+                     filter result. "No completed tasks match these filters"
+                     would state a fact about rows Lens never saw — and would
+                     contradict the banner in the same breath. Only the section
+                     whose read failed says this: its neighbours answered, and
+                     their empty lines are honest. #}
+                  <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                  <p class="empty" data-section-unavailable>{{ section_labels[section] }} tasks could not be loaded, so none can be shown here. Whether any match these filters is unknown.</p>
                 {% else %}
                   <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                   <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>

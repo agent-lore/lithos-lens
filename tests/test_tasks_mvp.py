@@ -1180,6 +1180,76 @@ def test_a_scope_holding_only_rolled_up_rows_says_which_gap_it_is(
     assert "data-task-group=" not in text
 
 
+class _CompletedWindowDown(TaskFakeLithosClient):
+    """Every read answers except the completed window (§14 degraded path)."""
+
+    async def list_tasks(self, **kwargs: Any) -> list[TaskRecord]:
+        if kwargs.get("status") == "completed":
+            raise RuntimeError("completed window unavailable")
+        return await super().list_tasks(**kwargs)
+
+
+def test_an_unread_window_is_not_reported_as_a_filter_result(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-002): on a ``?status=completed`` board scoped to an
+    epic whose subtree HAS a matching completed child, the completed read
+    fails. The epic explanations stand down — Lens cannot claim a filter result
+    about rows it never saw — and the section that came back empty must not
+    make that claim either, which is what it used to do one line below the
+    banner saying the read failed."""
+    template = _roadmap_fake()
+    fake = _CompletedWindowDown()
+    fake.tasks = template.tasks
+    fake.ready_ids = template.ready_ids
+    fake.tasks.append(_epic_row("epic-loom", "Loom epic"))
+    fake.children["epic-loom"] = ["loom-done"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=completed&tag=roadmap-2026-08&epic=epic-loom"
+            "&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    # The read that failed is named…
+    assert "Could not load completed tasks." in text
+    # …and the empty section says the same thing rather than the opposite.
+    assert "data-section-unavailable" in text
+    assert "could not be loaded" in text
+    assert "No completed tasks match these filters." not in text
+    # Neither epic explanation is supportable here, so neither renders.
+    assert "data-epic-scope-unmatched" not in text
+    assert "data-epic-scope-rolled-up" not in text
+
+
+def test_a_window_that_answered_still_says_no_match(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half: only the window that failed is unknown. The cancelled
+    read answered, so its empty section keeps the honest filter wording — a
+    blanket suppression would hide that distinction (and, where the read did
+    return rows, the rows themselves)."""
+    template = _roadmap_fake()
+    fake = _CompletedWindowDown()
+    fake.tasks = template.tasks
+    fake.ready_ids = template.ready_ids
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=completed&status=cancelled&tag=roadmap-2026-08"
+            "&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "Completed tasks could not be loaded" in text
+    assert "No cancelled tasks match these filters." in text
+
+
 def test_an_epic_scope_the_filters_empty_says_so(
     lithos_lens_config_env: Path,
 ) -> None:

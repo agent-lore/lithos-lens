@@ -62,13 +62,13 @@ from lithos_lens.frontier_join import (
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
     board_visible_ids,
-    displayed_read_failed,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
     loaded_task_rows,
     log_project_data_quality,
     matches_filters,
     project_universe,
+    unread_displayed_statuses,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -704,10 +704,10 @@ async def load_dashboard(
         # explain: in no section, so never examined (see the field).
         frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
-        # Whether a window this board DISPLAYS failed to load: the epic-scope
-        # explanations are claims about the filters, and only this can make a
+        # The windows this board DISPLAYS that failed to load: the epic-scope
+        # explanations are claims about the filters, and only these can make a
         # row's membership unknown (a failed stats or agent read cannot).
-        rows_incomplete=displayed_read_failed(closed_results, filters=filters),
+        unread_statuses=unread_displayed_statuses(closed_results, filters=filters),
         epics=strip.rollups,
         epics_hidden=strip.hidden,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its

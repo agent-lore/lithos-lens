@@ -163,11 +163,12 @@ class DashboardData:
     # beside the strip rather than absorbed silently — a short strip otherwise
     # reads as "these are all the epics".
     epics_hidden: int = 0
-    # A window this board DISPLAYS did not answer, so which rows belong on it
-    # is unknown rather than known-empty. Narrower than ``errors`` on purpose:
-    # only this withholds the epic-scope explanations (§5.2.1), because only
-    # this can hide a row that would have filled the board.
-    rows_incomplete: bool = False
+    # The statuses this board DISPLAYS whose read did not answer, so which rows
+    # belong to them is unknown rather than known-empty. Narrower than
+    # ``errors`` on purpose — only these can hide a row that would have filled
+    # the board — and kept per status, because the section that came back empty
+    # must say which of the two it is while its neighbours still say "no match".
+    unread_statuses: frozenset[str] = frozenset()
     # The epic id the sections are actually scoped to — empty when no ``?epic=``
     # was asked for OR when the requested epic is no longer an open epic, which
     # the template explains instead of rendering a silently empty board.
@@ -188,6 +189,16 @@ class DashboardData:
         """The epic chip the board is scoped to, if any (the template's handle
         on it — e.g. to explain a confirmed-childless epic's empty board)."""
         return next((epic for epic in self.epics if epic.selected), None)
+
+    @property
+    def rows_incomplete(self) -> bool:
+        """True when ANY window this board displays did not answer.
+
+        The board-wide reading of :attr:`unread_statuses`: the epic-scope
+        explanations below are about the board as a whole, so one unread window
+        is enough to withhold them.
+        """
+        return bool(self.unread_statuses)
 
     @property
     def epic_scope_blank(self) -> bool:
