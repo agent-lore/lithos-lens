@@ -115,15 +115,6 @@ class DashboardData:
     # once at this instant (PRD story 6).
     next_gate_ready_at: str = ""
     reconciliation_pending: bool = False
-    # A task a frontier read returned that the adopted open snapshot did not,
-    # still contradictory after the one skew retry (§14). It drives no row
-    # decoration and not the reconciliation banner — the row is in NO section,
-    # so there is nothing to annotate — but it does withhold the affirmative
-    # surfaces (this load observed a task it renders nowhere, which is neither
-    # "0 issues" nor "nothing here"; see ``frontier._is_nothing_to_show``) and
-    # carries its own notice, which offers a refresh rather than promising one
-    # will help: the reads can skew again.
-    frontier_skew_unresolved: bool = False
     truncated: bool = False
     # True when these filters hide part of the corpus from the sections, so
     # every per-view signal below (truncation, reconciliation, claims-unknown,
@@ -208,11 +199,6 @@ class DashboardData:
         ``open_side_narrowed`` rather than ``filters_narrowed`` because a
         status filter hides no open row.
 
-        Withheld, like :attr:`rolled_up_only` and for the same reason, while
-        ``frontier_skew_unresolved`` stands: a task this load READ renders in
-        no section at all, so the frontier it is claiming health over was not
-        self-consistent.
-
         Withheld when the open side rendered nothing but rolled-up rows exist
         (see :attr:`rolled_up_only`): the stripe would be the only thing on an
         empty board, asserting health over work the operator cannot see.
@@ -232,6 +218,5 @@ class DashboardData:
             and not self.errors
             and not self.truncated
             and not self.reconciliation_pending
-            and not self.frontier_skew_unresolved
             and not self.sections.get("claims_unknown")
         )

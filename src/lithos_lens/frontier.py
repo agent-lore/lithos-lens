@@ -345,9 +345,10 @@ async def load_dashboard(
         # Same class, other direction: a frontier answered with a task the
         # open read never saw — it closed in between (epics and gates are
         # excluded from both frontiers upstream, so nothing else gets in). It
-        # lands in no section, so it too only drives the retry — and it stops
-        # the empty-state panel calling a corpus empty that this very
-        # generation read a task out of.
+        # is in no OPEN section (a resolved window of the same generation may
+        # well show it), so it too only drives the retry — and it stops the
+        # empty-state panel calling a corpus empty that this very generation
+        # read a task out of.
         frontier_only = (ready_ids | blocked_ids) - set(index)
         return _FrontierState(
             snapshot,
@@ -649,7 +650,6 @@ async def load_dashboard(
         # marking cannot disagree about what truncated.
         truncated=truncated,
         reconciliation_pending=reconciliation_pending,
-        frontier_skew_unresolved=bool(frontier_only),
         filters_narrowed=filters_narrowed,
         open_side_narrowed=open_side_narrowed,
         open_flat=open_flat,

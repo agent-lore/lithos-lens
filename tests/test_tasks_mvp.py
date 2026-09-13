@@ -1979,14 +1979,18 @@ def test_healthy_stripe_is_withheld_when_a_frontier_read_failed(
     assert "Some task data could not be loaded." in text
 
 
-def test_healthy_stripe_is_withheld_when_a_frontier_row_is_not_open(
+def test_a_frontier_row_the_open_list_never_confirmed_leaves_the_stripe_alone(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Same claim, the freshness cause: the ready frontier returned a task the
-    master open list did not (it resolved between the two reads), and the one
-    retry saw the same thing. The row lands in NO section, so an empty
-    attention list means "a task went unexamined" — the page says the view may
-    be a moment behind and withholds the stripe rather than claiming 0 issues.
+    """The ready frontier returned a task the master open list did not (it
+    resolved between the two reads) and the one retry saw the same thing.
+
+    That evidence is real — it rules out the empty-corpus panel and it drives
+    the retry (§14) — but it is NOT a statement about what renders: the row may
+    well be in the resolved window of the same generation. So the page makes no
+    claim that a task is missing from the board, and the healthy stripe keeps
+    its settled gating (the error/truncation/reconciliation channels), which
+    this behaviour does not touch.
     """
     # The board that shows the stripe today (see the test above), plus one
     # ghost row on the ready frontier.
@@ -2017,17 +2021,49 @@ def test_healthy_stripe_is_withheld_when_a_frontier_row_is_not_open(
 
     assert response.status_code == 200
     text = response.text
-    assert "This view may be a moment behind." in text
-    # Hedged, never a promise: the same reads can skew again on the next load,
-    # so the notice offers a refresh rather than guaranteeing what it will show.
-    assert "A refresh may settle it." in unescape(text)
-    assert "next refresh" not in text
-    assert "All systems healthy" not in text
-    assert "data-attention-healthy" not in text
-    assert "data-attention-unknown" in text
-    assert "Cannot assess" in unescape(text)
+    # No notice asserting an absence the page cannot know (the row can be
+    # rendered under Completed — see the test below).
+    assert "not shown in any section below" not in unescape(text)
+    assert "data-frontier-skew-banner" not in text
     # The reconciliation surface stays away: no row moved, so none is marked.
     assert "data-reconciliation-banner" not in text
+    # The settled stripe, unchanged by this story.
+    assert "data-attention-healthy" in text
+    assert "All systems healthy" in unescape(text)
+
+
+def test_a_frontier_only_row_can_render_in_the_resolved_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The counterexample to "frontier-only means it renders nowhere": the
+    ready frontier returns a task the open list does not BECAUSE it just
+    completed — and the completed window of the same load returns it.
+
+    The row is on the page, under Completed. Nothing on that page may say it is
+    missing.
+    """
+    fake = TaskFakeLithosClient()
+    fake.ready_ids = set()
+
+    async def ghost_task_ready(**_: Any) -> list[TaskRecord]:
+        # An id the open read never returns (it is completed) and the
+        # completed window does — every time, so the retry cannot settle it.
+        return [TaskRecord(id="done-recent", title="Recently completed task")]
+
+    fake.task_ready = ghost_task_ready  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    completed = text[text.index('data-task-group="completed"') :]
+    completed = completed[: completed.index("</article>")]
+    assert 'data-task-id="done-recent"' in completed
+    assert "not shown in any section below" not in unescape(text)
+    assert "data-frontier-skew-banner" not in text
+    # The board is not empty and never says it is.
+    assert "No tasks in this window" not in unescape(text)
 
 
 def test_healthy_stripe_is_withheld_when_the_frontier_truncated(

@@ -168,20 +168,6 @@
           <span>The ready/blocked reads returned inconsistent membership even after a retry; the affected rows are marked "awaiting reconciliation" — shown under Blocked, or kept In progress with their blocked decoration — until the frontier settles.</span>
         </section>
       {% endif %}
-      {% if dashboard.frontier_skew_unresolved %}
-        {# The other freshness contradiction, and it needs its own wording: a
-           task the frontier returned that the open list did not, still
-           disagreeing after the retry. It is in NO section, so there is no row
-           to mark "awaiting reconciliation" above — and saying nothing would
-           leave the board describing itself as complete (or empty) over a task
-           this very load read. The healthy stripe is withheld for the same
-           reason. The wording promises nothing: independent reads can skew
-           again, so a refresh MAY settle the view — Lens cannot say it will. #}
-        <section class="banner banner-warning" role="status" data-frontier-skew-banner>
-          <strong>This view may be a moment behind.</strong>
-          <span>A task the Lithos frontier returned is missing from the open list — most likely it resolved while this page was being read — so it is not shown in any section below. A refresh may settle it.</span>
-        </section>
-      {% endif %}
 
       <form class="filter-bar" action="/tasks" method="get">
         <fieldset>
@@ -492,15 +478,14 @@
                        a SYSTEM-wide claim, which is what the two branches below
                        are for. #}
                     <p class="healthy-stripe" data-healthy-stripe data-attention-healthy>All systems healthy &mdash; 0 issues</p>
-                  {% elif dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending or dashboard.frontier_skew_unresolved or dashboard.open_flat or dashboard.sections["claims_unknown"] %}
+                  {% elif dashboard.errors or dashboard.truncated or dashboard.reconciliation_pending or dashboard.open_flat or dashboard.sections["claims_unknown"] %}
                     {# An empty list means nothing when the reads behind it were
                        incomplete: rules 1-2 fire only from the blocked frontier,
                        so a failed read, a truncated one, an unreconciled
-                       disagreement, a frontier row the open list never
-                       confirmed, a frontier that never answered, or rows whose
-                       claims are unknown all leave it empty with rows
-                       unexamined (they land in Not classified, the degraded
-                       groups, or no section at all). #}
+                       disagreement, a frontier that never answered, or rows
+                       whose claims are unknown all leave it empty with rows
+                       unexamined (they land in Not classified or the degraded
+                       groups). #}
                     <p class="healthy-stripe healthy-stripe-unknown" data-attention-unknown>Cannot assess &mdash; task data is incomplete; see the notice above.</p>
                   {% else %}
                     {# Nothing is wrong and nothing went unexamined, but the

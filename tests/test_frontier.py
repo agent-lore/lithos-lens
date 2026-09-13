@@ -1112,15 +1112,16 @@ def test_a_below_limit_gap_adopts_the_retried_terminal_windows_too() -> None:
     assert data.reconciliation_pending is False
 
 
-def test_a_frontier_only_row_surviving_the_retry_withholds_both_claims() -> None:
+def test_a_frontier_only_row_surviving_the_retry_withholds_the_empty_panel() -> None:
     """The contradiction can PERSIST: both generations answer open ``[]`` and
     ready ``[T]`` with empty terminal windows.
 
-    T is then a task this load read twice and renders nowhere, so neither
-    affirmative surface may speak — not the empty-state panel ("nothing here")
-    and not the healthy stripe ("0 issues"). The reconciliation banner stays
-    away as designed (it annotates a rendered row, and there is none), so the
-    stripe needs its own degraded signal. The retry stays single-shot.
+    T is a task this load read twice, so the empty-state panel may not claim
+    the corpus is empty. That is the whole of the frontier-only evidence's
+    reach: the healthy stripe keeps its settled gating (§14 — the error
+    channel), which this story does not touch, and the reconciliation banner
+    stays away as designed (it annotates a rendered row, and there is none).
+    The retry stays single-shot.
     """
     t = _task("t", claims=())
     fake = _FrontierFake(open_tasks=[], ready=[t], blocked=[])
@@ -1130,12 +1131,37 @@ def test_a_frontier_only_row_surviving_the_retry_withholds_both_claims() -> None
     # Exactly two generations — one retry, no loop.
     assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
     assert (fake.completed_calls, fake.cancelled_calls) == (2, 2)
-    assert data.frontier_skew_unresolved is True
     assert data.nothing_to_show is False
-    assert data.healthy is False
     # Not the reconciliation surface: no row moved, so nothing is annotated.
     assert data.reconciliation_pending is False
     assert data.errors == ()
+    # The settled gate, unchanged: no read failed, nothing truncated, no row
+    # went unexamined in a rendered section.
+    assert data.healthy is True
+
+
+def test_a_frontier_only_row_the_terminal_window_explains_still_renders() -> None:
+    """Frontier-only does NOT mean "renders nowhere".
+
+    Both generations agree: open ``[]``, ready ``[T]`` — and the completed
+    window of the same generation returns T, which is exactly how a task that
+    resolved between the two open-side reads is supposed to surface. So T IS
+    on the page, under Completed; the load may not call the corpus empty, and
+    nothing about this state may claim the row is missing from the board.
+    """
+    t = _task("t", claims=())
+    done = replace(t, status="completed", resolved_at="2026-09-12T00:00:00Z", claims=())
+    fake = _FrontierFake(open_tasks=[], ready=[t], blocked=[], completed=[done])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["t"]
+    assert data.nothing_to_show is False
+    assert data.reconciliation_pending is False
+    assert data.errors == ()
+    # Still the settled gate: the row this load read is rendered, so there is
+    # no degraded signal to report.
+    assert data.healthy is True
 
 
 def test_the_retry_adopts_the_cancelled_window_and_re_asks_the_same_reads() -> None:
@@ -1160,7 +1186,6 @@ def test_the_retry_adopts_the_cancelled_window_and_re_asks_the_same_reads() -> N
 
     # The retried cancelled result is what renders — not the first (empty) one.
     assert _section_ids(data.sections, "cancelled") == ["t"]
-    assert data.frontier_skew_unresolved is False
     # Both generations asked the same five questions.
     open_reads = [call for call in fake.list_calls if call["status"] == "open"]
     terminal = [
