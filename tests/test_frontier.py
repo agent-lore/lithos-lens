@@ -1072,6 +1072,86 @@ def test_a_coherent_empty_generation_may_still_say_nothing_to_show() -> None:
     assert data.errors == ()
 
 
+def test_the_adopted_generation_drops_the_first_terminal_rows() -> None:
+    """Whole-or-none, from the direction the other tests cannot see.
+
+    They all script terminal windows that GAIN a row on the retry, which a
+    buggy implementation retaining (or unioning) the first generation's
+    terminal results would still pass. Here the first generation is the one
+    holding rows: T on the ready frontier the open read never saw (the retry
+    trigger), a stale completed row and a stale cancelled row. The retry finds
+    nothing anywhere — including both windows — so the adopted generation is
+    empty, the two stale rows are GONE from the page, and the load may say so.
+    Keeping them would be the mixed generation §14 forbids, and would render
+    resolved rows this generation never read.
+    """
+    t = _task("t", claims=())
+    stale_done = replace(t, id="stale-done", status="completed")
+    stale_gone = replace(t, id="stale-gone", status="cancelled")
+    fake = _FrontierFake(
+        open_tasks=[[], []],
+        ready=[[t], []],
+        blocked=[],
+        completed=[[stale_done], []],
+        cancelled=[[stale_gone], []],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
+    assert _terminal_reads(fake) == [
+        "completed",
+        "cancelled",
+        "completed",
+        "cancelled",
+    ]
+    # The first generation's terminal rows are not carried over…
+    assert _section_ids(data.sections, "completed") == []
+    assert _section_ids(data.sections, "cancelled") == []
+    # …so the empty panel describes the adopted generation, not a mix of two.
+    assert data.nothing_to_show is True
+    assert data.errors == ()
+
+
+@pytest.mark.parametrize("side", ["ready", "blocked"])
+def test_a_frontier_only_row_is_skew_even_at_the_frontier_limit(side: str) -> None:
+    """The at-limit twin of the overlap regression above.
+
+    Truncation explains a frontier response that is SHORT of rows the open list
+    holds; it explains nothing about a row the frontier RETURNED and the open
+    read never saw. That contradiction stands at the cap exactly as below it,
+    on either frontier — so the generation retries whole, and the retried one
+    (which finds T resolved) is what renders.
+    """
+    t = _task("t", claims=())
+    done = replace(t, status="completed")
+    ghost_blocked = _blocked(t, BlockerRecord(kind="task", task_id="p"))
+    fake = _FrontierFake(
+        open_tasks=[[], []],
+        # Exactly ``frontier_limit`` rows on the side under test: the response
+        # hit its cap AND contradicts the open read.
+        ready=[[t], []] if side == "ready" else [],
+        blocked=[[ghost_blocked], []] if side == "blocked" else [],
+        completed=[[], [done]],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=1))
+
+    assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
+    assert _terminal_reads(fake) == [
+        "completed",
+        "cancelled",
+        "completed",
+        "cancelled",
+    ]
+    assert _section_ids(data.sections, "completed") == ["t"]
+    assert data.nothing_to_show is False
+    # A cap that returned a contradiction is not truncation to report: the
+    # retried generation left no classifiable row in the tail.
+    assert data.truncated is False
+    assert data.errors == ()
+
+
 def test_a_below_limit_gap_adopts_the_retried_terminal_windows_too() -> None:
     """Variant 2 of the same defect, reached through the OTHER skew signal.
 
@@ -1168,7 +1248,8 @@ def test_a_frontier_only_row_the_terminal_window_explains_still_renders() -> Non
 
 
 def test_an_unplaced_frontier_only_row_withholds_the_healthy_stripe() -> None:
-    """The stripe is withheld by the UNPLACED row itself, not by an empty board.
+    """Reviewer repro (#82, PR re-review): the stripe is withheld by the
+    UNPLACED row itself, not by an empty board.
 
     Here the board is otherwise the healthy one: every read answered, nothing
     truncated, no filter, one Ready row rendered. The blocked frontier also
