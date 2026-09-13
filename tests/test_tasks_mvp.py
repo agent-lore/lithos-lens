@@ -1979,6 +1979,53 @@ def test_healthy_stripe_is_withheld_when_a_frontier_read_failed(
     assert "Some task data could not be loaded." in text
 
 
+def test_healthy_stripe_is_withheld_when_a_frontier_row_is_not_open(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Same claim, the freshness cause: the ready frontier returned a task the
+    master open list did not (it resolved between the two reads), and the one
+    retry saw the same thing. The row lands in NO section, so an empty
+    attention list means "a task went unexamined" — the page says the view may
+    be a moment behind and withholds the stripe rather than claiming 0 issues.
+    """
+    # The board that shows the stripe today (see the test above), plus one
+    # ghost row on the ready frontier.
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.ready_ids = set()
+    fake.blocked = {
+        "open-unclaimed": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-claimed",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor open-claimed to complete.",
+            ),
+        )
+    }
+
+    async def ghost_task_ready(**_: Any) -> list[TaskRecord]:
+        # Returned by the frontier, absent from the open list — every time, so
+        # the single retry cannot settle it.
+        return [TaskRecord(id="just-closed", title="Just closed", status="open")]
+
+    fake.task_ready = ghost_task_ready  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "This view may be a moment behind." in text
+    assert "All systems healthy" not in text
+    assert "data-attention-healthy" not in text
+    assert "data-attention-unknown" in text
+    assert "Cannot assess" in unescape(text)
+    # The reconciliation surface stays away: no row moved, so none is marked.
+    assert "data-reconciliation-banner" not in text
+
+
 def test_healthy_stripe_is_withheld_when_the_frontier_truncated(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

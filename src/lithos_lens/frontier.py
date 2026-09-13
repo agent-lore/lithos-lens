@@ -649,6 +649,7 @@ async def load_dashboard(
         # marking cannot disagree about what truncated.
         truncated=truncated,
         reconciliation_pending=reconciliation_pending,
+        frontier_skew_unresolved=bool(frontier_only),
         filters_narrowed=filters_narrowed,
         open_side_narrowed=open_side_narrowed,
         open_flat=open_flat,

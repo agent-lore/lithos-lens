@@ -206,6 +206,7 @@ classDiagram
     +projects tuple[str, ...]
     +next_gate_ready_at str
     +reconciliation_pending bool
+    +frontier_skew_unresolved bool
     +truncated bool
     +filters_narrowed bool
     +open_side_narrowed bool
