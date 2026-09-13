@@ -291,12 +291,12 @@
       "TaskGraph": {
         "classes": 56,
         "functions": 249,
-        "largest_module": "lithos_lens.graph_layout",
-        "largest_module_lines": 799,
-        "lines": 7796,
+        "largest_module": "lithos_lens.frontier",
+        "largest_module_lines": 800,
+        "lines": 7815,
         "modules": 18,
         "public_symbols": 107,
-        "sloc": 5971
+        "sloc": 5980
       },
       "Tasks": {
         "classes": 13,
@@ -329,16 +329,16 @@
         "sloc": 1236
       }
     },
-    "max_module": "lithos_lens.graph_layout",
-    "max_module_lines": 799,
+    "max_module": "lithos_lens.frontier",
+    "max_module_lines": 800,
     "modules_over_800": [],
-    "total_lines": 17627,
+    "total_lines": 17646,
     "total_modules": 46,
-    "total_sloc": 13518
+    "total_sloc": 13527
   },
   "tests": {
     "ratio": 1.76,
-    "src_lines": 17627,
-    "test_lines": 31000
+    "src_lines": 17646,
+    "test_lines": 31048
   }
 }
