@@ -184,6 +184,33 @@ def test_the_pr_match_is_not_weakened_by_the_length_bound() -> None:
 
 
 @pytest.mark.parametrize(
+    "state_pr_url",
+    [
+        " https://github.com/agent-lore/lithos-lens/pull/84",
+        "https://github.com/agent-lore/lithos-lens/pull/84 ",
+        "https://github.com/agent-lore/lithos-lens/pull/84\n",
+    ],
+    ids=["leading space", "trailing space", "trailing newline"],
+)
+def test_two_urls_that_are_not_the_same_string_are_not_a_match(
+    state_pr_url: str,
+) -> None:
+    """The check is EXACT equality on the values loom wrote, not a comparison of
+    Lens-cleaned versions of them.
+
+    Trimming both sides first reads as harmless tidying, and is not: it makes
+    Lens rule that two different metadata values name the same PR, which is the
+    one judgement this check exists to refuse. Whitespace in a url loom writes
+    means loom wrote something Lens cannot vouch for, and the honest answer to
+    "is this state about this PR?" is then "cannot tell" — the raw keys stay on
+    the row either way.
+    """
+    gate = _pr_gate(state_pr_url=state_pr_url)
+
+    assert reconciliation_of(gate, gate_type=PR_GATE_TYPE, now=_NOW) is None
+
+
+@pytest.mark.parametrize(
     "dropped",
     [
         ("pr_url", "reconciliation_pr_url"),
@@ -268,21 +295,58 @@ def test_a_since_in_the_future_reads_as_zero_rather_than_negative() -> None:
     assert state is not None and state.badge_text == "needs human · 0m"
 
 
-def test_the_two_values_with_a_stated_domain_are_bounded_to_it() -> None:
-    """``metadata`` is peer-written whatever loom's own contract says, and both
-    of these reach the page — the detail as a tooltip, the stamp as an
-    attribute the browser re-reads. Each is capped at its OWN stated domain
-    (loom documents the detail as one line of ≤200 chars; an ISO instant is
-    ~25), not at a number Lens invented."""
+def test_the_detail_is_bounded_to_looms_own_stated_line_length() -> None:
+    """``metadata`` is peer-written whatever loom's own contract says, and this
+    one reaches the page as the badge's tooltip. Capped at loom's OWN stated
+    domain — one line of ≤200 characters — not at a number Lens invented."""
     state = reconciliation_of(
-        _pr_gate(detail="d" * 5_000, since="s" * 500),
-        gate_type=PR_GATE_TYPE,
-        now=_NOW,
+        _pr_gate(detail="d" * 5_000), gate_type=PR_GATE_TYPE, now=_NOW
     )
 
     assert state is not None
     assert len(state.detail) == 200 and state.detail.endswith("…")
+
+
+def test_an_unreadable_stamp_is_bounded_only_after_it_fails_to_parse() -> None:
+    """The display bound on ``reconciliation_since`` applies to text that is
+    already known NOT to be an instant — it is never a filter in front of the
+    parser."""
+    state = reconciliation_of(
+        _pr_gate(since="s" * 500), gate_type=PR_GATE_TYPE, now=_NOW
+    )
+
+    assert state is not None
     assert len(state.since) == 40 and state.since.endswith("…")
+    assert state.age == ""
+
+
+def test_a_long_but_valid_stamp_still_dates_the_badge() -> None:
+    """An ISO instant has no length worth asserting: the fractional second is
+    arbitrary-precision and ``datetime.fromisoformat`` accepts more digits than
+    a 40-character bound leaves room for.
+
+    Bounding before parsing turned exactly this value into an ellipsized string
+    the parser then rejected — so the badge silently lost its age, and (see
+    ``test_attention``) an old ``gate_failed`` state stopped escalating. The
+    stamp is parsed from the whole value; only what fails to parse is bounded.
+    """
+    long_stamp = "2026-09-13T10:00:00.000000000000000000001+00:00"
+    short_stamp = "2026-09-13T10:00:00+00:00"
+    assert len(long_stamp) > 40
+
+    long_state = reconciliation_of(
+        _pr_gate(since=long_stamp), gate_type=PR_GATE_TYPE, now=_NOW
+    )
+    short_state = reconciliation_of(
+        _pr_gate(since=short_stamp), gate_type=PR_GATE_TYPE, now=_NOW
+    )
+
+    assert long_state is not None and short_state is not None
+    # The same instant written two ways renders the same badge: precision the
+    # datetime domain cannot hold changes nothing, and length changes nothing.
+    assert long_state.badge_text == short_state.badge_text == "needs human · 2h"
+    assert long_state.since == short_state.since == "2026-09-13T10:00:00+00:00"
+    assert "…" not in long_state.since
 
 
 def test_an_unknown_state_is_never_shortened_however_long_it_is() -> None:

@@ -308,6 +308,26 @@ def test_a_failing_pr_gate_escalates_only_after_the_human_gate_threshold() -> No
     assert _section_ids(relaxed, "attention") == []
 
 
+def test_a_stale_gate_failed_escalates_on_a_long_but_valid_stamp() -> None:
+    """Rule 3b reads the state's own clock, so anything that stops
+    ``reconciliation_since`` parsing stops the escalation — silently, and only
+    for the gates that have been failing longest.
+
+    A sub-microsecond ISO stamp is longer than 40 characters and parses fine;
+    a display bound applied before the parse turned it into an ellipsis, and
+    this rule's never-fire-on-an-unreadable-timestamp policy then (correctly,
+    from bad input) declined to promote a two-day-old failure.
+    """
+    stamp = _ago(days=2).replace("+00:00", ".000000000000000000001+00:00")
+    assert len(stamp) > 40
+    gate = _pr_gate(state="gate_failed", since=stamp, detail="ci is red.")
+
+    (row,) = _flag([gate])["attention"]
+
+    assert _rules(row) == ["pr-needs-decision"]
+    assert "2d" in row.attention[0].detail
+
+
 @pytest.mark.parametrize(
     ("hours", "promoted"),
     [(23.99, False), (24, False), (24.01, True)],

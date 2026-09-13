@@ -89,13 +89,18 @@ GATE_FAILED_STATE = "gate_failed"
 # the state stay closed whatever its length (``slug``/``tone`` collapse to
 # ``unknown``), so an unbounded value buys no class and no selector hook.
 #
-# The other two are capped against their own stated domains rather than a
-# policy of ours: ``reconciliation_detail`` is one line of at most 200
-# characters by loom's own contract, and a stamp longer than 40 characters is
-# not an ISO instant — and that one reaches a ``datetime=``-style attribute the
-# browser re-reads, not only text.
+# ``reconciliation_detail`` is capped at its own stated domain rather than at a
+# policy of ours: loom documents it as one line of at most 200 characters.
+#
+# ``reconciliation_since`` is capped only AFTER it has failed to parse — the
+# cap is a bound on how much unreadable text a badge will show, never a filter
+# in front of the parser. An ISO instant has no length limit worth asserting
+# (the fractional second is arbitrary-precision, and ``fromisoformat`` accepts
+# more digits than 40 characters leaves room for), so bounding first would have
+# turned a perfectly good stamp into an ellipsized one, dropped the age off the
+# badge, and stopped an old ``gate_failed`` state from ever escalating.
 _DETAIL_CAP = 200
-_SINCE_CAP = 40
+_UNREADABLE_SINCE_CAP = 40
 
 
 @dataclass(frozen=True)
@@ -176,12 +181,13 @@ def reconciliation_of(
     if gate_type != PR_GATE_TYPE:
         return None
     metadata = task.metadata
-    state = _state_text(metadata.get(RECONCILIATION_STATE_KEY))
+    state = _scalar_text(metadata.get(RECONCILIATION_STATE_KEY))
     if not state:
         return None
     if not _describes_this_pr(metadata):
         return None
-    since = _scalar_text(metadata.get(RECONCILIATION_SINCE_KEY), cap=_SINCE_CAP)
+    since = _scalar_text(metadata.get(RECONCILIATION_SINCE_KEY))
+    # Parsed from the WHOLE value, before any display bound touches it.
     parsed_since = parse_timestamp(since)
     style = _BY_STATE.get(state)
     return Reconciliation(
@@ -193,11 +199,17 @@ def reconciliation_of(
         slug=style.state if style is not None else UNKNOWN_STATE_TONE,
         tone=style.tone if style is not None else UNKNOWN_STATE_TONE,
         severity=style.severity if style is not None else UNKNOWN_STATE_SEVERITY,
-        detail=_scalar_text(metadata.get(RECONCILIATION_DETAIL_KEY), cap=_DETAIL_CAP),
-        # Normalized when it parses, bounded raw text when it does not: an
-        # unreadable stamp stays visible rather than vanishing, and drives no
+        detail=_bounded(
+            _scalar_text(metadata.get(RECONCILIATION_DETAIL_KEY)), _DETAIL_CAP
+        ),
+        # Normalized when it parses; bounded raw text only when it does NOT —
+        # an unreadable stamp stays visible rather than vanishing, and drives no
         # age rather than a guessed one.
-        since=parsed_since.isoformat() if parsed_since is not None else since,
+        since=(
+            parsed_since.isoformat()
+            if parsed_since is not None
+            else _bounded(since, _UNREADABLE_SINCE_CAP)
+        ),
         age=(
             humanize_age(now - parsed_since)
             if now is not None and parsed_since is not None
@@ -219,38 +231,36 @@ def _describes_this_pr(metadata: Mapping[str, Any]) -> bool:
     withholding it: the four raw keys stay on the row as advisory chips and in
     the detail page's metadata table.
 
-    Compared RAW — the full strings, never a bounded form. Truncating first
-    would make two long urls sharing a prefix compare equal, i.e. would let a
-    stale state through the one check that exists to catch it.
+    Compared EXACTLY, on the values as loom wrote them: no bounding (truncating
+    first would make two long urls sharing a prefix compare equal) and no
+    normalisation either. ``strip()`` appears once, to decide whether there is a
+    url here at all — a whitespace-only value is an absent one. It is not
+    applied to the comparison, because "these two metadata values are the same
+    url" is a question about the values, and a Lens-side cleanup that made
+    ``" …/pull/12 "`` equal to ``"…/pull/12"`` would be Lens deciding two
+    different strings name the same PR — the judgement this check exists to
+    refuse.
     """
     state_url = metadata.get(RECONCILIATION_PR_URL_KEY)
     gate_url = metadata.get(PR_URL_KEY)
     if not isinstance(state_url, str) or not isinstance(gate_url, str):
         return False
-    return bool(state_url.strip()) and state_url.strip() == gate_url.strip()
+    return bool(state_url.strip()) and state_url == gate_url
 
 
-def _state_text(value: Any) -> str:
-    """The state as text — stripped, never shortened (see the bounds note).
+def _scalar_text(value: Any) -> str:
+    """One loom-written key as stripped text; "" for anything that is not one.
 
-    Non-strings are refused, like every other key here: loom writes flat
-    scalars, and ``str()``-ing a peer-sized container to label a badge is the
+    No cap: the two values that have one take it from :func:`_bounded` at the
+    point they are RENDERED, so nothing here can shorten a value before it is
+    interpreted. Non-strings are refused outright rather than stringified — all
+    four keys are documented as flat scalars, so a dict or a list here is
+    malformed, and ``str()``-ing a peer-sized container on every render is the
     allocation the Gates section refuses everywhere else.
     """
     return value.strip() if isinstance(value, str) else ""
 
 
-def _scalar_text(value: Any, *, cap: int) -> str:
-    """One loom-written key as text bounded to its own domain; "" otherwise.
-
-    Used for the two keys that HAVE a stated domain to bound to — the detail
-    line and the stamp; the state is deliberately unbounded (see the bounds
-    note above). Non-strings are refused outright rather than stringified: all
-    four keys are documented as flat scalars, so a dict or a list here is
-    malformed, and ``str()``-ing a peer-sized container on every render to keep
-    200 bytes of it is the allocation the Gates section refuses everywhere else.
-    """
-    if not isinstance(value, str):
-        return ""
-    text = value.strip()
+def _bounded(text: str, cap: int) -> str:
+    """``text`` capped for DISPLAY, with the ellipsis that says it was cut."""
     return text[: cap - 1] + "…" if len(text) > cap else text
