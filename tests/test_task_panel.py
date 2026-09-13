@@ -529,13 +529,26 @@ def test_a_resolved_pr_gate_shows_no_live_state_on_either_surface(
         panel = client.get("/tasks/gate-pr-done?fragment=panel").text
         page = client.get("/tasks/gate-pr-done").text
 
+    # Positive control FIRST, on each surface: the promise is "render the
+    # resolved gate, minus its stale live-state badge", and an absence
+    # assertion is satisfied just as well by a panel that rendered nothing —
+    # not-found, unavailable, or a read error — which would hide a regression
+    # behind a passing test. So each body must be the real thing: this task,
+    # as a `pr` gate, at its terminal status, and through none of the panel's
+    # degraded branches (all of which mark themselves with `data-panel-state`).
+    assert 'data-panel-task="gate-pr-done"' in panel
+    assert "data-panel-state=" not in panel
+    assert 'data-task-detail="gate-pr-done"' in page
     for body in (panel, page):
+        assert "Land the migration PR" in body
+        assert 'data-task-type="gate"' in body
+        assert 'data-gate-type="pr">pr gate' in body
+        assert f'<span class="badge badge-{status}">{status}</span>' in body
+        # …and only the present-tense claim is missing from it.
         assert "badge-reconciliation" not in body
         assert "data-reconciliation-state" not in body
         assert "data-reconciliation-detail" not in body
-    # The gate itself still renders, and its keys survive as HISTORY in the
-    # metadata table — it is the present-tense CLAIM that is withheld.
-    assert 'data-gate-type="pr"' in page
+    # The keys themselves survive as HISTORY in the metadata table.
     assert "<dt>reconciliation_state</dt>" in page
     assert "<dd>needs_human</dd>" in page
 
