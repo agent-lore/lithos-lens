@@ -324,7 +324,23 @@ const rows = {
       panelUrl: "/tasks/id?task_id=graph&project=influx&fragment=panel",
     },
   },
+  // A row from the Gates section. It renders gate chrome instead of the
+  // claim/blocker chrome of an ordinary row, so it carries `data-gate-row`
+  // and NOT `data-task-row` — and the SAME panel contract, which is the whole
+  // point: one click handler for every row on the board (§5.5).
+  gate: {
+    gateRow: true,
+    dataset: {
+      taskId: "gate",
+      panelUrl: "/tasks/gate?project=influx&fragment=panel",
+    },
+  },
 };
+
+// The one selector tasks.js closest()s a click up to. Spelled once here for
+// the same reason it is spelled once there: a row that does not match it is a
+// row the panel cannot be opened from.
+const PANEL_ROW = "[data-panel-url][data-task-id]";
 
 const boardNode = { replaceWith(next) { board = next.html; } };
 const titleLink = { classList: { contains: (name) => name === "task-title" } };
@@ -344,8 +360,17 @@ const document = {
     if (selector === "[data-panel-host]") return host;
     if (selector === '[data-refresh-fragment="panel"]') return host.panel;
     if (selector === '[data-refresh-fragment="dashboard-data"]') return boardNode;
+    // The PANEL contract — carried by every row on the board, gates included.
+    const selected =
+      /\\[data-panel-url\\]\\[data-task-id="([^"]+)"\\]/.exec(selector);
+    if (selected) return rows[selected[1]] || null;
+    // The SSE handlers' hook, which a gate row does not carry: its chrome is
+    // not the claim/status chrome those handlers rewrite.
     const row = /\\[data-task-row\\]\\[data-task-id="([^"]+)"\\]/.exec(selector);
-    if (row) return rows[row[1]] || null;
+    if (row) {
+      const found = rows[row[1]];
+      return found && !found.gateRow ? found : null;
+    }
     return null;
   },
   querySelectorAll() { return { length: 0, forEach() {} }; },
@@ -471,7 +496,12 @@ const ACTIONS = {
     { "[data-task-panel]": {}, "a[href]": tagLink }, "expand",
   )),
   tag: () => fire("click", clickEvent(
-    { "[data-task-row]": rows.alpha, "a[href]": tagLink }, "tag",
+    { [PANEL_ROW]: rows.alpha, "a[href]": tagLink }, "tag",
+  )),
+  // The <summary> of a gate row's waiter list: the browser's own control for
+  // the <details> it opens, inside a row the panel handler claims.
+  waiters: () => fire("click", clickEvent(
+    { [PANEL_ROW]: rows.gate, summary: {} }, "waiters",
   )),
   back: () => { if (cursor > 0) cursor -= 1; fire("popstate", {}); },
   forward: () => {
@@ -503,13 +533,13 @@ const ACTIONS = {
     const [name, argument] = action.split(":");
     if (name === "click") {
       fire("click", clickEvent(
-        { "[data-task-row]": rows[argument], "a[href]": titleLink }, "row:" + argument,
+        { [PANEL_ROW]: rows[argument], "a[href]": titleLink }, "row:" + argument,
       ));
     } else if (name === "click-body") {
       // The row itself, away from any link — "clicking a ROW opens the panel"
       // (§5.5), not only clicking its title.
       fire("click", clickEvent(
-        { "[data-task-row]": rows[argument] }, "row-body:" + argument,
+        { [PANEL_ROW]: rows[argument] }, "row-body:" + argument,
       ));
     } else if (name === "settle") {
       fetches[Number(argument)].settle();
@@ -949,6 +979,33 @@ def test_clicking_the_row_away_from_any_link_opens_the_panel() -> None:
     assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
     assert result["panel"] == "panel:alpha"
     assert result["prevented"] == ["row-body:alpha"]
+
+
+def test_clicking_a_gate_row_opens_its_panel_like_any_other_row() -> None:
+    """A gate is a row on the board, so §5.5's "clicking a row opens a panel"
+    covers it. Gate rows carry gate chrome instead of claim chrome and so do
+    NOT carry `data-task-row`; keying the handler off that attribute left the
+    whole Gates section navigating away on a title click and inert everywhere
+    else. The panel contract is `data-panel-url` + `data-task-id`, which every
+    rendered row carries."""
+    result = _panel_run(["click:gate", "settle:0"])
+
+    assert result["fetches"] == ["/tasks/gate?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=gate"]
+    assert result["panel"] == "panel:gate"
+    assert result["prevented"] == ["row:gate"]
+
+
+def test_a_gate_rows_waiter_list_still_opens_natively() -> None:
+    """The waiter count is a <details> so it expands with no JS at all. Its
+    <summary> is the browser's own control, and a row handler that swallowed
+    the click would trade the disclosure for a panel open — the list could
+    then never be expanded again."""
+    result = _panel_run(["waiters"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
 
 
 def test_escape_closes_a_server_rendered_panel_with_no_click_before_it() -> None:

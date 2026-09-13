@@ -10,8 +10,13 @@
   class tokens or selector hooks. Timer gates render ``ready_at`` as an
   absolute stamp — the no-JS baseline — which tasks.js rewrites into a live
   countdown.
+
+  A gate is a task, so it takes part in the side panel exactly like the rows in
+  tasks/row.html do (§5.5, T2-A6): `data-task-id` plus the SERVER-built
+  `data-panel-url` is the whole contract tasks.js clicks on, and "what is this
+  gate holding up?" is the Blocks list the panel already answers.
 #}
-<article class="task-row gate-row" id="task-row-{{ gate.task.id }}" data-gate-row data-task-id="{{ gate.task.id }}" data-gate-type="{{ gate.type_slug }}" title="{{ gate.task.title }}">
+<article class="task-row gate-row" id="task-row-{{ gate.task.id }}" data-gate-row data-task-id="{{ gate.task.id }}" data-panel-url="{{ panel_fragment_url(request, gate.task.id) }}" data-gate-type="{{ gate.type_slug }}" title="{{ gate.task.title }}">
   <div>
     <a class="task-title" href="{{ task_detail_url(request, gate.task.id) }}">{{ gate.task.title }}</a>
     {% if gate.task.description %}

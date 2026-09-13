@@ -83,4 +83,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **69** (78 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.73** (30459 test lines / 17598 source lines)
+- Test-to-source line ratio: **1.74** (30548 test lines / 17598 source lines)

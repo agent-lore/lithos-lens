@@ -404,9 +404,17 @@ REQUIREMENTS), rendered from one template that extends no layout:
   residual fallback uses the query-alias route, whose path and key the server
   hands down, because that is the one form that addresses every id: a task
   called `graph` fetched as `/tasks/graph` would return the graph PAGE.
+- **Every row on the board opens one**, the Gates section included: a gate is a
+  task, and "what is this gate holding up?" is the Blocks list the panel
+  already answers. The contract a row opts into is `data-task-id` plus the
+  server-built `data-panel-url` — not the `data-task-row` hook the live-event
+  handlers use to rewrite claim and status chrome in place, which a gate row
+  does not carry.
 - **Expand** leaves for the full page. Every other link inside the panel is an
   ordinary link too; the click handler intercepts the row title and the row
-  itself, never a tag chip or a link within the panel.
+  itself, never a tag chip or a link within the panel. Nor a `<summary>`: the
+  gate row's waiter list is a `<details>` that expands with no JavaScript, and
+  its disclosure control keeps that behaviour.
 
 The panel states: the header (title, status, type badge with `gate_type`,
 project chip under the configured convention, creating agent), the parent

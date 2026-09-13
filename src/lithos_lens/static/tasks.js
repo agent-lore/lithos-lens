@@ -227,6 +227,34 @@
     return document.querySelector("[data-panel-host]");
   }
 
+  // The panel contract a row opts into, and the ONE selector both halves of
+  // the interaction use: the id the click selects plus the server-built URL
+  // its panel comes from. Every kind of board row carries the pair —
+  // tasks/row.html, tasks/gate_row.html (a gate is a task, and §5.5 puts a
+  // panel behind every row, not behind the workable ones only) and the
+  // skeleton `insertSkeletonRow` builds below. Deliberately NOT
+  // `[data-task-row]`: that attribute is the SSE handlers' hook for the rows
+  // they may rewrite in place, and a gate row's chrome is not theirs to touch.
+  // Requiring `data-task-id` as well keeps the panel HOST out of the match —
+  // it carries a `data-panel-url` of its own for the selection it rendered.
+  const PANEL_ROW = "[data-panel-url][data-task-id]";
+
+  function panelRowFor(taskId) {
+    return document.querySelector(
+      `[data-panel-url][data-task-id="${cssEscape(taskId)}"]`
+    );
+  }
+
+  // The query alias addresses EVERY id — the path form is what the ids that
+  // collide with a page under `/tasks/` cannot use — and its path and key come
+  // from the server rather than being spelled out here.
+  function aliasPanelUrl(taskId) {
+    const alias = new URLSearchParams();
+    alias.set(config.panelAliasKey || "task_id", taskId);
+    alias.set("fragment", "panel");
+    return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
+  }
+
   function panelUrlFor(taskId) {
     // Both sources here are URLs the SERVER built, and that is the point: task
     // ids are arbitrary strings, and the id that collides with a page under
@@ -237,7 +265,7 @@
     // The row's `data-panel-url` also carries the board's preserved filters,
     // so the panel comes back with Expand and Close links inside the scope the
     // operator is browsing.
-    const row = rowFor(taskId);
+    const row = panelRowFor(taskId);
     if (row && row.dataset.panelUrl) return row.dataset.panelUrl;
     // No row for it: a deep link to a task the board's filters exclude. The
     // host keeps the URL the server built for the SELECTION it rendered, so
@@ -248,16 +276,10 @@
       return host.dataset.panelUrl;
     }
     // Last resort, for a task this tab has no server-built URL for (its row
-    // left the board on a reconcile). The QUERY ALIAS is the one route that
-    // addresses EVERY id — the path form is what the reserved ids cannot use —
-    // and its path and key come from the server rather than being spelled out
-    // here. The board's filters are lost, which costs the panel's own links
-    // their scope; opening the right task without them beats opening the wrong
-    // page with them.
-    const alias = new URLSearchParams();
-    alias.set(config.panelAliasKey || "task_id", taskId);
-    alias.set("fragment", "panel");
-    return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
+    // left the board on a reconcile): the query alias. The board's filters are
+    // lost, which costs the panel's own links their scope; opening the right
+    // task without them beats opening the wrong page with them.
+    return aliasPanelUrl(taskId);
   }
 
   // Which task a URL selects, "" for none. One reading, shared by the load-time
@@ -382,7 +404,13 @@
     // Inside the panel, every link is an ordinary link — Expand navigates to
     // the full page, and a blocker or parent opens that task's own page.
     if (target.closest("[data-task-panel]")) return;
-    const row = target.closest("[data-task-row]");
+    // A <summary> is the browser's own control for the <details> it opens, and
+    // a gate row carries one (the waiter list, which works with no JS at all).
+    // Swallowing that click would trade the disclosure for a panel open and
+    // the list could never be expanded again — the same reason the tag chips
+    // below keep their navigation.
+    if (target.closest("summary")) return;
+    const row = target.closest(PANEL_ROW);
     if (!row) return;
     const link = target.closest("a[href]");
     // The title link IS the row click (§5.5: clicking a row opens the panel,
@@ -450,6 +478,13 @@
     row.dataset.taskRow = "";
     row.dataset.taskId = taskId;
     row.dataset.taskStatus = "open";
+    // The panel contract, on a row no template rendered. The alias URL is the
+    // only one the browser may build for an arbitrary id, and it is also the
+    // right one here: the guard above means no filter is active, so there is
+    // no board scope for this panel to carry (the same reasoning as the bare
+    // detail link below). The ~800ms reconcile replaces this row with the
+    // server's, and its `data-panel-url` with the server's too.
+    row.dataset.panelUrl = aliasPanelUrl(taskId);
     row.innerHTML = `
       <div><a class="task-title" href="/tasks/${encodeURIComponent(taskId)}">${escapeHtml(title)}</a><p>Loading full task details...</p></div>
       <div class="task-row-meta"><span class="badge badge-open">open</span><span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span></div>

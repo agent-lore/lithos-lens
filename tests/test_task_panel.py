@@ -27,12 +27,13 @@ makes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 
 from lithos_lens.task_links import LINK_PAGE_SIZE
 from tests.test_task_detail import _client, _link, _task
-from tests.test_tasks_mvp import TaskFakeLithosClient
+from tests.test_tasks_mvp import TaskFakeLithosClient, _add_gate
 
 
 def _related_fixture() -> TaskFakeLithosClient:
@@ -189,6 +190,37 @@ def test_the_rows_panel_url_is_the_fragment_route_with_the_board_filters(
     assert panel_url.replace("&amp;", "&") == (
         "/tasks/open-unclaimed?project=influx&fragment=panel"
     )
+
+
+def test_every_row_on_the_board_carries_the_panel_contract(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5.5 puts a panel behind EVERY row, so every row the board renders has
+    to carry the pair tasks.js opens one from: the id it selects and the
+    server-built URL its panel comes from.
+
+    Asserted over the rendered markup rather than per template, because the
+    board has more than one kind of row and they are easy to forget. The Gates
+    section was: its rows carry gate chrome instead of claim chrome, so they
+    do not carry `data-task-row`, and a click handler keyed off that attribute
+    left the whole section navigating away instead of opening a panel.
+    """
+    fake = _related_fixture()
+    _add_gate(fake, "gate-human", title="Approve the cutover")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    rows = re.findall(r"<article class=\"task-row[^\"]*\"[^>]*>", response.text)
+    assert any("data-gate-row" in row for row in rows), (
+        "the fixture is meant to put a gate row on the board"
+    )
+    inert = [
+        row
+        for row in rows
+        if "data-task-id=" not in row or "data-panel-url=" not in row
+    ]
+    assert inert == [], f"rows with no panel to open: {inert}"
 
 
 # --- Acceptance: an unknown id is a panel, never a 500 ----------------------

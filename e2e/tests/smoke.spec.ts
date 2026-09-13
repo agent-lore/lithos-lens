@@ -398,6 +398,39 @@ test("clicking a row away from its links opens the panel too", async ({ page }) 
   await expect(page).toHaveURL(/selected=influx-backfill/);
 });
 
+test("clicking a gate row opens its panel, and the waiter list still opens", async ({
+  page,
+}) => {
+  // §5.5's "clicking a row opens a panel" covers the Gates section too: a gate
+  // is a task, and "what is this gate holding up?" is the Blocks list the
+  // panel already answers. Gate rows carry gate chrome rather than claim
+  // chrome, so they do not carry `data-task-row` — which is exactly how the
+  // section fell out of the shared click contract.
+  await page.goto("/tasks?since=2026-08-01");
+  const gate = page.locator(
+    '[data-gate-row][data-task-id="influx-read-swap-approval"]',
+  );
+  await expect(gate).toBeVisible();
+
+  // The waiter disclosure is a <details> that works with no JS, so the row
+  // handler must leave its <summary> alone. Toggled BEFORE the panel click:
+  // a handler that swallowed it would both fail to expand the list and open
+  // the panel early.
+  const waiters = gate.locator("[data-gate-waiters]");
+  await waiters.locator("summary").click();
+  await expect(waiters.locator(".gate-waiter-list")).toBeVisible();
+  await expect(page).not.toHaveURL(/selected=/);
+
+  await gate.locator(".task-title").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-read-swap-approval"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-read-swap-approval/);
+  // Still the board — a gate click used to be a full-page navigation.
+  await expect(page.locator(".task-board")).toBeVisible();
+});
+
 test("a panel fetch that fails leaves the board exactly as it was", async ({
   page,
 }) => {
