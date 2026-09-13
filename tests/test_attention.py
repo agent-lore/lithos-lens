@@ -364,6 +364,24 @@ def test_a_pr_that_is_merely_moving_stays_in_the_gates_section(state: str) -> No
     assert _section_ids(_flag([gate]), "attention") == []
 
 
+@pytest.mark.parametrize(
+    "state",
+    ["needs_human ", " needs_human", "gate_failed\n"],
+    ids=["trailing space", "leading space", "failed with newline"],
+)
+def test_a_state_that_only_looks_escalating_does_not_promote(state: str) -> None:
+    """Rule 3b fires on loom's vocabulary, matched exactly.
+
+    A promotion is the most disruptive thing this rule can do — it pulls the
+    gate out of the Gates section and puts it at the top of the board — so it
+    must rest on a state loom actually wrote, not on one Lens tidied into
+    shape. The gate still renders, with an unknown-state badge.
+    """
+    gate = _pr_gate(state=state, since=_ago(days=9), detail="cannot vouch for this.")
+
+    assert _section_ids(_flag([gate]), "attention") == []
+
+
 def test_a_needs_human_state_about_another_pr_does_not_escalate() -> None:
     """Same rule as the badge, from the same code: a state describing a PR this
     gate no longer points at is not evidence about this gate — and promoting on

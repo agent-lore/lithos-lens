@@ -255,6 +255,36 @@ def test_an_unconfirmable_pr_renders_no_badge(
     )
 
 
+@pytest.mark.parametrize(
+    "state",
+    ["needs_human ", " needs_human", "needs_human\n", " ready_to_merge", "\tbehind"],
+    ids=["trailing space", "leading space", "trailing newline", "green", "tab"],
+)
+def test_a_state_that_only_looks_like_a_known_one_stays_unknown(state: str) -> None:
+    """The vocabulary is matched EXACTLY, on the value as loom wrote it.
+
+    Trimming first reads as harmless tidying and is the same mistake as
+    trimming the PR url: it makes Lens rule that `"needs_human "` is loom's
+    `needs_human`, and that verdict is not cosmetic — it takes the red badge,
+    the top of the Gates ordering and an IMMEDIATE promotion into Needs
+    attention on a value loom's own closed set does not contain. The honest
+    answer to a string Lens cannot find in the mapping is the same whatever it
+    resembles: grey, unknown, and its own text (whitespace included, since the
+    contract is that the operator sees what loom wrote).
+    """
+    rendered = reconciliation_of(
+        _pr_gate(state=state), gate_type=PR_GATE_TYPE, now=_NOW
+    )
+
+    assert rendered is not None
+    assert rendered.state == state
+    assert rendered.label == state
+    assert (rendered.slug, rendered.tone) == ("unknown", "unknown")
+    assert rendered.severity == UNKNOWN_STATE_SEVERITY
+    # …and it is neither of the states rule 3b escalates on.
+    assert rendered.state not in {NEEDS_HUMAN_STATE, GATE_FAILED_STATE}
+
+
 @pytest.mark.parametrize("gate_type", ["human", "timer", "ci", "external_task", ""])
 def test_only_pr_gates_carry_a_reconciliation_state(gate_type: str) -> None:
     """These keys are loom's PR sweep. On any other gate they are stray

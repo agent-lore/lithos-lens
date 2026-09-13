@@ -79,11 +79,13 @@ GATE_FAILED_STATE = "gate_failed"
 
 # Bounds, and the deliberate absence of one.
 #
-# The STATE is NOT capped. Its whole contract is that loom owns the vocabulary
-# and may extend it, so a value Lens does not recognise is rendered as its own
-# text — and a cap would quietly render a DIFFERENT value ("a_very_long_futur…")
-# for any future state that outgrew it, which is the one failure mode the
-# opaque-string contract exists to prevent. Peer-written text of unknown length
+# The STATE is NOT capped — nor trimmed, nor normalised in any other way. Its
+# whole contract is that loom owns the vocabulary and may extend it, so a value
+# Lens does not recognise is rendered as its own text, and any edit Lens made to
+# it first would render a DIFFERENT value than the one upstream holds
+# ("a_very_long_futur…", or `needs_human` for a `"needs_human "` that loom's
+# vocabulary does not contain) — the one failure mode the opaque-string
+# contract exists to prevent. Peer-written text of unknown length
 # is not a new exposure on these rows either: a task's title and description
 # reach every row of the board verbatim already. The markup TOKENS built from
 # the state stay closed whatever its length (``slug``/``tone`` collapse to
@@ -168,10 +170,11 @@ def reconciliation_of(
 
     - the gate is not a ``pr`` gate. Nothing else carries these keys, and a
       badge built from stray metadata on a timer gate would be a fiction;
-    - ``reconciliation_state`` is absent, empty, or not a string. loom writes
+    - ``reconciliation_state`` is absent, blank, or not a string. loom writes
       flat scalars, so a container here is malformed rather than meaningful —
       and it stays visible either way, as the generic advisory chips that render
-      whenever this returns None;
+      whenever this returns None. A state that IS a string is used as written
+      (see ``_state_text``);
     - the state cannot be CONFIRMED to be about the PR this gate points at (see
       ``_describes_this_pr``).
 
@@ -181,7 +184,7 @@ def reconciliation_of(
     if gate_type != PR_GATE_TYPE:
         return None
     metadata = task.metadata
-    state = _scalar_text(metadata.get(RECONCILIATION_STATE_KEY))
+    state = _state_text(metadata.get(RECONCILIATION_STATE_KEY))
     if not state:
         return None
     if not _describes_this_pr(metadata):
@@ -248,15 +251,40 @@ def _describes_this_pr(metadata: Mapping[str, Any]) -> bool:
     return bool(state_url.strip()) and state_url == gate_url
 
 
-def _scalar_text(value: Any) -> str:
-    """One loom-written key as stripped text; "" for anything that is not one.
+def _state_text(value: Any) -> str:
+    """The state EXACTLY as loom wrote it, or "" when there is no state.
 
-    No cap: the two values that have one take it from :func:`_bounded` at the
-    point they are RENDERED, so nothing here can shorten a value before it is
-    interpreted. Non-strings are refused outright rather than stringified — all
-    four keys are documented as flat scalars, so a dict or a list here is
-    malformed, and ``str()``-ing a peer-sized container on every render is the
-    allocation the Gates section refuses everywhere else.
+    Deliberately not stripped, unlike the two display values below. The state is
+    the key into the closed vocabulary, so trimming it here would be Lens
+    ruling that ``"needs_human "`` IS ``needs_human`` — taking the red badge,
+    the top of the ordering and the immediate escalation on a value loom's own
+    vocabulary does not contain. The same cleanup would also render a genuinely
+    new state without the whitespace loom wrote, which the verbatim contract
+    forbids for the same reason a cap does (see the bounds note).
+
+    So the rule matches ``_describes_this_pr``: the two values a DECISION is
+    keyed on — this and the PR url — are compared as written, and ``strip()``
+    decides only whether there is a value here at all. A whitespace-only state
+    is an absent one; anything else is matched exactly and, when nothing
+    matches, rendered verbatim in the unknown tone.
+
+    Non-strings are refused like every other key: loom writes flat scalars, so a
+    dict or a list here is malformed, and ``str()``-ing a peer-sized container
+    on every render is the allocation the Gates section refuses everywhere else.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    return value
+
+
+def _scalar_text(value: Any) -> str:
+    """One loom-written DISPLAY value as stripped text; "" if it is not one.
+
+    The detail line and the stamp, both of which are shown rather than matched
+    — stripping them changes no verdict, and a stamp is parsed by a parser that
+    strips anyway. No cap here: the two that have one take it from
+    :func:`_bounded` at the point they are RENDERED, so nothing can shorten a
+    value before it is interpreted.
     """
     return value.strip() if isinstance(value, str) else ""
 
