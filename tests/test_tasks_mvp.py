@@ -2018,6 +2018,10 @@ def test_healthy_stripe_is_withheld_when_a_frontier_row_is_not_open(
     assert response.status_code == 200
     text = response.text
     assert "This view may be a moment behind." in text
+    # Hedged, never a promise: the same reads can skew again on the next load,
+    # so the notice offers a refresh rather than guaranteeing what it will show.
+    assert "A refresh may settle it." in unescape(text)
+    assert "next refresh" not in text
     assert "All systems healthy" not in text
     assert "data-attention-healthy" not in text
     assert "data-attention-unknown" in text

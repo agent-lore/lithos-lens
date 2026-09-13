@@ -116,11 +116,13 @@ class DashboardData:
     next_gate_ready_at: str = ""
     reconciliation_pending: bool = False
     # A task a frontier read returned that the adopted open snapshot did not,
-    # still contradictory after the one skew retry (§14). It drives no banner
-    # and no row decoration — the row is in NO section, so there is nothing to
-    # annotate. What it does is withhold the affirmative surfaces: this load
-    # observed a task it renders nowhere, which is neither "0 issues" nor
-    # "nothing here" (see ``frontier._is_nothing_to_show``).
+    # still contradictory after the one skew retry (§14). It drives no row
+    # decoration and not the reconciliation banner — the row is in NO section,
+    # so there is nothing to annotate — but it does withhold the affirmative
+    # surfaces (this load observed a task it renders nowhere, which is neither
+    # "0 issues" nor "nothing here"; see ``frontier._is_nothing_to_show``) and
+    # carries its own notice, which offers a refresh rather than promising one
+    # will help: the reads can skew again.
     frontier_skew_unresolved: bool = False
     truncated: bool = False
     # True when these filters hide part of the corpus from the sections, so

@@ -175,10 +175,11 @@
            to mark "awaiting reconciliation" above — and saying nothing would
            leave the board describing itself as complete (or empty) over a task
            this very load read. The healthy stripe is withheld for the same
-           reason. #}
+           reason. The wording promises nothing: independent reads can skew
+           again, so a refresh MAY settle the view — Lens cannot say it will. #}
         <section class="banner banner-warning" role="status" data-frontier-skew-banner>
           <strong>This view may be a moment behind.</strong>
-          <span>A task the Lithos frontier returned is missing from the open list — most likely it resolved while this page was being read — so it is not shown in any section below. It appears on the next refresh.</span>
+          <span>A task the Lithos frontier returned is missing from the open list — most likely it resolved while this page was being read — so it is not shown in any section below. A refresh may settle it.</span>
         </section>
       {% endif %}
 
