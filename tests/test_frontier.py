@@ -219,9 +219,10 @@ class _FrontierFake:
     """Minimal client covering the parallel calls load_dashboard makes.
 
     The frontier reads HONOR their ``limit`` (mirroring the real server), and
-    ``ready`` / ``blocked`` accept either a single response or a SEQUENCE of
-    responses so read-skew retries can be scripted (the last response repeats).
-    Call counts are recorded for retry assertions.
+    every read of a generation — ``open_tasks`` / ``ready`` / ``blocked`` and
+    the ``completed`` / ``cancelled`` windows — accepts either a single
+    response or a SEQUENCE of responses so read-skew retries can be scripted
+    (the last response repeats). Call counts are recorded for retry assertions.
     """
 
     def __init__(
@@ -230,14 +231,15 @@ class _FrontierFake:
         open_tasks: list[TaskRecord] | list[list[TaskRecord]],
         ready: list[TaskRecord] | list[list[TaskRecord]],
         blocked: list[BlockedTaskRecord] | list[list[BlockedTaskRecord]],
-        completed: list[TaskRecord] | None = None,
-        cancelled: list[TaskRecord] | None = None,
+        completed: list[TaskRecord] | list[list[TaskRecord]] | None = None,
+        cancelled: list[TaskRecord] | list[list[TaskRecord]] | None = None,
         fail_ready: bool = False,
         children: dict[str, list[TaskRecord]] | None = None,
         fail_children: set[str] | None = None,
         gets: dict[str, TaskRecord] | None = None,
         missing_gets: set[str] | None = None,
         fail_ready_from: int | None = None,
+        fail_completed_from: int | None = None,
         ready_error: BaseException | None = None,
         blocked_error: BaseException | None = None,
         edges: dict[str, list[EdgeRecord]] | None = None,
@@ -247,8 +249,8 @@ class _FrontierFake:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
         self._blocked_seq = self._as_sequence(blocked)
-        self._completed = completed or []
-        self._cancelled = cancelled or []
+        self._completed_seq = self._as_sequence(completed or [])
+        self._cancelled_seq = self._as_sequence(cancelled or [])
         self._fail_ready = fail_ready
         self._children = children or {}
         self._fail_children = fail_children or set()
@@ -278,8 +280,11 @@ class _FrontierFake:
         self.blocked_calls = 0
         self.children_calls: list[dict[str, Any]] = []
         # Which ready call starts failing (0-based): scripts a first
-        # generation that succeeds and a RETRY that does not.
+        # generation that succeeds and a RETRY that does not. The same for the
+        # completed window — the retry re-reads it too, so it has the same
+        # power to leave the generation mixed.
         self._fail_ready_from = fail_ready_from
+        self._fail_completed_from = fail_completed_from
         # Per-tool frontier failures: each read reports its own error line
         # ("ready" vs "blocked"), so the two are scripted separately.
         self._ready_error = ready_error
@@ -287,6 +292,8 @@ class _FrontierFake:
         self.open_calls = 0
         self.ready_calls = 0
         self.blocked_calls = 0
+        self.completed_calls = 0
+        self.cancelled_calls = 0
         self.list_calls: list[dict[str, Any]] = []
 
     @staticmethod
@@ -320,18 +327,26 @@ class _FrontierFake:
             index = min(self.open_calls, len(self._open_seq) - 1)
             self.open_calls += 1
             rows = self._open_seq[index]
+        elif status == "completed":
+            if self._fail_completed_from is not None and (
+                self.completed_calls >= self._fail_completed_from
+            ):
+                self.completed_calls += 1
+                raise RuntimeError("completed window unavailable")
+            index = min(self.completed_calls, len(self._completed_seq) - 1)
+            self.completed_calls += 1
+            rows = self._completed_seq[index]
         else:
-            rows = {
-                "completed": self._completed,
-                "cancelled": self._cancelled,
-            }[status or "open"]
-            if resolved_since:
-                # Upstream windows on resolved_at and drops NULL-resolved rows.
-                rows = [
-                    task
-                    for task in rows
-                    if task.resolved_at and task.resolved_at >= resolved_since
-                ]
+            index = min(self.cancelled_calls, len(self._cancelled_seq) - 1)
+            self.cancelled_calls += 1
+            rows = self._cancelled_seq[index]
+        if resolved_since:
+            # Upstream windows on resolved_at and drops NULL-resolved rows.
+            rows = [
+                task
+                for task in rows
+                if task.resolved_at and task.resolved_at >= resolved_since
+            ]
         if agent:
             rows = [task for task in rows if task.created_by == agent]
         if tags:
@@ -968,6 +983,150 @@ def test_claimed_overlap_healed_on_retry_leaves_no_residual_flags() -> None:
     assert row.blockers == ()
     assert row.reconciliation_pending is False
     assert data.reconciliation_pending is False
+
+
+def _terminal_reads(fake: _FrontierFake) -> list[str | None]:
+    """The status of every terminal-window read, in call order."""
+    return [
+        call["status"]
+        for call in fake.list_calls
+        if call["status"] in ("completed", "cancelled")
+    ]
+
+
+def test_a_ready_only_row_retries_every_read_of_the_generation() -> None:
+    """Regression (loom ``lens43-composed-projects``): a row the FRONTIER
+    returned and the open read did not is skew too.
+
+    Ordering: both terminal windows answer empty, ``task_ready`` returns T, T
+    completes, the master open read answers empty. T was then in no section,
+    in no overlap, and nothing made the state retry-worthy — so the board
+    rendered "No tasks in this window" over a read of its own generation that
+    had returned a task.
+
+    It must retry, and retry ALL FIVE reads: adopting a fresh open/ready/
+    blocked triple beside the first generation's stale (empty) completed
+    window is the mixed generation §14 forbids, and would lose T entirely.
+    """
+    t = _task("t", claims=())
+    done = replace(t, status="completed")
+    fake = _FrontierFake(
+        open_tasks=[[], []],
+        ready=[[t], []],
+        blocked=[],
+        completed=[[], [done]],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
+    assert _terminal_reads(fake) == [
+        "completed",
+        "cancelled",
+        "completed",
+        "cancelled",
+    ]
+    # The whole retried generation is adopted, so T renders where it now is.
+    assert _section_ids(data.sections, "completed") == ["t"]
+    assert data.nothing_to_show is False
+    assert data.errors == ()
+
+
+def test_a_blocked_only_row_retries_the_same_way_a_ready_only_row_does() -> None:
+    """The blocked frontier is the other half of the same contradiction: a
+    task it returned that the open read never saw retries the generation and
+    lands wherever the retried reads find it."""
+    t = _task("t", claims=())
+    done = replace(t, status="completed")
+    fake = _FrontierFake(
+        open_tasks=[[], []],
+        ready=[],
+        blocked=[[_blocked(t, BlockerRecord(kind="task", task_id="p"))], []],
+        completed=[[], [done]],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
+    assert _section_ids(data.sections, "completed") == ["t"]
+    assert data.nothing_to_show is False
+
+
+def test_a_coherent_empty_generation_may_still_say_nothing_to_show() -> None:
+    """The retry ARBITRATES rather than vetoing the panel: when the re-read of
+    every one of the five finds nothing anywhere, the load holds a coherent
+    empty generation and "No tasks in this window" is a claim it supports."""
+    t = _task("t", claims=())
+    fake = _FrontierFake(open_tasks=[[], []], ready=[[t], []], blocked=[])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.ready_calls == 2
+    assert data.nothing_to_show is True
+    assert data.errors == ()
+
+
+def test_a_below_limit_gap_adopts_the_retried_terminal_windows_too() -> None:
+    """Variant 2 of the same defect, reached through the OTHER skew signal.
+
+    X is in the initial open read but in neither frontier (a below-limit gap),
+    so the generation retries; the retry finds X gone from open/ready/blocked
+    and resolved in the completed window. While the retry re-read only three
+    of the five, the load kept the first generation's empty completed result
+    and X — a task this one load saw twice — rendered in no section at all.
+    """
+    x = _task("x", claims=())
+    done = replace(x, status="completed")
+    fake = _FrontierFake(
+        open_tasks=[[x], []],
+        ready=[],
+        blocked=[],
+        completed=[[], [done]],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    assert _terminal_reads(fake) == [
+        "completed",
+        "cancelled",
+        "completed",
+        "cancelled",
+    ]
+    for section in (
+        "in_progress",
+        "ready",
+        "blocked",
+        "claims_unknown",
+        "unclassified",
+    ):
+        assert "x" not in _section_ids(data.sections, section)
+    assert _section_ids(data.sections, "completed") == ["x"]
+    assert data.nothing_to_show is False
+    assert data.reconciliation_pending is False
+
+
+def test_a_terminal_read_failing_the_retry_keeps_the_first_generation() -> None:
+    """All five or none: a terminal window that does not answer the retry is a
+    failed re-read like any other. The first generation stands, the failure
+    reaches the error channel, and the healthy stripe is withheld."""
+    t = _task("t", claims=())
+    fake = _FrontierFake(
+        open_tasks=[[], []],
+        ready=[[t], []],
+        blocked=[],
+        fail_completed_from=1,
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    # The completed window was part of the retry, and it is what failed.
+    assert fake.completed_calls == 2
+    assert RETRY_FAILED_ERROR in data.errors
+    assert data.healthy is False
+    # First generation kept, not mixed — and it saw a task, so the empty-state
+    # panel stays away.
+    assert data.nothing_to_show is False
 
 
 def test_summary_counts_exclude_claims_unknown_rows() -> None:
