@@ -62,6 +62,7 @@ from lithos_lens.frontier_join import (
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
     board_visible_ids,
+    displayed_read_failed,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
     loaded_task_rows,
@@ -561,18 +562,14 @@ async def load_dashboard(
     # Zero unless the open side is actually on screen: with ``?status=completed``
     # the open sections are emptied by choice, and an epic in the snapshot must
     # not turn that into "nothing to work on here".
-    # …and only the rows the strip REPRESENTS: an epic the filters left with no
-    # work here has no chip, so counting it would send the operator to a strip
-    # that does not hold it (the hidden-chip note accounts for those instead).
-    chip_ids = {rollup.task.id for rollup in strip.rollups}
+    # EVERY type this board cannot place is counted, not just epics: an open
+    # row of a type Lens does not know is withheld with no surface of its own,
+    # and dropping it from this number would let the healthy stripe claim a
+    # board that is hiding it.
     rolled_up_open = (
         0
         if open_flat or "open" not in filters.statuses
-        else sum(
-            1
-            for task in visible_open
-            if task.task_type not in PLACED_OPEN_TYPES and task.id in chip_ids
-        )
+        else sum(1 for task in visible_open if task.task_type not in PLACED_OPEN_TYPES)
     )
 
     closed: dict[str, list[TaskRecord]] = {}
@@ -707,6 +704,10 @@ async def load_dashboard(
         # explain: in no section, so never examined (see the field).
         frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
+        # Whether a window this board DISPLAYS failed to load: the epic-scope
+        # explanations are claims about the filters, and only this can make a
+        # row's membership unknown (a failed stats or agent read cannot).
+        rows_incomplete=displayed_read_failed(closed_results, filters=filters),
         epics=strip.rollups,
         epics_hidden=strip.hidden,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its

@@ -163,6 +163,11 @@ class DashboardData:
     # beside the strip rather than absorbed silently — a short strip otherwise
     # reads as "these are all the epics".
     epics_hidden: int = 0
+    # A window this board DISPLAYS did not answer, so which rows belong on it
+    # is unknown rather than known-empty. Narrower than ``errors`` on purpose:
+    # only this withholds the epic-scope explanations (§5.2.1), because only
+    # this can hide a row that would have filled the board.
+    rows_incomplete: bool = False
     # The epic id the sections are actually scoped to — empty when no ``?epic=``
     # was asked for OR when the requested epic is no longer an open epic, which
     # the template explains instead of rendering a silently empty board.
@@ -185,33 +190,53 @@ class DashboardData:
         return next((epic for epic in self.epics if epic.selected), None)
 
     @property
-    def epic_scope_unmatched(self) -> bool:
-        """True when the board is scoped to an epic the other filters empty.
+    def epic_scope_blank(self) -> bool:
+        """True when the board is scoped to an epic and renders NO row at all.
 
         The residual dead end after §5.2.1's scoping: the SELECTED chip is kept
         whatever the filters leave of it (it is the live scope), and a shared
-        ``?epic=`` URL can arrive with any filters at all. Both land on a board
-        whose sections are all empty for a reason no section can state —
-        "nothing under this epic matches these filters" — which is what this
-        drives.
+        ``?epic=`` URL can arrive with any filters at all. Both can land on a
+        board whose sections are all empty for a reason no section can state.
+        This is the shared precondition of the two explanations below — the
+        board owes the operator ONE of them — and what the sections themselves
+        stand down for, so the reason is stated once and names the epic.
 
         Distinct from the confirmed-childless epic beside it (an empty scope,
         not an emptied one) and from a scope that was never applied. A board
-        that renders ANYTHING — a section row, a gate, or rolled-up children
-        the strip does hold — is not this case, and says so itself.
+        that renders ANYTHING — a section row or a gate — is not this case.
 
-        It is also a claim about the FILTERS, so it stands down whenever a read
-        did not answer (the same test :func:`frontier._is_nothing_to_show`
-        applies to its own whole-board claim): rows this load never saw are
-        unknown, not filtered out, and the error banner is the honest
-        explanation of that board.
+        Both explanations are claims about what this load READ, so they stand
+        down when a window this board displays did not answer
+        (``rows_incomplete``): a row that belongs here may exist in the read
+        that failed, and the load-error banner is the honest account of that
+        board. Only that uncertainty counts — a failed stats or agent-list read
+        leaves row membership perfectly well known.
         """
         scoped = self.scoped_epic
-        if scoped is None or not scoped.descendant_ids or self.rolled_up_open:
-            return False
-        if self.errors:
+        if scoped is None or not scoped.descendant_ids or self.rows_incomplete:
             return False
         return not any(self.sections.values()) and not self.gate_groups
+
+    @property
+    def epic_scope_unmatched(self) -> bool:
+        """Blank because NOTHING under the epic survived the other filters.
+
+        The plain filter mismatch — the off-project chip of the prod repro,
+        followed into a board that cannot match anything.
+        """
+        return self.epic_scope_blank and not self.rolled_up_open
+
+    @property
+    def epic_scope_rolled_up(self) -> bool:
+        """Blank although matching descendants DID survive the other filters.
+
+        They are all rows this board cannot place — a sub-epic, which rolls up
+        into the strip, or a type Lens does not render. Told apart from
+        :attr:`epic_scope_unmatched` because the two have opposite fixes:
+        widening the filters would find nothing here, and saying "none of it
+        survives the filters" about descendants that did would be false.
+        """
+        return self.epic_scope_blank and bool(self.rolled_up_open)
 
     @property
     def rolled_up_only(self) -> bool:

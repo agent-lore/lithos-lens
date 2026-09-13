@@ -1024,12 +1024,46 @@ def test_every_chip_on_a_fully_filtered_board_leads_to_a_board_with_rows(
             _epic_row("epic-lens", "Lens epic"),
             _epic_row("epic-untagged", "Side quest epic"),
             _epic_row("epic-done", "Finished epic"),
+            _epic_row("epic-other-agent", "Other agent's epic"),
+            _epic_row("epic-claimed", "Claimed-by-planner epic"),
         ]
+    )
+    # Two rows that differ from ``loom-ready`` in the AGENT dimension alone:
+    # same project, same tag, same open status. One is another agent's work
+    # outright; the other is another agent's row that ``planner`` claims, which
+    # the creator-OR-claimer match (§5.4.2) must keep.
+    fake.tasks.extend(
+        [
+            TaskRecord(
+                id="loom-other",
+                title="Loom roadmap item, other agent",
+                status="open",
+                created_by="worker",
+                created_at=_ago(minutes=20),
+                tags=("project:lithos-loom", "roadmap-2026-08"),
+            ),
+            TaskRecord(
+                id="loom-claimed",
+                title="Loom roadmap item, claimed by planner",
+                status="open",
+                created_by="worker",
+                created_at=_ago(minutes=20),
+                tags=("project:lithos-loom", "roadmap-2026-08"),
+            ),
+        ]
+    )
+    fake.ready_ids.add("loom-other")
+    fake.claims["loom-claimed"] = (
+        ClaimRecord(
+            agent="planner", aspect="implementation", expires_at=_ahead(hours=6)
+        ),
     )
     fake.children["epic-loom"] = ["loom-ready"]
     fake.children["epic-lens"] = ["lens-ready", "lens-stale"]
     fake.children["epic-untagged"] = ["loom-offscope"]
     fake.children["epic-done"] = ["loom-done"]
+    fake.children["epic-other-agent"] = ["loom-other"]
+    fake.children["epic-claimed"] = ["loom-claimed"]
 
     query = (
         "tag=roadmap-2026-08&project=lithos-loom&agent=planner"
@@ -1039,12 +1073,20 @@ def test_every_chip_on_a_fully_filtered_board_leads_to_a_board_with_rows(
         board = client.get(f"/tasks?{query}")
         chips = _epic_chip_links(board.text)
         followed = {epic_id: client.get(href) for epic_id, href in chips.items()}
+        # The same board with the agent term dropped, as the control.
+        any_agent = client.get(f"/tasks?{query.replace('&agent=planner', '')}")
 
     assert board.status_code == 200
-    # Wrong project, wrong tag, and resolved work on an open-only board: three
-    # chips that could only have led to an empty board.
-    assert list(chips) == ["epic-loom"]
-    assert "3 more epics have no tasks on this board" in unescape(board.text)
+    # Wrong project, wrong tag, resolved work on an open-only board, and
+    # another agent's work: four chips that could only have led to an empty
+    # board. The claimed-by-planner epic survives on the claimer half of the
+    # agent match.
+    assert list(chips) == ["epic-loom", "epic-claimed"]
+    assert "4 more epics have no tasks on this board" in unescape(board.text)
+    # The agent term does that work on its own: without it, and with every
+    # other filter unchanged, the other agent's epic is back.
+    assert 'data-epic-chip="epic-other-agent"' in any_agent.text
+    assert 'data-epic-chip="epic-lens"' not in any_agent.text
 
     for epic_id, href in chips.items():
         # The link is the board's own filters plus the epic — all of them.
@@ -1061,8 +1103,81 @@ def test_every_chip_on_a_fully_filtered_board_leads_to_a_board_with_rows(
         assert response.status_code == 200
         # …and following it lands on rows, not on four "no match" lines.
         assert "data-task-row" in response.text, epic_id
-        assert "Loom roadmap item" in response.text
-        assert "No ready tasks match these filters." not in unescape(response.text)
+        assert "data-epic-scope-unmatched" not in response.text, epic_id
+    assert "Loom roadmap item" in followed["epic-loom"].text
+    assert "claimed by planner" in unescape(followed["epic-claimed"].text)
+
+
+def test_a_chip_whose_only_work_is_a_gate_leads_to_its_gate(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Gates are rows this board places (they have their own section), so an
+    epic whose only matching descendant is an open gate is a live chip — and
+    following it must render that gate rather than the "nothing matches"
+    explanation, which reads ``gate_groups`` separately from the sections."""
+    fake = _roadmap_fake()
+    _add_gate(
+        fake,
+        "loom-gate",
+        title="Loom roadmap approval",
+        tags=("project:lithos-loom", "roadmap-2026-08"),
+    )
+    fake.tasks.append(_epic_row("epic-gated", "Gated epic"))
+    fake.children["epic-gated"] = ["loom-gate"]
+
+    query = "tag=roadmap-2026-08&project=lithos-loom&since=2026-04-01"
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?{query}")
+        chips = _epic_chip_links(board.text)
+        scoped = client.get(chips["epic-gated"])
+
+    text = unescape(scoped.text)
+
+    assert board.status_code == 200
+    assert scoped.status_code == 200
+    # The gate is the whole content of that board, and it renders.
+    assert 'data-gate-row data-task-id="loom-gate"' in scoped.text
+    assert 'data-task-group="gates"' in scoped.text
+    # …so neither epic explanation applies — the board is not blank.
+    assert "data-epic-scope-unmatched" not in text
+    assert "data-epic-scope-rolled-up" not in text
+
+
+def test_a_scope_holding_only_rolled_up_rows_says_which_gap_it_is(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Reviewer repro (c-001) as the operator sees it: the sub-epic under this
+    scope DID survive the filters, so "none of it survives the other filters"
+    would be false. The board says what is actually true — the matching rows
+    roll up rather than rendering — and says it once."""
+    fake = _roadmap_fake()
+    fake.tasks.extend(
+        [
+            _epic_row("epic-outer", "Outer epic"),
+            _epic_row("epic-nested", "Nested epic"),
+        ]
+    )
+    # The nested epic carries the filtered tag, so it is not filtered OUT; it
+    # is simply not a row. Its own subtree is empty, so it has no chip either.
+    fake.tasks[-1] = replace(fake.tasks[-1], tags=("roadmap-2026-08",))
+    fake.children["epic-outer"] = ["epic-nested"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?epic=epic-outer&tag=roadmap-2026-08&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    assert "data-epic-scope-rolled-up" in text
+    assert "Nothing under this epic renders as a row." in text
+    assert "roll up rather than rendering here" in text
+    # The WRONG explanation, and the generic ones, stay away.
+    assert "data-epic-scope-unmatched" not in text
+    assert "No tasks under this epic match these filters." not in text
+    assert 'data-empty-state="rolled-up"' not in text
+    assert "data-task-group=" not in text
 
 
 def test_an_epic_scope_the_filters_empty_says_so(

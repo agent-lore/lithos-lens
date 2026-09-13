@@ -245,6 +245,7 @@ class _FrontierFake:
         edges: dict[str, list[EdgeRecord]] | None = None,
         late_edges: dict[str, list[EdgeRecord]] | None = None,
         fail_edges: bool = False,
+        fail_stats: bool = False,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -278,6 +279,9 @@ class _FrontierFake:
         # response from before it can speak to it.
         self._late_edges = late_edges or {}
         self._fail_edges = fail_edges
+        # A read that has nothing to do with which ROWS the board holds: the
+        # error banner reports it, and the row-level claims stand.
+        self._fail_stats = fail_stats
         self.edge_list_calls: list[dict[str, Any]] = []
         self.open_calls = 0
         self.ready_calls = 0
@@ -471,6 +475,8 @@ class _FrontierFake:
         raise RuntimeError(f"task '{task_id}' not found")
 
     async def stats(self) -> dict[str, Any]:
+        if self._fail_stats:
+            raise RuntimeError("stats unavailable")
         return {"open_claims": 2, "agents": 3}
 
     async def list_agents(self) -> list[AgentRecord]:
@@ -2325,11 +2331,12 @@ def test_a_chip_resting_only_on_a_rolled_up_descendant_is_not_drawn() -> None:
     assert data.epics_hidden == 2
 
 
-def test_a_scope_holding_only_a_rolled_up_row_explains_itself() -> None:
+def test_a_scope_holding_only_a_rolled_up_row_says_which_gap_it_is() -> None:
     """The other half of c-001: a bookmark can still select that outer epic.
-    Its chip is kept, no section renders — and the rolled-up nested epic has no
-    chip either, so the board must not fall back to "epics are shown as
-    progress chips in the strip above". The epic explanation says it instead."""
+    Its chip is kept and no section renders — but the nested epic DID survive
+    the filters, so "none of it survives the other filters" would be false.
+    The two gaps are told apart: this one is the placement rule, not the
+    filters, and widening them would find nothing."""
     outer = _epic("epic-outer")
     nested = _task("epic-nested", task_type="epic", tags=("roadmap",))
     fake = _FrontierFake(
@@ -2344,10 +2351,50 @@ def test_a_scope_holding_only_a_rolled_up_row_explains_itself() -> None:
 
     assert data.epic_scope == "epic-outer"
     assert not any(data.sections.values())
-    # The nested epic is in scope and matches the filters, but no chip holds
-    # it, so it is not counted as a row this board rolled up.
-    assert data.rolled_up_open == 0
-    assert data.rolled_up_only is False
+    assert data.epic_scope_blank is True
+    assert data.epic_scope_rolled_up is True
+    assert data.epic_scope_unmatched is False
+    # The nested epic is still counted as a row this board withheld — it is
+    # the subject of the explanation.
+    assert data.rolled_up_open == 1
+
+
+def test_an_unplaceable_row_is_never_dropped_from_the_rolled_up_count() -> None:
+    """Reviewer repro (c-003): ``TaskRecord.task_type`` keeps unknown future
+    strings, and the classifier cannot place one. Such a row has no chip and no
+    section, so if it also left the rolled-up count the board would render
+    empty under "All systems healthy" while holding it."""
+    future = _task("future-1", task_type="future_type")
+    fake = _FrontierFake(open_tasks=[future], ready=[], blocked=[])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.epics == ()
+    assert data.rolled_up_open == 1
+    assert data.rolled_up_only is True
+    assert data.healthy is False
+
+
+def test_an_unrelated_read_failure_does_not_silence_the_epic_explanation() -> None:
+    """Reviewer repro (c-002, narrowed): the reads that decide row membership
+    all answered — this epic demonstrably has nothing under it on this board —
+    so a failed stats read must not take the explanation away. Only a window
+    the board DISPLAYS can make membership unknown."""
+    epic = _epic("epic-1")
+    inside = _tagged("inside", "other")
+    fake = _FrontierFake(
+        open_tasks=[epic, inside],
+        ready=[inside],
+        blocked=[],
+        children={"epic-1": [inside]},
+        fail_stats=True,
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-1")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert any("stats" in message for message in data.errors)
+    assert data.rows_incomplete is False
     assert data.epic_scope_unmatched is True
 
 
@@ -2420,6 +2467,39 @@ def test_the_strip_follows_the_generation_the_skew_retry_adopted() -> None:
     assert [rollup.task.id for rollup in data.epics] == ["epic-fresh"]
     assert data.epics_hidden == 1
     assert _section_ids(data.sections, "ready") == ["fresh-row"]
+
+
+def test_hidden_chips_accumulate_across_every_fan_out_batch() -> None:
+    """The corpus that motivated the rule is many batches deep, and the hidden
+    count is summed one ``EPIC_FANOUT_BATCH`` at a time — so it has to survive
+    the boundary. Kept and hidden epics sit on both sides of both boundaries,
+    and the note beside the strip reports the whole corpus, not the last
+    batch."""
+    count = EPIC_FANOUT_BATCH * 2 + 4
+    kept = (0, 7, 8, 15, 16, 19)
+    epics = [_epic(f"epic-{index:02d}") for index in range(count)]
+    rows = {index: _tagged(f"row-{index:02d}", "roadmap") for index in kept}
+    off_tag = _tagged("off-tag", "other")
+    fake = _FrontierFake(
+        open_tasks=[*epics, *rows.values(), off_tag],
+        ready=[*rows.values(), off_tag],
+        blocked=[],
+        children={
+            f"epic-{index:02d}": [rows[index]] if index in kept else [off_tag]
+            for index in range(count)
+        },
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == [
+        f"epic-{index:02d}" for index in kept
+    ]
+    assert data.epics_hidden == count - len(kept)
+    # Every epic was still READ — the scoping narrows the strip, not the
+    # fan-out — so the count above is the whole corpus.
+    assert len(fake.children_calls) == count
 
 
 def test_the_selected_epic_keeps_its_chip_and_the_board_explains_the_gap() -> None:

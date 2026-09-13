@@ -245,6 +245,33 @@ def filters_narrow_the_board(
     ) != set(TASK_STATUSES)
 
 
+def displayed_read_failed(
+    closed_results: Sequence[Sequence[TaskRecord] | BaseException],
+    *,
+    filters: TaskFilters,
+) -> bool:
+    """True when a status the board DISPLAYS came back as a failed read.
+
+    The one uncertainty that makes row membership unknowable: a window this
+    board is showing did not answer, so a row that belongs on it may exist and
+    Lens never saw it. Every claim of the form "nothing here matches your
+    filters" has to stand down on that — and on that alone. A failed stats or
+    agent-list read, or another epic's children read, says nothing about which
+    rows this board holds, which is why those are NOT read from the aggregate
+    error list.
+
+    Takes the gather results verbatim (``list | BaseException``, the shape
+    ``frontier_fallback.resolve_frontier`` also accepts), paired with
+    :data:`TERMINAL_STATUS_READS`. The open read is deliberately not part of
+    it: without the open snapshot there are no epics to explain, so nothing
+    downstream can make the claim in the first place.
+    """
+    return any(
+        status in filters.statuses and isinstance(result, BaseException)
+        for status, result in zip(TERMINAL_STATUS_READS, closed_results, strict=True)
+    )
+
+
 def board_visible_ids(
     open_snapshot: Sequence[TaskRecord],
     closed_results: Sequence[Sequence[TaskRecord] | BaseException],
@@ -291,6 +318,8 @@ def board_visible_ids(
     """
     if not filters_narrow_the_board(filters, scope_applied=False):
         return None
+    if displayed_read_failed(closed_results, filters=filters):
+        return None
     visible: set[str] = set()
     if "open" in filters.statuses:
         visible.update(
@@ -301,10 +330,8 @@ def board_visible_ids(
         )
     open_ids = {task.id for task in open_snapshot}
     for status, result in zip(TERMINAL_STATUS_READS, closed_results, strict=True):
-        if status not in filters.statuses:
+        if status not in filters.statuses or isinstance(result, BaseException):
             continue
-        if isinstance(result, BaseException):
-            return None
         visible.update(
             task.id
             for task in result
