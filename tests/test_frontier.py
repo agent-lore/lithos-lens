@@ -1197,11 +1197,11 @@ def test_a_frontier_only_row_surviving_the_retry_withholds_the_empty_panel() -> 
     ready ``[T]`` with empty terminal windows.
 
     T is a task this load read twice, so the empty-state panel may not claim
-    the corpus is empty. That is the whole of the frontier-only evidence's
-    reach: the healthy stripe keeps its settled gating (§14 — the error
-    channel), which this story does not touch, and the reconciliation banner
-    stays away as designed (it annotates a rendered row, and there is none).
-    The retry stays single-shot.
+    the corpus is empty — and no read of either generation PLACED it, so the
+    system-wide "All systems healthy — 0 issues" claim is withheld too: the
+    attention rules only ever see rows that reached a section. The
+    reconciliation banner still stays away as designed (it annotates a
+    rendered row, and there is none). The retry stays single-shot.
     """
     t = _task("t", claims=())
     fake = _FrontierFake(open_tasks=[], ready=[t], blocked=[])
@@ -1215,10 +1215,10 @@ def test_a_frontier_only_row_surviving_the_retry_withholds_the_empty_panel() -> 
     # Not the reconciliation surface: no row moved, so nothing is annotated.
     assert data.reconciliation_pending is False
     assert data.errors == ()
-    # T is in no section, and the settled gate is unchanged by that: no read
-    # failed, nothing truncated, no row went unexamined in a RENDERED section.
+    # T is in no section — the whole reason the affirmative claim is withheld.
     assert all(not rows for rows in data.sections.values())
-    assert data.healthy is True
+    assert data.frontier_unplaced is True
+    assert data.healthy is False
 
 
 def test_a_frontier_only_row_the_terminal_window_explains_still_renders() -> None:
@@ -1240,26 +1240,24 @@ def test_a_frontier_only_row_the_terminal_window_explains_still_renders() -> Non
     assert data.nothing_to_show is False
     assert data.reconciliation_pending is False
     assert data.errors == ()
-    # Still the settled gate: the row this load read is rendered, so there is
-    # no degraded signal to report.
+    # Still the settled gate: the row this load read is PLACED (the resolved
+    # window explains the frontier-only id), so there is no degraded signal to
+    # report and the stripe is not withheld.
+    assert data.frontier_unplaced is False
     assert data.healthy is True
 
 
-def test_an_unplaced_frontier_only_row_beside_a_populated_board_only_retries() -> None:
-    """The frontier-only signal reaches the RETRY and stops there.
+def test_an_unplaced_frontier_only_row_withholds_the_healthy_stripe() -> None:
+    """Reviewer repro (#82, PR re-review): the stripe is withheld by the
+    UNPLACED row itself, not by an empty board.
 
-    Every other frontier-only case here starts from an empty open read, which
-    leaves the empty-state panel as the only observable. This board is the
-    ordinary one — every read answered, nothing truncated, no filter, one Ready
-    row rendered — plus a blocked-only ghost G the open read never saw and
-    neither resolved window explains. The retry is issued, G is placed nowhere,
-    and NOTHING else moves: no banner, no row decoration, no empty panel, and
-    the settled healthy stripe (§14 — the error channel) is untouched.
-
-    That last line is deliberate and contested: the #82 re-review asked for the
-    stripe to be withheld over an unplaced row like G. It is not withheld here,
-    because the story's criteria reserve the stripe's gating as settled design;
-    changing it is a separate decision, not this test's to pre-empt.
+    Here the board is otherwise the healthy one: every read answered, nothing
+    truncated, no filter, one Ready row rendered. The blocked frontier also
+    returns G, which the open read never saw and neither resolved window
+    explains — so G reached no section and the attention rules never evaluated
+    it. G may be a newly-ready open task the open read missed, so "0 issues"
+    cannot be asserted; nothing else about the load is degraded, so no banner
+    and no row decoration appear.
     """
     rendered = _task("r", claims=())
     ghost = _task("g", claims=())
@@ -1275,11 +1273,14 @@ def test_an_unplaced_frontier_only_row_beside_a_populated_board_only_retries() -
     assert (fake.open_calls, fake.ready_calls, fake.blocked_calls) == (2, 2, 2)
     assert _section_ids(data.sections, "ready") == ["r"]
     assert "g" not in _section_ids(data.sections, "blocked")
+    assert data.frontier_unplaced is True
+    assert data.healthy is False
+    # The stripe is the ONLY thing withheld: no error, no truncation, no
+    # reconciliation surface, and the board is not called empty.
     assert data.errors == ()
     assert data.truncated is False
     assert data.reconciliation_pending is False
     assert data.nothing_to_show is False
-    assert data.healthy is True
 
 
 def test_the_retry_adopts_the_cancelled_window_and_re_asks_the_same_reads() -> None:
