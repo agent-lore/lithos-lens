@@ -83,6 +83,7 @@ source_modules = [
     "lithos_lens.graph_page",
     "lithos_lens.frontier",
     "lithos_lens.gates",
+    "lithos_lens.pr_reconciliation",
     "lithos_lens.dashboard",
     "lithos_lens.attention",
     "lithos_lens.frontier_fallback",

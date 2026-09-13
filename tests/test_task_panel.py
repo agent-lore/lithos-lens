@@ -447,6 +447,80 @@ def test_the_panel_names_a_gates_subtype(lithos_lens_config_env: Path) -> None:
     assert 'data-link-target="open-unclaimed"' in dependents
 
 
+def test_the_panel_and_the_detail_page_show_the_same_pr_state_badge(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5.5.4 gate context, T2b: a `pr` gate's reconciliation state is part of
+    judging the gate, so it rides the same one badge template the board's Gates
+    section uses — asserted on BOTH host pages from one fixture, because "the
+    same badge" is the claim and three copies of the markup would be how it
+    stops being true. The detail line is TEXT beside it, not only a tooltip: a
+    title attribute is invisible to a keyboard and to a screen reader."""
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "gate-pr",
+        gate_type="pr",
+        title="Land the migration PR",
+        metadata={
+            "pr_url": "https://example.invalid/pull/84",
+            "reconciliation_pr_url": "https://example.invalid/pull/84",
+            "reconciliation_state": "needs_human",
+            "reconciliation_detail": "Reviewer requested changes.",
+            "reconciliation_since": "2026-08-01T00:00:00+00:00",
+        },
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        panel = client.get("/tasks/gate-pr?fragment=panel").text
+        page = client.get("/tasks/gate-pr").text
+
+    badge = re.compile(
+        r'<span class="badge badge-reconciliation badge-reconciliation-danger"'
+        r' data-reconciliation-state="needs_human"[^>]*'
+        r'title="Reviewer requested changes\."'
+        r">needs human · \d+[dhm]</span>"
+    )
+    assert badge.search(panel), panel
+    assert badge.search(page), page
+    for body in (panel, page):
+        assert (
+            '<p class="reconciliation-detail" data-reconciliation-detail>'
+            "Reviewer requested changes.</p>" in body
+        )
+
+
+def test_the_panel_shows_no_pr_badge_for_a_state_about_another_pr(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The staleness rule is the server's, so every surface inherits it — the
+    panel cannot re-decide it, because it is handed nothing to render."""
+    fake = TaskFakeLithosClient()
+    _add_gate(
+        fake,
+        "gate-pr-replaced",
+        gate_type="pr",
+        metadata={
+            "pr_url": "https://example.invalid/pull/84",
+            "reconciliation_pr_url": "https://example.invalid/pull/12",
+            "reconciliation_state": "needs_human",
+            "reconciliation_detail": "About the replaced PR.",
+        },
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        panel = client.get("/tasks/gate-pr-replaced?fragment=panel").text
+
+    assert "badge-reconciliation" not in panel
+    assert "data-reconciliation-detail" not in panel
+    # …and the raw keys are still on the page's metadata table, where the gate's
+    # full metadata has always been.
+    page = None
+    with _client(lithos_lens_config_env, fake) as client:
+        page = client.get("/tasks/gate-pr-replaced").text
+    assert "reconciliation_state" in page
+
+
 # --- A dependent is not a blocker: the verdicts read one way round ----------
 
 

@@ -309,10 +309,18 @@ class BlockerChip:
 
 # Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug IS the
 # reason chip's text, so the vocabulary is fixed here and rendered verbatim.
+#
+# ``pr-needs-decision`` (rule 3b, T2b) sits beside ``gate-waiting`` because it
+# is the same escalation seen through a different gate type: a PR loom has
+# stopped being able to move on its own is a decision waiting on a person,
+# exactly like a human gate. It ranks just below it — a human gate past its
+# threshold has been ignored for a day, where a PR escalation may be minutes
+# old — and above the claim/age rules, which are about work in flight.
 ATTENTION_RULES: tuple[str, ...] = (
     "unsatisfiable",
     "cycle",
     "gate-waiting",
+    "pr-needs-decision",
     "claim-expiring",
     "stale-open",
     "ready-unclaimed",
@@ -341,6 +349,48 @@ class AttentionReason:
 
 
 @dataclass(frozen=True)
+class Reconciliation:
+    """One PR gate's loom-written reconciliation state, ready to render.
+
+    A DATA HOLDER, deliberately: ``pr_reconciliation.reconciliation_of`` owns
+    the one mapping from loom's closed vocabulary (PRD S7) to the ``label``,
+    ``tone`` and ``severity`` below and fills them in. It lives here, beside
+    :class:`SectionRow`, so a gate the severity model promotes can carry the
+    same badge into Needs attention as the Gates section shows — a view model
+    in the mapping's own module could not, because that module reads the
+    records defined here and the import would close a cycle.
+
+    ``state`` is loom's raw value (bounded) and is the only field the mapping is
+    keyed on; ``slug`` and ``tone`` are the markup-safe tokens derived from it
+    (both ``unknown`` outside the vocabulary, so a peer-written state cannot
+    borrow another state's colour or inject a class), and ``label`` is the badge
+    TEXT — the mapped wording, or the raw value itself when Lens does not know
+    it. ``detail`` is loom's one-line why, carried verbatim; ``since`` the
+    normalized stamp the state last changed at, and ``age`` its coarse age,
+    empty when that stamp could not be read rather than guessed.
+    """
+
+    state: str
+    label: str = ""
+    slug: str = ""
+    tone: str = ""
+    severity: int = 0
+    detail: str = ""
+    since: str = ""
+    age: str = ""
+
+    @property
+    def badge_text(self) -> str:
+        """The whole badge in one string: ``needs human · 2h``.
+
+        Built here rather than in a template so the three surfaces that show
+        this badge — gate row, side panel, detail page — cannot render it
+        differently, and so the age-less form is exercised by the same tests.
+        """
+        return f"{self.label} · {self.age}" if self.age else self.label
+
+
+@dataclass(frozen=True)
 class SectionRow:
     """A task rendered in one dashboard section, with its display extras.
 
@@ -356,6 +406,11 @@ class SectionRow:
     ``attention`` holds the Needs-attention reasons that fired for the row
     (empty for every row outside that section): a flagged row is promoted OUT
     of the section it would otherwise occupy, so the reasons travel with it.
+    ``pr_reconciliation`` travels with it for the same reason — a ``pr`` gate
+    promoted on its reconciliation state keeps the state BADGE it would have
+    worn in the Gates section, so single placement costs the operator nothing.
+    (Unrelated to ``reconciliation_pending`` below, which is about the two
+    frontier reads disagreeing, not about a pull request.)
     """
 
     task: TaskRecord
@@ -364,6 +419,7 @@ class SectionRow:
     claimed_but_blocked: bool = False
     claims_unknown: bool = False
     attention: tuple[AttentionReason, ...] = ()
+    pr_reconciliation: Reconciliation | None = None
     # The frontier reads are independent (no cross-call snapshot); when they
     # disagree even after the single retry, the row is classified
     # conservatively as Blocked and flagged so the template can render the
@@ -613,6 +669,24 @@ def parse_timestamp(value: str) -> datetime | None:
         return parsed.astimezone(UTC)
     except (ValueError, OverflowError):
         return None
+
+
+def humanize_age(delta: timedelta) -> str:
+    """Coarse age text for a chip or a badge: ``12d`` / ``5h`` / ``9m``.
+
+    Shared by the Needs-attention reason chips (``attention.py``) and the PR
+    reconciliation badge (``reconciliation.py``), which state ages side by side
+    in the same list — two roundings of "how long has this been true" would read
+    as a contradiction on the row that carries both. Negative deltas (a stamp in
+    the future, i.e. clock skew between loom and Lens) clamp to zero rather than
+    rendering a negative age.
+    """
+    seconds = max(int(delta.total_seconds()), 0)
+    if seconds >= 86400:
+        return f"{seconds // 86400}d"
+    if seconds >= 3600:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 60}m"
 
 
 def parse_date(value: str) -> date | None:

@@ -13,7 +13,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 11 |
-| `lithos_lens.tasks` | M | 13 | 12 |
+| `lithos_lens.tasks` | L | 14 | 13 |
 
 ## Public API
 
@@ -50,6 +50,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `NoteSummary` — A lightweight note row from ``lithos_list`` (no body).
 - class `BlockerChip` — One "waiting for" chip on a Blocked (or claimed-but-blocked) row.
 - class `AttentionReason` — One fired Needs-attention rule on a promoted row.
+- class `Reconciliation` — One PR gate's loom-written reconciliation state, ready to render.
 - class `SectionRow` — A task rendered in one dashboard section, with its display extras.
 - class `EpicRollup` — One open epic's progress chip in the dashboard's epic strip.
 - class `TaskFilters` — The live ``/tasks`` filter vocabulary, parsed from the query string.
@@ -61,6 +62,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `format_display_date`
 - def `format_tag`
 - def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.
+- def `humanize_age` — Coarse age text for a chip or a badge: ``12d`` / ``5h`` / ``9m``.
 - def `parse_date`
 - def `int_stat`
 - def `honored_tags` — The ``?tag=`` values the board filters by, in the order written.

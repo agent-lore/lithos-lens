@@ -3792,3 +3792,186 @@ def test_a_browser_parseable_only_ready_at_renders_without_a_countdown_hook(
     # The unparseable one is still on the page, as static text.
     assert "2026/09/01" in text
     assert "data-gate-ready-unparsed" in text
+
+
+# --- T2b: loom's PR reconciliation state, as the board renders it ---------
+
+_PR_URL = "https://example.invalid/lithos-lens/pull/84"
+
+
+def _add_pr_gate(
+    fake: TaskFakeLithosClient,
+    task_id: str,
+    *,
+    state: str,
+    detail: str = "",
+    since: str | None = None,
+    pr_url: str = _PR_URL,
+    state_pr_url: str | None = None,
+    created_at: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """A `pr` gate carrying the four keys loom writes on every sweep."""
+    metadata: dict[str, Any] = {
+        "pr_url": pr_url,
+        "reconciliation_state": state,
+        "reconciliation_detail": detail,
+        "reconciliation_since": since or _ago(hours=2),
+        "reconciliation_pr_url": pr_url if state_pr_url is None else state_pr_url,
+    }
+    metadata.update(extra or {})
+    _add_gate(
+        fake,
+        task_id,
+        gate_type="pr",
+        created_at=created_at,
+        metadata=metadata,
+    )
+
+
+def test_a_needs_human_pr_gate_badges_red_and_enters_needs_attention(
+    lithos_lens_config_env: Path,
+) -> None:
+    """T2b acceptance, both halves at once: the state loom computes every ten
+    minutes is a first-class badge with loom's line as its tooltip, and
+    `needs_human` also promotes the gate into Needs attention with the reason
+    and the same fact — the escalation loom `human` gates already get, without
+    the 24h wait."""
+    fake = TaskFakeLithosClient()
+    _add_pr_gate(
+        fake,
+        "gate-pr-stuck",
+        state="needs_human",
+        detail="Reviewer requested changes Lens cannot resolve.",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        body = client.get("/tasks?since=2026-04-01").text
+
+    assert 'data-reconciliation-state="needs_human"' in body
+    assert 'class="badge badge-reconciliation badge-reconciliation-danger"' in body
+    assert 'title="Reviewer requested changes Lens cannot resolve."' in body
+    # The badge says the state AND how long it has held it.
+    assert ">needs human · 2h<" in body
+    # Promoted: the reason chip and its supporting fact, on the attention row.
+    assert 'data-attention-rule="pr-needs-decision"' in body
+    assert "Reviewer requested changes Lens cannot resolve." in body
+    # Single placement — promoted out of the Gates section, not rendered twice —
+    # and the badge travelled with the row, so it is the ATTENTION row that
+    # carries it.
+    assert body.count('id="task-row-gate-pr-stuck"') == 1
+    assert body.count("badge-reconciliation-danger") == 1
+    assert 'data-gate-row data-task-id="gate-pr-stuck"' not in body
+    assert '<article class="task-row" id="task-row-gate-pr-stuck"' in body
+
+
+def test_a_ready_to_merge_pr_gate_badges_green_and_stays_in_the_gates_section(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other end of the vocabulary: green, and NOT an escalation — a PR
+    that is ready to merge needs no one's attention."""
+    fake = TaskFakeLithosClient()
+    _add_pr_gate(
+        fake, "gate-pr-done", state="ready_to_merge", detail="All gates green."
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        body = client.get("/tasks?since=2026-04-01").text
+
+    assert 'class="badge badge-reconciliation badge-reconciliation-ok"' in body
+    assert ">ready to merge · 2h<" in body
+    assert 'data-gate-row data-task-id="gate-pr-done"' in body
+    assert 'data-attention-rule="pr-needs-decision"' not in body
+
+
+def test_a_state_about_a_replaced_pr_renders_no_badge(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A replacement PR on the same gate starts fresh, and the old state sits
+    there until loom's next sweep. The row withholds it — and keeps the raw
+    keys as advisory chips, so it stays inspectable without being asserted."""
+    fake = TaskFakeLithosClient()
+    _add_pr_gate(
+        fake,
+        "gate-pr-replaced",
+        state="needs_human",
+        detail="About the PR this gate no longer points at.",
+        state_pr_url="https://example.invalid/lithos-lens/pull/12",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        body = client.get("/tasks?since=2026-04-01").text
+
+    assert "data-reconciliation-state" not in body
+    assert "badge-reconciliation" not in body
+    assert 'data-attention-rule="pr-needs-decision"' not in body
+    # …and the row is still a gate row carrying the keys as ordinary metadata.
+    assert 'data-gate-row data-task-id="gate-pr-replaced"' in body
+    assert "reconciliation_detail" in body
+
+
+def test_an_unknown_state_renders_as_grey_text_rather_than_a_crash(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The vocabulary is loom's and may grow. An unrecognised value renders as
+    the text it is, in the unknown tone — and its markup hook collapses to
+    `unknown`, so a peer-written state cannot borrow another state's colour."""
+    fake = TaskFakeLithosClient()
+    _add_pr_gate(fake, "gate-pr-new", state="awaiting_second_review")
+    _add_pr_gate(fake, "gate-pr-hostile", state='needs_human" data-evil="')
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    body = response.text
+    assert response.status_code == 200
+    assert 'class="badge badge-reconciliation badge-reconciliation-unknown"' in body
+    assert ">awaiting_second_review · 2h<" in body
+    # The hostile value is escaped TEXT and buys no markup hook at all.
+    assert 'data-reconciliation-state="unknown"' in body
+    assert 'data-evil="' not in body
+    assert "badge-reconciliation-danger" not in body
+
+
+def test_pr_gates_render_in_state_severity_order(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5.2.3 ordering, server-rendered and JS-free: the PR that needs a person
+    leads, then the failures, then the ones loom is still working, then the
+    ones that are done."""
+    fake = TaskFakeLithosClient()
+    # Added youngest-severe first, so age alone would produce a different order.
+    _add_pr_gate(fake, "pr-merge", state="ready_to_merge", created_at=_ago(days=3))
+    _add_pr_gate(fake, "pr-review", state="awaiting_review", created_at=_ago(days=2))
+    _add_pr_gate(fake, "pr-flight", state="reconciling", created_at=_ago(days=2))
+    _add_pr_gate(fake, "pr-behind", state="behind", created_at=_ago(hours=20))
+    _add_pr_gate(fake, "pr-failed", state="gate_failed", created_at=_ago(hours=2))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        body = client.get("/tasks?since=2026-04-01").text
+
+    rendered = re.findall(r'id="task-row-(pr-[a-z]+)"', body)
+    assert rendered == ["pr-failed", "pr-behind", "pr-flight", "pr-review", "pr-merge"]
+
+
+def test_a_long_failing_pr_gate_escalates_like_a_waiting_human_gate(
+    lithos_lens_config_env: Path,
+) -> None:
+    """`gate_failed` past the human-gate threshold is the same "nobody is
+    coming" judgement, so it takes the same promotion — dated from the state's
+    own `reconciliation_since`, not the gate's age."""
+    fake = TaskFakeLithosClient()
+    _add_pr_gate(
+        fake,
+        "gate-pr-failing",
+        state="gate_failed",
+        since=_ago(days=2),
+        detail="required check `e2e` has failed 6 times.",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        body = client.get("/tasks?since=2026-04-01").text
+
+    assert 'data-attention-rule="pr-needs-decision"' in body
+    assert "required check `e2e` has failed 6 times." in body
+    assert 'data-gate-row data-task-id="gate-pr-failing"' not in body

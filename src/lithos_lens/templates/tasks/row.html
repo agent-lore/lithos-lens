@@ -22,6 +22,14 @@
   </div>
   <div class="task-row-meta">
     <span class="badge badge-{{ row.task.status }}">{{ row.task.status }}</span>
+    {# A `pr` gate the severity model promoted out of the Gates section keeps
+       its reconciliation badge (§5.2.3): single placement moves the row, it
+       does not take the state away. Unset on every other row — including the
+       `reconciliation_pending` one below, which is about the two frontier
+       reads disagreeing and has nothing to do with a pull request. #}
+    {% if row.pr_reconciliation %}
+      {% with reconciliation = row.pr_reconciliation %}{% include "tasks/reconciliation_badge.html" %}{% endwith %}
+    {% endif %}
     {% if row.task.created_by %}
       <span>{{ row.task.created_by }}</span>
     {% endif %}

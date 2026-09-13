@@ -63,6 +63,21 @@ const PAGES: ReadonlyArray<{
         page.locator('[data-task-group="gates"] [data-gate-type-badge]').first(),
       ).toBeVisible();
       await expect(page.locator(".gate-countdown")).toContainText(/ready in /);
+      // T2b: loom's PR reconciliation state, both ends of the vocabulary on
+      // one board — the escalated PR (red, promoted into Needs attention) and
+      // the one that is ready to merge (green, still in Gates). Waited on
+      // here, not just captured, because this sandbox cannot look at the PNGs:
+      // a board that lost a badge must fail the run rather than produce a
+      // healthy-looking artifact.
+      await expect(
+        page.locator('[data-reconciliation-state="needs_human"]'),
+      ).toHaveClass(/badge-reconciliation-danger/);
+      await expect(
+        page.locator('[data-reconciliation-state="ready_to_merge"]'),
+      ).toHaveClass(/badge-reconciliation-ok/);
+      await expect(
+        page.locator('[data-attention-rule="pr-needs-decision"]'),
+      ).toBeVisible();
     },
   },
   {

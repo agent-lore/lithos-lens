@@ -18,7 +18,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
-| `lithos_lens.gates` | M | 5 | 5 |
+| `lithos_lens.gates` | L | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 2 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
@@ -26,6 +26,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_page` | L | 1 | 6 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
 | `lithos_lens.graph_view` | S | 10 | 0 |
+| `lithos_lens.pr_reconciliation` | S | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -74,7 +75,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `GateSection` — The assembled Gates section, as ``load_gates`` hands it to the board.
 - def `load_gates` — Assemble the Gates section from the reads ``load_dashboard`` already has.
 - def `collect_gates` — Collect the open gates off the master open list (§5.2.3).
-- def `group_gates` — Group gate rows by gate type — human first, oldest first within a group.
+- def `group_gates` — Group gate rows by gate type — human first, by severity then age within.
 - def `attach_gate_waiters` — Fill each gate's waiter list, preferring the Lithos-computed source.
 - def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
 
@@ -144,6 +145,11 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `HierarchyRowView`
 - class `Banner` — One honesty banner. ``id`` is the test/CSS hook, ``text`` the sentence.
 - class `GraphPageView` — Everything `/tasks/graph` renders for one scope.
+
+### `lithos_lens.pr_reconciliation`
+- class `ReconciliationStyle` — How ONE reconciliation state renders: its text and its colour tone.
+- def `known_states` — The rendered vocabulary, most severe first — the mapping, read-only.
+- def `reconciliation_of` — The PR reconciliation state to RENDER for a gate, or None for none.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.

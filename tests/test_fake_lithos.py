@@ -139,6 +139,34 @@ def test_fake_mode_dashboard_renders_a_live_gates_section(
     assert f'data-gate-ready-at="{match.group(1)}"' in body
 
 
+def test_fake_mode_board_shows_both_ends_of_the_pr_reconciliation_vocabulary(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T2b's demo fixtures, and the contract the e2e capture photographs: one
+    escalated PR gate and one that is ready to merge, so a reviewer sees the
+    red badge and the green one on the same board.
+
+    The `needs_human` one also demonstrates single placement — it is promoted
+    into Needs attention and takes its badge with it, so the board shows the
+    state exactly once.
+    """
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        body = client.get("/tasks?since=2026-08-01").text
+
+    assert body.count('data-reconciliation-state="needs_human"') == 1
+    assert body.count('data-reconciliation-state="ready_to_merge"') == 1
+    assert "badge-reconciliation-danger" in body
+    assert "badge-reconciliation-ok" in body
+    # Promoted (rule 3b), so it is an attention row rather than a gate row…
+    assert 'data-attention-rule="pr-needs-decision"' in body
+    assert 'data-gate-row data-task-id="influx-schema-pr"' not in body
+    # …while the healthy one stays in the Gates section under its own group.
+    assert 'data-gate-group="pr"' in body
+    assert 'data-gate-row data-task-id="influx-dashboards-pr"' in body
+
+
 def test_fake_mode_task_detail_renders(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

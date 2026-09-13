@@ -1,0 +1,17 @@
+{#
+  loom's PR reconciliation state as ONE badge (§5.2.3, PRD S7) — the gate row,
+  the side panel and the detail page all include THIS file, so the three cannot
+  render the same state three ways.
+
+  Context: `reconciliation` (a reconciliation.Reconciliation), already decided
+  to be about THIS gate's PR — the server withholds a state describing a
+  replaced PR by handing the template nothing at all, so there is no staleness
+  test here to get wrong.
+
+  Every markup hook comes from the closed vocabulary (`tone`, `slug`); loom's
+  raw state reaches the page only as escaped TEXT, which is what lets an
+  unknown future state render as itself instead of crashing or being dropped.
+  The detail is the tooltip, and it is loom's line verbatim: it names the check,
+  the conflict or the review, which Lens cannot derive.
+#}
+<span class="badge badge-reconciliation badge-reconciliation-{{ reconciliation.tone }}" data-reconciliation-state="{{ reconciliation.slug }}"{% if reconciliation.since %} data-reconciliation-since="{{ reconciliation.since }}"{% endif %}{% if reconciliation.detail %} title="{{ reconciliation.detail }}"{% endif %}>{{ reconciliation.badge_text }}</span>

@@ -32,6 +32,12 @@
   </div>
   <div class="task-row-meta">
     <span class="badge badge-gate badge-gate-{{ gate.type_slug }}" data-gate-type-badge>{{ gate.type_label }}</span>
+    {# A `pr` gate's reconciliation state leads the meta row: what loom is
+       doing with this PR right now is the reason the gate is still open, so it
+       outranks the advisory chips it used to sort behind alphabetically. #}
+    {% if gate.pr_reconciliation %}
+      {% with reconciliation = gate.pr_reconciliation %}{% include "tasks/reconciliation_badge.html" %}{% endwith %}
+    {% endif %}
     {% if gate.is_timer and gate.ready_at %}
       {# The countdown attribute carries `ready_instant`, which is empty unless
          the stamp parsed SERVER-side. The browser's Date.parse is the more
