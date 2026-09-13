@@ -1225,6 +1225,50 @@ def test_an_unread_window_is_not_reported_as_a_filter_result(
     assert "data-epic-scope-rolled-up" not in text
 
 
+def test_a_window_the_board_hides_cannot_silence_the_epic_explanation(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The complement, as rendered: on an open-only board the completed window
+    is off screen, so its outage says nothing about which rows belong here. The
+    epic explanation — supported entirely by reads that answered — must still
+    render, the strip must still be scoped, and no section may claim to be
+    unavailable."""
+    template = _roadmap_fake()
+    fake = _CompletedWindowDown()
+    fake.tasks = template.tasks
+    fake.ready_ids = template.ready_ids
+    fake.tasks.extend(
+        [
+            _epic_row("epic-side", "Side quest epic"),
+            _epic_row("epic-roadmap", "Roadmap epic"),
+        ]
+    )
+    fake.children["epic-side"] = ["loom-offscope"]
+    fake.children["epic-roadmap"] = ["loom-ready"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?status=open&tag=roadmap-2026-08&epic=epic-side&since=2026-04-01"
+        )
+
+    text = unescape(response.text)
+
+    assert response.status_code == 200
+    # The failed read is reported, and nothing on this board is unavailable
+    # because of it — the completed window is not on screen at all.
+    assert "Could not load completed tasks." in text
+    assert "data-section-unavailable" not in text
+    # The explanation this board CAN support still renders, and replaces the
+    # generic groups as before.
+    assert "data-epic-scope-unmatched" in text
+    assert "No tasks under this epic match these filters." in text
+    assert "data-task-group=" not in text
+    # …and the strip is still scoped: the roadmap epic keeps its chip beside
+    # the selected one, and nothing else does.
+    assert 'data-epic-chip="epic-roadmap"' in text
+    assert 'data-epic-chip="epic-side"' in text
+
+
 def test_a_window_that_answered_still_says_no_match(
     lithos_lens_config_env: Path,
 ) -> None:

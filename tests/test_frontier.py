@@ -2440,6 +2440,46 @@ def test_a_failed_terminal_read_leaves_the_strip_unscoped() -> None:
     assert scoped.epic_scope_unmatched is False
 
 
+def test_a_failed_read_the_board_does_not_display_changes_nothing() -> None:
+    """The complement of that contract: only a window this board SHOWS can make
+    its rows unknown. On an open-only board the completed window is not on
+    screen, so its outage must not scope the strip back to the whole corpus,
+    must not swallow the count of chips the filters dropped, and must not take
+    away an explanation the reads that DID answer fully support."""
+    selected = _epic("epic-1")
+    partner = _epic("epic-2")
+    stranger = _epic("epic-3")
+    inside = _tagged("inside", "other")
+    on_tag = _tagged("on-tag", "roadmap")
+    off_tag = _tagged("off-tag", "other")
+    fake = _FrontierFake(
+        open_tasks=[selected, partner, stranger, inside, on_tag, off_tag],
+        ready=[inside, on_tag, off_tag],
+        blocked=[],
+        children={"epic-1": [inside], "epic-2": [on_tag], "epic-3": [off_tag]},
+        fail_completed_from=0,
+    )
+    filters = TaskFilters(
+        statuses=("open",), tags=("roadmap",), agent="", since="", epic="epic-1"
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    # The outage is still reported — it is simply not this board's rows.
+    assert any("completed" in message for message in data.errors)
+    assert data.unread_statuses == frozenset()
+    assert data.rows_incomplete is False
+    # So every filter-derived statement stands: the strip is still scoped (the
+    # off-tag epic dropped, and counted)…
+    assert [rollup.task.id for rollup in data.epics] == ["epic-1", "epic-2"]
+    assert data.epics_hidden == 1
+    # …and the selected epic still gets the explanation its own (successful)
+    # reads support.
+    assert data.epic_scope == "epic-1"
+    assert not any(data.sections.values())
+    assert data.epic_scope_unmatched is True
+
+
 def test_the_strip_follows_the_generation_the_skew_retry_adopted() -> None:
     """The retry path carries the scope, not just the fan-out: the adopted
     generation changes WHICH epic has work on the board, so chips computed
