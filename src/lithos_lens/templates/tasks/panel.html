@@ -1,0 +1,164 @@
+{#
+  THE side panel (§5.5, T2-A6) — ONE implementation for dashboard rows and, from
+  T2-A4, graph nodes.
+
+  Rendered three ways from this one file, which is what keeps the three honest
+  about each other:
+
+  - server-side into the dashboard, from `GET /tasks?selected=<id>` (the no-JS
+    baseline: a deep link or a shared URL opens the board with the panel up);
+  - as the whole response of `GET /tasks/{id}?fragment=panel`, which is what a
+    row click fetches before pushing `selected` onto the URL;
+  - and, on the auto-refresh, swapped in place through
+    `data-refresh-fragment="panel"` so the live statuses below stay live.
+
+  So it extends nothing and carries its own degraded states: an unknown id must
+  render the not-found PANEL (never HTTP 500), and a failed read must not be
+  reported as "this task does not exist".
+
+  Context: `detail` (a task_detail.TaskDetailData), plus the host page's
+  `offline` / `filter_query_rejected` flags. `panel_close_url` is optional — the
+  host page's own URL with its selection parameter cleared; the dashboard's
+  board URL is the default, and the graph page (T2-A7) passes its own.
+#}
+<aside class="task-panel" data-task-panel data-refresh-fragment="panel" aria-label="Task panel" tabindex="-1">
+  {% if filter_query_rejected %}
+    <p class="warning-text" data-panel-state="filters-rejected">The filters in this link are too large to apply.</p>
+  {% elif offline %}
+    <p class="warning-text" data-panel-state="offline">Lithos is offline or degraded. Task detail is unavailable.</p>
+  {% elif detail is none %}
+    <p class="warning-text" data-panel-state="unavailable">Could not load this task from Lithos.</p>
+  {% elif detail.not_found %}
+    {# Lithos's own answer (the `task_not_found` envelope), not a failed read. #}
+    <header class="task-panel-header">
+      <p class="eyebrow">Task not found</p>
+      <h2>Unknown task</h2>
+      <div class="task-panel-actions">
+        <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
+      </div>
+    </header>
+    <p data-panel-state="not-found">Lithos has no task with this id.</p>
+  {% elif not detail.task %}
+    {# A read that failed, which is NOT the same as "this task does not exist". #}
+    <header class="task-panel-header">
+      <p class="eyebrow">Task panel</p>
+      <h2>Task unavailable</h2>
+      <div class="task-panel-actions">
+        <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
+      </div>
+    </header>
+    <p class="warning-text" data-panel-state="error">{{ detail.errors | join(" ") or "Could not load this task from Lithos." }}</p>
+  {% else %}
+    <header class="task-panel-header" data-panel-task="{{ detail.task.id }}">
+      <p class="eyebrow">Task panel</p>
+      <h2>{{ detail.task.title }}</h2>
+      <div class="detail-meta">
+        <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
+        <span class="badge badge-type" data-task-type="{{ detail.task.task_type }}">{{ detail.task.task_type }}</span>
+        {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
+        {# The project chip: read off `task_projects` under the configured
+           convention (§5B.1), so a task carrying both spellings shows both
+           rather than whichever this template happened to look at.
+
+           No project is a real answer, not a missing one — a cross-project
+           task, or one nobody stamped — and §5.5.1 asks the header for a
+           project. So it is SAID, for the same reason the row's tag strip
+           writes "(empty tag)" rather than a blank pill: a field that renders
+           nothing reads as a rendering fault, and the operator cannot tell
+           projectless work from a panel that failed to fill one in. The chip
+           carries no `tag-chip-project` modifier, because there is no project
+           for it to name. #}
+        {% for slug in detail.projects %}
+          <span class="tag-chip tag-chip-project" data-panel-project="{{ slug }}">{{ slug }}</span>
+        {% else %}
+          <span class="tag-chip" data-panel-project-none>(no project)</span>
+        {% endfor %}
+        {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
+      </div>
+      <div class="task-panel-actions">
+        {# Expand LEAVES the board for the full page; close just clears the
+           host's selection parameter. Both are real links, so the panel works
+           with JavaScript off — tasks.js intercepts them, it does not invent
+           them. #}
+        <a class="button-secondary" href="{{ task_detail_url(request, detail.task.id) }}" data-panel-expand>Expand</a>
+        <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
+      </div>
+    </header>
+
+    {% if detail.breadcrumb.ancestors or detail.breadcrumb.incomplete %}
+      <nav class="detail-breadcrumb" data-panel-parent aria-label="Parent tasks">
+        {% if detail.breadcrumb.incomplete %}<span data-breadcrumb-incomplete title="The chain above could not be walked to a root">&hellip;</span>{% endif %}
+        {% for parent in detail.breadcrumb.ancestors %}
+          <a href="{{ task_detail_url(request, parent.id) }}">{{ parent.title }}</a>
+        {% endfor %}
+        <span aria-current="page">{{ detail.task.title }}</span>
+      </nav>
+    {% endif %}
+
+    <section data-panel-blockers>
+      {# Same heading rule as the full page: "Blocked by" is a claim about the
+         present, and a set of finished predecessors does not support it. #}
+      <h3>{% if detail.blockers.still_blocking %}Blocked by{% else %}Dependencies{% endif %}</h3>
+      {% if detail.relations_state == "error" %}
+        <p class="warning-text">Blockers unavailable. Refresh to retry.</p>
+      {% elif detail.blockers.total %}
+        {# No `chain`, so no expanders: the panel is level 1 by decision (D9)
+           and the full page is where a walk belongs. #}
+        {% with page = detail.blockers, page_noun = "blockers", page_label = "blockers" %}
+          {% include "tasks/link_page.html" %}
+        {% endwith %}
+      {% else %}
+        <p class="empty">Nothing is blocking this task.</p>
+      {% endif %}
+    </section>
+
+    <section data-panel-dependents>
+      {# The downstream half of the relationship the chain shows upstream,
+         under the same "Blocks:" label the full page uses (§5.5.2). #}
+      <h3>Blocks:</h3>
+      {% if detail.relations_state == "error" %}
+        <p class="warning-text">Dependents unavailable. Refresh to retry.</p>
+      {% elif detail.dependents.total %}
+        {% with page = detail.dependents, page_noun = "dependents", page_label = "dependents" %}
+          {% include "tasks/link_page.html" %}
+        {% endwith %}
+      {% else %}
+        <p class="empty">Nothing depends on this task.</p>
+      {% endif %}
+    </section>
+
+    {#
+      Downstream impact (§5.5.1, D10) — "frees N in this graph, M immediately".
+      T2-A7 fills this slot: N is counted over a SCOPE's active projection and M
+      comes from that scope's coverage-set blocked reads, so neither figure
+      exists until the panel is handed a `scope=`. Deliberately empty rather
+      than absent, so the slot has one place to land and the dashboard (which
+      passes no scope) renders no number it cannot support.
+    #}
+    <div data-panel-impact-slot></div>
+
+    <section data-panel-claims>
+      <h3>Active claims</h3>
+      {% if detail.status_state == "error" %}
+        <p class="warning-text">Claims unavailable. Refresh to retry.</p>
+      {% elif detail.task_status and detail.task_status.claims %}
+        <div class="claim-list">
+          {% for claim in detail.task_status.claims %}
+            <span data-panel-claim="{{ claim.aspect }}">{{ claim.aspect }} / {{ claim.agent }} / expires {{ claim.expires_at }}</span>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty">No active claims.</p>
+      {% endif %}
+    </section>
+
+    <p data-panel-findings>
+      {% if detail.findings_state == "error" %}
+        <span class="warning-text">Findings unavailable. Refresh to retry.</span>
+      {% else %}
+        {# A COUNT plus a link, not the timeline: the full page carries §5.6. #}
+        <a href="{{ task_detail_url(request, detail.task.id) }}#findings">{{ detail.findings | length }} finding{{ "" if (detail.findings | length) == 1 else "s" }}</a>
+      {% endif %}
+    </p>
+  {% endif %}
+</aside>

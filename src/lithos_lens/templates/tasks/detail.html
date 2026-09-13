@@ -121,6 +121,36 @@
         </section>
       {% endif %}
 
+      {% if detail.task.status == "open" or detail.dependents.total %}
+        <section data-dependents>
+          {# The downstream half of the same relationship (§5.5.2's Blocks
+             line, T2-A6): the level-1 dependents this task's completion would
+             free, with the live status each was read with. The blocker chain
+             above answers "why can't this run?"; this answers "what is waiting
+             on it?", and both come from the ONE edge list already in hand.
+
+             Rendered on the same terms as the chain — while the task is open,
+             or whenever the edges exist — so a finished task still shows what
+             it once held up rather than dropping the record. #}
+          {# "Blocks:" with the colon, verbatim: REQUIREMENTS §5.5.2 and the
+             PRD (D11) both name this the "Blocks:" line, and it LABELS the
+             list under it the way the provenance eyebrows do rather than
+             titling a section. #}
+          <h2>Blocks:</h2>
+          {% if detail.relations_state == "error" %}
+            <p class="warning-text">Dependents unavailable. Refresh this task to retry.</p>
+          {% elif detail.dependents.total %}
+            {# No `chain`: a walk DOWNstream is the graph page's job (T2), not
+               this page's per-level blocker expander. #}
+            {% with page = detail.dependents, page_noun = "dependents", page_label = "dependents" %}
+              {% include "tasks/link_page.html" %}
+            {% endwith %}
+          {% else %}
+            <p class="empty">Nothing depends on this task.</p>
+          {% endif %}
+        </section>
+      {% endif %}
+
       {% if detail.has_provenance %}
         <section data-provenance>
           <h2>Provenance</h2>

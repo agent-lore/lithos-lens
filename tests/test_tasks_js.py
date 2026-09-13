@@ -13,6 +13,13 @@ arms:
 - a stamp already in the past on arrival (browser/Lens clock skew) must back
   off to the poll interval instead of the sub-second floor.
 
+T2-A6 adds a second harness for the SIDE PANEL, which lives in the same file
+for the same reason: what it pins is browser behaviour with no server half —
+which URL a row click fetches, and above all that CLOSING the panel clears only
+the selection and leaves the board's filters (``?project=``) exactly as they
+were. A Python test can assert what the close LINK says; only this can assert
+what ``history.pushState`` is handed.
+
 Node is the same runtime the ``e2e/`` Playwright suite needs; the tests skip
 when it is absent rather than failing a pure-Python environment.
 """
@@ -58,6 +65,9 @@ const document = {
   },
   querySelectorAll() { return { length: 0, forEach() {} }; },
   createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  // The panel (T2-A6) binds its click/keydown handlers at load; this harness
+  // never fires one, but the IIFE must be able to install them.
+  addEventListener() {},
 };
 
 class EventSource {
@@ -69,6 +79,7 @@ const sandbox = {
   document,
   EventSource,
   console,
+  URL,
   // Controlled clock: the harness asserts on exact delays, and advances time
   // by a timer's own delay when it fires (so a chained sleep converges).
   Date: new Proxy(Date, {
@@ -86,6 +97,7 @@ sandbox.window = {
   clearTimeout() {},
   setInterval: () => 0,
   clearInterval() {},
+  addEventListener() {},
   location: { href: "http://lens.test/tasks" },
 };
 sandbox.window.window = sandbox.window;
@@ -218,3 +230,967 @@ def test_a_second_gate_due_soon_is_not_delayed_to_the_poll_interval() -> None:
     assert result["delays"][1] == 3_500, (
         f"second gate was scheduled {result['delays'][1]}ms out, not 3500ms"
     )
+
+
+# ── the side panel (T2-A6): row click, close, Escape, back/forward ──────────
+
+# A second stub DOM, and a deliberately CONTROLLED one: the panel's defects
+# live in the gaps between a request leaving and its response landing, so every
+# fetch here is deferred and settled by name. That is what lets a test stage an
+# out-of-order pair (click A, click B, answer A last) — the interleaving a
+# harness that drains each request before the next action can never produce.
+#
+# It models what the panel code actually touches: two rows with server-built
+# panel URLs, a host whose `innerHTML` setter maintains the panel node that
+# `replaceFragment` swaps, a history STACK with back/forward, an EventSource
+# that delivers events to the real handler, and a timer list the test fires to
+# run the reconcile. `DOMParser` parses the fake document as JSON keyed by
+# refresh-fragment name — the fragments are the contract, not the markup.
+PANEL_HARNESS = """
+const fs = require("fs");
+const vm = require("vm");
+
+const [sourcePath, initialHref, actionsRaw, selectionParam] = process.argv.slice(1);
+const actions = JSON.parse(actionsRaw);
+
+// Registered before anything runs, which also overrides Node's default of
+// crashing the process: an unhandled rejection is a RESULT this harness
+// reports, because "the panel never leaves a rejection dangling" is part of
+// what the failure paths promise.
+const unhandled = [];
+process.on("unhandledRejection", (reason) => { unhandled.push(String(reason)); });
+
+const entries = [initialHref];
+let cursor = 0;
+const pushed = [];
+const fetches = [];      // { url, settle } — settled by an explicit action
+const prevented = [];
+const listeners = {};    // document/window listeners, by type
+const sse = {};          // EventSource listeners, by type
+const timers = new Map();
+let timerId = 0;
+let board = "board:initial";
+
+function href() { return entries[cursor]; }
+function absolute(url) { return new URL(url, "http://lens.test").href; }
+
+// The host, with the `innerHTML` setter the panel code writes through. The
+// node it keeps is what `document.querySelector('[data-refresh-fragment=
+// "panel"]')` finds, so a reconcile can replace exactly what an open panel put
+// there — the live-status path this exists to exercise.
+const host = {
+  dataset: {},
+  panel: null,
+  _html: "",
+  get innerHTML() { return this._html; },
+  set innerHTML(value) {
+    this._html = value;
+    this.panel = value
+      ? { html: value, replaceWith(next) { host.innerHTML = next.html; } }
+      : null;
+  },
+};
+
+// What `dashboard.html` renders for a request that arrived with `?selected=`:
+// the panel already in the host, and the host carrying the URL the SERVER
+// built for that selection — the only source for a task with no row.
+const initialSelection =
+  new URL(initialHref).searchParams.get(selectionParam) || "";
+if (initialSelection) {
+  host.dataset.panelSelected = initialSelection;
+  host.dataset.panelUrl =
+    "/tasks/" + initialSelection + "?project=influx&fragment=panel";
+  host.innerHTML = "panel:" + initialSelection;
+}
+
+const rows = {
+  alpha: {
+    dataset: {
+      taskId: "alpha",
+      panelUrl: "/tasks/alpha?project=influx&fragment=panel",
+    },
+  },
+  beta: {
+    dataset: {
+      taskId: "beta",
+      panelUrl: "/tasks/beta?project=influx&fragment=panel",
+    },
+  },
+  // A task really can be called `graph`, and the server addresses it through
+  // the query alias because `/tasks/graph` is the graph PAGE.
+  graph: {
+    dataset: {
+      taskId: "graph",
+      panelUrl: "/tasks/id?task_id=graph&project=influx&fragment=panel",
+    },
+  },
+  // A row from the Gates section. It renders gate chrome instead of the
+  // claim/blocker chrome of an ordinary row, so it carries `data-gate-row`
+  // and NOT `data-task-row` — and the SAME panel contract, which is the whole
+  // point: one click handler for every row on the board (§5.5).
+  gate: {
+    gateRow: true,
+    dataset: {
+      taskId: "gate",
+      panelUrl: "/tasks/gate?project=influx&fragment=panel",
+    },
+  },
+};
+
+// The one selector tasks.js closest()s a click up to. Spelled once here for
+// the same reason it is spelled once there: a row that does not match it is a
+// row the panel cannot be opened from.
+const PANEL_ROW = "[data-panel-url][data-task-id]";
+
+const boardNode = { replaceWith(next) { board = next.html; } };
+const titleLink = { classList: { contains: (name) => name === "task-title" } };
+const tagLink = { classList: { contains: () => false } };
+
+function clickEvent(map, label) {
+  return {
+    button: 0,
+    defaultPrevented: false,
+    target: { closest: (selector) => map[selector] || null },
+    preventDefault() { prevented.push(label); },
+  };
+}
+
+const document = {
+  querySelector(selector) {
+    if (selector === "[data-panel-host]") return host;
+    if (selector === '[data-refresh-fragment="panel"]') return host.panel;
+    if (selector === '[data-refresh-fragment="dashboard-data"]') return boardNode;
+    // The PANEL contract — carried by every row on the board, gates included.
+    const selected =
+      /\\[data-panel-url\\]\\[data-task-id="([^"]+)"\\]/.exec(selector);
+    if (selected) return rows[selected[1]] || null;
+    // The SSE handlers' hook, which a gate row does not carry: its chrome is
+    // not the claim/status chrome those handlers rewrite.
+    const row = /\\[data-task-row\\]\\[data-task-id="([^"]+)"\\]/.exec(selector);
+    if (row) {
+      const found = rows[row[1]];
+      return found && !found.gateRow ? found : null;
+    }
+    return null;
+  },
+  querySelectorAll() { return { length: 0, forEach() {} }; },
+  createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+};
+
+class EventSource {
+  addEventListener(type, fn) { (sse[type] = sse[type] || []).push(fn); }
+  close() {}
+}
+
+// What the SERVER would answer for a URL. A panel fetch returns that task's
+// partial; the reconcile fetches the live board URL, so its document carries
+// the board plus the panel for whatever `selected=` that URL names — which is
+// exactly how a reconcile's panel can be one selection behind.
+function bodyFor(url) {
+  if (url.indexOf("fragment=panel") !== -1) {
+    const path = /\\/tasks\\/([^?]+)\\?/.exec(url);
+    const alias = /task_id=([^&]+)/.exec(url);
+    const id = decodeURIComponent(alias ? alias[1] : path ? path[1] : "");
+    return "panel:" + id;
+  }
+  const selected = new URL(url, "http://lens.test").searchParams.get(selectionParam);
+  const doc = { "dashboard-data": "board:fresh" };
+  if (selected) doc.panel = "panel:" + selected + ":fresh";
+  return JSON.stringify(doc);
+}
+
+const sandbox = {
+  document,
+  EventSource,
+  console,
+  URL,
+  URLSearchParams,
+  DOMParser: class {
+    parseFromString(text) {
+      let parsed = {};
+      try { parsed = JSON.parse(text); } catch (error) { parsed = {}; }
+      return {
+        querySelector(selector) {
+          const match = /data-refresh-fragment="([^"]+)"/.exec(selector);
+          if (!match || parsed[match[1]] === undefined) return null;
+          return { html: parsed[match[1]] };
+        },
+      };
+    }
+  },
+  // Headers and BODY are separate suspension points, and the panel code checks
+  // itself at both: `await fetch(...)` resolves when the response arrives,
+  // `await response.text()` when it has been read. A harness that answered them
+  // together could only ever exercise the first check.
+  //
+  // Each request can also FAIL in each of the three ways a real one can: a
+  // rejected fetch (no connection), a non-OK answer, and a body that never
+  // finishes reading. They are separate outcomes in the browser and separate
+  // actions here.
+  fetch: (url) => new Promise((resolveResponse, rejectResponse) => {
+    let resolveBody = () => {};
+    let rejectBody = () => {};
+    const body = new Promise((resolve, reject) => {
+      resolveBody = resolve;
+      rejectBody = reject;
+    });
+    // The HARNESS's own handler, so a body rejected for a request the code
+    // under test abandoned is not reported as ITS unhandled rejection. The
+    // awaiting code still sees the rejection; this only keeps the books
+    // honest about whose it is.
+    body.catch(() => {});
+    fetches.push({
+      url,
+      headers: () => resolveResponse({ ok: true, text: () => body }),
+      body: () => resolveBody(bodyFor(url)),
+      settle() { this.headers(); this.body(); },
+      fail: () => resolveResponse({ ok: false, text: () => body }),
+      reject: () => rejectResponse(new Error("network is down")),
+      rejectBody: () => rejectBody(new Error("connection reset mid-body")),
+    });
+  }),
+};
+sandbox.window = {
+  LithosLensTasks: {
+    eventsUrl: "/tasks/events",
+    // The HOST page's selection parameter — `selected` on the dashboard,
+    // `focus` on the graph page. Driven from the test, because "one panel
+    // implementation for rows and nodes" is exactly the promise a hard-coded
+    // key here would stop protecting.
+    selectionParam,
+    panelAliasPath: "/tasks/id",
+    panelAliasKey: "task_id",
+  },
+  setTimeout: (fn, delay) => { timerId += 1; timers.set(timerId, fn); return timerId; },
+  clearTimeout: (id) => { timers.delete(id); },
+  setInterval: () => 0,
+  clearInterval() {},
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  location: { get href() { return href(); } },
+  history: {
+    pushState(state, title, url) {
+      pushed.push(url);
+      entries.splice(cursor + 1);
+      entries.push(absolute(url));
+      cursor = entries.length - 1;
+    },
+  },
+};
+sandbox.window.window = sandbox.window;
+Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
+
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(sourcePath, "utf8"), sandbox);
+
+function fire(type, event) {
+  (listeners[type] || []).forEach((listener) => listener(event));
+}
+
+let eventSeq = 0;
+
+const ACTIONS = {
+  escape: () => fire("keydown", { key: "Escape" }),
+  close: () => fire("click", clickEvent({ "[data-panel-close]": {} }, "close")),
+  expand: () => fire("click", clickEvent(
+    { "[data-task-panel]": {}, "a[href]": tagLink }, "expand",
+  )),
+  tag: () => fire("click", clickEvent(
+    { [PANEL_ROW]: rows.alpha, "a[href]": tagLink }, "tag",
+  )),
+  // The <summary> of a gate row's waiter list: the browser's own control for
+  // the <details> it opens, inside a row the panel handler claims.
+  waiters: () => fire("click", clickEvent(
+    { [PANEL_ROW]: rows.gate, summary: {} }, "waiters",
+  )),
+  back: () => { if (cursor > 0) cursor -= 1; fire("popstate", {}); },
+  forward: () => {
+    if (cursor < entries.length - 1) cursor += 1;
+    fire("popstate", {});
+  },
+  // One task event: the real handler debounces a reconcile behind a timer.
+  event: () => {
+    eventSeq += 1;
+    (sse["task.updated"] || []).forEach((listener) => listener({
+      lastEventId: "event-" + eventSeq,
+      data: JSON.stringify({
+        type: "task.updated", task_id: "alpha", requires_refresh: true,
+      }),
+    }));
+  },
+  // The board was replaced by a reconcile and this row is no longer on it —
+  // the one way a task in this tab's history can have no server-built URL left.
+  drop: () => {},
+  timers: () => {
+    const pending = Array.from(timers.entries());
+    timers.clear();
+    pending.forEach(([, fn]) => fn());
+  },
+};
+
+(async () => {
+  for (const action of actions) {
+    const [name, argument] = action.split(":");
+    if (name === "click") {
+      fire("click", clickEvent(
+        { [PANEL_ROW]: rows[argument], "a[href]": titleLink }, "row:" + argument,
+      ));
+    } else if (name === "click-body") {
+      // The row itself, away from any link — "clicking a ROW opens the panel"
+      // (§5.5), not only clicking its title.
+      fire("click", clickEvent(
+        { [PANEL_ROW]: rows[argument] }, "row-body:" + argument,
+      ));
+    } else if (name === "settle") {
+      fetches[Number(argument)].settle();
+    } else if (name === "headers") {
+      fetches[Number(argument)].headers();
+    } else if (name === "body") {
+      fetches[Number(argument)].body();
+    } else if (name === "fail") {
+      fetches[Number(argument)].fail();
+    } else if (name === "reject") {
+      fetches[Number(argument)].reject();
+    } else if (name === "reject-body") {
+      fetches[Number(argument)].rejectBody();
+    } else if (name === "drop") {
+      delete rows[argument];
+    } else {
+      ACTIONS[name]();
+    }
+    // Between actions only: each one is a discrete operator/browser event, and
+    // whatever it set in motion gets to make whatever progress it can before
+    // the next. Nothing here waits for a fetch — only an explicit `settle`
+    // answers one.
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  // One more turn, so a rejection left dangling by the last action is reported
+  // before the results are: Node raises `unhandledRejection` a tick after the
+  // rejection itself.
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({
+    pushed,
+    fetches: fetches.map((entry) => entry.url),
+    prevented,
+    href: href(),
+    panel: host.innerHTML,
+    board,
+    unhandled,
+  }));
+})();
+"""
+
+BOARD_HREF = "http://lens.test/tasks?project=influx"
+
+
+def _panel_run(
+    actions: list[str],
+    href: str = BOARD_HREF,
+    selection_param: str = "selected",
+) -> dict:
+    """Load tasks.js against a two-row board, then run ``actions`` in order.
+
+    Every fetch stays unanswered until an explicit action: ``settle:<n>``
+    answers one whole, ``headers:<n>`` and ``body:<n>`` answer its two halves
+    separately. So a test says exactly which response lands when, and where in
+    a response's own lifetime the next thing happens.
+
+    ``selection_param`` is the HOST page's one selection parameter — the
+    dashboard's ``selected``, the graph page's ``focus`` — because the panel is
+    one implementation for both and nothing in it may assume either spelling.
+    """
+    assert NODE is not None
+    result = subprocess.run(
+        [
+            NODE,
+            "-e",
+            PANEL_HARNESS,
+            "--",
+            str(TASKS_JS),
+            href,
+            json.dumps(actions),
+            selection_param,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_clicking_a_row_fetches_its_panel_fragment_and_pushes_the_selection() -> None:
+    """§5.5: a row click opens the panel instead of navigating. It fetches the
+    URL the SERVER put on the row — so the id encoding and the board's filters
+    are the server's decision — and only then pushes `selected` onto the URL, so
+    a failed fetch can never leave the address bar claiming an open panel."""
+    result = _panel_run(["click:alpha", "settle:0"])
+
+    assert result["fetches"] == ["/tasks/alpha?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    assert result["panel"] == "panel:alpha"
+    assert result["prevented"] == ["row:alpha"]
+
+
+def test_nothing_is_pushed_until_the_panel_has_actually_arrived() -> None:
+    """The push follows the swap. While the fetch is in flight the URL still
+    describes what is on screen."""
+    result = _panel_run(["click:alpha"])
+
+    assert result["pushed"] == []
+    assert result["panel"] == ""
+
+
+def test_closing_the_panel_keeps_the_boards_project_filter() -> None:
+    """THE acceptance criterion for the close path: closing clears the
+    selection and preserves list state. Rebuilt from the live URL rather than
+    from a remembered query string, so every filter — `project` here, but tags,
+    the epic scope and the since window alike — survives."""
+    result = _panel_run(["click:alpha", "settle:0", "close"])
+
+    assert result["pushed"][-1] == "/tasks?project=influx"
+    assert result["href"] == "http://lens.test/tasks?project=influx"
+    assert result["panel"] == ""
+
+
+def test_escape_closes_the_panel_the_same_way() -> None:
+    """Escape is the keyboard half of the close button, not a second path with
+    its own URL handling."""
+    result = _panel_run(["click:alpha", "settle:0", "escape"])
+
+    assert result["pushed"][-1] == "/tasks?project=influx"
+    assert result["panel"] == ""
+
+
+def test_escape_with_no_panel_open_pushes_nothing() -> None:
+    """An Escape on a board with no selection must not write a history entry —
+    it would make Back a no-op the operator has to press twice."""
+    result = _panel_run(["escape"])
+
+    assert result["pushed"] == []
+
+
+def test_a_tag_chip_inside_a_row_keeps_its_own_navigation() -> None:
+    """A row click is the TITLE link and the row itself. The tag chips inside
+    the row are filter links and must still filter, or the panel would swallow
+    the only way to scope the board from a row."""
+    result = _panel_run(["tag"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
+
+
+def test_links_inside_the_panel_navigate_normally() -> None:
+    """Expand is the whole point of the panel's link set: it LEAVES for the
+    full page. A handler that swallowed clicks inside the panel would strand
+    the operator in a summary."""
+    result = _panel_run(["expand"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
+
+
+# --- Ordering: the LATEST intent owns the panel, whatever answers last ------
+
+
+def test_a_late_response_never_overwrites_a_newer_selection() -> None:
+    """Two clicks in flight at once, answered in the wrong order. Panels are
+    fetched, so this is ordinary — and without a guard the panel becomes
+    whichever request happened to answer LAST: A's stale response would repaint
+    A and push `selected=A` over B, so the first click would win."""
+    result = _panel_run(["click:alpha", "click:beta", "settle:1", "settle:0"])
+
+    assert result["panel"] == "panel:beta"
+    assert result["pushed"] == ["/tasks?project=influx&selected=beta"]
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+
+
+def test_a_response_that_lands_after_a_close_does_not_reopen_the_panel() -> None:
+    """The same defect with a stronger contradiction: the panel is closed, the
+    URL says nothing is selected, and a request issued before the close answers
+    afterwards. Reopening then leaves a panel the URL does not describe."""
+    result = _panel_run(["click:alpha", "close", "settle:0"])
+
+    assert result["panel"] == ""
+    assert result["pushed"] == ["/tasks?project=influx"]
+
+
+def test_back_past_an_in_flight_selection_leaves_the_url_it_landed_on() -> None:
+    """The reviewer's interleaving, end to end: from B, Back to A starts A's
+    fetch, and a second Back to the unselected board arrives before it lands.
+    The late A response must not reopen A under a URL that has moved on."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "click:beta",
+            "settle:1",
+            "back",  # -> ?selected=alpha, starts a fetch
+            "back",  # -> the unselected board, closes the panel
+            "settle:2",  # …and only now does alpha answer
+        ]
+    )
+
+    assert result["panel"] == ""
+    assert result["href"] == "http://lens.test/tasks?project=influx"
+    # Neither Back pushed: back/forward walk history, they do not extend it.
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha",
+        "/tasks?project=influx&selected=beta",
+    ]
+
+
+def test_forward_onto_the_visible_selection_still_supersedes_an_open() -> None:
+    """Back to A and straight Forward to B, before A has answered. B is still
+    what is on SCREEN, so a handler comparing against the screen has nothing to
+    do and returns — leaving A's open running under B's URL, and A's response
+    free to paint itself there. The comparison is against the INTENT for
+    exactly this schedule."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "click:beta",
+            "settle:1",
+            "back",  # -> ?selected=alpha, starts alpha's fetch
+            "forward",  # -> ?selected=beta again, before it answers
+            "settle:2",  # …and only now does alpha answer
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+    assert result["panel"] == "panel:beta"
+
+
+def test_a_reconcile_started_before_a_click_pushed_does_not_paint_it() -> None:
+    """The reconcile fetches the LIVE URL, and a click already in flight has
+    not pushed its own yet — so a reconcile started in that window carries the
+    previous selection's panel while the generation it captured is the new
+    click's. Generation alone therefore cannot spot it; the URL it fetched can."""
+    result = _panel_run(
+        [
+            "click:beta",
+            "settle:0",
+            "click:alpha",  # in flight, so the URL still says beta
+            "event",
+            "timers",  # the reconcile leaves, fetching ?selected=beta
+            "settle:1",  # alpha lands and pushes ?selected=alpha
+            "settle:2",  # …then the reconcile answers, with beta's panel
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == "panel:alpha"
+    # The board fragment is applied either way: it does not depend on the
+    # selection, and dropping it would leave the board stale for no reason.
+    assert result["board"] == "board:fresh"
+
+
+def test_a_body_that_arrives_after_a_newer_panel_is_rendered_is_dropped() -> None:
+    """The second suspension point, on its own. A's response ARRIVES, then B is
+    clicked and fully rendered, and only then is A's body read. Between those
+    two awaits the panel and the URL have both moved on, so the check after
+    `response.text()` is what stops A's markup landing on top of B."""
+    result = _panel_run(
+        ["click:alpha", "headers:0", "click:beta", "settle:1", "body:0"]
+    )
+
+    assert result["panel"] == "panel:beta"
+    assert result["pushed"] == ["/tasks?project=influx&selected=beta"]
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+
+
+def test_back_to_an_earlier_selection_shows_that_task_without_a_push() -> None:
+    """Back and forward walk the exploration: a previous NON-EMPTY selection is
+    re-fetched and re-shown, and no history entry is written for the move."""
+    opened = ["click:alpha", "settle:0", "click:beta", "settle:1"]
+    result = _panel_run(opened + ["back", "settle:2"])
+
+    assert result["panel"] == "panel:alpha"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha",
+        "/tasks?project=influx&selected=beta",
+    ]
+
+
+def test_forward_returns_to_the_later_selection() -> None:
+    """…and the same in the other direction, which is what makes the URL — not
+    a click — the state."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "click:beta",
+            "settle:1",
+            "back",
+            "settle:2",
+            "forward",
+            "settle:3",
+        ]
+    )
+
+    assert result["panel"] == "panel:beta"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+    assert len(result["pushed"]) == 2
+
+
+# --- Live reconciliation: an open panel's statuses stay live ----------------
+
+
+def test_a_task_event_refreshes_the_open_panel_alongside_the_board() -> None:
+    """The panel states BLOCKER and DEPENDENT statuses, so a stale one is a
+    wrong answer, not merely an old one. A task event reconciles the board, and
+    the panel is swapped from the same response — while the selection and the
+    URL stay exactly where they were."""
+    result = _panel_run(["click:alpha", "settle:0", "event", "timers", "settle:1"])
+
+    # The reconcile fetched the live URL, which names the open selection.
+    assert (
+        result["fetches"][1] == "http://lens.test/tasks?project=influx&selected=alpha"
+    )
+    assert result["panel"] == "panel:alpha:fresh"
+    assert result["board"] == "board:fresh"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    # No history entry: a refresh is not a navigation.
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+
+
+def test_a_reconcile_fetched_for_one_selection_never_paints_another() -> None:
+    """The reconcile carries a panel for whatever was selected when it LEFT. If
+    the operator has opened another task since, that panel is one selection
+    behind and must not be applied — the board fragment still is, because it
+    does not depend on the selection."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "event",
+            "timers",  # the reconcile leaves, carrying alpha's panel
+            "click:beta",
+            "settle:2",  # beta's panel arrives first
+            "settle:1",  # …then the reconcile answers, with alpha
+        ]
+    )
+
+    assert result["panel"] == "panel:beta"
+    assert result["board"] == "board:fresh"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+
+
+# --- The fallback URL: every id addressable, page words included ------------
+
+
+def test_a_selection_with_no_row_reopens_through_the_hosts_own_url() -> None:
+    """A deep-linked task need not have a row — a filter can exclude it, or it
+    resolved outside the window — so the host carries the URL the server built
+    for the selection it rendered. Closing and going Back reopens it through
+    that, with the board's filters intact."""
+    result = _panel_run(
+        ["close", "back", "settle:0"],
+        href="http://lens.test/tasks?project=influx&selected=ghost",
+    )
+
+    assert result["fetches"] == ["/tasks/ghost?project=influx&fragment=panel"]
+    assert result["panel"] == "panel:ghost"
+
+
+def test_a_page_word_id_is_never_refetched_through_a_browser_built_path() -> None:
+    """The last resort, reached when the row a selection came from has left the
+    board on a reconcile. A task id is an arbitrary string and `graph` is a
+    PAGE under /tasks/, so a path assembled in the browser would fetch the
+    graph page and swap it into the panel host. The alias route addresses every
+    id, and its spelling comes from the server rather than from here."""
+    result = _panel_run(
+        ["click:graph", "settle:0", "close", "drop:graph", "back", "settle:1"]
+    )
+
+    # First through the row's server-built URL, then — with the row gone —
+    # through the alias, never `/tasks/graph`.
+    assert result["fetches"] == [
+        "/tasks/id?task_id=graph&project=influx&fragment=panel",
+        "/tasks/id?task_id=graph&fragment=panel",
+    ]
+    assert result["panel"] == "panel:graph"
+    assert not any(url.startswith("/tasks/graph") for url in result["fetches"])
+
+
+# --- One panel, two hosts: the selection parameter is the host's ------------
+
+# What the graph page (T2-A4) will hand this code: its own selection parameter
+# and its own URL state around it. The panel is ONE implementation for rows and
+# nodes, so every transition below runs against `focus` here and `selected`
+# above, from the same source.
+GRAPH_HREF = (
+    "http://lens.test/tasks/graph"
+    "?project=lithos-loom&overlays=hierarchy&isolated=1&focus=alpha"
+)
+
+
+def test_a_node_click_pushes_the_hosts_own_selection_parameter() -> None:
+    """On the graph page the parameter is `focus`, and nothing may write
+    `selected` there: §5.5 gives each host exactly one selection parameter, and
+    two on one URL is two selections."""
+    result = _panel_run(["click:beta", "settle:0"], GRAPH_HREF, selection_param="focus")
+
+    assert result["pushed"] == [
+        "/tasks/graph?project=lithos-loom&overlays=hierarchy&isolated=1&focus=beta"
+    ]
+    assert "selected=" not in result["href"]
+
+
+def test_closing_on_the_graph_page_clears_focus_and_keeps_the_graph_state() -> None:
+    """Close clears the host's selection and nothing else — here that means the
+    scope, the overlays and the isolated toggle all survive, exactly as the
+    dashboard's filters do."""
+    result = _panel_run(
+        ["click:beta", "settle:0", "close"], GRAPH_HREF, selection_param="focus"
+    )
+
+    assert result["pushed"][-1] == (
+        "/tasks/graph?project=lithos-loom&overlays=hierarchy&isolated=1"
+    )
+    assert result["panel"] == ""
+
+
+def test_back_on_the_graph_page_restores_the_focus_in_the_url() -> None:
+    """…and back/forward read the same parameter they wrote."""
+    result = _panel_run(
+        ["close", "back", "settle:0"], GRAPH_HREF, selection_param="focus"
+    )
+
+    assert result["fetches"] == ["/tasks/alpha?project=influx&fragment=panel"]
+    assert result["panel"] == "panel:alpha"
+    assert result["href"] == GRAPH_HREF
+
+
+# --- The interaction contract: a ROW opens the panel, not just its title ----
+
+
+def test_clicking_the_row_away_from_any_link_opens_the_panel() -> None:
+    """§5.5 says "clicking a row opens a panel". The title link is the obvious
+    target, but it is not the contract: a click on the row's own body — its
+    meta line, its whitespace — opens the same panel, and a handler that only
+    caught the title would leave most of the row inert."""
+    result = _panel_run(["click-body:alpha", "settle:0"])
+
+    assert result["fetches"] == ["/tasks/alpha?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    assert result["panel"] == "panel:alpha"
+    assert result["prevented"] == ["row-body:alpha"]
+
+
+def test_clicking_a_gate_row_opens_its_panel_like_any_other_row() -> None:
+    """A gate is a row on the board, so §5.5's "clicking a row opens a panel"
+    covers it. Gate rows carry gate chrome instead of claim chrome and so do
+    NOT carry `data-task-row`; keying the handler off that attribute left the
+    whole Gates section navigating away on a title click and inert everywhere
+    else. The panel contract is `data-panel-url` + `data-task-id`, which every
+    rendered row carries."""
+    result = _panel_run(["click:gate", "settle:0"])
+
+    assert result["fetches"] == ["/tasks/gate?project=influx&fragment=panel"]
+    assert result["pushed"] == ["/tasks?project=influx&selected=gate"]
+    assert result["panel"] == "panel:gate"
+    assert result["prevented"] == ["row:gate"]
+
+
+def test_a_gate_rows_waiter_list_still_opens_natively() -> None:
+    """The waiter count is a <details> so it expands with no JS at all. Its
+    <summary> is the browser's own control, and a row handler that swallowed
+    the click would trade the disclosure for a panel open — the list could
+    then never be expanded again."""
+    result = _panel_run(["waiters"])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
+
+
+def test_escape_closes_a_server_rendered_panel_with_no_click_before_it() -> None:
+    """A deep link renders the panel server-side, so the browser never opened
+    it — the selection comes off the URL at load. Escape has to close THAT
+    panel too, which is what the load-time seed is for: without it the first
+    Escape on a shared link does nothing."""
+    result = _panel_run(
+        ["escape"], "http://lens.test/tasks?project=influx&selected=ghost"
+    )
+
+    assert result["panel"] == ""
+    assert result["pushed"] == ["/tasks?project=influx"]
+
+
+# --- Close preserves the WHOLE list state, not just one filter -------------
+
+COMPOSITE_HREF = (
+    "http://lens.test/tasks"
+    "?status=open&project=influx&project=loom&tag=area%3Adata&tag=ops"
+    "&agent=worker-a&epic=epic-1&since=2026-08-01&selected=alpha"
+)
+
+
+def test_closing_removes_only_the_selection_from_a_full_board_url() -> None:
+    """ "Close preserves list state" is the whole query, not the one filter the
+    headline example happens to use: the epic scope the build criterion names,
+    a repeated multi-select, a tag whose value carries a colon, and the
+    resolved-since window. Asserted as a multimap, so a rebuild that dropped a
+    duplicate or reordered the pairs fails even if it kept every key."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    result = _panel_run(["close"], COMPOSITE_HREF)
+
+    expected = [
+        (key, value)
+        for key, value in parse_qsl(urlsplit(COMPOSITE_HREF).query)
+        if key != "selected"
+    ]
+    closed = parse_qsl(urlsplit(result["pushed"][-1]).query)
+    assert closed == expected
+    assert "selected" not in dict(closed)
+
+
+ANCHORED_HREF = "http://lens.test/tasks?project=influx#task-group-blocked"
+
+
+def test_the_boards_section_anchor_survives_both_panel_transitions() -> None:
+    """A summary card links to a SECTION of the board — `task_card_url` appends
+    `#task-group-blocked` — so the fragment is generated dashboard state that
+    says where the operator is, exactly like the filters say what they are
+    looking at. Rebuilding the URL from `pathname + search` alone dropped it on
+    the first open and never gave it back, which breaks "closing clears the
+    selection and nothing else" one click earlier than the close."""
+    result = _panel_run(["click:alpha", "settle:0", "close"], ANCHORED_HREF)
+
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha#task-group-blocked",
+        "/tasks?project=influx#task-group-blocked",
+    ]
+    assert result["href"] == ANCHORED_HREF
+
+
+# --- Reopening the selected task is not a navigation -----------------------
+
+
+def test_reopening_the_selected_task_does_not_stack_a_second_entry() -> None:
+    """Clicking the row that is already selected re-fetches its panel — the
+    open is real, and the response may well be newer — but it does NOT move
+    the address bar, so it must not write a history entry.
+
+    An identical entry stacked here is invisible until the operator leaves:
+    Back lands on the twin, `handlePanelPopstate` sees the selection it already
+    intends and returns, and the board stays exactly as it was. The panel then
+    takes two Backs to leave and the first one looks broken."""
+    result = _panel_run(["click:alpha", "settle:0", "click:alpha", "settle:1", "back"])
+
+    # The second click is a real open: it fetches.
+    assert result["fetches"] == [
+        "/tasks/alpha?project=influx&fragment=panel",
+        "/tasks/alpha?project=influx&fragment=panel",
+    ]
+    # …and exactly one entry was ever written for it.
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    # So ONE Back leaves the task, rather than landing on its duplicate.
+    assert result["href"] == BOARD_HREF
+    assert result["panel"] == ""
+
+
+def test_retrying_a_task_whose_back_navigation_failed_pushes_nothing() -> None:
+    """The same shape by the other route. A failed fetch on Back clears the
+    panel and the selection but leaves the URL the browser already moved — so
+    the retry that finally answers is an open under a URL that ALREADY names
+    the task, and pushing there would bury the entry Back is meant to reach."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "close",
+            "back",
+            "fail:1",
+            "click:alpha",
+            "settle:2",
+        ]
+    )
+
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha",
+        "/tasks?project=influx",
+    ]
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == "panel:alpha"
+
+
+# --- A panel that never arrives: three failures, two navigation modes -------
+
+# Back and Forward move the URL BEFORE the panel code runs, so a failed fetch
+# there is not the same event as a failed click: the address bar already names
+# the new task while the previous one is still on screen. Each failure class is
+# exercised on that path, because they enter the code at three different points.
+OPEN_A_THEN_B = ["click:alpha", "settle:0", "click:beta", "settle:1"]
+
+
+def test_a_failed_response_on_back_never_leaves_the_previous_task_on_screen() -> None:
+    """The reviewer's schedule: A, then B, then Back to A — and A's fragment
+    answers non-200. The URL says A. Leaving B's panel under it is the one
+    state the panel must never be in, so it is cleared: a missing answer beats
+    a wrong one, and the URL stays intact for a reload to retry."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "fail:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_rejected_fetch_on_back_is_handled_the_same_way() -> None:
+    """A transport failure never reaches the `response.ok` test at all — it
+    rejects the fetch. Same outcome required, and nothing left dangling: with
+    no caller awaiting `openPanel`, an uncaught rejection is an unhandled one."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "reject:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_body_that_fails_to_read_on_back_is_handled_the_same_way() -> None:
+    """The third class, and the one that gets furthest in: the response
+    arrives, `ok` is true, and the connection dies while the body is read."""
+    result = _panel_run(OPEN_A_THEN_B + ["back", "headers:2", "reject-body:2"])
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == ""
+    assert result["unhandled"] == []
+
+
+def test_a_failed_click_leaves_the_panel_and_the_url_exactly_as_they_were() -> None:
+    """The other navigation mode. A click pushes only on success, so nothing
+    has moved: the panel on screen still describes the URL, and both stay."""
+    result = _panel_run(["click:alpha", "settle:0", "click:beta", "fail:1"])
+
+    assert result["panel"] == "panel:alpha"
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    assert result["unhandled"] == []
+
+
+def test_a_failed_click_does_not_leave_its_task_claimed_as_the_intent() -> None:
+    """What the failed click must NOT leave behind. The intent is compared
+    against on every history move, so a click that failed while claiming B
+    makes the next Forward ONTO B match it, return early, and leave A's panel
+    sitting under B's URL. The intent is walked back to what is on screen, so
+    that Forward re-fetches instead."""
+    result = _panel_run(
+        OPEN_A_THEN_B
+        + [
+            "back",  # -> ?selected=alpha
+            "settle:2",  # …shown; the forward entry (beta) is still in history
+            "click:beta",  # a click that fails, pushing nothing
+            "fail:3",
+            "forward",  # -> ?selected=beta, which the stale intent would match
+            "settle:4",
+        ]
+    )
+
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
+    assert result["panel"] == "panel:beta"
+    assert result["unhandled"] == []

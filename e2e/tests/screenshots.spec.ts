@@ -113,6 +113,33 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The side panel (T2-A6), server-rendered open by `?selected=` — the
+    // no-JS baseline, and the only artifact that shows the panel OVER the
+    // board. `loom-worker` sits mid-chain in the demo's loom cluster, so it
+    // is the one fixture carrying every section at once: a blocker above, two
+    // dependents below, and a parent epic.
+    slug: "dashboard-panel",
+    url: "/tasks?since=2026-08-01&selected=loom-worker",
+    ready: async (page) => {
+      await expect(page.locator(".task-board")).toBeVisible();
+      await expect(page.locator('[data-panel-task="loom-worker"]')).toBeVisible();
+      // Both directions of the relationship, which is the slice: the chain
+      // upstream and the "Blocks" list downstream.
+      await expect(
+        page.locator('[data-panel-blockers] [data-link-list="blockers"] li').first(),
+      ).toBeVisible();
+      await expect(
+        page
+          .locator('[data-panel-dependents] [data-link-list="dependents"] li')
+          .first(),
+      ).toBeVisible();
+      // The parent breadcrumb and the two buttons §5.5 promises.
+      await expect(page.locator("[data-panel-parent]")).toBeVisible();
+      await expect(page.locator("[data-panel-expand]")).toBeVisible();
+      await expect(page.locator("[data-panel-close]")).toBeVisible();
+    },
+  },
+  {
     slug: "task-detail",
     url: "/tasks/influx-ingest-cutover",
     ready: async (page) => {
