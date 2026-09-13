@@ -250,8 +250,10 @@ The dashboard also renders:
   each other by age). The badge renders only when `reconciliation_pr_url` and
   the gate's `pr_url` are both present and equal, so a state about a replaced
   PR — or one Lens cannot tie to a PR at all — is withheld (its raw keys stay
-  visible as advisory metadata); a state Lens does not recognise renders as its
-  own text, verbatim, in grey rather than failing. The vocabulary and its colours are
+  visible as advisory metadata), and only while the gate is **open**, since
+  loom stops sweeping a resolved gate and its keys freeze into history; a state
+  Lens does not recognise renders as its own text, verbatim, in grey rather
+  than failing. The vocabulary and its colours are
   one mapping in `pr_reconciliation.py`, which the templates read — the same
   badge appears in the side panel's gate context, on the detail page, and on a
   gate the severity model promoted

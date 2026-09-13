@@ -40,6 +40,7 @@ def _pr_gate(
     pr_url: Any = "https://github.com/agent-lore/lithos-lens/pull/84",
     state_pr_url: Any | None = None,
     extra: dict[str, Any] | None = None,
+    status: str = "open",
 ) -> TaskRecord:
     """A ``pr`` gate carrying loom's four keys, all four independently overridable.
 
@@ -58,7 +59,7 @@ def _pr_gate(
     return TaskRecord(
         id="gate-pr",
         title="Land the migration PR",
-        status="open",
+        status=status,  # type: ignore[arg-type]
         task_type="gate",
         created_at="2026-09-10T09:00:00+00:00",
         metadata=metadata,
@@ -283,6 +284,27 @@ def test_a_state_that_only_looks_like_a_known_one_stays_unknown(state: str) -> N
     assert rendered.severity == UNKNOWN_STATE_SEVERITY
     # …and it is neither of the states rule 3b escalates on.
     assert rendered.state not in {NEEDS_HUMAN_STATE, GATE_FAILED_STATE}
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled"])
+@pytest.mark.parametrize("state", ["needs_human", "ready_to_merge"])
+def test_a_resolved_gate_carries_no_live_state(status: str, state: str) -> None:
+    """loom sweeps still-OPEN PR gates, so a resolved gate's four keys are the
+    last snapshot taken before it closed — frozen, and never refreshed again.
+
+    The badge is present tense by construction ("what is this PR doing right
+    now?"), so on a completed or cancelled gate it would assert a live
+    condition about a PR nothing is watching: a gate someone completed to
+    unblock the work would fly a red `needs human` for ever, and a merged one
+    would go on claiming `ready to merge`. The keys are not lost — the detail
+    page's metadata table renders them, which is where history belongs.
+    """
+    resolved = _pr_gate(state=state, status=status)
+    still_open = _pr_gate(state=state)
+
+    assert reconciliation_of(resolved, gate_type=PR_GATE_TYPE, now=_NOW) is None
+    # …and the only thing that changed is the status.
+    assert reconciliation_of(still_open, gate_type=PR_GATE_TYPE, now=_NOW) is not None
 
 
 @pytest.mark.parametrize("gate_type", ["human", "timer", "ci", "external_task", ""])

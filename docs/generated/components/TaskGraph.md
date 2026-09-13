@@ -26,7 +26,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_page` | L | 1 | 6 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
 | `lithos_lens.graph_view` | S | 10 | 0 |
-| `lithos_lens.pr_reconciliation` | S | 1 | 2 |
+| `lithos_lens.pr_reconciliation` | M | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |

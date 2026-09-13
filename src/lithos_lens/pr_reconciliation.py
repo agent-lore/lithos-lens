@@ -24,6 +24,9 @@ Two honesty rules the rest of the module exists to keep:
   previous PR's state until the next sweep rewrites it, so the badge renders
   only when ``reconciliation_pr_url`` and the gate's own ``pr_url`` are both
   present and equal — positive evidence, not the absence of a contradiction;
+- **the state must be CURRENT.** loom sweeps only still-open ``pr`` gates, so a
+  resolved gate's keys are a frozen snapshot rather than an answer to "right
+  now", and no badge is built from them;
 - **nothing here is Lens's own judgement.** The detail line is loom's, shown
   verbatim; the age is measured from loom's own ``reconciliation_since`` and is
   empty when that stamp cannot be read, never guessed.
@@ -43,6 +46,7 @@ from datetime import datetime
 from typing import Any
 
 from lithos_lens.tasks import (
+    TERMINAL_TASK_STATUSES,
     Reconciliation,
     TaskRecord,
     humanize_age,
@@ -165,11 +169,20 @@ def reconciliation_of(
 ) -> Reconciliation | None:
     """The PR reconciliation state to RENDER for a gate, or None for none.
 
-    None — no badge at all — in three cases, which is the whole judgement this
+    None — no badge at all — in four cases, which is the whole judgement this
     module makes:
 
     - the gate is not a ``pr`` gate. Nothing else carries these keys, and a
       badge built from stray metadata on a timer gate would be a fiction;
+    - the gate is RESOLVED. loom rewrites these keys on every sweep of every
+      still-OPEN ``pr`` gate, and stops the moment the gate is completed or
+      cancelled — so on a resolved gate the four keys are the last snapshot
+      taken before it closed, frozen. The badge's whole claim is present tense
+      ("what is this PR doing right now?"), and a completed gate still flying a
+      red ``needs human`` — or a merged one still claiming ``ready to merge`` —
+      asserts a live condition about a PR nothing is watching any more. The
+      board never hits this (it collects gates off the open list), but the
+      detail page and the side panel address a task by id, so they do;
     - ``reconciliation_state`` is absent, blank, or not a string. loom writes
       flat scalars, so a container here is malformed rather than meaningful —
       and it stays visible either way, as the generic advisory chips that render
@@ -182,6 +195,13 @@ def reconciliation_of(
     renders without one.
     """
     if gate_type != PR_GATE_TYPE:
+        return None
+    if task.status in TERMINAL_TASK_STATUSES:
+        # Resolved: the keys are history, and history belongs in the detail
+        # page's metadata table (where they still render, verbatim) rather than
+        # in a badge that states the present. ``normalize_task`` coerces any
+        # status it does not recognise to ``open``, so this reads as the
+        # positive "only while open" rule it is meant to be.
         return None
     metadata = task.metadata
     state = _state_text(metadata.get(RECONCILIATION_STATE_KEY))

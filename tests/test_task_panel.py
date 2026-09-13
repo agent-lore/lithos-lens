@@ -31,6 +31,8 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from lithos_lens.task_links import LINK_PAGE_SIZE
 from tests.test_task_detail import _client, _link, _task
 from tests.test_tasks_mvp import TaskFakeLithosClient, _add_gate
@@ -488,6 +490,54 @@ def test_the_panel_and_the_detail_page_show_the_same_pr_state_badge(
             '<p class="reconciliation-detail" data-reconciliation-detail>'
             "Reviewer requested changes.</p>" in body
         )
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled"])
+def test_a_resolved_pr_gate_shows_no_live_state_on_either_surface(
+    lithos_lens_config_env: Path, status: str
+) -> None:
+    """loom refreshes the four keys on still-OPEN PR gates only, so once a gate
+    is completed or cancelled they are the last snapshot before it closed.
+
+    The board never shows one — it collects gates off the open list — but the
+    panel and the detail page address a task by id, so they are where a
+    resolved gate would go on flying a red `needs human` (or claiming
+    `ready to merge` about a PR that merged weeks ago) for ever. Asserted on
+    both surfaces, and for both terminal statuses, because the rule is about
+    the task's lifecycle rather than about either page.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        _task(
+            "gate-pr-done",
+            title="Land the migration PR",
+            status=status,
+            task_type="gate",
+            resolved_at="2026-08-20T09:00:00+00:00",
+            metadata={
+                "gate_type": "pr",
+                "pr_url": "https://example.invalid/pull/84",
+                "reconciliation_pr_url": "https://example.invalid/pull/84",
+                "reconciliation_state": "needs_human",
+                "reconciliation_detail": "Reviewer requested changes.",
+                "reconciliation_since": "2026-08-01T00:00:00+00:00",
+            },
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        panel = client.get("/tasks/gate-pr-done?fragment=panel").text
+        page = client.get("/tasks/gate-pr-done").text
+
+    for body in (panel, page):
+        assert "badge-reconciliation" not in body
+        assert "data-reconciliation-state" not in body
+        assert "data-reconciliation-detail" not in body
+    # The gate itself still renders, and its keys survive as HISTORY in the
+    # metadata table — it is the present-tense CLAIM that is withheld.
+    assert 'data-gate-type="pr"' in page
+    assert "<dt>reconciliation_state</dt>" in page
+    assert "<dd>needs_human</dd>" in page
 
 
 def test_the_panel_shows_no_pr_badge_for_a_state_about_another_pr(
