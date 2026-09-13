@@ -655,9 +655,6 @@ async def load_dashboard(
         open_flat=open_flat,
         rolled_up_open=rolled_up_open,
         nothing_to_show=nothing_to_show,
-        # Frontier-only ids the adopted generation's resolved windows do NOT
-        # explain: in no section, so never examined (see the field).
-        frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
         epics=strip.rollups,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its

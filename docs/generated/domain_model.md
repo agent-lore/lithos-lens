@@ -212,7 +212,6 @@ classDiagram
     +open_flat bool
     +rolled_up_open int
     +nothing_to_show bool
-    +frontier_unplaced bool
     +errors tuple[str, ...]
     +epic_scope str
   }

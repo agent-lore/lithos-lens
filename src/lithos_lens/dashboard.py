@@ -145,14 +145,6 @@ class DashboardData:
     # ``since``, so work resolved before it is invisible to this flag and the
     # panel it drives has to name the window.
     nothing_to_show: bool = False
-    # True when a frontier read of this load returned an id that NO read of the
-    # adopted generation placed: absent from the open snapshot AND from both
-    # resolved windows. Such a row is in no section, so the attention rules
-    # never examined it — which is why it withholds the system-wide healthy
-    # stripe (§14). A frontier-only id a resolved window DID return renders
-    # under Completed/Cancelled and leaves the stripe alone; the load read it
-    # and placed it.
-    frontier_unplaced: bool = False
     errors: tuple[str, ...] = ()
     # One rollup per open epic, in open-snapshot (newest-first) order.
     epics: tuple[EpicRollup, ...] = ()
@@ -211,13 +203,6 @@ class DashboardData:
         (see :attr:`rolled_up_only`): the stripe would be the only thing on an
         empty board, asserting health over work the operator cannot see.
 
-        Withheld when a frontier-only row survived the skew retry unplaced
-        (see :attr:`frontier_unplaced`): a task this load read twice reached no
-        section, so the attention rules never evaluated it and "0 issues" would
-        be a claim about rows nobody looked at. It may be a newly-ready open
-        task the open read missed, so an issue cannot be ruled out. The
-        resolved-window case is not this: that row renders, and stays healthy.
-
         Withheld on a narrowed view. Truncation, reconciliation and
         claims-unknown are all measured over the rows the filters left, so on a
         filtered board they cannot support the stripe's system-wide claim — a
@@ -233,6 +218,5 @@ class DashboardData:
             and not self.errors
             and not self.truncated
             and not self.reconciliation_pending
-            and not self.frontier_unplaced
             and not self.sections.get("claims_unknown")
         )
