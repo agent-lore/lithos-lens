@@ -419,7 +419,7 @@
              and a gate the severity rules promoted renders in Needs attention
              instead of here, so the single-placement rule holds. #}
           {% if section == "gates" %}
-            {% if "open" in dashboard.filters.statuses %}
+            {% if "open" in dashboard.filters.statuses and not dashboard.epic_scope_unmatched %}
               <article class="task-group" id="task-group-gates" data-task-group="gates">
                 <header>
                   <h2>{{ section_labels["gates"] }}</h2>
@@ -444,7 +444,13 @@
             {% endif %}
           {% else %}
             {% set rows = dashboard.sections[section] %}
-            {% if section in ("completed", "cancelled") %}
+            {% if dashboard.epic_scope_unmatched %}
+              {# The epic banner above states the ONE reason every section here
+                 is empty, and names the epic. A row of "no tasks match these
+                 filters" groups would blame the filters alone — the failure
+                 §5.2.1 exists to remove — so the banner speaks instead. #}
+              {% set active = false %}
+            {% elif section in ("completed", "cancelled") %}
               {% set active = section in dashboard.filters.statuses %}
             {% elif section == "attention" %}
               {# Active whenever the open side is on screen, INCLUDING the flat

@@ -197,11 +197,19 @@ class DashboardData:
 
         Distinct from the confirmed-childless epic beside it (an empty scope,
         not an emptied one) and from a scope that was never applied. A board
-        that renders ANYTHING — a section row, a gate, or rolled-up children —
-        is not this case, and says so itself.
+        that renders ANYTHING — a section row, a gate, or rolled-up children
+        the strip does hold — is not this case, and says so itself.
+
+        It is also a claim about the FILTERS, so it stands down whenever a read
+        did not answer (the same test :func:`frontier._is_nothing_to_show`
+        applies to its own whole-board claim): rows this load never saw are
+        unknown, not filtered out, and the error banner is the honest
+        explanation of that board.
         """
         scoped = self.scoped_epic
         if scoped is None or not scoped.descendant_ids or self.rolled_up_open:
+            return False
+        if self.errors:
             return False
         return not any(self.sections.values()) and not self.gate_groups
 

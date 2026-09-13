@@ -996,6 +996,75 @@ def test_epic_strip_drops_the_chips_the_filters_would_empty(
     assert "2 epics have no tasks on this board" in unescape(nothing.text)
 
 
+def _epic_chip_links(html: str) -> dict[str, str]:
+    """Every chip the strip rendered: epic id -> the href a click follows."""
+    return {
+        chip_id: unescape(href)
+        for href, chip_id in re.findall(
+            r'<a class="epic-chip[^"]*"\s+href="([^"]+)"\s+data-epic-chip="([^"]+)"',
+            html,
+        )
+    }
+
+
+def test_every_chip_on_a_fully_filtered_board_leads_to_a_board_with_rows(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The acceptance criterion, followed the way an operator follows it: on a
+    board narrowed by tag AND project AND agent AND status, take the href of
+    every chip the strip drew, request it, and require rows.
+
+    The chip link is the active filters plus ``?epic=`` (§5.2.1), so this also
+    pins that the link keeps carrying them — a chip that quietly dropped the
+    project filter would "work" by widening the board it promised to scope."""
+    fake = _roadmap_fake()
+    fake.tasks.extend(
+        [
+            _epic_row("epic-loom", "Loom epic"),
+            _epic_row("epic-lens", "Lens epic"),
+            _epic_row("epic-untagged", "Side quest epic"),
+            _epic_row("epic-done", "Finished epic"),
+        ]
+    )
+    fake.children["epic-loom"] = ["loom-ready"]
+    fake.children["epic-lens"] = ["lens-ready", "lens-stale"]
+    fake.children["epic-untagged"] = ["loom-offscope"]
+    fake.children["epic-done"] = ["loom-done"]
+
+    query = (
+        "tag=roadmap-2026-08&project=lithos-loom&agent=planner"
+        "&status=open&since=2026-04-01"
+    )
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?{query}")
+        chips = _epic_chip_links(board.text)
+        followed = {epic_id: client.get(href) for epic_id, href in chips.items()}
+
+    assert board.status_code == 200
+    # Wrong project, wrong tag, and resolved work on an open-only board: three
+    # chips that could only have led to an empty board.
+    assert list(chips) == ["epic-loom"]
+    assert "3 more epics have no tasks on this board" in unescape(board.text)
+
+    for epic_id, href in chips.items():
+        # The link is the board's own filters plus the epic — all of them.
+        for term in (
+            "tag=roadmap-2026-08",
+            "project=lithos-loom",
+            "agent=planner",
+            "status=open",
+            "since=2026-04-01",
+            f"epic={epic_id}",
+        ):
+            assert term in href, (epic_id, href)
+        response = followed[epic_id]
+        assert response.status_code == 200
+        # …and following it lands on rows, not on four "no match" lines.
+        assert "data-task-row" in response.text, epic_id
+        assert "Loom roadmap item" in response.text
+        assert "No ready tasks match these filters." not in unescape(response.text)
+
+
 def test_an_epic_scope_the_filters_empty_says_so(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -1023,6 +1092,19 @@ def test_an_epic_scope_the_filters_empty_says_so(
     # is not childless.
     assert "data-epic-scope-missing" not in text
     assert "data-epic-scope-empty" not in text
+    # The failure this task is about: four (here five) "No … match these
+    # filters" lines that never mention the epic. The banner replaces them —
+    # every empty section group is gone, not just quieter.
+    for line in (
+        "Nothing needs attention in this view.",
+        "No open gates match these filters.",
+        "No ready tasks match these filters.",
+        "No blocked tasks match these filters.",
+        "No completed tasks match these filters.",
+        "No cancelled tasks match these filters.",
+    ):
+        assert line not in text, line
+    assert "data-task-group=" not in text
 
 
 def test_active_tag_filter_renders_a_chip_that_clears_only_that_tag(

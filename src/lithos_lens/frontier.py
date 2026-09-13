@@ -44,6 +44,7 @@ from typing import Any, Protocol, cast
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.epic_strip import (
+    EpicStrip,
     epic_scope_ids,
     load_epic_rollups,
 )
@@ -82,6 +83,12 @@ from lithos_lens.tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The open task types that render as ROWS on a board with a frontier: workable
+# tasks in the sections, gates in their own. Everything else rolls up, which is
+# why the rolled-up count and the strip's scope read the SAME set — a chip whose
+# only match is a rolled-up row leads to a board with nothing on it.
+PLACED_OPEN_TYPES: frozenset[str] = frozenset({WORKABLE_TASK_TYPE, GATE_TASK_TYPE})
 
 
 class FrontierLithosClient(Protocol):
@@ -291,24 +298,26 @@ async def load_dashboard(
         """
         return {**terminal_index, **open_index}
 
-    def _strip_scope() -> frozenset[str] | None:
-        """What the epic chips describe: the ids this board renders (§5.2.1).
+    async def _load_strip() -> EpicStrip:
+        """The epic strip for the reads currently in hand.
 
-        A closure over the snapshot and the terminal reads because the skew
-        retry rebinds both: the strip has to follow the generation the sections
-        were built from, here as much as in the fan-out itself. A FAILED
-        terminal read contributes no rows rather than an empty list of them.
+        One definition, called once per generation: the skew retry rebinds the
+        snapshot and the terminal reads, and the strip must follow the
+        generation the sections were built from — its chips AND the board they
+        describe (§5.2.1), which is why the scope is derived here rather than
+        passed in. Without a frontier every open row renders flat, epics
+        included, so nothing rolls up and no type is held back.
         """
-        return board_visible_ids(
+        return await load_epic_rollups(
+            lithos,
             open_snapshot,
-            {
-                status: cast(list[TaskRecord], result)
-                for status, result in zip(
-                    ("completed", "cancelled"), closed_results, strict=True
-                )
-                if not isinstance(result, BaseException)
-            },
-            filters=filters,
+            selected=filters.epic,
+            visible_ids=board_visible_ids(
+                open_snapshot,
+                closed_results,
+                filters=filters,
+                open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
+            ),
         )
 
     def _partition_state(
@@ -385,17 +394,10 @@ async def load_dashboard(
         )
 
     # The epic strip depends on the open snapshot (its epic ids), so it is
-    # fetched here rather than in the main gather — and refetched below if the
-    # skew retry adopts a newer snapshot, so the strip lists the epics of the
-    # snapshot the sections were built from. The children reads themselves stay
-    # independent reads (see the module docstring): counts can be a generation
-    # newer, which is why only a non-empty subtree is allowed to scope.
-    strip = await load_epic_rollups(
-        lithos,
-        open_snapshot,
-        selected=filters.epic,
-        visible_ids=_strip_scope(),
-    )
+    # fetched here rather than in the main gather. The children reads themselves
+    # stay independent reads (see the module docstring): counts can be a
+    # generation newer, which is why only a non-empty subtree is allowed to scope.
+    strip = await _load_strip()
     scope_ids = epic_scope_ids(strip.rollups)
 
     # §14: a failed frontier read renders the master open list flat. Half a
@@ -443,16 +445,9 @@ async def load_dashboard(
                     cast("list[TaskRecord] | BaseException", retry_closed[1]),
                 )
                 _read_terminal()
-                # Re-read the strip against the adopted snapshot, so the chips
-                # list the epics of the generation the sections were built from
-                # — and re-derive what the board shows from it, for the same
-                # reason: the chips describe THIS generation's board.
-                strip = await load_epic_rollups(
-                    lithos,
-                    open_snapshot,
-                    selected=filters.epic,
-                    visible_ids=_strip_scope(),
-                )
+                # Re-read the strip, so the chips (and their scope) describe
+                # the generation the sections were built from.
+                strip = await _load_strip()
                 scope_ids = epic_scope_ids(strip.rollups)
                 state = _partition_state(
                     open_snapshot, ready_list, blocked_records, scope_ids
@@ -566,13 +561,17 @@ async def load_dashboard(
     # Zero unless the open side is actually on screen: with ``?status=completed``
     # the open sections are emptied by choice, and an epic in the snapshot must
     # not turn that into "nothing to work on here".
+    # …and only the rows the strip REPRESENTS: an epic the filters left with no
+    # work here has no chip, so counting it would send the operator to a strip
+    # that does not hold it (the hidden-chip note accounts for those instead).
+    chip_ids = {rollup.task.id for rollup in strip.rollups}
     rolled_up_open = (
         0
         if open_flat or "open" not in filters.statuses
         else sum(
             1
             for task in visible_open
-            if task.task_type not in (WORKABLE_TASK_TYPE, GATE_TASK_TYPE)
+            if task.task_type not in PLACED_OPEN_TYPES and task.id in chip_ids
         )
     )
 

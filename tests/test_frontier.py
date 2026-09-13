@@ -2301,6 +2301,127 @@ def test_a_terminal_only_board_keeps_the_epics_whose_resolved_work_it_shows() ->
     assert data.epics_hidden == 1
 
 
+def test_a_chip_resting_only_on_a_rolled_up_descendant_is_not_drawn() -> None:
+    """Reviewer repro (c-001): "a descendant among the rows this board renders"
+    means a row that can be PLACED. A nested epic matches the filters but rolls
+    up into the strip rather than rendering, so an outer epic whose only match
+    is that nested epic is the same dead-end chip — and the nested epic, being
+    childless, has no work on this board either."""
+    outer = _epic("epic-outer")
+    nested = _task("epic-nested", task_type="epic", tags=("roadmap",))
+    working = _epic("epic-working")
+    row = _tagged("row", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[outer, nested, working, row],
+        ready=[row],
+        blocked=[],
+        children={"epic-outer": [nested], "epic-working": [row]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-working"]
+    assert data.epics_hidden == 2
+
+
+def test_a_scope_holding_only_a_rolled_up_row_explains_itself() -> None:
+    """The other half of c-001: a bookmark can still select that outer epic.
+    Its chip is kept, no section renders — and the rolled-up nested epic has no
+    chip either, so the board must not fall back to "epics are shown as
+    progress chips in the strip above". The epic explanation says it instead."""
+    outer = _epic("epic-outer")
+    nested = _task("epic-nested", task_type="epic", tags=("roadmap",))
+    fake = _FrontierFake(
+        open_tasks=[outer, nested],
+        ready=[],
+        blocked=[],
+        children={"epic-outer": [nested]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-outer")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.epic_scope == "epic-outer"
+    assert not any(data.sections.values())
+    # The nested epic is in scope and matches the filters, but no chip holds
+    # it, so it is not counted as a row this board rolled up.
+    assert data.rolled_up_open == 0
+    assert data.rolled_up_only is False
+    assert data.epic_scope_unmatched is True
+
+
+def test_a_failed_terminal_read_leaves_the_strip_unscoped() -> None:
+    """Reviewer repro (c-002): "no tasks on this board" is a claim about the
+    FILTERS. With a displayed window that never answered, the rows are unknown
+    rather than absent — the matching one may be in the read that failed — so
+    the strip scopes nothing, hides nothing, and the load-error banner explains
+    the board."""
+    epic = _epic("epic-1")
+    done = _task("done", status="completed", tags=("roadmap",))
+    fake = _FrontierFake(
+        open_tasks=[epic],
+        ready=[],
+        blocked=[],
+        completed=[done],
+        children={"epic-1": [done]},
+        fail_completed_from=0,
+    )
+    filters = TaskFilters(
+        statuses=("completed",), tags=("roadmap",), agent="", since=""
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert any("completed" in message for message in data.errors)
+    assert [rollup.task.id for rollup in data.epics] == ["epic-1"]
+    assert data.epics_hidden == 0
+
+    # …and the same board with that epic selected does not turn the outage
+    # into "nothing here matches your filters" either.
+    scoped = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(filters, epic="epic-1"), frontier_limit=500
+        )
+    )
+    assert scoped.epic_scope == "epic-1"
+    assert not any(scoped.sections.values())
+    assert scoped.epic_scope_unmatched is False
+
+
+def test_the_strip_follows_the_generation_the_skew_retry_adopted() -> None:
+    """The retry path carries the scope, not just the fan-out: the adopted
+    generation changes WHICH epic has work on the board, so chips computed
+    against the first generation would leave an off-filter chip behind."""
+    stale_epic = _epic("epic-stale")
+    fresh_epic = _epic("epic-fresh")
+    stale_row = _tagged("stale-row", "roadmap")
+    fresh_row = _tagged("fresh-row", "roadmap")
+    gap = _tagged("gap", "roadmap")
+    fake = _FrontierFake(
+        # First generation: the stale epic's row is on the board, and ``gap``
+        # is in neither frontier (the skew trigger). The retry replaces both
+        # the epics and the rows.
+        open_tasks=[
+            [stale_epic, fresh_epic, stale_row, gap],
+            [stale_epic, fresh_epic, fresh_row],
+        ],
+        ready=[[stale_row], [fresh_row]],
+        blocked=[],
+        children={"epic-stale": [stale_row], "epic-fresh": [fresh_row]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    # The stale epic's only row is gone from the adopted snapshot, so its chip
+    # goes with it — and the fresh epic's row arrived, so its chip is drawn.
+    assert [rollup.task.id for rollup in data.epics] == ["epic-fresh"]
+    assert data.epics_hidden == 1
+    assert _section_ids(data.sections, "ready") == ["fresh-row"]
+
+
 def test_the_selected_epic_keeps_its_chip_and_the_board_explains_the_gap() -> None:
     """The residual dead end: the scoped chip is kept whatever the filters
     leave of it (it is the live scope and the way back out), so the board — not
