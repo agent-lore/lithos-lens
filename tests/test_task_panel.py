@@ -131,6 +131,28 @@ def test_the_panel_names_the_task_project_and_type(
     assert "data-panel-close" in header
 
 
+def test_a_task_with_no_project_says_so_rather_than_rendering_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A task belonging to no project is a real domain case, not an error: a
+    cross-project chore, or work nobody stamped. `task_projects` correctly
+    answers with an empty tuple — and a header that then renders NOTHING where
+    §5.5.1 asks for a project is indistinguishable from a panel that failed to
+    fill the field in. It is said out loud, the same way the row's tag strip
+    writes "(empty tag)" rather than showing a blank pill."""
+    fake = _related_fixture()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=pred-open")
+
+    header = response.text.split("data-panel-task=", 1)[1].split("</header>")[0]
+    assert "data-panel-project=" not in header, "this fixture carries no project"
+    assert "data-panel-project-none" in header
+    assert "(no project)" in header
+    # And the chip does not claim to NAME a project it has not got.
+    assert "tag-chip-project" not in header
+
+
 def test_a_selected_task_with_no_dependents_says_so(
     lithos_lens_config_env: Path,
 ) -> None:

@@ -299,6 +299,34 @@ test("task.created event inserts a skeleton row on an unfiltered board", async (
     "href",
     "/tasks/e2e-just-created",
   );
+
+  // …and the optimistic row takes part in the side panel like every other row
+  // on the board (§5.5). It is the ONE row no template rendered, so its half
+  // of the contract is written by tasks.js — through the query-alias route,
+  // the only form the browser may build for an arbitrary id. Without it the
+  // row is still visible and still clickable, and the click navigates away
+  // instead of opening the panel.
+  await expect(skeleton).toHaveAttribute(
+    "data-panel-url",
+    "/tasks/id?task_id=e2e-just-created&fragment=panel",
+  );
+  const fragment = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).searchParams.get("fragment") === "panel",
+  );
+
+  await skeleton.locator("a.task-title").click();
+
+  expect(new URL((await fragment).url()).searchParams.get("task_id")).toBe(
+    "e2e-just-created",
+  );
+  // The board is still here — a navigation would have replaced it — and the
+  // selection is on the URL. The panel itself is the NOT-FOUND one: the id
+  // came off an event and no such task exists in the fixture, which is the
+  // panel this route is specified to answer with and not an HTTP 500.
+  await expect(page).toHaveURL(/selected=e2e-just-created/);
+  await expect(page.locator(".task-board")).toBeVisible();
+  await expect(page.locator("[data-task-panel]")).toBeVisible();
 });
 
 test("the optimistic skeleton is suppressed on a filtered board", async ({ page, request }) => {
@@ -480,6 +508,34 @@ test("a panel fetch that fails leaves the board exactly as it was", async ({
   await expect(page.locator(".task-board")).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("a board section anchor survives opening and closing the panel", async ({
+  page,
+}) => {
+  // The summary cards link to a SECTION of the board, so `#task-group-blocked`
+  // is generated dashboard state that says where the operator is. Driven from
+  // the card rather than typed into `goto`, so the anchor under test is the
+  // one the app actually emits.
+  await page.goto("/tasks?since=2026-08-01");
+  await page.locator('a.metric-card[href$="#task-group-blocked"]').click();
+  await expect(page).toHaveURL(/#task-group-blocked$/);
+
+  const row = page.locator('[data-task-row][data-task-id="influx-backfill"]');
+  await row.locator(".task-title").click();
+
+  await expect(
+    page.locator('[data-panel-task="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/selected=influx-backfill#task-group-blocked$/);
+
+  await page.locator("[data-panel-close]").click();
+
+  // Only the selection cleared. The anchor is list state like any filter.
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/selected=/);
+  await expect(page).toHaveURL(/#task-group-blocked$/);
+});
+
 
 test("closing the side panel keeps the board's filters", async ({ page }) => {
   // The no-JS baseline first: `?selected=` renders the panel open server-side.

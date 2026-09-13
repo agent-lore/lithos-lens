@@ -58,9 +58,20 @@
         {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
         {# The project chip: read off `task_projects` under the configured
            convention (§5B.1), so a task carrying both spellings shows both
-           rather than whichever this template happened to look at. #}
+           rather than whichever this template happened to look at.
+
+           No project is a real answer, not a missing one — a cross-project
+           task, or one nobody stamped — and §5.5.1 asks the header for a
+           project. So it is SAID, for the same reason the row's tag strip
+           writes "(empty tag)" rather than a blank pill: a field that renders
+           nothing reads as a rendering fault, and the operator cannot tell
+           projectless work from a panel that failed to fill one in. The chip
+           carries no `tag-chip-project` modifier, because there is no project
+           for it to name. #}
         {% for slug in detail.projects %}
           <span class="tag-chip tag-chip-project" data-panel-project="{{ slug }}">{{ slug }}</span>
+        {% else %}
+          <span class="tag-chip" data-panel-project-none>(no project)</span>
         {% endfor %}
         {% if detail.task.created_by %}<span>Created by {{ detail.task.created_by }}</span>{% endif %}
       </div>

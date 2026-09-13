@@ -293,11 +293,18 @@
   // when it is empty. Built from the live URL rather than from a remembered
   // query string, so closing the panel preserves every filter, the epic scope
   // and the resolved-since window exactly as they arrived.
+  //
+  // The FRAGMENT is part of that state and is carried too. Every summary card
+  // links to a section of the board (`task_card_url` appends
+  // `#task-group-blocked`), so an operator can arrive at a board already
+  // scrolled to one group; rebuilding the URL without its hash would clear
+  // that on the first panel open and never give it back, which is exactly the
+  // "closing clears the selection and nothing else" contract this is for.
   function selectionUrl(taskId) {
     const url = new URL(window.location.href);
     if (taskId) url.searchParams.set(selectionParam, taskId);
     else url.searchParams.delete(selectionParam);
-    return url.pathname + url.search;
+    return url.pathname + url.search + url.hash;
   }
 
   async function openPanel(taskId, options) {
@@ -345,8 +352,18 @@
     // fetched document, and htmx only wires the ones it swapped itself.
     if (window.htmx) window.htmx.process(host);
     selectedTaskId = taskId;
-    // Pushed AFTER the swap, so a URL never claims a panel that failed to open.
-    if (push) window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
+    // Pushed AFTER the swap, so a URL never claims a panel that failed to
+    // open — and only when it MOVES the address bar. Opening the task the URL
+    // already names is a real open (the panel may be absent, or stale, and the
+    // fetch above has just answered it) but not a real navigation: clicking
+    // the selected row again, or retrying a task whose popstate fetch failed
+    // under its own URL, would otherwise stack a second identical entry. The
+    // Back that should leave the task would then land on its twin, match
+    // `desiredTaskId` in the popstate handler, and do nothing until pressed a
+    // second time.
+    if (push && selectionIn(window.location.href) !== taskId) {
+      window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
+    }
   }
 
   function panelFetchFailed(push) {

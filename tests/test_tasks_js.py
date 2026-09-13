@@ -1050,6 +1050,76 @@ def test_closing_removes_only_the_selection_from_a_full_board_url() -> None:
     assert "selected" not in dict(closed)
 
 
+ANCHORED_HREF = "http://lens.test/tasks?project=influx#task-group-blocked"
+
+
+def test_the_boards_section_anchor_survives_both_panel_transitions() -> None:
+    """A summary card links to a SECTION of the board — `task_card_url` appends
+    `#task-group-blocked` — so the fragment is generated dashboard state that
+    says where the operator is, exactly like the filters say what they are
+    looking at. Rebuilding the URL from `pathname + search` alone dropped it on
+    the first open and never gave it back, which breaks "closing clears the
+    selection and nothing else" one click earlier than the close."""
+    result = _panel_run(["click:alpha", "settle:0", "close"], ANCHORED_HREF)
+
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha#task-group-blocked",
+        "/tasks?project=influx#task-group-blocked",
+    ]
+    assert result["href"] == ANCHORED_HREF
+
+
+# --- Reopening the selected task is not a navigation -----------------------
+
+
+def test_reopening_the_selected_task_does_not_stack_a_second_entry() -> None:
+    """Clicking the row that is already selected re-fetches its panel — the
+    open is real, and the response may well be newer — but it does NOT move
+    the address bar, so it must not write a history entry.
+
+    An identical entry stacked here is invisible until the operator leaves:
+    Back lands on the twin, `handlePanelPopstate` sees the selection it already
+    intends and returns, and the board stays exactly as it was. The panel then
+    takes two Backs to leave and the first one looks broken."""
+    result = _panel_run(["click:alpha", "settle:0", "click:alpha", "settle:1", "back"])
+
+    # The second click is a real open: it fetches.
+    assert result["fetches"] == [
+        "/tasks/alpha?project=influx&fragment=panel",
+        "/tasks/alpha?project=influx&fragment=panel",
+    ]
+    # …and exactly one entry was ever written for it.
+    assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    # So ONE Back leaves the task, rather than landing on its duplicate.
+    assert result["href"] == BOARD_HREF
+    assert result["panel"] == ""
+
+
+def test_retrying_a_task_whose_back_navigation_failed_pushes_nothing() -> None:
+    """The same shape by the other route. A failed fetch on Back clears the
+    panel and the selection but leaves the URL the browser already moved — so
+    the retry that finally answers is an open under a URL that ALREADY names
+    the task, and pushing there would bury the entry Back is meant to reach."""
+    result = _panel_run(
+        [
+            "click:alpha",
+            "settle:0",
+            "close",
+            "back",
+            "fail:1",
+            "click:alpha",
+            "settle:2",
+        ]
+    )
+
+    assert result["pushed"] == [
+        "/tasks?project=influx&selected=alpha",
+        "/tasks?project=influx",
+    ]
+    assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
+    assert result["panel"] == "panel:alpha"
+
+
 # --- A panel that never arrives: three failures, two navigation modes -------
 
 # Back and Forward move the URL BEFORE the panel code runs, so a failed fetch

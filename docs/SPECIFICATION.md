@@ -372,10 +372,19 @@ REQUIREMENTS), rendered from one template that extends no layout:
   push happens after the swap, so a failed fetch never leaves the address bar
   claiming an open panel.
 - Closing (the Close link, or Escape) clears `selected` and nothing else: the
-  filters, the epic scope and the resolved-since window are rebuilt from the
-  live URL. `selected` is deliberately not a preserved filter, so no generated
-  link carries one selection into the next page. Back and forward re-apply the
-  URL's selection without a reload.
+  filters, the epic scope, the resolved-since window and the **fragment** are
+  rebuilt from the live URL. The fragment counts because the summary cards link
+  to a section of the board (`#task-group-blocked`), so it is generated state
+  saying where the operator is. `selected` is deliberately not a preserved
+  filter, so no generated link carries one selection into the next page. Back
+  and forward re-apply the URL's selection without a reload.
+- **An open that does not move the URL writes no history entry.** Reopening the
+  task the address bar already names — clicking the selected row again, or
+  retrying one whose Back-navigation fetch failed under its own URL — still
+  fetches, because the panel may be absent or stale. It does not push: a second
+  identical entry is invisible until the operator leaves, and then the Back that
+  should clear the selection lands on the twin, matches the intent, and appears
+  to do nothing until pressed again.
 - **The latest intent owns the panel.** Panels are fetched, so two can be in
   flight at once and answer in either order. Every open and every close takes a
   generation, and no response writes the panel or the URL unless its generation
@@ -404,6 +413,10 @@ REQUIREMENTS), rendered from one template that extends no layout:
   residual fallback uses the query-alias route, whose path and key the server
   hands down, because that is the one form that addresses every id: a task
   called `graph` fetched as `/tasks/graph` would return the graph PAGE.
+- The header carries the identity §5.5.1 asks for, and says so even when the
+  answer is empty: a task belonging to no project under the configured
+  convention renders an explicit `(no project)` chip rather than nothing, so
+  projectless work is distinguishable from a field that failed to render.
 - **Every row on the board opens one**, the Gates section included: a gate is a
   task, and "what is this gate holding up?" is the Blocks list the panel
   already answers. The contract a row opts into is `data-task-id` plus the
