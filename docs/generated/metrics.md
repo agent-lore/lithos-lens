@@ -14,9 +14,9 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 35 | 35 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 799 | 800 | 1 |
+| `max_module_lines` | 817 | 850 | 33 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 0 | 0 | 0 |
+| `modules_over_800_lines` | 1 | 1 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
@@ -42,26 +42,27 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 5 | 2662 | 2127 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 19 | 8281 | 6319 | 4 | 1 | 0.20 | 46 (`lithos_lens.frontier.load_dashboard`) | 18 |
+| TaskGraph | 19 | 8329 | 6346 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 18 |
 | Tasks | 3 | 1224 | 886 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 3 |
 | Telemetry | 2 | 1091 | 793 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 4 | 1591 | 1236 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **47**, lines: **18279**, SLOC: **13984**
-- Largest module: `lithos_lens.graph_layout` (799 lines)
-- Modules over 800 lines: **0**
+- Modules: **47**, lines: **18327**, SLOC: **14011**
+- Largest module: `lithos_lens.frontier` (817 lines)
+- Modules over 800 lines: **1**
+  - `lithos_lens.frontier`
 
 ## Complexity
 
-- Functions: **595**, cyclomatic > 10: **32**
+- Functions: **596**, cyclomatic > 10: **32**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
-| 46 | `lithos_lens.frontier.load_dashboard` |
+| 42 | `lithos_lens.frontier.load_dashboard` |
 | 32 | `lithos_lens.config._apply_env_overrides` |
 | 25 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
@@ -83,4 +84,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **71** (81 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.75** (31929 test lines / 18279 source lines)
+- Test-to-source line ratio: **1.77** (32418 test lines / 18327 source lines)

@@ -43,7 +43,7 @@
       },
       "TaskGraph": {
         "functions_over_10": 18,
-        "max_complexity": 46,
+        "max_complexity": 42,
         "max_function": "lithos_lens.frontier.load_dashboard"
       },
       "Tasks": {
@@ -65,7 +65,7 @@
     "functions_over_10": 32,
     "top_functions": [
       {
-        "complexity": 46,
+        "complexity": 42,
         "qualname": "lithos_lens.frontier.load_dashboard"
       },
       {
@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.events._iter_sse_lines"
       }
     ],
-    "total_functions": 595
+    "total_functions": 596
   },
   "domain": {
     "associations": 81,
@@ -290,13 +290,13 @@
       },
       "TaskGraph": {
         "classes": 57,
-        "functions": 258,
-        "largest_module": "lithos_lens.graph_layout",
-        "largest_module_lines": 799,
-        "lines": 8281,
+        "functions": 259,
+        "largest_module": "lithos_lens.frontier",
+        "largest_module_lines": 817,
+        "lines": 8329,
         "modules": 19,
         "public_symbols": 110,
-        "sloc": 6319
+        "sloc": 6346
       },
       "Tasks": {
         "classes": 14,
@@ -329,16 +329,18 @@
         "sloc": 1236
       }
     },
-    "max_module": "lithos_lens.graph_layout",
-    "max_module_lines": 799,
-    "modules_over_800": [],
-    "total_lines": 18279,
+    "max_module": "lithos_lens.frontier",
+    "max_module_lines": 817,
+    "modules_over_800": [
+      "lithos_lens.frontier"
+    ],
+    "total_lines": 18327,
     "total_modules": 47,
-    "total_sloc": 13984
+    "total_sloc": 14011
   },
   "tests": {
-    "ratio": 1.75,
-    "src_lines": 18279,
-    "test_lines": 31929
+    "ratio": 1.77,
+    "src_lines": 18327,
+    "test_lines": 32418
   }
 }

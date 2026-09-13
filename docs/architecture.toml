@@ -130,8 +130,20 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # largest module, because with no exception left there is one uniform ceiling
 # and no reason to sit anywhere else. Today's largest is knowledge.py at 781.
 # A future exception must be argued from here, not from an inherited 895.
-modules_over_800_lines = 0    # the exception is discharged; no module may retake it
-max_module_lines       = 800  # the god-module threshold itself, no allowance above it
+#
+# Argued here (lens #85, 2026-09-13): frontier.py — the frontier/dashboard
+# assembly — is 785 on the T2b branch and 800 on main after #84; composed it is
+# 817. Each PR fit alone; together they do not, and the composition was found
+# by loom's trial merge, not by either author. The operator's decision is to
+# hold the count at ONE and lift the stop-loss to 850 rather than force an
+# extraction whose only purpose is the number: the fallback-attention block
+# (#85) and the skew-retry gating (#84) are both frontier assembly, and moving
+# either into frontier_fallback.py to satisfy a ceiling would split one
+# responsibility across two modules — a worse architecture for a better
+# metric. The ceiling is a budget, not an absolute. Discharge it when frontier
+# assembly grows a real second responsibility worth its own module.
+modules_over_800_lines = 1    # frontier.py (817) — the composition of #84 + #85, argued above
+max_module_lines       = 850  # stop-loss over that one exception; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 

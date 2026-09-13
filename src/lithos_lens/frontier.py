@@ -154,14 +154,14 @@ async def load_dashboard(
     and the recently-resolved completed/cancelled windows. The epic-strip
     children fan-out follows as a second (internally parallel) round-trip
     because its epic ids come from the open list; the only other extra
-    round-trip is the read-skew retry below — and only when the first pair of
-    frontier responses is inconsistent below the limit.
+    round-trip is the read-skew retry below — and only when this generation's
+    reads contradict each other below the limit.
 
     The open/ready/blocked calls are independent reads, not a snapshot, so a
     workable open task can be missing from both frontier lists (or present in
     both) through pure read-skew. Policy: a frontier response that actually
     hit ``frontier_limit`` is truncation; an inconsistency BELOW the limit
-    retries the ready+blocked pair once, and if it persists the affected rows
+    retries the WHOLE generation once, and if it persists the affected rows
     classify conservatively as Blocked with the reconciliation-warning surface
     (wrongly-Ready invites wasted operator attention; wrongly-Blocked is safe)
     — the same explicit degraded-data pattern as ``claims_unknown``.
@@ -251,27 +251,30 @@ async def load_dashboard(
     # never answered would be a fabricated fact rather than a degraded one.
     blocked_ok = not isinstance(blocked_result, BaseException)
 
-    # Raw terminal rows (pre-filter). Two uses, one pass:
+    # Raw terminal rows (pre-filter), indexed by id. Two uses, one pass:
     #
-    # - ``terminal_ids`` — a task appearing in BOTH the open snapshot and a
-    #   terminal result is freshness skew worth a retry, whether or not the
-    #   terminal row survives the section filters.
-    # - ``terminal_index`` — blocker NAMES. A predecessor that was cancelled or
-    #   completed is by definition absent from the open snapshot, and a
-    #   cancelled one is exactly what the highest-severity rule fires on: the
-    #   unsatisfiable chip and its reason sentence would print a raw task id on
-    #   the loudest row on the board while the same page renders that task's
-    #   title in Cancelled. These reads are already in hand, so naming it costs
-    #   nothing. The residual is honest and bounded: a predecessor resolved
-    #   outside the ``resolved_since`` window was never read, so it still falls
-    #   back to its id — Lens names what it read.
-    terminal_ids: set[str] = set()
+    # - MEMBERSHIP — a task appearing in BOTH the open snapshot and a terminal
+    #   result is freshness skew worth a retry, whether or not the terminal row
+    #   survives the section filters.
+    # - blocker NAMES. A predecessor that was cancelled or completed is by
+    #   definition absent from the open snapshot, and a cancelled one is
+    #   exactly what the highest-severity rule fires on: the unsatisfiable chip
+    #   and its reason sentence would print a raw task id on the loudest row on
+    #   the board while the same page renders that task's title in Cancelled.
+    #   These reads are already in hand, so naming it costs nothing. The
+    #   residual is honest and bounded: a predecessor resolved outside the
+    #   ``resolved_since`` window was never read, so it still falls back to its
+    #   id — Lens names what it read.
     terminal_index: dict[str, TaskRecord] = {}
-    for closed_result in closed_results:
-        if not isinstance(closed_result, BaseException):
-            for closed_task in closed_result:
-                terminal_ids.add(closed_task.id)
-                terminal_index[closed_task.id] = closed_task
+
+    def _read_terminal() -> None:
+        """(Re)build the index: the skew retry adopts a new generation."""
+        terminal_index.clear()
+        for closed_result in closed_results:
+            if not isinstance(closed_result, BaseException):
+                terminal_index.update({task.id: task for task in closed_result})
+
+    _read_terminal()
 
     def _blocker_names(open_index: Mapping[str, TaskRecord]) -> dict[str, TaskRecord]:
         """The index used to NAME blockers — never to decide openness.
@@ -301,7 +304,8 @@ async def load_dashboard(
             )
         ]
         ready_ids = {task.id for task in ready_rows}
-        overlap = ready_ids & {record.task.id for record in blocked_rows}
+        blocked_ids = {record.task.id for record in blocked_rows}
+        overlap = ready_ids & blocked_ids
         # Truncation is a fact about the response size, not an inference from
         # gaps: a frontier read that returned frontier_limit rows hit its cap.
         # Recorded PER SIDE — the two reads are capped independently, and only
@@ -337,7 +341,15 @@ async def load_dashboard(
         # An id in both the open snapshot and a terminal result is freshness
         # skew: it drives the retry (the later snapshot then arbitrates via
         # the closed dedup) but not the moved-to-Blocked surface.
-        terminal_overlap = terminal_ids & set(index)
+        terminal_overlap = terminal_index.keys() & index.keys()
+        # Same class, other direction: a frontier answered with a task the
+        # open read never saw — it closed in between (epics and gates are
+        # excluded from both frontiers upstream, so nothing else gets in). It
+        # is in no OPEN section (a resolved window of the same generation may
+        # well show it), so it too only drives the retry — and it stops the
+        # empty-state panel calling a corpus empty that this very generation
+        # read a task out of.
+        frontier_only = (ready_ids | blocked_ids) - set(index)
         return _FrontierState(
             snapshot,
             index,
@@ -346,7 +358,8 @@ async def load_dashboard(
             effective_overlap,
             capped_frontiers,
             skewed_frontier,
-            skewed_frontier or bool(terminal_overlap),
+            skewed_frontier or bool(terminal_overlap) or bool(frontier_only),
+            frontier_only,
         )
 
     # The epic strip depends on the open snapshot (its epic ids), so it is
@@ -362,33 +375,34 @@ async def load_dashboard(
     # frontier is not a classification — rows would land in "Not classified",
     # the tail whose banner explains it as frontier-limit overflow, so a failed
     # read would present itself as truncation.
+    frontier_only: set[str] = set()
     if frontier_ok:
         state = _partition_state(open_snapshot, ready_list, blocked_records, scope_ids)
 
         if frontier_ok and state.retry_worthy:
-            # Read-skew between independent reads (a would-be-Ready task also in
-            # the blocked response, or a below-limit frontier gap). Retry ALL
-            # THREE reads together — the master open list too, or a task that
-            # closed after the stale open read would keep rendering in an open
-            # section alongside its terminal row. Adopt the retried generation
-            # only when every read succeeds (no mixed generations); a persisting
-            # disagreement is handled conservatively below rather than trusted.
-            retry_open, retry_ready, retry_blocked = await asyncio.gather(
+            # Read-skew between independent reads (a would-be-Ready task also
+            # in the blocked response, a below-limit frontier gap, or a row one
+            # read returned and another never saw). Retry ALL FIVE reads of the
+            # generation, the terminal windows included: keeping any first-
+            # generation result beside the retried ones is precisely the mixed
+            # generation the policy forbids. Adopt it only when every read
+            # succeeds; a persisting disagreement is handled conservatively
+            # below rather than trusted.
+            retried = await asyncio.gather(
                 lithos.list_tasks(status="open", with_claims=True),
                 lithos.task_ready(limit=frontier_limit, with_claims=False),
                 lithos.task_blocked(limit=frontier_limit),
+                load_closed("completed"),
+                load_closed("cancelled"),
                 return_exceptions=True,
             )
-            if (
-                isinstance(retry_open, BaseException)
-                or isinstance(retry_ready, BaseException)
-                or isinstance(retry_blocked, BaseException)
-            ):
+            if any(isinstance(result, BaseException) for result in retried):
                 # Keep the first generation (a mixed one would be worse), but
                 # SAY SO: without this the stripe can call a board healthy
                 # whose skew was never resolved.
                 errors.append(RETRY_FAILED_ERROR)
             else:
+                retry_open, retry_ready, retry_blocked, *retry_closed = retried
                 open_snapshot = sorted(
                     cast(list[TaskRecord], retry_open),
                     key=lambda task: task.created_at,
@@ -397,6 +411,11 @@ async def load_dashboard(
                 ready_list = cast(list[TaskRecord], retry_ready)
                 blocked_records = cast(list[BlockedTaskRecord], retry_blocked)
                 blocked_ok = True
+                closed_results = (
+                    cast("list[TaskRecord] | BaseException", retry_closed[0]),
+                    cast("list[TaskRecord] | BaseException", retry_closed[1]),
+                )
+                _read_terminal()
                 # Re-read the strip against the adopted snapshot, so the chips
                 # list the epics of the generation the sections were built from.
                 strip = await load_epic_rollups(
@@ -411,6 +430,7 @@ async def load_dashboard(
         capped_frontiers = state.capped_frontiers
         open_index = state.index
         visible_open = state.visible
+        frontier_only = state.frontier_only
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
             partition = reclassify_conservative(partition, state.effective_overlap)
@@ -600,6 +620,7 @@ async def load_dashboard(
         closed_results,
         errors=errors,
         filters_narrowed=filters_narrowed,
+        frontier_only=bool(frontier_only),
     )
     # Truncation means a frontier response actually HIT frontier_limit AND
     # left otherwise-classifiable rows in the tail; one fact, computed once, so
@@ -651,6 +672,9 @@ async def load_dashboard(
         open_flat=open_flat,
         rolled_up_open=rolled_up_open,
         nothing_to_show=nothing_to_show,
+        # Frontier-only ids the adopted generation's resolved windows do NOT
+        # explain: in no section, so never examined (see the field).
+        frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
         epics=strip.rollups,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its
@@ -668,15 +692,19 @@ def _is_nothing_to_show(
     *,
     errors: list[str],
     filters_narrowed: bool,
+    frontier_only: bool,
 ) -> bool:
     """True when Lithos answered everything and returned nothing for this view.
 
     "Nothing here" as opposed to "your filters hid everything", which the
-    per-section empty lines already say. Three things must hold: no recorded
+    per-section empty lines already say. Four things must hold: no recorded
     error (an outage empties the snapshot too), an empty master open list
-    (which is read unfiltered), and no narrowing filter — every section is
+    (which is read unfiltered), no narrowing filter — every section is
     filtered down before it is counted (client-side since T1-S9), so under a
-    filter an empty board says nothing about the corpus at all.
+    filter an empty board says nothing about the corpus at all — and a
+    COHERENT generation: ``frontier_only`` means a frontier read of this same
+    load returned a task the open read did not, which is a corpus that is
+    demonstrably not empty however empty the open list came back.
 
     ``since`` is the one filter that survives this test, because it always has
     a value and windowing the resolved sections is the dashboard's normal
@@ -685,7 +713,7 @@ def _is_nothing_to_show(
     here, so the panel this drives must name the window rather than claim there
     are no tasks.
     """
-    if errors or open_snapshot or filters_narrowed:
+    if errors or open_snapshot or filters_narrowed or frontier_only:
         return False
     return not any(
         not isinstance(result, BaseException) and bool(result)
@@ -698,9 +726,9 @@ class _FrontierState:
 
     ``capped_frontiers`` names which frontier reads came back full;
     ``skewed_frontier`` drives the conservative reclassification + banner;
-    ``retry_worthy`` additionally includes the open∩terminal freshness
-    overlap, which only warrants the retry (the later snapshot then
-    arbitrates via the closed dedup).
+    ``retry_worthy`` additionally includes the freshness contradictions the
+    retry alone arbitrates (the later generation settles them): the
+    open∩terminal overlap and ``frontier_only``.
     """
 
     __slots__ = (
@@ -712,6 +740,7 @@ class _FrontierState:
         "capped_frontiers",
         "skewed_frontier",
         "retry_worthy",
+        "frontier_only",
     )
 
     def __init__(
@@ -724,6 +753,7 @@ class _FrontierState:
         capped_frontiers: tuple[str, ...],
         skewed_frontier: bool,
         retry_worthy: bool,
+        frontier_only: set[str],
     ) -> None:
         self.snapshot = snapshot
         self.index = index
@@ -737,6 +767,8 @@ class _FrontierState:
         self.capped_frontiers = capped_frontiers
         self.skewed_frontier = skewed_frontier
         self.retry_worthy = retry_worthy
+        # Frontier ids the open snapshot lacks: evidence, never a section.
+        self.frontier_only = frontier_only
 
 
 def _sorted_or_error(

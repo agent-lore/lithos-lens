@@ -1979,6 +1979,103 @@ def test_healthy_stripe_is_withheld_when_a_frontier_read_failed(
     assert "Some task data could not be loaded." in text
 
 
+def test_a_frontier_row_no_read_placed_withholds_the_system_wide_stripe(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The ready frontier returned a task the master open list did not, the one
+    retry saw the same thing, and no resolved window explains it either.
+
+    The page still makes no claim that a task is MISSING (it cannot know that —
+    see the test below, where the resolved window returns the row and it
+    renders). What it may not do is assert "All systems healthy — 0 issues":
+    the ghost reached no section, so the attention rules never evaluated it and
+    it may be a newly-ready open task the open read missed. The system-wide
+    claim gives way to the view-scoped one; no banner is raised, because
+    nothing else about the load is degraded.
+    """
+    # The board that shows the stripe today (see the test above), plus one
+    # ghost row on the ready frontier.
+    fake = TaskFakeLithosClient()
+    fake.tasks = [task for task in fake.tasks if task.id != "open-old"]
+    fake.ready_ids = set()
+    fake.blocked = {
+        "open-unclaimed": (
+            BlockerRecord(
+                kind="task",
+                task_id="open-claimed",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor open-claimed to complete.",
+            ),
+        )
+    }
+
+    async def ghost_task_ready(**_: Any) -> list[TaskRecord]:
+        # Returned by the frontier, absent from the open list — every time, so
+        # the single retry cannot settle it.
+        return [TaskRecord(id="just-closed", title="Just closed", status="open")]
+
+    fake.task_ready = ghost_task_ready  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?status=open&since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    # No notice asserting an absence the page cannot know (the row can be
+    # rendered under Completed — see the test below).
+    assert "not shown in any section below" not in unescape(text)
+    assert "data-frontier-skew-banner" not in text
+    # The reconciliation surface stays away: no row moved, so none is marked.
+    assert "data-reconciliation-banner" not in text
+    # The affirmative system-wide claim is withheld…
+    assert "data-attention-healthy" not in text
+    assert "All systems healthy" not in unescape(text)
+    # …and, with no failed/truncated read to point at, the honest fallback is
+    # the view-scoped line rather than "Cannot assess … see the notice above",
+    # which would name a notice this page deliberately does not raise.
+    assert "data-attention-unknown" not in text
+    assert "data-attention-scoped" in text
+    assert "Nothing needs attention in this view." in unescape(text)
+
+
+def test_a_frontier_only_row_can_render_in_the_resolved_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The counterexample to "frontier-only means it renders nowhere": the
+    ready frontier returns a task the open list does not BECAUSE it just
+    completed — and the completed window of the same load returns it.
+
+    The row is on the page, under Completed. Nothing on that page may say it is
+    missing.
+    """
+    fake = TaskFakeLithosClient()
+    fake.ready_ids = set()
+
+    async def ghost_task_ready(**_: Any) -> list[TaskRecord]:
+        # An id the open read never returns (it is completed) and the
+        # completed window does — every time, so the retry cannot settle it.
+        return [TaskRecord(id="done-recent", title="Recently completed task")]
+
+    fake.task_ready = ghost_task_ready  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01")
+
+    assert response.status_code == 200
+    text = response.text
+    completed = text[text.index('data-task-group="completed"') :]
+    completed = completed[: completed.index("</article>")]
+    assert 'data-task-id="done-recent"' in completed
+    assert "not shown in any section below" not in unescape(text)
+    assert "data-frontier-skew-banner" not in text
+    # The board is not empty and never says it is.
+    assert "No tasks in this window" not in unescape(text)
+    # And because a read of this generation PLACED the row, the health claim
+    # is not withheld on its account (contrast the test above).
+    assert "data-attention-unknown" not in text
+
+
 def test_healthy_stripe_is_withheld_when_the_frontier_truncated(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
