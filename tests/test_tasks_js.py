@@ -1246,8 +1246,14 @@ const reducedMotion = reducedMotionRaw === "1";
 // case the canvas has to walk its optimistic focus ring back from; `hold`
 // leaves the response IN FLIGHT until a `release` action lands it, which is
 // the only way to put another gesture between a request and its answer.
+//
+// Held in TWO phases, because `openPanel` suspends twice — once on the
+// headers, once on reading the body — and an open is still pending through
+// both. `release` lands the whole answer; `release:headers` stops at the
+// headers, leaving the body streaming, and `release:body` finishes it.
 const panelFetch = panelFetchRaw || "ok";
-const heldResponses = [];
+const heldHeaders = [];
+const heldBodies = [];
 
 const entries = [initialHref];
 let cursor = 0;
@@ -1374,8 +1380,13 @@ const sandbox = {
     }
     if (panelFetch === "hold") {
       return new Promise((resolve) => {
-        heldResponses.push(() => resolve({
-          ok: true, text: () => Promise.resolve("panel:" + url),
+        heldHeaders.push(() => resolve({
+          ok: true,
+          // The body's own promise is minted when the page READS it, which is
+          // the second suspension point: until then there is nothing to hold.
+          text: () => new Promise((landBody) => {
+            heldBodies.push(() => landBody("panel:" + url));
+          }),
         }));
       });
     }
@@ -1655,7 +1666,13 @@ function ranks() {
     } else if (name === "release") {
       // Every panel response held so far, answered now — an older request
       // landing in the middle of whatever gesture the actions have reached.
-      heldResponses.splice(0).forEach((land) => land());
+      if (argument !== "body") heldHeaders.splice(0).forEach((land) => land());
+      if (argument !== "headers") {
+        // The reader has to run before its body promise exists, so the page is
+        // given a turn between the two phases.
+        await new Promise((resolve) => setImmediate(resolve));
+        heldBodies.splice(0).forEach((land) => land());
+      }
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -2797,6 +2814,43 @@ def test_superseding_a_pending_open_leaves_the_panel_already_on_screen() -> None
     # `ship` never reached the URL: its open was superseded before it painted.
     assert result["pushed"] == ["/tasks/graph?project=loom&focus=schema"]
     # And the gesture finishes as the operator made it.
+    assert result["final"]["href"] == "/tasks/announce"
+
+
+def test_an_open_is_still_pending_while_its_body_is_arriving() -> None:
+    """Regression (round-4 test-quality f-003). `openPanel` suspends TWICE —
+    on the headers, and again on reading the body — and it has written nothing
+    at either point. So an open whose headers have landed is still a response
+    that must not paint beside the canvas mid-gesture, and the pending mark has
+    to outlive the first suspension: cleared when the headers arrive, a slow
+    body would reflow the canvas between the two clicks exactly as the whole
+    answer would."""
+    result = _graph_run(
+        [
+            "tap:schema",  # settles, and its panel arrives whole
+            "release",
+            "tap:ship",  # settles too …
+            "release:headers",  # … and its headers land, body still streaming
+            "firsttap:announce",  # a double-click starts elsewhere
+            "release:body",  # and the body lands between its two clicks
+            "secondtap:announce",
+        ],
+        panel_fetch="hold",
+    )
+    states = result["states"]
+
+    assert result["fetches"] == [
+        "/tasks/id?task_id=schema&fragment=panel",
+        "/tasks/id?task_id=ship&fragment=panel",
+    ]
+    schema_panel = "panel:/tasks/id?task_id=schema&fragment=panel"
+    # Headers in hand and the gesture begun: nothing has been written yet …
+    assert states[3]["panel"] == schema_panel
+    assert states[4]["panel"] == schema_panel
+    # … and the body, arriving mid-gesture, is dropped like the rest of it.
+    assert states[5]["panel"] == schema_panel, "a streamed body painted mid-gesture"
+    assert "focus=schema" in states[5]["href"]
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=schema"]
     assert result["final"]["href"] == "/tasks/announce"
 
 
