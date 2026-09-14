@@ -245,6 +245,7 @@ class _FrontierFake:
         edges: dict[str, list[EdgeRecord]] | None = None,
         late_edges: dict[str, list[EdgeRecord]] | None = None,
         fail_edges: bool = False,
+        fail_stats: bool = False,
     ) -> None:
         self._open_seq = self._as_sequence(open_tasks)
         self._ready_seq = self._as_sequence(ready)
@@ -278,6 +279,9 @@ class _FrontierFake:
         # response from before it can speak to it.
         self._late_edges = late_edges or {}
         self._fail_edges = fail_edges
+        # A read that has nothing to do with which ROWS the board holds: the
+        # error banner reports it, and the row-level claims stand.
+        self._fail_stats = fail_stats
         self.edge_list_calls: list[dict[str, Any]] = []
         self.open_calls = 0
         self.ready_calls = 0
@@ -471,6 +475,8 @@ class _FrontierFake:
         raise RuntimeError(f"task '{task_id}' not found")
 
     async def stats(self) -> dict[str, Any]:
+        if self._fail_stats:
+            raise RuntimeError("stats unavailable")
         return {"open_claims": 2, "agents": 3}
 
     async def list_agents(self) -> list[AgentRecord]:
@@ -2146,23 +2152,448 @@ def test_load_dashboard_scopes_every_section_to_the_selected_epic() -> None:
 
 
 def test_epic_rollup_counts_ignore_the_section_filters() -> None:
-    """Rollup counts are whole-subtree facts: a tag filter that hides the
-    descendants from the sections must not change the chip."""
+    """Rollup counts are whole-subtree facts: a tag filter that hides most of
+    the descendants from the sections must not change the chip. (The chip
+    itself is kept by the one descendant that IS on the board — see the
+    scoping tests below.)"""
     epic = _epic("epic-1")
     tagged = _task("in-ready", claims=(), tags=("project:mine",))
     fake = _FrontierFake(
         open_tasks=[epic, tagged],
         ready=[tagged],
         blocked=[],
-        children={"epic-1": _subtree(done=5, open_=3)},
+        children={"epic-1": [tagged, *_subtree(done=5, open_=3)]},
     )
     filters = TaskFilters(
-        statuses=("open",), tags=("project:other",), agent="", since=""
+        statuses=("open",), tags=("project:mine",), agent="", since=""
     )
     data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
 
-    assert _section_ids(data.sections, "ready") == []
-    assert [rollup.progress_label for rollup in data.epics] == ["5/8"]
+    assert _section_ids(data.sections, "ready") == ["in-ready"]
+    # The whole subtree (one open row on the board plus the eight it hides),
+    # NOT the 1/1 the filtered sections show.
+    assert [rollup.progress_label for rollup in data.epics] == ["5/9"]
+
+
+# --- the strip follows the board's filters (§5.2.1) ------------------------
+
+
+def _tagged(task_id: str, *tags: str) -> TaskRecord:
+    return _task(task_id, claims=(), tags=tags)
+
+
+def test_the_strip_lists_only_epics_with_work_on_the_filtered_board() -> None:
+    """Regression: the strip was built from the unfiltered open snapshot, so a
+    filtered board drew a chip for every open epic in the corpus — and each
+    chip links to the ACTIVE filters plus ``?epic=``, which for an off-filter
+    epic can only produce an empty board. Chips now describe the board the
+    operator is looking at, and the ones dropped are counted out loud."""
+    on_board = _epic("epic-on")
+    off_board = _epic("epic-off")
+    inside = _tagged("inside", "roadmap")
+    elsewhere = _tagged("elsewhere", "other")
+    fake = _FrontierFake(
+        open_tasks=[on_board, off_board, inside, elsewhere],
+        ready=[inside, elsewhere],
+        blocked=[],
+        children={"epic-on": [inside], "epic-off": [elsewhere]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-on"]
+    assert data.epics_hidden == 1
+    # …and the unfiltered board is unchanged: every open epic still gets a chip.
+    whole = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    assert [rollup.task.id for rollup in whole.epics] == ["epic-on", "epic-off"]
+    assert whole.epics_hidden == 0
+
+
+def test_the_strip_matches_on_descendants_not_the_epics_own_tags() -> None:
+    """The scoping rule §5.2.1 states, in the one case where the two readings
+    differ. An epic carrying the filtered tag whose children do not is exactly
+    the dead-end chip (its scope lands on nothing); a cross-project epic with a
+    child in the filter is exactly the chip an operator wants."""
+    labelled = _task("epic-labelled", task_type="epic", tags=("roadmap",))
+    cross = _task("epic-cross", task_type="epic", tags=("other",))
+    off_tag_child = _tagged("child-off", "other")
+    on_tag_child = _tagged("child-on", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[labelled, cross, off_tag_child, on_tag_child],
+        ready=[off_tag_child, on_tag_child],
+        blocked=[],
+        children={"epic-labelled": [off_tag_child], "epic-cross": [on_tag_child]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-cross"]
+    assert data.epics_hidden == 1
+
+
+def test_a_chip_the_filters_left_on_the_strip_leads_to_a_non_empty_board() -> None:
+    """The acceptance criterion end to end: follow every chip the filtered
+    board draws and none of them lands on an empty board."""
+    epics = [_epic(f"epic-{n}") for n in range(4)]
+    rows = [_tagged(f"row-{n}", "roadmap" if n < 2 else "other") for n in range(4)]
+    fake = _FrontierFake(
+        open_tasks=[*epics, *rows],
+        ready=rows,
+        blocked=[],
+        children={f"epic-{n}": [rows[n]] for n in range(4)},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    strip = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in strip.epics] == ["epic-0", "epic-1"]
+    for rollup in strip.epics:
+        followed = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(filters, epic=rollup.task.id),
+                frontier_limit=500,
+            )
+        )
+        assert followed.epic_scope == rollup.task.id
+        assert any(followed.sections.values()), rollup.task.id
+
+
+def test_the_strip_does_not_shrink_as_the_operator_moves_between_epics() -> None:
+    """The strip is scoped by the OTHER filters, never by ``?epic=`` itself —
+    selecting one epic must not erase the chips that lead out of it."""
+    epics = [_epic("epic-a"), _epic("epic-b")]
+    a_row = _tagged("a-row", "roadmap")
+    b_row = _tagged("b-row", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[*epics, a_row, b_row],
+        ready=[a_row, b_row],
+        blocked=[],
+        children={"epic-a": [a_row], "epic-b": [b_row]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-a")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-a", "epic-b"]
+    assert [rollup.selected for rollup in data.epics] == [True, False]
+    assert _section_ids(data.sections, "ready") == ["a-row"]
+
+
+def test_a_terminal_only_board_keeps_the_epics_whose_resolved_work_it_shows() -> None:
+    """ "On this board" is the statuses actually rendered, not "open": under
+    ``?status=completed`` a chip earns its place from the resolved rows, and an
+    epic whose only matching work is open leads nowhere there."""
+    resolved_epic = _epic("epic-resolved")
+    open_epic = _epic("epic-open")
+    done = _task("done", status="completed", tags=("roadmap",))
+    still_open = _tagged("still-open", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[resolved_epic, open_epic, still_open],
+        ready=[still_open],
+        blocked=[],
+        completed=[done],
+        children={"epic-resolved": [done], "epic-open": [still_open]},
+    )
+    filters = TaskFilters(
+        statuses=("completed",), tags=("roadmap",), agent="", since=""
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-resolved"]
+    assert data.epics_hidden == 1
+
+
+def test_a_chip_resting_only_on_a_rolled_up_descendant_is_not_drawn() -> None:
+    """Reviewer repro (c-001): "a descendant among the rows this board renders"
+    means a row that can be PLACED. A nested epic matches the filters but rolls
+    up into the strip rather than rendering, so an outer epic whose only match
+    is that nested epic is the same dead-end chip — and the nested epic, being
+    childless, has no work on this board either."""
+    outer = _epic("epic-outer")
+    nested = _task("epic-nested", task_type="epic", tags=("roadmap",))
+    working = _epic("epic-working")
+    row = _tagged("row", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[outer, nested, working, row],
+        ready=[row],
+        blocked=[],
+        children={"epic-outer": [nested], "epic-working": [row]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-working"]
+    assert data.epics_hidden == 2
+
+
+def test_a_scope_holding_only_a_rolled_up_row_says_which_gap_it_is() -> None:
+    """The other half of c-001: a bookmark can still select that outer epic.
+    Its chip is kept and no section renders — but the nested epic DID survive
+    the filters, so "none of it survives the other filters" would be false.
+    The two gaps are told apart: this one is the placement rule, not the
+    filters, and widening them would find nothing."""
+    outer = _epic("epic-outer")
+    nested = _task("epic-nested", task_type="epic", tags=("roadmap",))
+    fake = _FrontierFake(
+        open_tasks=[outer, nested],
+        ready=[],
+        blocked=[],
+        children={"epic-outer": [nested]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-outer")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.epic_scope == "epic-outer"
+    assert not any(data.sections.values())
+    assert data.epic_scope_blank is True
+    assert data.epic_scope_rolled_up is True
+    assert data.epic_scope_unmatched is False
+    # The nested epic is still counted as a row this board withheld — it is
+    # the subject of the explanation.
+    assert data.rolled_up_open == 1
+
+
+def test_an_unplaceable_row_is_never_dropped_from_the_rolled_up_count() -> None:
+    """Reviewer repro (c-003): ``TaskRecord.task_type`` keeps unknown future
+    strings, and the classifier cannot place one. Such a row has no chip and no
+    section, so if it also left the rolled-up count the board would render
+    empty under "All systems healthy" while holding it."""
+    future = _task("future-1", task_type="future_type")
+    fake = _FrontierFake(open_tasks=[future], ready=[], blocked=[])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.epics == ()
+    assert data.rolled_up_open == 1
+    assert data.rolled_up_only is True
+    assert data.healthy is False
+
+
+def test_an_unrelated_read_failure_does_not_silence_the_epic_explanation() -> None:
+    """Reviewer repro (c-002, narrowed): the reads that decide row membership
+    all answered — this epic demonstrably has nothing under it on this board —
+    so a failed stats read must not take the explanation away. Only a window
+    the board DISPLAYS can make membership unknown."""
+    epic = _epic("epic-1")
+    inside = _tagged("inside", "other")
+    fake = _FrontierFake(
+        open_tasks=[epic, inside],
+        ready=[inside],
+        blocked=[],
+        children={"epic-1": [inside]},
+        fail_stats=True,
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-1")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert any("stats" in message for message in data.errors)
+    assert data.rows_incomplete is False
+    assert data.epic_scope_unmatched is True
+
+
+def test_a_failed_terminal_read_leaves_the_strip_unscoped() -> None:
+    """Reviewer repro (c-002): "no tasks on this board" is a claim about the
+    FILTERS. With a displayed window that never answered, the rows are unknown
+    rather than absent — the matching one may be in the read that failed — so
+    the strip scopes nothing, hides nothing, and the load-error banner explains
+    the board."""
+    epic = _epic("epic-1")
+    done = _task("done", status="completed", tags=("roadmap",))
+    fake = _FrontierFake(
+        open_tasks=[epic],
+        ready=[],
+        blocked=[],
+        completed=[done],
+        children={"epic-1": [done]},
+        fail_completed_from=0,
+    )
+    filters = TaskFilters(
+        statuses=("completed",), tags=("roadmap",), agent="", since=""
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert any("completed" in message for message in data.errors)
+    assert [rollup.task.id for rollup in data.epics] == ["epic-1"]
+    assert data.epics_hidden == 0
+    # Recorded per status, not as one flag: the window that did not answer is
+    # the one whose empty section must say so (the others answered).
+    assert data.unread_statuses == frozenset({"completed"})
+    assert data.rows_incomplete is True
+
+    # …and the same board with that epic selected does not turn the outage
+    # into "nothing here matches your filters" either.
+    scoped = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(filters, epic="epic-1"), frontier_limit=500
+        )
+    )
+    assert scoped.epic_scope == "epic-1"
+    assert not any(scoped.sections.values())
+    assert scoped.epic_scope_unmatched is False
+
+
+def test_a_failed_read_the_board_does_not_display_changes_nothing() -> None:
+    """The complement of that contract: only a window this board SHOWS can make
+    its rows unknown. On an open-only board the completed window is not on
+    screen, so its outage must not scope the strip back to the whole corpus,
+    must not swallow the count of chips the filters dropped, and must not take
+    away an explanation the reads that DID answer fully support."""
+    selected = _epic("epic-1")
+    partner = _epic("epic-2")
+    stranger = _epic("epic-3")
+    inside = _tagged("inside", "other")
+    on_tag = _tagged("on-tag", "roadmap")
+    off_tag = _tagged("off-tag", "other")
+    fake = _FrontierFake(
+        open_tasks=[selected, partner, stranger, inside, on_tag, off_tag],
+        ready=[inside, on_tag, off_tag],
+        blocked=[],
+        children={"epic-1": [inside], "epic-2": [on_tag], "epic-3": [off_tag]},
+        fail_completed_from=0,
+    )
+    filters = TaskFilters(
+        statuses=("open",), tags=("roadmap",), agent="", since="", epic="epic-1"
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    # The outage is still reported — it is simply not this board's rows.
+    assert any("completed" in message for message in data.errors)
+    assert data.unread_statuses == frozenset()
+    assert data.rows_incomplete is False
+    # So every filter-derived statement stands: the strip is still scoped (the
+    # off-tag epic dropped, and counted)…
+    assert [rollup.task.id for rollup in data.epics] == ["epic-1", "epic-2"]
+    assert data.epics_hidden == 1
+    # …and the selected epic still gets the explanation its own (successful)
+    # reads support.
+    assert data.epic_scope == "epic-1"
+    assert not any(data.sections.values())
+    assert data.epic_scope_unmatched is True
+
+
+def test_the_strip_follows_the_generation_the_skew_retry_adopted() -> None:
+    """The retry path carries the scope, not just the fan-out: the adopted
+    generation changes WHICH epic has work on the board, so chips computed
+    against the first generation would leave an off-filter chip behind."""
+    stale_epic = _epic("epic-stale")
+    fresh_epic = _epic("epic-fresh")
+    stale_row = _tagged("stale-row", "roadmap")
+    fresh_row = _tagged("fresh-row", "roadmap")
+    gap = _tagged("gap", "roadmap")
+    fake = _FrontierFake(
+        # First generation: the stale epic's row is on the board, and ``gap``
+        # is in neither frontier (the skew trigger). The retry replaces both
+        # the epics and the rows.
+        open_tasks=[
+            [stale_epic, fresh_epic, stale_row, gap],
+            [stale_epic, fresh_epic, fresh_row],
+        ],
+        ready=[[stale_row], [fresh_row]],
+        blocked=[],
+        children={"epic-stale": [stale_row], "epic-fresh": [fresh_row]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    # The stale epic's only row is gone from the adopted snapshot, so its chip
+    # goes with it — and the fresh epic's row arrived, so its chip is drawn.
+    assert [rollup.task.id for rollup in data.epics] == ["epic-fresh"]
+    assert data.epics_hidden == 1
+    assert _section_ids(data.sections, "ready") == ["fresh-row"]
+
+
+def test_hidden_chips_accumulate_across_every_fan_out_batch() -> None:
+    """The corpus that motivated the rule is many batches deep, and the hidden
+    count is summed one ``EPIC_FANOUT_BATCH`` at a time — so it has to survive
+    the boundary. Kept and hidden epics sit on both sides of both boundaries,
+    and the note beside the strip reports the whole corpus, not the last
+    batch."""
+    count = EPIC_FANOUT_BATCH * 2 + 4
+    kept = (0, 7, 8, 15, 16, 19)
+    epics = [_epic(f"epic-{index:02d}") for index in range(count)]
+    rows = {index: _tagged(f"row-{index:02d}", "roadmap") for index in kept}
+    off_tag = _tagged("off-tag", "other")
+    fake = _FrontierFake(
+        open_tasks=[*epics, *rows.values(), off_tag],
+        ready=[*rows.values(), off_tag],
+        blocked=[],
+        children={
+            f"epic-{index:02d}": [rows[index]] if index in kept else [off_tag]
+            for index in range(count)
+        },
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == [
+        f"epic-{index:02d}" for index in kept
+    ]
+    assert data.epics_hidden == count - len(kept)
+    # Every epic was still READ — the scoping narrows the strip, not the
+    # fan-out — so the count above is the whole corpus.
+    assert len(fake.children_calls) == count
+
+
+def test_the_selected_epic_keeps_its_chip_and_the_board_explains_the_gap() -> None:
+    """The residual dead end: the scoped chip is kept whatever the filters
+    leave of it (it is the live scope and the way back out), so the board — not
+    four "no match" section lines — has to say why it is empty."""
+    epic = _epic("epic-1")
+    inside = _tagged("inside", "other")
+    fake = _FrontierFake(
+        open_tasks=[epic, inside],
+        ready=[inside],
+        blocked=[],
+        children={"epic-1": [inside]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-1")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [rollup.task.id for rollup in data.epics] == ["epic-1"]
+    assert data.epic_scope == "epic-1"
+    assert not any(data.sections.values())
+    assert data.epic_scope_unmatched is True
+    # No confirming read was needed: the subtree is not empty, the filters
+    # emptied it — a different thing, said differently.
+    assert fake.get_calls == []
+
+
+def test_a_scoped_board_with_rows_explains_nothing() -> None:
+    """The mirror: the explanation is for an EMPTIED scope only. A scope that
+    renders rows (or a confirmed-childless epic, which has its own banner)
+    must not carry it."""
+    epic = _epic("epic-1")
+    inside = _tagged("inside", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[epic, inside],
+        ready=[inside],
+        blocked=[],
+        children={"epic-1": [inside]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-1")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    assert data.epic_scope_unmatched is False
+
+    childless = _FrontierFake(
+        open_tasks=[epic, inside], ready=[inside], blocked=[], children={"epic-1": []}
+    )
+    empty = asyncio.run(load_dashboard(childless, filters=filters, frontier_limit=500))
+    assert empty.epic_scope == "epic-1"
+    assert empty.epic_scope_unmatched is False
 
 
 def test_load_dashboard_ignores_a_scope_that_is_no_longer_an_open_epic() -> None:

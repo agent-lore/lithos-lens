@@ -18,7 +18,7 @@ for the convention-conflict warnings).
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
@@ -33,6 +33,10 @@ from lithos_lens.tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The terminal windows the dashboard reads, in the order it gathers them — the
+# pairing :func:`board_visible_ids` reads its ``closed_results`` with.
+TERMINAL_STATUS_READS: tuple[TaskStatusName, ...] = ("completed", "cancelled")
 
 
 def _metadata_project_slug(task: TaskRecord) -> str:
@@ -239,6 +243,110 @@ def filters_narrow_the_board(
     return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
         filters.statuses
     ) != set(TASK_STATUSES)
+
+
+def unread_displayed_statuses(
+    closed_results: Sequence[Sequence[TaskRecord] | BaseException],
+    *,
+    filters: TaskFilters,
+) -> frozenset[str]:
+    """The statuses the board DISPLAYS whose read did not answer.
+
+    The one uncertainty that makes row membership unknowable: a window this
+    board is showing did not answer, so a row that belongs on it may exist and
+    Lens never saw it. Every claim of the form "nothing here matches your
+    filters" has to stand down on that — and on that alone. A failed stats or
+    agent-list read, or another epic's children read, says nothing about which
+    rows this board holds, which is why those are NOT read from the aggregate
+    error list.
+
+    Returned per STATUS rather than as one flag because the two consumers ask
+    at different grains: the epic-scope explanations are about the board as a
+    whole (any entry withholds them), while the section that renders empty must
+    say "could not be loaded" for the window that failed and keep saying "no
+    match" for the windows that answered — suppressing both would hide rows
+    Lens does have.
+
+    Takes the gather results verbatim (``list | BaseException``, the shape
+    ``frontier_fallback.resolve_frontier`` also accepts), paired with
+    :data:`TERMINAL_STATUS_READS`. The open read is deliberately not part of
+    it: without the open snapshot there are no epics to explain, so nothing
+    downstream can make the claim in the first place.
+    """
+    return frozenset(
+        status
+        for status, result in zip(TERMINAL_STATUS_READS, closed_results, strict=True)
+        if status in filters.statuses and isinstance(result, BaseException)
+    )
+
+
+def board_visible_ids(
+    open_snapshot: Sequence[TaskRecord],
+    closed_results: Sequence[Sequence[TaskRecord] | BaseException],
+    *,
+    filters: TaskFilters,
+    open_row_types: Collection[str] | None,
+) -> frozenset[str] | None:
+    """The ids a board RENDERS under its filters — ``None`` when unscoped.
+
+    The epic strip's scope (§5.2.1). Every chip links to the CURRENT filters
+    plus ``?epic=<id>``, so a chip is only worth drawing when the epic has a
+    descendant among these ids — which is precisely the set of rows that
+    survives the filters the rest of the page applies. Built from the same
+    reads and the same predicate the sections use, one status at a time, so
+    the strip and the board cannot disagree about what is on screen:
+
+    - only rows that can be PLACED count. ``open_row_types`` is the open task
+      types that render as rows (``None`` on the flat fallback, where every
+      open row does): an epic or any other rolled-up type is NOT a row this
+      board shows, so a chip resting on one would be the dead end the rule
+      exists to remove. Terminal rows have no such test — every resolved row
+      renders in its section, epics included;
+    - only the statuses actually shown contribute (``?status=completed`` hides
+      the open sections, so an open row cannot make a chip non-empty there);
+    - terminal rows carry the same open-snapshot dedup the sections apply, so
+      a row read skew returned twice is counted where it renders;
+    - the ``?epic=`` scope itself is deliberately NOT applied (``scope_ids`` is
+      ``None``): the strip must stay the same whichever chip is selected, or
+      selecting one epic would erase the others and strand the operator inside
+      it.
+
+    ``None`` is returned in the two cases where there is nothing to say:
+
+    - an UNNARROWED board — nothing is filtered out of view, so there is no
+      scope to apply and the caller keeps its whole set. Narrowing is
+      :func:`filters_narrow_the_board`'s definition, shared with the empty-
+      state and healthy-stripe claims: ``since`` windows the resolved reads
+      (the dashboard's normal posture) and does not narrow;
+    - a displayed status whose read FAILED. Its rows are unknown, not absent,
+      and every claim built on this set — "this epic has no tasks on this
+      board", "nothing under this epic matches these filters" — would state a
+      filter result Lens cannot know. The unfiltered strip plus the load-error
+      banner is the honest degraded answer.
+    """
+    if not filters_narrow_the_board(filters, scope_applied=False):
+        return None
+    if unread_displayed_statuses(closed_results, filters=filters):
+        return None
+    visible: set[str] = set()
+    if "open" in filters.statuses:
+        visible.update(
+            task.id
+            for task in open_snapshot
+            if (open_row_types is None or task.task_type in open_row_types)
+            and matches_filters(task, filters=filters, status="open", scope_ids=None)
+        )
+    open_ids = {task.id for task in open_snapshot}
+    for status, result in zip(TERMINAL_STATUS_READS, closed_results, strict=True):
+        if status not in filters.statuses or isinstance(result, BaseException):
+            continue
+        visible.update(
+            task.id
+            for task in result
+            if task.id not in open_ids
+            and matches_filters(task, filters=filters, status=status, scope_ids=None)
+        )
+    return frozenset(visible)
 
 
 def loaded_task_rows(

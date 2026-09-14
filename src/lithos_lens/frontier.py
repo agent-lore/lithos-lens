@@ -15,10 +15,11 @@ On top of that join sits the Needs-attention severity model
 the sections computed here.
 
 Open epics roll up instead: EVERY open epic gets a ``lithos_task_children``
-read and a progress chip (``build_epic_rollup``), issued in bounded batches
-(``EPIC_FANOUT_BATCH``) so the fan-out cannot flood the shared MCP session or
-hold every subtree at once. The selected chip's descendant set scopes every
-section (``?epic=``). Those children reads are independent of the open read
+read, issued in bounded batches (``EPIC_FANOUT_BATCH``) so the fan-out cannot
+flood the shared MCP session or hold every subtree at once, and the epics with
+work on THIS board get a progress chip (``build_epic_rollup``; the scoping rule
+is §5.2.1). The selected chip's descendant set scopes every section
+(``?epic=``). Those children reads are independent of the open read
 like every other call here, so a chip's counts may be one generation newer than
 the sections — harmless, because counts are display-only and never decide a
 row's placement. The SCOPE does decide placement, and there the generation gap
@@ -43,6 +44,7 @@ from typing import Any, Protocol, cast
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.epic_strip import (
+    EpicStrip,
     epic_scope_ids,
     load_epic_rollups,
 )
@@ -59,12 +61,14 @@ from lithos_lens.frontier_join import (
 )
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
+    board_visible_ids,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
     loaded_task_rows,
     log_project_data_quality,
     matches_filters,
     project_universe,
+    unread_displayed_statuses,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -80,6 +84,12 @@ from lithos_lens.tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The open task types that render as ROWS on a board with a frontier: workable
+# tasks in the sections, gates in their own. Everything else rolls up, which is
+# why the rolled-up count and the strip's scope read the SAME set — a chip whose
+# only match is a rolled-up row leads to a board with nothing on it.
+PLACED_OPEN_TYPES: frozenset[str] = frozenset({WORKABLE_TASK_TYPE, GATE_TASK_TYPE})
 
 
 class FrontierLithosClient(Protocol):
@@ -289,6 +299,28 @@ async def load_dashboard(
         """
         return {**terminal_index, **open_index}
 
+    async def _load_strip() -> EpicStrip:
+        """The epic strip for the reads currently in hand.
+
+        One definition, called once per generation: the skew retry rebinds the
+        snapshot and the terminal reads, and the strip must follow the
+        generation the sections were built from — its chips AND the board they
+        describe (§5.2.1), which is why the scope is derived here rather than
+        passed in. Without a frontier every open row renders flat, epics
+        included, so nothing rolls up and no type is held back.
+        """
+        return await load_epic_rollups(
+            lithos,
+            open_snapshot,
+            selected=filters.epic,
+            visible_ids=board_visible_ids(
+                open_snapshot,
+                closed_results,
+                filters=filters,
+                open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
+            ),
+        )
+
     def _partition_state(
         snapshot: list[TaskRecord],
         ready_rows: list[TaskRecord],
@@ -363,12 +395,10 @@ async def load_dashboard(
         )
 
     # The epic strip depends on the open snapshot (its epic ids), so it is
-    # fetched here rather than in the main gather — and refetched below if the
-    # skew retry adopts a newer snapshot, so the strip lists the epics of the
-    # snapshot the sections were built from. The children reads themselves stay
-    # independent reads (see the module docstring): counts can be a generation
-    # newer, which is why only a non-empty subtree is allowed to scope.
-    strip = await load_epic_rollups(lithos, open_snapshot, selected=filters.epic)
+    # fetched here rather than in the main gather. The children reads themselves
+    # stay independent reads (see the module docstring): counts can be a
+    # generation newer, which is why only a non-empty subtree is allowed to scope.
+    strip = await _load_strip()
     scope_ids = epic_scope_ids(strip.rollups)
 
     # §14: a failed frontier read renders the master open list flat. Half a
@@ -416,11 +446,9 @@ async def load_dashboard(
                     cast("list[TaskRecord] | BaseException", retry_closed[1]),
                 )
                 _read_terminal()
-                # Re-read the strip against the adopted snapshot, so the chips
-                # list the epics of the generation the sections were built from.
-                strip = await load_epic_rollups(
-                    lithos, open_snapshot, selected=filters.epic
-                )
+                # Re-read the strip, so the chips (and their scope) describe
+                # the generation the sections were built from.
+                strip = await _load_strip()
                 scope_ids = epic_scope_ids(strip.rollups)
                 state = _partition_state(
                     open_snapshot, ready_list, blocked_records, scope_ids
@@ -534,14 +562,14 @@ async def load_dashboard(
     # Zero unless the open side is actually on screen: with ``?status=completed``
     # the open sections are emptied by choice, and an epic in the snapshot must
     # not turn that into "nothing to work on here".
+    # EVERY type this board cannot place is counted, not just epics: an open
+    # row of a type Lens does not know is withheld with no surface of its own,
+    # and dropping it from this number would let the healthy stripe claim a
+    # board that is hiding it.
     rolled_up_open = (
         0
         if open_flat or "open" not in filters.statuses
-        else sum(
-            1
-            for task in visible_open
-            if task.task_type not in (WORKABLE_TASK_TYPE, GATE_TASK_TYPE)
-        )
+        else sum(1 for task in visible_open if task.task_type not in PLACED_OPEN_TYPES)
     )
 
     closed: dict[str, list[TaskRecord]] = {}
@@ -676,7 +704,12 @@ async def load_dashboard(
         # explain: in no section, so never examined (see the field).
         frontier_unplaced=bool(frontier_only - terminal_index.keys()),
         errors=tuple(errors),
+        # The windows this board DISPLAYS that failed to load: the epic-scope
+        # explanations are claims about the filters, and only these can make a
+        # row's membership unknown (a failed stats or agent read cannot).
+        unread_statuses=unread_displayed_statuses(closed_results, filters=filters),
         epics=strip.rollups,
+        epics_hidden=strip.hidden,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its
         # children read failed, or an empty subtree Lens could not confirm —
         # shows the whole board with the template's explanation. A CONFIRMED

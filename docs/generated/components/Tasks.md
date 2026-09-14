@@ -12,7 +12,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_filtering` | M | 0 | 11 |
+| `lithos_lens.task_filtering` | M | 0 | 13 |
 | `lithos_lens.tasks` | L | 14 | 13 |
 
 ## Public API
@@ -34,6 +34,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `matches_filters` — Client-side filter predicate shared by the dashboard sections.
 - def `filters_narrow_the_open_side` — True when these filters hide OPEN rows from the sections.
 - def `filters_narrow_the_board` — True when these filters hide part of the corpus from the sections.
+- def `unread_displayed_statuses` — The statuses the board DISPLAYS whose read did not answer.
+- def `board_visible_ids` — The ids a board RENDERS under its filters — ``None`` when unscoped.
 - def `loaded_task_rows` — Every task row this load fetched, deduped by id (open snapshot wins).
 - def `project_universe` — Every project slug present in the loaded rows, sorted (§5B.1).
 - def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).

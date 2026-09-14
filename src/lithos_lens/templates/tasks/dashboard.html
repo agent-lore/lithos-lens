@@ -280,14 +280,18 @@
       {% endif %}
 
       {#
-        Epic rollup strip: one progress chip per open epic, counted over its
-        RECURSIVE subtree (lithos_task_children), so epics roll up instead of
-        polluting the open sections. A chip links to ?epic=<id>, which scopes
-        every section to that epic's descendants; the selected chip links back
-        out, so clicking it again clears the scope. The counts are whole-subtree
-        facts and deliberately ignore the other filters.
+        Epic rollup strip: one progress chip per open epic ON THIS BOARD,
+        counted over its RECURSIVE subtree (lithos_task_children), so epics roll
+        up instead of polluting the open sections. A chip links to ?epic=<id>,
+        which scopes every section to that epic's descendants; the selected chip
+        links back out, so clicking it again clears the scope.
+
+        The chip's PRESENCE follows the active filters (§5.2.1) — a chip whose
+        subtree holds nothing on this board would link to an empty one, so it is
+        not drawn, and the count of those is said below. Its COUNTS do not: the
+        fraction is a whole-subtree fact about the epic, not about the slice.
       #}
-      {% if dashboard.epics %}
+      {% if dashboard.epics or dashboard.epics_hidden %}
         <section class="epic-strip" aria-label="Epics" data-epic-strip>
           {% for epic in dashboard.epics %}
             <a class="epic-chip{{ " epic-chip-selected" if epic.selected else "" }}"
@@ -304,6 +308,35 @@
               <span class="epic-chip-count" data-epic-progress>{{ epic.progress_label }}</span>
             </a>
           {% endfor %}
+          {% if dashboard.epics_hidden %}
+            {# Never a silent strip: an epic with no work on this board is a
+               chip that would lead nowhere, so it is dropped — but dropping it
+               without a word is how the strip would start under-reporting its
+               own subject. The note stands alone when the filters emptied
+               EVERY chip, which is when a missing strip misleads most. #}
+            <span class="epic-strip-note" data-epic-strip-hidden>{{ dashboard.epics_hidden }} {{ "more " if dashboard.epics else "" }}{{ "epic has" if dashboard.epics_hidden == 1 else "epics have" }} no tasks on this board</span>
+          {% endif %}
+        </section>
+      {% endif %}
+      {% if dashboard.epic_scope_unmatched %}
+        {# The scoped chip is kept whatever the filters leave of it, and a
+           shared ?epic= link arrives with whatever filters it was copied
+           under. Either way every section below is empty for a reason none of
+           them can state — so state it here, with the way out. #}
+        <section class="banner banner-warning" role="status" data-epic-scope-unmatched>
+          <strong>No tasks under this epic match these filters.</strong>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; has work in its subtree, but none of it survives the other filters on this board, so every section is empty. <a href="/tasks?epic={{ dashboard.epic_scope | urlencode }}">Show this epic without the other filters</a>.</span>
+        </section>
+      {% endif %}
+      {% if dashboard.epic_scope_rolled_up %}
+        {# The other way a scope comes up empty, and the opposite fix: the
+           descendants DID survive the filters, they are simply rows this board
+           does not render (a sub-epic, or a type Lens cannot place). Saying
+           "none of it matches" here would be false, and widening the filters
+           would not help. #}
+        <section class="banner" role="status" data-epic-scope-rolled-up>
+          <strong>Nothing under this epic renders as a row.</strong>
+          <span>The {{ dashboard.rolled_up_open }} matching {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} under &ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; roll up rather than rendering here — a sub-epic gets its own chip in the strip above, and only when it has work of its own on this board.</span>
         </section>
       {% endif %}
       {% if dashboard.scoped_epic and not dashboard.scoped_epic.descendant_ids %}
@@ -375,7 +408,7 @@
             <p class="empty">Lithos has no open tasks, and nothing was completed or cancelled since {{ dashboard.filters.since | display_date }}. Widen "Resolved since" to see work resolved before then; new tasks appear here as soon as an agent creates one.</p>
           </article>
         {% else %}
-        {% if dashboard.rolled_up_only %}
+        {% if dashboard.rolled_up_only and not dashboard.epic_scope_blank %}
           {# Open rows came back, but every one of them rolls up rather than
              rendering (epics only — gates have had their own section since
              T1-S4). Saying nothing would leave a blank open side over a
@@ -387,7 +420,7 @@
              is all roll-ups still has completed and cancelled rows to show. #}
           <article class="task-group task-board-empty" data-empty-state="rolled-up">
             <h2>Nothing to work on here</h2>
-            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
+            <p class="empty">{{ dashboard.rolled_up_open }} open {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} roll up rather than appearing as tasks — epics are shown as progress chips in the strip above, and only when they have work on this board. Nothing else is open{% if dashboard.filters_narrowed %} under these filters{% endif %}.</p>
           </article>
         {% endif %}
         {% for section in section_order %}
@@ -397,7 +430,7 @@
              and a gate the severity rules promoted renders in Needs attention
              instead of here, so the single-placement rule holds. #}
           {% if section == "gates" %}
-            {% if "open" in dashboard.filters.statuses %}
+            {% if "open" in dashboard.filters.statuses and not dashboard.epic_scope_blank %}
               <article class="task-group" id="task-group-gates" data-task-group="gates">
                 <header>
                   <h2>{{ section_labels["gates"] }}</h2>
@@ -422,7 +455,13 @@
             {% endif %}
           {% else %}
             {% set rows = dashboard.sections[section] %}
-            {% if section in ("completed", "cancelled") %}
+            {% if dashboard.epic_scope_blank %}
+              {# The epic banner above states the ONE reason every section here
+                 is empty, and names the epic. A row of "no tasks match these
+                 filters" groups would blame the filters alone — the failure
+                 §5.2.1 exists to remove — so the banner speaks instead. #}
+              {% set active = false %}
+            {% elif section in ("completed", "cancelled") %}
               {% set active = section in dashboard.filters.statuses %}
             {% elif section == "attention" %}
               {# Active whenever the open side is on screen, INCLUDING the flat
@@ -494,6 +533,16 @@
                        claim is scoped to what is on screen, not to the system. #}
                     <p class="healthy-stripe" data-attention-scoped>Nothing needs attention in this view.</p>
                   {% endif %}
+                {% elif section in dashboard.unread_statuses %}
+                  {# This window did not answer (the load-error banner above
+                     names the read), so an empty group here is UNKNOWN, not a
+                     filter result. "No completed tasks match these filters"
+                     would state a fact about rows Lens never saw — and would
+                     contradict the banner in the same breath. Only the section
+                     whose read failed says this: its neighbours answered, and
+                     their empty lines are honest. #}
+                  <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
+                  <p class="empty" data-section-unavailable>{{ section_labels[section] }} tasks could not be loaded, so none can be shown here. Whether any match these filters is unknown.</p>
                 {% else %}
                   <div class="task-list" id="task-list-{{ section }}" data-task-list="{{ section }}"></div>
                   <p class="empty">No {{ section_labels[section] | lower }} tasks match these filters.</p>

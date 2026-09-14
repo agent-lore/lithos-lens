@@ -885,6 +885,15 @@ button,
   font-weight: 700;
 }
 
+/* What the strip left out: the epics the active filters emptied. Reads as a
+   note beside the chips (not as one of them), the same muted voice the
+   active-filter overflow label uses. */
+.epic-strip-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 /* Needs-attention reason chips (T1-S3). Same pill language as the blocker
    chips; severity is carried by TEXT (the rule slug) with colour only
    reinforcing it, per the "never colour alone" chrome requirement. The two

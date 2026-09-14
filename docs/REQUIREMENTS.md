@@ -514,10 +514,26 @@ The Operator View renders, top-to-bottom, the following sections. Each is render
 
 #### 5.2.1 Epic strip
 
-- One chip per **open epic**, showing title and a done/total progress fraction computed from `lithos_task_children(epic_id, recursive=true, include_closed=true)` — completed descendants over all descendants.
+- One chip per **open epic that has work on this board**, showing title and a done/total progress fraction computed from `lithos_task_children(epic_id, recursive=true, include_closed=true)` — completed descendants over all descendants.
 - Clicking an epic chip scopes the entire dashboard to that epic's descendant set (URL: `?epic=<id>`), composing with the other filters.
 - Epics never appear in the workable sections or their counts (Lithos excludes them from both frontiers).
-- The epic count is expected to stay small (tens); the per-epic children calls are gathered concurrently.
+
+**Scoping rule (2026-09).** A chip's link is *the active filters plus `?epic=<id>`*, so the strip MUST follow those filters or most of it leads to boards that cannot match anything. The rule, stated so the two possible readings cannot be confused:
+
+- An open epic is listed when **at least one of its recursive descendants is among the rows this board renders** under the active tag/project/agent/status filters. Membership is decided by the **descendants**, never by the epic's own tags or `metadata.project` — an epic tagged for the filtered project whose children are not is exactly the dead-end chip this rule exists to remove, and a cross-project epic with children in the filtered project is exactly the chip an operator is looking for. It costs no extra read: the subtree is already in hand for the counts.
+- "Rows this board renders" means rows that can be **placed**: open workable tasks and gates (a gate renders in the Gates section, so an epic whose only matching descendant is a gate is a live chip). A descendant that *rolls up* — a nested epic, or any open type the board does not render as a row — is not a row, so a chip resting only on one is the same dead end and is dropped too. Resolved descendants have no such test: every terminal row renders in its section, epics included.
+- The rows "this board renders" are computed with the same predicate the sections use, over the statuses actually shown, **without** the `?epic=` scope itself — so the strip is identical whichever chip is selected and the operator can always move between epics.
+- On an **unnarrowed** board (no tag/project/agent filter and no status subset — `since` windows the resolved reads and does not narrow, as elsewhere in §5.4.2) the strip is unscoped: one chip per open epic, the whole-corpus summary. A childless open epic keeps its `0/0` chip there.
+- The **selected** epic always keeps its chip, even when the other filters leave nothing under it: the chip is the live scope and the way back out.
+- The strip MUST NOT shorten silently. The open epics it omitted are counted beside the chips (`N more epics have no tasks on this board`), and that count stands alone when the filters emptied every chip — a strip that simply vanished would read as a corpus with no epics.
+- When the board is scoped to an epic and renders no row — the kept selected chip, or a shared `?epic=` URL — the page MUST explain why, **instead of** the per-section "no match" lines, which never mention the epic and blame the filters alone. The two reasons are different and MUST NOT be conflated, because the fix for each is the opposite of the other:
+  - **nothing survived the filters** → `No tasks under this epic match these filters`, with a link to the epic without the other filters (widening helps);
+  - **matching descendants survived, but none of them is a row this board renders** (they are sub-epics, or a type Lens cannot place) → `Nothing under this epic renders as a row`, naming how many rolled up (widening would not help).
+- Every statement above is a claim about the FILTERS, so it stands down exactly when a window **this board displays** failed to load: the strip is **not scoped** (every open epic keeps its chip), nothing is counted as hidden, and neither explanation renders — those rows are unknown, not filtered out, and the load-error banner is the honest account of that board. A read that cannot hide a row (stats, the agent list, another epic's children) is NOT that uncertainty and must not silence an explanation Lens can support.
+- The same rule binds the ordinary section lines, per window: a section whose read did not answer MUST say so (`Completed tasks could not be loaded … whether any match these filters is unknown`) rather than `No completed tasks match these filters`, which contradicts the banner directly above it. Only that section — the windows that answered keep the filter wording, and a window that answered with rows still renders them.
+- The rolled-up count the empty-open-side panel reports counts **every** open row the board cannot place, epics and unknown future task types alike — a row withheld from every surface must never let the healthy stripe claim an empty board.
+
+The read count follows the number of **open epics** (one recursive children call each), not the number of chips: scoping is applied to the display, after the subtrees are read. That count is bounded in flight rather than capped — see `epic_strip.EPIC_FANOUT_BATCH` — because a capped strip would drop epics rather than describe them. (This replaces the original "the epic count is expected to stay small (tens)": at ~20 projects the corpus outgrew it, and the strip became a wall of chips most of which matched nothing on the board showing them.)
 
 #### 5.2.2 Needs attention — severity model v2
 

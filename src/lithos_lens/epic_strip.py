@@ -10,6 +10,13 @@ lives here.
 The fan-out is the one dashboard read whose call count follows the corpus (one
 subtree read per open epic), which is why the batching and its resource bound
 sit in this module rather than being spread through the assembly.
+
+What the strip SHOWS is narrower than what it reads: a chip links to the active
+filters plus ``?epic=<id>``, so an epic with nothing on the filtered board is a
+chip that leads nowhere, and §5.2.1's scoping rule drops it (counting what it
+dropped). The subtree the rule tests is already in hand for the progress
+counts, so the display narrows without another read — and the counts stay
+whole-subtree facts, unchanged by the filters.
 """
 
 from __future__ import annotations
@@ -92,6 +99,7 @@ async def load_epic_rollups(
     snapshot: Sequence[TaskRecord],
     *,
     selected: str,
+    visible_ids: frozenset[str] | None,
 ) -> EpicStrip:
     """Fan ``lithos_task_children`` out over EVERY open epic in the snapshot.
 
@@ -104,6 +112,17 @@ async def load_epic_rollups(
     Per-subtree truncation is deliberately NOT applied: a clipped subtree would
     report a wrong ``5/8`` and silently shrink the scope.
 
+    ``visible_ids`` is what the strip is SCOPED to (§5.2.1): the ids of the
+    rows the board renders under its other filters. A chip is kept when the
+    subtree just read intersects that set — the epic has work on this board —
+    and dropped otherwise, because its link (the active filters plus
+    ``?epic=<id>``) could only produce an empty board. ``None`` means an
+    unnarrowed board, where every open epic is on it. The test is descendant
+    membership, not the epic's own tags: an epic carries the filtered tag no
+    child carries as often as the reverse, and only the descendants decide
+    whether the chip's scope lands on anything. It costs no extra read — the
+    subtree is already in hand for the counts.
+
     ``failed`` is set when ANY call failed; a failed epic is dropped rather
     than shown with a wrong count, and the caller turns the flag into the usual
     load-error banner. A selected epic that answers with an EMPTY subtree is
@@ -115,13 +134,18 @@ async def load_epic_rollups(
         return EpicStrip((), False)
     rollups: list[EpicRollup] = []
     failed = False
+    hidden = 0
     for start in range(0, len(epics), EPIC_FANOUT_BATCH):
-        batch_rollups, batch_failed = await _load_children_batch(
-            lithos, epics[start : start + EPIC_FANOUT_BATCH], selected=selected
+        batch_rollups, batch_failed, batch_hidden = await _load_children_batch(
+            lithos,
+            epics[start : start + EPIC_FANOUT_BATCH],
+            selected=selected,
+            visible_ids=visible_ids,
         )
         rollups.extend(batch_rollups)
         failed = failed or batch_failed
-    return await _resolve_empty_selection(lithos, tuple(rollups), failed)
+        hidden += batch_hidden
+    return await _resolve_empty_selection(lithos, tuple(rollups), failed, hidden)
 
 
 async def _load_children_batch(
@@ -129,7 +153,8 @@ async def _load_children_batch(
     batch: Sequence[TaskRecord],
     *,
     selected: str,
-) -> tuple[list[EpicRollup], bool]:
+    visible_ids: frozenset[str] | None,
+) -> tuple[list[EpicRollup], bool, int]:
     """Read one batch of epics' subtrees concurrently and reduce them to chips.
 
     A separate frame on purpose: the bulky part — the raw ``task_children``
@@ -143,6 +168,10 @@ async def _load_children_batch(
     ``include_closed=True``, so retaining every epic's set would hold an id for
     every task ever closed under every epic, for the whole render — and nothing
     reads the set of an epic that is not the ``?epic=`` scope.
+
+    The ``visible_ids`` test belongs to this frame for the same reason: it
+    reads the full descendant set, which exists only here. Its answer — one
+    bool per epic, and the count of chips dropped — is what leaves.
     """
     results = await asyncio.gather(
         *(
@@ -153,12 +182,20 @@ async def _load_children_batch(
     )
     rollups: list[EpicRollup] = []
     failed = False
+    hidden = 0
     for epic, result in zip(batch, results, strict=True):
         if isinstance(result, BaseException):
             failed = True
             continue
         rollup = build_epic_rollup(epic, cast(list[TaskRecord], result))
         is_selected = bool(selected) and epic.id == selected
+        # The SELECTED epic is never hidden, whatever the filters leave of it:
+        # its chip is the live scope (dropping it would silently unscope the
+        # board and lose the way back out), and an empty one is explained by
+        # the board rather than by omission.
+        if not is_selected and not _on_this_board(rollup.descendant_ids, visible_ids):
+            hidden += 1
+            continue
         rollups.append(
             replace(
                 rollup,
@@ -166,13 +203,28 @@ async def _load_children_batch(
                 descendant_ids=rollup.descendant_ids if is_selected else frozenset(),
             )
         )
-    return rollups, failed
+    return rollups, failed, hidden
+
+
+def _on_this_board(
+    descendant_ids: frozenset[str], visible_ids: frozenset[str] | None
+) -> bool:
+    """Whether this epic's ``?epic=`` scope would land on a rendered row.
+
+    ``None`` is the unnarrowed board — nothing is filtered out of it, so every
+    open epic is on it, including a childless one (its chip is still a true
+    ``0/0`` statement about the corpus). Otherwise the chip has to earn its
+    place: one descendant among the visible ids is the whole test, and it is
+    exactly the condition under which the chip's link renders something.
+    """
+    return visible_ids is None or bool(descendant_ids & visible_ids)
 
 
 async def _resolve_empty_selection(
     lithos: EpicChildrenClient,
     rollups: tuple[EpicRollup, ...],
     failed: bool,
+    hidden: int,
 ) -> EpicStrip:
     """Decide what an EMPTY subtree under the selected epic means.
 
@@ -190,9 +242,11 @@ async def _resolve_empty_selection(
         None,
     )
     if selected is None or await _is_open_epic(lithos, selected.task.id):
-        return EpicStrip(rollups, failed)
+        return EpicStrip(rollups, failed, hidden)
+    # A stale chip is not a filtered-out one: the board says "scope not
+    # applied" about it, so it never joins the hidden count.
     return EpicStrip(
-        tuple(rollup for rollup in rollups if rollup is not selected), failed
+        tuple(rollup for rollup in rollups if rollup is not selected), failed, hidden
     )
 
 
@@ -214,10 +268,17 @@ async def _is_open_epic(lithos: EpicChildrenClient, task_id: str) -> bool:
 
 
 class EpicStrip(NamedTuple):
-    """One epic-strip load: the chips plus the read-failure flag."""
+    """One epic-strip load: the chips, the read-failure flag, and what it hid.
+
+    ``hidden`` counts the open epics dropped because nothing under them is on
+    the filtered board (§5.2.1). It is reported rather than silently absorbed,
+    for the same reason the frontier truncation banner exists: a strip that
+    quietly stops short reads as "these are all the epics".
+    """
 
     rollups: tuple[EpicRollup, ...]
     failed: bool
+    hidden: int = 0
 
 
 def epic_scope_ids(epics: Sequence[EpicRollup]) -> frozenset[str] | None:
