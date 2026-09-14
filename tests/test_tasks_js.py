@@ -1510,6 +1510,10 @@ function styles() {
       // and a NaN serialises to null and compares equal to nothing.
       width: parseFloat(ele.style("width")),
       arrow: node ? "" : ele.style("target-arrow-shape"),
+      // Its own field, because the SHAPE and the COLOUR are separate rules and
+      // a trace whose arrowhead kept the default grey would still be "an edge
+      // with an arrowhead" to a test that only read the shape.
+      arrowColor: node ? "" : ele.style("target-arrow-color"),
     };
   });
   return out;
@@ -1880,6 +1884,23 @@ HOSTILE_IDS_PAYLOAD: dict = _payload(
     ],
     longest_chain={"nodes": [], "length": 0, "bound": "exact"},
     roots=["__proto__", "a::b", "a"],
+)
+
+# The chain step `a>b → c` and the off-chain dependency `a → b>c` (round-3
+# correctness f-007): two different ordered pairs that a `from + ">" + to` key
+# cannot tell apart. Task ids are arbitrary non-empty strings, so `>` is a
+# character in one as readily as a separator between two.
+AMBIGUOUS_STEP_PAYLOAD: dict = _payload(
+    [
+        _node("a>b"),
+        _node("c", layer=1),
+        _node("d", layer=2),
+        _node("a"),
+        _node("b>c", layer=1),
+    ],
+    [_edge("a>b", "c"), _edge("c", "d"), _edge("a", "b>c")],
+    longest_chain={"nodes": ["a>b", "c", "d"], "length": 3, "bound": "exact"},
+    roots=["a>b", "a"],
 )
 
 #: This harness's own address. Deliberately not the panel harness's
@@ -2528,6 +2549,24 @@ def test_the_traced_chain_is_visibly_distinct_from_everything_off_it() -> None:
 
     assert on_chain["width"] > off_chain["width"]
     assert on_chain["lineColor"] != off_chain["lineColor"]
-    assert on_chain["lineColor"] == on_chain["arrow"] or True  # arrowhead follows
+    # The arrowhead is traced with the line: an accent edge ending in the
+    # default grey head reads as the trace stopping one step short.
+    assert on_chain["arrowColor"] == on_chain["lineColor"]
+    assert off_chain["arrowColor"] == off_chain["lineColor"]
     # And the nodes on it are marked too, not only the edges between them.
     assert styles["schema"]["borderColor"] != styles["stranded"]["borderColor"]
+
+
+def test_a_chain_step_is_an_ordered_pair_not_a_joined_string() -> None:
+    """Regression (round-3 correctness f-007). The chain's steps were keyed by
+    `from + ">" + to`, and a task id may contain `>` as readily as anything
+    else — so the real step `a>b → c` and the unrelated dependency `a → b>c`
+    produced the same key, and the second took the critical-path accent for a
+    chain it is not on."""
+    result = _graph_run([], payload=AMBIGUOUS_STEP_PAYLOAD)
+
+    assert "chain" in _edge_style(result, "a>b", "c", "blocks")["classes"]
+    assert "chain" in _edge_style(result, "c", "d", "blocks")["classes"]
+    assert "chain" not in _edge_style(result, "a", "b>c", "blocks")["classes"], (
+        "an off-chain edge was traced as part of the longest blocking chain"
+    )

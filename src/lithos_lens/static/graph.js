@@ -150,10 +150,18 @@
 
   const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
   const chainCondensations = dict();
+  // NESTED, not a joined key. A condensation is named by a task id, and a task
+  // id is an arbitrary non-empty string (`tasks.py`): `from + ">" + to` cannot
+  // tell the step `a>b → c` from the step `a → b>c`, so an off-chain
+  // dependency between the second pair would take the critical-path accent
+  // from the first. Two lookups have no separator to be ambiguous about.
   const chainSteps = dict();
   chain.forEach(function (id, index) {
     chainCondensations[id] = true;
-    if (index) chainSteps[chain[index - 1] + ">" + id] = true;
+    if (!index) return;
+    const from = chain[index - 1];
+    if (!chainSteps[from]) chainSteps[from] = dict();
+    chainSteps[from][id] = true;
   });
 
   function onChain(id) {
@@ -172,7 +180,9 @@
     // An edge INSIDE a condensation is not a step either: the chain crosses it
     // in one move, and the loop it is drawn from has no direction the chain
     // endorses.
-    return from !== to && chainSteps[from + ">" + to] === true;
+    if (from === to) return false;
+    const successors = chainSteps[from];
+    return !!successors && successors[to] === true;
   }
 
   // ── URL state (D8: one URL, re-applied on popstate) ────────────────────

@@ -917,7 +917,9 @@ at. Lens still never re-implements the readiness predicate.
   compound parents and the edges collision-free by construction, where a key
   built from `from::to` would merge the payload edges `a::b → c` and
   `a → b::c` and silently drop one of them. Every client-side lookup keyed by
-  an id uses a null-prototype map for the same reason.
+  an id uses a null-prototype map for the same reason, and an ordered PAIR of
+  ids — the chain's steps — is a nested map rather than a joined string, which
+  could not tell the step `a>b → c` from the step `a → b>c`.
 - **Events** raise a "graph changed — refresh" pill when a consumed task
   event's `task_id` is a node on the page, and do nothing else: this page tells
   `tasks.js` not to reconcile, because re-rendering the board's way would
