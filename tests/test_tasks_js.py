@@ -1611,17 +1611,29 @@ function ranks() {
       fire("keydown", { key: "Escape" });
     } else if (name === "tap" || name === "firsttap" || name === "dbltap") {
       // The SEQUENCE the library emits, not one event out of it. Cytoscape
-      // holds every tap for `multiClickDebounceTime` and then decides: a
-      // second tap inside the window makes the pair a `dbltap` and the held
+      // emits a `tap` per click and then decides by TIME alone: a second tap
+      // inside `multiClickDebounceTime` makes the pair a `dbltap` and the held
       // `onetap` is dropped; nothing else makes it a `onetap`. A harness that
-      // emitted only `tap` would call both gestures the same thing, which is
+      // emitted only `tap` would call every gesture the same thing, which is
       // precisely the confusion the page has to keep apart.
-      const node = graph.node(argument);
-      node.emit("tap");
-      if (name === "tap") node.emit("onetap");
-      else if (name === "dbltap") node.emit("dbltap");
-      // `firsttap` stops there: the first half of a double-click, with the
-      // window still open and nothing settled.
+      //
+      // `dbltap:a~b` is the same window closing across two DIFFERENT targets —
+      // the library compares only the time since the previous tap, never what
+      // it was on, so two quick clicks on unrelated nodes are a `dbltap` on
+      // the second. `dbltap:~b` is the background then a node. Both are real
+      // gestures an operator makes, and neither is that node's double-click.
+      const ids = (argument || "").split("~");
+      const target = graph.node(ids[ids.length - 1]);
+      if (name === "dbltap") {
+        const opening = ids.length > 1 ? ids[0] : ids[ids.length - 1];
+        if (opening) graph.node(opening).emit("tap");
+        else graph.cy.emit("tap"); // the empty background taps as the core
+      }
+      target.emit("tap");
+      if (name === "tap") target.emit("onetap");
+      else if (name === "dbltap") target.emit("dbltap");
+      // `firsttap` stops at the one tap: the first half of a double-click,
+      // with the window still open and nothing settled.
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -2537,6 +2549,29 @@ def test_a_double_click_on_an_ordinary_node_still_opens_its_own_page() -> None:
     # `focus=` entry behind the page the operator actually asked for.
     assert result["fetches"] == []
     assert result["pushed"] == []
+
+
+def test_a_click_inside_another_node_s_multi_click_window_opens_its_panel() -> None:
+    """Regression (round-2 correctness f-002). Cytoscape's multi-click detector
+    measures TIME and nothing else, so clicking one node and then another
+    within 250ms is a `dbltap` on the second — and taken at face value it
+    navigated away from a node the operator had clicked exactly once.
+
+    Worse, the same debounce swallowed that node's `onetap`, so the panel the
+    single click should have opened never came either: the page left for a
+    detail page nobody asked for, from a click that meant "show me this".
+    """
+    crossed = _graph_run(["dbltap:schema~ship"])
+    background = _graph_run(["dbltap:~ship"])
+
+    for result, gesture in ((crossed, "another node"), (background, "the canvas")):
+        final = result["final"]
+        assert "/tasks/ship" not in final["href"], f"navigated after {gesture}"
+        # The second click was a single click on `ship`, and is answered as one.
+        assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+        assert final["panel"] == "panel:/tasks/id?task_id=ship&fragment=panel"
+        assert "focus=ship" in final["href"]
+        assert final["focused"] == ["ship"]
 
 
 def test_the_first_click_of_a_double_click_opens_no_panel() -> None:

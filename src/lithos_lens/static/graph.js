@@ -834,6 +834,27 @@
   const panelApi = panel();
   if (panelApi && panelApi.onChange) panelApi.onChange(render);
 
+  // What the previous tap was on, whatever it was on.
+  //
+  // Cytoscape's multi-click detector measures TIME and nothing else: two taps
+  // inside `multiClickDebounceTime` are a `dbltap` on whatever the second one
+  // hit, even when the first hit a different node or the empty background. So
+  // the library's own `dbltap` is "two clicks in a row", not "two clicks on
+  // this" — and only the page knows which one it meant (round-2 correctness
+  // f-002). Recorded on the raw `tap`, which is emitted for every click and
+  // always before the `dbltap` that may follow it.
+  let previousTapId = "";
+  let latestTapId = "";
+  cy.on("tap", function (event) {
+    const target = event.target;
+    const isElement = target && typeof target.isNode === "function";
+    previousTapId = latestTapId;
+    // The background taps as the CORE, which has no id — and must not compare
+    // equal to a node's, or a click on empty canvas would pass for half of
+    // that node's double-click.
+    latestTapId = isElement ? target.id() : "";
+  });
+
   // The focus ring lands on the FIRST tap, so a click answers immediately …
   cy.on("tap", "node", function (event) {
     if (!nodeFor(event.target)) return; // the cycle box, chrome not a task
@@ -870,13 +891,25 @@
     if (open) open.open(node.id);
   });
 
-  // Double-click leaves for the full page. The tap that preceded it lit the
-  // node and nothing else, so there is no panel open to supersede — the
-  // navigation is the whole answer, which is the same order the dashboard's
-  // title link has always had.
+  // Double-click leaves for the full page — but only a double-click on THIS
+  // node. The tap that preceded it lit the node and nothing else, so there is
+  // no panel open to supersede; the navigation is the whole answer, which is
+  // the same order the dashboard's title link has always had.
   cy.on("dbltap", "node", function (event) {
     const node = nodeFor(event.target);
-    if (node && node.detail_url) window.location.href = node.detail_url;
+    if (!node) return;
+    if (previousTapId !== event.target.id()) {
+      // Two clicks, two targets: the operator clicked one node and then
+      // another (or the background and then a node) in quick succession, and
+      // the library called the pair a double-click on the second. Navigating
+      // would leave the page from a node clicked ONCE — and the same debounce
+      // has already swallowed that node's `onetap`, so this is where its
+      // single click has to be answered instead.
+      const open = panel();
+      if (open) open.open(node.id);
+      return;
+    }
+    if (node.detail_url) window.location.href = node.detail_url;
   });
 
   // ── "Graph changed — refresh" (D8): never an auto re-layout ─────────────

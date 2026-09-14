@@ -1095,6 +1095,27 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   expect(lit).toBe(0);
 });
 
+/**
+ * Hand the multi-click window to the TEST's clock instead of the runner's.
+ *
+ * Cytoscape classifies a pair of clicks by the time between them, and at the
+ * shipped 250ms a gesture driven from here depends on the harness delivering
+ * the second click in time: a stalled worker turns correct code red, and the
+ * failure looks exactly like the regression these tests exist to catch (round-2
+ * test-quality f-002). Widened, the pair below is inside the window whatever
+ * the host is doing — while the gap between the clicks stays REAL time, which
+ * is what still lets a panel fragment land inside it.
+ *
+ * The window's length is not what any of this is testing: the page's rule is
+ * "a pair inside the window is one gesture, and only a same-node pair is a
+ * double-click", and that rule is the same at 250ms as at five seconds.
+ */
+async function widenMultiClickWindow(page: import("@playwright/test").Page) {
+  await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy.multiClickDebounceTime(5000),
+  );
+}
+
 test("double-clicking a node leaves the canvas for that task's own page", async ({
   page,
 }) => {
@@ -1109,8 +1130,7 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
   // used to open the panel beside the canvas, the flex layout narrowed it, the
   // refit moved the node — and the second click landed on the background with
   // no `dbltap` to show for it. The gap below is deliberately wide enough for
-  // a local panel fragment to have come back inside it, and still inside
-  // Cytoscape's 250ms multi-click window.
+  // a local panel fragment to have come back inside it.
   const panelRequests: string[] = [];
   await page.route(/fragment=panel/, async (route) => {
     panelRequests.push(route.request().url());
@@ -1122,6 +1142,7 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
     page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
   ).toBeVisible();
   await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
+  await widenMultiClickWindow(page);
 
   const placed = () =>
     page.evaluate(() => {
@@ -1148,6 +1169,39 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
   await expect(page.locator('[data-task-detail="loom-ship"]')).toBeVisible();
   // And the panel the operator never asked for was never even requested.
   expect(panelRequests).toEqual([]);
+});
+
+test("two quick clicks on different nodes select the second, never leave", async ({
+  page,
+}) => {
+  // Round-2 correctness f-002, in the browser it was found in. Cytoscape's
+  // multi-click detector measures TIME and nothing else, so a click on one
+  // node followed inside the window by a click on another is a `dbltap` on the
+  // second — and taken at face value the page left for a detail page from a
+  // node the operator had clicked exactly once. The same debounce swallows
+  // that node's `onetap`, so its panel did not open either: the click that
+  // meant "show me this" navigated away instead.
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await widenMultiClickWindow(page);
+
+  await pointerOnNode(page, "loom-schema");
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  // Nothing has moved, so the second node is still where it was measured.
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+
+  // The second click is a SINGLE click on `loom-ship`, and is answered as one.
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/tasks\/graph\?/);
+  await expect(page).toHaveURL(/focus=loom-ship/);
 });
 
 test("the canvas ranks every node by the layer the text gives it", async ({

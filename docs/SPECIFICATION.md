@@ -902,7 +902,11 @@ at. Lens still never re-implements the readiness predicate.
   built. The node lights on the first tap, but the panel waits for the click to
   settle as a single one (Cytoscape's 250ms multi-click window): a panel opened
   mid-gesture narrows the canvas, and the refit that follows would move the
-  node out from under the second click. Every panel transition is announced back to the canvas, because it
+  node out from under the second click. That window is measured by TIME alone,
+  so a pair inside it counts as a double-click only when both clicks were on
+  the SAME node; a pair spanning two nodes (or the background and a node) is
+  the second one's single click, and opens its panel.
+  Every panel transition is announced back to the canvas, because it
   moves the URL by `pushState` and `pushState` fires no `popstate`: without it,
   closing the panel would clear `focus` and leave the node still lit. A
   `focus=` already in the URL is answered by the SERVER (§5.12), and the client
