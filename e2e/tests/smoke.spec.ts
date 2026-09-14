@@ -1092,33 +1092,46 @@ test("the event stream waits for the deferred scripts that subscribe to it", asy
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let bundleServed = false;
-  let eventsRequestedEarly = false;
-  let eventsRequested = false;
+
+  // EventSource CONSTRUCTIONS, not network requests. Probed both ways: a page
+  // that connects twice (`connect()` closes the first stream and opens a
+  // second) shows two constructions and still only one request in Playwright's
+  // request log, so the request count cannot tell the two apart and the thing
+  // actually under test is the construction.
+  await page.addInitScript(() => {
+    const Real = window.EventSource;
+    (window as any).__streams = [];
+    class Counting extends Real {
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        (window as any).__streams.push(String(url));
+      }
+    }
+    (window as any).EventSource = Counting;
+  });
+  const streams = () =>
+    page.evaluate(() => ((window as any).__streams || []).length);
 
   await page.route("**/vendor/cytoscape.min.js", async (route) => {
     await held;
-    bundleServed = true;
     await route.continue();
-  });
-  page.on("request", (request) => {
-    if (!request.url().includes("/tasks/events")) return;
-    eventsRequested = true;
-    if (!bundleServed) eventsRequestedEarly = true;
   });
 
   const navigation = page.goto("/tasks/graph?project=lithos-loom");
   // `tasks.js` publishes this at the very END of its own execution, after the
   // point where it used to open the stream — so once it exists, an early
-  // connection would already have been issued.
+  // connection would already have happened.
   await page.waitForFunction(() => (window as any).LithosLens !== undefined);
-  expect(eventsRequestedEarly).toBe(false);
+  expect(await streams()).toBe(0);
 
   release();
   await navigation;
   await expect(
     page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
   ).toBeVisible();
-  // And it does connect, once there is something on the page to hear it.
-  await expect.poll(() => eventsRequested, { timeout: 5000 }).toBe(true);
+  // And it connects — ONCE. A real page fires `DOMContentLoaded` and then
+  // `load`, and both start the stream, so this is also what pins the
+  // idempotence guard between them.
+  await page.waitForLoadState("load");
+  await expect.poll(streams, { timeout: 5000 }).toBe(1);
 });

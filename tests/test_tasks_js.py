@@ -1232,8 +1232,14 @@ const vm = require("vm");
 
 const [
   tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
-  reducedMotionRaw, servedPanelRaw, panelFetchRaw, readyStateRaw,
+  reducedMotionRaw, servedPanelRaw, panelFetchRaw, readyStateRaw, lifecycleRaw,
 ] = process.argv.slice(1);
+// Which document lifecycle events the browser fires once both files have run.
+// The page's own is `DOMContentLoaded` then `load`; a script that arrived after
+// the first of those sees only the second.
+const lifecycle = (lifecycleRaw === undefined ? "DOMContentLoaded" : lifecycleRaw)
+  .split(",")
+  .filter(Boolean);
 const actions = JSON.parse(actionsRaw);
 const reducedMotion = reducedMotionRaw === "1";
 // How the SERVER answers a panel request. A node open that never lands is the
@@ -1320,7 +1326,13 @@ const document = {
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
 };
 
+// COUNTED, not merely recorded: `connect()` closes any open stream and opens a
+// new one, so "a connection exists" cannot tell one call from two — and two is
+// what a page that fires both lifecycle events gets without the idempotence
+// guard.
+let eventSources = 0;
 class EventSource {
+  constructor() { eventSources += 1; }
   addEventListener(type, fn) { (sse[type] = sse[type] || []).push(fn); }
   close() {}
 }
@@ -1440,10 +1452,10 @@ const streamBeforeGraph = Object.keys(sse).length > 0;
 
 vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
 
-// …and then the browser announces that every deferred script has run.
-if (document.readyState !== "complete") {
-  (listeners["DOMContentLoaded"] || []).forEach((listener) => listener({}));
-}
+// …and then the browser announces where in the lifecycle it has got to.
+lifecycle.forEach((event) => {
+  (listeners[event] || []).forEach((listener) => listener({}));
+});
 
 const graph = sandbox.window.LithosLensGraph;
 
@@ -1596,6 +1608,7 @@ function ranks() {
     // The roots the library was handed, named the way the payload names them.
     streamBeforeGraph,
     streamOpen: Object.keys(sse).length > 0,
+    eventSources,
     layouts: layoutCalls.map((call) => Object.assign({}, call, {
       roots: call.roots.map((id) => nameOf[id] || id).sort(),
     })),
@@ -1947,6 +1960,7 @@ def _graph_run(
     served_panel: str = "",
     panel_fetch: str = "ok",
     ready_state: str = "interactive",
+    lifecycle: str = "DOMContentLoaded",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
@@ -1962,7 +1976,9 @@ def _graph_run(
     three ways one can fail to arrive; ``ready_state`` is the document's state
     when the scripts run — ``interactive`` is the page's own, which is what a
     DEFERRED script sees, and the harness fires `DOMContentLoaded` itself once
-    both files have loaded.
+    both files have loaded; ``lifecycle`` is which events it fires there (the
+    page's own sequence is ``DOMContentLoaded,load``, and a file that arrived
+    after the first of those sees only ``load``).
     """
     assert NODE is not None
     result = subprocess.run(
@@ -1981,6 +1997,7 @@ def _graph_run(
             served_panel,
             panel_fetch,
             ready_state,
+            lifecycle,
         ],
         capture_output=True,
         text=True,
@@ -2630,7 +2647,32 @@ def test_a_script_that_arrives_after_the_document_connects_at_once() -> None:
     """The other branch, and the reason it is a branch: for a file injected
     once the document is parsed there is no later script to wait for, and a
     `DOMContentLoaded` that has already fired would never come again."""
-    result = _graph_run(["event:ship"], ready_state="complete")
+    result = _graph_run(["event:ship"], ready_state="complete", lifecycle="")
 
     assert result["streamBeforeGraph"] is True
+    assert result["eventSources"] == 1
+    assert result["final"]["pillHidden"] is False
+
+
+def test_the_page_s_own_lifecycle_opens_exactly_one_stream() -> None:
+    """A normal page fires `DOMContentLoaded` AND `load`, and both start the
+    stream — so without the idempotence guard the second call closes the first
+    EventSource and opens a second, which is a dropped subscription and a second
+    connection against the hub's per-process ceiling. "A stream exists"
+    cannot tell one from two; the count can."""
+    result = _graph_run(["event:ship"], lifecycle="DOMContentLoaded,load")
+
+    assert result["eventSources"] == 1, "the page opened a second stream"
+    assert result["final"]["pillHidden"] is False
+
+
+def test_a_file_that_missed_dom_content_loaded_still_gets_its_stream() -> None:
+    """The third entry, and the only one `DOMContentLoaded` cannot serve: a
+    script injected between the two events runs at `"interactive"` — so it is
+    not `"complete"` and connects on an event that has already fired and will
+    not fire again. `load` is the backstop, and it has to open exactly one."""
+    result = _graph_run(["event:ship"], lifecycle="load")
+
+    assert result["eventSources"] == 1, "the stream never opened"
+    assert result["streamOpen"] is True
     assert result["final"]["pillHidden"] is False
