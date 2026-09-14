@@ -47,24 +47,62 @@
 
   // ── The vocabulary the server and this file share ──────────────────────
 
-  const OVERLAY_BY_EDGE_TYPE = {
+  // EVERY lookup below is keyed by something the SERVER chose — a task id or
+  // an edge type — and `tasks.py` contracts a task id as an arbitrary non-empty
+  // string. A plain `{}` inherits `__proto__`, `constructor` and `toString`
+  // from its prototype, so `map[id]` for a task called `constructor` answers
+  // with a function nobody stored and `map[id].push` throws. Null-prototype
+  // maps have no such answers to give.
+  function dict(entries) {
+    return Object.assign(Object.create(null), entries || {});
+  }
+
+  const OVERLAY_BY_EDGE_TYPE = dict({
     parent_child: "hierarchy",
     discovered_from: "provenance"
-  };
+  });
   const OVERLAYS = ["hierarchy", "provenance"];
-  const DEPENDENCY_EDGE_TYPES = { blocks: true, waits_on_gate: true };
+  const DEPENDENCY_EDGE_TYPES = dict({ blocks: true, waits_on_gate: true });
   const SELECTION_PARAM =
     (window.LithosLensTasks || {}).selectionParam || "focus";
   // Mirrors `graph_page._flag`: a value in neither set carries no request at
   // all, so the scope's own default stands rather than flipping to false.
   const TRUE_FLAGS = ["1", "true", "yes", "on"];
   const FALSE_FLAGS = ["0", "false", "no", "off"];
-  // A cycle's compound parent is a node Cytoscape needs and the payload has no
-  // id for; prefixed so it cannot collide with a task id.
-  const CYCLE_PARENT_PREFIX = "cycle::";
 
-  const byId = {};
+  const byId = dict();
   nodes.forEach(function (node) { byId[node.id] = node; });
+
+  // CYTOSCAPE IS HANDED OPAQUE IDS, never a task's own — and the second reason
+  // is not ours to fix.
+  //
+  // Ours: the payload has no id at all for the two elements this file has to
+  // synthesise (a cycle's compound parent, and every edge), and any id built by
+  // splicing task ids together can collide — `a::b → c` and `a → b::c` produce
+  // one key between them, and Cytoscape keeps whichever arrived first, silently
+  // dropping the other edge and its arrowhead.
+  //
+  // Theirs: a task id is an arbitrary non-empty string (`tasks.py`), and the
+  // shipped 3.30.3 throws outright — "f.source is not a function", inside
+  // `breadthfirst` — on an element called `__proto__`, `constructor` or
+  // `toString`, because its own internal maps are prototype-bearing. No
+  // escaping fixes that from out here; only not using the id does.
+  //
+  // So ids are indices, and everything the page says about a node is looked up
+  // through these two maps.
+  const elementIdOf = dict();
+  const taskIdOf = dict();
+  nodes.forEach(function (node, index) {
+    const elementId = "n" + index;
+    elementIdOf[node.id] = elementId;
+    taskIdOf[elementId] = node.id;
+  });
+
+  //: The payload node an element stands for, or undefined for one this file
+  //: synthesised (a cycle's box).
+  function nodeFor(element) {
+    return byId[taskIdOf[element.id()]];
+  }
 
   // Both endpoints in the node set, or Cytoscape rejects the edge. The server
   // does not emit a dangling one, but a payload it could not complete is
@@ -73,7 +111,7 @@
     return byId[edge.from] && byId[edge.to];
   });
 
-  const isolated = {};
+  const isolated = dict();
   ((payload && payload.isolated) || []).forEach(function (id) {
     isolated[id] = true;
   });
@@ -81,7 +119,7 @@
   // "Something in this graph blocks it", straight off the states the server
   // classified (D6). NOT Lithos's readiness verdict, which this page never
   // re-implements — an inactive or unknown edge is deliberately not counted.
-  const blocked = {};
+  const blocked = dict();
   edges.forEach(function (edge) {
     if (DEPENDENCY_EDGE_TYPES[edge.type] && edge.state === "active") {
       blocked[edge.to] = true;
@@ -91,9 +129,12 @@
   // Only a cycle Lens can SHAPE gets a compound parent (D4): a Lithos-flagged
   // member with no component in the fetched topology is condensed alone, and a
   // box drawn round it would be a cycle of one.
-  const cycleParent = {};
-  ((payload && payload.cycles) || []).forEach(function (cycle) {
-    if (cycle.scc) cycleParent[cycle.id] = CYCLE_PARENT_PREFIX + cycle.id;
+  const cycleParent = dict();
+  const cycleElementId = dict();
+  ((payload && payload.cycles) || []).forEach(function (cycle, index) {
+    if (!cycle.scc) return;
+    cycleParent[cycle.id] = "c" + index;
+    cycleElementId[cycle.id] = "c" + index;
   });
 
   // The chain (D7) is a walk over the CONDENSED graph — a cycle counts as one
@@ -108,8 +149,8 @@
   }
 
   const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
-  const chainCondensations = {};
-  const chainSteps = {};
+  const chainCondensations = dict();
+  const chainSteps = dict();
   chain.forEach(function (id, index) {
     chainCondensations[id] = true;
     if (index) chainSteps[chain[index - 1] + ">" + id] = true;
@@ -120,11 +161,17 @@
   }
 
   function stepOnChain(edge) {
+    // The chain is the longest BLOCKING chain over the ACTIVE projection (D7),
+    // so only an active dependency edge can be a step of it. A `parent_child`
+    // or `discovered_from` edge running parallel to one — the same two tasks,
+    // a different relation — would otherwise take the critical-path accent and
+    // trace a hierarchy as if it blocked something.
+    if (!DEPENDENCY_EDGE_TYPES[edge.type] || edge.state !== "active") return false;
     const from = condensationOf(edge.from);
     const to = condensationOf(edge.to);
-    // An edge INSIDE a condensation is not a step of the chain: the chain
-    // crosses it in one move, and the loop it is drawn from has no direction
-    // the chain endorses.
+    // An edge INSIDE a condensation is not a step either: the chain crosses it
+    // in one move, and the loop it is drawn from has no direction the chain
+    // endorses.
     return from !== to && chainSteps[from + ">" + to] === true;
   }
 
@@ -217,8 +264,11 @@
     return node.label;
   }
 
-  function edgeId(edge) {
-    return "edge::" + edge.type + "::" + edge.from + "::" + edge.to;
+  // One opaque id per payload edge, assigned once and looked up by position.
+  const edgeElementId = edges.map(function (_edge, index) { return "e" + index; });
+
+  function edgeId(index) {
+    return edgeElementId[index];
   }
 
   // Two sets, and the split is the layout's (below): every node, plus the
@@ -236,12 +286,12 @@
     });
   });
   nodes.forEach(function (node) {
-    const data = { id: node.id, label: nodeLabel(node) };
+    const data = { id: elementIdOf[node.id], label: nodeLabel(node) };
     const parent = cycleParent[node.cycle];
     if (parent) data.parent = parent;
     elements.push({ data: data, classes: nodeClasses(node) });
   });
-  edges.forEach(function (edge) {
+  edges.forEach(function (edge, index) {
     const overlay = OVERLAY_BY_EDGE_TYPE[edge.type];
     const classes = ["graph-edge", "type-" + edge.type];
     if (edge.state) classes.push("state-" + edge.state);
@@ -249,9 +299,9 @@
     if (stepOnChain(edge)) classes.push("chain");
     (overlay ? overlayElements : elements).push({
       data: {
-        id: edgeId(edge),
-        source: edge.from,
-        target: edge.to,
+        id: edgeId(index),
+        source: elementIdOf[edge.from],
+        target: elementIdOf[edge.to],
         type: edge.type,
         overlay: overlay || ""
       },
@@ -402,14 +452,17 @@
   // back to roots of its own choosing for anything else. They decide which end
   // of the graph the traversal starts from, and so the left-to-right order the
   // placement below reads off it.
-  const rootIds = {};
+  const rootIds = dict();
   ((payload && payload.roots) || []).forEach(function (id) {
     if (byId[id]) rootIds[id] = true;
   });
   cy.layout({
     name: "breadthfirst",
     directed: true,
-    roots: cy.nodes().filter(function (node) { return rootIds[node.id()] === true; }),
+    roots: cy.nodes().filter(function (element) {
+      const node = nodeFor(element);
+      return !!node && rootIds[node.id] === true;
+    }),
     padding: 20,
     spacingFactor: 1.15,
     avoidOverlap: true,
@@ -447,13 +500,20 @@
   // one: a cycle occupies one place in its layer, and its members stack inside
   // that slot so the compound box hugs them instead of stretching across
   // whatever the layout happened to put between.
-  const ROW_PITCH = 110;
+  //
+  // Which is why the ranks are stacked CUMULATIVELY rather than at a fixed
+  // pitch. A rank is as tall as its tallest condensation, and nothing bounds
+  // an SCC below the 300-node scope guard: a five-member cycle stacked at a
+  // fixed 110 spills 128px past its own band, putting one member above the
+  // rank before it and another below the rank after. The band then says the
+  // opposite of the layer, which is the whole thing this placement is for.
+  const ROW_GAP = 110;
   const COLUMN_PITCH = 170;
   const MEMBER_PITCH = 64;
-  const rows = {};
-  const slotMembers = {};
+  const rows = dict();
+  const slotMembers = dict();
   cy.nodes().forEach(function (element) {
-    const node = byId[element.id()];
+    const node = nodeFor(element);
     if (!node) return; // a cycle's compound parent, placed by its children
     const slot = condensationOf(node.id);
     if (!slotMembers[slot]) {
@@ -463,47 +523,54 @@
     }
     slotMembers[slot].push(element);
   });
-  Object.keys(rows).forEach(function (layer) {
-    const slots = rows[layer];
-    const centre = {};
-    slots.forEach(function (slot) {
-      let x = 0;
-      slotMembers[slot].forEach(function (element) { x += element.position().x; });
-      centre[slot] = x / slotMembers[slot].length;
-    });
-    // The layout's left-to-right order, with the id as the tiebreak so a rank
-    // it placed in a column renders the same way twice.
-    slots.sort(function (a, b) {
-      return centre[a] - centre[b] || (a < b ? -1 : 1);
-    });
-    slots.forEach(function (slot, index) {
-      const x = (index - (slots.length - 1) / 2) * COLUMN_PITCH;
-      const members = slotMembers[slot];
-      members.forEach(function (element, member) {
-        element.position({
-          x: x,
-          y: Number(layer) * ROW_PITCH +
-            (member - (members.length - 1) / 2) * MEMBER_PITCH
+  let top = 0;
+  Object.keys(rows)
+    .map(Number)
+    .sort(function (a, b) { return a - b; })
+    .forEach(function (layer) {
+      const slots = rows[layer];
+      const centre = dict();
+      let tallest = 0;
+      slots.forEach(function (slot) {
+        let x = 0;
+        slotMembers[slot].forEach(function (element) { x += element.position().x; });
+        centre[slot] = x / slotMembers[slot].length;
+        tallest = Math.max(tallest, (slotMembers[slot].length - 1) * MEMBER_PITCH);
+      });
+      // The layout's left-to-right order, with the id as the tiebreak so a rank
+      // it placed in a column renders the same way twice.
+      slots.sort(function (a, b) {
+        return centre[a] - centre[b] || (a < b ? -1 : 1);
+      });
+      const middle = top + tallest / 2;
+      slots.forEach(function (slot, index) {
+        const x = (index - (slots.length - 1) / 2) * COLUMN_PITCH;
+        const members = slotMembers[slot];
+        members.forEach(function (element, member) {
+          element.position({
+            x: x,
+            y: middle + (member - (members.length - 1) / 2) * MEMBER_PITCH
+          });
         });
       });
+      top += tallest + ROW_GAP;
     });
-  });
 
   // ── What is drawn (D6/D8), recomputed from the URL on every transition ──
 
   function visibility(state) {
-    const on = {};
+    const on = dict();
     state.overlays.forEach(function (name) { on[name] = true; });
-    const shownEdges = {};
-    const anchored = {};
-    edges.forEach(function (edge) {
+    const shownEdges = dict();
+    const anchored = dict();
+    edges.forEach(function (edge, index) {
       const overlay = OVERLAY_BY_EDGE_TYPE[edge.type];
       if (overlay && !on[overlay]) return;
-      shownEdges[edgeId(edge)] = true;
+      shownEdges[edgeId(index)] = true;
       anchored[edge.from] = true;
       anchored[edge.to] = true;
     });
-    const shownNodes = {};
+    const shownNodes = dict();
     nodes.forEach(function (node) {
       let visible = true;
       if (node.ghost_kind === "context") {
@@ -541,7 +608,7 @@
     let nodeCount = 0;
     let ghostCount = 0;
     cy.nodes().forEach(function (element) {
-      const node = byId[element.id()];
+      const node = nodeFor(element);
       if (!node) return; // a cycle's compound parent, which its members carry
       const visible = shown.nodes[node.id];
       element.style("display", visible ? "element" : "none");
@@ -679,23 +746,25 @@
   if (panelApi && panelApi.onChange) panelApi.onChange(render);
 
   cy.on("tap", "node", function (event) {
-    const id = event.target.id();
-    if (!byId[id]) return; // the cycle box, which is chrome rather than a task
+    const node = nodeFor(event.target);
+    if (!node) return; // the cycle box, which is chrome rather than a task
     // The focus ring lands now; the panel's own `pushState` follows its fetch,
-    // which is what keeps a URL from ever claiming a panel that failed to open.
+    // which is what keeps a URL from ever claiming a panel that failed to open
+    // — and an open that never arrives announces itself too, so the ring is
+    // walked back rather than left over a selection that never happened.
     cy.nodes().forEach(function (element) {
-      if (element.id() === id) element.addClass("focused");
+      if (element.id() === event.target.id()) element.addClass("focused");
       else element.removeClass("focused");
     });
     const open = panel();
-    if (open) open.open(id);
+    if (open) open.open(node.id);
   });
 
   // Double-click leaves for the full page. The single tap that precedes it has
   // already opened the panel; the navigation supersedes it, which is the same
   // order the dashboard's title link has always had.
   cy.on("dbltap", "node", function (event) {
-    const node = byId[event.target.id()];
+    const node = nodeFor(event.target);
     if (node && node.detail_url) window.location.href = node.detail_url;
   });
 
@@ -774,12 +843,17 @@
   // instance rather than of the image.
   window.LithosLensGraph = {
     cy: cy,
+    // Cytoscape's ids are opaque here (see the top of the file), so asking
+    // about a TASK goes through these rather than through `getElementById`.
+    node: function (taskId) { return cy.getElementById(elementIdOf[taskId] || ""); },
+    cycle: function (cycleId) {
+      return cy.getElementById(cycleElementId[cycleId] || "");
+    },
     shown: function () {
       const drawn = { nodes: [], edges: [] };
       cy.nodes().forEach(function (element) {
-        if (byId[element.id()] && element.style("display") !== "none") {
-          drawn.nodes.push(element.id());
-        }
+        const node = nodeFor(element);
+        if (node && element.style("display") !== "none") drawn.nodes.push(node.id);
       });
       cy.edges().forEach(function (element) {
         if (element.style("display") === "none") return;
@@ -795,7 +869,8 @@
       const at = {};
       cy.nodes().forEach(function (element) {
         const point = element.position();
-        at[element.id()] = [Math.round(point.x), Math.round(point.y)];
+        const node = nodeFor(element);
+        if (node) at[node.id] = [Math.round(point.x), Math.round(point.y)];
       });
       return at;
     }

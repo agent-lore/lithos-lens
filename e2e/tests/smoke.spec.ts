@@ -968,9 +968,7 @@ test("toggling the overlays adds their edges and remembers them in the URL", asy
   // this open-only scope, in the payload from the first render so the toggle
   // needs no fetch.
   const source = await page.evaluate(() =>
-    (window as any).LithosLensGraph.cy
-      .getElementById("loom-research-old")
-      .style("display"),
+    (window as any).LithosLensGraph.node("loom-research-old").style("display"),
   );
   expect(source).not.toBe("none");
 
@@ -995,7 +993,7 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   // event surface rather than a DOM row — which is the whole reason the panel
   // is reachable as an API (D9: one implementation for rows and nodes).
   await page.evaluate(() =>
-    (window as any).LithosLensGraph.cy.getElementById("loom-ship").emit("tap"),
+    (window as any).LithosLensGraph.node("loom-ship").emit("tap"),
   );
 
   await expect(
@@ -1010,12 +1008,10 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
   await expect(page).not.toHaveURL(/focus=/);
   await expect(page).toHaveURL(/project=lithos-loom/);
-  const lit = await page.evaluate(() =>
-    (window as any).LithosLensGraph.cy
-      .nodes(".focused")
-      .map((node: any) => node.id()),
+  const lit = await page.evaluate(
+    () => (window as any).LithosLensGraph.cy.nodes(".focused").length,
   );
-  expect(lit).toEqual([]);
+  expect(lit).toBe(0);
 });
 
 test("the canvas ranks every node by the layer the text gives it", async ({
@@ -1034,10 +1030,10 @@ test("the canvas ranks every node by the layer the text gives it", async ({
     const payload = JSON.parse(
       document.querySelector("[data-graph-payload]")!.textContent!,
     );
-    const cy = (window as any).LithosLensGraph.cy;
+    const graph = (window as any).LithosLensGraph;
     const out: Record<string, { min: number; max: number }> = {};
     payload.nodes.forEach((node: any) => {
-      const y = cy.getElementById(node.id).position().y;
+      const y = graph.node(node.id).position().y;
       const band = out[node.layer] || (out[node.layer] = { min: y, max: y });
       band.min = Math.min(band.min, y);
       band.max = Math.max(band.max, y);

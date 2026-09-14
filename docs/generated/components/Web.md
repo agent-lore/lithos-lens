@@ -11,7 +11,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.graph_routes` | S | 0 | 1 |
+| `lithos_lens.graph_routes` | M | 0 | 1 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 13 |
 | `lithos_lens.web` | L | 0 | 1 |

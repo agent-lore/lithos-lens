@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from opentelemetry.trace import Span
 
@@ -36,7 +36,12 @@ from lithos_lens.graph_page import (
 from lithos_lens.graph_scope import GraphScopeLimits
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
-from lithos_lens.tasks import GRAPH_SELECTION_KEY, TaskRecord, default_since
+from lithos_lens.tasks import (
+    GRAPH_SELECTION_KEY,
+    PANEL_SELECTION_KEY,
+    TaskRecord,
+    default_since,
+)
 from lithos_lens.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -60,7 +65,7 @@ def register_graph_routes(
     templates.env.globals["graph_selection_key"] = GRAPH_SELECTION_KEY
 
     @app.get("/tasks/graph", response_class=HTMLResponse)
-    async def tasks_graph(request: Request) -> HTMLResponse:
+    async def tasks_graph(request: Request) -> Response:
         """The dependency graph of one scope, or the picker when none is given.
 
         The no-JS baseline is the WHOLE page here (D3): layers, callout,
@@ -76,6 +81,16 @@ def register_graph_routes(
         fetch?" is a question the server span cannot answer.
         """
         params = parse_graph_params(dict(request.query_params))
+        # `selected=` is the DASHBOARD's selection parameter, accepted here as a
+        # compatibility alias (D8). Canonicalising it means REPLACING it, not
+        # merely reading it: this page has one selection parameter, and both
+        # clients read `focus`. A page served under the alias would render the
+        # panel while no node was lit, Escape would be inert, and closing would
+        # push a URL that still carried `selected=` — so the next reload, or the
+        # next Back, would reopen the panel the operator just closed. Redirected
+        # before any read, because the answer costs nothing to compute.
+        if PANEL_SELECTION_KEY in request.query_params:
+            return RedirectResponse(graph_url(params), status_code=307)
         snapshot = await state.refresh_health()
         context: dict[str, object] = {
             "config": state.config,

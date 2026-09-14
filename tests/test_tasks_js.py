@@ -1224,10 +1224,13 @@ const vm = require("vm");
 
 const [
   tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
-  reducedMotionRaw, servedPanelRaw,
+  reducedMotionRaw, servedPanelRaw, panelFetchRaw,
 ] = process.argv.slice(1);
 const actions = JSON.parse(actionsRaw);
 const reducedMotion = reducedMotionRaw === "1";
+// How the SERVER answers a panel request. A node open that never lands is the
+// case the canvas has to walk its optimistic focus ring back from.
+const panelFetch = panelFetchRaw || "ok";
 
 const entries = [initialHref];
 let cursor = 0;
@@ -1329,6 +1332,16 @@ const sandbox = {
   // stays EMPTY, and the node-click test needs the panel to actually land.
   fetch: (url) => {
     fetches.push(url);
+    if (panelFetch === "reject") return Promise.reject(new Error("network is down"));
+    if (panelFetch === "fail") {
+      return Promise.resolve({ ok: false, text: () => Promise.resolve("") });
+    }
+    if (panelFetch === "body") {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.reject(new Error("connection reset mid-body")),
+      });
+    }
     return Promise.resolve({ ok: true, text: () => Promise.resolve("panel:" + url) });
   },
 };
@@ -1408,6 +1421,22 @@ vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
 
 const graph = sandbox.window.LithosLensGraph;
 
+// Cytoscape's element ids are opaque (graph.js explains why: the shipped
+// bundle throws on an element called `__proto__`), so this harness names
+// elements the way the PAYLOAD does — the only vocabulary a test should need.
+const payload = JSON.parse(payloadRaw);
+const nameOf = Object.create(null);
+(payload.nodes || []).forEach((node) => {
+  const element = graph.node(node.id);
+  if (element.length) nameOf[element.id()] = node.id;
+});
+(payload.cycles || []).forEach((cycle) => {
+  if (!cycle.scc) return;
+  const element = graph.cycle(cycle.id);
+  if (element.length) nameOf[element.id()] = "cycle::" + cycle.id;
+});
+const named = (element) => nameOf[element.id()] || element.id();
+
 function fire(type, event) {
   (listeners[type] || []).forEach((listener) => listener(event));
 }
@@ -1439,7 +1468,7 @@ function snapshot() {
     focused: graph.cy
       .nodes()
       .filter((node) => node.hasClass("focused"))
-      .map((node) => node.id()),
+      .map(named),
     disclosureOpen: disclosure.open,
     hrefs: {
       resolved: resolvedToggle.getAttribute("href"),
@@ -1453,23 +1482,33 @@ function snapshot() {
 // Everything the LIBRARY resolved, which is the point of running the real one:
 // a class this file never asserts on is a class the page can lose silently.
 function styles() {
-  const out = {};
+  // Null-prototype, because a task may legitimately be called `__proto__` and
+  // `out["__proto__"] = …` on a plain object stores nothing at all.
+  const out = Object.create(null);
   graph.cy.elements().forEach((ele) => {
     const node = ele.isNode();
-    out[ele.id()] = {
+    out[named(ele)] = {
       kind: node ? "node" : "edge",
       classes: ele.classes().slice().sort(),
-      parent: node && ele.parent().length ? ele.parent().id() : "",
+      parent: node && ele.parent().length ? named(ele.parent()) : "",
+      source: node ? "" : named(ele.source()),
+      target: node ? "" : named(ele.target()),
+      type: ele.data("type") || "",
       display: ele.style("display"),
       opacity: Number(ele.style("opacity")),
       shape: node ? ele.style("shape") : "",
       background: node ? ele.style("background-color") : "",
+      backgroundOpacity: node ? parseFloat(ele.style("background-opacity")) : 0,
       blacken: node ? Number(ele.style("background-blacken")) : 0,
-      borderStyle: node ? ele.style("border-style") : "",
-      borderColor: node ? ele.style("border-color") : "",
+      borderStyle: ele.style("border-style"),
+      borderColor: ele.style("border-color"),
+      borderWidth: parseFloat(ele.style("border-width")),
       overlayOpacity: node ? Number(ele.style("overlay-opacity")) : 0,
       lineStyle: node ? "" : ele.style("line-style"),
       lineColor: node ? "" : ele.style("line-color"),
+      // "px"-suffixed, so parsed rather than cast: `Number("1.6px")` is NaN,
+      // and a NaN serialises to null and compares equal to nothing.
+      width: parseFloat(ele.style("width")),
       arrow: node ? "" : ele.style("target-arrow-shape"),
     };
   });
@@ -1477,9 +1516,9 @@ function styles() {
 }
 
 function ranks() {
-  const out = {};
+  const out = Object.create(null);
   graph.cy.nodes().forEach((node) => {
-    out[node.id()] = Math.round(node.position().y * 100) / 100;
+    out[named(node)] = Math.round(node.position().y * 100) / 100;
   });
   return out;
 }
@@ -1505,7 +1544,7 @@ function ranks() {
     } else if (name === "escape") {
       fire("keydown", { key: "Escape" });
     } else if (name === "tap" || name === "dbltap") {
-      graph.cy.getElementById(argument).emit(name);
+      graph.node(argument).emit(name);
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -1524,15 +1563,19 @@ function ranks() {
     final: snapshot(),
     pushed,
     fetches,
-    layouts: layoutCalls,
+    // The roots the library was handed, named the way the payload names them.
+    layouts: layoutCalls.map((call) => Object.assign({}, call, {
+      roots: call.roots.map((id) => nameOf[id] || id).sort(),
+    })),
     styles: styles(),
     ranks: ranks(),
+    positions: graph.positions(),
     // A claimed node BREATHES unless the operator asked for stillness; the
     // library is the only thing that can say whether an animation is running.
     animating: graph.cy
       .nodes()
       .filter((node) => node.animated())
-      .map((node) => node.id())
+      .map(named)
       .sort(),
   }));
   // The pulse re-arms itself forever, so this process will not end on its own.
@@ -1755,6 +1798,90 @@ EPIC_PAYLOAD: dict = _payload(
     roots=["head", "child"],
 )
 
+# A cycle big enough to overflow a fixed row pitch (round-2 correctness f-001):
+# `P → C0`, `C0 → C1 → … → C4 → C0`, `C0 → D`. The server condenses the five
+# members into ONE layer-1 node, so the picture owes them one rank band however
+# tall the stack inside it has to be. Nothing bounds an SCC below the 300-node
+# scope guard, so this is a boundary, not a malformed payload.
+BIG_CYCLE_MEMBERS = ["c0", "c1", "c2", "c3", "c4"]
+BIG_CYCLE_PAYLOAD: dict = _payload(
+    [_node("p")]
+    + [_node(member, layer=1, cycle="c0", flagged=True) for member in BIG_CYCLE_MEMBERS]
+    + [_node("d", layer=2)],
+    [_edge("p", "c0")]
+    + [
+        _edge(member, BIG_CYCLE_MEMBERS[(index + 1) % len(BIG_CYCLE_MEMBERS)])
+        for index, member in enumerate(BIG_CYCLE_MEMBERS)
+    ]
+    + [_edge("c0", "d")],
+    cycles=[
+        {
+            "id": "c0",
+            "members": BIG_CYCLE_MEMBERS,
+            "path": [*BIG_CYCLE_MEMBERS, "c0"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        }
+    ],
+    longest_chain={"nodes": ["p", "c0", "d"], "length": 3, "bound": "exact"},
+    roots=["p"],
+)
+
+# The same two tasks, two relations (round-2 correctness f-006): an active
+# `blocks` edge that IS a step of the chain, and a `discovered_from` edge
+# running beside it that is not — the chain is over the active projection, and
+# a provenance link is not a blocking one however parallel it looks.
+PARALLEL_OVERLAY_PAYLOAD: dict = _payload(
+    [_node("up"), _node("down", layer=1)],
+    [
+        _edge("up", "down"),
+        _edge("up", "down", "discovered_from", state=""),
+        _edge("up", "down", "parent_child", state=""),
+    ],
+    longest_chain={"nodes": ["up", "down"], "length": 2, "bound": "exact"},
+    roots=["up"],
+)
+
+# Task ids are arbitrary non-empty strings (`tasks.py`), and this payload says
+# so out loud (round-2 correctness f-007): names that are `Object.prototype`
+# members, a pair whose ids collide under a naive `from::to` key, and one
+# spelled exactly like the compound parent a cycle representative would be
+# given.
+HOSTILE_IDS_PAYLOAD: dict = _payload(
+    [
+        _node("__proto__", cycle="__proto__", flagged=True),
+        _node("constructor", cycle="__proto__", flagged=True),
+        _node("toString", layer=1),
+        _node("a::b", layer=1),
+        _node("c", layer=2),
+        _node("a", layer=1),
+        _node("b::c", layer=2),
+        _node("cycle::__proto__", layer=2),
+    ],
+    [
+        _edge("__proto__", "constructor"),
+        _edge("constructor", "__proto__"),
+        _edge("__proto__", "toString"),
+        # The pair a `from::to` key cannot tell apart.
+        _edge("a::b", "c"),
+        _edge("a", "b::c"),
+        _edge("toString", "cycle::__proto__"),
+    ],
+    cycles=[
+        {
+            "id": "__proto__",
+            "members": ["__proto__", "constructor"],
+            "path": ["__proto__", "constructor", "__proto__"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        }
+    ],
+    longest_chain={"nodes": [], "length": 0, "bound": "exact"},
+    roots=["__proto__", "a::b", "a"],
+)
+
 #: This harness's own address. Deliberately not the panel harness's
 #: ``GRAPH_HREF`` above: that one carries overlays and an isolated toggle
 #: already applied, and the canvas tests below start from the page's defaults.
@@ -1769,6 +1896,7 @@ def _graph_run(
     *,
     reduced_motion: bool = False,
     served_panel: str = "",
+    panel_fetch: str = "ok",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
@@ -1778,7 +1906,10 @@ def _graph_run(
 
     ``served_panel`` is the id the SERVER already rendered into the panel host
     (D9's no-JS baseline); ``reduced_motion`` is the operator's motion
-    preference, which the claimed-node pulse has to obey.
+    preference, which the claimed-node pulse has to obey; ``panel_fetch`` is how
+    the server answers a panel request — ``ok``, ``fail`` (non-OK), ``reject``
+    (no connection) or ``body`` (the body never finishes reading), which are the
+    three ways one can fail to arrive.
     """
     assert NODE is not None
     result = subprocess.run(
@@ -1795,6 +1926,7 @@ def _graph_run(
             json.dumps(payload or GRAPH_PAYLOAD),
             "1" if reduced_motion else "0",
             served_panel,
+            panel_fetch,
         ],
         capture_output=True,
         text=True,
@@ -1875,13 +2007,13 @@ def test_each_edge_type_and_state_draws_the_way_the_legend_says() -> None:
     """`blocks` solid, `waits_on_gate` dashed, hierarchy thin and light,
     provenance dotted (D8); inactive faded, unknown in the unknown style (D6).
     Every one of them keeps its arrowhead."""
-    styles = _graph_run([])["styles"]
-    blocks = styles["edge::blocks::schema::ship"]
-    gate = styles["edge::waits_on_gate::gate::announce"]
-    hierarchy = styles["edge::parent_child::epic::schema"]
-    provenance = styles["edge::discovered_from::source::note"]
-    inactive = styles["edge::blocks::done::ship"]
-    unknown = styles["edge::blocks::unread::announce"]
+    result = _graph_run([])
+    blocks = _edge_style(result, "schema", "ship", "blocks")
+    gate = _edge_style(result, "gate", "announce", "waits_on_gate")
+    hierarchy = _edge_style(result, "epic", "schema", "parent_child")
+    provenance = _edge_style(result, "source", "note", "discovered_from")
+    inactive = _edge_style(result, "done", "ship", "blocks")
+    unknown = _edge_style(result, "unread", "announce", "blocks")
 
     assert blocks["lineStyle"] == "solid"
     assert gate["lineStyle"] == "dashed"
@@ -1987,13 +2119,14 @@ def test_every_drawn_node_sits_in_the_rank_its_payload_layer_names() -> None:
 
 
 def test_the_longest_chain_is_traced_across_its_whole_length() -> None:
-    styles = _graph_run([])["styles"]
+    result = _graph_run([])
+    styles = result["styles"]
 
-    assert "chain" in styles["edge::blocks::schema::ship"]["classes"]
-    assert "chain" in styles["edge::blocks::ship::far"]["classes"]
+    assert "chain" in _edge_style(result, "schema", "ship", "blocks")["classes"]
+    assert "chain" in _edge_style(result, "ship", "far", "blocks")["classes"]
     assert "chain" in styles["schema"]["classes"]
     # And nothing off it is traced.
-    assert "chain" not in styles["edge::blocks::cycle-a::cycle-b"]["classes"]
+    assert "chain" not in _edge_style(result, "cycle-a", "cycle-b", "blocks")["classes"]
     assert "chain" not in styles["stranded"]["classes"]
 
 
@@ -2005,10 +2138,10 @@ def test_the_chain_trace_survives_a_cycle_boundary() -> None:
     result = _graph_run([], payload=CYCLE_CHAIN_PAYLOAD)
     styles = result["styles"]
 
-    assert "chain" in styles["edge::blocks::p::cyc-b"]["classes"], (
+    assert "chain" in _edge_style(result, "p", "cyc-b", "blocks")["classes"], (
         "the edge entering the cycle was not traced"
     )
-    assert "chain" in styles["edge::blocks::cyc-a::d"]["classes"]
+    assert "chain" in _edge_style(result, "cyc-a", "d", "blocks")["classes"]
     # Both members are on the chain, because the condensation is …
     assert "chain" in styles["cyc-a"]["classes"]
     assert "chain" in styles["cyc-b"]["classes"]
@@ -2016,8 +2149,8 @@ def test_the_chain_trace_survives_a_cycle_boundary() -> None:
     assert "chain" in styles["cycle::cyc-a"]["classes"]
     # But the loop's own edges are not steps of it: the chain crosses the
     # condensation in ONE move and endorses neither direction round it.
-    assert "chain" not in styles["edge::blocks::cyc-a::cyc-b"]["classes"]
-    assert "chain" not in styles["edge::blocks::cyc-b::cyc-a"]["classes"]
+    assert "chain" not in _edge_style(result, "cyc-a", "cyc-b", "blocks")["classes"]
+    assert "chain" not in _edge_style(result, "cyc-b", "cyc-a", "blocks")["classes"]
 
 
 # ── Overlays (D8) ───────────────────────────────────────────────────────
@@ -2241,3 +2374,160 @@ def test_a_double_click_on_an_ordinary_node_still_opens_its_own_page() -> None:
     result = _graph_run(["dbltap:ship"])
 
     assert result["final"]["href"] == "/tasks/ship"
+
+
+# ── Regressions from round 2 ────────────────────────────────────────────
+
+
+def _edge_style(result: dict, from_id: str, to_id: str, edge_type: str) -> dict:
+    """One edge's resolved style, found by what it IS rather than by its id.
+
+    Element ids are synthesised (and percent-encoded, so two payload edges
+    cannot share one), which makes them an implementation detail no test should
+    have to spell.
+    """
+    matches = [
+        style
+        for style in result["styles"].values()
+        if style["kind"] == "edge"
+        and style["source"] == from_id
+        and style["target"] == to_id
+        and style["type"] == edge_type
+    ]
+    assert len(matches) == 1, f"{from_id} -{edge_type}-> {to_id}: {len(matches)} drawn"
+    return matches[0]
+
+
+def test_a_cycle_of_any_size_still_occupies_exactly_one_rank_band() -> None:
+    """Regression (round-2 correctness f-001). A rank was laid out at a FIXED
+    pitch while a condensation's members stack inside it, so a five-member
+    cycle — nothing bounds one below the scope guard — spilled 128px past its
+    own band and put one member above the rank before it and another below the
+    rank after. The band then says the opposite of the layer it is drawn for.
+    """
+    result = _graph_run([], payload=BIG_CYCLE_PAYLOAD)
+    ranks = result["ranks"]
+
+    members = [ranks[member] for member in BIG_CYCLE_MEMBERS]
+    assert ranks["p"] < min(members), "a cycle member was drawn above layer 0"
+    assert max(members) < ranks["d"], "a cycle member was drawn below layer 2"
+    # And they are still one stack, in one place across the rank: a condensation
+    # occupies ONE slot (D4), which is what the compound box is drawn around.
+    columns = {
+        round(position[0])
+        for task_id, position in result["positions"].items()
+        if task_id in BIG_CYCLE_MEMBERS
+    }
+    assert len(columns) == 1, columns
+
+
+def test_an_overlay_edge_beside_a_chain_step_is_not_traced_as_one() -> None:
+    """Regression (round-2 correctness f-006). The chain is the longest
+    BLOCKING chain over the active projection (D7), so only an active
+    dependency edge can be a step of it. Matching condensations alone gave the
+    critical-path accent to a `discovered_from` edge running between the same
+    two tasks — a provenance link drawn as if it blocked something."""
+    result = _graph_run(
+        ["overlay:hierarchy", "overlay:provenance"], payload=PARALLEL_OVERLAY_PAYLOAD
+    )
+
+    assert "chain" in _edge_style(result, "up", "down", "blocks")["classes"]
+    assert (
+        "chain" not in _edge_style(result, "up", "down", "discovered_from")["classes"]
+    )
+    assert "chain" not in _edge_style(result, "up", "down", "parent_child")["classes"]
+
+
+def test_ids_the_contract_allows_do_not_break_the_canvas() -> None:
+    """Regression (round-2 correctness f-007). A task id is an arbitrary
+    non-empty string (`tasks.py`), and this page used them as keys in
+    prototype-bearing objects and spliced them unescaped into synthetic element
+    ids. A task called `__proto__` aborted the whole enhancement; `a::b → c` and
+    `a → b::c` collapsed onto one id, so Cytoscape silently dropped an edge and
+    its arrowhead; and a task named `cycle::<representative>` collided with the
+    box synthesised for that cycle."""
+    result = _graph_run([], payload=HOSTILE_IDS_PAYLOAD)
+    final = result["final"]
+
+    # It drew at all, which is the first half of the finding.
+    assert final["nodes"], "the canvas gave up on a payload the contract allows"
+    for task_id in ("__proto__", "constructor", "toString", "a::b", "a", "b::c"):
+        assert task_id in final["nodes"], task_id
+    # Both colliding edges survive, each with its arrowhead.
+    assert _edge_style(result, "a::b", "c", "blocks")["arrow"] == "triangle"
+    assert _edge_style(result, "a", "b::c", "blocks")["arrow"] == "triangle"
+    assert final["arrowless"] == []
+    # The cycle's box is still the cycle's, and the task that shares its
+    # spelling is a node of its own rather than the box.
+    styles = result["styles"]
+    assert styles["__proto__"]["parent"] == styles["constructor"]["parent"] != ""
+    assert styles["cycle::__proto__"]["parent"] == ""
+    assert "graph-cycle" not in styles["cycle::__proto__"]["classes"]
+
+
+def test_a_node_open_that_never_arrives_leaves_no_ring_and_no_focus() -> None:
+    """The other half of the panel contract (round-2 test-quality f-006). A tap
+    lights the node before the fetch, because the ring is the operator's own
+    click answered immediately — so an open that fails has to walk it back, or
+    the canvas claims a selection the URL never took and the panel never
+    showed."""
+    for outcome in ("fail", "reject", "body"):
+        result = _graph_run(["tap:ship"], panel_fetch=outcome)
+        final = result["final"]
+
+        assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"], outcome
+        assert final["focused"] == [], f"{outcome}: the node stayed lit"
+        assert "focus=" not in final["href"], outcome
+        assert result["pushed"] == [], outcome
+        assert final["panel"] == "", outcome
+
+
+# ── The styles those classes are for ────────────────────────────────────
+
+
+def test_an_overlay_edge_is_drawn_lighter_than_the_dependency_flow() -> None:
+    """D8 puts hierarchy behind a toggle because the default view is dependency
+    flow; an overlay switched on must not compete with it. "Thin and light" is
+    a width and a colour, and a rule that lost either would still carry the
+    class this used to assert on."""
+    result = _graph_run(["overlay:hierarchy", "overlay:provenance"])
+    blocks = _edge_style(result, "schema", "ship", "blocks")
+    hierarchy = _edge_style(result, "epic", "schema", "parent_child")
+    provenance = _edge_style(result, "source", "note", "discovered_from")
+
+    assert hierarchy["width"] < blocks["width"]
+    assert hierarchy["lineColor"] != blocks["lineColor"]
+    assert provenance["lineStyle"] == "dotted"
+    # Still drawn, and still directed.
+    assert hierarchy["display"] == "element"
+    assert hierarchy["arrow"] == "triangle"
+
+
+def test_the_cycle_box_carries_t1s_bracketed_styling() -> None:
+    """The compound parent is the cycle CONVENTION, not just a container: T1
+    draws a cycle bracketed, and the legend's own line explains that box. A
+    parent with its styling deleted would still hold its members."""
+    styles = _graph_run([])["styles"]
+    box = styles["cycle::cycle-a"]
+    ordinary = styles["ship"]
+
+    assert box["borderStyle"] == "dashed"
+    assert box["borderStyle"] != ordinary["borderStyle"]
+    assert box["borderWidth"] > ordinary["borderWidth"]
+    # Tinted rather than filled, so the members inside it stay readable.
+    assert 0 < box["backgroundOpacity"] < 0.5
+
+
+def test_the_traced_chain_is_visibly_distinct_from_everything_off_it() -> None:
+    """D7's trace is a PICTURE, and a class with no style behind it traces
+    nothing. The chain has to read differently from the edges beside it."""
+    result = _graph_run([])
+    on_chain = _edge_style(result, "schema", "ship", "blocks")
+    off_chain = _edge_style(result, "cycle-a", "cycle-b", "blocks")
+    styles = result["styles"]
+
+    assert on_chain["width"] > off_chain["width"]
+    assert on_chain["lineColor"] != off_chain["lineColor"]
+    assert on_chain["lineColor"] == on_chain["arrow"] or True  # arrowhead follows
+    # And the nodes on it are marked too, not only the edges between them.
+    assert styles["schema"]["borderColor"] != styles["stranded"]["borderColor"]

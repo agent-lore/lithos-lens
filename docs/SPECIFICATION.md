@@ -706,9 +706,12 @@ page renders a picker listing every project the snapshot observes under both
 default by scope KIND, opposite ways round — a project graph is about what can
 still run (resolved hidden, isolates folded), an epic graph about an
 initiative's progress (closed children shown, isolates open). `focus=` is the
-page's single selection parameter and `selected=` is accepted as an alias it
-canonicalises; a request carrying one **server-renders that task's side panel**
-beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
+page's single selection parameter and `selected=` is accepted as a
+compatibility alias that the route **redirects away** (307 to the same URL with
+`focus=` and no `selected=`) before it reads anything: both clients read
+`focus`, so a page served under the alias would render a panel with no node lit
+and a Close that pushed a URL still carrying the alias. A request carrying a
+selection **server-renders that task's side panel** beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
 `url` open), and a read that fails there costs the panel rather than the graph; `overlays=hierarchy,provenance` is carried for the client layer.
 A scope over `graph.max_tasks` (ghosts counted), or one whose out-of-set
 endpoints would cost more classification reads than one render may spend, is
@@ -863,16 +866,22 @@ at. Lens still never re-implements the readiness predicate.
   graph has a cycle, which a dependency graph routinely does.) A slot in a rank
   is a **condensation**, not a node: a cycle takes one place in its layer and
   its members stack inside a **compound parent** there, exactly as the server
-  layers it.
+  layers it. Ranks are stacked **cumulatively** — each is as tall as its
+  tallest condensation — because nothing bounds an SCC below the node guard and
+  a fixed pitch lets a large cycle's stack spill into the rank above and the
+  rank below, which is the contradiction this placement exists to prevent.
 - **Colour is status** (open / completed / cancelled, plus the dashed `unknown`
   style for a ghost whose status could not be read), **shape is type** (ellipse
   task, round-rectangle epic, diamond gate); a node something in this graph
   blocks is tinted, and a claimed one pulses (suppressed under
   `prefers-reduced-motion`). Ghosts are dimmed and carry their project on the
   label. `unknown` edges take the `unknown` style, inactive ones are faded, and
-  the longest blocking chain is traced — matched by **condensation**, since the
-  chain is a walk over the condensed graph and names a cycle by its
-  representative while the edge that enters it may land on any member.
+  the longest blocking chain is traced — over **active dependency edges**
+  only (it is the longest *blocking* chain, so a `parent_child` or
+  `discovered_from` edge running between the same two tasks is not a step of
+  it), matched by **condensation**, since the chain is a walk over the
+  condensed graph and names a cycle by its representative while the edge that
+  enters it may land on any member.
 - **Every edge carries an arrowhead**; `blocks` is solid and `waits_on_gate`
   dashed. `parent_child` (thin, light) and `discovered_from` (dotted) are
   **overlays, off by default**, toggled in the toolbar and remembered in the
@@ -901,6 +910,14 @@ at. Lens still never re-implements the readiness predicate.
   every other control here moves the URL without a reload, and a pill still
   pointing at the address the page loaded on would silently drop the overlays
   and the focus set on the way to needing it.
+- **Cytoscape is handed opaque element ids**, never a task's own. A task id is
+  an arbitrary non-empty string (§5.1), and the shipped 3.30.3 throws inside
+  `breadthfirst` on an element called `__proto__`, `constructor` or `toString`
+  — its internal maps are prototype-bearing. Synthesising ids also makes the
+  compound parents and the edges collision-free by construction, where a key
+  built from `from::to` would merge the payload edges `a::b → c` and
+  `a → b::c` and silently drop one of them. Every client-side lookup keyed by
+  an id uses a null-prototype map for the same reason.
 - **Events** raise a "graph changed — refresh" pill when a consumed task
   event's `task_id` is a node on the page, and do nothing else: this page tells
   `tasks.js` not to reconcile, because re-rendering the board's way would

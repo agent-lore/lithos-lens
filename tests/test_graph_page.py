@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from lithos_lens import graph_cycles, graph_scope
+from lithos_lens import graph_cycles, graph_routes, graph_scope
 from lithos_lens.config import DEFAULT_TASKS_FRONTIER_LIMIT, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_graph_dataset import edge_index
@@ -2744,5 +2744,68 @@ def test_an_unselected_panel_host_is_empty_so_the_canvas_keeps_the_width(
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
 
+    host = only_group(r"(<div\s+class=\"graph-panel-host[^>]*>.*?</div>)", html)
+    assert host.endswith("></div>"), host
+
+
+def test_the_dashboards_selected_alias_is_replaced_by_focus(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D8 gives this page ONE selection parameter and accepts the dashboard's
+    `selected=` as a compatibility alias — which means replacing it, not just
+    reading it. Served under the alias, the panel would render while no node
+    was lit, Escape would be inert, and closing would push a URL still carrying
+    `selected=`, so the next reload reopened the panel just closed.
+    """
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/graph?project={PROJECT}&selected=b", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    location = unescape(response.headers["location"])
+    assert "focus=b" in location
+    assert "selected=" not in location
+    assert f"project={PROJECT}" in location
+
+
+def test_focus_wins_over_the_alias_and_the_alias_still_goes(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A hand-edited URL carrying both names one selection, not two: `focus`
+    is the page's own and the alias is dropped, so closing cannot leave a stale
+    one behind."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/graph?project={PROJECT}&selected=a&focus=b", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    location = unescape(response.headers["location"])
+    assert "focus=b" in location
+    assert "selected=" not in location and "=a" not in location
+
+
+def test_a_panel_read_that_raises_leaves_the_graph_standing(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel is one read beside a whole graph assembly, so its failure may
+    cost the panel and nothing else: an empty host beside a perfectly good
+    picture, never the scope-error page."""
+
+    async def boom(*args: object, **kwargs: object) -> object:
+        raise LithosToolError("detail read failed", code="internal_error")
+
+    monkeypatch.setattr(graph_routes, "load_task_detail", boom)
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b")
+
+    assert "data-graph-layers" in html
+    assert "data-graph-error" not in html
     host = only_group(r"(<div\s+class=\"graph-panel-host[^>]*>.*?</div>)", html)
     assert host.endswith("></div>"), host

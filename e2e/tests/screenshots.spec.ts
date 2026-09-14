@@ -240,21 +240,27 @@ const PAGES: ReadonlyArray<{
       await expect(canvas).toHaveAttribute("data-canvas-cycles", "1");
       // The members are INSIDE the box, which is the whole convention: a
       // parent node drawn beside them would bracket nothing.
-      const inBox = await page.evaluate(() =>
-        (window as any).LithosLensGraph.cy
-          .getElementById("cycle::loom-cycle-b")
-          .children()
-          .map((node: any) => node.id())
-          .sort(),
-      );
-      expect(inBox).toEqual(["loom-cycle-a", "loom-cycle-b"]);
+      const inBox = await page.evaluate(() => {
+        const graph = (window as any).LithosLensGraph;
+        // Cytoscape's element ids are opaque here (a task id may be
+        // `__proto__`, which the library itself cannot hold), so the box's
+        // members are compared as elements rather than as strings.
+        const children = graph.cycle("loom-cycle-b").children();
+        const expected = ["loom-cycle-a", "loom-cycle-b"].map((id) =>
+          graph.node(id).id(),
+        );
+        return {
+          children: children.map((node: any) => node.id()).sort(),
+          expected: expected.sort(),
+        };
+      });
+      expect(inBox.children).toEqual(inBox.expected);
+      expect(inBox.children.length).toBe(2);
       // 2. The ghost: drawn, dimmed, and carrying its project on the label —
       //    the cross-project `blocks` edge, the one node here that belongs to
       //    another scope.
       const ghost = await page.evaluate(() => {
-        const node = (window as any).LithosLensGraph.cy.getElementById(
-          "lens-graph-page",
-        );
+        const node = (window as any).LithosLensGraph.node("lens-graph-page");
         return { opacity: Number(node.style("opacity")), label: node.data("label") };
       });
       expect(ghost.opacity).toBeLessThan(1);
@@ -321,11 +327,8 @@ const PAGES: ReadonlyArray<{
       );
       expect(types).toContain("parent_child");
       expect(types).toContain("discovered_from");
-      const source = await page.evaluate(
-        () =>
-          (window as any).LithosLensGraph.cy
-            .getElementById("loom-research-old")
-            .style("display"),
+      const source = await page.evaluate(() =>
+        (window as any).LithosLensGraph.node("loom-research-old").style("display"),
       );
       expect(source).not.toBe("none");
       // The canvas gave the panel its room: Cytoscape sizes its drawing
