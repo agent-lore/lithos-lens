@@ -469,7 +469,15 @@
   const cy = window.cytoscape({
     container: container,
     elements: elements,
-    style: style
+    style: style,
+    // A drag is a PAN, always. Cytoscape makes nodes grabbable by default, so
+    // dragging one would move it — and "once placed, nothing moves" is the
+    // whole reason the ranks can be trusted against the text layers. Box
+    // selection is off for the same reason it is the other default that claims
+    // the background drag: panning is how a clipped graph is read, and it may
+    // not depend on which part of the canvas the operator happened to grab.
+    autoungrabify: true,
+    boxSelectionEnabled: false
   });
 
   // ONE layout, and never again (D8). No physics: a graph that drifts while it
@@ -632,24 +640,44 @@
   // by the caller: a resize refits too (the panel opening beside the canvas is
   // one), and a hint left behind by the previous width would claim a limit that
   // is no longer there.
-  function fitVisible() {
-    const drawn = cy.nodes().filter(function (element) {
+  function drawnNodes() {
+    return cy.nodes().filter(function (element) {
       return element.style("display") !== "none";
     });
+  }
+
+  // Whether anything is actually OUT of view, in the canvas's own coordinates.
+  //
+  // Measured, not inferred from the floor having bound the zoom: the floor
+  // zooms IN, and a fit that was a hair below it still has everything on
+  // screen afterwards. And measured by POSITION, not by size — a graph smaller
+  // than the canvas is off screen all the same if it has been panned past the
+  // edge, and one the size of the canvas is fully visible only when it also
+  // sits inside it.
+  const EDGE_TOLERANCE = 1;
+
+  function reportVisibility() {
+    const drawn = drawnNodes();
+    if (!drawn.length) return;
+    const extent = drawn.renderedBoundingBox();
+    const clipped =
+      extent.x1 < -EDGE_TOLERANCE ||
+      extent.y1 < -EDGE_TOLERANCE ||
+      extent.x2 > cy.width() + EDGE_TOLERANCE ||
+      extent.y2 > cy.height() + EDGE_TOLERANCE;
+    container.dataset.canvasClipped = clipped ? "true" : "false";
+    if (panHint) panHint.hidden = !clipped;
+  }
+
+  function fitVisible() {
+    const drawn = drawnNodes();
     if (!drawn.length) return;
     cy.fit(drawn, FIT_PADDING);
     if (cy.zoom() < MIN_READABLE_ZOOM) {
       cy.zoom(MIN_READABLE_ZOOM);
       cy.center(drawn);
     }
-    // Whether anything is actually OUT of view — measured, not inferred from
-    // the floor having bound the zoom. The floor zooms IN, and a fit that was
-    // a hair below it still has everything on screen afterwards; a hint raised
-    // on that would be telling the operator to go looking for nothing.
-    const extent = drawn.renderedBoundingBox();
-    const clipped = extent.w > cy.width() || extent.h > cy.height();
-    container.dataset.canvasClipped = clipped ? "true" : "false";
-    if (panHint) panHint.hidden = !clipped;
+    reportVisibility();
   }
 
   function render() {
@@ -833,6 +861,28 @@
       pill.hidden = false;
     });
   }
+
+  // The partial-view state is the OPERATOR's as much as the layout's: panning
+  // a clipped graph back into view makes it whole, and zooming in on a fitted
+  // one takes it out of view again. Both move the viewport and neither refits,
+  // so the notice is recomputed on `viewport` — Cytoscape's own pan/zoom event
+  // — or it would go on claiming whatever the last automatic fit concluded.
+  //
+  // Coalesced to one frame: `viewport` fires per pan step, and the answer is
+  // only ever read by eye.
+  let visibilityPending = false;
+  cy.on("viewport", function () {
+    if (visibilityPending) return;
+    if (typeof window.requestAnimationFrame !== "function") {
+      reportVisibility();
+      return;
+    }
+    visibilityPending = true;
+    window.requestAnimationFrame(function () {
+      visibilityPending = false;
+      reportVisibility();
+    });
+  });
 
   // Cytoscape sizes its canvas to the container once and does not watch it, so
   // the panel opening BESIDE the canvas (D9) — which narrows it — would leave

@@ -916,7 +916,14 @@ at. Lens still never re-implements the readiness predicate.
   at under three pixels, which communicates none of what the canvas is for. The
   fit therefore stops at the zoom that still renders a label at 10px; past that
   the graph overflows its box and is panned, and the page says so ("showing part
-  of the graph") whenever anything is measurably out of view. Every label the
+  of the graph") whenever anything is measurably out of view — recomputed on
+  every Cytoscape `viewport` change, not only on a fit, because panning a
+  clipped graph back into view makes it whole and zooming in on a fitted one
+  takes it out again. "Out of view" is a test of POSITION against the canvas
+  rect, not of size: a graph smaller than its box is off screen all the same
+  once it has been panned past the edge. A drag is always a PAN — nodes are
+  ungrabbable and box selection is off — because "once placed, nothing moves"
+  is what lets the ranks be trusted against the text layers. Every label the
   canvas draws — a cycle box's caption included — uses the one font size the
   floor is derived from, or it would be sub-legible exactly when the floor
   binds. Zooming out further is the operator's to do; only the automatic

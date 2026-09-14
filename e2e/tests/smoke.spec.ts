@@ -1178,3 +1178,160 @@ test("a narrow canvas keeps its labels readable and says the view is partial", a
   });
   expect(wide).toBeGreaterThanOrEqual(10);
 });
+
+test("a clipped graph can be dragged to the part that is off screen", async ({
+  page,
+}) => {
+  // The legibility floor deliberately shows only part of the graph at narrow
+  // widths and tells the operator to drag — so panning is the ONLY way to
+  // reach the rest without zooming back below readability. A drag that had
+  // gone inert (nodes grabbable instead of the canvas panning, box selection
+  // claiming the gesture, pointer events lost) would leave the legible
+  // fragment as the only reachable part of the picture.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const state = () =>
+    page.evaluate(() => {
+      const graph = (window as any).LithosLensGraph;
+      const cycle = graph.node("loom-cycle-a").renderedBoundingBox();
+      return {
+        pan: graph.cy.pan(),
+        zoom: graph.cy.zoom(),
+        // Is the cycle's first member inside the canvas, in the canvas's own
+        // coordinates? That is what "reachable" means here.
+        inView:
+          cycle.x1 >= 0 &&
+          cycle.y1 >= 0 &&
+          cycle.x2 <= graph.cy.width() &&
+          cycle.y2 <= graph.cy.height(),
+      };
+    });
+
+  const before = await state();
+  expect(before.inView).toBe(false);
+  const placedBefore = await page.evaluate(() =>
+    JSON.stringify((window as any).LithosLensGraph.positions()),
+  );
+
+  const canvas = page.locator("[data-graph-canvas]");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const drag = async (from: { x: number; y: number }) => {
+    await page.mouse.move(box.x + from.x, box.y + from.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + from.x + 220, box.y + from.y + 120, {
+      steps: 12,
+    });
+    await page.mouse.up();
+  };
+
+  // A drag that lands ON a node moves nothing. Cytoscape makes nodes grabbable
+  // by default, so without `autoungrabify` this would drag that node out of
+  // its rank — a picture that no longer matches the text layers printed under
+  // it, from the very gesture the operator is being told to use. Done first,
+  // while it is known which nodes are actually under the canvas.
+  const grip = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const inside = graph.cy.nodes().filter((node: any) => {
+      if (node.style("display") === "none") return false;
+      const at = node.renderedBoundingBox();
+      return (
+        at.x1 >= 0 &&
+        at.y1 >= 0 &&
+        at.x2 <= graph.cy.width() &&
+        at.y2 <= graph.cy.height()
+      );
+    });
+    return inside.length ? inside.first().renderedPosition() : null;
+  });
+  expect(grip).not.toBeNull();
+  await drag(grip!);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify((window as any).LithosLensGraph.positions()),
+    ),
+  ).toBe(placedBefore);
+
+  await drag({ x: 10, y: 10 });
+
+  const after = await state();
+  expect(after.pan).not.toEqual(before.pan);
+  expect(after.inView).toBe(true);
+  // A pan, not a zoom, and not a re-placement: the readable floor survives the
+  // gesture and so does the layout.
+  expect(after.zoom).toBeCloseTo(before.zoom, 5);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify((window as any).LithosLensGraph.positions()),
+    ),
+  ).toBe(placedBefore);
+
+});
+
+test("the partial-view notice follows the viewport, not just the fit", async ({
+  page,
+}) => {
+  // The notice is the operator's instruction to pan, so it has to stay true
+  // once they do. It was computed only during an automatic fit, which left it
+  // claiming a limit that zooming out had removed — and hiding one that
+  // zooming in had created.
+  const notice = page.locator("[data-graph-pan-hint]");
+  const canvas = page.locator("[data-graph-canvas]");
+  const zoomTo = (level: number) =>
+    page.evaluate(
+      (value) => (window as any).LithosLensGraph.cy.zoom(value),
+      level,
+    );
+
+  // Narrow: clipped, and zooming out until the whole graph fits clears it.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+
+  await zoomTo(0.15);
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  await expect(notice).toBeHidden();
+
+  // Wide: the whole graph fits, and zooming in takes it out of view again.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  await expect(notice).toBeHidden();
+
+  await zoomTo(1.5);
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+
+  // And the test is about POSITION, not size: a graph smaller than its canvas
+  // is off screen all the same once it has been panned past the edge.
+  await page.reload();
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  const fits = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const drawn = graph.cy
+      .nodes()
+      .filter((node: any) => node.style("display") !== "none")
+      .renderedBoundingBox();
+    return drawn.w <= graph.cy.width() && drawn.h <= graph.cy.height();
+  });
+  expect(fits).toBe(true);
+  await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy.panBy({ x: 2000, y: 0 }),
+  );
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+});
