@@ -953,6 +953,26 @@ test("toggling the overlays adds their edges and remembers them in the URL", asy
       (window as any).LithosLensGraph.shown().edges.map((edge: any) => edge.type),
     );
 
+  // Every toolbar control is a real link — the no-JS page is the baseline —
+  // so "applied client-side with no fetch" is a claim about the BROWSER's own
+  // default action, not just about `fetch`. A handler that dropped
+  // `preventDefault()` would reload `/tasks/graph` and land on the very same
+  // URL showing the very same edges, which the assertions below cannot tell
+  // from a client-side toggle (round-8 test-quality f-011). So the main
+  // document is counted and stamped: a reload would both request it again and
+  // wipe the stamp.
+  const documentRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      documentRequests.push(request.url());
+    }
+  });
+  await page.evaluate(() => {
+    (window as any).__sameDocument = true;
+  });
+  const sameDocument = () =>
+    page.evaluate(() => (window as any).__sameDocument === true);
+
   // Default: dependency flow only, hierarchy and provenance switched off even
   // though both are already in the payload (D6/D8).
   expect(await types()).not.toContain("parent_child");
@@ -961,6 +981,7 @@ test("toggling the overlays adds their edges and remembers them in the URL", asy
   await page.locator('[data-toggle-overlay="hierarchy"]').click();
   await expect(page).toHaveURL(/overlays=hierarchy/);
   expect(await types()).toContain("parent_child");
+  expect(await sameDocument()).toBe(true);
 
   await page.locator('[data-toggle-overlay="provenance"]').click();
   expect(await types()).toContain("discovered_from");
@@ -979,7 +1000,66 @@ test("toggling the overlays adds their edges and remembers them in the URL", asy
   await page.goBack();
   expect(await types()).not.toContain("parent_child");
   await expect(page).not.toHaveURL(/overlays=/);
+
+  // The isolated toggle is the same kind of link and the same promise.
+  await page.locator("[data-toggle-isolated]").click();
+  await expect(page).toHaveURL(/isolated=1/);
+  await expect(page.locator("[data-isolated-disclosure]")).toHaveJSProperty(
+    "open",
+    true,
+  );
+
+  // Four toggles and two history steps later: one document, never re-fetched.
+  expect(await sameDocument()).toBe(true);
+  expect(documentRequests).toEqual([]);
 });
+
+/**
+ * Put the pointer on a drawn node and answer where it now is.
+ *
+ * A node on a canvas has no DOM element to click, so a test that reached for
+ * Cytoscape's own `emit("tap")` would prove only that the handler is wired: it
+ * bypasses the renderer's hit-testing and the browser's pointer-to-`tap`
+ * translation, which is where an intercepting layer, a dead pointer surface or
+ * nodes painted away from their hit regions would show up (round-8
+ * test-quality f-011). So the tests below aim real pointer input at the pixels
+ * the library says the node occupies, and assert first that those pixels are
+ * on the canvas at all.
+ *
+ * The pointer is WALKED there rather than teleported, which is both what a
+ * hand does and what the library needs: Cytoscape accepts a press only at
+ * coordinates inside the container box it has cached, and pointer movement
+ * over the canvas is what refreshes that cache after the page has scrolled.
+ */
+async function pointerOnNode(
+  page: import("@playwright/test").Page,
+  taskId: string,
+) {
+  const canvas = page.locator("[data-graph-canvas]");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const at = await page.evaluate((id) => {
+    const graph = (window as any).LithosLensGraph;
+    const node = graph.node(id);
+    const point = node.renderedPosition();
+    return {
+      x: point.x,
+      y: point.y,
+      // Aiming at a point that is off the canvas would hit whatever IS there
+      // and quietly test nothing, so the test refuses to aim at one.
+      inView:
+        node.style("display") !== "none" &&
+        point.x >= 0 &&
+        point.y >= 0 &&
+        point.x <= graph.cy.width() &&
+        point.y <= graph.cy.height(),
+    };
+  }, taskId);
+  expect(at.inView, `${taskId} is not drawn inside the canvas`).toBe(true);
+  const point = { x: box.x + at.x, y: box.y + at.y };
+  await page.mouse.move(point.x, point.y);
+  return point;
+}
 
 test("clicking a node opens that task's panel beside the canvas and pushes focus", async ({
   page,
@@ -991,10 +1071,11 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
 
   // The node is drawn on a canvas, so the click goes through Cytoscape's own
   // event surface rather than a DOM row — which is the whole reason the panel
-  // is reachable as an API (D9: one implementation for rows and nodes).
-  await page.evaluate(() =>
-    (window as any).LithosLensGraph.node("loom-ship").emit("tap"),
-  );
+  // is reachable as an API (D9: one implementation for rows and nodes). Real
+  // pointer input at the node's own pixels, so the renderer's hit-testing is
+  // under test along with the handler.
+  const ship = await pointerOnNode(page, "loom-ship");
+  await page.mouse.click(ship.x, ship.y);
 
   await expect(
     page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
@@ -1012,6 +1093,35 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
     () => (window as any).LithosLensGraph.cy.nodes(".focused").length,
   );
   expect(lit).toBe(0);
+});
+
+test("double-clicking a node leaves the canvas for that task's own page", async ({
+  page,
+}) => {
+  // The other half of the canvas's pointer contract (D8): one click selects
+  // beside the picture, two leave for the whole task. Driven as real pointer
+  // input for the same reason the single click is — Cytoscape synthesises
+  // `dbltap` from two taps it hit-tested itself, and nothing short of a mouse
+  // proves that translation still happens on the page we ship.
+  //
+  // The panel is already open on this node, so the click that precedes the
+  // second one neither opens nor resizes anything: the canvas keeps its width
+  // and the node keeps the pixels the double-click is aimed at.
+  await page.goto("/tasks/graph?project=lithos-loom&focus=loom-ship");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+  ).toBeVisible();
+
+  const ship = await pointerOnNode(page, "loom-ship");
+  await page.mouse.dblclick(ship.x, ship.y);
+
+  await page.waitForURL("**/tasks/loom-ship");
+  // A whole-document navigation, not the panel: the task's own page is up.
+  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+  await expect(page.locator('[data-task-detail="loom-ship"]')).toBeVisible();
 });
 
 test("the canvas ranks every node by the layer the text gives it", async ({

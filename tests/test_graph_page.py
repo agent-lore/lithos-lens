@@ -14,6 +14,7 @@ renders that.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -2647,6 +2648,7 @@ def test_the_overlay_toggles_report_the_state_the_url_asks_for(
 
 def test_cytoscape_loads_on_a_drawn_scope_and_on_no_other_state(
     lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A ~400KB vendored bundle, on the one page that draws a graph and only
     when there is something to draw: the picker, a refusal and an empty scope
@@ -2657,18 +2659,56 @@ def test_cytoscape_loads_on_a_drawn_scope_and_on_no_other_state(
     picker = get(lithos_lens_config_env, fake, "/tasks/graph")
     empty = get(lithos_lens_config_env, fake, "/tasks/graph?project=nobody-here")
     board = get(lithos_lens_config_env, fake, "/tasks")
+    # The refusal is RENDERED, not assumed: it is the state whose whole point
+    # is that the scope was too big to draw, which is the last page that should
+    # pay for a graph library (round-8 test-quality f-011).
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "1")
+    refused = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    monkeypatch.delenv("LITHOS_LENS_GRAPH_MAX_TASKS")
+    assert "data-graph-refusal" in refused
+    assert "data-graph-canvas" not in refused
 
     for asset in ("vendor/cytoscape.min.js", "graph.js"):
         assert asset in drawn, asset
         assert asset not in picker, asset
         assert asset not in empty, asset
         assert asset not in board, asset
+        assert asset not in refused, asset
     # And the panel it shares with the dashboard is told THIS page's selection
     # parameter, because one implementation serves both hosts (D9).
     assert 'selectionParam: "focus"' in drawn
     # …without the reconcile the board runs: a task event here raises the
     # "graph changed" pill instead of re-fetching a whole graph assembly.
     assert "liveRefresh: false" in drawn
+
+
+#: The graph page's one vendored dependency is pinned in a DOCUMENT, not here:
+#: `docs/vendor-assets.md` is where the version, the source URL and the
+#: checksum are recorded (Lens serves production frontend dependencies from
+#: local files, never a CDN). The test below reads that row rather than
+#: restating it — a pin spelled twice is a pin that can disagree with itself.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VENDOR_ASSETS_DOC = REPO_ROOT / "docs/vendor-assets.md"
+
+
+def test_the_vendored_cytoscape_is_the_asset_the_docs_pin() -> None:
+    """A4 is written against Cytoscape 3.30.3 — its layout, its event surface
+    and its style vocabulary — and `tests/test_tasks_js.py` drives the SHIPPED
+    bundle for exactly that reason. Asserting only that a file named
+    `vendor/cytoscape.min.js` is referenced would pass on any other version, or
+    on any other file with that name (round-8 test-quality f-011)."""
+    row = only_group(
+        r"(\| Cytoscape\.js \|[^\n]*)", VENDOR_ASSETS_DOC.read_text(encoding="utf-8")
+    )
+    _, _, path, version, _source, digest, _ = (cell.strip() for cell in row.split("|"))
+    bundle = REPO_ROOT / path.strip("`")
+
+    assert version == "3.30.3", "docs/vendor-assets.md no longer pins the A4 version"
+    assert bundle.is_file(), bundle
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest.strip("`")
+    # And the bundle says so itself, so a re-minified build of another release
+    # carrying the recorded name cannot pass for it.
+    assert f'version="{version}"' in bundle.read_text(encoding="utf-8")
 
 
 def test_a_focus_in_the_url_server_renders_that_task_s_panel(

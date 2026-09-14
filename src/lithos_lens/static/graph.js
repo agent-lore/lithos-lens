@@ -658,20 +658,31 @@
 
   function reportVisibility() {
     const drawn = drawnNodes();
-    if (!drawn.length) return;
-    const extent = drawn.renderedBoundingBox();
-    const clipped =
-      extent.x1 < -EDGE_TOLERANCE ||
-      extent.y1 < -EDGE_TOLERANCE ||
-      extent.x2 > cy.width() + EDGE_TOLERANCE ||
-      extent.y2 > cy.height() + EDGE_TOLERANCE;
+    // An empty canvas hides nothing, so it may not go on saying it does. A
+    // scope whose whole picture is isolates leaves exactly that behind when
+    // they are folded away again, and the notice — which is the operator's
+    // instruction to drag — would be pointing at a graph that is not there.
+    let clipped = false;
+    if (drawn.length) {
+      const extent = drawn.renderedBoundingBox();
+      clipped =
+        extent.x1 < -EDGE_TOLERANCE ||
+        extent.y1 < -EDGE_TOLERANCE ||
+        extent.x2 > cy.width() + EDGE_TOLERANCE ||
+        extent.y2 > cy.height() + EDGE_TOLERANCE;
+    }
     container.dataset.canvasClipped = clipped ? "true" : "false";
     if (panHint) panHint.hidden = !clipped;
   }
 
   function fitVisible() {
     const drawn = drawnNodes();
-    if (!drawn.length) return;
+    // Nothing to fit the viewport around — but the notice still has to be told
+    // so, or it survives the transition that emptied the canvas.
+    if (!drawn.length) {
+      reportVisibility();
+      return;
+    }
     cy.fit(drawn, FIT_PADDING);
     if (cy.zoom() < MIN_READABLE_ZOOM) {
       cy.zoom(MIN_READABLE_ZOOM);

@@ -1268,6 +1268,7 @@ function element(extra) {
 }
 
 const container = element({ hidden: true });
+const panHint = element({ hidden: true });
 const host = element({
   _html: "",
   get innerHTML() { return this._html; },
@@ -1296,6 +1297,7 @@ const overlayToggles = {
 
 const SINGLE = {
   "[data-graph-canvas]": container,
+  "[data-graph-pan-hint]": panHint,
   "[data-graph-payload]": payloadScript,
   "[data-panel-host]": host,
   "[data-graph-refresh-pill]": pill,
@@ -1488,6 +1490,24 @@ function clickOn(map) {
   };
 }
 
+// Every toolbar control is a REAL LINK (it has to be: the no-JS page is the
+// baseline), so a click the page does not intercept is a main-document
+// navigation — the browser follows the `href` and replaces the page, payload,
+// canvas and all. `fetch` cannot see that, which is why "the overlays cost no
+// request" is not provable from the fetch log alone: a handler that forgot
+// `preventDefault()` would reload `/tasks/graph` on every toggle and leave
+// that log empty. So the browser's own default action is modelled here, and
+// the tests assert this list stays empty.
+const navigations = [];
+
+function clickLink(selector, target) {
+  const event = clickOn({ [selector]: target });
+  fire("click", event);
+  if (event.defaultPrevented) return;
+  const href = target.getAttribute ? target.getAttribute("href") : "";
+  if (href) navigations.push(href);
+}
+
 let eventSeq = 0;
 
 function snapshot() {
@@ -1501,6 +1521,10 @@ function snapshot() {
       .map((edge) => edge.id),
     pillHidden: pill.hidden,
     canvasHidden: container.hidden,
+    // The partial-view state, which is a CLAIM about what is on screen and so
+    // has to follow every transition that changes what is drawn.
+    clipped: container.dataset.canvasClipped || "",
+    panHintHidden: panHint.hidden,
     textHidden: layersSection.hidden,
     panel: host.innerHTML,
     focused: graph.cy
@@ -1570,11 +1594,11 @@ function ranks() {
   for (const action of actions) {
     const [name, argument] = action.split(":");
     if (name === "overlay") {
-      fire("click", clickOn({ "[data-toggle-overlay]": overlayToggles[argument] }));
+      clickLink("[data-toggle-overlay]", overlayToggles[argument]);
     } else if (name === "isolated") {
-      fire("click", clickOn({ "[data-toggle-isolated]": isolatedToggle }));
+      clickLink("[data-toggle-isolated]", isolatedToggle);
     } else if (name === "text") {
-      fire("click", clickOn({ "[data-toggle-text]": textToggle }));
+      clickLink("[data-toggle-text]", textToggle);
     } else if (name === "back") {
       if (cursor > 0) cursor -= 1;
       fire("popstate", {});
@@ -1605,6 +1629,7 @@ function ranks() {
     final: snapshot(),
     pushed,
     fetches,
+    navigations,
     // The roots the library was handed, named the way the payload names them.
     streamBeforeGraph,
     streamOpen: Object.keys(sse).length > 0,
@@ -1841,6 +1866,17 @@ EPIC_PAYLOAD: dict = _payload(
     key="loom-epic",
     isolated=True,
     roots=["head", "child"],
+)
+
+# A scope whose whole picture is isolates (round-8 correctness f-011): tasks
+# with no edge between them at all, so "show isolated" is the only thing that
+# puts anything on the canvas and folding them away again empties it outright.
+# That is the boundary the partial-view notice has to survive — a real shape
+# for a project whose open work has not been linked up yet.
+ISOLATED_ONLY_PAYLOAD: dict = _payload(
+    [_node(name, isolated=True) for name in ("alone", "apart", "aside")],
+    [],
+    roots=[],
 )
 
 # A cycle big enough to overflow a fixed row pitch (round-2 correctness f-001):
@@ -2238,6 +2274,11 @@ def test_toggling_hierarchy_adds_the_parent_child_edges_and_the_url_remembers() 
     assert final["edges"].count("parent_child") == 2
     assert result["pushed"] == ["/tasks/graph?project=loom&overlays=hierarchy"]
     assert result["fetches"] == []
+    # The toolbar control is a real LINK (the no-JS page is the baseline), so
+    # "no request" is only half the claim: a handler that skipped
+    # `preventDefault()` would fetch nothing and still reload the whole page
+    # through the browser's own default action.
+    assert result["navigations"] == []
     # The overlay pulls its own endpoints in: an epic's whole hierarchy hangs
     # off a node with no dependency edge of its own, and folding that away
     # would hide the very edges the toggle just asked for.
@@ -2259,6 +2300,7 @@ def test_toggling_provenance_shows_the_discovered_from_edge_and_its_context_ghos
     assert "note" in final["nodes"], "the follow-on the edge points to"
     assert result["pushed"] == ["/tasks/graph?project=loom&overlays=provenance"]
     assert result["fetches"] == []
+    assert result["navigations"] == []
 
 
 def test_back_after_a_toggle_hides_the_overlay_again_without_a_reload() -> None:
@@ -2281,6 +2323,7 @@ def test_back_after_a_toggle_hides_the_overlay_again_without_a_reload() -> None:
     assert "parent_child" not in back_to_none["edges"]
     assert "source" not in back_to_none["nodes"]
     assert result["fetches"] == []
+    assert result["navigations"] == []
 
 
 # ── Isolated tasks (D8) ─────────────────────────────────────────────────
@@ -2297,6 +2340,7 @@ def test_the_isolated_toggle_moves_the_url_and_the_text_disclosure_together() ->
     assert "note" in final["nodes"]
     assert final["disclosureOpen"] is True
     assert result["fetches"] == []
+    assert result["navigations"] == []
 
 
 def test_an_epic_scope_shows_its_isolated_children_and_hides_them_on_request() -> None:
@@ -2319,6 +2363,38 @@ def test_an_epic_scope_shows_its_isolated_children_and_hides_them_on_request() -
     # And Back re-applies the epic's own default rather than the project's.
     assert "child" in restored["nodes"]
     assert restored["disclosureOpen"] is True
+    assert result["navigations"] == []
+
+
+def test_folding_every_isolate_away_takes_the_partial_view_notice_with_it() -> None:
+    """Regression (round-8 correctness f-011). A scope that is nothing but
+    isolates empties the canvas when they are folded away — and both halves of
+    the partial-view report returned early on an empty collection, so the box
+    kept `data-canvas-clipped="true"` and went on telling the operator to drag
+    a graph that was no longer drawn at all."""
+    result = _graph_run(
+        ["isolated", "isolated", "isolated"], payload=ISOLATED_ONLY_PAYLOAD
+    )
+    shown, emptied, restored = result["states"]
+
+    # The isolates are the whole picture, and it overflows the canvas — which
+    # this harness's headless one always is, at 1×1: the partial view is the
+    # state under test here, not the width that produced it (the real-browser
+    # half of that is `e2e/`'s narrow-canvas tests).
+    assert shown["nodes"] == ["alone", "apart", "aside"]
+    assert shown["clipped"] == "true"
+    assert shown["panHintHidden"] is False
+    # … and folding them away leaves nothing to be out of view.
+    assert emptied["nodes"] == []
+    assert emptied["clipped"] == "false"
+    assert emptied["panHintHidden"] is True
+    # Restored with them, because the notice describes the CURRENT picture.
+    assert restored["nodes"] == ["alone", "apart", "aside"]
+    assert restored["clipped"] == "true"
+    assert restored["panHintHidden"] is False
+    # All of it client-side, from the payload the page already had.
+    assert result["fetches"] == []
+    assert result["navigations"] == []
 
 
 # ── Selection, events, text ─────────────────────────────────────────────
