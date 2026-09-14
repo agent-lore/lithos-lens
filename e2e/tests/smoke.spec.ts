@@ -1104,24 +1104,50 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
   // `dbltap` from two taps it hit-tested itself, and nothing short of a mouse
   // proves that translation still happens on the page we ship.
   //
-  // The panel is already open on this node, so the click that precedes the
-  // second one neither opens nor resizes anything: the canvas keeps its width
-  // and the node keeps the pixels the double-click is aimed at.
-  await page.goto("/tasks/graph?project=lithos-loom&focus=loom-ship");
+  // From an UNSELECTED graph, which is the state a double-click ordinarily
+  // starts in and the one round-2 correctness f-001 was about: the first click
+  // used to open the panel beside the canvas, the flex layout narrowed it, the
+  // refit moved the node — and the second click landed on the background with
+  // no `dbltap` to show for it. The gap below is deliberately wide enough for
+  // a local panel fragment to have come back inside it, and still inside
+  // Cytoscape's 250ms multi-click window.
+  const panelRequests: string[] = [];
+  await page.route(/fragment=panel/, async (route) => {
+    panelRequests.push(route.request().url());
+    await route.continue();
+  });
+
+  await page.goto("/tasks/graph?project=lithos-loom");
   await expect(
     page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
   ).toBeVisible();
-  await expect(
-    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
-  ).toBeVisible();
+  await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
 
-  const ship = await pointerOnNode(page, "loom-ship");
-  await page.mouse.dblclick(ship.x, ship.y);
+  const placed = () =>
+    page.evaluate(() => {
+      const at = (window as any).LithosLensGraph.node(
+        "loom-ship",
+      ).renderedPosition();
+      return [Math.round(at.x), Math.round(at.y)];
+    });
+
+  const before = await placed();
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  // The hit target the second click is about to use has not moved — which is
+  // the invariant, whatever a first click is allowed to do.
+  expect(await placed()).toEqual(before);
+  await page.mouse.down();
+  await page.mouse.up();
 
   await page.waitForURL("**/tasks/loom-ship");
   // A whole-document navigation, not the panel: the task's own page is up.
   await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
   await expect(page.locator('[data-task-detail="loom-ship"]')).toBeVisible();
+  // And the panel the operator never asked for was never even requested.
+  expect(panelRequests).toEqual([]);
 });
 
 test("the canvas ranks every node by the layer the text gives it", async ({

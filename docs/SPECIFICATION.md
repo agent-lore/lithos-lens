@@ -899,7 +899,10 @@ at. Lens still never re-implements the readiness predicate.
 - **Click** a node and its panel opens beside the canvas through the same
   implementation the dashboard's rows use (§5.6.1), pushing `focus=` after the
   swap; **double-click** navigates to the task's page via the URL the server
-  built. Every panel transition is announced back to the canvas, because it
+  built. The node lights on the first tap, but the panel waits for the click to
+  settle as a single one (Cytoscape's 250ms multi-click window): a panel opened
+  mid-gesture narrows the canvas, and the refit that follows would move the
+  node out from under the second click. Every panel transition is announced back to the canvas, because it
   moves the URL by `pushState` and `pushState` fires no `popstate`: without it,
   closing the panel would clear `focus` and leave the node still lit. A
   `focus=` already in the URL is answered by the SERVER (§5.12), and the client

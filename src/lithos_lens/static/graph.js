@@ -834,24 +834,46 @@
   const panelApi = panel();
   if (panelApi && panelApi.onChange) panelApi.onChange(render);
 
+  // The focus ring lands on the FIRST tap, so a click answers immediately …
   cy.on("tap", "node", function (event) {
-    const node = nodeFor(event.target);
-    if (!node) return; // the cycle box, which is chrome rather than a task
-    // The focus ring lands now; the panel's own `pushState` follows its fetch,
-    // which is what keeps a URL from ever claiming a panel that failed to open
-    // — and an open that never arrives announces itself too, so the ring is
-    // walked back rather than left over a selection that never happened.
+    if (!nodeFor(event.target)) return; // the cycle box, chrome not a task
     cy.nodes().forEach(function (element) {
       if (element.id() === event.target.id()) element.addClass("focused");
       else element.removeClass("focused");
     });
+  });
+
+  // … but the PANEL waits for the click to settle as a single one.
+  //
+  // Both gestures live on the same node, and opening the panel is not a
+  // passive act: it appears BESIDE the canvas (D9), which narrows the canvas,
+  // which refits the viewport — moving the node out from under a pointer that
+  // is halfway through a double-click. The second click then lands on the
+  // background, no `dbltap` is emitted and the operator is left on the graph
+  // with a panel they did not ask for (round-2 correctness f-001).
+  //
+  // `onetap` is Cytoscape's own answer to that: a tap it has held for
+  // `multiClickDebounceTime` (250ms) and no second tap arrived, so the gesture
+  // IS a single click. The cost is that the panel opens a quarter-second after
+  // the click rather than on it — paid deliberately, and only for the panel:
+  // the ring above is the immediate acknowledgement, and the fetch this saves
+  // on every double-click is one the page would have thrown away anyway.
+  //
+  // The panel's own `pushState` follows its fetch, which is what keeps a URL
+  // from ever claiming a panel that failed to open — and an open that never
+  // arrives announces itself too, so the ring is walked back rather than left
+  // over a selection that never happened.
+  cy.on("onetap", "node", function (event) {
+    const node = nodeFor(event.target);
+    if (!node) return;
     const open = panel();
     if (open) open.open(node.id);
   });
 
-  // Double-click leaves for the full page. The single tap that precedes it has
-  // already opened the panel; the navigation supersedes it, which is the same
-  // order the dashboard's title link has always had.
+  // Double-click leaves for the full page. The tap that preceded it lit the
+  // node and nothing else, so there is no panel open to supersede — the
+  // navigation is the whole answer, which is the same order the dashboard's
+  // title link has always had.
   cy.on("dbltap", "node", function (event) {
     const node = nodeFor(event.target);
     if (node && node.detail_url) window.location.href = node.detail_url;

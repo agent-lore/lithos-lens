@@ -1609,8 +1609,19 @@ function ranks() {
       fire("click", clickOn({ "[data-panel-close]": {} }));
     } else if (name === "escape") {
       fire("keydown", { key: "Escape" });
-    } else if (name === "tap" || name === "dbltap") {
-      graph.node(argument).emit(name);
+    } else if (name === "tap" || name === "firsttap" || name === "dbltap") {
+      // The SEQUENCE the library emits, not one event out of it. Cytoscape
+      // holds every tap for `multiClickDebounceTime` and then decides: a
+      // second tap inside the window makes the pair a `dbltap` and the held
+      // `onetap` is dropped; nothing else makes it a `onetap`. A harness that
+      // emitted only `tap` would call both gestures the same thing, which is
+      // precisely the confusion the page has to keep apart.
+      const node = graph.node(argument);
+      node.emit("tap");
+      if (name === "tap") node.emit("onetap");
+      else if (name === "dbltap") node.emit("dbltap");
+      // `firsttap` stops there: the first half of a double-click, with the
+      // window still open and nothing settled.
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -2521,6 +2532,35 @@ def test_a_double_click_on_an_ordinary_node_still_opens_its_own_page() -> None:
     result = _graph_run(["dbltap:ship"])
 
     assert result["final"]["href"] == "/tasks/ship"
+    # And it cost no panel on the way out: the tap that opened the gesture lit
+    # the node and nothing more, so there is no fragment to throw away and no
+    # `focus=` entry behind the page the operator actually asked for.
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+
+
+def test_the_first_click_of_a_double_click_opens_no_panel() -> None:
+    """Regression (round-2 correctness f-001). The panel used to open on the
+    raw `tap`, which is the first half of a double-click too: the fragment
+    landed beside the canvas mid-gesture, the flex layout narrowed the canvas,
+    the refit moved the node — and the second click hit the background, so the
+    `dbltap` that should have left for `/tasks/{id}` was never emitted.
+
+    So a tap the library has not yet settled may do nothing but light the node.
+    `onetap` — the tap Cytoscape held for its 250ms multi-click window without
+    a second one arriving — is what opens the panel."""
+    pending = _graph_run(["firsttap:ship"])
+    settled = _graph_run(["tap:ship"])
+
+    # Lit immediately, because a click has to answer at once …
+    assert pending["final"]["focused"] == ["ship"]
+    # … and that is ALL it may do while the gesture could still be a double.
+    assert pending["fetches"] == []
+    assert pending["final"]["panel"] == ""
+    assert pending["pushed"] == []
+    # The same tap, once the window closes with no second click: the panel.
+    assert settled["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    assert "focus=ship" in settled["final"]["href"]
 
 
 # ── Regressions from round 2 ────────────────────────────────────────────
