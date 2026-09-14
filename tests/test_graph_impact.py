@@ -232,6 +232,55 @@ def test_the_canvas_re_traces_the_chain_the_server_would_have_rendered(
     assert drawn["final"]["traced"] == ["d", "e", "side"]
 
 
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_canvas_names_a_focused_cycle_member_the_way_the_server_does(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same producer/consumer check where the two vocabularies differ
+    (round-2 correctness f-005): a chain is a walk over CONDENSATIONS and names
+    each by its representative, while the sentence says whose chain it is — the
+    task the operator focused. `ring-b` is a non-representative member of a
+    live cycle, so a client that named the representative would print
+    "through Ring A" under a URL that says `focus=ring-b`.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [task(name) for name in ("before", "ring-a", "ring-b", "after")],
+            (
+                ("before", "ring-a", "blocks"),
+                ("ring-a", "ring-b", "blocks"),
+                ("ring-b", "ring-a", "blocks"),
+                ("ring-b", "after", "blocks"),
+            ),
+        )
+    )
+    unfocused = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    served = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=ring-b"
+    )
+
+    drawn = _graph_run(
+        ["tap:ring-b"],
+        href=f"http://lens.test/tasks/graph?project={PROJECT}",
+        payload=payload(unfocused),
+    )
+    line = drawn["final"]["chainLine"]
+
+    # The server names the FOCUSED member and condenses the walk …
+    assert "Longest blocking chain through Ring B" in chain_line(served)
+    assert "Before → Ring A → After" in chain_line(served)
+    assert 'data-chain-through="ring-b"' in served
+    # … and so does the canvas, from the same projection.
+    assert line["through"] == "ring-b"
+    assert f"Longest blocking chain{line['label']}" in chain_line(served)
+    assert line["nodes"] in chain_line(served)
+    assert f"<span data-chain-length>{line['length']}</span>" in served
+    # Both cycle members are on the traced chain, which crosses the loop in one
+    # move: the step enters at the member the edge actually lands on.
+    assert set(drawn["final"]["traced"]) >= {"before", "ring-a", "ring-b", "after"}
+    assert drawn["final"]["tracedEdges"] == ["before>ring-a", "ring-b>after"]
+
+
 # ── Downstream impact (D10) ─────────────────────────────────────────────
 
 
@@ -466,7 +515,12 @@ def test_an_unreadable_ghost_dependent_is_listed_and_not_counted(
 ) -> None:
     """An `unknown` edge is counted in NEITHER direction (D6): the far end is
     named so the gap is visible, and N becomes a lower bound rather than
-    absorbing a relation Lens could not classify."""
+    absorbing a relation Lens could not classify.
+
+    It also bounds the LIT SET, which is D8's separate claim and the other half
+    of `_relations_exact` (round-2 test-quality f-008): every edge list here was
+    read in full, so the scope is complete and the unknown EDGE is the only
+    thing that can be making either statement a lower bound."""
     fake = GraphFakeClient(
         dataset(
             [task("root"), task("one")],
@@ -482,8 +536,13 @@ def test_an_unreadable_ghost_dependent_is_listed_and_not_counted(
         lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
     )
 
+    # No edge read failed, so nothing here degrades on scope incompleteness.
+    assert 'data-graph-banner="edges-incomplete"' not in html
     assert "frees ≥ 1 in this graph" in slot(html)
     assert "Not counted, relation unreadable: far" in slot(html)
+    # …and the picture around the focus is a lower bound for the same reason.
+    assert "data-panel-focus-bound" in html
+    assert "lower bound of what surrounds it" in slot(html)
 
 
 def test_an_incomplete_scope_makes_both_the_count_and_the_lit_set_bounds(

@@ -980,7 +980,12 @@ at. Lens still never re-implements the readiness predicate.
   those pointers reproduces `longest_blocking_chain(through=…)`, tie-breaks
   included. Only the focus-dependent parts of the sentence are rewritten; the
   lower-bound wording beside them describes the scope (an unreadable edge
-  anywhere) and does not move with the focus.
+  anywhere) and does not move with the focus. The sentence names the **focused
+  task**, while the chain it lists names each step by its **condensation's
+  representative** — the two differ exactly when the focus is a
+  non-representative member of a live cycle, and a line naming the
+  representative there would disagree with a reload of the URL it was just
+  pushed under.
 - **Search** is a toolbar input matching a title SUBSTRING or an id PREFIX over
   the payload's own nodes — a title is remembered in fragments, an id is pasted
   from its start — and selecting a match (click, or Enter for the first one) is

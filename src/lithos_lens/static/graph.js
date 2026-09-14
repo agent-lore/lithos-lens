@@ -1032,9 +1032,16 @@
     else delete section.dataset.chainThrough;
     const clause = section.querySelector("[data-chain-through-label]");
     if (clause) {
-      clause.textContent = focused
-        ? " through " + labelOf(chainCondensationOf(state.focus))
-        : "";
+      // The FOCUSED task's own label, not its condensation's. The two differ
+      // exactly when the focus is a non-representative member of a live cycle,
+      // and there the representative is a different task with a different
+      // name: the server says "through Ring-B" for `focus=ring-b`
+      // (`graph_page` reads `views.get(focus)`), and a client naming Ring-A
+      // would make a click disagree with a reload of the URL it just pushed
+      // (round-2 correctness f-005). Only the chain's NODE LIST is condensed —
+      // that list is a walk over condensations, and each is named by its
+      // representative.
+      clause.textContent = focused ? " through " + labelOf(state.focus) : "";
     }
     const length = section.querySelector("[data-chain-length]");
     if (length) length.textContent = String(chain.length);

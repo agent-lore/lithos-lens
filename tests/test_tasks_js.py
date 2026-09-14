@@ -2300,6 +2300,11 @@ FOCUS_PAYLOAD: dict = _payload(
             projects=("lens",),
         ),
         _node("hidden", isolated=True),
+        # A task whose OWN edge list could not be read, with nothing of its own
+        # on the page: D8 classes every such node `unknown` whatever the focus,
+        # because Lens has no evidence either way about where it sits — and it
+        # is never folded as isolated, for the same reason (D2/D8).
+        _node("stale", layer=1, completeness="edges_unknown"),
         # A CONTEXT ghost: drawn only while the overlay whose edge anchors it
         # is on (D6), so it is one of the two kinds of payload node the page
         # hides by default — and search ranges over every payload node.
@@ -2340,6 +2345,7 @@ FOCUS_PAYLOAD: dict = _payload(
                 "murky",
                 "unread",
                 "hidden",
+                "stale",
                 "source",
             )
         },
@@ -2961,6 +2967,7 @@ def test_focusing_a_node_lights_exactly_its_active_relations() -> None:
 
     assert final["lit"] == ["a", "b", "c", "d", "e"]
     assert final["dimmed"] == ["done", "hidden", "off-a", "off-b", "source"]
+    # `stale` is in neither set — see the unknown-relation test below.
     assert final["focused"] == ["c"]
     # The panel the server rendered is the one on screen; focus mode costs no
     # fetch of its own — the payload already carries every edge it walks.
@@ -2978,9 +2985,14 @@ def test_a_node_reached_only_through_an_unknown_edge_is_neither_lit_nor_dimmed()
         "final"
     ]
 
-    assert final["unknownRelation"] == ["murky", "unread"]
-    assert "unread" not in final["lit"] and "unread" not in final["dimmed"]
-    assert "murky" not in final["lit"] and "murky" not in final["dimmed"]
+    # `stale` is the case a reachability-only rule would get wrong: its own
+    # edge list failed and NOTHING on this page reaches it, so a client marking
+    # only the unreadable nodes it can walk to would dim it as "unrelated"
+    # (round-2 test-quality f-009).
+    assert final["unknownRelation"] == ["murky", "stale", "unread"]
+    for name in ("murky", "stale", "unread"):
+        assert name not in final["lit"], name
+        assert name not in final["dimmed"], name
 
 
 def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
@@ -3007,6 +3019,32 @@ def test_the_lit_set_reaches_through_a_cycle_in_both_directions() -> None:
 
     assert final["lit"] == ["after", "before", "ring-a", "ring-b"]
     assert final["dimmed"] == []
+
+
+def test_focusing_a_cycle_member_names_THAT_task_and_traces_its_condensation() -> None:
+    """Regression (round-2 correctness f-005). A chain is a walk over
+    CONDENSATIONS and names each by its representative — but the sentence says
+    whose chain it is, and that is the task the operator focused. The two
+    differ exactly here: `ring-b` is a non-representative member of a live
+    cycle, so a client naming the representative would print "through Ring-A"
+    under a URL that says `focus=ring-b`, and disagree with a reload of it."""
+    result = _graph_run(["tap:ring-b"], payload=FOCUS_CYCLE_PAYLOAD)
+    final = result["final"]
+
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=ring-b"]
+    assert final["chainLine"] == {
+        "through": "ring-b",
+        # The FOCUSED task …
+        "label": " through Ring-B",
+        "length": "3",
+        # … and the walk over condensations, each named by its representative.
+        "nodes": "Before → Ring-A → After",
+    }
+    # The trace crosses the cycle in one move: both members are on it, the box
+    # around them is accented, and the steps are the edges that actually enter
+    # and leave the loop — whichever member they land on.
+    assert final["traced"] == ["after", "before", "cycle::ring-a", "ring-a", "ring-b"]
+    assert final["tracedEdges"] == ["before>ring-a", "ring-b>after"]
 
 
 def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
