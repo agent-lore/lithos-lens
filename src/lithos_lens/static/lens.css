@@ -1748,6 +1748,10 @@ button,
   flex: 1 1 22rem;
   height: clamp(18rem, 60vh, 32rem);
   min-width: 0;
+  /* A graph held at a readable zoom is routinely wider than its box (see
+     `graph.js`), and it is drawn on canvases sized to this element — the clip
+     is what keeps that overflow from widening the document. */
+  overflow: hidden;
 }
 
 /* On the graph page the panel sits BESIDE the canvas (D9) instead of the
@@ -1771,6 +1775,16 @@ button,
 /* `width: auto` against the shared control rule, which stretches every button
    to the full row — right for the filter form it was written for, wrong for a
    toggle sitting inline among the toolbar's links. */
+/* The canvas never scales the graph below legibility, so a graph bigger than
+   its box overflows and is panned. This says so, rather than letting a
+   fragment read as the whole picture. */
+.graph-pan-hint {
+  color: var(--muted);
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
 .graph-text-toggle {
   background: none;
   border: 1px solid var(--line);

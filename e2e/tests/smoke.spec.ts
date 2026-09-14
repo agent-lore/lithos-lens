@@ -1135,3 +1135,46 @@ test("the event stream waits for the deferred scripts that subscribe to it", asy
   await page.waitForLoadState("load");
   await expect.poll(streams, { timeout: 5000 }).toBe(1);
 });
+
+test("a narrow canvas keeps its labels readable and says the view is partial", async ({
+  page,
+}) => {
+  // Round-6 review: Cytoscape scales text with the viewport, so fitting the
+  // whole graph into a 320px column drew the labels at under three pixels —
+  // the nodes, the arrowheads, the dimmed ghost and the compound cycle all
+  // became unreadable, which is everything the canvas is for. The automatic
+  // fit stops at a readable floor instead, and the overflow is panned.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const narrow = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const box = document.querySelector("[data-graph-canvas]") as HTMLElement;
+    return {
+      rendered: parseFloat(graph.node("loom-ship").style("font-size")) * graph.cy.zoom(),
+      clipped: box.dataset.canvasClipped,
+      scrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(narrow.rendered).toBeGreaterThanOrEqual(10);
+  // Bigger than its box at that size, so the page says so …
+  expect(narrow.clipped).toBe("true");
+  await expect(page.locator("[data-graph-pan-hint]")).toBeVisible();
+  // … and the overflow is clipped to the canvas rather than widening the page.
+  expect(narrow.scrollWidth).toBeLessThanOrEqual(320);
+
+  // Given room, the whole graph fits and the page stops claiming otherwise.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await expect(page.locator("[data-graph-pan-hint]")).toBeHidden();
+  await expect(
+    page.locator("[data-graph-canvas]"),
+  ).toHaveAttribute("data-canvas-clipped", "false");
+  const wide = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    return parseFloat(graph.node("loom-ship").style("font-size")) * graph.cy.zoom();
+  });
+  expect(wide).toBeGreaterThanOrEqual(10);
+});

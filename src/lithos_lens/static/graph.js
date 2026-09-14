@@ -30,6 +30,9 @@
 (function () {
   const container = document.querySelector("[data-graph-canvas]");
   const source = document.querySelector("[data-graph-payload]");
+  // Shown only while the picture is bigger than the canvas can hold at a
+  // readable size — otherwise it would claim a limit that is not there.
+  const panHint = document.querySelector("[data-graph-pan-hint]");
   if (!container || !source || !window.cytoscape) return;
 
   let payload = null;
@@ -321,6 +324,20 @@
 
   // ── Style: colour = status, shape = type, an arrowhead on every edge ────
 
+  // The node label's size in MODEL units, and the smallest it may be allowed to
+  // RENDER at. Cytoscape scales text with the viewport, so a fit that shrinks
+  // the graph to the canvas shrinks the labels with it — at 320px the loom
+  // graph fitted to zoom 0.26, which drew a 10px font at under three pixels.
+  // Everything the canvas exists to communicate (the labels, the arrowheads,
+  // which box a cycle member is in) stops being readable well before the
+  // picture stops fitting, so the automatic fit stops at this floor and the
+  // graph overflows instead. Panning is the operator's; so is zooming out past
+  // this, which is deliberately NOT clamped — only the AUTOMATIC scaling is.
+  const LABEL_FONT = 14;
+  const MIN_RENDERED_FONT = 10;
+  const MIN_READABLE_ZOOM = MIN_RENDERED_FONT / LABEL_FONT;
+  const FIT_PADDING = 24;
+
   const INK = "#1e2723";
   const MUTED = "#65716b";
   const LINE = "#ded6c7";
@@ -336,10 +353,10 @@
       style: {
         label: "data(label)",
         "text-wrap": "wrap",
-        "text-max-width": 130,
+        "text-max-width": 150,
         "text-valign": "bottom",
         "text-margin-y": 4,
-        "font-size": 10,
+        "font-size": LABEL_FONT,
         "font-family": "ui-sans-serif, system-ui, sans-serif",
         color: INK,
         shape: "ellipse",
@@ -380,7 +397,10 @@
         label: "data(label)",
         shape: "round-rectangle",
         "text-valign": "top",
-        "font-size": 9,
+        // The same size as a node's label, and for the same reason: the zoom
+        // floor is derived from LABEL_FONT, so anything smaller is guaranteed
+        // to render below legibility exactly when the graph is clipped.
+        "font-size": LABEL_FONT,
         color: ACCENT,
         "background-color": ACCENT,
         "background-opacity": 0.07,
@@ -405,7 +425,7 @@
         "curve-style": "bezier",
         "target-arrow-shape": "triangle",
         "target-arrow-color": MUTED,
-        "arrow-scale": 0.85,
+        "arrow-scale": 1.1,
         "line-color": MUTED,
         width: 1.6
       }
@@ -603,13 +623,33 @@
   // layout: the nodes keep the positions the one layout gave them, so nothing
   // the operator does rearranges the picture. Without it, an overlay switched
   // off leaves the graph in a corner of its own canvas.
+  //
+  // Floored at MIN_READABLE_ZOOM. A fit that has to go below it is a picture
+  // nobody can read — so the graph is shown at legible size, centred on what is
+  // drawn, and overflows the canvas for the operator to pan.
+  //
+  // Whether it came to that is recorded HERE, beside the decision, rather than
+  // by the caller: a resize refits too (the panel opening beside the canvas is
+  // one), and a hint left behind by the previous width would claim a limit that
+  // is no longer there.
   function fitVisible() {
-    cy.fit(
-      cy.nodes().filter(function (element) {
-        return element.style("display") !== "none";
-      }),
-      24
-    );
+    const drawn = cy.nodes().filter(function (element) {
+      return element.style("display") !== "none";
+    });
+    if (!drawn.length) return;
+    cy.fit(drawn, FIT_PADDING);
+    if (cy.zoom() < MIN_READABLE_ZOOM) {
+      cy.zoom(MIN_READABLE_ZOOM);
+      cy.center(drawn);
+    }
+    // Whether anything is actually OUT of view — measured, not inferred from
+    // the floor having bound the zoom. The floor zooms IN, and a fit that was
+    // a hair below it still has everything on screen afterwards; a hint raised
+    // on that would be telling the operator to go looking for nothing.
+    const extent = drawn.renderedBoundingBox();
+    const clipped = extent.w > cy.width() || extent.h > cy.height();
+    container.dataset.canvasClipped = clipped ? "true" : "false";
+    if (panHint) panHint.hidden = !clipped;
   }
 
   function render() {

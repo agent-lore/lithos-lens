@@ -38,6 +38,41 @@ test.describe.configure({ mode: "default", retries: 1 });
 
 const ARTIFACTS_DIR = path.resolve(__dirname, "..", "artifacts");
 
+/**
+ * The canvas never scales the graph below legibility (T2-A4, round-6 review).
+ *
+ * Cytoscape scales text with the viewport, so a fit that shrinks the graph into
+ * a narrow box shrinks the labels with it — at 320px the loom graph fitted to
+ * zoom 0.26 and drew its labels at under three pixels, which is a picture that
+ * communicates none of what the canvas was added to show. The automatic fit
+ * therefore stops at a readable floor and the graph overflows to be panned;
+ * this asserts the floor held and that a clipped view SAYS it is partial,
+ * rather than letting a fragment read as the whole graph.
+ *
+ * Asserted inside `ready()`, so it is checked at every captured width.
+ */
+async function canvasIsLegible(page: Page) {
+  const drawn = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const box = document.querySelector("[data-graph-canvas]") as HTMLElement;
+    // The SMALLEST label on the canvas, not a sampled one: a cycle's box
+    // carries a caption of its own, and a floor that held for the nodes while
+    // that rendered at six pixels would be a floor in name only.
+    const sizes = graph.cy
+      .nodes()
+      .filter((node: any) => node.style("display") !== "none")
+      .map((node: any) => parseFloat(node.style("font-size")) * graph.cy.zoom());
+    return {
+      rendered: Math.min(...sizes),
+      clipped: box.dataset.canvasClipped === "true",
+    };
+  });
+  expect(drawn.rendered).toBeGreaterThanOrEqual(10);
+  const hint = page.locator("[data-graph-pan-hint]");
+  if (drawn.clipped) await expect(hint).toBeVisible();
+  else await expect(hint).toBeHidden();
+}
+
 const WIDTHS = [320, 768, 1024, 1440] as const;
 
 const PAGES: ReadonlyArray<{
@@ -302,6 +337,8 @@ const PAGES: ReadonlyArray<{
       //    this page's normal state.
       await expect(page.locator("[data-graph-banner]")).toHaveCount(0);
       await expect(page.locator("[data-graph-refusal]")).toHaveCount(0);
+      // 8. And it is READABLE at this width, whichever width that is.
+      await canvasIsLegible(page);
     },
   },
   {
@@ -344,6 +381,7 @@ const PAGES: ReadonlyArray<{
         };
       });
       expect(sized.drawn).toBe(sized.container);
+      await canvasIsLegible(page);
     },
   },
   {

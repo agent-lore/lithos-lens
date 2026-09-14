@@ -910,6 +910,17 @@ at. Lens still never re-implements the readiness predicate.
   every other control here moves the URL without a reload, and a pill still
   pointing at the address the page loaded on would silently drop the overlays
   and the focus set on the way to needing it.
+- **The automatic fit never scales below legibility.** Cytoscape scales text
+  with the viewport, so fitting a graph into a narrow box shrinks its labels
+  with it — at 320px the demo graph fitted to zoom 0.26 and drew a 10-unit font
+  at under three pixels, which communicates none of what the canvas is for. The
+  fit therefore stops at the zoom that still renders a label at 10px; past that
+  the graph overflows its box and is panned, and the page says so ("showing part
+  of the graph") whenever anything is measurably out of view. Every label the
+  canvas draws — a cycle box's caption included — uses the one font size the
+  floor is derived from, or it would be sub-legible exactly when the floor
+  binds. Zooming out further is the operator's to do; only the automatic
+  scaling is bounded.
 - **Cytoscape is handed opaque element ids**, never a task's own. A task id is
   an arbitrary non-empty string (§5.1), and the shipped 3.30.3 throws inside
   `breadthfirst` on an element called `__proto__`, `constructor` or `toString`

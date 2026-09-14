@@ -323,6 +323,14 @@
         data-panel-host
         {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}
       >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
+      {# Raised by `graph.js` only while the picture is larger than the canvas
+         can hold at a readable size. The alternative — scaling the whole graph
+         down to fit — draws labels and arrowheads too small to read, which is
+         the one thing the canvas was added to do. #}
+      <p class="graph-pan-hint" data-graph-pan-hint hidden>
+        Showing part of the graph — drag to pan, or read it all under
+        <strong>Show as text</strong>.
+      </p>
     </section>
 
     <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">
