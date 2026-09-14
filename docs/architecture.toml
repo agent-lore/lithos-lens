@@ -142,8 +142,18 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # responsibility across two modules — a worse architecture for a better
 # metric. The ceiling is a budget, not an absolute. Discharge it when frontier
 # assembly grows a real second responsibility worth its own module.
-modules_over_800_lines = 1    # frontier.py (817) — the composition of #84 + #85, argued above
-max_module_lines       = 850  # stop-loss over that one exception; the threshold stays 800
+#
+# Revisited (task 0976cf72, 2026-09-14): the epic-strip scoping fix took
+# frontier.py from 817 to 850 — ON the stop-loss, no headroom left. The change
+# is +33 lines of assembly, not a second responsibility: the strip is derived
+# from the same filter predicate and generation as the sections, which is the
+# reason it has to be built HERE, and an extraction would again split one
+# responsibility to satisfy a number. So the allowance stands at 850 and is
+# NOT raised. It is also now spent: the next change that grows frontier.py has
+# no room and must discharge the exception by extraction rather than argue the
+# stop-loss up a fourth time.
+modules_over_800_lines = 1    # frontier.py (850) — the #84 + #85 composition, now at the stop-loss
+max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 
