@@ -2741,6 +2741,65 @@ def test_a_settled_panel_survives_a_gesture_that_starts_elsewhere() -> None:
     assert final["focused"] == ["ship"]
 
 
+def test_a_startup_panel_request_is_superseded_like_any_other() -> None:
+    """Regression (round-3 correctness f-001). A page loaded with `focus=` that
+    the SERVER could not render leaves the client to fetch that panel itself —
+    and `tasks.js` has already seeded both its selection ids from the URL, so
+    that request is in flight with the two equal. A supersession test that read
+    the ids would call it settled and let its response land beside the canvas
+    mid-gesture, which is the whole failure again.
+    """
+    result = _graph_run(
+        ["firsttap:schema", "release", "secondtap:schema"],
+        href=GRAPH_CANVAS_HREF + "&focus=ship",
+        panel_fetch="hold",
+    )
+
+    # The fallback really did ask for the panel the server did not send …
+    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    # … and the answer, landing after a gesture had begun, is dropped: no panel
+    # beside the canvas, and the ring stays on the node being clicked.
+    assert result["states"][1]["panel"] == "", "a stale panel opened mid-gesture"
+    assert result["states"][1]["focused"] == ["schema"]
+    assert result["final"]["href"] == "/tasks/schema"
+
+
+def test_superseding_a_pending_open_leaves_the_panel_already_on_screen() -> None:
+    """Regression (round-3 test-quality f-002). The load-bearing combination:
+    one panel is OPEN, a second open is in flight, and a gesture starts on a
+    third node. Only the pending one may be dropped — clearing the host as well
+    would expand and refit the canvas between the two clicks, which is the
+    reflow this supersession exists to prevent, caused by the cure."""
+    result = _graph_run(
+        [
+            "tap:schema",  # settles, and its panel arrives
+            "release",
+            "tap:ship",  # settles too, but its panel is still in flight …
+            "firsttap:announce",  # … when a double-click starts elsewhere
+            "release",
+            "secondtap:announce",
+        ],
+        panel_fetch="hold",
+    )
+    states = result["states"]
+
+    assert result["fetches"] == [
+        "/tasks/id?task_id=schema&fragment=panel",
+        "/tasks/id?task_id=ship&fragment=panel",
+    ]
+    schema_panel = "panel:/tasks/id?task_id=schema&fragment=panel"
+    # On screen before the gesture, and still there after the superseded
+    # response lands — the operator did not ask for it to go.
+    assert states[2]["panel"] == schema_panel
+    assert states[3]["panel"] == schema_panel
+    assert states[4]["panel"] == schema_panel, "the open panel was torn down"
+    assert "focus=schema" in states[4]["href"]
+    # `ship` never reached the URL: its open was superseded before it painted.
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=schema"]
+    # And the gesture finishes as the operator made it.
+    assert result["final"]["href"] == "/tasks/announce"
+
+
 # ── Regressions from round 2 ────────────────────────────────────────────
 
 

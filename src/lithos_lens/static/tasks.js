@@ -49,6 +49,20 @@
   // another. Cancelling the fetch would not do: the response is already on its
   // way, and it is the WRITE that has to be ordered, not the read.
   let panelGeneration = 0;
+  // The generation of an open that has STARTED and not yet settled — 0 when
+  // none has. `desiredTaskId` cannot answer that question: a page loaded with
+  // a selection seeds BOTH ids from the URL (below), so an open the client
+  // then starts for it — the fallback for a `focus=` the server could not
+  // render — runs with the two already equal, and a reader comparing them
+  // would call that request settled while it is still in flight (round-3
+  // correctness f-001).
+  //
+  // Only the NEWEST open can still write: every one before it has had the
+  // generation moved past it and returns in silence. So this is one number,
+  // and it needs clearing only where an open SETTLES — a superseded one is
+  // cleared by the same bump that superseded it, because that bump is what
+  // makes this no longer equal to `panelGeneration`.
+  let pendingOpenGeneration = 0;
   // setTimeout stores its delay in a signed 32-bit int: anything larger wraps
   // and fires (near) immediately, so a gate more than ~24.8 days out must be
   // reached by chaining sleeps rather than by one oversized timeout.
@@ -343,6 +357,7 @@
     panelGeneration += 1;
     desiredTaskId = taskId;
     const generation = panelGeneration;
+    pendingOpenGeneration = generation;
     // `null` means "no panel to show", whatever went wrong — a transport
     // failure, a non-OK answer, or a body that never finished reading. The
     // three are one outcome here and share one recovery below; an EMPTY body
@@ -370,6 +385,9 @@
     // point of its own, and the gap between "headers arrived" and "body read"
     // is long enough for another click to land in it.
     if (generation !== panelGeneration) return;
+    // Settled from here on, one way or the other: nothing this request does
+    // afterwards is still pending.
+    pendingOpenGeneration = 0;
     if (markup === null) {
       panelFetchFailed(push);
       return;
@@ -450,14 +468,18 @@
   // this gesture's own (round-2 correctness f-001).
   //
   // Only the INTENT is walked back, the same way a failed open walks it back,
-  // because there is nothing on screen to undo. A SETTLED panel has
-  // `desiredTaskId === selectedTaskId` and is left exactly as it is — an
-  // operator who clicked a node and then began a gesture elsewhere still has
-  // the panel they asked for. Nothing is announced either: the selection has
-  // not changed, and announcing it would re-render the host's own view of it
-  // in the middle of the gesture this exists to protect.
+  // because there is nothing on screen to undo. What is ALREADY on screen is
+  // left exactly as it is — an operator who opened a panel and then began a
+  // gesture elsewhere still has the panel they asked for, and a server-
+  // rendered one is not disturbed either. Nothing is announced: the selection
+  // has not changed, and announcing it would re-render the host's own view of
+  // it in the middle of the gesture this exists to protect.
+  //
+  // The test is whether a request is PENDING, not whether the ids differ: they
+  // are equal for a `focus=` the page loaded with, and the client's fallback
+  // open for it is exactly a response that must not land mid-gesture.
   function supersedePendingOpen() {
-    if (desiredTaskId === selectedTaskId) return;
+    if (pendingOpenGeneration !== panelGeneration) return;
     panelGeneration += 1;
     desiredTaskId = selectedTaskId;
   }

@@ -1194,6 +1194,92 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
   expect(panelRequests).toEqual([]);
 });
 
+test("a superseded panel response neither opens nor moves the graph", async ({
+  page,
+}) => {
+  // Round-3 correctness f-001 and test-quality f-002, in the browser they are
+  // about. One panel is OPEN, a second open is still in flight, and a
+  // double-click starts on a third node: the pending response must be dropped
+  // — it would narrow the canvas and refit it between the two clicks — while
+  // the panel already on screen must be left exactly where it is, because
+  // clearing THAT widens the canvas and refits it just the same. Both failures
+  // look identical from the operator's chair: the second click lands on the
+  // background and the navigation never happens.
+  //
+  // The two panels are opened through the page's own API rather than by
+  // clicking, and deliberately: Cytoscape's multi-click detector measures TIME
+  // alone, so a setup click would pair with the gesture's opening click and the
+  // test would be about that instead. It is also the truer setup — the `focus=`
+  // fallback that f-001 was found in starts its open without any tap at all.
+  let releaseShip = () => {};
+  const shipHeld = new Promise<void>((resolve) => {
+    releaseShip = resolve;
+  });
+  let shipAsked = () => {};
+  const shipRequested = new Promise<void>((resolve) => {
+    shipAsked = resolve;
+  });
+  await page.route(/fragment=panel/, async (route) => {
+    if (route.request().url().includes("loom-ship")) {
+      shipAsked();
+      await shipHeld;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  // The panel on screen …
+  // Not awaited inside the page: `open()` answers with a promise, and
+  // `evaluate` would wait on it — which is the one thing a HELD response makes
+  // impossible. The assertions below are what waits.
+  await page.evaluate(() => {
+    (window as any).LithosLens.panel.open("loom-schema");
+  });
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-schema"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-schema/);
+  // … and the one still in flight behind it.
+  await page.evaluate(() => {
+    (window as any).LithosLens.panel.open("loom-ship");
+  });
+  await shipRequested;
+
+  await holdMultiClickWindowOpen(page);
+  const placed = () =>
+    page.evaluate(() => {
+      const at = (window as any).LithosLensGraph.node(
+        "loom-announce",
+      ).renderedPosition();
+      return [Math.round(at.x), Math.round(at.y)];
+    });
+  const before = await placed();
+  await pointerOnNode(page, "loom-announce");
+  await page.mouse.down();
+  await page.mouse.up();
+  // The held answer lands HERE, between the two halves of the gesture.
+  releaseShip();
+  await page.waitForTimeout(100);
+
+  // Neither panel moved the page: `loom-schema` is still open under its own
+  // URL, `loom-ship` never arrived, and the hit target the second click is
+  // about to use is exactly where it was measured.
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-schema"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-schema/);
+  expect(await placed()).toEqual(before);
+
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForURL("**/tasks/loom-announce");
+  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+});
+
 test("two quick clicks on different nodes select the second, never leave", async ({
   page,
 }) => {
