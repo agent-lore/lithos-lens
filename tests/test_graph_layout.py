@@ -434,10 +434,13 @@ def test_a_cyclic_condensation_counts_once_in_the_chain() -> None:
     # condensation may land on C.
     assert chain.members == (("A",), ("B", "C"), ("D",))
     # Focus resolves by MEMBERSHIP, so the member that is not the
-    # representative names the same condensation and traces the same chain.
+    # representative names the same condensation and traces the same chain —
+    # membership included, or the focused chain would be traced by a client
+    # that has only been told its representatives.
     for member in ("B", "C"):
         focused = longest_blocking_chain(topology, through=member)
         assert (focused.nodes, focused.length) == (chain.nodes, 3)
+        assert focused.members == (("A",), ("B", "C"), ("D",))
 
 
 def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:

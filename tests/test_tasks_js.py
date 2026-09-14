@@ -1243,8 +1243,11 @@ const lifecycle = (lifecycleRaw === undefined ? "DOMContentLoaded" : lifecycleRa
 const actions = JSON.parse(actionsRaw);
 const reducedMotion = reducedMotionRaw === "1";
 // How the SERVER answers a panel request. A node open that never lands is the
-// case the canvas has to walk its optimistic focus ring back from.
+// case the canvas has to walk its optimistic focus ring back from; `hold`
+// leaves the response IN FLIGHT until a `release` action lands it, which is
+// the only way to put another gesture between a request and its answer.
 const panelFetch = panelFetchRaw || "ok";
+const heldResponses = [];
 
 const entries = [initialHref];
 let cursor = 0;
@@ -1367,6 +1370,13 @@ const sandbox = {
       return Promise.resolve({
         ok: true,
         text: () => Promise.reject(new Error("connection reset mid-body")),
+      });
+    }
+    if (panelFetch === "hold") {
+      return new Promise((resolve) => {
+        heldResponses.push(() => resolve({
+          ok: true, text: () => Promise.resolve("panel:" + url),
+        }));
       });
     }
     return Promise.resolve({ ok: true, text: () => Promise.resolve("panel:" + url) });
@@ -1634,6 +1644,18 @@ function ranks() {
       else if (name === "dbltap") target.emit("dbltap");
       // `firsttap` stops at the one tap: the first half of a double-click,
       // with the window still open and nothing settled.
+    } else if (name === "secondtap") {
+      // The CLOSING half of a double-click whose first half was `firsttap`:
+      // the tap the library emits for the second click, then the `dbltap` the
+      // pair makes. `firsttap:x` followed by `secondtap:x` emits exactly what
+      // `dbltap:x` does, with somewhere to put an action in between.
+      const target = graph.node(argument);
+      target.emit("tap");
+      target.emit("dbltap");
+    } else if (name === "release") {
+      // Every panel response held so far, answered now — an older request
+      // landing in the middle of whatever gesture the actions have reached.
+      heldResponses.splice(0).forEach((land) => land());
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -2676,6 +2698,47 @@ def test_the_first_click_of_a_double_click_opens_no_panel() -> None:
     # The same tap, once the window closes with no second click: the panel.
     assert settled["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
     assert "focus=ship" in settled["final"]["href"]
+
+
+def test_an_older_panel_request_cannot_land_inside_a_double_click() -> None:
+    """Regression (round-2 correctness f-001, the second way in). The `onetap`
+    debounce stops THIS gesture's own click from opening a panel mid-gesture,
+    but not an open already in flight from an earlier one: a single click on
+    one node settles and asks for its fragment, the operator then starts a
+    double-click on another, and the older answer lands between the two
+    clicks — inserting the panel beside the canvas, narrowing it, refitting
+    it, and moving the node out from under a pointer that has not moved. The
+    second click hits the background, no `dbltap` is emitted for the node, and
+    the navigation the operator asked for never happens.
+
+    So a tap that OPENS a gesture supersedes any panel open that has not yet
+    painted."""
+    result = _graph_run(
+        ["tap:schema", "firsttap:ship", "release", "secondtap:ship"],
+        panel_fetch="hold",
+    )
+
+    # The settled single click really did ask for `schema`'s panel …
+    assert result["fetches"] == ["/tasks/id?task_id=schema&fragment=panel"]
+    # … and the answer, landing after the double-click had begun, is dropped.
+    assert result["states"][2]["panel"] == "", "a stale panel opened mid-gesture"
+    assert result["pushed"] == [], "a stale open moved the URL mid-gesture"
+    # Which leaves the gesture to finish as the operator made it.
+    assert result["final"]["href"] == "/tasks/ship"
+
+
+def test_a_settled_panel_survives_a_gesture_that_starts_elsewhere() -> None:
+    """The other half of the rule: only a PENDING open is superseded. A panel
+    that has arrived is on screen and was asked for — beginning a gesture on
+    another node must not clear it, or every double-click would close the
+    panel the operator opened before it."""
+    result = _graph_run(["tap:schema", "release", "firsttap:ship"], panel_fetch="hold")
+    final = result["final"]
+
+    assert final["panel"] == "panel:/tasks/id?task_id=schema&fragment=panel"
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=schema"]
+    # The new gesture still lights its own node, which is all a raw tap does.
+    assert final["focused"] == ["ship"]
 
 
 # ── Regressions from round 2 ────────────────────────────────────────────

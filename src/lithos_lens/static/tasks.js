@@ -440,6 +440,28 @@
     announceSelection();
   }
 
+  // Drop a panel open that has not painted yet, and leave what IS on screen
+  // alone. The graph page's canvas calls this the moment a node tap starts a
+  // new gesture: an open from an EARLIER click may still be in flight, and its
+  // response would insert the panel BESIDE the canvas (D9) — narrowing the
+  // canvas, refitting it, and moving the node out from under a pointer that is
+  // halfway through a double-click. That is the failure the `onetap` debounce
+  // exists to prevent, reached through an older request instead of through
+  // this gesture's own (round-2 correctness f-001).
+  //
+  // Only the INTENT is walked back, the same way a failed open walks it back,
+  // because there is nothing on screen to undo. A SETTLED panel has
+  // `desiredTaskId === selectedTaskId` and is left exactly as it is — an
+  // operator who clicked a node and then began a gesture elsewhere still has
+  // the panel they asked for. Nothing is announced either: the selection has
+  // not changed, and announcing it would re-render the host's own view of it
+  // in the middle of the gesture this exists to protect.
+  function supersedePendingOpen() {
+    if (desiredTaskId === selectedTaskId) return;
+    panelGeneration += 1;
+    desiredTaskId = selectedTaskId;
+  }
+
   function handlePanelClick(event) {
     // Modified and non-primary clicks keep their browser meaning: open in a
     // new tab has to stay open in a new tab, on a row as much as on a link.
@@ -877,6 +899,7 @@
   window.LithosLens.panel = {
     open: openPanel,
     close: closePanel,
+    supersedePending: supersedePendingOpen,
     onChange: function (subscriber) { panelSubscribers.push(subscriber); }
   };
   window.LithosLens.events = {

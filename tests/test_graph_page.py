@@ -57,6 +57,13 @@ from lithos_lens.tasks import (
 from lithos_lens.web import create_app
 from tests.conftest import metric_points, metric_value
 
+# The A4 canvas harness, borrowed rather than rebuilt: the payload's chain
+# membership is a claim with a PRODUCER here and a CONSUMER in `graph.js`, and
+# a contract asserted only on one side of a serialisation is the hole this
+# import closes (round-2 test-quality f-001). Underscored because they are that
+# module's own helpers; nothing in `lithos_lens` is reached privately.
+from tests.test_tasks_js import NODE, _edge_style, _graph_run
+
 pytestmark = pytest.mark.anyio
 
 PROJECT = "loom"
@@ -1754,6 +1761,116 @@ def test_the_payload_carries_D3_s_whole_schema(
     assert {node["id"]: node["layer"] for node in data["nodes"]} == rendered_layers(
         html
     )
+
+
+def _mixed_cycle_fake() -> GraphFakeClient:
+    """A drawn cycle the ACTIVE projection does not agree is one.
+
+    ``cyc-a -> cyc-b`` is live; ``cyc-b -> cyc-c`` is inactive (its dependent
+    completed) and ``cyc-c -> cyc-a`` is inactive (its predecessor did). All
+    three are ONE all-edge SCC — the box the canvas draws — while the active
+    projection makes three nodes and the longest chain is ``cyc-a -> cyc-b``.
+    """
+    return GraphFakeClient(
+        dataset(
+            [task("cyc-a"), task("cyc-b"), task("cyc-c", status="completed")],
+            [
+                ("cyc-a", "cyc-b", "blocks"),
+                ("cyc-b", "cyc-c", "blocks"),
+                ("cyc-c", "cyc-a", "blocks"),
+            ],
+        )
+    )
+
+
+def _active_cycle_fake() -> GraphFakeClient:
+    """The other shape: a cycle that IS one in the active projection too.
+
+    ``p -> cyc-y``, ``cyc-x <-> cyc-y``, ``cyc-x -> d``. The chain condenses
+    the loop and names it by ``cyc-x``, while the edge that enters it lands on
+    ``cyc-y`` — so a membership serialised as singletons breaks the trace
+    exactly at that boundary.
+    """
+    return GraphFakeClient(
+        dataset(
+            [
+                task("p", project="lens"),
+                task("cyc-x", project="lens"),
+                task("cyc-y", project="lens"),
+                task("d", project="lens"),
+            ],
+            [
+                ("p", "cyc-y", "blocks"),
+                ("cyc-x", "cyc-y", "blocks"),
+                ("cyc-y", "cyc-x", "blocks"),
+                ("cyc-x", "d", "blocks"),
+            ],
+        )
+    )
+
+
+MIXED_CYCLE_URL = f"/tasks/graph?project={PROJECT}&include_resolved=1"
+ACTIVE_CYCLE_URL = "/tasks/graph?project=lens"
+
+
+def test_the_payloads_chain_membership_is_the_active_partition(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The chain names condensations of the ACTIVE projection, and the payload
+    has to state THAT partition — the canvas has nothing else to trace the
+    chain by, and the `cycle` each node carries is the all-edge one the picture
+    is drawn from (round-2 test-quality f-001).
+
+    Asserted as the exact groups, on the two shapes that fail differently:
+    serialising the drawn cycle's membership breaks the first, and serialising
+    a singleton per chain node breaks the second.
+    """
+    mixed = payload(get(lithos_lens_config_env, _mixed_cycle_fake(), MIXED_CYCLE_URL))
+    active = payload(
+        get(lithos_lens_config_env, _active_cycle_fake(), ACTIVE_CYCLE_URL)
+    )
+
+    # One drawn cycle of three, and a chain of two that holds one task each.
+    assert mixed["cycles"][0]["members"] == ["cyc-a", "cyc-b", "cyc-c"]
+    assert [node["cycle"] for node in mixed["nodes"]] == ["cyc-a"] * 3
+    assert mixed["longest_chain"]["nodes"] == ["cyc-a", "cyc-b"]
+    assert mixed["longest_chain"]["members"] == [["cyc-a"], ["cyc-b"]]
+    # And where the loop IS live, the chain's middle condensation holds both
+    # members — the one the chain names and the one the entering edge lands on.
+    assert active["longest_chain"]["nodes"] == ["p", "cyc-x", "d"]
+    assert active["longest_chain"]["members"] == [["p"], ["cyc-x", "cyc-y"], ["d"]]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_canvas_traces_the_chain_the_served_payload_states(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same two payloads, SERVED by this route and drawn by the real
+    `graph.js` against the real Cytoscape — the producer and the consumer in
+    one test, so a membership serialised wrong cannot be green at both ends
+    while the picture contradicts the text (round-2 test-quality f-001)."""
+    served = payload(get(lithos_lens_config_env, _mixed_cycle_fake(), MIXED_CYCLE_URL))
+    mixed = _graph_run([], href=f"http://lens.test{MIXED_CYCLE_URL}", payload=served)
+    served = payload(
+        get(lithos_lens_config_env, _active_cycle_fake(), ACTIVE_CYCLE_URL)
+    )
+    active = _graph_run([], href=f"http://lens.test{ACTIVE_CYCLE_URL}", payload=served)
+
+    # The live step inside the drawn cycle is traced …
+    assert "chain" in _edge_style(mixed, "cyc-a", "cyc-b", "blocks")["classes"]
+    assert "chain" in mixed["styles"]["cyc-a"]["classes"]
+    assert "chain" in mixed["styles"]["cyc-b"]["classes"]
+    # … and the completed task the chain does not name is not accented, though
+    # the picture draws it in the same box.
+    assert "chain" not in mixed["styles"]["cyc-c"]["classes"]
+    assert mixed["styles"]["cyc-c"]["parent"] == "cycle::cyc-a"
+
+    # And where the loop is live, the trace crosses it: the edge enters at the
+    # member the chain does NOT name, and both members are on it.
+    assert "chain" in _edge_style(active, "p", "cyc-y", "blocks")["classes"]
+    assert "chain" in _edge_style(active, "cyc-x", "d", "blocks")["classes"]
+    assert "chain" in active["styles"]["cyc-x"]["classes"]
+    assert "chain" in active["styles"]["cyc-y"]["classes"]
 
 
 # ── The route's own shape: picker and refusal ───────────────────────────

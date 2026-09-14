@@ -911,7 +911,11 @@ at. Lens still never re-implements the readiness predicate.
   node out from under the second click. That window is measured by TIME alone,
   so a pair inside it counts as a double-click only when both clicks were on
   the SAME node; a pair spanning two nodes (or the background and a node) is
-  the second one's single click, and opens its panel.
+  the second one's single click, and opens its panel. A tap on a node also
+  **supersedes any panel open still in flight**: an answer to an earlier click
+  landing between the two halves of a double-click would narrow the canvas at
+  exactly the moment the debounce exists to protect. A panel that has already
+  arrived is left alone — only the unpainted intent is dropped.
   Every panel transition is announced back to the canvas, because it
   moves the URL by `pushState` and `pushState` fires no `popstate`: without it,
   closing the panel would clear `focus` and leave the node still lit. A

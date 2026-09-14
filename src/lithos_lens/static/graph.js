@@ -886,6 +886,17 @@
   // The focus ring lands on the FIRST tap, so a click answers immediately …
   cy.on("tap", "node", function (event) {
     if (!nodeFor(event.target)) return; // the cycle box, chrome not a task
+    // … and this tap OPENS a gesture, so the canvas must not move again until
+    // it settles. An open started by an EARLIER click can still be in flight,
+    // and the debounce below does not cover it: its response would insert the
+    // panel beside the canvas, narrow it and refit it between the two clicks
+    // of a double-click, moving this node out from under the pointer exactly
+    // as the debounce exists to prevent (round-2 correctness f-001). So the
+    // pending open is superseded here, on the raw tap — the panel already on
+    // screen is untouched, and the gesture about to settle will say what
+    // replaces it.
+    const pending = panel();
+    if (pending && pending.supersedePending) pending.supersedePending();
     cy.nodes().forEach(function (element) {
       if (element.id() === event.target.id()) element.addClass("focused");
       else element.removeClass("focused");
