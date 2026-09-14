@@ -1095,24 +1095,45 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   expect(lit).toBe(0);
 });
 
+/** An hour. See `holdMultiClickWindowOpen`. */
+const HELD_MULTI_CLICK_WINDOW_MS = 3_600_000;
+
 /**
- * Hand the multi-click window to the TEST's clock instead of the runner's.
+ * Hold Cytoscape's multi-click window open for the whole of a gesture test.
  *
- * Cytoscape classifies a pair of clicks by the time between them, and at the
- * shipped 250ms a gesture driven from here depends on the harness delivering
- * the second click in time: a stalled worker turns correct code red, and the
- * failure looks exactly like the regression these tests exist to catch (round-2
- * test-quality f-002). Widened, the pair below is inside the window whatever
- * the host is doing — while the gap between the clicks stays REAL time, which
- * is what still lets a panel fragment land inside it.
+ * A pair of real clicks is classified by the library against ONE number, twice
+ * over: `dbltap` is emitted when the two DOM event timestamps are within
+ * `multiClickDebounceTime`, and the `onetap` that would otherwise settle the
+ * first click is a `setTimeout` armed with the same value. A test that drove
+ * the pair at the shipped 250ms would be asserting on the runner's scheduling:
+ * a stalled worker lets the timer win, correct code opens a panel mid-gesture,
+ * and the failure looks exactly like the regression the test exists to catch
+ * (round-3 test-quality f-002).
  *
- * The window's length is not what any of this is testing: the page's rule is
- * "a pair inside the window is one gesture, and only a same-node pair is a
- * double-click", and that rule is the same at 250ms as at five seconds.
+ * Setting the window is the only lever that binds BOTH halves, and it is the
+ * page's own knob rather than a shim. A faked browser clock would not do: the
+ * `dbltap` comparison is between two native DOM `event.timeStamp`s, which the
+ * page never mints and a clock shim therefore cannot control — freezing
+ * `setTimeout` would hold `onetap` off while the window lapsed anyway, leaving
+ * the second click a separate gesture.
+ *
+ * An hour is not a bigger margin, it is a bound: every test here is capped by
+ * Playwright's own per-test timeout (30s by default), so a stall long enough to
+ * expire this window aborts the test as a timeout — a harness fault, reported
+ * as one — instead of quietly reclassifying the gesture. It is also as long as
+ * it may safely be: a `setTimeout` delay past 2^31-1ms is clamped to fire at
+ * once (the trap `tasks.js` chains around), which would spring `onetap`
+ * immediately and do the precise opposite of this.
+ *
+ * The window's LENGTH is not the claim under test. The page's rule — a pair
+ * inside the window is one gesture, and only a same-node pair is that node's
+ * double-click — reads the same at 250ms as at an hour, and the pair outside
+ * the window has a test of its own below that touches none of this.
  */
-async function widenMultiClickWindow(page: import("@playwright/test").Page) {
-  await page.evaluate(() =>
-    (window as any).LithosLensGraph.cy.multiClickDebounceTime(5000),
+async function holdMultiClickWindowOpen(page: import("@playwright/test").Page) {
+  await page.evaluate(
+    (ms) => (window as any).LithosLensGraph.cy.multiClickDebounceTime(ms),
+    HELD_MULTI_CLICK_WINDOW_MS,
   );
 }
 
@@ -1129,8 +1150,10 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
   // starts in and the one round-2 correctness f-001 was about: the first click
   // used to open the panel beside the canvas, the flex layout narrowed it, the
   // refit moved the node — and the second click landed on the background with
-  // no `dbltap` to show for it. The gap below is deliberately wide enough for
-  // a local panel fragment to have come back inside it.
+  // no `dbltap` to show for it. The gap below is a FLOOR and nothing more —
+  // long enough that a local panel fragment would have come back inside it, so
+  // the old interleaving is reproduced rather than out-run. Nothing is asked of
+  // its upper end: the window above is held open for the whole gesture.
   const panelRequests: string[] = [];
   await page.route(/fragment=panel/, async (route) => {
     panelRequests.push(route.request().url());
@@ -1142,7 +1165,7 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
     page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
   ).toBeVisible();
   await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
-  await widenMultiClickWindow(page);
+  await holdMultiClickWindowOpen(page);
 
   const placed = () =>
     page.evaluate(() => {
@@ -1185,11 +1208,13 @@ test("two quick clicks on different nodes select the second, never leave", async
   await expect(
     page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
   ).toBeVisible();
-  await widenMultiClickWindow(page);
+  await holdMultiClickWindowOpen(page);
 
   await pointerOnNode(page, "loom-schema");
   await page.mouse.down();
   await page.mouse.up();
+  // A floor again, not a deadline: long enough to be an ordinary human pair,
+  // with the window held open around it.
   await page.waitForTimeout(100);
   // Nothing has moved, so the second node is still where it was measured.
   await pointerOnNode(page, "loom-ship");
@@ -1202,6 +1227,44 @@ test("two quick clicks on different nodes select the second, never leave", async
   ).toBeVisible();
   await expect(page).toHaveURL(/\/tasks\/graph\?/);
   await expect(page).toHaveURL(/focus=loom-ship/);
+});
+
+test("two clicks on a node with the panel between them are two single clicks", async ({
+  page,
+}) => {
+  // The other side of the boundary, and the one case the held-open window
+  // above deliberately cannot reach: a pair the library has already settled.
+  // No delay is asserted here at all — the wait is for the PANEL the first
+  // click opened, which only exists once Cytoscape decided that click was a
+  // single one, so the second click is provably a new gesture however long the
+  // host took to get there. Clicking the same node twice slowly must stay two
+  // single clicks: the page may not accumulate taps into a navigation.
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).__sameDocument = true;
+  });
+
+  const panel = page.locator('[data-panel-host] [data-panel-task="loom-ship"]');
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(panel).toBeVisible();
+
+  // The panel narrowed the canvas and the viewport refitted, so the node is
+  // re-measured — the second click goes wherever it is NOW.
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+
+  await expect(panel).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-ship/);
+  // The same document throughout: a navigation would have replaced it.
+  expect(await page.evaluate(() => (window as any).__sameDocument === true)).toBe(
+    true,
+  );
 });
 
 test("the canvas ranks every node by the layer the text gives it", async ({
