@@ -727,8 +727,8 @@ chain; the topological layers as one `<ol>` per layer; the "N isolated tasks"
 disclosure; the `parent_child` hierarchy tree, always rendered; and a
 `<script type="application/json">` payload carrying nodes (with completeness
 and layer), edges (with state and reason), layers, cycles, ghosts, the longest
-chain with its `exact | lower_bound` flag, roots, isolated, incomplete and
-`as_of`. Each node additionally carries its claims and the detail URL
+chain with its `exact | lower_bound` flag and its condensations' members,
+roots, isolated, incomplete and `as_of`. Each node additionally carries its claims and the detail URL
 `tasks.task_detail_path` built for it — the two things the canvas needs and
 the topology does not imply. The toolbar states `as_of` — the OLDEST
 contributing fetch — because edge upserts emit no upstream event and the TTL
@@ -881,7 +881,13 @@ at. Lens still never re-implements the readiness predicate.
   `discovered_from` edge running between the same two tasks is not a step of
   it), matched by **condensation**, since the chain is a walk over the
   condensed graph and names a cycle by its representative while the edge that
-  enters it may land on any member.
+  enters it may land on any member. The condensation it matches on is the
+  chain's OWN — the payload's `longest_chain.members`, parallel to its
+  `nodes` — and not a node's `cycle`, which is the all-edge SCC the picture is
+  drawn from: an open `A → B` inside a loop closed by an inactive `B → C` and
+  `C → A` is one drawn cycle and a live two-chain at once, and reading the
+  chain through the drawn cycle there would trace an answer the text does not
+  state.
 - **Every edge carries an arrowhead**; `blocks` is solid and `waits_on_gate`
   dashed. `parent_child` (thin, light) and `discovered_from` (dotted) are
   **overlays, off by default**, toggled in the toolbar and remembered in the

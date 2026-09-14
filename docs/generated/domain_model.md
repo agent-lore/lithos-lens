@@ -158,6 +158,7 @@ classDiagram
   }
   class BlockingChain {
     +nodes tuple[str, ...]
+    +members tuple[tuple[str, ...], ...]
     +bound ChainBound
   }
   class Breadcrumb {

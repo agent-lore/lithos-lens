@@ -369,6 +369,15 @@ def payload_json(
             "nodes": list(chain.nodes),
             "length": chain.length,
             "bound": chain.bound,
+            # Parallel to ``nodes``: what each of those condensations HOLDS.
+            # The chain condenses the active projection, the picture is drawn
+            # from the all-edge one, and the two partitions legitimately
+            # differ — an `A -> B` that is live inside a loop closed by a
+            # completed `C` is one drawn cycle and a live two-chain at once.
+            # So the canvas is told the chain's own membership rather than
+            # left to map an id through a node's ``cycle``, which would trace
+            # a different chain from the one the text states.
+            "members": [list(members) for members in chain.members],
         },
         "roots": list(topology.roots),
         # The list the PAGE folds, not the raw D8 set: a flagged cycle member

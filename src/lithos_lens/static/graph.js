@@ -134,25 +134,42 @@
   // box drawn round it would be a cycle of one.
   const cycleParent = dict();
   const cycleElementId = dict();
+  const cycleMembers = dict();
   ((payload && payload.cycles) || []).forEach(function (cycle, index) {
     if (!cycle.scc) return;
     cycleParent[cycle.id] = "c" + index;
     cycleElementId[cycle.id] = "c" + index;
+    cycleMembers[cycle.id] = cycle.members || [];
   });
 
-  // The chain (D7) is a walk over the CONDENSED graph — a cycle counts as one
-  // node and is named by its representative — so it cannot be matched against
-  // raw endpoints. `P → B` where B is a non-representative member of A's cycle
-  // IS the step `P → A` the chain names, and a client comparing ids would look
-  // for an edge that does not exist and leave the trace broken exactly at the
-  // cycle boundary. Everything below is keyed by condensation instead.
+  // The DISPLAY condensation: the all-edge SCC the picture is drawn from, which
+  // is what puts a node inside a compound box and what the placement below
+  // stacks in one slot. NOT the chain's — see `chainCondensationOf`.
   function condensationOf(id) {
     const node = byId[id];
     return (node && node.cycle) || id;
   }
 
+  // The chain (D7) is a walk over a CONDENSED graph — a cycle counts as one
+  // node and is named by its representative — so it cannot be matched against
+  // raw endpoints. `P → B` where B is a non-representative member of A's cycle
+  // IS the step `P → A` the chain names, and a client comparing ids would look
+  // for an edge that does not exist and leave the trace broken exactly at the
+  // cycle boundary. Everything below is keyed by condensation instead.
+  //
+  // But it is the ACTIVE projection's condensation, and the server states it
+  // (`longest_chain.members`) precisely because it is NOT the `cycle` each node
+  // carries. Those two partitions legitimately differ: an epic graph showing
+  // completed children can hold an open `A → B` whose loop closes back through
+  // an inactive `B → C` and `C → A`, which is one drawn cycle `{A,B,C}` and a
+  // live two-chain `A → B` at the same time. Mapping through `cycle` there
+  // would call the chain's own step internal and leave completed `C` accented —
+  // the canvas tracing a different answer from the one the text states. So a
+  // node the payload did not name as a chain member stands for itself.
   const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
+  const chainMembers = (payload.longest_chain && payload.longest_chain.members) || [];
   const chainCondensations = dict();
+  const chainCondensationOfId = dict();
   // NESTED, not a joined key. A condensation is named by a task id, and a task
   // id is an arbitrary non-empty string (`tasks.py`): `from + ">" + to` cannot
   // tell the step `a>b → c` from the step `a → b>c`, so an off-chain
@@ -161,14 +178,21 @@
   const chainSteps = dict();
   chain.forEach(function (id, index) {
     chainCondensations[id] = true;
+    (chainMembers[index] || [id]).forEach(function (member) {
+      chainCondensationOfId[member] = id;
+    });
     if (!index) return;
     const from = chain[index - 1];
     if (!chainSteps[from]) chainSteps[from] = dict();
     chainSteps[from][id] = true;
   });
 
+  function chainCondensationOf(id) {
+    return chainCondensationOfId[id] || id;
+  }
+
   function onChain(id) {
-    return chainCondensations[condensationOf(id)] === true;
+    return chainCondensations[chainCondensationOf(id)] === true;
   }
 
   function stepOnChain(edge) {
@@ -178,8 +202,8 @@
     // a different relation — would otherwise take the critical-path accent and
     // trace a hierarchy as if it blocked something.
     if (!DEPENDENCY_EDGE_TYPES[edge.type] || edge.state !== "active") return false;
-    const from = condensationOf(edge.from);
-    const to = condensationOf(edge.to);
+    const from = chainCondensationOf(edge.from);
+    const to = chainCondensationOf(edge.to);
     // An edge INSIDE a condensation is not a step either: the chain crosses it
     // in one move, and the loop it is drawn from has no direction the chain
     // endorses.
@@ -292,10 +316,14 @@
   Object.keys(cycleParent).forEach(function (id) {
     elements.push({
       data: { id: cycleParent[id], label: "cycle" },
-      // The box is on the chain when its condensation is: the trace enters and
-      // leaves the cycle as one node, so a box drawn plain between two traced
-      // edges would read as a break in the sequence.
-      classes: "graph-cycle" + (chainCondensations[id] ? " chain" : "")
+      // The box is on the chain when any task inside it is: usually the whole
+      // box is one chain node — the trace enters and leaves the cycle in one
+      // move, and a box drawn plain between two traced edges would read as a
+      // break in the sequence — but where the active projection splits this
+      // loop up, the chain runs THROUGH the box and the same accent is what
+      // says so.
+      classes:
+        "graph-cycle" + ((cycleMembers[id] || []).some(onChain) ? " chain" : "")
     });
   });
   nodes.forEach(function (node) {

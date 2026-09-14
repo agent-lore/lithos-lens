@@ -1777,6 +1777,14 @@ def _payload(nodes: list[dict], edges: list[dict], **scope: object) -> dict:
     }
     body["scope"].update(scope_overrides)  # type: ignore[union-attr]
     body.update(scope)
+    # The chain's own condensation membership, which the server always states
+    # (`graph_layout.BlockingChain.members`) because it is the ACTIVE
+    # projection's partition and nothing else in the payload carries it. A
+    # fixture that names no members is one where every chain node stands alone,
+    # which is the ordinary case — the two that are not spell it out.
+    chain = body["longest_chain"]
+    assert isinstance(chain, dict)
+    chain.setdefault("members", [[node] for node in chain["nodes"]])
     return body
 
 
@@ -1876,8 +1884,50 @@ CYCLE_CHAIN_PAYLOAD: dict = _payload(
             "message": "Dependency cycle.",
         }
     ],
-    longest_chain={"nodes": ["p", "cyc-a", "d"], "length": 3, "bound": "exact"},
+    longest_chain={
+        "nodes": ["p", "cyc-a", "d"],
+        "length": 3,
+        "bound": "exact",
+        "members": [["p"], ["cyc-a", "cyc-b"], ["d"]],
+    },
     roots=["p"],
+)
+
+# A drawn cycle the ACTIVE projection does not agree is one (round-9
+# correctness f-001). `mix-a → mix-b` is live; `mix-b → mix-c` is inactive
+# (its dependent completed) and `mix-c → mix-a` is inactive (its predecessor
+# completed). Every dependency edge makes ONE SCC — the box the picture draws —
+# while the active projection makes three nodes, where the longest chain is the
+# two-step `mix-a → mix-b` the text states. The partitions differ legitimately,
+# so the chain names its OWN membership and the canvas must read that.
+MIXED_ACTIVE_CYCLE_PAYLOAD: dict = _payload(
+    [
+        _node("mix-a", cycle="mix-a", flagged=True),
+        _node("mix-b", cycle="mix-a", flagged=True),
+        _node("mix-c", status="completed", cycle="mix-a", flagged=True),
+    ],
+    [
+        _edge("mix-a", "mix-b"),
+        _edge("mix-b", "mix-c", state="inactive", reason="dependent_resolved"),
+        _edge("mix-c", "mix-a", state="inactive", reason="satisfied"),
+    ],
+    cycles=[
+        {
+            "id": "mix-a",
+            "members": ["mix-a", "mix-b", "mix-c"],
+            "path": ["mix-a", "mix-b", "mix-c", "mix-a"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        }
+    ],
+    longest_chain={
+        "nodes": ["mix-a", "mix-b"],
+        "length": 2,
+        "bound": "exact",
+        "members": [["mix-a"], ["mix-b"]],
+    },
+    roots=["mix-a"],
 )
 
 # An EPIC scope, where the isolated default is the other way round (D8): an
@@ -1928,7 +1978,12 @@ BIG_CYCLE_PAYLOAD: dict = _payload(
             "message": "Dependency cycle.",
         }
     ],
-    longest_chain={"nodes": ["p", "c0", "d"], "length": 3, "bound": "exact"},
+    longest_chain={
+        "nodes": ["p", "c0", "d"],
+        "length": 3,
+        "bound": "exact",
+        "members": [["p"], BIG_CYCLE_MEMBERS, ["d"]],
+    },
     roots=["p"],
 )
 
@@ -2281,6 +2336,31 @@ def test_the_chain_trace_survives_a_cycle_boundary() -> None:
     # condensation in ONE move and endorses neither direction round it.
     assert "chain" not in _edge_style(result, "cyc-a", "cyc-b", "blocks")["classes"]
     assert "chain" not in _edge_style(result, "cyc-b", "cyc-a", "blocks")["classes"]
+
+
+def test_the_chain_is_traced_over_the_active_projections_own_condensation() -> None:
+    """Regression (round-9 correctness f-001). A node's `cycle` is the all-edge
+    SCC the PICTURE is drawn from; the chain condenses the ACTIVE projection,
+    and the two partitions legitimately differ. Reading the chain through
+    `cycle` called the chain's own step internal to a condensation and accented
+    a completed task the chain never names."""
+    result = _graph_run([], payload=MIXED_ACTIVE_CYCLE_PAYLOAD)
+    styles = result["styles"]
+
+    assert "chain" in _edge_style(result, "mix-a", "mix-b", "blocks")["classes"], (
+        "the chain's own step was discarded as internal to the drawn cycle"
+    )
+    assert "chain" in styles["mix-a"]["classes"]
+    assert "chain" in styles["mix-b"]["classes"]
+    # The completed task is in the box, not on the chain — the text names two
+    # nodes and the canvas may not name three.
+    assert "chain" not in styles["mix-c"]["classes"]
+    # The inactive edges are no part of it either, in either direction.
+    assert "chain" not in _edge_style(result, "mix-b", "mix-c", "blocks")["classes"]
+    assert "chain" not in _edge_style(result, "mix-c", "mix-a", "blocks")["classes"]
+    # And the box the chain runs THROUGH is accented, as it is when the whole
+    # box is one chain node: the trace may not read as broken where it is drawn.
+    assert "chain" in styles["cycle::mix-a"]["classes"]
 
 
 # ── Overlays (D8) ───────────────────────────────────────────────────────

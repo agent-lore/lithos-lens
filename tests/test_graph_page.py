@@ -1741,6 +1741,13 @@ def test_the_payload_carries_D3_s_whole_schema(
     # The chain, its bound, and the roots the canvas lays out from.
     assert data["longest_chain"]["bound"] == "lower_bound"
     assert data["longest_chain"]["length"] == len(data["longest_chain"]["nodes"])
+    # Each chain node with what its condensation HOLDS, parallel to `nodes`.
+    # The chain condenses the ACTIVE projection and the nodes' `cycle` is the
+    # all-edge one, so this is the only statement of that partition the canvas
+    # can trace the chain by.
+    members = data["longest_chain"]["members"]
+    assert len(members) == len(data["longest_chain"]["nodes"])
+    assert [group[0] for group in members] == data["longest_chain"]["nodes"]
     assert "cyc-a" in data["roots"]
     assert set(data["roots"]) <= {node["id"] for node in data["nodes"]}
     # And it still agrees with the text about where every node is rendered.
