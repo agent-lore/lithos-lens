@@ -33,7 +33,6 @@ The one number this page never states is a corpus-wide one: the chain is
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 from urllib.parse import urlencode
@@ -78,6 +77,7 @@ from lithos_lens.graph_view import (
     LayerGroup,
     LayerView,
     NodeView,
+    payload_json,
 )
 from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_links import (
@@ -88,6 +88,8 @@ from lithos_lens.task_links import (
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
+    GRAPH_SELECTION_KEY,
+    PANEL_SELECTION_KEY,
     ProjectConvention,
     TaskRecord,
 )
@@ -235,7 +237,7 @@ def build_graph_page(
         reads_truncated=sum(1 for read in signal.reads if read.truncated),
         reads_failed=sum(1 for read in signal.reads if read.error),
         reads_unmade=sum(1 for read in signal.reads if read.unmade),
-        payload_json=_payload_json(
+        payload_json=payload_json(
             scope, topology, chain, views, layers, params, folded
         ),
         edge_count=len(scope.edges),
@@ -580,91 +582,6 @@ def _edge_types(scope: TaskGraphScope) -> tuple[str, ...]:
     return tuple(known + other)
 
 
-def _payload_json(
-    scope: TaskGraphScope,
-    topology: Topology,
-    chain: BlockingChain,
-    views: Mapping[str, NodeView],
-    layers: Sequence[LayerView],
-    params: GraphPageParams,
-    folded: Sequence[str],
-) -> str:
-    """D3's embedded payload — the same node set, layers and chain as the text.
-
-    Serialised here rather than in the template so the escaping is applied
-    once: ``<`` is escaped so a task title containing ``</script>`` cannot end
-    the element early.
-    """
-    payload = {
-        "scope": {
-            "kind": params.kind,
-            "key": params.key,
-            "include_resolved": params.include_resolved,
-            "focus": params.focus,
-            "overlays": list(params.overlays),
-            "isolated": params.show_isolated,
-        },
-        "nodes": [
-            {
-                "id": node.id,
-                "label": node.label,
-                "status": node.status,
-                "type": node.task_type,
-                "layer": node.layer,
-                "ghost": node.ghost,
-                "ghost_kind": node.ghost_kind,
-                "projects": list(node.projects),
-                "completeness": node.completeness,
-                "cycle": node.cycle_id,
-                # Shape and verdict are separate fields because they are
-                # separate facts (D4): the canvas groups on ``cycle`` and marks
-                # on ``flagged``.
-                "flagged": node.flagged,
-                "cycle_unknown": node.cycle_unknown,
-                "blocked_via_cycle": node.blocked_via_cycle,
-                "isolated": node.isolated,
-            }
-            for node in views.values()
-        ],
-        "edges": [
-            {
-                "from": edge.from_task_id,
-                "to": edge.to_task_id,
-                "type": edge.type,
-                "state": edge.state,
-                "reason": edge.reason,
-            }
-            for edge in scope.edges
-        ],
-        "layers": [[node.id for node in layer.nodes] for layer in layers],
-        "cycles": [
-            {
-                "id": cycle.id,
-                "members": list(cycle.members),
-                "path": list(cycle.path),
-                "scc": cycle.scc,
-                "flagged": cycle.flagged,
-                "message": cycle.message,
-            }
-            for cycle in topology.cycles
-        ],
-        "ghosts": [node.id for node in scope.nodes if node.ghost],
-        "longest_chain": {
-            "nodes": list(chain.nodes),
-            "length": chain.length,
-            "bound": chain.bound,
-        },
-        "roots": list(topology.roots),
-        # The list the PAGE folds, not the raw D8 set: a flagged cycle member
-        # is layered rather than folded, and the payload has to agree with the
-        # text about where every node is rendered.
-        "isolated": list(folded),
-        "incomplete": dict(scope.incomplete),
-        "as_of": scope.as_of.isoformat() if scope.as_of else None,
-    }
-    return json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
-
-
 def _join(values: Sequence[str]) -> str:
     return ", ".join(values)
 
@@ -698,7 +615,9 @@ def parse_graph_params(query: Mapping[str, str]) -> GraphPageParams:
         kind=kind,
         key=key,
         include_resolved=include_resolved,
-        focus=(query.get("focus") or query.get("selected") or "").strip(),
+        focus=(
+            query.get(GRAPH_SELECTION_KEY) or query.get(PANEL_SELECTION_KEY) or ""
+        ).strip(),
         overlays=tuple(
             overlay
             for overlay in KNOWN_OVERLAYS
@@ -746,6 +665,7 @@ def graph_url(
     include_resolved: bool | None = None,
     isolated: bool | None = None,
     focus: str | None = None,
+    toggle_overlay: str = "",
 ) -> str:
     """Build a `/tasks/graph` URL — a fresh scope, or this one with one toggle.
 
@@ -754,6 +674,13 @@ def graph_url(
     carried this page's ``focus`` would point at a node that scope may not
     contain. Everything else edits the current URL in place, which is what the
     toggles need.
+
+    ``toggle_overlay`` FLIPS one overlay's membership and leaves the other
+    alone, because that is the only edit the toolbar makes — the two overlays
+    are independent switches (D8) and a link that set the whole list would turn
+    the other one off as a side effect. An empty result drops the parameter
+    rather than emitting ``overlays=``: "absent" and "none" are the same state,
+    and the client reads a missing parameter as no overlays for that reason.
     """
     if project or epic:
         return "/tasks/graph?" + urlencode(
@@ -769,9 +696,16 @@ def graph_url(
     query.append(("isolated", "1" if show else "0"))
     target = params.focus if focus is None else focus
     if target:
-        query.append(("focus", target))
-    if params.overlays:
-        query.append(("overlays", ",".join(params.overlays)))
+        query.append((GRAPH_SELECTION_KEY, target))
+    overlays = params.overlays
+    if toggle_overlay:
+        overlays = tuple(
+            overlay
+            for overlay in KNOWN_OVERLAYS
+            if (overlay in params.overlays) != (overlay == toggle_overlay)
+        )
+    if overlays:
+        query.append(("overlays", ",".join(overlays)))
     return "/tasks/graph?" + urlencode(query)
 
 

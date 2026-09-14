@@ -35,7 +35,7 @@ from lithos_lens.graph_page import (
 )
 from lithos_lens.graph_scope import GraphScopeLimits
 from lithos_lens.state import AppState
-from lithos_lens.tasks import TaskRecord, default_since
+from lithos_lens.tasks import GRAPH_SELECTION_KEY, TaskRecord, default_since
 from lithos_lens.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,10 @@ def register_graph_routes(
     # filter set, so it does not travel through `request_filters`.
     templates.env.globals["graph_url"] = graph_url
     templates.env.globals["edge_legend"] = EDGE_LEGEND
+    # The page's single selection parameter, handed to `tasks.js` so the one
+    # panel implementation is told which key this host uses rather than
+    # carrying a copy of both pages' vocabularies (D9).
+    templates.env.globals["graph_selection_key"] = GRAPH_SELECTION_KEY
 
     @app.get("/tasks/graph", response_class=HTMLResponse)
     async def tasks_graph(request: Request) -> HTMLResponse:

@@ -1194,3 +1194,740 @@ def test_a_failed_click_does_not_leave_its_task_claimed_as_the_intent() -> None:
     assert result["href"] == "http://lens.test/tasks?project=influx&selected=beta"
     assert result["panel"] == "panel:beta"
     assert result["unhandled"] == []
+
+
+# ── the graph canvas (T2-A4): overlays, isolated, the pill, node clicks ─────
+
+# A third harness, and the reason it is not the panel one: what A4 adds lives
+# between the payload the server already embedded and Cytoscape — which URL an
+# overlay toggle pushes, which elements are drawn afterwards, that NOTHING is
+# fetched to do it, and that a task event never moves the layout. None of that
+# is visible to Python (the server renders the same HTML either way) and none of
+# it is visible to the e2e suite either, which photographs pixels.
+#
+# It loads BOTH files, in the page's own order, because "one panel
+# implementation for rows and nodes" (D9) is exactly the promise that a canvas
+# with its own private copy of the panel would stop keeping: a node tap here has
+# to travel through `tasks.js`.
+#
+# Cytoscape itself is stubbed — a real one needs a canvas — but the stub
+# resolves STYLE the way the library does (last matching rule wins), so
+# "every drawn edge carries an arrowhead" is a question this harness can
+# actually answer rather than assume.
+GRAPH_HARNESS = """
+const fs = require("fs");
+const vm = require("vm");
+
+const [tasksPath, graphPath, initialHref, actionsRaw, payloadRaw] =
+  process.argv.slice(1);
+const actions = JSON.parse(actionsRaw);
+
+const entries = [initialHref];
+let cursor = 0;
+const pushed = [];
+const fetches = [];
+const listeners = {};
+const sse = {};
+let layouts = 0;
+
+function href() { return entries[cursor]; }
+
+function element(extra) {
+  return Object.assign({
+    dataset: {},
+    attributes: {},
+    hidden: false,
+    textContent: "",
+    setAttribute(name, value) { this.attributes[name] = value; },
+    getAttribute(name) { return this.attributes[name]; },
+  }, extra || {});
+}
+
+const surface = element();
+const container = element();
+const host = element({
+  panel: null,
+  _html: "",
+  get innerHTML() { return this._html; },
+  set innerHTML(value) { this._html = value; },
+});
+const payloadScript = element({ textContent: payloadRaw });
+const pill = element({ hidden: true });
+const textToggle = element({ hidden: true });
+const disclosure = element({ open: false });
+const layersSection = element();
+const hierarchySection = element();
+const isolatedToggle = element({ dataset: {} });
+const overlayToggles = {
+  hierarchy: element({ dataset: { toggleOverlay: "hierarchy" } }),
+  provenance: element({ dataset: { toggleOverlay: "provenance" } }),
+};
+
+const SINGLE = {
+  "[data-graph-canvas-layout]": surface,
+  "[data-graph-canvas]": container,
+  "[data-graph-payload]": payloadScript,
+  "[data-panel-host]": host,
+  "[data-graph-refresh-pill]": pill,
+  "[data-toggle-text]": textToggle,
+  "[data-isolated-disclosure]": disclosure,
+};
+const MANY = {
+  "[data-toggle-overlay]": [overlayToggles.hierarchy, overlayToggles.provenance],
+  "[data-toggle-isolated]": [isolatedToggle],
+  "[data-graph-text]": [layersSection, disclosure, hierarchySection],
+};
+
+const document = {
+  querySelector(selector) { return SINGLE[selector] || null; },
+  querySelectorAll(selector) { return MANY[selector] || []; },
+  createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+};
+
+class EventSource {
+  addEventListener(type, fn) { (sse[type] = sse[type] || []).push(fn); }
+  close() {}
+}
+
+// ── the Cytoscape stub ────────────────────────────────────────────────────
+//
+// Style resolution is real enough to be worth asking: a rule matches when its
+// `node`/`edge` head matches the element kind and every `.class` token is on
+// it, and the LAST matching rule wins — which is how the library itself
+// resolves a stylesheet.
+function selectorMatches(ele, selector) {
+  const parts = selector.trim().split(".");
+  const head = parts.shift();
+  if (head === "node" && ele.kind !== "node") return false;
+  if (head === "edge" && ele.kind !== "edge") return false;
+  if (head && head !== "node" && head !== "edge") return false;
+  return parts.every(function (name) { return ele.classes.has(name); });
+}
+
+function cytoscape(options) {
+  const style = options.style || [];
+  const nodes = [];
+  const edges = [];
+  const handlers = [];
+  function build(spec) {
+    const kind = spec.data.source ? "edge" : "node";
+    const ele = {
+      kind,
+      classes: new Set((spec.classes || "").split(" ").filter(Boolean)),
+      inline: {},
+      id() { return spec.data.id; },
+      data(key) { return key === undefined ? spec.data : spec.data[key]; },
+      hasClass(name) { return ele.classes.has(name); },
+      addClass(name) { ele.classes.add(name); return ele; },
+      removeClass(name) { ele.classes.delete(name); return ele; },
+      at: { x: 0, y: 0 },
+      position(next) {
+        if (next !== undefined) { ele.at = next; return ele; }
+        return ele.at;
+      },
+      style(name, value) {
+        if (value !== undefined) { ele.inline[name] = value; return ele; }
+        if (name in ele.inline) return ele.inline[name];
+        let resolved;
+        style.forEach(function (rule) {
+          if (selectorMatches(ele, rule.selector) && rule.style[name] !== undefined) {
+            resolved = rule.style[name];
+          }
+        });
+        return resolved;
+      },
+    };
+    (kind === "edge" ? edges : nodes).push(ele);
+  }
+  (options.elements || []).forEach(build);
+  const collection = function (all, selector) {
+    if (!selector) return all;
+    return all.filter(function (ele) { return selectorMatches(ele, selector); });
+  };
+  return {
+    nodes(selector) { return collection(nodes, selector); },
+    edges(selector) { return collection(edges, selector); },
+    // The overlay edges, which join after the layout so that hierarchy cannot
+    // decide the dependency graph's shape.
+    add(specs) { specs.forEach(build); },
+    on(event, selector, fn) { handlers.push({ event, selector, fn }); },
+    // Counted, because "exactly one, ever" is the claim: D8 forbids a second.
+    layout() { layouts += 1; return { run() {} }; },
+    // A pan and a zoom over the positions that one layout produced — not a
+    // layout, which is why it is a separate method here as it is there.
+    fit() {},
+    _fire(event, id) {
+      const target = nodes.concat(edges).filter(function (ele) {
+        return ele.id() === id;
+      })[0];
+      handlers.forEach(function (entry) {
+        if (entry.event === event) entry.fn({ target });
+      });
+    },
+  };
+}
+
+const sandbox = {
+  document,
+  EventSource,
+  console,
+  URL,
+  URLSearchParams,
+  DOMParser: class {
+    parseFromString() { return { querySelector() { return null; } }; }
+  },
+  // Answered immediately and recorded: the overlay tests assert this list
+  // stays EMPTY, and the node-click test needs the panel to actually land.
+  fetch: (url) => {
+    fetches.push(url);
+    return Promise.resolve({ ok: true, text: () => Promise.resolve("panel:" + url) });
+  },
+};
+sandbox.window = {
+  LithosLensTasks: {
+    selectionParam: "focus",
+    panelAliasPath: "/tasks/id",
+    panelAliasKey: "task_id",
+    liveRefresh: false,
+    eventsUrl: "/tasks/events",
+  },
+  cytoscape,
+  setTimeout: (fn) => { return 0; },
+  clearTimeout() {},
+  setInterval: () => 0,
+  clearInterval() {},
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  location: {
+    get href() { return href(); },
+    // A real navigation, which is what a double-click on a node is.
+    set href(value) { entries.push(value); cursor = entries.length - 1; },
+  },
+  history: {
+    pushState(state, title, url) {
+      pushed.push(url);
+      entries.splice(cursor + 1);
+      entries.push(new URL(url, "http://lens.test").href);
+      cursor = entries.length - 1;
+    },
+  },
+};
+sandbox.window.window = sandbox.window;
+Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
+
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(tasksPath, "utf8"), sandbox);
+vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
+
+function fire(type, event) {
+  (listeners[type] || []).forEach((listener) => listener(event));
+}
+
+function clickOn(map) {
+  return {
+    button: 0,
+    defaultPrevented: false,
+    target: { closest: (selector) => map[selector] || null },
+    preventDefault() { this.defaultPrevented = true; },
+  };
+}
+
+let eventSeq = 0;
+
+function snapshot() {
+  const drawn = sandbox.window.LithosLensGraph.shown();
+  return {
+    href: href(),
+    nodes: drawn.nodes,
+    edges: drawn.edges.map((edge) => edge.type),
+    arrowless: drawn.edges
+      .filter((edge) => !edge.arrow || edge.arrow === "none")
+      .map((edge) => edge.id),
+    pillHidden: pill.hidden,
+    textHidden: layersSection.hidden,
+    panel: host.innerHTML,
+    focused: sandbox.window.LithosLensGraph.cy
+      .nodes()
+      .filter((node) => node.hasClass("focused"))
+      .map((node) => node.id()),
+    disclosureOpen: disclosure.open,
+  };
+}
+
+(async () => {
+  const states = [];
+  for (const action of actions) {
+    const [name, argument] = action.split(":");
+    if (name === "overlay") {
+      fire("click", clickOn({ "[data-toggle-overlay]": overlayToggles[argument] }));
+    } else if (name === "isolated") {
+      fire("click", clickOn({ "[data-toggle-isolated]": isolatedToggle }));
+    } else if (name === "text") {
+      fire("click", clickOn({ "[data-toggle-text]": textToggle }));
+    } else if (name === "back") {
+      if (cursor > 0) cursor -= 1;
+      fire("popstate", {});
+    } else if (name === "forward") {
+      if (cursor < entries.length - 1) cursor += 1;
+      fire("popstate", {});
+    } else if (name === "tap" || name === "dbltap") {
+      sandbox.window.LithosLensGraph.cy._fire(name, argument);
+    } else if (name === "event") {
+      eventSeq += 1;
+      (sse["task.updated"] || []).forEach((listener) => listener({
+        lastEventId: "event-" + eventSeq,
+        data: JSON.stringify({
+          type: "task.updated", task_id: argument, requires_refresh: true,
+        }),
+      }));
+    } else if (name === "finding") {
+      eventSeq += 1;
+      (sse["finding.posted"] || []).forEach((listener) => listener({
+        lastEventId: "event-" + eventSeq,
+        data: JSON.stringify({ type: "finding.posted", task_id: argument }),
+      }));
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    states.push(snapshot());
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({
+    states,
+    final: snapshot(),
+    pushed,
+    fetches,
+    layouts,
+    positions: sandbox.window.LithosLensGraph.positions(),
+  }));
+})();
+"""
+
+GRAPH_JS = Path(__file__).resolve().parents[1] / "src/lithos_lens/static/graph.js"
+
+# One scope's payload in the shape `graph_view.payload_json` emits, carrying
+# every branch the canvas has a rule for: a drawable cycle, a dependency ghost,
+# a CONTEXT ghost reachable only through its provenance edge, an isolated node
+# whose only edge is hierarchy, an inactive edge and an unknown one.
+GRAPH_PAYLOAD: dict = {
+    "scope": {
+        "kind": "project",
+        "key": "loom",
+        "include_resolved": False,
+        "focus": "",
+        "overlays": [],
+        "isolated": False,
+    },
+    "nodes": [
+        {
+            "id": "epic",
+            "label": "Epic",
+            "status": "open",
+            "type": "epic",
+            "layer": 0,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/epic",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": True,
+        },
+        {
+            "id": "schema",
+            "label": "Schema",
+            "status": "open",
+            "type": "task",
+            "layer": 0,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": ["agent-zero"],
+            "detail_url": "/tasks/schema",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "ship",
+            "label": "Ship",
+            "status": "open",
+            "type": "task",
+            "layer": 1,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/ship",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "cycle-a",
+            "label": "A",
+            "status": "open",
+            "type": "task",
+            "layer": 0,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/cycle-a",
+            "cycle": "cycle-a",
+            "flagged": True,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "cycle-b",
+            "label": "B",
+            "status": "open",
+            "type": "task",
+            "layer": 0,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/cycle-b",
+            "cycle": "cycle-a",
+            "flagged": True,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "far",
+            "label": "Far",
+            "status": "open",
+            "type": "task",
+            "layer": 2,
+            "ghost": True,
+            "ghost_kind": "dependency",
+            "projects": ["lens"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/far",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "source",
+            "label": "Source",
+            "status": "completed",
+            "type": "task",
+            "layer": 0,
+            "ghost": True,
+            "ghost_kind": "context",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/source",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": False,
+        },
+        {
+            "id": "note",
+            "label": "Note",
+            "status": "open",
+            "type": "task",
+            "layer": 0,
+            "ghost": False,
+            "ghost_kind": "",
+            "projects": ["loom"],
+            "completeness": "ok",
+            "claims": [],
+            "detail_url": "/tasks/note",
+            "cycle": "",
+            "flagged": False,
+            "cycle_unknown": False,
+            "blocked_via_cycle": False,
+            "isolated": True,
+        },
+    ],
+    "edges": [
+        {
+            "from": "schema",
+            "to": "ship",
+            "type": "blocks",
+            "state": "active",
+            "reason": "",
+        },
+        {
+            "from": "ship",
+            "to": "far",
+            "type": "blocks",
+            "state": "active",
+            "reason": "",
+        },
+        {
+            "from": "cycle-a",
+            "to": "cycle-b",
+            "type": "blocks",
+            "state": "active",
+            "reason": "",
+        },
+        {
+            "from": "cycle-b",
+            "to": "cycle-a",
+            "type": "blocks",
+            "state": "active",
+            "reason": "",
+        },
+        {
+            "from": "epic",
+            "to": "schema",
+            "type": "parent_child",
+            "state": "",
+            "reason": "",
+        },
+        {
+            "from": "epic",
+            "to": "note",
+            "type": "parent_child",
+            "state": "",
+            "reason": "",
+        },
+        {
+            "from": "source",
+            "to": "note",
+            "type": "discovered_from",
+            "state": "",
+            "reason": "",
+        },
+    ],
+    "layers": [["schema", "cycle-a", "cycle-b"], ["ship"], ["far"]],
+    "cycles": [
+        {
+            "id": "cycle-a",
+            "members": ["cycle-a", "cycle-b"],
+            "path": ["cycle-a", "cycle-b", "cycle-a"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        },
+    ],
+    "ghosts": ["far", "source"],
+    "longest_chain": {
+        "nodes": ["schema", "ship", "far"],
+        "length": 3,
+        "bound": "exact",
+    },
+    "roots": ["schema", "cycle-a", "epic", "source"],
+    "isolated": ["epic", "note"],
+    "incomplete": {},
+    "as_of": "2026-09-14T10:00:00+00:00",
+}
+
+#: This harness's own address. Deliberately not the panel harness's
+#: ``GRAPH_HREF`` above: that one carries overlays and an isolated toggle
+#: already applied, and the canvas tests below start from the page's defaults.
+GRAPH_CANVAS_HREF = "http://lens.test/tasks/graph?project=loom"
+
+
+def _graph_run(
+    actions: list[str], href: str = GRAPH_CANVAS_HREF, payload: dict | None = None
+) -> dict:
+    """Load tasks.js then graph.js against one embedded payload, run ``actions``.
+
+    The order matters and is the page's own: ``graph.js`` opens the side panel
+    through the API ``tasks.js`` publishes, so a harness that loaded only the
+    second would be testing a graph page that cannot open a panel at all.
+    """
+    assert NODE is not None
+    result = subprocess.run(
+        [
+            NODE,
+            "-e",
+            GRAPH_HARNESS,
+            "--",
+            str(TASKS_JS),
+            str(GRAPH_JS),
+            href,
+            json.dumps(actions),
+            json.dumps(payload or GRAPH_PAYLOAD),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return json.loads(result.stdout)
+
+
+def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -> None:
+    """D8's default view: `blocks` and `waits_on_gate`, arrowheads throughout.
+
+    The overlays are in the payload from the first render (D6 resolves them so
+    a toggle needs no fetch) and must nevertheless be OFF, along with the
+    context ghost that only a provenance edge anchors — otherwise the default
+    picture is the hairball the overlay decision exists to prevent.
+    """
+    result = _graph_run([])
+    final = result["final"]
+
+    assert sorted(final["edges"]) == ["blocks"] * 4
+    assert final["arrowless"] == [], "an edge whose direction cannot be read"
+    assert "source" not in final["nodes"], "context ghost drawn with its overlay off"
+    # The dependency ghost is not a context one: it is a live cross-project
+    # blocker and belongs in the default picture (D5).
+    assert "far" in final["nodes"]
+    # Isolated tasks are folded away on a project scope …
+    assert "epic" not in final["nodes"]
+    assert "note" not in final["nodes"]
+    # … and nothing was fetched to decide any of it.
+    assert result["fetches"] == []
+
+
+def test_toggling_hierarchy_adds_the_parent_child_edges_and_the_url_remembers() -> None:
+    """The acceptance criterion, both halves: the edges appear and
+    `overlays=hierarchy` lands on the URL — from the payload the page already
+    had, with no request."""
+    result = _graph_run(["overlay:hierarchy"])
+    final = result["final"]
+
+    assert "parent_child" in final["edges"]
+    assert final["edges"].count("parent_child") == 2
+    assert result["pushed"] == ["/tasks/graph?project=loom&overlays=hierarchy"]
+    assert result["fetches"] == []
+    # The overlay pulls its own endpoints in: an epic's whole hierarchy hangs
+    # off a node with no dependency edge of its own, and folding that away
+    # would hide the very edges the toggle just asked for.
+    assert "epic" in final["nodes"]
+    assert final["arrowless"] == []
+
+
+def test_toggling_provenance_shows_the_discovered_from_edge_and_its_context_ghost() -> (
+    None
+):
+    """D6's context ghost, and the point of resolving it on every request: the
+    source is a completed task outside the open-only scope, and the toggle has
+    to reveal it without going back to Lithos."""
+    result = _graph_run(["overlay:provenance"])
+    final = result["final"]
+
+    assert "discovered_from" in final["edges"]
+    assert "source" in final["nodes"], "the context ghost the edge points from"
+    assert "note" in final["nodes"], "the follow-on the edge points to"
+    assert result["pushed"] == ["/tasks/graph?project=loom&overlays=provenance"]
+    assert result["fetches"] == []
+
+
+def test_back_after_a_toggle_hides_the_overlay_again_without_a_reload() -> None:
+    """`popstate` re-applies the URL's overlays from the static payload (D8) —
+    the other half of "remembered in the URL", and the half a page that only
+    ever pushed would get wrong."""
+    result = _graph_run(["overlay:hierarchy", "overlay:provenance", "back", "back"])
+    after_both, after_one, back_to_none = (
+        result["states"][1],
+        result["states"][2],
+        result["states"][3],
+    )
+
+    assert "parent_child" in after_both["edges"]
+    assert "discovered_from" in after_both["edges"]
+    # One step back drops provenance and keeps hierarchy …
+    assert "parent_child" in after_one["edges"]
+    assert "discovered_from" not in after_one["edges"]
+    # … and the second lands on the URL the page loaded with.
+    assert "parent_child" not in back_to_none["edges"]
+    assert "source" not in back_to_none["nodes"]
+    assert result["fetches"] == []
+
+
+def test_the_isolated_toggle_moves_the_url_and_the_text_disclosure_together() -> None:
+    """`isolated=1|0` (D8). The canvas and the disclosure answer the same
+    question, so they are never allowed to disagree about it."""
+    result = _graph_run(["isolated"])
+    final = result["final"]
+
+    assert result["pushed"] == ["/tasks/graph?project=loom&isolated=1"]
+    assert "epic" in final["nodes"]
+    assert "note" in final["nodes"]
+    assert final["disclosureOpen"] is True
+    assert result["fetches"] == []
+
+
+def test_clicking_a_node_opens_that_task_s_panel_and_pushes_focus() -> None:
+    """D9's promise, through D8's parameter: the node has no DOM row, so the
+    tap travels through the API `tasks.js` publishes — one panel
+    implementation, and `focus` is the graph page's only selection key."""
+    result = _graph_run(["tap:ship"])
+
+    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    assert result["final"]["panel"] == "panel:/tasks/id?task_id=ship&fragment=panel"
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=ship"]
+    assert result["final"]["focused"] == ["ship"]
+
+
+def test_a_task_event_for_a_node_raises_the_pill_and_never_re_layouts() -> None:
+    """D8: the graph stays still while it is read. The pill is the whole
+    response to an event — a re-layout under the operator's cursor is the
+    behaviour this replaces."""
+    result = _graph_run(["event:ship"])
+
+    assert result["final"]["pillHidden"] is False
+    assert result["layouts"] == 1, "the page laid itself out again"
+    # And no reconcile: the graph page tells tasks.js not to re-render, or one
+    # event would cost a whole graph assembly.
+    assert result["fetches"] == []
+
+
+def test_an_event_for_a_task_that_is_not_on_this_page_raises_nothing() -> None:
+    """The pill says "this picture is out of date", so it may only fire when
+    the event touches a node actually drawn from this payload."""
+    result = _graph_run(["event:somewhere-else"])
+
+    assert result["final"]["pillHidden"] is True
+
+
+def test_show_as_text_collapses_the_baseline_and_leaves_it_in_the_dom() -> None:
+    """D3: the canvas hides the text layers behind a toggle and never removes
+    them — the text is the page for a screen reader and a PR screenshot."""
+    result = _graph_run(["text", "text"])
+
+    assert result["states"][0]["textHidden"] is False, "the toggle did not reveal it"
+    assert result["states"][1]["textHidden"] is True, "the toggle does not close again"
+    # Hidden, never detached: the section object is still the one the page
+    # rendered, which is what "stays in the DOM" means.
+    assert result["final"]["textHidden"] is True
+
+
+def test_a_focus_in_the_url_opens_its_panel_without_pushing_a_second_entry() -> None:
+    """Load with `focus=A` (D8). The address bar already names the selection,
+    so re-pushing it would leave a twin entry the first Back appears to
+    ignore."""
+    result = _graph_run(
+        [], href="http://lens.test/tasks/graph?project=loom&focus=cycle-a"
+    )
+
+    assert result["fetches"] == ["/tasks/id?task_id=cycle-a&fragment=panel"]
+    assert result["pushed"] == []
+    assert result["final"]["focused"] == ["cycle-a"]
+
+
+def test_a_double_click_leaves_for_the_task_s_own_page() -> None:
+    """The server built that URL (`tasks.task_detail_path`), because an id that
+    collides with a page under `/tasks/` has to be addressed through the query
+    alias — a rule the browser never restates."""
+    result = _graph_run(["dbltap:ship"])
+
+    assert result["final"]["href"] == "/tasks/ship"

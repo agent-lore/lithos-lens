@@ -2532,3 +2532,138 @@ def test_the_picker_and_an_offline_page_carry_their_own_outcomes(
             ).value
             == 1
         ), outcome
+
+
+# ── What A4's canvas is handed (D8/D9) ──────────────────────────────────
+#
+# The canvas itself is a Cytoscape instance and is asserted in
+# `tests/test_tasks_js.py` (browser behaviour) and the e2e captures (pixels).
+# What belongs HERE is the server's half of that contract: the fields the
+# picture cannot derive, the toolbar URLs the overlays are remembered in, and
+# the fact that the vendored bundle is loaded on a page that has a graph to
+# draw and on no other.
+
+
+def test_the_payload_carries_the_claims_and_detail_url_the_canvas_cannot_derive(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Two fields the picture needs and nothing in the topology implies.
+
+    A claim is what makes a node "in progress" on the canvas, and the detail
+    URL is `tasks.task_detail_path`'s answer — the rule that an id colliding
+    with a page under `/tasks/` is addressed through the query alias lives
+    there, and a double-click that rebuilt it in the browser would send the
+    operator to the graph PAGE for a task called `graph`.
+    """
+    rows = [task("a"), task("graph")]
+    data = FakeLithosDataset(
+        tasks=tuple(rows),
+        edges=edge_index((("a", "graph", "blocks"),)),
+        claims={"a": (ClaimRecord(agent="worker-a", aspect="impl"),)},
+    )
+    fake = GraphFakeClient(data)
+
+    nodes = {
+        node["id"]: node
+        for node in payload(
+            get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+        )["nodes"]
+    }
+
+    assert nodes["a"]["claims"] == ["worker-a"]
+    assert nodes["graph"]["claims"] == []
+    assert nodes["a"]["detail_url"] == task_detail_path("a")
+    assert nodes["graph"]["detail_url"] == "/tasks/id?task_id=graph"
+
+
+def test_an_overlay_toggle_flips_its_own_overlay_and_leaves_the_other_alone() -> None:
+    """D8's two overlays are independent switches, so the link that turns one
+    on must not turn the other off as a side effect. An empty result drops the
+    parameter entirely — "absent" and "none" are the same state, which is what
+    lets the client read a missing parameter as no overlays."""
+    none = parse_graph_params({"project": PROJECT})
+    both = parse_graph_params({"project": PROJECT, "overlays": "hierarchy,provenance"})
+
+    assert "overlays=hierarchy" in graph_url(none, toggle_overlay="hierarchy")
+    assert "provenance" not in graph_url(none, toggle_overlay="hierarchy")
+    assert "overlays=hierarchy" in graph_url(both, toggle_overlay="provenance")
+    assert "provenance" not in graph_url(both, toggle_overlay="provenance")
+    assert "overlays=" not in graph_url(
+        parse_graph_params({"project": PROJECT, "overlays": "hierarchy"}),
+        toggle_overlay="hierarchy",
+    )
+    # And the rest of the page's state rides along, the way every other toggle
+    # link does — an overlay switch is not a new scope.
+    focused = parse_graph_params({"project": PROJECT, "focus": "abc", "isolated": "1"})
+    switched = graph_url(focused, toggle_overlay="provenance")
+    assert "focus=abc" in switched
+    assert "isolated=1" in switched
+
+
+def test_the_toolbar_offers_both_overlays_and_the_canvas_hosts_the_panel_beside_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The no-JS half of A4: both overlays are real links carrying the URL the
+    choice is remembered in, and the canvas surface — with the side panel's
+    host beside it (D9) — is rendered HIDDEN, so a browser that never runs
+    `graph.js` sees exactly the text page A3 shipped."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert 'data-toggle-overlay="hierarchy"' in html
+    assert 'data-toggle-overlay="provenance"' in html
+    assert "overlays=hierarchy" in html and "overlays=provenance" in html
+    surface = only_group(r"(<section class=\"graph-canvas-layout\"[^>]*>)", html)
+    assert "hidden" in surface
+    canvas = only_group(r"(<div class=\"graph-canvas\"[^>]*>)", html)
+    assert "data-graph-canvas" in canvas
+    assert "data-panel-host" in html
+    # Off by default, both of them (D8): the default view is dependency flow.
+    assert 'data-overlay-on="false"' in html
+    assert 'data-overlay-on="true"' not in html
+
+
+def test_the_overlay_toggles_report_the_state_the_url_asks_for(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(
+        lithos_lens_config_env,
+        fake,
+        f"/tasks/graph?project={PROJECT}&overlays=hierarchy",
+    )
+
+    hierarchy = only_group(r"(<a\s+data-toggle-overlay=\"hierarchy\".*?</a>)", html)
+    provenance = only_group(r"(<a\s+data-toggle-overlay=\"provenance\".*?</a>)", html)
+    assert 'data-overlay-on="true"' in hierarchy
+    assert "Hide hierarchy" in hierarchy
+    assert 'data-overlay-on="false"' in provenance
+    assert "Show provenance" in provenance
+
+
+def test_cytoscape_loads_on_a_drawn_scope_and_on_no_other_state(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A ~400KB vendored bundle, on the one page that draws a graph and only
+    when there is something to draw: the picker, a refusal and an empty scope
+    have no canvas, so shipping the parser to them is pure cost."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    drawn = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    picker = get(lithos_lens_config_env, fake, "/tasks/graph")
+    empty = get(lithos_lens_config_env, fake, "/tasks/graph?project=nobody-here")
+    board = get(lithos_lens_config_env, fake, "/tasks")
+
+    for asset in ("vendor/cytoscape.min.js", "graph.js"):
+        assert asset in drawn, asset
+        assert asset not in picker, asset
+        assert asset not in empty, asset
+        assert asset not in board, asset
+    # And the panel it shares with the dashboard is told THIS page's selection
+    # parameter, because one implementation serves both hosts (D9).
+    assert 'selectionParam: "focus"' in drawn
+    # …without the reconcile the board runs: a task event here raises the
+    # "graph changed" pill instead of re-fetching a whole graph assembly.
+    assert "liveRefresh: false" in drawn

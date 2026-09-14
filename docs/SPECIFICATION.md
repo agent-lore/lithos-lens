@@ -695,9 +695,9 @@ the hierarchy tree out.
 
 `GET /tasks/graph` renders one scope's dependency graph as **server-rendered
 text**. That is the first-class baseline, not a fallback: the page is complete
-and reviewable with no JavaScript, and the Cytoscape rendering (a later T2
-slice) is enhancement drawn from the same embedded payload, so the picture and
-the text cannot disagree.
+and reviewable with no JavaScript, and the Cytoscape rendering (§5.12.1) is
+enhancement drawn from the same embedded payload, so the picture and the text
+cannot disagree.
 
 **Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
 page renders a picker listing every project the snapshot observes under both
@@ -722,8 +722,11 @@ disclosure; the `parent_child` hierarchy tree, always rendered; and a
 `<script type="application/json">` payload carrying nodes (with completeness
 and layer), edges (with state and reason), layers, cycles, ghosts, the longest
 chain with its `exact | lower_bound` flag, roots, isolated, incomplete and
-`as_of`. The toolbar states `as_of` — the OLDEST contributing fetch — because
-edge upserts emit no upstream event and the TTL is the staleness bound.
+`as_of`. Each node additionally carries its claims and the detail URL
+`tasks.task_detail_path` built for it — the two things the canvas needs and
+the topology does not imply. The toolbar states `as_of` — the OLDEST
+contributing fetch — because edge upserts emit no upstream event and the TTL
+is the staleness bound.
 
 Each node row carries its status, type, claims and, for a ghost, its project
 chip with links to the ghost's detail page and to its own project's graph. Its
@@ -833,6 +836,56 @@ queued is not one of its three outcomes, and is carried by the span field
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
 
+#### 5.12.1 Cytoscape rendering
+
+With JavaScript, `static/graph.js` draws the embedded payload with the vendored
+Cytoscape 3.30.3 — loaded on this page, and only when there is a graph to draw
+(not the picker, not a refusal, not an empty scope). It adds nothing the text
+does not already state: status, type, ghost-ness, cycle membership, the longest
+chain and the isolated set are all payload fields, and the only thing the
+client derives is which nodes an `active` dependency edge in this graph points
+at. Lens still never re-implements the readiness predicate.
+
+- **Layout** is `breadthfirst`, directed, from the server's own `roots`, run
+  **once** and never again — no physics, and no re-layout for any later event.
+  The layout sees the dependency edges only: an epic's `parent_child` edges are
+  added afterwards, or hierarchy would decide the shape of a picture that is
+  about dependency flow. A cycle's members are drawn inside a **compound
+  parent** and are stacked together within it, because the server condenses a
+  cycle to one node for layering and its members belong at one place.
+- **Colour is status** (open / completed / cancelled, plus the dashed `unknown`
+  style for a ghost whose status could not be read), **shape is type** (ellipse
+  task, round-rectangle epic, diamond gate); a node something in this graph
+  blocks is tinted, and a claimed one pulses (suppressed under
+  `prefers-reduced-motion`). Ghosts are dimmed and carry their project on the
+  label. `unknown` edges take the `unknown` style, inactive ones are faded, and
+  the longest blocking chain is traced.
+- **Every edge carries an arrowhead**; `blocks` is solid and `waits_on_gate`
+  dashed. `parent_child` (thin, light) and `discovered_from` (dotted) are
+  **overlays, off by default**, toggled in the toolbar and remembered in the
+  URL as `overlays=hierarchy,provenance`. Both overlays' edges and their
+  context ghosts are already in the payload, so a toggle is a client-side
+  show/hide with **no fetch**, and `popstate` re-applies whatever the URL
+  says. An overlay draws in the endpoints it needs — an isolated node folded
+  away by default is revealed when a switched-on overlay connects it, since
+  hiding it would hide the edges just asked for. A context ghost appears only
+  with its overlay.
+- The **isolated toggle** (`isolated=1|0`) moves the canvas and the text
+  disclosure together; the plain-language **legend** is persistent; and **show
+  as text** collapses the text layers behind the canvas without removing them
+  — the text stays in the DOM.
+- **Click** a node and its panel opens beside the canvas through the same
+  implementation the dashboard's rows use (§5.6.1), pushing `focus=` after the
+  swap; **double-click** navigates to the task's page via the URL the server
+  built. A `focus=` already in the URL opens that panel on load without
+  pushing a second entry.
+- **Events** raise a "graph changed — refresh" pill when a consumed task
+  event's `task_id` is a node on the page, and do nothing else: this page tells
+  `tasks.js` not to reconcile, because re-rendering the board's way would
+  re-fetch a whole graph assembly per event and move the canvas under the
+  operator's cursor. Edge upserts emit no event at all, so the pill is a hint
+  and `as_of` remains the page's real staleness bound.
+
 The side panel (§5.6.1) is counted by **`lens_tasks_panel_opens_total`**
 (`source` in `url` | `fragment`) — the SSR baseline and the click-fetched
 partial, which are the two things the request can actually distinguish. The
@@ -873,8 +926,9 @@ Key characteristics:
 
 - FastAPI + Jinja templates for primary rendering
 - static CSS for presentation
-- lightweight browser JavaScript for SSE, fragment refresh, and date-picker
-  synchronization
+- lightweight browser JavaScript for SSE, fragment refresh, the side panel, and
+  date-picker synchronization
+- one vendored library, Cytoscape, loaded by the task graph page alone (§5.12.1)
 - no SPA framework
 
 The application is designed to remain usable in partially degraded conditions

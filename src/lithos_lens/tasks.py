@@ -150,6 +150,11 @@ TASK_DETAIL_ALIAS_KEY = "task_id"
 #: so the board, the fragment route and ``tasks.js`` cannot drift on the
 #: spelling of a parameter all three have to agree on.
 PANEL_SELECTION_KEY = "selected"
+#: The graph page's one selection parameter (D8). Spelled here beside the
+#: dashboard's so the two pages' vocabularies are read together and neither can
+#: quietly adopt the other's: they do not share a highlight model, and a link
+#: arriving with ``selected=`` on the graph route is canonicalised to this.
+GRAPH_SELECTION_KEY = "focus"
 PANEL_FRAGMENT_KEY = "fragment"
 PANEL_FRAGMENT_VALUE = "panel"
 

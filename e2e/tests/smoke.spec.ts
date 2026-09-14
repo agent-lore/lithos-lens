@@ -913,3 +913,99 @@ test("a skeleton link does not propagate a retired query param", async ({
     "/tasks/e2e-retired-param",
   );
 });
+
+// ── The graph canvas (T2-A4), driven against the real Cytoscape ─────────────
+//
+// `tests/test_tasks_js.py` pins this behaviour against a stubbed library,
+// which is where the interleavings and the "no fetch" assertions live. These
+// drive the vendored 3.30.3 bundle itself, because "the toggle works" and "the
+// toggle works with the library we actually ship" are different claims.
+
+test("the canvas draws the graph and collapses the text behind a toggle", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  const canvas = page.locator('[data-graph-canvas][data-canvas-state="ready"]');
+  await expect(canvas).toBeVisible();
+
+  // The text baseline is collapsed but present — D3's promise, and the reason
+  // a screen reader and a PR screenshot still get the whole page.
+  await expect(page.locator("[data-graph-layers]")).toBeHidden();
+  await expect(page.locator('[data-graph-layer="4"]')).toBeAttached();
+  await page.locator("[data-toggle-text]").click();
+  await expect(page.locator("[data-graph-layers]")).toBeVisible();
+
+  // The legend is persistent: it explains the arrowheads, so it never goes
+  // away with the text.
+  await expect(page.locator("[data-graph-legend]")).toBeVisible();
+});
+
+test("toggling the overlays adds their edges and remembers them in the URL", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const types = () =>
+    page.evaluate(() =>
+      (window as any).LithosLensGraph.shown().edges.map((edge: any) => edge.type),
+    );
+
+  // Default: dependency flow only, hierarchy and provenance switched off even
+  // though both are already in the payload (D6/D8).
+  expect(await types()).not.toContain("parent_child");
+  expect(await types()).not.toContain("discovered_from");
+
+  await page.locator('[data-toggle-overlay="hierarchy"]').click();
+  await expect(page).toHaveURL(/overlays=hierarchy/);
+  expect(await types()).toContain("parent_child");
+
+  await page.locator('[data-toggle-overlay="provenance"]').click();
+  expect(await types()).toContain("discovered_from");
+  // The context ghost the provenance edge points from: a task resolved outside
+  // this open-only scope, in the payload from the first render so the toggle
+  // needs no fetch.
+  const source = await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy
+      .getElementById("loom-research-old")
+      .style("display"),
+  );
+  expect(source).not.toBe("none");
+
+  // Back walks the exploration without a reload, re-applying the URL's
+  // overlays from the same static payload.
+  await page.goBack();
+  expect(await types()).not.toContain("discovered_from");
+  await page.goBack();
+  expect(await types()).not.toContain("parent_child");
+  await expect(page).not.toHaveURL(/overlays=/);
+});
+
+test("clicking a node opens that task's panel beside the canvas and pushes focus", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  // The node is drawn on a canvas, so the click goes through Cytoscape's own
+  // event surface rather than a DOM row — which is the whole reason the panel
+  // is reachable as an API (D9: one implementation for rows and nodes).
+  await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy.getElementById("loom-ship").emit("tap"),
+  );
+
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-ship/);
+
+  // Close clears the selection and nothing else: the scope survives.
+  await page.locator("[data-panel-host] [data-panel-close]").click();
+  await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/focus=/);
+  await expect(page).toHaveURL(/project=lithos-loom/);
+});

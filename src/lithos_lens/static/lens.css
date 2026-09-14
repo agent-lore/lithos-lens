@@ -1723,3 +1723,74 @@ button,
   border-left: 2px dashed var(--warning-border);
   padding-left: 0.4rem;
 }
+
+/* ── The Cytoscape surface and the panel beside it (D8/D9, T2-A4) ───────
+
+   Flex rather than a two-column grid, and the panel host collapses when it is
+   `:empty` (the shared rule above), so an unselected graph gets the whole
+   width and a selected one splits it — without reserving a column for a panel
+   that is not there. `min-width: 0` on both: a flex item defaults to
+   `min-width: auto`, and the canvas would then refuse to shrink below its
+   basis and push the document sideways at 320px, which the e2e capture
+   asserts against. */
+.graph-canvas-layout {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.graph-canvas {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  flex: 1 1 22rem;
+  height: clamp(18rem, 60vh, 32rem);
+  min-width: 0;
+}
+
+/* On the graph page the panel sits BESIDE the canvas (D9) instead of the
+   fixed overlay the dashboard uses: here the thing the operator must not lose
+   is the picture, and a panel floating over it would cover the very nodes the
+   selection is about. */
+.graph-panel-host {
+  /* No grow: the spare width belongs to the picture. `flex-wrap` puts the two
+     on separate lines once their bases stop fitting, which is what keeps a
+     narrow viewport from squeezing both into unreadable columns. */
+  flex: 0 1 24rem;
+  min-width: 0;
+}
+
+.graph-panel-host .task-panel {
+  max-height: none;
+  position: static;
+  width: auto;
+}
+
+/* `width: auto` against the shared control rule, which stretches every button
+   to the full row — right for the filter form it was written for, wrong for a
+   toggle sitting inline among the toolbar's links. */
+.graph-text-toggle {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.7rem;
+  width: auto;
+}
+
+/* Raised by a task event touching a node on this page, and only ever by the
+   operator's click after that: the graph never re-layouts itself (D8). */
+.graph-refresh-pill {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.7rem;
+  text-decoration: none;
+}

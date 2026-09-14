@@ -7,15 +7,21 @@ than a condition in Jinja, because each is a claim with a rule behind it —
 "in a cycle" is Lithos's verdict, "cycle status unknown" is the absence of one,
 and a template deriving either would be a second implementation of a rule the
 PRD states once.
+
+:func:`payload_json` lives here for the same reason: the embedded payload is
+this view model addressed to the CLIENT rather than to Jinja — same nodes, same
+layers, same chain — and A4's canvas draws from it, so the two renderings of one
+page's shape are written side by side where a divergence is visible.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from lithos_lens.graph_layout import Cycle
+from lithos_lens.graph_layout import BlockingChain, Cycle, Topology
 from lithos_lens.graph_scope import (
     COMPLETENESS_EDGES_UNKNOWN,
     COMPLETENESS_STATUS_UNKNOWN,
@@ -23,7 +29,9 @@ from lithos_lens.graph_scope import (
     EDGE_INACTIVE,
     EDGE_UNKNOWN,
     ScopeRefusal,
+    TaskGraphScope,
 )
+from lithos_lens.tasks import task_detail_path
 
 SCOPE_PROJECT = "project"
 SCOPE_EPIC = "epic"
@@ -279,3 +287,95 @@ class GraphPageView:
     def fanout(self) -> int:
         """Upstream reads this render issued: edge misses plus ghost reads."""
         return self.cache_misses + self.ghost_reads
+
+
+def payload_json(
+    scope: TaskGraphScope,
+    topology: Topology,
+    chain: BlockingChain,
+    views: Mapping[str, NodeView],
+    layers: Sequence[LayerView],
+    params: GraphPageParams,
+    folded: Sequence[str],
+) -> str:
+    """D3's embedded payload — the same node set, layers and chain as the text.
+
+    Serialised here rather than in the template so the escaping is applied
+    once: ``<`` is escaped so a task title containing ``</script>`` cannot end
+    the element early.
+    """
+    payload = {
+        "scope": {
+            "kind": params.kind,
+            "key": params.key,
+            "include_resolved": params.include_resolved,
+            "focus": params.focus,
+            "overlays": list(params.overlays),
+            "isolated": params.show_isolated,
+        },
+        "nodes": [
+            {
+                "id": node.id,
+                "label": node.label,
+                "status": node.status,
+                "type": node.task_type,
+                "layer": node.layer,
+                "ghost": node.ghost,
+                "ghost_kind": node.ghost_kind,
+                "projects": list(node.projects),
+                "completeness": node.completeness,
+                # What the canvas needs and cannot derive (A4): the claims that
+                # make a node "in progress", and the detail URL a double-click
+                # navigates to — `tasks.task_detail_path` owns the rule that an
+                # id colliding with a page under `/tasks/` is addressed through
+                # the query alias, and the browser does not restate it.
+                "claims": list(node.claims),
+                "detail_url": task_detail_path(node.id),
+                "cycle": node.cycle_id,
+                # Shape and verdict are separate fields because they are
+                # separate facts (D4): the canvas groups on ``cycle`` and marks
+                # on ``flagged``.
+                "flagged": node.flagged,
+                "cycle_unknown": node.cycle_unknown,
+                "blocked_via_cycle": node.blocked_via_cycle,
+                "isolated": node.isolated,
+            }
+            for node in views.values()
+        ],
+        "edges": [
+            {
+                "from": edge.from_task_id,
+                "to": edge.to_task_id,
+                "type": edge.type,
+                "state": edge.state,
+                "reason": edge.reason,
+            }
+            for edge in scope.edges
+        ],
+        "layers": [[node.id for node in layer.nodes] for layer in layers],
+        "cycles": [
+            {
+                "id": cycle.id,
+                "members": list(cycle.members),
+                "path": list(cycle.path),
+                "scc": cycle.scc,
+                "flagged": cycle.flagged,
+                "message": cycle.message,
+            }
+            for cycle in topology.cycles
+        ],
+        "ghosts": [node.id for node in scope.nodes if node.ghost],
+        "longest_chain": {
+            "nodes": list(chain.nodes),
+            "length": chain.length,
+            "bound": chain.bound,
+        },
+        "roots": list(topology.roots),
+        # The list the PAGE folds, not the raw D8 set: a flagged cycle member
+        # is layered rather than folded, and the payload has to agree with the
+        # text about where every node is rendered.
+        "isolated": list(folded),
+        "incomplete": dict(scope.incomplete),
+        "as_of": scope.as_of.isoformat() if scope.as_of else None,
+    }
+    return json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")

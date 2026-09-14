@@ -8,6 +8,11 @@
   const selectionParam = config.selectionParam || "selected";
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
+  // Pages that CONSUME events without reconciling their own markup — the graph
+  // page, which raises a "graph changed" pill instead of re-rendering (D8) —
+  // subscribe here. One EventSource per tab either way: a second subscription
+  // would mean a second connection and a second copy of the dedup below.
+  const eventSubscribers = [];
   let eventSource = null;
   let reconcileTimer = null;
   let pollTimer = null;
@@ -105,6 +110,13 @@
   // arrived. So the board still converges on the latest state, and a burst of
   // events costs two renders rather than N.
   async function refreshFragments() {
+    // Opt-out for a host page whose markup this must not rebuild. The graph
+    // page sets it: a reconcile there would re-fetch a whole graph assembly per
+    // event and re-lay-out the canvas under the operator's cursor, which D8
+    // forbids outright — that page shows a refresh pill and waits. Guarded HERE
+    // rather than at each caller so the poll fallback, the debounced reconcile
+    // and the gate timer are all covered by the one rule.
+    if (config.liveRefresh === false) return;
     if (refreshInFlight) {
       refreshQueued = true;
       return;
@@ -199,6 +211,9 @@
     }
     const message = JSON.parse(event.data);
     const type = message.type || event.type;
+    // Before the board handlers, so a subscriber sees every event this tab
+    // consumed whatever this page does with it afterwards.
+    eventSubscribers.forEach(function (subscriber) { subscriber(message, type); });
     if (type === "task.created") insertSkeletonRow(message);
     if (type === "task.claimed") updateClaim(message, true);
     if (type === "task.released") updateClaim(message, false);
@@ -797,4 +812,16 @@
   document.addEventListener("keydown", handlePanelKeydown);
   window.addEventListener("popstate", handlePanelPopstate);
   connect();
+
+  // The seam the graph page's canvas opens the panel through (D9: ONE panel
+  // implementation for rows and nodes). A Cytoscape node is drawn on a canvas
+  // and has no DOM row to click, so it cannot reach the delegated handler
+  // above — but everything behind that handler, the URL push included, is the
+  // same code either way. Published last, so a page that loads `graph.js`
+  // after this file finds it ready.
+  window.LithosLens = window.LithosLens || {};
+  window.LithosLens.panel = { open: openPanel, close: closePanel };
+  window.LithosLens.events = {
+    subscribe: function (subscriber) { eventSubscribers.push(subscriber); }
+  };
 })();
