@@ -2604,9 +2604,10 @@ def test_the_toolbar_offers_both_overlays_and_the_canvas_hosts_the_panel_beside_
     lithos_lens_config_env: Path,
 ) -> None:
     """The no-JS half of A4: both overlays are real links carrying the URL the
-    choice is remembered in, and the canvas surface — with the side panel's
-    host beside it (D9) — is rendered HIDDEN, so a browser that never runs
-    `graph.js` sees exactly the text page A3 shipped."""
+    choice is remembered in, and the CANVAS — not the surface around it — is
+    rendered hidden, so a browser that never runs `graph.js` sees exactly the
+    text page A3 shipped. The surface stays visible because the side panel
+    lives in it (D9), and hiding the pair would hide the panel too."""
     fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
 
     html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
@@ -2614,10 +2615,11 @@ def test_the_toolbar_offers_both_overlays_and_the_canvas_hosts_the_panel_beside_
     assert 'data-toggle-overlay="hierarchy"' in html
     assert 'data-toggle-overlay="provenance"' in html
     assert "overlays=hierarchy" in html and "overlays=provenance" in html
-    surface = only_group(r"(<section class=\"graph-canvas-layout\"[^>]*>)", html)
-    assert "hidden" in surface
     canvas = only_group(r"(<div class=\"graph-canvas\"[^>]*>)", html)
     assert "data-graph-canvas" in canvas
+    assert "hidden" in canvas
+    surface = only_group(r"(<section class=\"graph-canvas-layout\"[^>]*>)", html)
+    assert "hidden" not in surface, "the side panel's own surface is hidden too"
     assert "data-panel-host" in html
     # Off by default, both of them (D8): the default view is dependency flow.
     assert 'data-overlay-on="false"' in html
@@ -2667,3 +2669,80 @@ def test_cytoscape_loads_on_a_drawn_scope_and_on_no_other_state(
     # …without the reconcile the board runs: a task event here raises the
     # "graph changed" pill instead of re-fetching a whole graph assembly.
     assert "liveRefresh: false" in drawn
+
+
+def test_a_focus_in_the_url_server_renders_that_task_s_panel(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D9's no-JS baseline. `focus` is this page's single selection parameter
+    and it opens the SAME panel a dashboard row does, so a deep link or a
+    shared URL has to arrive with the panel already up — with scripting off
+    there is no canvas to click, and the panel is the only thing the focused
+    task says at all. The client layer is enhancement over this, never the
+    thing that creates it.
+    """
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    focused = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b"
+    )
+    plain = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert 'data-panel-task="b"' in focused, "no panel in the server's own HTML"
+    assert "B" in only_group(r"(<aside class=\"task-panel\".*?</aside>)", focused)
+    # The host carries the id the REQUEST named and the URL the server built
+    # for it, the way the dashboard's does — that pair is what reopens a task
+    # with no node to read it off.
+    assert 'data-panel-selected="b"' in focused
+    # Close clears the selection and nothing else: the scope survives it.
+    close = only_group(r'href="([^"]+)" data-panel-close', focused)
+    assert f"project={PROJECT}" in close
+    assert "focus=" not in close
+    # …and an unfocused render carries no panel at all.
+    assert "data-task-panel" not in plain
+
+
+def test_a_focus_naming_no_task_leaves_the_graph_standing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A bad id in a shared URL must not cost the operator the graph: Lithos's
+    own `task_not_found` renders the not-found PANEL beside a perfectly good
+    picture, exactly as it does beside the board."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=nobody"
+    )
+
+    assert "data-graph-layers" in html
+    assert 'data-panel-state="not-found"' in html
+
+
+def test_the_focus_panel_is_counted_as_a_url_open(
+    lithos_lens_config_env: Path, metric_reader: InMemoryMetricReader
+) -> None:
+    """`lens_tasks_panel_opens_total{source="url"}` is the SSR baseline's
+    counter (§5.12), and the graph page's `focus=` is one of its two hosts."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b")
+
+    assert (
+        metric_value(metric_reader, "lens_tasks_panel_opens_total", source="url").value
+        == 1
+    )
+
+
+def test_an_unselected_panel_host_is_empty_so_the_canvas_keeps_the_width(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Beside the canvas the host is a flex item, and `.task-panel-host:empty`
+    is the rule that collapses it when nothing is selected. A newline between
+    its tags is a text node — `:empty` stops matching and the picture loses a
+    quarter of its width to a panel that is not there."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    host = only_group(r"(<div\s+class=\"graph-panel-host[^>]*>.*?</div>)", html)
+    assert host.endswith("></div>"), host

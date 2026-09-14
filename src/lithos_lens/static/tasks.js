@@ -13,6 +13,12 @@
   // subscribe here. One EventSource per tab either way: a second subscription
   // would mean a second connection and a second copy of the dedup below.
   const eventSubscribers = [];
+  // Pages that render the selection somewhere ELSE than the panel — the graph
+  // page's canvas, which lights the focused node — subscribe here. Every panel
+  // transition is a `pushState`, and `pushState` fires no `popstate`, so a host
+  // with its own view of the selection has no way to notice one without being
+  // told: closing the panel would clear the URL and leave the node still lit.
+  const panelSubscribers = [];
   let eventSource = null;
   let reconcileTimer = null;
   let pollTimer = null;
@@ -242,6 +248,12 @@
     return document.querySelector("[data-panel-host]");
   }
 
+  // Announced AFTER the URL has moved, so a subscriber reading the address bar
+  // sees the transition that has just completed rather than the one before it.
+  function announceSelection() {
+    panelSubscribers.forEach(function (subscriber) { subscriber(selectedTaskId); });
+  }
+
   // The panel contract a row opts into, and the ONE selector both halves of
   // the interaction use: the id the click selects plus the server-built URL
   // its panel comes from. Every kind of board row carries the pair —
@@ -379,6 +391,7 @@
     if (push && selectionIn(window.location.href) !== taskId) {
       window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
     }
+    announceSelection();
   }
 
   function panelFetchFailed(push) {
@@ -391,6 +404,11 @@
       // next Forward onto that very selection would match the intent, return
       // early, and leave the previous task's panel sitting under it.
       desiredTaskId = selectedTaskId;
+      // Announced anyway: a host that lit the clicked node the moment the
+      // click landed has to be told the open did NOT happen, or the canvas
+      // keeps a node lit for a panel that never opened and a URL that never
+      // moved.
+      announceSelection();
       return;
     }
     // Back or forward. The browser moved the URL BEFORE this ran, so the panel
@@ -405,6 +423,7 @@
     if (host) host.innerHTML = "";
     selectedTaskId = "";
     desiredTaskId = "";
+    announceSelection();
   }
 
   function closePanel(options) {
@@ -418,6 +437,7 @@
     if (!options || options.push !== false) {
       window.history.pushState({ selected: "" }, "", selectionUrl(""));
     }
+    announceSelection();
   }
 
   function handlePanelClick(event) {
@@ -820,7 +840,11 @@
   // same code either way. Published last, so a page that loads `graph.js`
   // after this file finds it ready.
   window.LithosLens = window.LithosLens || {};
-  window.LithosLens.panel = { open: openPanel, close: closePanel };
+  window.LithosLens.panel = {
+    open: openPanel,
+    close: closePanel,
+    onChange: function (subscriber) { panelSubscribers.push(subscriber); }
+  };
   window.LithosLens.events = {
     subscribe: function (subscriber) { eventSubscribers.push(subscriber); }
   };

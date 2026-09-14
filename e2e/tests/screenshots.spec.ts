@@ -238,12 +238,16 @@ const PAGES: ReadonlyArray<{
       //    compound parent, which is the convention the legend explains.
       await expect(page.locator("[data-cycle-callout]")).toBeVisible();
       await expect(canvas).toHaveAttribute("data-canvas-cycles", "1");
-      const box = await page.evaluate(
-        () =>
-          (window as any).LithosLensGraph.cy.getElementById("cycle::loom-cycle-b")
-            .length,
+      // The members are INSIDE the box, which is the whole convention: a
+      // parent node drawn beside them would bracket nothing.
+      const inBox = await page.evaluate(() =>
+        (window as any).LithosLensGraph.cy
+          .getElementById("cycle::loom-cycle-b")
+          .children()
+          .map((node: any) => node.id())
+          .sort(),
       );
-      expect(box).toBe(1);
+      expect(inBox).toEqual(["loom-cycle-a", "loom-cycle-b"]);
       // 2. The ghost: drawn, dimmed, and carrying its project on the label —
       //    the cross-project `blocks` edge, the one node here that belongs to
       //    another scope.

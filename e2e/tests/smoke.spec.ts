@@ -1003,9 +1003,80 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   ).toBeVisible();
   await expect(page).toHaveURL(/focus=loom-ship/);
 
-  // Close clears the selection and nothing else: the scope survives.
+  // Close clears the selection and nothing else: the scope survives, and the
+  // node stops being lit. `pushState` fires no `popstate`, so the canvas only
+  // learns of this because the panel announces it (round-1 correctness f-002).
   await page.locator("[data-panel-host] [data-panel-close]").click();
   await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
   await expect(page).not.toHaveURL(/focus=/);
   await expect(page).toHaveURL(/project=lithos-loom/);
+  const lit = await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy
+      .nodes(".focused")
+      .map((node: any) => node.id()),
+  );
+  expect(lit).toEqual([]);
+});
+
+test("the canvas ranks every node by the layer the text gives it", async ({
+  page,
+}) => {
+  // D3, in the browser that ships it: the picture is printed above the text
+  // layers, and the two may not disagree. Cytoscape's breadth-first ranks by
+  // SHORTEST path while the server layers by longest, so this is the claim a
+  // layout left to its own devices gets wrong (round-1 correctness f-001).
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const bands = await page.evaluate(() => {
+    const payload = JSON.parse(
+      document.querySelector("[data-graph-payload]")!.textContent!,
+    );
+    const cy = (window as any).LithosLensGraph.cy;
+    const out: Record<string, { min: number; max: number }> = {};
+    payload.nodes.forEach((node: any) => {
+      const y = cy.getElementById(node.id).position().y;
+      const band = out[node.layer] || (out[node.layer] = { min: y, max: y });
+      band.min = Math.min(band.min, y);
+      band.max = Math.max(band.max, y);
+    });
+    return out;
+  });
+
+  // A cycle's members stack inside one slot, so a layer holding one spans a
+  // band rather than a line — but the bands stay ordered and disjoint.
+  const layers = Object.keys(bands)
+    .map(Number)
+    .sort((a, b) => a - b);
+  expect(layers.length).toBeGreaterThan(2);
+  for (let i = 1; i < layers.length; i += 1) {
+    expect(bands[layers[i - 1]].max).toBeLessThan(bands[layers[i]].min);
+  }
+});
+
+test("the focused panel is there with no JavaScript at all", async ({ browser }) => {
+  // D9's baseline, and the only check that can prove it: with scripting off
+  // there is no canvas to click, so a panel the CLIENT creates is no baseline
+  // at all. The text page has to be complete on its own here too.
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+  try {
+    await page.goto("/tasks/graph?project=lithos-loom&focus=loom-ship");
+    await expect(
+      page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+    ).toBeVisible();
+    // The canvas never appears, and the text baseline is not collapsed behind
+    // a toggle only JavaScript can operate.
+    await expect(page.locator("[data-graph-canvas]")).toBeHidden();
+    await expect(page.locator("[data-graph-layers]")).toBeVisible();
+    await expect(page.locator("[data-toggle-text]")).toBeHidden();
+    // And Close is an ordinary link back to the unfocused graph.
+    await expect(
+      page.locator("[data-panel-host] [data-panel-close]"),
+    ).toHaveAttribute("href", /project=lithos-loom/);
+  } finally {
+    await context.close();
+  }
 });

@@ -301,9 +301,28 @@
       untouched and a vendored script that fails to load leaves the page exactly
       as A3 rendered it.
     #}
-    <section class="graph-canvas-layout" data-graph-canvas-layout hidden>
-      <div class="graph-canvas" data-graph-canvas data-canvas-state="pending"></div>
-      <div class="graph-panel-host task-panel-host" data-panel-host></div>
+    <section class="graph-canvas-layout" data-graph-canvas-layout>
+      {# The CANVAS is what is hidden until `graph.js` has one up — not the
+         section around it, which also holds the panel: with scripting off the
+         panel below is the only thing the focused task says, and a surface
+         hidden as a whole would hide D9's baseline along with the empty box.
+         An empty host collapses on its own (`.task-panel-host:empty`). #}
+      <div class="graph-canvas" data-graph-canvas data-canvas-state="pending" hidden></div>
+      {# Server-rendered OPEN when the request carried `focus=` — D9's no-JS
+         baseline, the same one `?selected=` gives the dashboard. The host also
+         carries the id the REQUEST named and the URL the server built for it,
+         so Back and Forward can reopen a task that has no node to read it off
+         (exactly the dashboard's reason, and its spelling). #}
+      {# No whitespace inside the element, deliberately: beside the canvas this
+         host is a FLEX ITEM, and `.task-panel-host:empty` is what collapses it
+         when nothing is selected. A newline between the tags is a text node,
+         `:empty` stops matching, and the picture loses a quarter of its width
+         to a panel that is not there. #}
+      <div
+        class="graph-panel-host task-panel-host"
+        data-panel-host
+        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}
+      >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
     </section>
 
     <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">

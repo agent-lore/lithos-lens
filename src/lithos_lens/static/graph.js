@@ -13,11 +13,12 @@
      apply it.
 
   2. THE LAYOUT RUNS ONCE. `breadthfirst` from the server's own `roots`, no
-     physics (D8). The only positions written afterwards are a cycle's members,
-     stacked into their own box at the place the layout already chose for them.
-     Everything later — a toggle, a resize — moves the VIEWPORT (a pan and a
-     zoom) and never a node, and a task event raises the "graph changed" pill
-     rather than re-laying-out the canvas under the operator's cursor.
+     physics (D8) — and it decides the ORDER across a rank, not the rank, which
+     is the server's `layer` (see the placement below). That is the same rule as
+     rule 3: the picture is printed above the text layers and may not contradict
+     them. Once placed, nothing moves: a toggle or a resize moves the VIEWPORT
+     (a pan and a zoom) and never a node, and a task event raises the "graph
+     changed" pill rather than re-laying-out the canvas under the cursor.
 
   3. NO CLAIM IS INVENTED HERE. Status, type, ghost-ness, cycle membership, the
      longest chain and the isolated set are all payload fields decided by the
@@ -27,10 +28,9 @@
      deliberately not the readiness verdict, which stays Lithos's.
 */
 (function () {
-  const surface = document.querySelector("[data-graph-canvas-layout]");
   const container = document.querySelector("[data-graph-canvas]");
   const source = document.querySelector("[data-graph-payload]");
-  if (!surface || !container || !source || !window.cytoscape) return;
+  if (!container || !source || !window.cytoscape) return;
 
   let payload = null;
   try {
@@ -88,14 +88,6 @@
     }
   });
 
-  const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
-  const chainNodes = {};
-  const chainEdges = {};
-  chain.forEach(function (id, index) {
-    chainNodes[id] = true;
-    if (index) chainEdges[chain[index - 1] + ">" + id] = true;
-  });
-
   // Only a cycle Lens can SHAPE gets a compound parent (D4): a Lithos-flagged
   // member with no component in the fetched topology is condensed alone, and a
   // box drawn round it would be a cycle of one.
@@ -103,6 +95,38 @@
   ((payload && payload.cycles) || []).forEach(function (cycle) {
     if (cycle.scc) cycleParent[cycle.id] = CYCLE_PARENT_PREFIX + cycle.id;
   });
+
+  // The chain (D7) is a walk over the CONDENSED graph — a cycle counts as one
+  // node and is named by its representative — so it cannot be matched against
+  // raw endpoints. `P → B` where B is a non-representative member of A's cycle
+  // IS the step `P → A` the chain names, and a client comparing ids would look
+  // for an edge that does not exist and leave the trace broken exactly at the
+  // cycle boundary. Everything below is keyed by condensation instead.
+  function condensationOf(id) {
+    const node = byId[id];
+    return (node && node.cycle) || id;
+  }
+
+  const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
+  const chainCondensations = {};
+  const chainSteps = {};
+  chain.forEach(function (id, index) {
+    chainCondensations[id] = true;
+    if (index) chainSteps[chain[index - 1] + ">" + id] = true;
+  });
+
+  function onChain(id) {
+    return chainCondensations[condensationOf(id)] === true;
+  }
+
+  function stepOnChain(edge) {
+    const from = condensationOf(edge.from);
+    const to = condensationOf(edge.to);
+    // An edge INSIDE a condensation is not a step of the chain: the chain
+    // crosses it in one move, and the loop it is drawn from has no direction
+    // the chain endorses.
+    return from !== to && chainSteps[from + ">" + to] === true;
+  }
 
   // ── URL state (D8: one URL, re-applied on popstate) ────────────────────
 
@@ -129,6 +153,11 @@
       // into the payload for this page's own URL (project graphs fold isolates
       // away, epic graphs show them).
       isolated: flag(params.get("isolated"), scope.isolated === true),
+      // Read for the resolved link's href only — this page never flips it
+      // client-side, because resolved tasks are nodes the server did not send.
+      includeResolved: flag(
+        params.get("include_resolved"), scope.include_resolved === true
+      ),
       focus: params.get(SELECTION_PARAM) || ""
     };
   }
@@ -144,6 +173,9 @@
     }
     if (changes.isolated !== undefined) {
       url.searchParams.set("isolated", changes.isolated ? "1" : "0");
+    }
+    if (changes.includeResolved !== undefined) {
+      url.searchParams.set("include_resolved", changes.includeResolved ? "1" : "0");
     }
     return url.pathname + url.search + url.hash;
   }
@@ -170,7 +202,7 @@
     if (node.blocked_via_cycle) classes.push("blocked-via-cycle");
     if (blocked[node.id]) classes.push("blocked");
     if ((node.claims || []).length) classes.push("claimed");
-    if (chainNodes[node.id]) classes.push("chain");
+    if (onChain(node.id)) classes.push("chain");
     return classes.join(" ");
   }
 
@@ -197,7 +229,10 @@
   Object.keys(cycleParent).forEach(function (id) {
     elements.push({
       data: { id: cycleParent[id], label: "cycle" },
-      classes: "graph-cycle"
+      // The box is on the chain when its condensation is: the trace enters and
+      // leaves the cycle as one node, so a box drawn plain between two traced
+      // edges would read as a break in the sequence.
+      classes: "graph-cycle" + (chainCondensations[id] ? " chain" : "")
     });
   });
   nodes.forEach(function (node) {
@@ -211,7 +246,7 @@
     const classes = ["graph-edge", "type-" + edge.type];
     if (edge.state) classes.push("state-" + edge.state);
     if (overlay) classes.push("overlay-" + overlay);
-    if (chainEdges[edge.from + ">" + edge.to]) classes.push("chain");
+    if (stepOnChain(edge)) classes.push("chain");
     (overlay ? overlayElements : elements).push({
       data: {
         id: edgeId(edge),
@@ -347,13 +382,14 @@
     { selector: "node.chain", style: { "border-color": ACCENT } }
   ];
 
-  surface.hidden = false;
+  // Revealed before Cytoscape is constructed: it measures the container it is
+  // handed, and a hidden one has no size to measure.
+  container.hidden = false;
 
   const cy = window.cytoscape({
     container: container,
     elements: elements,
-    style: style,
-    wheelSensitivity: 0.2
+    style: style
   });
 
   // ONE layout, and never again (D8). No physics: a graph that drifts while it
@@ -363,9 +399,9 @@
   // graph plus one representative per cyclic condensation (D4) — handed over
   // as a collection rather than as the list of ids the payload carries,
   // because `breadthfirst` takes a collection or a selector and silently falls
-  // back to roots of its own choosing for anything else. That fallback is not
-  // a cosmetic difference: it re-derives the layering the page already
-  // computed, so the picture would stop agreeing with the text layers.
+  // back to roots of its own choosing for anything else. They decide which end
+  // of the graph the traversal starts from, and so the left-to-right order the
+  // placement below reads off it.
   const rootIds = {};
   ((payload && payload.roots) || []).forEach(function (id) {
     if (byId[id]) rootIds[id] = true;
@@ -390,28 +426,66 @@
   // already placed.
   if (overlayElements.length) cy.add(overlayElements);
 
-  // The server condenses a cycle to ONE node for layering (D4), so its members
-  // belong at ONE place in the picture — and `breadthfirst` has no notion of a
-  // compound parent, so it spreads them and stretches the box across whatever
-  // sits between. Stacked here into a tight column around the position the
-  // layout already chose for them: the box then hugs its own members instead
-  // of drawing an unrelated task inside a cycle it is not in.
-  Object.keys(cycleParent).forEach(function (id) {
-    const members = cy.nodes().filter(function (node) {
-      return node.data("parent") === cycleParent[id];
+  // ── Placement: the SERVER's ranks, the layout's order within them ──────
+  //
+  // `breadthfirst` ranks by SHORTEST path from a root. The server's layering is
+  // Kahn's over the condensed graph — one below the DEEPEST predecessor
+  // (`graph_layout._layer`) — so on `A → B → C → D` plus `A → D` the library
+  // draws D level with B while the text below it says layer 3. A picture
+  // contradicting the layers it is printed above is the one thing D3 does not
+  // allow, so the rank comes from `node.layer` and the layout decides only what
+  // it is genuinely better at: the ORDER of the nodes across a rank, from the
+  // server's own roots.
+  //
+  // (`breadthfirst`'s own `maximal` option is the server's rule, and would have
+  // been the whole fix — but the library abandons it the moment the graph has a
+  // cycle, which a dependency graph routinely does, and falls silently back to
+  // shortest path. A promise that lapses exactly where this page is most
+  // interesting is not one to build on.)
+  //
+  // A slot is a CONDENSATION, not a node, for the same reason the server layers
+  // one: a cycle occupies one place in its layer, and its members stack inside
+  // that slot so the compound box hugs them instead of stretching across
+  // whatever the layout happened to put between.
+  const ROW_PITCH = 110;
+  const COLUMN_PITCH = 170;
+  const MEMBER_PITCH = 64;
+  const rows = {};
+  const slotMembers = {};
+  cy.nodes().forEach(function (element) {
+    const node = byId[element.id()];
+    if (!node) return; // a cycle's compound parent, placed by its children
+    const slot = condensationOf(node.id);
+    if (!slotMembers[slot]) {
+      slotMembers[slot] = [];
+      const layer = node.layer || 0;
+      (rows[layer] = rows[layer] || []).push(slot);
+    }
+    slotMembers[slot].push(element);
+  });
+  Object.keys(rows).forEach(function (layer) {
+    const slots = rows[layer];
+    const centre = {};
+    slots.forEach(function (slot) {
+      let x = 0;
+      slotMembers[slot].forEach(function (element) { x += element.position().x; });
+      centre[slot] = x / slotMembers[slot].length;
     });
-    if (!members.length) return;
-    let x = 0;
-    let y = 0;
-    members.forEach(function (node) {
-      const point = node.position();
-      x += point.x;
-      y += point.y;
+    // The layout's left-to-right order, with the id as the tiebreak so a rank
+    // it placed in a column renders the same way twice.
+    slots.sort(function (a, b) {
+      return centre[a] - centre[b] || (a < b ? -1 : 1);
     });
-    x /= members.length;
-    y /= members.length;
-    members.forEach(function (node, index) {
-      node.position({ x: x, y: y + (index - (members.length - 1) / 2) * 64 });
+    slots.forEach(function (slot, index) {
+      const x = (index - (slots.length - 1) / 2) * COLUMN_PITCH;
+      const members = slotMembers[slot];
+      members.forEach(function (element, member) {
+        element.position({
+          x: x,
+          y: Number(layer) * ROW_PITCH +
+            (member - (members.length - 1) / 2) * MEMBER_PITCH
+        });
+      });
     });
   });
 
@@ -508,6 +582,23 @@
       link.textContent = state.isolated ? "Hide isolated tasks" : "Show isolated tasks";
       link.setAttribute("href", urlWith({ isolated: !state.isolated }));
     });
+    // The two links the SERVER built and the client never re-applies. They are
+    // still rebuilt from the live URL on every render, because every other
+    // control here moves that URL without a reload: a pill still pointing at
+    // the address the page loaded on would silently drop the overlays and the
+    // focus the operator set on the way to needing it, which makes its own
+    // "this is a refresh" contract false. `include_resolved` genuinely needs
+    // the server, so its link stays a navigation — it just has to be a
+    // navigation from HERE.
+    document.querySelectorAll("[data-toggle-resolved]").forEach(function (link) {
+      link.setAttribute(
+        "href",
+        urlWith({ includeResolved: !state.includeResolved })
+      );
+    });
+    document.querySelectorAll("[data-graph-refresh-pill]").forEach(function (pill) {
+      pill.setAttribute("href", urlWith({}));
+    });
     // The text disclosure and the canvas answer the same question, so they are
     // never allowed to disagree about whether isolates are being shown.
     const disclosure = document.querySelector("[data-isolated-disclosure]");
@@ -578,6 +669,14 @@
   // Back and forward walk the exploration without a reload: the URL is the
   // state, and everything it names is already in the payload.
   window.addEventListener("popstate", render);
+
+  // And so does every PANEL transition, which moves the same URL by
+  // `pushState` — and `pushState` fires no `popstate`. Without this, closing
+  // the panel (or Escape) clears `focus` and the panel while the node stays
+  // lit: the canvas would claim a selection the page's one selection parameter
+  // no longer names.
+  const panelApi = panel();
+  if (panelApi && panelApi.onChange) panelApi.onChange(render);
 
   cy.on("tap", "node", function (event) {
     const id = event.target.id();
@@ -656,12 +755,16 @@
     });
   }
 
-  // D8's "load with focus=A → A's panel open". The panel is fetched rather
-  // than server-rendered here, and the push is suppressed: the URL already
+  // D8's "load with focus=A → A's panel open". The server renders that panel
+  // itself (D9's no-JS baseline), so the only case left here is a focus the
+  // server did not answer — a scope error on its read, or a `focus` that
+  // arrived without one. The push is suppressed either way: the URL already
   // names this selection, and a second identical history entry would make the
   // first Back appear to do nothing.
   const initial = stateFromUrl();
-  if (initial.focus && byId[initial.focus]) {
+  const host = document.querySelector("[data-panel-host]");
+  const served = host && host.dataset.panelSelected === initial.focus && host.innerHTML;
+  if (initial.focus && byId[initial.focus] && !served) {
     const open = panel();
     if (open) open.open(initial.focus, { push: false });
   }

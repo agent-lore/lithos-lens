@@ -1200,27 +1200,34 @@ def test_a_failed_click_does_not_leave_its_task_claimed_as_the_intent() -> None:
 
 # A third harness, and the reason it is not the panel one: what A4 adds lives
 # between the payload the server already embedded and Cytoscape — which URL an
-# overlay toggle pushes, which elements are drawn afterwards, that NOTHING is
-# fetched to do it, and that a task event never moves the layout. None of that
-# is visible to Python (the server renders the same HTML either way) and none of
-# it is visible to the e2e suite either, which photographs pixels.
+# overlay toggle pushes, what is drawn afterwards and in what style, that
+# NOTHING is fetched to do it, and that a task event never moves the layout.
+# None of that is visible to Python (the server renders the same HTML either
+# way) and none of it is visible to the e2e suite either, which photographs
+# pixels.
 #
 # It loads BOTH files, in the page's own order, because "one panel
 # implementation for rows and nodes" (D9) is exactly the promise that a canvas
 # with its own private copy of the panel would stop keeping: a node tap here has
 # to travel through `tasks.js`.
 #
-# Cytoscape itself is stubbed — a real one needs a canvas — but the stub
-# resolves STYLE the way the library does (last matching rule wins), so
-# "every drawn edge carries an arrowhead" is a question this harness can
-# actually answer rather than assume.
+# And it runs the REAL vendored Cytoscape, headless, inside the same context —
+# not a stub. A stub can only answer the questions its author thought to
+# reimplement, and every claim this slice makes about the picture (the rank a
+# node lands in, the shape its type gives it, which box a cycle member is
+# actually inside, whether an arrowhead resolves) is a question for the library
+# that will draw it in production. Style resolution, compound parents, layout
+# and event delegation are therefore the shipped 3.30.3's own.
 GRAPH_HARNESS = """
 const fs = require("fs");
 const vm = require("vm");
 
-const [tasksPath, graphPath, initialHref, actionsRaw, payloadRaw] =
-  process.argv.slice(1);
+const [
+  tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
+  reducedMotionRaw, servedPanelRaw,
+] = process.argv.slice(1);
 const actions = JSON.parse(actionsRaw);
+const reducedMotion = reducedMotionRaw === "1";
 
 const entries = [initialHref];
 let cursor = 0;
@@ -1228,7 +1235,7 @@ const pushed = [];
 const fetches = [];
 const listeners = {};
 const sse = {};
-let layouts = 0;
+const layoutCalls = [];
 
 function href() { return entries[cursor]; }
 
@@ -1239,32 +1246,38 @@ function element(extra) {
     hidden: false,
     textContent: "",
     setAttribute(name, value) { this.attributes[name] = value; },
-    getAttribute(name) { return this.attributes[name]; },
+    getAttribute(name) { return this.attributes[name] || ""; },
   }, extra || {});
 }
 
-const surface = element();
-const container = element();
+const container = element({ hidden: true });
 const host = element({
-  panel: null,
   _html: "",
   get innerHTML() { return this._html; },
   set innerHTML(value) { this._html = value; },
 });
+// What the SERVER rendered into the host for a request carrying `focus=`
+// (D9's no-JS baseline). When it is present the client must NOT fetch the
+// panel again; when it is absent the client is the only thing that can open it.
+if (servedPanelRaw) {
+  host.dataset.panelSelected = servedPanelRaw;
+  host.dataset.panelUrl = "/tasks/" + servedPanelRaw + "?fragment=panel";
+  host.innerHTML = "panel:server:" + servedPanelRaw;
+}
 const payloadScript = element({ textContent: payloadRaw });
 const pill = element({ hidden: true });
 const textToggle = element({ hidden: true });
 const disclosure = element({ open: false });
 const layersSection = element();
 const hierarchySection = element();
-const isolatedToggle = element({ dataset: {} });
+const isolatedToggle = element();
+const resolvedToggle = element();
 const overlayToggles = {
   hierarchy: element({ dataset: { toggleOverlay: "hierarchy" } }),
   provenance: element({ dataset: { toggleOverlay: "provenance" } }),
 };
 
 const SINGLE = {
-  "[data-graph-canvas-layout]": surface,
   "[data-graph-canvas]": container,
   "[data-graph-payload]": payloadScript,
   "[data-panel-host]": host,
@@ -1275,13 +1288,19 @@ const SINGLE = {
 const MANY = {
   "[data-toggle-overlay]": [overlayToggles.hierarchy, overlayToggles.provenance],
   "[data-toggle-isolated]": [isolatedToggle],
+  "[data-toggle-resolved]": [resolvedToggle],
+  "[data-graph-refresh-pill]": [pill],
   "[data-graph-text]": [layersSection, disclosure, hierarchySection],
 };
 
 const document = {
   querySelector(selector) { return SINGLE[selector] || null; },
   querySelectorAll(selector) { return MANY[selector] || []; },
-  createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  createElement() {
+    // Cytoscape's headless renderer touches no DOM; `tasks.js` builds a span
+    // to escape HTML with, which is the only element anything here creates.
+    return { dataset: {}, style: {}, appendChild() {}, getContext() { return {}; } };
+  },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
 };
 
@@ -1290,90 +1309,19 @@ class EventSource {
   close() {}
 }
 
-// ── the Cytoscape stub ────────────────────────────────────────────────────
-//
-// Style resolution is real enough to be worth asking: a rule matches when its
-// `node`/`edge` head matches the element kind and every `.class` token is on
-// it, and the LAST matching rule wins — which is how the library itself
-// resolves a stylesheet.
-function selectorMatches(ele, selector) {
-  const parts = selector.trim().split(".");
-  const head = parts.shift();
-  if (head === "node" && ele.kind !== "node") return false;
-  if (head === "edge" && ele.kind !== "edge") return false;
-  if (head && head !== "node" && head !== "edge") return false;
-  return parts.every(function (name) { return ele.classes.has(name); });
-}
-
-function cytoscape(options) {
-  const style = options.style || [];
-  const nodes = [];
-  const edges = [];
-  const handlers = [];
-  function build(spec) {
-    const kind = spec.data.source ? "edge" : "node";
-    const ele = {
-      kind,
-      classes: new Set((spec.classes || "").split(" ").filter(Boolean)),
-      inline: {},
-      id() { return spec.data.id; },
-      data(key) { return key === undefined ? spec.data : spec.data[key]; },
-      hasClass(name) { return ele.classes.has(name); },
-      addClass(name) { ele.classes.add(name); return ele; },
-      removeClass(name) { ele.classes.delete(name); return ele; },
-      at: { x: 0, y: 0 },
-      position(next) {
-        if (next !== undefined) { ele.at = next; return ele; }
-        return ele.at;
-      },
-      style(name, value) {
-        if (value !== undefined) { ele.inline[name] = value; return ele; }
-        if (name in ele.inline) return ele.inline[name];
-        let resolved;
-        style.forEach(function (rule) {
-          if (selectorMatches(ele, rule.selector) && rule.style[name] !== undefined) {
-            resolved = rule.style[name];
-          }
-        });
-        return resolved;
-      },
-    };
-    (kind === "edge" ? edges : nodes).push(ele);
-  }
-  (options.elements || []).forEach(build);
-  const collection = function (all, selector) {
-    if (!selector) return all;
-    return all.filter(function (ele) { return selectorMatches(ele, selector); });
-  };
-  return {
-    nodes(selector) { return collection(nodes, selector); },
-    edges(selector) { return collection(edges, selector); },
-    // The overlay edges, which join after the layout so that hierarchy cannot
-    // decide the dependency graph's shape.
-    add(specs) { specs.forEach(build); },
-    on(event, selector, fn) { handlers.push({ event, selector, fn }); },
-    // Counted, because "exactly one, ever" is the claim: D8 forbids a second.
-    layout() { layouts += 1; return { run() {} }; },
-    // A pan and a zoom over the positions that one layout produced — not a
-    // layout, which is why it is a separate method here as it is there.
-    fit() {},
-    _fire(event, id) {
-      const target = nodes.concat(edges).filter(function (ele) {
-        return ele.id() === id;
-      })[0];
-      handlers.forEach(function (entry) {
-        if (entry.event === event) entry.fn({ target });
-      });
-    },
-  };
-}
-
 const sandbox = {
   document,
   EventSource,
   console,
   URL,
   URLSearchParams,
+  Math,
+  Date,
+  JSON,
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
   DOMParser: class {
     parseFromString() { return { querySelector() { return null; } }; }
   },
@@ -1392,8 +1340,10 @@ sandbox.window = {
     liveRefresh: false,
     eventsUrl: "/tasks/events",
   },
-  cytoscape,
-  setTimeout: (fn) => { return 0; },
+  matchMedia: (query) => ({
+    matches: reducedMotion && query.indexOf("reduced-motion") !== -1,
+  }),
+  setTimeout: (fn) => 0,
   clearTimeout() {},
   setInterval: () => 0,
   clearInterval() {},
@@ -1416,8 +1366,47 @@ sandbox.window.window = sandbox.window;
 Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
 
 vm.createContext(sandbox);
+
+// The shipped bundle, in this context. Its UMD wrapper has no `module` here, so
+// it publishes onto the contextified global; `graph.js` reads `window`, and the
+// wrapper below is what bridges the two — and what records the layout options,
+// which are otherwise invisible once the library has consumed them.
+vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
+// The wrapper is built INSIDE the context, not here. Cytoscape's entry point
+// asks whether its argument is a plain object, and an object minted in another
+// realm is not one — called from this side it silently returns `undefined`.
+// The recorder is the only thing that crosses, because a function may.
+sandbox.__recordLayout = (info) => { layoutCalls.push(info); };
+vm.runInContext(`
+  window.cytoscape = function (options) {
+    var cy = cytoscape(Object.assign({}, options, {
+      // No container and no renderer: positions, styles, compound parents and
+      // event delegation are all computed without one.
+      container: null,
+      headless: true,
+      styleEnabled: true
+    }));
+    var layout = cy.layout.bind(cy);
+    cy.layout = function (opts) {
+      __recordLayout({
+        name: opts.name,
+        directed: opts.directed === true,
+        animate: opts.animate === true,
+        roots: (opts.roots || []).map(function (node) { return node.id(); }).sort(),
+        // What the layout could SEE. The overlays are added afterwards on
+        // purpose, so hierarchy cannot decide the dependency graph's shape.
+        edgeTypes: cy.edges().map(function (edge) { return edge.data("type"); }).sort()
+      });
+      return layout(opts);
+    };
+    return cy;
+  };
+`, sandbox);
+
 vm.runInContext(fs.readFileSync(tasksPath, "utf8"), sandbox);
 vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
+
+const graph = sandbox.window.LithosLensGraph;
 
 function fire(type, event) {
   (listeners[type] || []).forEach((listener) => listener(event));
@@ -1435,7 +1424,7 @@ function clickOn(map) {
 let eventSeq = 0;
 
 function snapshot() {
-  const drawn = sandbox.window.LithosLensGraph.shown();
+  const drawn = graph.shown();
   return {
     href: href(),
     nodes: drawn.nodes,
@@ -1444,14 +1433,55 @@ function snapshot() {
       .filter((edge) => !edge.arrow || edge.arrow === "none")
       .map((edge) => edge.id),
     pillHidden: pill.hidden,
+    canvasHidden: container.hidden,
     textHidden: layersSection.hidden,
     panel: host.innerHTML,
-    focused: sandbox.window.LithosLensGraph.cy
+    focused: graph.cy
       .nodes()
       .filter((node) => node.hasClass("focused"))
       .map((node) => node.id()),
     disclosureOpen: disclosure.open,
+    hrefs: {
+      resolved: resolvedToggle.getAttribute("href"),
+      pill: pill.getAttribute("href"),
+      hierarchy: overlayToggles.hierarchy.getAttribute("href"),
+      isolated: isolatedToggle.getAttribute("href"),
+    },
   };
+}
+
+// Everything the LIBRARY resolved, which is the point of running the real one:
+// a class this file never asserts on is a class the page can lose silently.
+function styles() {
+  const out = {};
+  graph.cy.elements().forEach((ele) => {
+    const node = ele.isNode();
+    out[ele.id()] = {
+      kind: node ? "node" : "edge",
+      classes: ele.classes().slice().sort(),
+      parent: node && ele.parent().length ? ele.parent().id() : "",
+      display: ele.style("display"),
+      opacity: Number(ele.style("opacity")),
+      shape: node ? ele.style("shape") : "",
+      background: node ? ele.style("background-color") : "",
+      blacken: node ? Number(ele.style("background-blacken")) : 0,
+      borderStyle: node ? ele.style("border-style") : "",
+      borderColor: node ? ele.style("border-color") : "",
+      overlayOpacity: node ? Number(ele.style("overlay-opacity")) : 0,
+      lineStyle: node ? "" : ele.style("line-style"),
+      lineColor: node ? "" : ele.style("line-color"),
+      arrow: node ? "" : ele.style("target-arrow-shape"),
+    };
+  });
+  return out;
+}
+
+function ranks() {
+  const out = {};
+  graph.cy.nodes().forEach((node) => {
+    out[node.id()] = Math.round(node.position().y * 100) / 100;
+  });
+  return out;
 }
 
 (async () => {
@@ -1470,8 +1500,12 @@ function snapshot() {
     } else if (name === "forward") {
       if (cursor < entries.length - 1) cursor += 1;
       fire("popstate", {});
+    } else if (name === "close") {
+      fire("click", clickOn({ "[data-panel-close]": {} }));
+    } else if (name === "escape") {
+      fire("keydown", { key: "Escape" });
     } else if (name === "tap" || name === "dbltap") {
-      sandbox.window.LithosLensGraph.cy._fire(name, argument);
+      graph.cy.getElementById(argument).emit(name);
     } else if (name === "event") {
       eventSeq += 1;
       (sse["task.updated"] || []).forEach((listener) => listener({
@@ -1479,12 +1513,6 @@ function snapshot() {
         data: JSON.stringify({
           type: "task.updated", task_id: argument, requires_refresh: true,
         }),
-      }));
-    } else if (name === "finding") {
-      eventSeq += 1;
-      (sse["finding.posted"] || []).forEach((listener) => listener({
-        lastEventId: "event-" + eventSeq,
-        data: JSON.stringify({ type: "finding.posted", task_id: argument }),
       }));
     }
     await new Promise((resolve) => setImmediate(resolve));
@@ -1496,226 +1524,174 @@ function snapshot() {
     final: snapshot(),
     pushed,
     fetches,
-    layouts,
-    positions: sandbox.window.LithosLensGraph.positions(),
+    layouts: layoutCalls,
+    styles: styles(),
+    ranks: ranks(),
+    // A claimed node BREATHES unless the operator asked for stillness; the
+    // library is the only thing that can say whether an animation is running.
+    animating: graph.cy
+      .nodes()
+      .filter((node) => node.animated())
+      .map((node) => node.id())
+      .sort(),
   }));
+  // The pulse re-arms itself forever, so this process will not end on its own.
+  process.exit(0);
 })();
 """
 
 GRAPH_JS = Path(__file__).resolve().parents[1] / "src/lithos_lens/static/graph.js"
+#: The SHIPPED bundle, not a copy: a harness that stubbed it could only answer
+#: the questions its author remembered to reimplement.
+CYTOSCAPE_JS = (
+    Path(__file__).resolve().parents[1]
+    / "src/lithos_lens/static/vendor/cytoscape.min.js"
+)
 
-# One scope's payload in the shape `graph_view.payload_json` emits, carrying
-# every branch the canvas has a rule for: a drawable cycle, a dependency ghost,
-# a CONTEXT ghost reachable only through its provenance edge, an isolated node
-# whose only edge is hierarchy, an inactive edge and an unknown one.
-GRAPH_PAYLOAD: dict = {
-    "scope": {
-        "kind": "project",
-        "key": "loom",
-        "include_resolved": False,
-        "focus": "",
-        "overlays": [],
-        "isolated": False,
-    },
-    "nodes": [
-        {
-            "id": "epic",
-            "label": "Epic",
-            "status": "open",
-            "type": "epic",
-            "layer": 0,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/epic",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": True,
-        },
-        {
-            "id": "schema",
-            "label": "Schema",
-            "status": "open",
-            "type": "task",
-            "layer": 0,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": ["agent-zero"],
-            "detail_url": "/tasks/schema",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
+
+def _node(
+    task_id: str,
+    *,
+    layer: int = 0,
+    status: str = "open",
+    task_type: str = "task",
+    ghost: str = "",
+    projects: tuple[str, ...] = ("loom",),
+    completeness: str = "ok",
+    claims: tuple[str, ...] = (),
+    cycle: str = "",
+    flagged: bool = False,
+    isolated: bool = False,
+    detail_url: str = "",
+) -> dict:
+    """One payload node in the shape `graph_view.payload_json` emits."""
+    return {
+        "id": task_id,
+        "label": task_id.title(),
+        "status": status,
+        "type": task_type,
+        "layer": layer,
+        "ghost": bool(ghost),
+        "ghost_kind": ghost,
+        "projects": list(projects),
+        "completeness": completeness,
+        "claims": list(claims),
+        "detail_url": detail_url or f"/tasks/{task_id}",
+        "cycle": cycle,
+        "flagged": flagged,
+        "cycle_unknown": False,
+        "blocked_via_cycle": False,
+        "isolated": isolated,
+    }
+
+
+def _edge(
+    from_id: str,
+    to_id: str,
+    edge_type: str = "blocks",
+    state: str = "active",
+    reason: str = "",
+) -> dict:
+    return {
+        "from": from_id,
+        "to": to_id,
+        "type": edge_type,
+        "state": state,
+        "reason": reason,
+    }
+
+
+def _payload(nodes: list[dict], edges: list[dict], **scope: object) -> dict:
+    """A whole payload around one node/edge set, with the rest defaulted.
+
+    Everything the server computes and the canvas only reads — layers, the
+    chain, roots, the isolated fold — is passed per fixture, because those ARE
+    the claims under test: the picture has to agree with them, not re-derive
+    them.
+    """
+    layers: dict[int, list[str]] = {}
+    folded = [node["id"] for node in nodes if node["isolated"]]
+    for node in nodes:
+        if node["id"] not in folded:
+            layers.setdefault(int(node["layer"]), []).append(node["id"])
+    body = {
+        "scope": {
+            "kind": "project",
+            "key": "loom",
+            "include_resolved": False,
+            "focus": "",
+            "overlays": [],
             "isolated": False,
         },
-        {
-            "id": "ship",
-            "label": "Ship",
-            "status": "open",
-            "type": "task",
-            "layer": 1,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/ship",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": False,
-        },
-        {
-            "id": "cycle-a",
-            "label": "A",
-            "status": "open",
-            "type": "task",
-            "layer": 0,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/cycle-a",
-            "cycle": "cycle-a",
-            "flagged": True,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": False,
-        },
-        {
-            "id": "cycle-b",
-            "label": "B",
-            "status": "open",
-            "type": "task",
-            "layer": 0,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/cycle-b",
-            "cycle": "cycle-a",
-            "flagged": True,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": False,
-        },
-        {
-            "id": "far",
-            "label": "Far",
-            "status": "open",
-            "type": "task",
-            "layer": 2,
-            "ghost": True,
-            "ghost_kind": "dependency",
-            "projects": ["lens"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/far",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": False,
-        },
-        {
-            "id": "source",
-            "label": "Source",
-            "status": "completed",
-            "type": "task",
-            "layer": 0,
-            "ghost": True,
-            "ghost_kind": "context",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/source",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": False,
-        },
-        {
-            "id": "note",
-            "label": "Note",
-            "status": "open",
-            "type": "task",
-            "layer": 0,
-            "ghost": False,
-            "ghost_kind": "",
-            "projects": ["loom"],
-            "completeness": "ok",
-            "claims": [],
-            "detail_url": "/tasks/note",
-            "cycle": "",
-            "flagged": False,
-            "cycle_unknown": False,
-            "blocked_via_cycle": False,
-            "isolated": True,
-        },
+        "nodes": nodes,
+        "edges": edges,
+        "layers": [
+            layers.get(index, []) for index in range(max(layers, default=0) + 1)
+        ],
+        "cycles": [],
+        "ghosts": [node["id"] for node in nodes if node["ghost"]],
+        "longest_chain": {"nodes": [], "length": 0, "bound": "exact"},
+        "roots": [],
+        "isolated": folded,
+        "incomplete": {},
+        "as_of": "2026-09-14T10:00:00+00:00",
+    }
+    scope_overrides = {
+        key: scope.pop(key) for key in list(scope) if key in body["scope"]
+    }
+    body["scope"].update(scope_overrides)  # type: ignore[union-attr]
+    body.update(scope)
+    return body
+
+
+# The main fixture: one scope carrying every branch the canvas has a rule for —
+# a drawable cycle, a dependency ghost, a CONTEXT ghost reachable only through
+# its provenance edge, an isolated node whose only edge is hierarchy, a gate and
+# its `waits_on_gate` edge, a completed predecessor on an inactive edge, a
+# cancelled task, a ghost whose status could not be read and the `unknown` edge
+# that follows from it, and a claimed task. Every clause of D8's styling has
+# something here to be wrong about.
+GRAPH_PAYLOAD: dict = _payload(
+    [
+        _node("epic", task_type="epic", isolated=True),
+        _node("schema", claims=("agent-zero",)),
+        _node("ship", layer=1),
+        _node("announce", layer=2),
+        _node("gate", task_type="gate", layer=1),
+        _node("done", status="completed"),
+        _node("stopped", status="cancelled"),
+        _node("stranded", layer=1),
+        _node("cycle-a", cycle="cycle-a", flagged=True),
+        _node("cycle-b", cycle="cycle-a", flagged=True),
+        _node("far", layer=2, ghost="dependency", projects=("lens",)),
+        _node(
+            "unread",
+            ghost="dependency",
+            status="unknown",
+            completeness="status_unknown",
+            projects=("lens",),
+        ),
+        _node("source", status="completed", ghost="context"),
+        _node("note", isolated=True),
+        # The id that collides with a page under `/tasks/`: it can only be
+        # addressed through the query alias, and the server said so.
+        _node("graph", layer=2, detail_url="/tasks/id?task_id=graph"),
     ],
-    "edges": [
-        {
-            "from": "schema",
-            "to": "ship",
-            "type": "blocks",
-            "state": "active",
-            "reason": "",
-        },
-        {
-            "from": "ship",
-            "to": "far",
-            "type": "blocks",
-            "state": "active",
-            "reason": "",
-        },
-        {
-            "from": "cycle-a",
-            "to": "cycle-b",
-            "type": "blocks",
-            "state": "active",
-            "reason": "",
-        },
-        {
-            "from": "cycle-b",
-            "to": "cycle-a",
-            "type": "blocks",
-            "state": "active",
-            "reason": "",
-        },
-        {
-            "from": "epic",
-            "to": "schema",
-            "type": "parent_child",
-            "state": "",
-            "reason": "",
-        },
-        {
-            "from": "epic",
-            "to": "note",
-            "type": "parent_child",
-            "state": "",
-            "reason": "",
-        },
-        {
-            "from": "source",
-            "to": "note",
-            "type": "discovered_from",
-            "state": "",
-            "reason": "",
-        },
+    [
+        _edge("schema", "ship"),
+        _edge("ship", "far"),
+        _edge("ship", "graph"),
+        _edge("gate", "announce", "waits_on_gate"),
+        _edge("done", "ship", state="inactive", reason="satisfied"),
+        _edge("stopped", "stranded"),
+        _edge("unread", "announce", state="unknown"),
+        _edge("cycle-a", "cycle-b"),
+        _edge("cycle-b", "cycle-a"),
+        _edge("epic", "schema", "parent_child", state=""),
+        _edge("epic", "note", "parent_child", state=""),
+        _edge("source", "note", "discovered_from", state=""),
     ],
-    "layers": [["schema", "cycle-a", "cycle-b"], ["ship"], ["far"]],
-    "cycles": [
+    cycles=[
         {
             "id": "cycle-a",
             "members": ["cycle-a", "cycle-b"],
@@ -1723,34 +1699,86 @@ GRAPH_PAYLOAD: dict = {
             "scc": True,
             "flagged": True,
             "message": "Dependency cycle.",
-        },
+        }
     ],
-    "ghosts": ["far", "source"],
-    "longest_chain": {
-        "nodes": ["schema", "ship", "far"],
-        "length": 3,
-        "bound": "exact",
-    },
-    "roots": ["schema", "cycle-a", "epic", "source"],
-    "isolated": ["epic", "note"],
-    "incomplete": {},
-    "as_of": "2026-09-14T10:00:00+00:00",
-}
+    longest_chain={"nodes": ["schema", "ship", "far"], "length": 3, "bound": "exact"},
+    roots=["schema", "gate", "done", "stopped", "cycle-a", "epic", "source", "unread"],
+)
+
+# The reviewer's own DAG (correctness f-001): `A → B → C → D` plus `A → D`. The
+# server layers it by LONGEST path, so D is layer 3; `breadthfirst` ranks by
+# shortest path and would draw D level with B.
+DIAMOND_PAYLOAD: dict = _payload(
+    [_node("a"), _node("b", layer=1), _node("c", layer=2), _node("d", layer=3)],
+    [_edge("a", "b"), _edge("b", "c"), _edge("c", "d"), _edge("a", "d")],
+    roots=["a"],
+)
+
+# A chain that crosses a cycle (correctness f-003). The server condenses the
+# cycle to its representative `cyc-a`, so the chain reads `p → cyc-a → d` while
+# the edge that actually enters it is `p → cyc-b`.
+CYCLE_CHAIN_PAYLOAD: dict = _payload(
+    [
+        _node("p"),
+        _node("cyc-a", layer=1, cycle="cyc-a", flagged=True),
+        _node("cyc-b", layer=1, cycle="cyc-a", flagged=True),
+        _node("d", layer=2),
+    ],
+    [
+        _edge("p", "cyc-b"),
+        _edge("cyc-a", "cyc-b"),
+        _edge("cyc-b", "cyc-a"),
+        _edge("cyc-a", "d"),
+    ],
+    cycles=[
+        {
+            "id": "cyc-a",
+            "members": ["cyc-a", "cyc-b"],
+            "path": ["cyc-a", "cyc-b", "cyc-a"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        }
+    ],
+    longest_chain={"nodes": ["p", "cyc-a", "d"], "length": 3, "bound": "exact"},
+    roots=["p"],
+)
+
+# An EPIC scope, where the isolated default is the other way round (D8): an
+# epic's edge-less children are its progress, so they are shown.
+EPIC_PAYLOAD: dict = _payload(
+    [_node("child", isolated=True), _node("head"), _node("tail", layer=1)],
+    [_edge("head", "tail")],
+    kind="epic",
+    key="loom-epic",
+    isolated=True,
+    roots=["head", "child"],
+)
 
 #: This harness's own address. Deliberately not the panel harness's
 #: ``GRAPH_HREF`` above: that one carries overlays and an isolated toggle
 #: already applied, and the canvas tests below start from the page's defaults.
 GRAPH_CANVAS_HREF = "http://lens.test/tasks/graph?project=loom"
+EPIC_CANVAS_HREF = "http://lens.test/tasks/graph?epic=loom-epic"
 
 
 def _graph_run(
-    actions: list[str], href: str = GRAPH_CANVAS_HREF, payload: dict | None = None
+    actions: list[str],
+    href: str = GRAPH_CANVAS_HREF,
+    payload: dict | None = None,
+    *,
+    reduced_motion: bool = False,
+    served_panel: str = "",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
     The order matters and is the page's own: ``graph.js`` opens the side panel
     through the API ``tasks.js`` publishes, so a harness that loaded only the
     second would be testing a graph page that cannot open a panel at all.
+
+    ``served_panel`` is the id the SERVER already rendered into the panel host
+    (D9's no-JS baseline); ``reduced_motion`` is the operator's motion
+    preference, which the claimed-node pulse has to obey.
     """
     assert NODE is not None
     result = subprocess.run(
@@ -1761,16 +1789,28 @@ def _graph_run(
             "--",
             str(TASKS_JS),
             str(GRAPH_JS),
+            str(CYTOSCAPE_JS),
             href,
             json.dumps(actions),
             json.dumps(payload or GRAPH_PAYLOAD),
+            "1" if reduced_motion else "0",
+            served_panel,
         ],
         capture_output=True,
         text=True,
         check=True,
-        timeout=30,
+        timeout=60,
     )
-    return json.loads(result.stdout)
+    # The LAST line: the library writes its own warnings to stdout, and a
+    # harness that could not survive one would fail on a future version's.
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def _rank(result: dict, task_id: str) -> float:
+    return result["ranks"][task_id]
+
+
+# ── What is drawn, and in what style ────────────────────────────────────
 
 
 def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -> None:
@@ -1784,7 +1824,7 @@ def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -
     result = _graph_run([])
     final = result["final"]
 
-    assert sorted(final["edges"]) == ["blocks"] * 4
+    assert sorted(set(final["edges"])) == ["blocks", "waits_on_gate"]
     assert final["arrowless"] == [], "an edge whose direction cannot be read"
     assert "source" not in final["nodes"], "context ghost drawn with its overlay off"
     # The dependency ghost is not a context one: it is a live cross-project
@@ -1795,6 +1835,192 @@ def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -
     assert "note" not in final["nodes"]
     # … and nothing was fetched to decide any of it.
     assert result["fetches"] == []
+
+
+def test_shape_is_type_and_colour_is_status_as_the_library_resolves_them() -> None:
+    """D8's vocabulary, read back off the real Cytoscape rather than off the
+    stylesheet this file could have mistyped: shape = type, colour = status,
+    a node something in this graph blocks is tinted, and a ghost is dimmed."""
+    styles = _graph_run([])["styles"]
+
+    assert styles["schema"]["shape"] == "ellipse"
+    assert styles["epic"]["shape"] == "round-rectangle"
+    assert styles["gate"]["shape"] == "diamond"
+
+    # One colour per status, all four distinct — a palette that collapsed two
+    # of them would make the picture say less than the text.
+    fills = {
+        name: styles[name]["background"]
+        for name in ("schema", "done", "stopped", "unread")
+    }
+    assert len(set(fills.values())) == 4, fills
+    # And the unread ghost's status is visibly PROVISIONAL, not just another
+    # colour: Lens asked for it and did not get it.
+    assert styles["unread"]["borderStyle"] == "dashed"
+
+    # Blocked is a TINT over the status, not a replacement for it: the fill
+    # still says "open" and the tint sits on top of it. (Readiness itself stays
+    # Lithos's — this only says that something in THIS graph points at it.)
+    assert "blocked" in styles["ship"]["classes"]
+    assert "blocked" not in styles["schema"]["classes"]
+    assert styles["ship"]["background"] == styles["schema"]["background"]
+    assert styles["ship"]["blacken"] != styles["schema"]["blacken"]
+
+    # A ghost is dimmed, one hop outside the scope.
+    assert styles["far"]["opacity"] < 1
+    assert styles["schema"]["opacity"] == 1
+
+
+def test_each_edge_type_and_state_draws_the_way_the_legend_says() -> None:
+    """`blocks` solid, `waits_on_gate` dashed, hierarchy thin and light,
+    provenance dotted (D8); inactive faded, unknown in the unknown style (D6).
+    Every one of them keeps its arrowhead."""
+    styles = _graph_run([])["styles"]
+    blocks = styles["edge::blocks::schema::ship"]
+    gate = styles["edge::waits_on_gate::gate::announce"]
+    hierarchy = styles["edge::parent_child::epic::schema"]
+    provenance = styles["edge::discovered_from::source::note"]
+    inactive = styles["edge::blocks::done::ship"]
+    unknown = styles["edge::blocks::unread::announce"]
+
+    assert blocks["lineStyle"] == "solid"
+    assert gate["lineStyle"] == "dashed"
+    assert provenance["lineStyle"] == "dotted"
+    # Hierarchy is the LIGHT one — the default view is dependency flow, and an
+    # overlay that competed with it would be the hairball D8 rules out.
+    assert hierarchy["lineColor"] != blocks["lineColor"]
+    assert inactive["opacity"] < 1, "a satisfied edge is drawn faded"
+    assert unknown["lineStyle"] == "dashed"
+    assert unknown["lineColor"] != blocks["lineColor"]
+    for edge in (blocks, gate, hierarchy, provenance, inactive, unknown):
+        assert edge["arrow"] == "triangle"
+
+
+def test_a_cycle_is_drawn_as_a_compound_parent_holding_its_own_members() -> None:
+    """T1's cycle convention (D4/D8). The box has to CONTAIN the members —
+    a parent node beside them would draw a cycle around nothing."""
+    styles = _graph_run([])["styles"]
+
+    assert styles["cycle-a"]["parent"] == "cycle::cycle-a"
+    assert styles["cycle-b"]["parent"] == "cycle::cycle-a"
+    assert styles["ship"]["parent"] == "", "a task outside the cycle is in its box"
+    assert "graph-cycle" in styles["cycle::cycle-a"]["classes"]
+    # Lithos's verdict marks the member rows themselves, whatever the box says.
+    assert "flagged" in styles["cycle-a"]["classes"]
+
+
+def test_a_claimed_task_breathes_and_stops_when_the_operator_asks_for_stillness() -> (
+    None
+):
+    """ "In progress" is a claim, and a still frame cannot say it — so the node
+    pulses. The operator's motion preference overrides that, which is the half
+    a test asserting only the class would never see."""
+    moving = _graph_run([], reduced_motion=False)
+    still = _graph_run([], reduced_motion=True)
+
+    assert moving["animating"] == ["schema"]
+    assert still["animating"] == []
+    # The resting ring is style, not animation, so it is there either way.
+    assert still["styles"]["schema"]["overlayOpacity"] > 0
+    assert "claimed" in still["styles"]["schema"]["classes"]
+
+
+# ── The layout: the server's ranks, the library's order ─────────────────
+
+
+def test_the_layout_is_one_directed_breadthfirst_from_the_servers_roots() -> None:
+    """D8's layout contract, read off the options the library was handed.
+
+    The overlay edges must NOT be among them: `breadthfirst` reads every edge
+    it is given, so an epic's hierarchy would flatten the dependency chain the
+    page is for into one row of its children.
+    """
+    result = _graph_run(["overlay:hierarchy", "event:ship"])
+
+    assert len(result["layouts"]) == 1, "the graph laid itself out more than once"
+    layout = result["layouts"][0]
+    assert layout["name"] == "breadthfirst"
+    assert layout["directed"] is True
+    assert layout["animate"] is False
+    assert layout["roots"] == sorted(GRAPH_PAYLOAD["roots"])
+    assert "parent_child" not in layout["edgeTypes"]
+    assert "discovered_from" not in layout["edgeTypes"]
+    assert "blocks" in layout["edgeTypes"]
+
+
+def test_a_node_is_ranked_by_the_servers_layer_not_by_the_shortest_path() -> None:
+    """Regression (round-1 correctness f-001). The server layers by LONGEST
+    path — `A → B → C → D` plus `A → D` puts D in layer 3 — while Cytoscape's
+    breadth-first ranks by shortest path and would draw D level with B. A
+    picture contradicting the layers printed under it is the one thing D3 does
+    not allow."""
+    result = _graph_run([], payload=DIAMOND_PAYLOAD)
+
+    assert _rank(result, "b") > _rank(result, "a")
+    assert _rank(result, "c") > _rank(result, "b")
+    assert _rank(result, "d") > _rank(result, "c"), (
+        "D was drawn level with B — the shortest-path rank, not the server's"
+    )
+    # Evenly, and in the server's own order: four layers, four ranks.
+    assert len({_rank(result, node) for node in ("a", "b", "c", "d")}) == 4
+
+
+def test_every_drawn_node_sits_in_the_rank_its_payload_layer_names() -> None:
+    """The same contract over a scope with a cycle in it, which is where the
+    library's own `maximal` option gives up and falls back to shortest path."""
+    result = _graph_run([])
+
+    by_layer: dict[int, set[float]] = {}
+    for node in GRAPH_PAYLOAD["nodes"]:
+        by_layer.setdefault(int(node["layer"]), set()).add(_rank(result, node["id"]))
+    # A cycle's members stack inside one slot, so a layer holding one spans a
+    # small band rather than a single line — but the bands stay ordered and
+    # disjoint, which is what "the picture agrees with the layers" means.
+    ordered = sorted(by_layer)
+    for lower, upper in zip(ordered, ordered[1:], strict=False):
+        assert max(by_layer[lower]) < min(by_layer[upper]), (
+            f"layer {lower} is drawn below layer {upper}"
+        )
+
+
+# ── The longest chain (D7) ──────────────────────────────────────────────
+
+
+def test_the_longest_chain_is_traced_across_its_whole_length() -> None:
+    styles = _graph_run([])["styles"]
+
+    assert "chain" in styles["edge::blocks::schema::ship"]["classes"]
+    assert "chain" in styles["edge::blocks::ship::far"]["classes"]
+    assert "chain" in styles["schema"]["classes"]
+    # And nothing off it is traced.
+    assert "chain" not in styles["edge::blocks::cycle-a::cycle-b"]["classes"]
+    assert "chain" not in styles["stranded"]["classes"]
+
+
+def test_the_chain_trace_survives_a_cycle_boundary() -> None:
+    """Regression (round-1 correctness f-003). The chain is a walk over the
+    CONDENSED graph, so it names a cycle by its representative — the edge that
+    actually enters the cycle can land on any member. Matching raw endpoints
+    left the trace broken at exactly that step."""
+    result = _graph_run([], payload=CYCLE_CHAIN_PAYLOAD)
+    styles = result["styles"]
+
+    assert "chain" in styles["edge::blocks::p::cyc-b"]["classes"], (
+        "the edge entering the cycle was not traced"
+    )
+    assert "chain" in styles["edge::blocks::cyc-a::d"]["classes"]
+    # Both members are on the chain, because the condensation is …
+    assert "chain" in styles["cyc-a"]["classes"]
+    assert "chain" in styles["cyc-b"]["classes"]
+    # … and so is the box, or the trace would read as broken where it is drawn.
+    assert "chain" in styles["cycle::cyc-a"]["classes"]
+    # But the loop's own edges are not steps of it: the chain crosses the
+    # condensation in ONE move and endorses neither direction round it.
+    assert "chain" not in styles["edge::blocks::cyc-a::cyc-b"]["classes"]
+    assert "chain" not in styles["edge::blocks::cyc-b::cyc-a"]["classes"]
+
+
+# ── Overlays (D8) ───────────────────────────────────────────────────────
 
 
 def test_toggling_hierarchy_adds_the_parent_child_edges_and_the_url_remembers() -> None:
@@ -1853,6 +2079,9 @@ def test_back_after_a_toggle_hides_the_overlay_again_without_a_reload() -> None:
     assert result["fetches"] == []
 
 
+# ── Isolated tasks (D8) ─────────────────────────────────────────────────
+
+
 def test_the_isolated_toggle_moves_the_url_and_the_text_disclosure_together() -> None:
     """`isolated=1|0` (D8). The canvas and the disclosure answer the same
     question, so they are never allowed to disagree about it."""
@@ -1864,6 +2093,31 @@ def test_the_isolated_toggle_moves_the_url_and_the_text_disclosure_together() ->
     assert "note" in final["nodes"]
     assert final["disclosureOpen"] is True
     assert result["fetches"] == []
+
+
+def test_an_epic_scope_shows_its_isolated_children_and_hides_them_on_request() -> None:
+    """The other scope default, and the other direction of the toggle (D8):
+    an epic graph is about an initiative's PROGRESS, and its edge-less children
+    are half of that. Back then restores what the URL said."""
+    loaded = _graph_run([], href=EPIC_CANVAS_HREF, payload=EPIC_PAYLOAD)["final"]
+    result = _graph_run(
+        ["isolated", "back"], href=EPIC_CANVAS_HREF, payload=EPIC_PAYLOAD
+    )
+    hidden, restored = result["states"][0], result["states"][1]
+
+    # Shown from the first paint, with no `isolated=` in the URL at all.
+    assert "child" in loaded["nodes"]
+    assert loaded["disclosureOpen"] is True
+    # The toggle goes the other way here, and takes the disclosure with it.
+    assert result["pushed"] == ["/tasks/graph?epic=loom-epic&isolated=0"]
+    assert "child" not in hidden["nodes"]
+    assert hidden["disclosureOpen"] is False
+    # And Back re-applies the epic's own default rather than the project's.
+    assert "child" in restored["nodes"]
+    assert restored["disclosureOpen"] is True
+
+
+# ── Selection, events, text ─────────────────────────────────────────────
 
 
 def test_clicking_a_node_opens_that_task_s_panel_and_pushes_focus() -> None:
@@ -1878,6 +2132,24 @@ def test_clicking_a_node_opens_that_task_s_panel_and_pushes_focus() -> None:
     assert result["final"]["focused"] == ["ship"]
 
 
+def test_closing_the_panel_clears_the_focus_ring_with_the_url() -> None:
+    """Regression (round-1 correctness f-002). Closing the panel clears `focus`
+    with `pushState`, and `pushState` fires no `popstate` — so the canvas had
+    no way to notice, and kept the node lit under a URL that no longer named
+    it. The panel announces its transitions instead."""
+    opened = _graph_run(["tap:ship"])["final"]
+    closed = _graph_run(["tap:ship", "close"])["final"]
+    escaped = _graph_run(["tap:ship", "escape"])["final"]
+
+    assert opened["focused"] == ["ship"]
+    assert closed["focused"] == [], "the node stayed lit after the panel closed"
+    assert "focus=" not in closed["href"]
+    assert closed["panel"] == ""
+    # Escape is the same transition by another control, and must not differ.
+    assert escaped["focused"] == []
+    assert "focus=" not in escaped["href"]
+
+
 def test_a_task_event_for_a_node_raises_the_pill_and_never_re_layouts() -> None:
     """D8: the graph stays still while it is read. The pill is the whole
     response to an event — a re-layout under the operator's cursor is the
@@ -1885,7 +2157,7 @@ def test_a_task_event_for_a_node_raises_the_pill_and_never_re_layouts() -> None:
     result = _graph_run(["event:ship"])
 
     assert result["final"]["pillHidden"] is False
-    assert result["layouts"] == 1, "the page laid itself out again"
+    assert len(result["layouts"]) == 1, "the page laid itself out again"
     # And no reconcile: the graph page tells tasks.js not to re-render, or one
     # event would cost a whole graph assembly.
     assert result["fetches"] == []
@@ -1897,6 +2169,24 @@ def test_an_event_for_a_task_that_is_not_on_this_page_raises_nothing() -> None:
     result = _graph_run(["event:somewhere-else"])
 
     assert result["final"]["pillHidden"] is True
+
+
+def test_the_server_built_links_follow_the_state_the_client_applied() -> None:
+    """Regression (round-1 correctness f-004). The resolved toggle and the
+    refresh pill are rendered by the server and never re-applied client-side,
+    so they kept the URL the page LOADED on: the pill's own "this is a refresh"
+    contract was false the moment an overlay or a focus had been set, and
+    following either silently dropped them."""
+    result = _graph_run(["overlay:hierarchy", "tap:ship", "event:ship"])
+    hrefs = result["final"]["hrefs"]
+
+    assert "overlays=hierarchy" in hrefs["pill"]
+    assert "focus=ship" in hrefs["pill"]
+    assert "overlays=hierarchy" in hrefs["resolved"]
+    assert "focus=ship" in hrefs["resolved"]
+    # The resolved link is still a NAVIGATION — resolved tasks are nodes the
+    # server did not send — so it flips its own parameter and nothing else.
+    assert "include_resolved=1" in hrefs["resolved"]
 
 
 def test_show_as_text_collapses_the_baseline_and_leaves_it_in_the_dom() -> None:
@@ -1911,23 +2201,43 @@ def test_show_as_text_collapses_the_baseline_and_leaves_it_in_the_dom() -> None:
     assert result["final"]["textHidden"] is True
 
 
-def test_a_focus_in_the_url_opens_its_panel_without_pushing_a_second_entry() -> None:
-    """Load with `focus=A` (D8). The address bar already names the selection,
-    so re-pushing it would leave a twin entry the first Back appears to
-    ignore."""
+def test_a_server_rendered_focus_panel_is_not_fetched_again() -> None:
+    """D9's no-JS baseline is the SERVER's panel, and the client is enhancement
+    over it: a page that arrives with the panel already up must not throw it
+    away and re-request the same fragment."""
     result = _graph_run(
-        [], href="http://lens.test/tasks/graph?project=loom&focus=cycle-a"
+        [],
+        href="http://lens.test/tasks/graph?project=loom&focus=ship",
+        served_panel="ship",
     )
 
-    assert result["fetches"] == ["/tasks/id?task_id=cycle-a&fragment=panel"]
+    assert result["fetches"] == []
+    assert result["final"]["panel"] == "panel:server:ship"
+    assert result["final"]["focused"] == ["ship"]
+
+
+def test_a_focus_the_server_did_not_answer_is_opened_without_a_second_entry() -> None:
+    """The remaining case: `focus=` in the URL with an empty host (the panel
+    read failed). The address bar already names the selection, so re-pushing it
+    would leave a twin entry the first Back appears to ignore."""
+    result = _graph_run([], href="http://lens.test/tasks/graph?project=loom&focus=ship")
+
+    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
     assert result["pushed"] == []
-    assert result["final"]["focused"] == ["cycle-a"]
+    assert result["final"]["focused"] == ["ship"]
 
 
-def test_a_double_click_leaves_for_the_task_s_own_page() -> None:
-    """The server built that URL (`tasks.task_detail_path`), because an id that
-    collides with a page under `/tasks/` has to be addressed through the query
-    alias — a rule the browser never restates."""
+def test_a_double_click_uses_the_url_the_server_built_for_that_id() -> None:
+    """The id `graph` collides with a page under `/tasks/`, so it can only be
+    addressed through the query alias — `tasks.task_detail_path` owns that rule
+    and the browser never restates it. A client that assembled `/tasks/<id>`
+    would send the operator to the graph PAGE instead of the task."""
+    result = _graph_run(["dbltap:graph"])
+
+    assert result["final"]["href"] == "/tasks/id?task_id=graph"
+
+
+def test_a_double_click_on_an_ordinary_node_still_opens_its_own_page() -> None:
     result = _graph_run(["dbltap:ship"])
 
     assert result["final"]["href"] == "/tasks/ship"
