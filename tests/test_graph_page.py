@@ -1715,11 +1715,15 @@ def test_the_payload_carries_D3_s_whole_schema(
         "cycles",
         "ghosts",
         "longest_chain",
+        # The DP behind every chain this page can be asked to trace (T2-A7):
+        # focus transitions are client-side, so one chain is not enough.
+        "active_chain",
         "roots",
         "isolated",
         "incomplete",
         "as_of",
     }
+    assert set(data["active_chain"]) == {"of", "up", "down", "chain"}
     # Shape and verdict are separate fields because they are separate facts:
     # the canvas groups on `cycle` and marks on `flagged`.
     verdicts = {node["id"]: (node["cycle"], node["flagged"]) for node in data["nodes"]}

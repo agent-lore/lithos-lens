@@ -1095,6 +1095,73 @@ test("clicking a node opens that task's panel beside the canvas and pushes focus
   expect(lit).toBe(0);
 });
 
+test("focusing a node re-traces the chain and centres it in the canvas", async ({
+  page,
+}) => {
+  // T2-A7's two claims that only a real browser can settle: the chain the page
+  // states follows the focus (D7/D8) with no reload, and the focused node ends
+  // up in the MIDDLE of a canvas the panel has just narrowed (D9) — the resize
+  // re-fits the whole drawn collection, so the centring has to survive it
+  // (round-1 correctness f-001 and f-003).
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  // The scope's own longest chain, before anything is focused.
+  await expect(page.locator("[data-chain-length]")).toHaveText("5");
+  await expect(page.locator("[data-chain-nodes]")).toContainText(
+    "Design the run-record schema",
+  );
+
+  // A node OFF that chain: its own chain is the two-step strand the cancelled
+  // predecessor strands, so a frozen trace would be visible here.
+  const stranded = await pointerOnNode(page, "loom-blocked-forever");
+  await page.mouse.click(stranded.x, stranded.y);
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-blocked-forever"]'),
+  ).toBeVisible();
+
+  // The sentence …
+  await expect(page.locator("[data-longest-chain]")).toHaveAttribute(
+    "data-chain-through",
+    "loom-blocked-forever",
+  );
+  await expect(page.locator("[data-chain-length]")).toHaveText("2");
+  await expect(page.locator("[data-chain-nodes]")).toHaveText(
+    "Port the legacy run bridge → Migrate the legacy run archive",
+  );
+  // … and the trace, which may not disagree with it.
+  const traced = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const on = (id: string) => graph.node(id).hasClass("chain");
+    return {
+      stranded: on("loom-blocked-forever"),
+      predecessor: on("loom-cancelled-pred"),
+      previous: on("loom-ship"),
+    };
+  });
+  expect(traced).toEqual({ stranded: true, predecessor: true, previous: false });
+
+  // And the node the operator selected is in the middle of what is left of the
+  // canvas, once the panel beside it has taken its width. Measured on the
+  // node's own rendered BOX — which is what Cytoscape centres, and which
+  // includes the label hanging under the node — and polled, because the resize
+  // arrives through a `ResizeObserver` after the panel swaps.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const graph = (window as any).LithosLensGraph;
+        const box = graph.node("loom-blocked-forever").renderedBoundingBox();
+        return Math.max(
+          Math.abs((box.x1 + box.x2) / 2 - graph.cy.width() / 2),
+          Math.abs((box.y1 + box.y2) / 2 - graph.cy.height() / 2),
+        );
+      }),
+    )
+    .toBeLessThan(2);
+});
+
 /** An hour. See `holdMultiClickWindowOpen`. */
 const HELD_MULTI_CLICK_WINDOW_MS = 3_600_000;
 
@@ -1250,15 +1317,19 @@ test("a superseded panel response neither opens nor moves the graph", async ({
   await shipRequested;
 
   await holdMultiClickWindowOpen(page);
+  // A node NEXT to the open panel's focus, deliberately: focus mode centres
+  // the canvas on the focused node (D8), so a gesture aimed at the far end of
+  // the chain would be aimed off screen. What this test is about is whether
+  // the picture MOVES under the gesture, not how much of it is in view.
   const placed = () =>
     page.evaluate(() => {
       const at = (window as any).LithosLensGraph.node(
-        "loom-announce",
+        "loom-transport",
       ).renderedPosition();
       return [Math.round(at.x), Math.round(at.y)];
     });
   const before = await placed();
-  await pointerOnNode(page, "loom-announce");
+  await pointerOnNode(page, "loom-transport");
   await page.mouse.down();
   await page.mouse.up();
   // The held answer lands HERE, between the two halves of the gesture.
@@ -1276,7 +1347,7 @@ test("a superseded panel response neither opens nor moves the graph", async ({
 
   await page.mouse.down();
   await page.mouse.up();
-  await page.waitForURL("**/tasks/loom-announce");
+  await page.waitForURL("**/tasks/loom-transport");
   await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
 });
 

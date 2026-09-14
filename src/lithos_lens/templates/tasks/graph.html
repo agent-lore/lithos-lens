@@ -355,17 +355,22 @@
     {# In focus mode this is the chain THROUGH the focused task, which replaces
        the scope's longest (D7/D8) — and says so, because a chain through a
        mid-graph task is routinely shorter and an unlabelled number here would
-       understate the graph's own longest. #}
+       understate the graph's own longest.
+
+       The three focus-dependent parts are their own elements because the
+       focus MOVES without this page being re-rendered: `graph.js` rewrites
+       the "through" clause, the length and the node list on every transition,
+       from the same projection it re-traces the canvas with. The lower-bound
+       wording around them is the scope's (an unreadable edge anywhere, D7)
+       and does not move with the focus, so it stays the server's. #}
     <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}"{% if view.chain.through %} data-chain-through="{{ view.chain.through.id }}"{% endif %}>
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
         <p>
-          Longest blocking chain{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}
+          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}</span>
           ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
           <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
         </p>
-      {% elif view.chain.through %}
-        <p data-chain-empty>Nothing blocks {{ view.chain.through.label }}, and it blocks nothing active.</p>
       {% else %}
         <p data-chain-empty>No active blocking chain in this graph.</p>
       {% endif %}

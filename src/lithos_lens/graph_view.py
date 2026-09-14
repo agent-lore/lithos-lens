@@ -21,7 +21,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from lithos_lens.graph_layout import BlockingChain, Cycle, Topology
+from lithos_lens.graph_layout import (
+    BlockingChain,
+    Cycle,
+    Topology,
+    active_condensed,
+    longest_paths,
+)
 from lithos_lens.graph_scope import (
     COMPLETENESS_EDGES_UNKNOWN,
     COMPLETENESS_STATUS_UNKNOWN,
@@ -379,6 +385,48 @@ class GraphPageView:
         return self.cache_misses + self.ghost_reads
 
 
+def active_chain_payload(topology: Topology) -> dict[str, object]:
+    """The active projection's longest-path DP, addressed to the CLIENT (D8).
+
+    Focus mode traces the chain THROUGH the focused node, and its transitions
+    are client-side (``pushState``, no reload, no fetch) — so every chain the
+    page can be asked to show has to be reachable from the STATIC payload. One
+    chain is not enough for that, and a client re-deriving the DP would be a
+    second implementation of D7's answer; shipping the DP's own pointers is
+    neither. ``of`` maps every task to its condensation representative, ``up``
+    and ``down`` give the next step of the longest walk into and out of each
+    condensation, and ``chain`` is the scope's own longest — what an unfocused
+    page traces.
+
+    The chain through X is then the walk up from X's condensation, reversed,
+    joined to the walk down: exactly what
+    :func:`~lithos_lens.graph_layout.longest_blocking_chain` computes with
+    ``through=X``, tie-breaks included, because it is the same DP.
+
+    Computed here rather than in ``graph_layout`` because it exists only to be
+    serialised: this module is the view model addressed to the client, and
+    :func:`payload_json` below is its one consumer.
+    """
+    if not topology.nodes:
+        return {"of": {}, "up": {}, "down": {}, "chain": []}
+    order_of = {node: index for index, node in enumerate(topology.nodes)}
+    groups, member_of, successors, predecessors = active_condensed(topology, order_of)
+    down = longest_paths(list(reversed(groups)), successors, order_of)
+    up = longest_paths(groups, predecessors, order_of, against_the_render=True)
+    start = min(groups, key=lambda node: (-len(down[node]), order_of[node]))
+    return {
+        "of": dict(member_of),
+        "up": _next_steps(up),
+        "down": _next_steps(down),
+        "chain": list(down[start]),
+    }
+
+
+def _next_steps(paths: Mapping[str, Sequence[str]]) -> dict[str, str]:
+    """Each walk's SECOND node — the one step a client follows from here."""
+    return {node: path[1] for node, path in paths.items() if len(path) > 1}
+
+
 def payload_json(
     scope: TaskGraphScope,
     topology: Topology,
@@ -469,6 +517,10 @@ def payload_json(
             # a different chain from the one the text states.
             "members": [list(members) for members in chain.members],
         },
+        # And the DP behind it, so a client-side focus transition can trace the
+        # chain through the newly focused node — which is a different chain
+        # from the one above, on a page that is not being re-rendered (D8).
+        "active_chain": active_chain_payload(topology),
         "roots": list(topology.roots),
         # The list the PAGE folds, not the raw D8 set: a flagged cycle member
         # is layered rather than folded, and the payload has to agree with the

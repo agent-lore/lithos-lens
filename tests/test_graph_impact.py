@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from lithos_lens.config import DEFAULT_TASKS_FRONTIER_LIMIT
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.graph_impact import parse_impact_scope
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
@@ -29,8 +28,14 @@ from tests.test_graph_page import (
     client_for,
     dataset,
     get,
+    payload,
     task,
 )
+
+# The A4 canvas harness, borrowed the way `test_graph_page` borrows it: the
+# chain a focus transition traces is a claim with a PRODUCER here and a
+# CONSUMER in `graph.js`, and only running both can show they agree.
+from tests.test_tasks_js import NODE, _graph_run
 
 pytestmark = pytest.mark.anyio
 
@@ -180,6 +185,53 @@ def test_the_panel_says_where_the_focus_sits_on_the_longest_chain(
     assert "longest chain" not in slot(aside)
 
 
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_canvas_re_traces_the_chain_the_server_would_have_rendered(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The producer and the consumer in one test (round-1 correctness f-001).
+
+    A focus transition is client-side — no reload, no fetch of the graph — so
+    the canvas computes the chain through the newly focused node from the DP
+    the payload ships (`active_chain`). That answer has to be the one the
+    SERVER would have rendered for the same URL, or the picture and the text
+    diverge the moment anybody clicks.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [task(name) for name in ("a", "b", "c", "d", "e", "side")],
+            (
+                ("a", "b", "blocks"),
+                ("b", "c", "blocks"),
+                ("c", "d", "blocks"),
+                ("d", "e", "blocks"),
+                ("side", "d", "blocks"),
+            ),
+        )
+    )
+    unfocused = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    served = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=side"
+    )
+
+    # The canvas starts on the unfocused page and focuses `side` itself.
+    drawn = _graph_run(
+        ["tap:side"],
+        href=f"http://lens.test/tasks/graph?project={PROJECT}",
+        payload=payload(unfocused),
+    )
+    line = drawn["final"]["chainLine"]
+
+    assert line["nodes"] == "Side → D → E"
+    assert line["label"] == " through Side"
+    assert line["length"] == "3"
+    # …which is exactly the sentence the server renders for that same URL.
+    assert f"Longest blocking chain{line['label']}" in chain_line(served)
+    assert line["nodes"] in chain_line(served)
+    assert f"<span data-chain-length>{line['length']}</span>" in served
+    assert drawn["final"]["traced"] == ["d", "e", "side"]
+
+
 # ── Downstream impact (D10) ─────────────────────────────────────────────
 
 
@@ -199,6 +251,118 @@ def test_the_panel_states_what_completing_the_focus_frees(
     assert attribute(html, "data-impact-frees") == "3"
     assert attribute(html, "data-impact-immediate") == "1"
     assert attribute(html, "data-impact-bound") == "exact"
+
+
+def test_a_dependent_with_a_second_blocker_is_not_freed_immediately(
+    lithos_lens_config_env: Path,
+) -> None:
+    """M is the SOLE-unsatisfied-blocker fact, not "this row mentions the focal
+    task" (D10). A dependent Lithos also reports waiting on something else is
+    not freed by completing this one, and counting it would promise the
+    operator an unblocking that will not happen."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("root"), task("one"), task("pair"), task("other-blocker")],
+            (
+                ("root", "one", "blocks"),
+                ("root", "pair", "blocks"),
+                ("other-blocker", "pair", "blocks"),
+            ),
+            blocked={
+                "one": (blocker("root"),),
+                # Named by BOTH — and still blocked after `root` finishes.
+                "pair": (blocker("root"), blocker("other-blocker")),
+            },
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    assert "frees 2 in this graph, 1 immediately" in slot(html)
+
+
+def test_an_open_gate_states_what_clearing_it_would_free(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D10 counts an open GATE like an open task — completing a gate is the
+    operator's own move — and its `waits_on_gate` edges are in the active
+    projection exactly as `blocks` edges are (D6)."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("review", task_type="gate"), task("waiter"), task("after")],
+            (("review", "waiter", "waits_on_gate"), ("waiter", "after", "blocks")),
+            blocked={
+                "waiter": (
+                    BlockerRecord(
+                        kind="gate",
+                        task_id="review",
+                        type="waits_on_gate",
+                        status="open",
+                        message="Waiting on the review gate.",
+                    ),
+                ),
+                "after": (blocker("waiter"),),
+            },
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=review"
+    )
+
+    assert "frees 2 in this graph, 1 immediately" in slot(html)
+
+
+def test_a_failed_read_for_a_dependents_project_withholds_the_figure(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A failed read is silence, like a truncated one (D4): M is withheld
+    rather than reported low, and N — Lens's own arithmetic — stands."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("root"), task("far", project="other")],
+            (("root", "far", "blocks"),),
+            blocked={"far": (blocker("root"),)},
+        ),
+        blocked_failures={"other", "project:other"},
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    assert "frees 1 in this graph" in slot(html)
+    assert "how many immediately is withheld" in slot(html)
+    assert attribute(html, "data-impact-withheld") == "true"
+
+
+def test_a_projectless_dependent_withholds_the_figure_with_no_read_for_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """No scoped read can reach a task carrying no project under either
+    convention, and Lens does not issue the unscoped one (D4) — so its
+    sole-blocker fact does not exist and M is withheld rather than guessed."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("root"), task("nowhere", project=None)],
+            (("root", "nowhere", "blocks"),),
+            blocked={"nowhere": (blocker("root"),)},
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    assert "frees 1 in this graph" in slot(html)
+    assert "how many immediately is withheld" in slot(html)
+    assert "covered 0 of 1 dependents" in slot(html)
+    # And no read was invented to cover it: the coverage set is this project.
+    assert {call["project"] for call in fake.blocked_calls if call["project"]} == {
+        PROJECT
+    }
 
 
 def test_a_satisfied_edge_frees_nobody_through_it(
@@ -322,13 +486,14 @@ def test_an_unreadable_ghost_dependent_is_listed_and_not_counted(
     assert "Not counted, relation unreadable: far" in slot(html)
 
 
-def test_an_unreadable_neighbour_makes_the_lit_set_a_lower_bound(
+def test_an_incomplete_scope_makes_both_the_count_and_the_lit_set_bounds(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Focus mode lights ancestors AND descendants (D8), so the honesty of the
-    lit set is a symmetric question where N's is not: an UPSTREAM task whose
-    edges could not be read leaves N exact and the picture a lower bound, and
-    a dimmed node must not read as "unrelated" when Lens only failed to look."""
+    """D10 and D8 degrade on the SCOPE being incomplete, not on where the gap
+    happens to fall in the projection Lens can already see: an unread edge list
+    is exactly the evidence that the known projection may not be all of it.
+    Here the failed read is UPSTREAM of the focus, where a reachability-only
+    rule would call the count exact (round-1 correctness f-002)."""
     fake = GraphFakeClient(
         dataset(
             [task("above"), task("root"), task("one")],
@@ -342,12 +507,36 @@ def test_an_unreadable_neighbour_makes_the_lit_set_a_lower_bound(
         lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
     )
 
-    # Downstream is whole, so the COUNT stays exact …
-    assert "frees 1 in this graph, 1 immediately" in slot(html)
-    assert attribute(html, "data-impact-bound") == "exact"
-    # … and the picture still says what it could not see.
+    assert "frees ≥ 1 in this graph, 1 immediately" in slot(html)
+    assert attribute(html, "data-impact-bound") == "lower_bound"
+    # …and the picture says what it could not see, in both directions.
     assert "data-panel-focus-bound" in html
     assert "lower bound of what surrounds it" in slot(html)
+
+
+def test_an_unreadable_task_elsewhere_in_the_scope_still_bounds_the_claims(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same rule at its edge: the failed read is on a task with no path to
+    the focus at all. A rule narrowed to the KNOWN neighbourhood would report
+    both claims exact — and the one thing an unread edge list means is that
+    what Lens knows about the neighbourhood may be short."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("root"), task("one"), task("apart"), task("apart-next")],
+            (("root", "one", "blocks"), ("apart", "apart-next", "blocks")),
+            blocked={"one": (blocker("root"),)},
+        ),
+        edge_failures={"apart"},
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    assert "frees ≥ 1 in this graph, 1 immediately" in slot(html)
+    assert attribute(html, "data-impact-bound") == "lower_bound"
+    assert "data-panel-focus-bound" in html
 
 
 def test_a_whole_neighbourhood_claims_no_lower_bound(
@@ -470,7 +659,23 @@ def test_an_impact_scope_is_parsed_with_the_pages_own_defaults() -> None:
     assert parse_impact_scope("project:loom", "1").include_resolved is True
 
 
-def test_the_shipped_frontier_limit_bounds_the_coverage_reads() -> None:
-    """The impact's M rides on D4's coverage reads, so it inherits their
-    bound rather than a limit of its own."""
-    assert DEFAULT_TASKS_FRONTIER_LIMIT > 0
+def test_the_fragment_routes_reads_carry_the_configured_frontier_limit(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M rides on D4's coverage reads, so it inherits THEIR bound rather than
+    a limit of its own — and the bound is what makes `len == limit` mean
+    truncation at all. Asserted on the calls the panel's own route issued,
+    because that route assembles the scope itself."""
+    monkeypatch.setenv("LITHOS_LENS_TASKS_FRONTIER_LIMIT", "5")
+    fake = GraphFakeClient(impact_dataset())
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        text = client.get(f"/tasks/root?fragment=panel&scope=project:{PROJECT}").text
+
+    assert "frees 3 in this graph, 1 immediately" in slot(text)
+    assert fake.blocked_calls, "the panel made no coverage read at all"
+    assert [call["limit"] for call in fake.blocked_calls] == [5, 5]
+    assert [(call["project"], call["tags"]) for call in fake.blocked_calls] == [
+        (PROJECT, None),
+        (None, [f"project:{PROJECT}"]),
+    ]

@@ -153,7 +153,7 @@ class BlockingChain:
 
     ``members`` is parallel to ``nodes``: what each of those condensations
     HOLDS. It is carried because this partition is the ACTIVE projection's own
-    (:func:`_active_condensed`) and nothing else in the render states it — a
+    (:func:`active_condensed`) and nothing else in the render states it — a
     node's ``cycle_id`` is the all-edge condensation the PICTURE is drawn
     from, and the two legitimately differ — so a client mapping a chain id
     through the drawn cycle traces an answer the text does not state.
@@ -638,7 +638,7 @@ def _chain_bound(topology: Topology) -> ChainBound:
     return "exact"
 
 
-def _active_condensed(
+def active_condensed(
     topology: Topology, order_of: NodeOrder
 ) -> tuple[list[str], dict[str, str], dict[str, list[str]], dict[str, list[str]]]:
     """Condense the ACTIVE projection on ITS OWN strongly connected components.
@@ -682,7 +682,7 @@ def _active_condensed(
     return groups, member_of, successors, predecessors
 
 
-def _longest_paths(
+def longest_paths(
     order: Sequence[str],
     neighbours: Mapping[str, Sequence[str]],
     key: NodeOrder,
@@ -740,15 +740,15 @@ def longest_blocking_chain(topology: Topology, *, through: str = "") -> Blocking
     # the active projection itself, and a group of THAT condensation can be
     # represented by any node, not just one carrying a ``created_at`` here.
     order_of = {node: index for index, node in enumerate(topology.nodes)}
-    groups, member_of, successors, predecessors = _active_condensed(topology, order_of)
-    down = _longest_paths(list(reversed(groups)), successors, order_of)
+    groups, member_of, successors, predecessors = active_condensed(topology, order_of)
+    down = longest_paths(list(reversed(groups)), successors, order_of)
     if not through:
         start = min(groups, key=lambda node: (-len(down[node]), order_of[node]))
         return _chain(down[start], topology, member_of, bound)
     focus = member_of.get(through)
     if focus is None:
         return BlockingChain(bound=bound)
-    up = _longest_paths(groups, predecessors, order_of, against_the_render=True)
+    up = longest_paths(groups, predecessors, order_of, against_the_render=True)
     chain = tuple(reversed(up[focus])) + down[focus][1:]
     return _chain(chain, topology, member_of, bound)
 

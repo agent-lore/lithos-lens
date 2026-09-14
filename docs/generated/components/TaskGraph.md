@@ -23,10 +23,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
 | `lithos_lens.graph_impact` | M | 2 | 3 |
-| `lithos_lens.graph_layout` | L | 6 | 4 |
+| `lithos_lens.graph_layout` | L | 6 | 6 |
 | `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
-| `lithos_lens.graph_view` | M | 11 | 2 |
+| `lithos_lens.graph_view` | M | 11 | 3 |
 | `lithos_lens.pr_reconciliation` | M | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -118,6 +118,8 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `Topology` — The condensed shape of one fetched scope.
 - def `classify_dependency_edges` — Classify the fetched dependency edges from BOTH endpoints (D6).
 - def `build_topology` — Condense the fetched scope into cycles, layers and roots.
+- def `active_condensed` — Condense the ACTIVE projection on ITS OWN strongly connected components.
+- def `longest_paths` — The longest path from each node over ``neighbours``, in walk order.
 - def `longest_blocking_chain` — The longest chain of blocking work in this graph, by node count (D7).
 - def `hierarchy_rows` — The scope's ``parent_child`` forest, flattened into indented rows.
 
@@ -158,6 +160,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `HierarchyRowView`
 - class `Banner` — One honesty banner. ``id`` is the test/CSS hook, ``text`` the sentence.
 - class `GraphPageView` — Everything `/tasks/graph` renders for one scope.
+- def `active_chain_payload` — The active projection's longest-path DP, addressed to the CLIENT (D8).
 - def `payload_json` — D3's embedded payload — the same node set, layers and chain as the text.
 
 ### `lithos_lens.pr_reconciliation`

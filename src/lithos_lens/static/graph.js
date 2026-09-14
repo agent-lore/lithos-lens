@@ -235,38 +235,81 @@
   // for an edge that does not exist and leave the trace broken exactly at the
   // cycle boundary. Everything below is keyed by condensation instead.
   //
-  // But it is the ACTIVE projection's condensation, and the server states it
-  // (`longest_chain.members`) precisely because it is NOT the `cycle` each node
-  // carries. Those two partitions legitimately differ: an epic graph showing
-  // completed children can hold an open `A → B` whose loop closes back through
-  // an inactive `B → C` and `C → A`, which is one drawn cycle `{A,B,C}` and a
-  // live two-chain `A → B` at the same time. Mapping through `cycle` there
-  // would call the chain's own step internal and leave completed `C` accented —
-  // the canvas tracing a different answer from the one the text states. So a
-  // node the payload did not name as a chain member stands for itself.
-  const chain = (payload.longest_chain && payload.longest_chain.nodes) || [];
-  const chainMembers = (payload.longest_chain && payload.longest_chain.members) || [];
-  const chainCondensations = dict();
-  const chainCondensationOfId = dict();
-  // NESTED, not a joined key. A condensation is named by a task id, and a task
-  // id is an arbitrary non-empty string (`tasks.py`): `from + ">" + to` cannot
-  // tell the step `a>b → c` from the step `a → b>c`, so an off-chain
-  // dependency between the second pair would take the critical-path accent
-  // from the first. Two lookups have no separator to be ambiguous about.
-  const chainSteps = dict();
-  chain.forEach(function (id, index) {
-    chainCondensations[id] = true;
-    (chainMembers[index] || [id]).forEach(function (member) {
-      chainCondensationOfId[member] = id;
-    });
-    if (!index) return;
-    const from = chain[index - 1];
-    if (!chainSteps[from]) chainSteps[from] = dict();
-    chainSteps[from][id] = true;
-  });
+  // But it is the ACTIVE projection's condensation, and the server states that
+  // one separately (`active_chain.of`) precisely because it is NOT the `cycle`
+  // each node carries. Those two partitions legitimately differ: an epic graph
+  // showing completed children can hold an open `A → B` whose loop closes back
+  // through an inactive `B → C` and `C → A`, which is one drawn cycle
+  // `{A,B,C}` and a live two-chain `A → B` at the same time. Mapping through
+  // `cycle` there would call the chain's own step internal and leave completed
+  // `C` accented — the canvas tracing a different answer from the one the text
+  // states. So a node the projection does not name stands for itself.
+  //
+  // And WHICH chain is traced changes with the focus, and a focus transition is
+  // client-side (D8) — so the payload ships the DP behind every chain this
+  // page can be asked to show (`graph_view.active_chain_payload`) rather than
+  // one answer: `of` is the projection's own condensation, `up` / `down` are
+  // the next step of the longest walk into and out of each condensation, and
+  // `chain` is the scope's own longest. Walking those pointers is not a second
+  // implementation of D7 — the tie-breaks are already baked into them — which
+  // is what keeps rule 3 true while the line changes under a click.
+  const projection = dict(payload.active_chain || {});
+  const chainCondensationOfId = dict(projection.of || {});
+  const chainUp = dict(projection.up || {});
+  const chainDown = dict(projection.down || {});
+  const scopeChain = projection.chain || [];
 
   function chainCondensationOf(id) {
     return chainCondensationOfId[id] || id;
+  }
+
+  // The chain the page is currently tracing: through the focused node, or the
+  // scope's own when nothing is focused (D7/D8). A focus the projection does
+  // not name — a `focus=` for a task this graph never fetched — keeps the
+  // scope's, exactly as the server's own render does.
+  function chainFor(focus) {
+    const start = chainCondensationOfId[focus];
+    if (!focus || !start) return scopeChain;
+    const walk = function (pointers) {
+      const steps = [];
+      const seen = dict();
+      let cursor = start;
+      seen[cursor] = true;
+      while (pointers[cursor] && !seen[pointers[cursor]]) {
+        cursor = pointers[cursor];
+        seen[cursor] = true;
+        steps.push(cursor);
+      }
+      return steps;
+    };
+    return walk(chainUp).reverse().concat([start], walk(chainDown));
+  }
+
+  // The chain drawn right now, in the two shapes the canvas asks of it: which
+  // condensations are ON it, and which ordered PAIRS are steps of it. Rebuilt
+  // on every render because the focus decides the answer.
+  //
+  // The steps are a NESTED map, not a joined key. A condensation is named by a
+  // task id, and a task id is an arbitrary non-empty string (`tasks.py`):
+  // `from + ">" + to` cannot tell the step `a>b → c` from the step `a → b>c`,
+  // so an off-chain dependency between the second pair would take the
+  // critical-path accent from the first. Two lookups have no separator to be
+  // ambiguous about.
+  let chain = [];
+  let chainCondensations = dict();
+  let chainSteps = dict();
+
+  function setChain(nodes) {
+    chain = nodes;
+    chainCondensations = dict();
+    chainSteps = dict();
+    chain.forEach(function (id, index) {
+      chainCondensations[id] = true;
+      if (!index) return;
+      const from = chain[index - 1];
+      if (!chainSteps[from]) chainSteps[from] = dict();
+      chainSteps[from][id] = true;
+    });
   }
 
   function onChain(id) {
@@ -346,15 +389,52 @@
     return url.pathname + url.search + url.hash;
   }
 
+  //: The overlay each edge touching a node belongs to, in toolbar order —
+  //: what it would take to DRAW a node that only an overlay anchors.
+  function anchoringOverlays(taskId) {
+    const found = dict();
+    edges.forEach(function (edge) {
+      if (edge.from !== taskId && edge.to !== taskId) return;
+      const overlay = OVERLAY_BY_EDGE_TYPE[edge.type];
+      if (overlay) found[overlay] = true;
+    });
+    return OVERLAYS.filter(function (name) { return found[name] === true; });
+  }
+
+  // What this URL state has to change for `taskId` to be DRAWN (D8: a search
+  // hit or a deep link never points at an invisible node).
+  //
+  // Two kinds of node are hidden by default and they are hidden for different
+  // reasons, so each is revealed by its own parameter: an isolate is folded
+  // away by the scope's `isolated` default, and a CONTEXT ghost exists only to
+  // anchor an overlay edge and is drawn only while that overlay is on (D6).
+  // One overlay is enough — the first that anchors it — because the node is
+  // visible as soon as any edge reaching it is.
+  function revealChanges(taskId, state) {
+    const changes = {};
+    const node = byId[taskId];
+    if (!node) return changes;
+    if (node.ghost_kind === "context") {
+      const anchors = anchoringOverlays(taskId);
+      const lit = anchors.filter(function (name) {
+        return state.overlays.indexOf(name) !== -1;
+      });
+      if (anchors.length && !lit.length) {
+        changes.overlays = state.overlays.concat([anchors[0]]);
+      }
+    }
+    if (isolated[taskId] && !state.isolated) changes.isolated = true;
+    return changes;
+  }
+
   // The address a focus transition moves to — ONE entry, however many
-  // parameters it takes to get there. Focusing a task the page has folded away
-  // reveals it in the same move (D8): a search hit or a deep link that left
-  // `isolated=0` would point at a node nobody can see, and a second push for
-  // the reveal would make Back undo half the transition.
+  // parameters it takes to get there. Focusing a node the page is not drawing
+  // reveals it in the same move (D8); a second push for the reveal would make
+  // Back undo half the transition.
   function focusUrl(taskId) {
     const state = stateFromUrl();
-    const changes = { focus: taskId };
-    if (isolated[taskId] && !state.isolated) changes.isolated = true;
+    const changes = revealChanges(taskId, state);
+    changes.focus = taskId;
     return urlWith(changes);
   }
 
@@ -398,7 +478,8 @@
     if (node.blocked_via_cycle) classes.push("blocked-via-cycle");
     if (blocked[node.id]) classes.push("blocked");
     if ((node.claims || []).length) classes.push("claimed");
-    if (onChain(node.id)) classes.push("chain");
+    // NOT the chain: which chain is traced depends on the focus, and the focus
+    // moves without this page being rebuilt (D8). `render` owns that class.
     return classes.join(" ");
   }
 
@@ -432,17 +513,14 @@
   // overlay edges are added afterwards.
   const elements = [];
   const overlayElements = [];
+  //: A cycle box's members, by the OPAQUE element id — what `applyChain` needs
+  //: to decide whether the box is on the chain being traced right now.
+  const cycleMembersOfElement = dict();
   Object.keys(cycleParent).forEach(function (id) {
+    cycleMembersOfElement[cycleParent[id]] = cycleMembers[id] || [];
     elements.push({
       data: { id: cycleParent[id], label: "cycle" },
-      // The box is on the chain when any task inside it is: usually the whole
-      // box is one chain node — the trace enters and leaves the cycle in one
-      // move, and a box drawn plain between two traced edges would read as a
-      // break in the sequence — but where the active projection splits this
-      // loop up, the chain runs THROUGH the box and the same accent is what
-      // says so.
-      classes:
-        "graph-cycle" + ((cycleMembers[id] || []).some(onChain) ? " chain" : "")
+      classes: "graph-cycle"
     });
   });
   nodes.forEach(function (node) {
@@ -456,7 +534,6 @@
     const classes = ["graph-edge", "type-" + edge.type];
     if (edge.state) classes.push("state-" + edge.state);
     if (overlay) classes.push("overlay-" + overlay);
-    if (stepOnChain(edge)) classes.push("chain");
     (overlay ? overlayElements : elements).push({
       data: {
         id: edgeId(index),
@@ -890,6 +967,86 @@
       : "focus-dimmed";
   }
 
+  //: The drawn element for a task, or an empty collection for one this page
+  //: has no node for.
+  function elementFor(taskId) {
+    return cy.getElementById(elementIdOf[taskId] || "");
+  }
+
+  // Centred, not re-fitted (D8): focus mode is about ONE node's neighbourhood,
+  // and the fit it follows is what keeps the rest of the picture available to
+  // pan back to. Nothing MOVES — this is the viewport again.
+  //
+  // Called after every fit, not only from `render`: opening the panel beside
+  // the canvas narrows it, and the resize that follows re-fits the whole drawn
+  // collection — which would quietly undo the centring the click just applied
+  // (round-1 correctness f-003).
+  function centreFocus() {
+    const state = stateFromUrl();
+    if (!state.focus) return;
+    const element = elementFor(state.focus);
+    if (!element.length || element.style("display") === "none") return;
+    cy.center(element);
+    reportVisibility();
+  }
+
+  // The longest chain the page currently claims (D7), in both places it is
+  // claimed: traced on the canvas and written in the line above the layers.
+  // Both follow the focus, because the chain THROUGH the focused node replaces
+  // the scope's — and a focus transition never reloads the page, so a trace
+  // left at the chain the payload was built for would state a sequence this
+  // picture is no longer about (round-1 correctness f-001).
+  function applyChain(state) {
+    setChain(chainFor(state.focus));
+    cy.nodes().forEach(function (element) {
+      const node = nodeFor(element);
+      if (node) {
+        element.toggleClass("chain", onChain(node.id));
+        return;
+      }
+      // A cycle's compound parent. The box is on the chain when any task
+      // inside it is: usually the whole box is one chain node — the trace
+      // enters and leaves the cycle in one move, and a box drawn plain between
+      // two traced edges would read as a break in the sequence — but where the
+      // active projection splits this loop up, the chain runs THROUGH the box
+      // and the same accent is what says so.
+      const members = cycleMembersOfElement[element.id()] || [];
+      element.toggleClass("chain", members.some(onChain));
+    });
+    cy.edges().forEach(function (element) {
+      element.toggleClass("chain", stepOnChain(edgeByElementId[element.id()]));
+    });
+    writeChainLine(state);
+  }
+
+  // The text line the canvas is printed above, kept in step with the trace.
+  // Only the two parts that DEPEND on the focus are rewritten: the "through
+  // X" clause, the length and the node list. The lower-bound wording beside
+  // them is the scope's own (an unreadable edge anywhere, D7) and does not
+  // move with the focus, so the server's sentence for it stands.
+  function writeChainLine(state) {
+    const section = document.querySelector("[data-longest-chain]");
+    if (!section) return;
+    const focused = state.focus && chainCondensationOfId[state.focus];
+    if (focused) section.dataset.chainThrough = state.focus;
+    else delete section.dataset.chainThrough;
+    const clause = section.querySelector("[data-chain-through-label]");
+    if (clause) {
+      clause.textContent = focused
+        ? " through " + labelOf(chainCondensationOf(state.focus))
+        : "";
+    }
+    const length = section.querySelector("[data-chain-length]");
+    if (length) length.textContent = String(chain.length);
+    const nodes = section.querySelector("[data-chain-nodes]");
+    if (nodes) nodes.textContent = chain.map(labelOf).join(" → ");
+  }
+
+  function labelOf(taskId) {
+    const node = byId[taskId];
+    return (node && node.label) || taskId;
+  }
+
   function render() {
     const state = stateFromUrl();
     const shown = visibility(state);
@@ -918,17 +1075,9 @@
         element, edgeFocusClass(focus, edgeByElementId[element.id()])
       );
     });
+    applyChain(state);
     fitVisible();
-    // Centred, not re-fitted (D8): focus mode is about one node's
-    // neighbourhood, and the fit above is what keeps the rest of the picture
-    // available to pan back to. Nothing MOVES — this is the viewport again.
-    if (focus && shown.nodes[state.focus]) {
-      const element = cy.getElementById(elementIdOf[state.focus] || "");
-      if (element.length) {
-        cy.center(element);
-        reportVisibility();
-      }
-    }
+    centreFocus();
     container.dataset.canvasState = "ready";
     container.dataset.canvasNodes = String(nodeCount);
     container.dataset.canvasEdges = String(edgeCount);
@@ -1259,6 +1408,11 @@
       height = container.clientHeight;
       cy.resize();
       fitVisible();
+      // …and put the focus back in the middle. `fitVisible` centres the whole
+      // DRAWN collection, so a resize while focused — which is what opening
+      // the panel beside the canvas is — would otherwise undo the centring the
+      // click that opened it just applied (round-1 correctness f-003).
+      centreFocus();
     }).observe(container);
   }
 
@@ -1293,12 +1447,16 @@
   const initial = stateFromUrl();
   const host = document.querySelector("[data-panel-host]");
   const served = host && host.dataset.panelSelected === initial.focus && host.innerHTML;
-  // A deep link onto a task this scope FOLDS AWAY: the reveal D8 owes it is
-  // owed however the panel got there, so it is applied before the open below
-  // rather than inside it. REPLACED, not pushed — this is the address the page
-  // loaded on, and a second entry for it would make the first Back a no-op.
-  if (initial.focus && isolated[initial.focus] && !initial.isolated) {
-    window.history.replaceState({}, "", urlWith({ isolated: true }));
+  // A deep link onto a task this page is not drawing — a folded isolate, or a
+  // context ghost whose overlay is off. The reveal D8 owes it is owed however
+  // the panel got there, so it is applied before the open below rather than
+  // inside it. REPLACED, not pushed — this is the address the page loaded on,
+  // and a second entry for it would make the first Back a no-op.
+  const initialReveal = initial.focus
+    ? revealChanges(initial.focus, initial)
+    : {};
+  if (Object.keys(initialReveal).length) {
+    window.history.replaceState({}, "", urlWith(initialReveal));
     render();
   }
   if (initial.focus && byId[initial.focus] && !served) {

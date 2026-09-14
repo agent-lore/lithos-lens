@@ -1264,6 +1264,7 @@ const fetches = [];
 const listeners = {};
 const sse = {};
 const layoutCalls = [];
+const viewportCalls = [];
 
 function href() { return entries[cursor]; }
 
@@ -1278,7 +1279,9 @@ function element(extra) {
   }, extra || {});
 }
 
-const container = element({ hidden: true });
+// Sized, because `graph.js` only re-measures when the box actually CHANGED —
+// which is what opening the panel beside the canvas does (D9).
+const container = element({ hidden: true, clientWidth: 1, clientHeight: 1 });
 const panHint = element({ hidden: true });
 const host = element({
   _html: "",
@@ -1294,6 +1297,21 @@ if (servedPanelRaw) {
   host.innerHTML = "panel:server:" + servedPanelRaw;
 }
 const payloadScript = element({ textContent: payloadRaw });
+// The chain line the canvas is printed above (T2-A7). Its three focus-
+// dependent parts are their own elements, because the client rewrites them on
+// every focus transition — the page is never re-rendered for one.
+const chainThroughLabel = element({ textContent: "" });
+const chainLength = element({ textContent: "0" });
+const chainNodes = element({ textContent: "" });
+const chainSection = element({
+  dataset: {},
+  querySelector(selector) {
+    if (selector === "[data-chain-through-label]") return chainThroughLabel;
+    if (selector === "[data-chain-length]") return chainLength;
+    if (selector === "[data-chain-nodes]") return chainNodes;
+    return null;
+  },
+});
 // The search control (T2-A7). The input is a real one — the page reads its
 // `value` — and the results list records what was appended to it, which is how
 // a test can click a hit without a DOM.
@@ -1329,6 +1347,7 @@ const SINGLE = {
   "[data-graph-search-control]": searchControl,
   "[data-graph-search]": searchInput,
   "[data-graph-search-results]": searchResults,
+  "[data-longest-chain]": chainSection,
 };
 const MANY = {
   "[data-toggle-overlay]": [overlayToggles.hierarchy, overlayToggles.provenance],
@@ -1360,6 +1379,15 @@ const document = {
   },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
 };
+
+// The canvas re-measures itself through one of these (D9: the panel opens
+// BESIDE it and narrows it). Recorded so a test can fire the callback the way
+// a browser would, which is the only way to reach the re-fit that follows.
+const resizeObservers = [];
+class ResizeObserver {
+  constructor(callback) { this.callback = callback; }
+  observe() { resizeObservers.push(this.callback); }
+}
 
 // COUNTED, not merely recorded: `connect()` closes any open stream and opens a
 // new one, so "a connection exists" cannot tell one call from two — and two is
@@ -1418,6 +1446,7 @@ const sandbox = {
   },
 };
 sandbox.window = {
+  ResizeObserver,
   LithosLensTasks: {
     selectionParam: "focus",
     panelAliasPath: "/tasks/id",
@@ -1474,6 +1503,11 @@ vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
 // realm is not one — called from this side it silently returns `undefined`.
 // The recorder is the only thing that crosses, because a function may.
 sandbox.__recordLayout = (info) => { layoutCalls.push(info); };
+// Every VIEWPORT move, in order. The headless canvas is 1x1, so `cy.fit()`
+// bails on a negative padded extent and the pan never moves — the pixels
+// cannot say whether a re-fit undid the focus centring, and the sequence of
+// moves can (round-1 correctness f-003).
+sandbox.__recordViewport = (move) => { viewportCalls.push(move); };
 vm.runInContext(`
   window.cytoscape = function (options) {
     var cy = cytoscape(Object.assign({}, options, {
@@ -1483,6 +1517,14 @@ vm.runInContext(`
       headless: true,
       styleEnabled: true
     }));
+    var fit = cy.fit.bind(cy);
+    cy.fit = function () { __recordViewport("fit"); return fit.apply(cy, arguments); };
+    var center = cy.center.bind(cy);
+    cy.center = function (target) {
+      var one = target && target.length === 1 && typeof target.id === "function";
+      __recordViewport("center:" + (one ? target.id() : "drawn"));
+      return center.apply(cy, arguments);
+    };
     var layout = cy.layout.bind(cy);
     cy.layout = function (opts) {
       __recordLayout({
@@ -1567,6 +1609,17 @@ function clickLink(selector, target) {
 
 let eventSeq = 0;
 
+function focusOffset() {
+  const focused = graph.cy.nodes().filter((node) => node.hasClass("focused"));
+  if (!focused.length) return null;
+  const point = focused[0].renderedPosition();
+  const round = (value) => Math.round(value * 100) / 100;
+  return [
+    round(point.x - graph.cy.width() / 2),
+    round(point.y - graph.cy.height() / 2),
+  ];
+}
+
 function withClass(name) {
   return graph.cy
     .nodes()
@@ -1603,6 +1656,33 @@ function snapshot() {
     unknownRelation: withClass("focus-unknown"),
     // What the search box is currently offering, in order.
     search: searchResults.children.map((item) => item.children[0].dataset.searchHit),
+    // The chain the page CLAIMS, in both places it claims it: the sentence
+    // above the layers, and the trace on the canvas.
+    chainLine: {
+      through: chainSection.dataset.chainThrough || "",
+      label: chainThroughLabel.textContent,
+      length: chainLength.textContent,
+      nodes: chainNodes.textContent,
+    },
+    traced: graph.cy
+      .nodes()
+      .filter((node) => node.hasClass("chain"))
+      .map(named)
+      .sort(),
+    tracedEdges: graph.cy
+      .edges()
+      .filter((edge) => edge.hasClass("chain"))
+      .map((edge) => named(edge.source()) + ">" + named(edge.target()))
+      .sort(),
+    // Where the focused node sits relative to the viewport's middle: [0, 0]
+    // is centred (D8), and null means nothing is focused.
+    focusOffset: focusOffset(),
+    // Every viewport move so far, in order — a fit, or a centring on
+    // something. What ENDS this list is what the operator is looking at.
+    viewport: viewportCalls.map((move) => {
+      const parts = move.split(":");
+      return parts.length > 1 ? parts[0] + ":" + (nameOf[parts[1]] || parts[1]) : move;
+    }),
     disclosureOpen: disclosure.open,
     hrefs: {
       resolved: resolvedToggle.getAttribute("href"),
@@ -1688,6 +1768,11 @@ function ranks() {
         .filter((child) => child.dataset.searchHit === argument)[0];
       if (!button) throw new Error("no search hit for " + argument);
       fire("click", clickOn({ "[data-search-hit]": button }));
+    } else if (name === "resize") {
+      // The canvas box changed — the panel opening beside it is the case this
+      // is for. `graph.js` only re-measures when the size actually moved.
+      container.clientWidth = Number(argument || 2);
+      resizeObservers.forEach((callback) => callback());
     } else if (name === "back") {
       if (cursor > 0) cursor -= 1;
       fire("popstate", {});
@@ -1893,6 +1978,29 @@ def _payload(nodes: list[dict], edges: list[dict], **scope: object) -> dict:
     chain = body["longest_chain"]
     assert isinstance(chain, dict)
     chain.setdefault("members", [[node] for node in chain["nodes"]])
+    # The DP the client walks to re-trace the chain THROUGH a node it is
+    # focused on (`graph_view.active_chain_payload`). Synthesised ALONG the
+    # stated chain here, which is what the server emits for it; a fixture whose
+    # focus transitions leave that chain — the projection has pointers the
+    # chain does not show — passes its own `active_chain` instead.
+    steps = list(chain["nodes"])
+    body.setdefault(
+        "active_chain",
+        {
+            "of": {
+                member: representative
+                for representative, members in zip(steps, chain["members"], strict=True)
+                for member in members
+            },
+            "up": {step: steps[index - 1] for index, step in enumerate(steps) if index},
+            "down": {
+                step: steps[index + 1]
+                for index, step in enumerate(steps)
+                if index + 1 < len(steps)
+            },
+            "chain": steps,
+        },
+    )
     return body
 
 
@@ -2192,6 +2300,10 @@ FOCUS_PAYLOAD: dict = _payload(
             projects=("lens",),
         ),
         _node("hidden", isolated=True),
+        # A CONTEXT ghost: drawn only while the overlay whose edge anchors it
+        # is on (D6), so it is one of the two kinds of payload node the page
+        # hides by default — and search ranges over every payload node.
+        _node("source", status="completed", ghost="context", projects=("lens",)),
     ],
     [
         _edge("a", "b"),
@@ -2202,11 +2314,38 @@ FOCUS_PAYLOAD: dict = _payload(
         _edge("off-a", "off-b"),
         _edge("c", "murky"),
         _edge("c", "unread", state="unknown"),
+        _edge("source", "off-b", "discovered_from", state=""),
     ],
     longest_chain={
         "nodes": ["a", "b", "c", "d", "e"],
         "length": 5,
         "bound": "exact",
+    },
+    # The WHOLE active projection, not just the pointers along the chain: this
+    # fixture's focus transitions leave the scope's longest (`off-a -> off-b`
+    # is its own two-chain), which is exactly the case a client that froze the
+    # payload's one chain would get wrong.
+    active_chain={
+        "of": {
+            name: name
+            for name in (
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "done",
+                "off-a",
+                "off-b",
+                "murky",
+                "unread",
+                "hidden",
+                "source",
+            )
+        },
+        "up": {"b": "a", "c": "b", "d": "c", "e": "d", "murky": "c", "off-b": "off-a"},
+        "down": {"a": "b", "b": "c", "c": "d", "d": "e", "off-a": "off-b"},
+        "chain": ["a", "b", "c", "d", "e"],
     },
     roots=["a", "done", "off-a", "hidden"],
 )
@@ -2821,7 +2960,7 @@ def test_focusing_a_node_lights_exactly_its_active_relations() -> None:
     final = result["final"]
 
     assert final["lit"] == ["a", "b", "c", "d", "e"]
-    assert final["dimmed"] == ["done", "hidden", "off-a", "off-b"]
+    assert final["dimmed"] == ["done", "hidden", "off-a", "off-b", "source"]
     assert final["focused"] == ["c"]
     # The panel the server rendered is the one on screen; focus mode costs no
     # fetch of its own — the payload already carries every edge it walks.
@@ -2868,6 +3007,137 @@ def test_the_lit_set_reaches_through_a_cycle_in_both_directions() -> None:
 
     assert final["lit"] == ["after", "before", "ring-a", "ring-b"]
     assert final["dimmed"] == []
+
+
+def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
+    """Regression (round-1 correctness f-001). The chain THROUGH the focused
+    node replaces the scope's (D7/D8) — and a focus transition never reloads
+    the page, so a canvas left tracing the chain the payload was built for
+    would accent a sequence the picture is no longer about, under a sentence
+    that still named the old one."""
+    result = _focus_run(["tap:off-b", "close"])
+    start = result["states"][0]  # nothing focused yet? no: the tap focuses it
+    focused, cleared = result["states"]
+
+    assert start is focused
+    # The scope's own chain, before anything is focused.
+    assert _focus_run([])["final"]["chainLine"]["nodes"] == "A → B → C → D → E"
+    # Focused off it, the line AND the trace move to the chain through it.
+    assert focused["chainLine"] == {
+        "through": "off-b",
+        "label": " through Off-B",
+        "length": "2",
+        "nodes": "Off-A → Off-B",
+    }
+    assert focused["traced"] == ["off-a", "off-b"]
+    assert focused["tracedEdges"] == ["off-a>off-b"]
+    # And clearing the focus restores the unfocused view, which is the same
+    # claim read the other way round.
+    assert cleared["chainLine"] == {
+        "through": "",
+        "label": "",
+        "length": "5",
+        "nodes": "A → B → C → D → E",
+    }
+    assert cleared["traced"] == ["a", "b", "c", "d", "e"]
+    assert cleared["tracedEdges"] == ["a>b", "b>c", "c>d", "d>e"]
+    assert result["fetches"] == ["/tasks/id?task_id=off-b&fragment=panel"]
+
+
+def test_back_re_traces_the_chain_of_the_focus_it_returns_to() -> None:
+    """Back and forward walk the exploration (D8), so the chain walks with
+    them: the sequence traced under a restored focus is that focus's own."""
+    result = _focus_run(["tap:off-b", "tap:c", "back"])
+    _, second, restored = result["states"]
+
+    assert second["chainLine"]["nodes"] == "A → B → C → D → E"
+    assert second["chainLine"]["label"] == " through C"
+    assert restored["chainLine"]["label"] == " through Off-B"
+    assert restored["chainLine"]["nodes"] == "Off-A → Off-B"
+    assert restored["traced"] == ["off-a", "off-b"]
+    assert result["navigations"] == []
+
+
+def test_a_search_hit_re_traces_the_chain_too() -> None:
+    """Search is an ordinary focus transition, so it owes the same answer as a
+    click — including the one the canvas draws."""
+    final = _focus_run(["search:off-b", "hit:off-b"])["final"]
+
+    assert final["chainLine"]["label"] == " through Off-B"
+    assert final["traced"] == ["off-a", "off-b"]
+
+
+def test_the_focused_node_is_centred_on_every_settled_transition() -> None:
+    """D8: focus mode CENTRES the node. Asserted after each kind of transition
+    — a deep link, a click, Back — because each reaches the viewport by its own
+    path (round-1 test-quality f-003)."""
+    deep_link = _focus_run([], href=GRAPH_CANVAS_HREF + "&focus=c", served_panel="c")[
+        "final"
+    ]
+    clicked = _focus_run(["tap:off-b"])["final"]
+    restored = _focus_run(["tap:off-b", "tap:c", "back"])["final"]
+
+    assert deep_link["focusOffset"] == [0, 0]
+    assert clicked["focusOffset"] == [0, 0]
+    assert restored["focusOffset"] == [0, 0]
+    # …and an unfocused canvas centres nothing, because there is nothing to
+    # centre on.
+    assert _focus_run([])["final"]["focusOffset"] is None
+
+
+def test_the_focus_stays_centred_when_the_panel_narrows_the_canvas() -> None:
+    """Regression (round-1 correctness f-003). The panel opens BESIDE the
+    canvas (D9), which resizes it — and the re-fit that follows centres the
+    whole DRAWN collection, undoing the centring the click just applied unless
+    the resize path re-applies it.
+
+    Asserted on the ORDER of the viewport moves, because this harness's
+    headless canvas is 1x1: `cy.fit` bails on a negative padded extent there,
+    so the pan cannot show what the sequence can. The pixels are the e2e
+    suite's to check, where the panel really does narrow a real canvas."""
+    result = _focus_run(["tap:c", "resize:4"])
+    clicked, resized = result["states"]
+
+    # The click settles with the focus centred …
+    assert clicked["viewport"][-1] == "center:c"
+    # … the resize really does re-measure and re-fit …
+    assert "fit" in resized["viewport"][len(clicked["viewport"]) :]
+    # … and what the operator is left looking at is still the focused node.
+    assert resized["viewport"][-1] == "center:c", "the resize decentred the focus"
+
+
+def test_focusing_a_context_ghost_turns_on_the_overlay_that_draws_it() -> None:
+    """Regression (round-1 correctness f-004). Search ranges over every payload
+    node, and a context ghost is drawn only while the overlay whose edge
+    anchors it is on (D6) — so the transition that selects one has to reveal
+    it, in the SAME entry, exactly as a folded isolate is revealed."""
+    result = _focus_run(["search:source", "hit:source"])
+    offered, chosen = result["states"]
+
+    assert offered["search"] == ["source"]
+    assert result["pushed"] == [
+        "/tasks/graph?project=loom&overlays=provenance&focus=source"
+    ]
+    assert "source" in chosen["nodes"], "the focused ghost stayed hidden"
+    assert chosen["focused"] == ["source"]
+    assert chosen["focusOffset"] == [0, 0]
+
+
+def test_a_deep_link_to_a_context_ghost_reveals_it_without_a_new_entry() -> None:
+    """The same reveal owed to a URL that arrived focused — replaced, not
+    pushed, so the first Back still leaves the page."""
+    result = _focus_run(
+        [], href=GRAPH_CANVAS_HREF + "&focus=source", served_panel="source"
+    )
+
+    assert result["pushed"] == []
+    # `focus` is already in the address it arrived on, so the reveal is the
+    # only parameter this rewrite adds.
+    assert result["replaced"] == [
+        "/tasks/graph?project=loom&focus=source&overlays=provenance"
+    ]
+    assert "source" in result["final"]["nodes"]
+    assert result["final"]["focusOffset"] == [0, 0]
 
 
 def test_typing_a_title_and_selecting_a_match_sets_the_focus() -> None:

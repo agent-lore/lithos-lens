@@ -6,11 +6,13 @@ figures come from two different authorities and degrade in two different ways:
 - **N** is Lens's own arithmetic — the open transitive dependents of the focal
   task over the **active projection** (D6) of ``blocks`` + ``waits_on_gate``,
   within the graph this page actually fetched, downstream ghosts counted as the
-  leaves they are (D5). It is a lower bound ("≥ N") whenever something
-  downstream is unreadable: a dependent whose own ``edge_list`` failed hides
-  whatever it blocks, and an ``unknown`` edge (an endpoint whose status Lens
-  could not read) is counted in neither direction — the node it names is
-  LISTED as unclassifiable rather than folded into the count.
+  leaves they are (D5). It is a lower bound ("≥ N") in two states, and both are
+  D10's: the **scope is incomplete** — any task's ``edge_list`` read failed,
+  wherever it sits, because an unread edge list is precisely the evidence that
+  the projection Lens can see may not be all of it — or an ``unknown`` edge (an
+  endpoint whose status Lens could not read) is reachable downstream, which is
+  counted in neither direction and whose far end is LISTED as unclassifiable
+  rather than folded into the number.
 - **M** is Lithos's — a dependent whose scoped ``task_blocked`` row names this
   task as its SOLE unsatisfied blocker is one that completing this task frees
   right now. That fact only exists for dependents D4's coverage set actually
@@ -162,7 +164,7 @@ def downstream_impact(
             chain_length=length,
         )
 
-    reached, unclassified, unreadable = _downstream(scope, focus)
+    reached, unclassified = _downstream(scope, focus)
     dependents = tuple(
         task_id
         for task_id in reached
@@ -176,7 +178,13 @@ def downstream_impact(
         focus=focus,
         state=IMPACT_OPEN,
         frees=len(dependents),
-        exact=not unreadable and not unclassified,
+        # D10's rule, taken whole: N is a lower bound when the SCOPE is
+        # incomplete — not merely when the unreadable task happens to sit on
+        # the projection Lens can already see. An unread edge list is exactly
+        # the evidence that the known projection may not be all of it, so
+        # asking where the gap is would be reasoning from the gap's own
+        # absence (round-1 correctness f-002).
+        exact=not scope.incomplete and not unclassified,
         immediately=immediately if covered == len(dependents) else None,
         covered=covered,
         unclassified=tuple(_label(scope, task_id) for task_id in sorted(unclassified)),
@@ -194,22 +202,20 @@ def _resolved_state(status: str) -> str:
     return IMPACT_UNKNOWN
 
 
-def _downstream(
-    scope: TaskGraphScope, focus: str
-) -> tuple[tuple[str, ...], set[str], bool]:
-    """Walk down from ``focus``: what it blocks, what it might, what is unread.
+def _downstream(scope: TaskGraphScope, focus: str) -> tuple[tuple[str, ...], set[str]]:
+    """Walk down from ``focus``: what it blocks, and what it might.
 
-    Three results, because D10 needs all three separately. The walk itself runs
-    over ACTIVE dependency edges only (D6) — a satisfied edge frees nobody, and
-    an edge into a resolved dependent constrains nothing — so anything reached
-    only through a resolved dependent is correctly out of the count.
+    The walk runs over ACTIVE dependency edges only (D6) — a satisfied edge
+    frees nobody, and an edge into a resolved dependent constrains nothing — so
+    anything reached only through a resolved dependent is correctly out of the
+    count.
 
     ``unclassified`` is the far end of an ``unknown`` edge leaving anything the
     walk reached (the focus included): a relation Lens cannot classify, so it
-    is named rather than counted in either direction. ``unreadable`` is whether
-    any node the walk reached — again including the focus — had its own
-    ``edge_list`` read fail, which hides whatever IT blocks and is the other
-    way N becomes a lower bound.
+    is named rather than counted in either direction. Whether the count is a
+    lower bound for the OTHER reason — an unreadable edge list — is not asked
+    here, because it is not a question about this walk: the scope's own
+    ``incomplete`` set answers it (D10).
     """
     successors: dict[str, list[str]] = {}
     unknown_out: dict[str, list[str]] = {}
@@ -237,22 +243,26 @@ def _downstream(
         for dependent in unknown_out.get(task_id, ())
         if dependent not in seen
     }
-    unreadable = any(task_id in scope.incomplete for task_id in seen)
-    return tuple(reached), unclassified, unreadable
+    return tuple(reached), unclassified
 
 
 def _relations_exact(scope: TaskGraphScope, focus: str) -> bool:
     """Whether focus mode's LIT SET is the whole of what surrounds this task.
 
-    The canvas lights the focused node's ancestors AND descendants over the
-    active projection (D8), so this walk is symmetric where :func:`_downstream`
-    is not — and it fails for the same two reasons the count does: a node in
-    the neighbourhood whose own ``edge_list`` read failed hides whatever else
-    it relates to, and an ``unknown`` edge touching it is a relation Lens
-    cannot classify in either direction. Either way the picture is a lower
-    bound of the neighbourhood, and the panel says so rather than letting a
+    Two ways it is not, and D8 states both: the SCOPE is incomplete — an
+    unreadable edge list anywhere is evidence that the projection Lens can see
+    is not all of it, wherever the gap turns out to be — or an ``unknown`` edge
+    touches the focused node's own neighbourhood, which is a relation Lens
+    cannot classify in either direction. The second is a question about THIS
+    node, so it is walked; the first is not, so it is not.
+
+    The walk is symmetric where :func:`_downstream` is not, because the canvas
+    lights ancestors AND descendants (D8). Either way the picture is a lower
+    bound of the neighbourhood and the panel says so, rather than letting a
     dimmed node read as "unrelated".
     """
+    if scope.incomplete:
+        return False
     neighbours: dict[str, list[str]] = {}
     unknown_at: set[str] = set()
     for edge in scope.edges:
@@ -272,7 +282,7 @@ def _relations_exact(scope: TaskGraphScope, focus: str) -> bool:
                 continue
             seen.add(other)
             queue.append(other)
-    return not (seen & unknown_at) and not (seen & set(scope.incomplete))
+    return not (seen & unknown_at)
 
 
 def _sole_blocker_count(

@@ -478,11 +478,13 @@ is two figures from two authorities (§5.7 of REQUIREMENTS):
 - **N** is Lens's own walk — the open transitive dependents of this task over
   the scope's **active projection** of `blocks` + `waits_on_gate`, within the
   graph that scope fetched, downstream ghosts counted as the leaves they are.
-  It reads `≥ N` whenever something downstream is unreadable: a dependent whose
-  own `edge_list` read failed hides whatever IT blocks, and a node reached only
-  over an `unknown` edge is **named, never counted** ("not counted, relation
-  unreadable: …") because Lens cannot classify the relation in either
-  direction.
+  It reads `≥ N` in two states, and both are the scope's rather than the walk's
+  to know: the **scope is incomplete** — any task's `edge_list` read failed,
+  wherever it sits, because an unread edge list is precisely the evidence that
+  the projection Lens can see may not be all of it — or a node reached only
+  over an `unknown` edge is downstream, which is **named, never counted** ("not
+  counted, relation unreadable: …") because Lens cannot classify the relation
+  in either direction.
 - **M** is Lithos's — the dependents whose scoped `task_blocked` row names this
   task as their SOLE unsatisfied blocker, read from the same coverage set
   §5.12 assembles (which is why the downstream ghosts' projects are in it: a
@@ -499,7 +501,11 @@ future-tense number — and an **epic** carries no impact line at all, since a
 zero there would read as "finishing this frees nobody" rather than "this is not
 that kind of task". Beside it, "on the longest chain (k of n)" gives the task's
 position on the SCOPE's chain (§5.12) when it is on it; a task is trivially on
-the chain through itself, so stating that would state nothing.
+the chain through itself, so stating that would state nothing. And when the
+scope is incomplete, or an `unknown` edge touches the focused task's own
+neighbourhood, the panel says that what the canvas lights is a **lower bound**
+of what surrounds it — a dimmed node must not read as "unrelated" when Lens
+only failed to look.
 
 The graph page's own render computes this from the scope and cycle signal it
 already holds; a panel fetched on its own rebuilds that scope, which the
@@ -770,7 +776,11 @@ chain; the topological layers as one `<ol>` per layer; the "N isolated tasks"
 disclosure; the `parent_child` hierarchy tree, always rendered; and a
 `<script type="application/json">` payload carrying nodes (with completeness
 and layer), edges (with state and reason), layers, cycles, ghosts, the longest
-chain with its `exact | lower_bound` flag and its condensations' members,
+chain with its `exact | lower_bound` flag and its condensations' members, the
+**active projection's own longest-path DP** (`active_chain`: every task's
+condensation, the next step of the longest walk into and out of each, and the
+scope's own chain — what lets a client-side focus transition trace the chain
+through the newly focused node without a reload and without re-deriving D7),
 roots, isolated, incomplete and `as_of`. Each node additionally carries its claims and the detail URL
 `tasks.task_detail_path` built for it — the two things the canvas needs and
 the topology does not imply. The toolbar states `as_of` — the OLDEST
@@ -956,10 +966,21 @@ at. Lens still never re-implements the readiness predicate.
   only, so a completed predecessor is not an ancestor however many hops the
   drawn graph offers. Closing the panel, or Escape, removes `focus` and every
   class with it; `popstate` re-applies `focus`, `overlays` and `isolated` from
-  the static payload with **no reload**. Focusing a task the scope FOLDS AWAY
-  reveals it in the same transition (`isolated=1` in the same history entry, so
-  Back cannot undo half the move); a deep link onto one replaces the entry it
-  arrived on rather than adding a twin.
+  the static payload with **no reload**. Focusing a node the page is not
+  DRAWING reveals it in the same transition, by whichever parameter hides it: a
+  folded isolate takes `isolated=1`, and a context ghost takes the overlay
+  whose edge anchors it — one history entry either way, so Back cannot undo
+  half the move, and a deep link onto one replaces the entry it arrived on
+  rather than adding a twin.
+- **The chain follows the focus.** The line above the layers and the trace on
+  the canvas both state the longest chain THROUGH the focused node (§5.11), and
+  a focus transition never reloads the page — so the client recomputes both
+  from the payload's `active_chain` on every transition, and clearing the focus
+  restores the scope's own chain. The answer is still the server's: walking
+  those pointers reproduces `longest_blocking_chain(through=…)`, tie-breaks
+  included. Only the focus-dependent parts of the sentence are rewritten; the
+  lower-bound wording beside them describes the scope (an unreadable edge
+  anywhere) and does not move with the focus.
 - **Search** is a toolbar input matching a title SUBSTRING or an id PREFIX over
   the payload's own nodes — a title is remembered in fragments, an id is pasted
   from its start — and selecting a match (click, or Enter for the first one) is
@@ -1010,7 +1031,10 @@ at. Lens still never re-implements the readiness predicate.
   canvas draws — a cycle box's caption included — uses the one font size the
   floor is derived from, or it would be sub-legible exactly when the floor
   binds. Zooming out further is the operator's to do; only the automatic
-  scaling is bounded.
+  scaling is bounded. A re-fit — which is what opening the panel beside the
+  canvas causes, since it narrows the box — is followed by re-centring the
+  focused node, or the fit would quietly undo the centring the click that
+  opened the panel just applied.
 - **The panel a node click fetches carries this page's scope**, so its
   downstream impact (§5.6.1) counts over the graph on screen. A node has no DOM
   row to read a server-built URL off, so the page hands `tasks.js` the scope and
