@@ -36,6 +36,12 @@ from lithos_lens.tasks import task_detail_path
 SCOPE_PROJECT = "project"
 SCOPE_EPIC = "epic"
 
+#: The spellings a documented ``1|0`` toggle accepts. Both sets are explicit so
+#: a value in NEITHER can be told apart from a valid false — which is what lets
+#: a scope's own default survive a malformed URL (see :func:`parse_flag`).
+TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
+FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
+
 #: The overlays D8 puts behind a toggle. Parsed once (in ``graph_page``) so an
 #: unknown value in a bookmarked URL is dropped in one place.
 OVERLAY_HIERARCHY = "hierarchy"
@@ -62,6 +68,82 @@ class GraphPageParams:
     @property
     def scoped(self) -> bool:
         return bool(self.kind and self.key)
+
+
+def parse_flag(raw: str | None, default: bool) -> bool:
+    """Parse a documented ``1|0`` toggle, keeping the DEFAULT when it is neither.
+
+    The scope toggles default by scope KIND and in opposite directions (D6/D8),
+    so "anything I do not recognise is false" is the one reading that must not
+    be used: ``include_resolved=2`` on an epic would silently hide its closed
+    children, and ``isolated=garbage`` would silently collapse a disclosure
+    that is open by default. A malformed value is not a request for the
+    opposite behaviour — it carries no request at all — so the default stands.
+
+    Beside :class:`GraphPageParams` because both readers of these toggles are
+    reading the SAME page's state: the graph route, and the side panel's
+    ``scope=`` (:mod:`lithos_lens.graph_impact`), which has to assemble the
+    graph its page did or answer a click differently from the deep link to it.
+    """
+    value = (raw or "").strip().lower()
+    if value in TRUE_FLAGS:
+        return True
+    if value in FALSE_FLAGS:
+        return False
+    return default
+
+
+@dataclass(frozen=True)
+class DownstreamImpact:
+    """What completing the focused task would free, and how sure Lens is (D10).
+
+    Two figures from two authorities — N is Lens's walk over the active
+    projection, M is Lithos's sole-blocker fact — computed by
+    :mod:`lithos_lens.graph_impact` and rendered by the side panel.
+
+    ``immediately`` is ``None`` when M is WITHHELD, never zero: "nothing is
+    freed immediately" and "Lens could not read the fact" are different
+    answers, and a zero would present the second as the first.
+    """
+
+    focus: str = ""
+    #: The focal task's own state, which decides whether there is a
+    #: future-tense claim to make at all: only ``open`` carries numbers.
+    state: str = "open"
+    #: N, over the active projection within the fetched graph.
+    frees: int = 0
+    #: False when N could only be larger: something downstream is unreadable.
+    exact: bool = True
+    #: M, or ``None`` when a dependent's project read did not cover it.
+    immediately: int | None = None
+    #: How many of the counted dependents a complete read did cover.
+    covered: int = 0
+    #: Dependents reached only through an ``unknown`` edge — listed, never
+    #: counted, because Lens cannot classify the relation in either direction.
+    unclassified: tuple[str, ...] = ()
+    #: Whether the LIT SET focus mode draws (D8) is the whole of it. False
+    #: when an unreadable edge list or an ``unknown`` edge sits anywhere in the
+    #: focused task's neighbourhood: the canvas then shows a lower bound of
+    #: what surrounds it, and the panel says so — in both directions, which is
+    #: why this is not the same question as ``exact`` (N is downstream only).
+    relations_exact: bool = True
+    #: Where the focal task sits on the SCOPE's longest chain (D7), 1-based.
+    #: Zero when it is not on it — the line is not rendered then.
+    chain_position: int = 0
+    chain_length: int = 0
+
+    @property
+    def open(self) -> bool:
+        return self.state == "open"
+
+    @property
+    def withheld(self) -> bool:
+        """Whether M is missing because the coverage was incomplete."""
+        return self.open and self.immediately is None
+
+    @property
+    def on_chain(self) -> bool:
+        return bool(self.chain_position)
 
 
 @dataclass(frozen=True)
@@ -195,6 +277,10 @@ class ChainView:
     exact: bool = True
     unreadable_nodes: int = 0
     unresolvable_edges: int = 0
+    #: In focus mode the chain THROUGH the focused task replaces the scope's
+    #: (D7/D8), and the line says whose chain it is — otherwise a shorter
+    #: number would read as the graph's longest, which it is not.
+    through: NodeView | None = None
 
     @property
     def length(self) -> int:
@@ -249,6 +335,10 @@ class GraphPageView:
     #: here from an unread one.
     unshaped_cycles: tuple[CycleView, ...] = ()
     chain: ChainView = field(default_factory=ChainView)
+    #: D10's line for the focused task, when this render carries a ``focus=``
+    #: the scope holds. Computed here rather than by the panel route because
+    #: this render already has the scope and the cycle signal in hand.
+    impact: DownstreamImpact | None = None
     banners: tuple[Banner, ...] = ()
     edge_types: tuple[str, ...] = ()
     edge_count: int = 0

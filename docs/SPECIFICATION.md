@@ -82,10 +82,13 @@ The current application exposes these routes:
   every id Lens can be handed is a server-generated UUID).
   `tasks.task_detail_path` is the one place that decides, shared by the board,
   the graph page and the knowledge produced-by chip.
-- `GET /tasks/{task_id}?fragment=panel`
+- `GET /tasks/{task_id}?fragment=panel[&scope=project:<slug>|epic:<id>][&include_resolved=1|0]`
   Renders the task's side-panel partial (§5.6.1) — the same reads as the detail
   page through a template that extends no layout. This is what a dashboard row
-  click fetches.
+  click fetches. `scope=` names the graph the **downstream impact** line is
+  counted over (§5.6.1); a panel fetched without it states no impact, because N
+  is a count within one fetched graph. `include_resolved` travels with the
+  scope so the panel assembles the same graph the page it was opened from did.
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -467,9 +470,43 @@ The panel states: the header (title, status, type badge with `gate_type`,
 project chip under the configured convention, creating agent), the parent
 breadcrumb, the blockers with live status (level 1, no per-level expander —
 the walk lives on the full page), **Blocks** (the level-1 dependents), the
+**downstream impact** when it was given a scope (below), the
 active claims, and the finding COUNT linked to the full timeline. The
-downstream-impact line (`frees N in this graph, M immediately`) needs a scope
-and is not computed here; its slot is present and empty.
+**downstream impact** is stated only when the request named a `scope=`, and it
+is two figures from two authorities (§5.7 of REQUIREMENTS):
+
+- **N** is Lens's own walk — the open transitive dependents of this task over
+  the scope's **active projection** of `blocks` + `waits_on_gate`, within the
+  graph that scope fetched, downstream ghosts counted as the leaves they are.
+  It reads `≥ N` whenever something downstream is unreadable: a dependent whose
+  own `edge_list` read failed hides whatever IT blocks, and a node reached only
+  over an `unknown` edge is **named, never counted** ("not counted, relation
+  unreadable: …") because Lens cannot classify the relation in either
+  direction.
+- **M** is Lithos's — the dependents whose scoped `task_blocked` row names this
+  task as their SOLE unsatisfied blocker, read from the same coverage set
+  §5.12 assembles (which is why the downstream ghosts' projects are in it: a
+  cross-project dependent this task solely blocks is counted like any other).
+  Where a dependent's project read truncated, failed, was never made, or could
+  not be issued at all (a projectless task), M is **withheld** with the covered
+  count stated — not reported low, because a partial M reads exactly like a
+  whole one and the operator is choosing what to work on next from it.
+
+Rendered "frees N in this graph, M immediately". A **completed** focal task
+states "completed; no pending impact" and a **cancelled** one "its dependents
+are unsatisfiable" — neither has pending edges, so neither carries a
+future-tense number — and an **epic** carries no impact line at all, since a
+zero there would read as "finishing this frees nobody" rather than "this is not
+that kind of task". Beside it, "on the longest chain (k of n)" gives the task's
+position on the SCOPE's chain (§5.12) when it is on it; a task is trivially on
+the chain through itself, so stating that would state nothing.
+
+The graph page's own render computes this from the scope and cycle signal it
+already holds; a panel fetched on its own rebuilds that scope, which the
+per-task edge cache (§5.10) makes affordable because the graph the operator is
+looking at is warm. Either way the impact costs the line and nothing else: a
+scope that fails, is refused, or does not hold the task renders the rest of the
+panel unchanged.
 
 An unknown id renders the **not-found panel** at HTTP 200 on both routes —
 never a 500, and never at the cost of the board beside it — and a read that
@@ -712,7 +749,13 @@ compatibility alias that the route **redirects away** (307 to the same URL with
 `focus`, so a page served under the alias would render a panel with no node lit
 and a Close that pushed a URL still carrying the alias. A request carrying a
 selection **server-renders that task's side panel** beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
-`url` open), and a read that fails there costs the panel rather than the graph; `overlays=hierarchy,provenance` is carried for the client layer.
+`url` open), with that panel's downstream impact computed from this render's
+own scope, and a read that fails there costs the panel rather than the graph; `overlays=hierarchy,provenance` is carried for the client layer.
+A `focus=` the scope actually holds also **replaces the chain line with the
+longest chain THROUGH that task** (§5.11), named as such: a chain through a
+mid-graph task is routinely shorter than the graph's longest, and an
+unlabelled number there would understate it. A `focus=` naming a task this
+graph does not hold leaves the scope's own chain standing.
 A scope over `graph.max_tasks` (ghosts counted), or one whose out-of-set
 endpoints would cost more classification reads than one render may spend, is
 **refused** with a "narrow your scope" panel naming the count — never rendered
@@ -902,6 +945,27 @@ at. Lens still never re-implements the readiness predicate.
   disclosure together; the plain-language **legend** is persistent; and **show
   as text** collapses the text layers behind the canvas without removing them
   — the text stays in the DOM.
+- **Focus mode** (`focus=<id>`) is the page's exploration state, and every
+  transition is one `pushState`: a node click, a search hit, `focus=` in the
+  URL at load. The focused node is **centred** (a pan, never a re-layout), its
+  ancestors and descendants over the **active projection** are classed
+  `focus-lit`, everything else `focus-dimmed`, and anything Lens cannot place
+  relative to it `focus-unknown` — a node whose own edge list failed, or one
+  reached only over an `unknown` edge, is neither lit nor dimmed, because its
+  relation is not known in either direction. The walk crosses `active` edges
+  only, so a completed predecessor is not an ancestor however many hops the
+  drawn graph offers. Closing the panel, or Escape, removes `focus` and every
+  class with it; `popstate` re-applies `focus`, `overlays` and `isolated` from
+  the static payload with **no reload**. Focusing a task the scope FOLDS AWAY
+  reveals it in the same transition (`isolated=1` in the same history entry, so
+  Back cannot undo half the move); a deep link onto one replaces the entry it
+  arrived on rather than adding a twin.
+- **Search** is a toolbar input matching a title SUBSTRING or an id PREFIX over
+  the payload's own nodes — a title is remembered in fragments, an id is pasted
+  from its start — and selecting a match (click, or Enter for the first one) is
+  an ordinary focus transition. No fetch and no server round trip; it is
+  revealed by the client, because with no scripting there is nothing to jump to
+  and the browser's own find searches the text baseline.
 - **Click** a node and its panel opens beside the canvas through the same
   implementation the dashboard's rows use (§5.6.1), pushing `focus=` after the
   swap; **double-click** navigates to the task's page via the URL the server
@@ -947,6 +1011,11 @@ at. Lens still never re-implements the readiness predicate.
   floor is derived from, or it would be sub-legible exactly when the floor
   binds. Zooming out further is the operator's to do; only the automatic
   scaling is bounded.
+- **The panel a node click fetches carries this page's scope**, so its
+  downstream impact (§5.6.1) counts over the graph on screen. A node has no DOM
+  row to read a server-built URL off, so the page hands `tasks.js` the scope and
+  its `include_resolved` directly; the URL is otherwise the query alias, which
+  is the one form that addresses every id.
 - **Cytoscape is handed opaque element ids**, never a task's own. A task id is
   an arbitrary non-empty string (§5.1), and the shipped 3.30.3 throws inside
   `breadthfirst` on an element called `__proto__`, `constructor` or `toString`

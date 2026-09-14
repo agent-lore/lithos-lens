@@ -1797,6 +1797,70 @@ button,
   width: auto;
 }
 
+/* Search (D8): revealed by `graph.js`, so it is laid out for the toolbar it
+   sits in rather than for a page that may never show it. The results list is a
+   plain stack under the input — a hit is a button, not a link, because it
+   changes this page's state (`focus=`) instead of navigating away. */
+.graph-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.graph-search-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.graph-search-input {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.7rem;
+  width: 12rem;
+}
+
+.graph-search-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.graph-search-hit {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.6rem;
+  width: auto;
+}
+
+.graph-search-hit:hover,
+.graph-search-hit:focus-visible {
+  border-color: var(--accent);
+}
+
+/* Downstream impact (D10): the panel's one forward-looking line, and the
+   note beside it that says what the number is NOT — a withheld M, a relation
+   Lens could not classify, a position on the longest chain. */
+.panel-impact {
+  margin: 0.4rem 0 0;
+}
+
+.panel-impact-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.2rem 0 0;
+}
+
 /* Raised by a task event touching a node on this page, and only ever by the
    operator's click after that: the graph never re-layouts itself (D8). */
 .graph-refresh-pill {

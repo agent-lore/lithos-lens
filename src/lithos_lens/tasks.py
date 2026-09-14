@@ -157,6 +157,12 @@ PANEL_SELECTION_KEY = "selected"
 GRAPH_SELECTION_KEY = "focus"
 PANEL_FRAGMENT_KEY = "fragment"
 PANEL_FRAGMENT_VALUE = "panel"
+#: The scope a panel fragment counts its downstream impact over (D10, T2-A7),
+#: spelled ``<kind>:<key>`` — ``project:<slug>`` or ``epic:<id>``. A panel
+#: without one renders no impact line at all: N is a count within ONE fetched
+#: graph and M comes from that graph's coverage-set blocked reads, so neither
+#: figure exists outside a scope.
+PANEL_SCOPE_KEY = "scope"
 
 
 def task_detail_path(task_id: str) -> str:

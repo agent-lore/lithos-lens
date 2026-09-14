@@ -137,13 +137,59 @@
 
     {#
       Downstream impact (§5.5.1, D10) — "frees N in this graph, M immediately".
-      T2-A7 fills this slot: N is counted over a SCOPE's active projection and M
-      comes from that scope's coverage-set blocked reads, so neither figure
-      exists until the panel is handed a `scope=`. Deliberately empty rather
-      than absent, so the slot has one place to land and the dashboard (which
-      passes no scope) renders no number it cannot support.
+      N is counted over a SCOPE's active projection and M comes from that
+      scope's coverage-set blocked reads, so neither figure exists until the
+      panel is handed a `scope=` (the graph page passes its own; the dashboard
+      passes none and renders nothing here). Every branch below is a field on
+      `impact`, because each is a claim with a rule behind it: `≥` is "something
+      downstream is unreadable", a WITHHELD M is "Lithos's sole-blocker fact was
+      not covered for every dependent" — never a zero, which would read as
+      "nothing is freed immediately" — and a resolved task carries no
+      future-tense line at all.
     #}
-    <div data-panel-impact-slot></div>
+    <div data-panel-impact-slot>
+      {% if impact %}
+        {% if impact.open %}
+          <p
+            class="panel-impact"
+            data-panel-impact
+            data-impact-state="open"
+            data-impact-frees="{{ impact.frees }}"
+            data-impact-bound="{{ "exact" if impact.exact else "lower_bound" }}"
+            {% if impact.withheld %}data-impact-withheld="true"{% else %}data-impact-immediate="{{ impact.immediately }}"{% endif %}
+          >{% if impact.withheld %}Completing this frees {% if not impact.exact %}≥ {% endif %}{{ impact.frees }} in this graph; how many immediately is withheld — the blocked read covered {{ impact.covered }} of {{ impact.frees }} dependents.{% else %}Completing this frees {% if not impact.exact %}≥ {% endif %}{{ impact.frees }} in this graph, {{ impact.immediately }} immediately.{% endif %}</p>
+          {% if impact.unclassified %}
+            {# Named, never counted (D10): Lens cannot classify the relation, so
+               folding these into N either way would be a guess. #}
+            <p class="panel-impact-note" data-panel-impact-unclassified>
+              Not counted, relation unreadable: {{ impact.unclassified | join(", ") }}.
+            </p>
+          {% endif %}
+        {% elif impact.state == "completed" %}
+          <p class="panel-impact" data-panel-impact data-impact-state="completed">This task is completed; no pending impact.</p>
+        {% elif impact.state == "cancelled" %}
+          <p class="panel-impact" data-panel-impact data-impact-state="cancelled">This task is cancelled — its dependents are unsatisfiable.</p>
+        {% else %}
+          <p class="panel-impact" data-panel-impact data-impact-state="unknown">This task's status could not be read, so its impact is unknown.</p>
+        {% endif %}
+        {% if not impact.relations_exact %}
+          {# D8: the lit set on the canvas is a LOWER BOUND when an unreadable
+             edge list or an `unknown` edge sits in this task's neighbourhood —
+             said here, or a dimmed node reads as "unrelated" when Lens only
+             failed to look. #}
+          <p class="panel-impact-note" data-panel-focus-bound>
+            Some edges around this task could not be read, so what the canvas
+            lights is a lower bound of what surrounds it.
+          </p>
+        {% endif %}
+        {% if impact.on_chain %}
+          {# The position is on the SCOPE's longest chain (D7), not on the one
+             focus mode traces — a task is trivially on the chain through
+             itself, and saying so would state nothing. #}
+          <p class="panel-impact-note" data-panel-chain-position>On the longest chain ({{ impact.chain_position }} of {{ impact.chain_length }}).</p>
+        {% endif %}
+      {% endif %}
+    </div>
 
     <section data-panel-claims>
       <h3>Active claims</h3>

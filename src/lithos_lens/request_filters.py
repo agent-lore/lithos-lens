@@ -43,6 +43,7 @@ from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     PANEL_FRAGMENT_KEY,
     PANEL_FRAGMENT_VALUE,
+    PANEL_SCOPE_KEY,
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
@@ -276,7 +277,13 @@ def task_detail_url(request: Request, task_id: str) -> str:
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 
-def panel_fragment_url(request: Request, task_id: str) -> str:
+def panel_fragment_url(
+    request: Request,
+    task_id: str,
+    *,
+    scope: str = "",
+    include_resolved: bool | None = None,
+) -> str:
     """Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
 
     Emitted onto every row as ``data-panel-url`` so the click handler in
@@ -288,9 +295,23 @@ def panel_fragment_url(request: Request, task_id: str) -> str:
     generated tasks URL uses, so the panel's own Expand and Close links come
     back carrying the scope the operator is browsing under rather than dropping
     it the moment the panel opens.
+
+    ``scope`` is the graph page's own — ``project:<slug>`` / ``epic:<id>`` —
+    and it is what turns on the downstream impact line (D10, T2-A7). It is
+    passed rather than derived from the request because the board's ``project``
+    filter is a different thing from a graph scope, and reading one as the
+    other would make the dashboard's panel claim a count over a graph nobody
+    assembled.
     """
     params = _preserved_filter_params(request)
     params.append((PANEL_FRAGMENT_KEY, PANEL_FRAGMENT_VALUE))
+    if scope:
+        params.append((PANEL_SCOPE_KEY, scope))
+        if include_resolved is not None:
+            # The scope's membership travels WITH the scope: the panel has to
+            # assemble the same graph its page did, or a click and a deep link
+            # to the same task answer differently.
+            params.append(("include_resolved", "1" if include_resolved else "0"))
     path = task_detail_path(task_id)
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 

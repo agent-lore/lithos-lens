@@ -187,6 +187,25 @@
           href="{{ graph_url(params, toggle_overlay=overlay) }}"
         >{{ "Hide" if overlay in params.overlays else "Show" }} {{ label }}</a>
       {% endfor %}
+      {#
+        Search (D8): jump to a task by title substring or id prefix, within the
+        payload this page already carries — no fetch, and no server round trip.
+        Revealed by `graph.js` for the same reason the text toggle is: with no
+        scripting there is nothing to jump TO, and the browser's own find is
+        what searches the text baseline.
+      #}
+      <div class="graph-search" data-graph-search-control hidden>
+        <label class="graph-search-label" for="graph-search">Find a task</label>
+        <input
+          class="graph-search-input"
+          id="graph-search"
+          type="search"
+          autocomplete="off"
+          placeholder="title or id"
+          data-graph-search
+        >
+        <ul class="graph-search-results" data-graph-search-results></ul>
+      </div>
       {# Revealed by `graph.js` only: with no canvas there is nothing for the
          text to be shown INSTEAD of, and the button would toggle the whole
          page away. #}
@@ -321,7 +340,7 @@
       <div
         class="graph-panel-host task-panel-host"
         data-panel-host
-        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}
+        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id, scope=graph_scope_param(params), include_resolved=params.include_resolved) }}"{% endif %}
       >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
       {# Raised by `graph.js` only while the picture is larger than the canvas
          can hold at a readable size. The alternative — scaling the whole graph
@@ -333,14 +352,20 @@
       </p>
     </section>
 
-    <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">
+    {# In focus mode this is the chain THROUGH the focused task, which replaces
+       the scope's longest (D7/D8) — and says so, because a chain through a
+       mid-graph task is routinely shorter and an unlabelled number here would
+       understate the graph's own longest. #}
+    <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}"{% if view.chain.through %} data-chain-through="{{ view.chain.through.id }}"{% endif %}>
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
         <p>
-          Longest blocking chain
+          Longest blocking chain{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}
           ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
           <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
         </p>
+      {% elif view.chain.through %}
+        <p data-chain-empty>Nothing blocks {{ view.chain.through.label }}, and it blocks nothing active.</p>
       {% else %}
         <p data-chain-empty>No active blocking chain in this graph.</p>
       {% endif %}
@@ -421,6 +446,13 @@
         selectionParam: {{ graph_selection_key | tojson }},
         panelAliasPath: {{ task_detail_alias_path | tojson }},
         panelAliasKey: {{ task_detail_alias_key | tojson }},
+        {# The scope every panel this page opens counts its impact over (D10).
+           Handed to `tasks.js` because it is what the browser-built fetch URL
+           would otherwise lack: a node has no row to read a server-built URL
+           off, and a panel fetched without the scope renders no impact at
+           all. #}
+        panelScope: {{ graph_scope_param(params) | tojson }},
+        panelScopeResolved: {{ params.include_resolved | tojson }},
         liveRefresh: false,
         eventsUrl: "/tasks/events"
       };

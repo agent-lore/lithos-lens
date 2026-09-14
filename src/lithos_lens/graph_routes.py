@@ -32,6 +32,7 @@ from lithos_lens.graph_page import (
     observed_projects,
     open_epics,
     parse_graph_params,
+    scope_param,
 )
 from lithos_lens.graph_scope import GraphScopeLimits
 from lithos_lens.state import AppState
@@ -63,6 +64,10 @@ def register_graph_routes(
     # panel implementation is told which key this host uses rather than
     # carrying a copy of both pages' vocabularies (D9).
     templates.env.globals["graph_selection_key"] = GRAPH_SELECTION_KEY
+    # The scope a panel opened from this page counts its impact over (D10):
+    # the page hands it to both halves — the URL the server writes onto the
+    # panel host, and the one `tasks.js` builds for a node click.
+    templates.env.globals["graph_scope_param"] = scope_param
 
     @app.get("/tasks/graph", response_class=HTMLResponse)
     async def tasks_graph(request: Request) -> Response:
@@ -107,6 +112,11 @@ def register_graph_routes(
             "panel": None,
             "selected_id": params.focus,
             "panel_close_url": graph_url(params, focus=""),
+            # D10's line, computed by the render that already holds this
+            # scope and its cycle signal — so the no-JS baseline states the
+            # impact without a second assembly (``graph_impact.load_impact``
+            # is for the panel fetched on its own).
+            "impact": None,
         }
         with get_tracer().start_as_current_span(GRAPH_SPAN) as span:
             if snapshot.lithos != "ok":
@@ -162,6 +172,7 @@ def register_graph_routes(
             context["view"] = view
             if not view.refused and view.nodes:
                 context["panel"] = await _focused_panel(state, params)
+                context["impact"] = view.impact
             _record(
                 span,
                 params,

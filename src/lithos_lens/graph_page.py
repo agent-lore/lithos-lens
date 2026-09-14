@@ -45,6 +45,7 @@ from lithos_lens.graph_cycles import (
     load_cycle_signal,
 )
 from lithos_lens.graph_fanout import GraphScopeClient
+from lithos_lens.graph_impact import downstream_impact
 from lithos_lens.graph_layout import (
     BlockingChain,
     Topology,
@@ -77,6 +78,7 @@ from lithos_lens.graph_view import (
     LayerGroup,
     LayerView,
     NodeView,
+    parse_flag,
     payload_json,
 )
 from lithos_lens.task_filtering import task_projects
@@ -208,7 +210,18 @@ def build_graph_page(
             if node.completeness == COMPLETENESS_STATUS_UNKNOWN
         ],
     )
+    # The scope's own chain, always: it is what the panel's "on the longest
+    # chain (k of n)" is a position ON, and in focus mode the line below
+    # renders a DIFFERENT chain (D7) — the one through the focused task.
     chain = longest_blocking_chain(topology)
+    focus = params.focus if scope.node(params.focus) is not None else ""
+    shown = chain
+    impact = None
+    if focus:
+        shown = longest_blocking_chain(topology, through=focus)
+        impact = downstream_impact(
+            scope, signal, focus=focus, chain=chain, tag_key=tag_key
+        )
     folded = _folded_isolates(scope, topology)
     views = _node_views(
         scope, topology, signal, params=params, tag_key=tag_key, folded=folded
@@ -225,7 +238,8 @@ def build_graph_page(
         cycles=cycles,
         external_cycles=external,
         unshaped_cycles=unshaped,
-        chain=_chain_view(chain, views, scope),
+        chain=_chain_view(shown, views, scope, through=views.get(focus)),
+        impact=impact,
         banners=_banners(scope, signal),
         edge_types=_edge_types(scope),
         as_of=scope.as_of,
@@ -238,7 +252,7 @@ def build_graph_page(
         reads_failed=sum(1 for read in signal.reads if read.error),
         reads_unmade=sum(1 for read in signal.reads if read.unmade),
         payload_json=payload_json(
-            scope, topology, chain, views, layers, params, folded
+            scope, topology, shown, views, layers, params, folded
         ),
         edge_count=len(scope.edges),
     )
@@ -481,9 +495,19 @@ def _chain_view(
     chain: BlockingChain,
     views: Mapping[str, NodeView],
     scope: TaskGraphScope,
+    *,
+    through: NodeView | None = None,
 ) -> ChainView:
-    """The chain line's nodes and the two counts that explain a lower bound."""
+    """The chain line's nodes and the two counts that explain a lower bound.
+
+    ``through`` is the focused task when this render is in focus mode, and the
+    chain handed in is then the one THROUGH it (D7/D8) rather than the scope's
+    longest. The line names it, because a chain through a mid-graph task is
+    routinely shorter than the graph's longest and an unlabelled number there
+    would understate it.
+    """
     return ChainView(
+        through=through,
         nodes=tuple(views[node] for node in chain.nodes if node in views),
         exact=chain.bound == "exact",
         unreadable_nodes=len(scope.incomplete),
@@ -610,7 +634,7 @@ def parse_graph_params(query: Mapping[str, str]) -> GraphPageParams:
     # Opposite defaults, both by scope kind: a project graph is about what can
     # still run; an epic graph is about an initiative's progress, which its
     # finished children are half of.
-    include_resolved = _flag(query.get("include_resolved"), kind == SCOPE_EPIC)
+    include_resolved = parse_flag(query.get("include_resolved"), kind == SCOPE_EPIC)
     return GraphPageParams(
         kind=kind,
         key=key,
@@ -623,34 +647,8 @@ def parse_graph_params(query: Mapping[str, str]) -> GraphPageParams:
             for overlay in KNOWN_OVERLAYS
             if overlay in _split(query.get("overlays"))
         ),
-        show_isolated=_flag(query.get("isolated"), kind == SCOPE_EPIC),
+        show_isolated=parse_flag(query.get("isolated"), kind == SCOPE_EPIC),
     )
-
-
-def _flag(raw: str | None, default: bool) -> bool:
-    """Parse a documented ``1|0`` toggle, keeping the DEFAULT when it is neither.
-
-    The two toggles default by scope kind and in opposite directions (D6/D8),
-    so "anything I do not recognise is false" is the one reading that must not
-    be used: ``include_resolved=2`` on an epic would silently hide its closed
-    children, and ``isolated=garbage`` would silently collapse a disclosure
-    that is open by default. A malformed value is not a request for the
-    opposite behaviour — it carries no request at all — so the scope's own
-    default stands.
-    """
-    value = (raw or "").strip().lower()
-    if value in _TRUE_FLAGS:
-        return True
-    if value in _FALSE_FLAGS:
-        return False
-    return default
-
-
-#: The spellings a `1|0` toggle accepts. Both sets are explicit so a value in
-#: neither can be told apart from a valid false — which is what lets the
-#: default survive a malformed URL.
-_TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
-_FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
 
 
 def _split(raw: str | None) -> tuple[str, ...]:
@@ -707,6 +705,17 @@ def graph_url(
     if overlays:
         query.append(("overlays", ",".join(overlays)))
     return "/tasks/graph?" + urlencode(query)
+
+
+def scope_param(params: GraphPageParams) -> str:
+    """This page's scope as the panel's ``scope=`` spells it (D10, T2-A7).
+
+    ``project:<slug>`` / ``epic:<id>``, empty when the page has no scope. The
+    panel needs it to count a downstream impact at all — N is a count within
+    ONE fetched graph — and it is built here, beside ``graph_url``, so the
+    page's URL vocabulary has one home.
+    """
+    return f"{params.kind}:{params.key}" if params.scoped else ""
 
 
 def observed_projects(

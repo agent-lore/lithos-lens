@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload).
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states.
 
 **Tier:** Foundation
 
@@ -20,12 +20,13 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier_join` | S | 0 | 3 |
 | `lithos_lens.gates` | L | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
-| `lithos_lens.graph_cycles` | M | 3 | 2 |
+| `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
+| `lithos_lens.graph_impact` | M | 2 | 3 |
 | `lithos_lens.graph_layout` | L | 6 | 4 |
-| `lithos_lens.graph_page` | L | 1 | 6 |
+| `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
-| `lithos_lens.graph_view` | M | 10 | 1 |
+| `lithos_lens.graph_view` | M | 11 | 2 |
 | `lithos_lens.pr_reconciliation` | M | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -92,12 +93,21 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `CycleSignalClient` — The one client method this module needs.
 - def `coverage_projects` — Every project the page must read, sorted (D4).
 - def `load_cycle_signal` — Run one ``lithos_task_blocked`` read PLAN per project in the coverage set.
+- def `read_covers` — Whether ``read`` would have returned ``task`` had it been blocked (D4).
+- def `blocked_coverage` — Whether some complete read could have returned ``task``.
 
 ### `lithos_lens.graph_fanout`
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
 - def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
 - def `partition_far_endpoints` — Split ghost candidates into "already known" and "needs a read".
 - def `resolve_far_endpoints` — Read every pending candidate, filling ``resolved`` and returning failures.
+
+### `lithos_lens.graph_impact`
+- class `ImpactScope` — The scope a panel fragment was asked to count its impact over.
+- class `ImpactClient` — The scope reads plus the blocked reads — the same surface a page needs.
+- def `parse_impact_scope` — Parse ``project:<slug>`` / ``epic:<id>``; anything else is no scope.
+- def `downstream_impact` — D10's two figures for ``focus`` over an assembled scope, pure.
+- def `load_impact` — Assemble ``scope`` and answer D10 for ``focus`` — the fragment route's path.
 
 ### `lithos_lens.graph_layout`
 - class `DependencyEdge` — One fetched ``blocks``/``waits_on_gate`` edge, classified per D6.
@@ -117,6 +127,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `build_graph_page` — Pure fold of scope + cycle verdict into everything the page renders.
 - def `parse_graph_params` — Parse `/tasks/graph`'s URL state, defaults resolved by scope kind.
 - def `graph_url` — Build a `/tasks/graph` URL — a fresh scope, or this one with one toggle.
+- def `scope_param` — This page's scope as the panel's ``scope=`` spells it (D10, T2-A7).
 - def `observed_projects` — Every project slug the snapshot observes, under BOTH conventions (§5B.1).
 - def `open_epics` — The picker's right column: open epics, newest first.
 
@@ -136,6 +147,8 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.graph_view`
 - class `GraphPageParams` — One graph page's URL state (D8), parsed once.
+- def `parse_flag` — Parse a documented ``1|0`` toggle, keeping the DEFAULT when it is neither.
+- class `DownstreamImpact` — What completing the focused task would free, and how sure Lens is (D10).
 - class `NodeView` — One rendered node, with every marker the text layer states.
 - class `EdgeView` — One dependency edge as the text renders it, under its dependent.
 - class `LayerGroup` — One condensation inside a layer: a lone task, or a cycle's members.

@@ -1233,6 +1233,7 @@ const vm = require("vm");
 const [
   tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
   reducedMotionRaw, servedPanelRaw, panelFetchRaw, readyStateRaw, lifecycleRaw,
+  panelScopeRaw,
 ] = process.argv.slice(1);
 // Which document lifecycle events the browser fires once both files have run.
 // The page's own is `DOMContentLoaded` then `load`; a script that arrived after
@@ -1258,6 +1259,7 @@ const heldBodies = [];
 const entries = [initialHref];
 let cursor = 0;
 const pushed = [];
+const replaced = [];
 const fetches = [];
 const listeners = {};
 const sse = {};
@@ -1292,6 +1294,18 @@ if (servedPanelRaw) {
   host.innerHTML = "panel:server:" + servedPanelRaw;
 }
 const payloadScript = element({ textContent: payloadRaw });
+// The search control (T2-A7). The input is a real one — the page reads its
+// `value` — and the results list records what was appended to it, which is how
+// a test can click a hit without a DOM.
+const searchControl = element({ hidden: true });
+const searchInput = element({ value: "", listeners: {},
+  addEventListener(type, fn) {
+    (this.listeners[type] = this.listeners[type] || []).push(fn);
+  },
+});
+const searchResults = element({ children: [],
+  replaceChildren() { this.children = Array.prototype.slice.call(arguments); },
+});
 const pill = element({ hidden: true });
 const textToggle = element({ hidden: true });
 const disclosure = element({ open: false });
@@ -1312,6 +1326,9 @@ const SINGLE = {
   "[data-graph-refresh-pill]": pill,
   "[data-toggle-text]": textToggle,
   "[data-isolated-disclosure]": disclosure,
+  "[data-graph-search-control]": searchControl,
+  "[data-graph-search]": searchInput,
+  "[data-graph-search-results]": searchResults,
 };
 const MANY = {
   "[data-toggle-overlay]": [overlayToggles.hierarchy, overlayToggles.provenance],
@@ -1331,8 +1348,15 @@ const document = {
   querySelectorAll(selector) { return MANY[selector] || []; },
   createElement() {
     // Cytoscape's headless renderer touches no DOM; `tasks.js` builds a span
-    // to escape HTML with, which is the only element anything here creates.
-    return { dataset: {}, style: {}, appendChild() {}, getContext() { return {}; } };
+    // to escape HTML with; and the search results (T2-A7) are built here, so
+    // an element has to actually HOLD what is appended to it.
+    return {
+      dataset: {},
+      style: {},
+      children: [],
+      appendChild(child) { this.children.push(child); },
+      getContext() { return {}; },
+    };
   },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
 };
@@ -1398,6 +1422,11 @@ sandbox.window = {
     selectionParam: "focus",
     panelAliasPath: "/tasks/id",
     panelAliasKey: "task_id",
+    // The scope a panel opened from this page counts its impact over (D10).
+    // Empty in most runs, because the URL a click fetches is what the other
+    // tests here are about; the one test that asks for it sets it.
+    panelScope: panelScopeRaw || "",
+    panelScopeResolved: false,
     liveRefresh: false,
     eventsUrl: "/tasks/events",
   },
@@ -1420,6 +1449,13 @@ sandbox.window = {
       entries.splice(cursor + 1);
       entries.push(new URL(url, "http://lens.test").href);
       cursor = entries.length - 1;
+    },
+    // Used for the reveal a deep link onto a folded isolate owes (D8): it
+    // REWRITES the entry the page loaded on rather than adding one, so the
+    // first Back still leaves the page.
+    replaceState(state, title, url) {
+      replaced.push(url);
+      entries[cursor] = new URL(url, "http://lens.test").href;
     },
   },
 };
@@ -1531,6 +1567,14 @@ function clickLink(selector, target) {
 
 let eventSeq = 0;
 
+function withClass(name) {
+  return graph.cy
+    .nodes()
+    .filter((node) => node.hasClass(name))
+    .map(named)
+    .sort();
+}
+
 function snapshot() {
   const drawn = graph.shown();
   return {
@@ -1552,6 +1596,13 @@ function snapshot() {
       .nodes()
       .filter((node) => node.hasClass("focused"))
       .map(named),
+    // Focus mode's three classes (D8), per NODE — the whole claim the lit
+    // picture makes, and the only one a canvas can be asked for.
+    lit: withClass("focus-lit"),
+    dimmed: withClass("focus-dimmed"),
+    unknownRelation: withClass("focus-unknown"),
+    // What the search box is currently offering, in order.
+    search: searchResults.children.map((item) => item.children[0].dataset.searchHit),
     disclosureOpen: disclosure.open,
     hrefs: {
       resolved: resolvedToggle.getAttribute("href"),
@@ -1620,6 +1671,23 @@ function ranks() {
       clickLink("[data-toggle-isolated]", isolatedToggle);
     } else if (name === "text") {
       clickLink("[data-toggle-text]", textToggle);
+    } else if (name === "search") {
+      // Typing: the page reads the input's own value on the `input` event,
+      // exactly as a browser delivers it.
+      searchInput.value = argument || "";
+      (searchInput.listeners.input || []).forEach((fn) => fn({}));
+    } else if (name === "enter") {
+      const event = { key: "Enter", defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; } };
+      (searchInput.listeners.keydown || []).forEach((fn) => fn(event));
+    } else if (name === "hit") {
+      // Clicking one of the rendered matches, through the same delegated
+      // click handler every other control on this page goes through.
+      const button = searchResults.children
+        .map((item) => item.children[0])
+        .filter((child) => child.dataset.searchHit === argument)[0];
+      if (!button) throw new Error("no search hit for " + argument);
+      fire("click", clickOn({ "[data-search-hit]": button }));
     } else if (name === "back") {
       if (cursor > 0) cursor -= 1;
       fire("popstate", {});
@@ -1690,6 +1758,7 @@ function ranks() {
     states,
     final: snapshot(),
     pushed,
+    replaced,
     fetches,
     navigations,
     // The roots the library was handed, named the way the payload names them.
@@ -2097,6 +2166,88 @@ AMBIGUOUS_STEP_PAYLOAD: dict = _payload(
     roots=["a>b", "a"],
 )
 
+# T2-A7's own fixture: a depth-5 chain to focus the middle of, an unrelated
+# pair beside it, a completed predecessor whose edge is INACTIVE (so the walk
+# must not cross it), a node reached over an active edge whose OWN edges could
+# not be read, a ghost whose status could not be read (and the `unknown` edge
+# that follows from it), and an isolated task the project scope folds away.
+# Every clause of D8's focus rule has something here to be wrong about.
+FOCUS_PAYLOAD: dict = _payload(
+    [
+        _node("a"),
+        _node("b", layer=1),
+        _node("c", layer=2),
+        _node("d", layer=3),
+        _node("e", layer=4),
+        _node("done", status="completed"),
+        _node("off-a"),
+        _node("off-b", layer=1),
+        _node("murky", layer=3, completeness="edges_unknown"),
+        _node(
+            "unread",
+            layer=3,
+            ghost="dependency",
+            status="unknown",
+            completeness="status_unknown",
+            projects=("lens",),
+        ),
+        _node("hidden", isolated=True),
+    ],
+    [
+        _edge("a", "b"),
+        _edge("b", "c"),
+        _edge("c", "d"),
+        _edge("d", "e"),
+        _edge("done", "b", state="inactive", reason="satisfied"),
+        _edge("off-a", "off-b"),
+        _edge("c", "murky"),
+        _edge("c", "unread", state="unknown"),
+    ],
+    longest_chain={
+        "nodes": ["a", "b", "c", "d", "e"],
+        "length": 5,
+        "bound": "exact",
+    },
+    roots=["a", "done", "off-a", "hidden"],
+)
+
+# A cycle ON the active projection, with work on both sides of it: `before`
+# blocks the ring, the ring blocks `after`. Focusing a ring member has to reach
+# THROUGH the loop in both directions — the walk down marks the other member,
+# and a walk up that refused to expand it would leave `before` dimmed while it
+# genuinely blocks the focus.
+FOCUS_CYCLE_PAYLOAD: dict = _payload(
+    [
+        _node("before"),
+        _node("ring-a", layer=1, cycle="ring-a", flagged=True),
+        _node("ring-b", layer=1, cycle="ring-a", flagged=True),
+        _node("after", layer=2),
+    ],
+    [
+        _edge("before", "ring-a"),
+        _edge("ring-a", "ring-b"),
+        _edge("ring-b", "ring-a"),
+        _edge("ring-b", "after"),
+    ],
+    cycles=[
+        {
+            "id": "ring-a",
+            "members": ["ring-a", "ring-b"],
+            "path": ["ring-a", "ring-b", "ring-a"],
+            "scc": True,
+            "flagged": True,
+            "message": "Dependency cycle.",
+        }
+    ],
+    longest_chain={
+        "nodes": ["before", "ring-a", "after"],
+        "length": 3,
+        "bound": "exact",
+        "members": [["before"], ["ring-a", "ring-b"], ["after"]],
+    },
+    roots=["before"],
+)
+
 #: This harness's own address. Deliberately not the panel harness's
 #: ``GRAPH_HREF`` above: that one carries overlays and an isolated toggle
 #: already applied, and the canvas tests below start from the page's defaults.
@@ -2114,6 +2265,7 @@ def _graph_run(
     panel_fetch: str = "ok",
     ready_state: str = "interactive",
     lifecycle: str = "DOMContentLoaded",
+    panel_scope: str = "",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
@@ -2131,7 +2283,8 @@ def _graph_run(
     DEFERRED script sees, and the harness fires `DOMContentLoaded` itself once
     both files have loaded; ``lifecycle`` is which events it fires there (the
     page's own sequence is ``DOMContentLoaded,load``, and a file that arrived
-    after the first of those sees only ``load``).
+    after the first of those sees only ``load``); ``panel_scope`` is the graph
+    scope the page hands ``tasks.js`` for the panel's impact line (D10).
     """
     assert NODE is not None
     result = subprocess.run(
@@ -2151,6 +2304,7 @@ def _graph_run(
             panel_fetch,
             ready_state,
             lifecycle,
+            panel_scope,
         ],
         capture_output=True,
         text=True,
@@ -2647,6 +2801,203 @@ def test_a_focus_the_server_did_not_answer_is_opened_without_a_second_entry() ->
     assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
     assert result["pushed"] == []
     assert result["final"]["focused"] == ["ship"]
+
+
+# ── Exploration mode (T2-A7): focus, search, and the transitions ────────
+
+
+def _focus_run(actions: list[str], **kwargs: object) -> dict:
+    """One run over `FOCUS_PAYLOAD`, which is what every test below reads."""
+    return _graph_run(actions, payload=FOCUS_PAYLOAD, **kwargs)  # type: ignore[arg-type]
+
+
+def test_focusing_a_node_lights_exactly_its_active_relations() -> None:
+    """D8's whole claim, on the depth-5 fixture's layer-2 node: its ancestors
+    and descendants over the ACTIVE projection are lit, and everything else is
+    dimmed. The completed predecessor is the case that makes it a claim rather
+    than "everything connected" — its edge is inactive, so `done` is not an
+    ancestor of `c` however many hops the drawn graph offers."""
+    result = _focus_run([], href=GRAPH_CANVAS_HREF + "&focus=c", served_panel="c")
+    final = result["final"]
+
+    assert final["lit"] == ["a", "b", "c", "d", "e"]
+    assert final["dimmed"] == ["done", "hidden", "off-a", "off-b"]
+    assert final["focused"] == ["c"]
+    # The panel the server rendered is the one on screen; focus mode costs no
+    # fetch of its own — the payload already carries every edge it walks.
+    assert result["fetches"] == []
+
+
+def test_a_node_reached_only_through_an_unknown_edge_is_neither_lit_nor_dimmed() -> (
+    None
+):
+    """An endpoint Lens could not read makes a relation UNKNOWABLE, not longer
+    (D6): `unread` is reached from the focus over an `unknown` edge and
+    `murky`'s own edge list failed, so neither may be called a descendant and
+    neither may be dimmed away as unrelated."""
+    final = _focus_run([], href=GRAPH_CANVAS_HREF + "&focus=c", served_panel="c")[
+        "final"
+    ]
+
+    assert final["unknownRelation"] == ["murky", "unread"]
+    assert "unread" not in final["lit"] and "unread" not in final["dimmed"]
+    assert "murky" not in final["lit"] and "murky" not in final["dimmed"]
+
+
+def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
+    """The ordinary state of the page: nothing is lit because nothing is
+    focused, and a class left behind from a cleared focus would dim two thirds
+    of a graph nobody is exploring."""
+    final = _focus_run([])["final"]
+
+    assert final["lit"] == []
+    assert final["dimmed"] == []
+    assert final["unknownRelation"] == []
+
+
+def test_the_lit_set_reaches_through_a_cycle_in_both_directions() -> None:
+    """The two walks are separate: a descendant marked going DOWN must not stop
+    the walk UP from expanding it, or a task that genuinely blocks the focus
+    renders dimmed the moment a cycle sits between them."""
+    final = _graph_run(
+        [],
+        href=GRAPH_CANVAS_HREF + "&focus=ring-b",
+        payload=FOCUS_CYCLE_PAYLOAD,
+        served_panel="ring-b",
+    )["final"]
+
+    assert final["lit"] == ["after", "before", "ring-a", "ring-b"]
+    assert final["dimmed"] == []
+
+
+def test_typing_a_title_and_selecting_a_match_sets_the_focus() -> None:
+    """D8's search: title substring or id prefix over the payload's own nodes,
+    and a hit is an ordinary focus transition — `focus=` by `pushState`, with
+    the panel opened through the same implementation a click uses."""
+    result = _focus_run(["search:off", "hit:off-b"])
+    offered, chosen = result["states"]
+
+    assert offered["search"] == ["off-a", "off-b"]
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=off-b"]
+    assert chosen["focused"] == ["off-b"]
+    assert chosen["lit"] == ["off-a", "off-b"]
+    # The results clear with the selection, so the list never survives the
+    # transition it caused.
+    assert chosen["search"] == []
+    assert result["navigations"] == [], "the search box navigated the page"
+
+
+def test_enter_takes_the_first_match_and_never_submits_the_page() -> None:
+    """A search box on a page of links: Enter means "the first match", and a
+    handler that let the keypress through would reload the graph."""
+    result = _focus_run(["search:off", "enter"])
+
+    assert result["pushed"] == ["/tasks/graph?project=loom&focus=off-a"]
+    assert result["navigations"] == []
+
+
+def test_a_search_matches_a_title_anywhere_and_an_id_from_its_start() -> None:
+    """The asymmetry is deliberate: a title is remembered in fragments, an id
+    is pasted from its beginning."""
+    result = _focus_run(["search:idden", "search:off-b", "search:zzz"])
+    by_title, by_id, no_match = result["states"]
+
+    # "Hidden" is the label of the isolate — a substring, not a prefix.
+    assert by_title["search"] == ["hidden"]
+    assert by_id["search"] == ["off-b"]
+    assert no_match["search"] == []
+
+
+def test_clicking_another_node_replaces_the_focus_and_the_panel() -> None:
+    """One selection parameter, one panel: focusing B leaves nothing of A's
+    selection behind, on the canvas or in the URL."""
+    result = _focus_run(["tap:a", "tap:e"])
+    first, second = result["states"]
+
+    assert first["focused"] == ["a"]
+    assert second["focused"] == ["e"]
+    assert result["pushed"] == [
+        "/tasks/graph?project=loom&focus=a",
+        "/tasks/graph?project=loom&focus=e",
+    ]
+    assert second["panel"] == "panel:/tasks/id?task_id=e&fragment=panel"
+    assert second["lit"] == ["a", "b", "c", "d", "e"]
+
+
+def test_closing_and_escape_both_take_the_lighting_with_the_focus() -> None:
+    """Closing clears `focus` by `pushState`, which fires no `popstate` — the
+    panel announces it instead, and the canvas drops every focus class with
+    it. A dimmed graph under a URL naming no focus is the state this is
+    for."""
+    closed = _focus_run(["tap:c", "close"])["final"]
+    escaped = _focus_run(["tap:c", "escape"])["final"]
+
+    for final in (closed, escaped):
+        assert "focus=" not in final["href"]
+        assert final["panel"] == ""
+        assert final["focused"] == []
+        assert final["lit"] == []
+        assert final["dimmed"] == []
+
+
+def test_back_after_two_focuses_restores_the_first_with_its_panel() -> None:
+    """Back and forward walk the exploration with no reload: the URL is the
+    state, and everything it names — the lit set, the panel, the ring — is
+    re-applied from the payload the page already holds."""
+    result = _focus_run(["tap:off-a", "tap:c", "back"])
+    _, second, restored = result["states"]
+
+    assert second["focused"] == ["c"]
+    assert restored["href"] == "http://lens.test/tasks/graph?project=loom&focus=off-a"
+    assert restored["focused"] == ["off-a"]
+    assert restored["lit"] == ["off-a", "off-b"]
+    assert restored["panel"] == "panel:/tasks/id?task_id=off-a&fragment=panel"
+    # A panel is a fetch; the GRAPH is not re-requested and the page is not
+    # navigated — that is what "no reload" means here.
+    assert result["navigations"] == []
+    assert result["fetches"] == [
+        "/tasks/id?task_id=off-a&fragment=panel",
+        "/tasks/id?task_id=c&fragment=panel",
+        "/tasks/id?task_id=off-a&fragment=panel",
+    ]
+
+
+def test_focusing_a_hidden_isolate_reveals_it_in_the_same_transition() -> None:
+    """D8: a search hit or a deep link must never point at an invisible node.
+    The reveal rides in the SAME history entry as the focus — two pushes would
+    make Back undo half the move."""
+    result = _focus_run(["search:hidden", "hit:hidden"])
+    final = result["final"]
+
+    assert result["pushed"] == ["/tasks/graph?project=loom&isolated=1&focus=hidden"]
+    assert "hidden" in final["nodes"], "the focused isolate stayed folded away"
+    assert final["focused"] == ["hidden"]
+    assert final["disclosureOpen"] is True
+
+
+def test_a_deep_link_onto_a_folded_isolate_reveals_it_without_a_new_entry() -> None:
+    """The same reveal, owed to a URL that arrived already focused — and
+    REPLACED rather than pushed, because this is the address the page loaded
+    on and a twin entry would make the first Back appear to do nothing."""
+    result = _focus_run(
+        [], href=GRAPH_CANVAS_HREF + "&focus=hidden", served_panel="hidden"
+    )
+
+    assert result["pushed"] == []
+    assert result["replaced"] == ["/tasks/graph?project=loom&focus=hidden&isolated=1"]
+    assert "hidden" in result["final"]["nodes"]
+    assert result["final"]["focused"] == ["hidden"]
+
+
+def test_a_panel_opened_from_the_graph_carries_the_pages_scope() -> None:
+    """D10's impact line is a count within ONE assembled graph, so the scope
+    travels on the fetch — and a node has no row to read a server-built URL
+    off, which is why the page hands `tasks.js` its scope directly."""
+    result = _focus_run(["tap:c"], panel_scope="project:loom")
+
+    assert result["fetches"] == [
+        "/tasks/id?task_id=c&fragment=panel&scope=project%3Aloom&include_resolved=0"
+    ]
 
 
 def test_a_double_click_uses_the_url_the_server_built_for_that_id() -> None:

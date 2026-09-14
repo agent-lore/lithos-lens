@@ -108,9 +108,11 @@ def test_selected_renders_the_panel_open_on_the_dashboard(
     assert "Ingest epic" in text
     findings = text.split("data-panel-findings", 1)[1].split("</p>")[0]
     assert ">0 findings</a>" in findings
-    # D10's downstream-impact line is A7's, and its slot is named and empty —
-    # the dashboard passes no scope, so there is no number to stand behind.
-    assert "data-panel-impact-slot></div>" in text
+    # D10's downstream-impact line (T2-A7) is a count within ONE assembled
+    # graph, and the dashboard assembles none: the slot is here and stands
+    # empty rather than showing a number nothing behind this page supports.
+    assert "data-panel-impact-slot" in text
+    assert "data-panel-impact" not in text.replace("data-panel-impact-slot", "")
 
 
 def test_the_panel_names_the_task_project_and_type(
