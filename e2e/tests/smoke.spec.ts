@@ -1076,3 +1076,49 @@ test("the focused panel is there with no JavaScript at all", async ({ browser })
     await context.close();
   }
 });
+
+test("the event stream waits for the deferred scripts that subscribe to it", async ({
+  page,
+}) => {
+  // Round-4 correctness f-008, in the browser it was found in. The graph page
+  // loads `tasks.js`, then a ~400KB Cytoscape bundle, then `graph.js` — and
+  // `graph.js` is what subscribes for the "graph changed" pill. A stream opened
+  // at the end of `tasks.js` consumes (and deduplicates) a matching event while
+  // the library is still in flight, with nothing to replay it to.
+  //
+  // So the claim under test is a SEQUENCE: `/tasks/events` must not be
+  // requested until every deferred script has run.
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let bundleServed = false;
+  let eventsRequestedEarly = false;
+  let eventsRequested = false;
+
+  await page.route("**/vendor/cytoscape.min.js", async (route) => {
+    await held;
+    bundleServed = true;
+    await route.continue();
+  });
+  page.on("request", (request) => {
+    if (!request.url().includes("/tasks/events")) return;
+    eventsRequested = true;
+    if (!bundleServed) eventsRequestedEarly = true;
+  });
+
+  const navigation = page.goto("/tasks/graph?project=lithos-loom");
+  // `tasks.js` publishes this at the very END of its own execution, after the
+  // point where it used to open the stream — so once it exists, an early
+  // connection would already have been issued.
+  await page.waitForFunction(() => (window as any).LithosLens !== undefined);
+  expect(eventsRequestedEarly).toBe(false);
+
+  release();
+  await navigation;
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  // And it does connect, once there is something on the page to hear it.
+  await expect.poll(() => eventsRequested, { timeout: 5000 }).toBe(true);
+});

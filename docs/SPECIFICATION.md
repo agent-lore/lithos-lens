@@ -927,6 +927,15 @@ at. Lens still never re-implements the readiness predicate.
   operator's cursor. Edge upserts emit no event at all, so the pill is a hint
   and `as_of` remains the page's real staleness bound.
 
+  The stream itself opens on **`DOMContentLoaded`**, not at the end of
+  `tasks.js`: deferred scripts all run before that event, and on this page the
+  subscriber is in the last of them, behind a ~400KB library. A stream opened
+  earlier would consume a matching event — and record its id in the dedup set —
+  while the library was still in flight, with nothing to replay it to and no
+  reconcile to cover for it. (`"interactive"`, not `"loading"`, is the state a
+  deferred script runs in; a file injected between `DOMContentLoaded` and `load`
+  is caught by a `load` backstop.)
+
 The side panel (§5.6.1) is counted by **`lens_tasks_panel_opens_total`**
 (`source` in `url` | `fragment`) — the SSR baseline and the click-fetched
 partial, which are the two things the request can actually distinguish. The

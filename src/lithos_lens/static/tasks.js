@@ -831,7 +831,41 @@
   document.addEventListener("click", handlePanelClick);
   document.addEventListener("keydown", handlePanelKeydown);
   window.addEventListener("popstate", handlePanelPopstate);
-  connect();
+
+  // The stream opens once every DEFERRED SCRIPT on the page has run, not at the
+  // end of this one.
+  //
+  // The graph page loads this file, then a ~400KB Cytoscape bundle, then
+  // `graph.js` — and `graph.js` is what subscribes below, for the "graph
+  // changed" pill. A stream opened here would consume a matching `task.updated`
+  // (and record its id in `seenEvents`, so a retry is deduplicated away) while
+  // the browser was still fetching the library, with nothing to replay it to
+  // when the subscriber finally arrives: the pill would never appear for an
+  // event that really did land, and this page has no reconcile to cover for it.
+  //
+  // Deferred scripts all execute before `DOMContentLoaded`, which is exactly
+  // the guarantee "after every subscriber has registered" needs — so the
+  // browser's own ordering does the work, with no replay buffer to bound.
+  //
+  // `"interactive"` is the state a DEFERRED script runs in, not `"loading"`:
+  // the parser sets it before working through the deferred list, and it stays
+  // there until the load event. So both are "not ready yet", and only
+  // `"complete"` means DOMContentLoaded is certainly past. `load` is the
+  // backstop for the one entry neither covers — a file injected between the two
+  // events, whose DOMContentLoaded will never come again.
+  let streamStarted = false;
+  function startStream() {
+    if (streamStarted) return;
+    streamStarted = true;
+    connect();
+  }
+
+  if (document.readyState === "complete") {
+    startStream();
+  } else {
+    document.addEventListener("DOMContentLoaded", startStream);
+    window.addEventListener("load", startStream);
+  }
 
   // The seam the graph page's canvas opens the panel through (D9: ONE panel
   // implementation for rows and nodes). A Cytoscape node is drawn on a canvas

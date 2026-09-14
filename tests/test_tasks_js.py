@@ -57,6 +57,7 @@ const currentReadyAt = () =>
   fetches.length && readyAtAfter !== undefined ? readyAtAfter : readyAt;
 const board = { dataset: { get gatesNextReadyAt() { return currentReadyAt(); } } };
 const document = {
+  readyState: "complete",
   querySelector(selector) {
     if (selector === "[data-gates-next-ready-at]") {
       return currentReadyAt() ? board : null;
@@ -356,6 +357,10 @@ function clickEvent(map, label) {
 }
 
 const document = {
+  // What a DEFERRED script sees (the parser sets `"interactive"` before working
+  // through the deferred list); `DOMContentLoaded` is fired below, once the
+  // file has run, exactly as the browser does it.
+  readyState: "interactive",
   querySelector(selector) {
     if (selector === "[data-panel-host]") return host;
     if (selector === '[data-refresh-fragment="panel"]') return host.panel;
@@ -486,6 +491,9 @@ vm.runInContext(fs.readFileSync(sourcePath, "utf8"), sandbox);
 function fire(type, event) {
   (listeners[type] || []).forEach((listener) => listener(event));
 }
+
+// Every deferred script has run; the event stream opens here, not earlier.
+fire("DOMContentLoaded", {});
 
 let eventSeq = 0;
 
@@ -1224,7 +1232,7 @@ const vm = require("vm");
 
 const [
   tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
-  reducedMotionRaw, servedPanelRaw, panelFetchRaw,
+  reducedMotionRaw, servedPanelRaw, panelFetchRaw, readyStateRaw,
 ] = process.argv.slice(1);
 const actions = JSON.parse(actionsRaw);
 const reducedMotion = reducedMotionRaw === "1";
@@ -1297,6 +1305,11 @@ const MANY = {
 };
 
 const document = {
+  // The page's real entry state. A DEFERRED script runs at `"interactive"` —
+  // the parser sets that before working through the deferred list — and
+  // `DOMContentLoaded` is what says they are all done. This harness reproduces
+  // that sequence below rather than pretending the document was complete.
+  readyState: readyStateRaw || "interactive",
   querySelector(selector) { return SINGLE[selector] || null; },
   querySelectorAll(selector) { return MANY[selector] || []; },
   createElement() {
@@ -1417,7 +1430,20 @@ vm.runInContext(`
 `, sandbox);
 
 vm.runInContext(fs.readFileSync(tasksPath, "utf8"), sandbox);
+
+// THE WINDOW THE FINDING IS ABOUT. On the real page a ~400KB Cytoscape bundle
+// is fetched and parsed between these two files, and `graph.js` is what
+// subscribes for the pill. Anything the stream consumed here would be
+// deduplicated away with no subscriber to hear it — so the stream must not be
+// open yet.
+const streamBeforeGraph = Object.keys(sse).length > 0;
+
 vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
+
+// …and then the browser announces that every deferred script has run.
+if (document.readyState !== "complete") {
+  (listeners["DOMContentLoaded"] || []).forEach((listener) => listener({}));
+}
 
 const graph = sandbox.window.LithosLensGraph;
 
@@ -1568,6 +1594,8 @@ function ranks() {
     pushed,
     fetches,
     // The roots the library was handed, named the way the payload names them.
+    streamBeforeGraph,
+    streamOpen: Object.keys(sse).length > 0,
     layouts: layoutCalls.map((call) => Object.assign({}, call, {
       roots: call.roots.map((id) => nameOf[id] || id).sort(),
     })),
@@ -1918,6 +1946,7 @@ def _graph_run(
     reduced_motion: bool = False,
     served_panel: str = "",
     panel_fetch: str = "ok",
+    ready_state: str = "interactive",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
@@ -1930,7 +1959,10 @@ def _graph_run(
     preference, which the claimed-node pulse has to obey; ``panel_fetch`` is how
     the server answers a panel request — ``ok``, ``fail`` (non-OK), ``reject``
     (no connection) or ``body`` (the body never finishes reading), which are the
-    three ways one can fail to arrive.
+    three ways one can fail to arrive; ``ready_state`` is the document's state
+    when the scripts run — ``interactive`` is the page's own, which is what a
+    DEFERRED script sees, and the harness fires `DOMContentLoaded` itself once
+    both files have loaded.
     """
     assert NODE is not None
     result = subprocess.run(
@@ -1948,6 +1980,7 @@ def _graph_run(
             "1" if reduced_motion else "0",
             served_panel,
             panel_fetch,
+            ready_state,
         ],
         capture_output=True,
         text=True,
@@ -2570,3 +2603,34 @@ def test_a_chain_step_is_an_ordered_pair_not_a_joined_string() -> None:
     assert "chain" not in _edge_style(result, "a", "b>c", "blocks")["classes"], (
         "an off-chain edge was traced as part of the longest blocking chain"
     )
+
+
+def test_the_event_stream_waits_for_every_deferred_script() -> None:
+    """Regression (round-4 correctness f-008). This page's scripts load in
+    order — `tasks.js`, a ~400KB Cytoscape bundle, `graph.js` — and `graph.js`
+    is the one that subscribes for the pill. A stream opened at the end of
+    `tasks.js` consumes a matching `task.updated` while the browser is still
+    fetching the library, records its id in the dedup set, and has nothing to
+    replay it to: the pill never appears for an event that really did land, and
+    this page has no reconcile to cover for it.
+
+    Deferred scripts all run before `DOMContentLoaded`, so waiting for that is
+    exactly the guarantee "after every subscriber has registered" needs.
+    """
+    result = _graph_run(["event:ship"])
+
+    assert result["streamBeforeGraph"] is False, (
+        "the stream was open before the canvas could subscribe to it"
+    )
+    assert result["streamOpen"] is True, "the stream never opened at all"
+    assert result["final"]["pillHidden"] is False
+
+
+def test_a_script_that_arrives_after_the_document_connects_at_once() -> None:
+    """The other branch, and the reason it is a branch: for a file injected
+    once the document is parsed there is no later script to wait for, and a
+    `DOMContentLoaded` that has already fired would never come again."""
+    result = _graph_run(["event:ship"], ready_state="complete")
+
+    assert result["streamBeforeGraph"] is True
+    assert result["final"]["pillHidden"] is False
