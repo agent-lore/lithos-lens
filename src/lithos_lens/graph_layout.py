@@ -150,9 +150,17 @@ class BlockingChain:
     the answer could only be longer than it says — see
     :func:`longest_blocking_chain` for the two ways that happens — and the
     caller renders ">= N" rather than "N" for it.
+
+    ``members`` is parallel to ``nodes``: what each of those condensations
+    HOLDS. It is carried because this partition is the ACTIVE projection's own
+    (:func:`_active_condensed`) and nothing else in the render states it — a
+    node's ``cycle_id`` is the all-edge condensation the PICTURE is drawn
+    from, and the two legitimately differ — so a client mapping a chain id
+    through the drawn cycle traces an answer the text does not state.
     """
 
     nodes: tuple[str, ...] = ()
+    members: tuple[tuple[str, ...], ...] = ()
     bound: ChainBound = "exact"
 
     @property
@@ -736,13 +744,36 @@ def longest_blocking_chain(topology: Topology, *, through: str = "") -> Blocking
     down = _longest_paths(list(reversed(groups)), successors, order_of)
     if not through:
         start = min(groups, key=lambda node: (-len(down[node]), order_of[node]))
-        return BlockingChain(nodes=down[start], bound=bound)
+        return _chain(down[start], topology, member_of, bound)
     focus = member_of.get(through)
     if focus is None:
         return BlockingChain(bound=bound)
     up = _longest_paths(groups, predecessors, order_of, against_the_render=True)
     chain = tuple(reversed(up[focus])) + down[focus][1:]
-    return BlockingChain(nodes=chain, bound=bound)
+    return _chain(chain, topology, member_of, bound)
+
+
+def _chain(
+    nodes: Sequence[str],
+    topology: Topology,
+    member_of: Mapping[str, str],
+    bound: ChainBound,
+) -> BlockingChain:
+    """One chain, with what each of its condensations holds beside it.
+
+    Walked over ``topology.nodes`` so the members are in the same
+    ``(created_at, id)`` order as everything else this module emits.
+    """
+    held: dict[str, list[str]] = {node: [] for node in nodes}
+    for node in topology.nodes:
+        group = held.get(member_of[node])
+        if group is not None:
+            group.append(node)
+    return BlockingChain(
+        nodes=tuple(nodes),
+        members=tuple(tuple(held[node]) for node in nodes),
+        bound=bound,
+    )
 
 
 def hierarchy_rows(

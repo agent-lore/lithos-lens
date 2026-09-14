@@ -8,6 +8,17 @@
   const selectionParam = config.selectionParam || "selected";
   const autoRefreshIntervalMs = config.autoRefreshIntervalMs || 30000;
   const seenEvents = new Set();
+  // Pages that CONSUME events without reconciling their own markup — the graph
+  // page, which raises a "graph changed" pill instead of re-rendering (D8) —
+  // subscribe here. One EventSource per tab either way: a second subscription
+  // would mean a second connection and a second copy of the dedup below.
+  const eventSubscribers = [];
+  // Pages that render the selection somewhere ELSE than the panel — the graph
+  // page's canvas, which lights the focused node — subscribe here. Every panel
+  // transition is a `pushState`, and `pushState` fires no `popstate`, so a host
+  // with its own view of the selection has no way to notice one without being
+  // told: closing the panel would clear the URL and leave the node still lit.
+  const panelSubscribers = [];
   let eventSource = null;
   let reconcileTimer = null;
   let pollTimer = null;
@@ -38,6 +49,20 @@
   // another. Cancelling the fetch would not do: the response is already on its
   // way, and it is the WRITE that has to be ordered, not the read.
   let panelGeneration = 0;
+  // The generation of an open that has STARTED and not yet settled — 0 when
+  // none has. `desiredTaskId` cannot answer that question: a page loaded with
+  // a selection seeds BOTH ids from the URL (below), so an open the client
+  // then starts for it — the fallback for a `focus=` the server could not
+  // render — runs with the two already equal, and a reader comparing them
+  // would call that request settled while it is still in flight (round-3
+  // correctness f-001).
+  //
+  // Only the NEWEST open can still write: every one before it has had the
+  // generation moved past it and returns in silence. So this is one number,
+  // and it needs clearing only where an open SETTLES — a superseded one is
+  // cleared by the same bump that superseded it, because that bump is what
+  // makes this no longer equal to `panelGeneration`.
+  let pendingOpenGeneration = 0;
   // setTimeout stores its delay in a signed 32-bit int: anything larger wraps
   // and fires (near) immediately, so a gate more than ~24.8 days out must be
   // reached by chaining sleeps rather than by one oversized timeout.
@@ -105,6 +130,13 @@
   // arrived. So the board still converges on the latest state, and a burst of
   // events costs two renders rather than N.
   async function refreshFragments() {
+    // Opt-out for a host page whose markup this must not rebuild. The graph
+    // page sets it: a reconcile there would re-fetch a whole graph assembly per
+    // event and re-lay-out the canvas under the operator's cursor, which D8
+    // forbids outright — that page shows a refresh pill and waits. Guarded HERE
+    // rather than at each caller so the poll fallback, the debounced reconcile
+    // and the gate timer are all covered by the one rule.
+    if (config.liveRefresh === false) return;
     if (refreshInFlight) {
       refreshQueued = true;
       return;
@@ -199,6 +231,9 @@
     }
     const message = JSON.parse(event.data);
     const type = message.type || event.type;
+    // Before the board handlers, so a subscriber sees every event this tab
+    // consumed whatever this page does with it afterwards.
+    eventSubscribers.forEach(function (subscriber) { subscriber(message, type); });
     if (type === "task.created") insertSkeletonRow(message);
     if (type === "task.claimed") updateClaim(message, true);
     if (type === "task.released") updateClaim(message, false);
@@ -225,6 +260,12 @@
 
   function panelHost() {
     return document.querySelector("[data-panel-host]");
+  }
+
+  // Announced AFTER the URL has moved, so a subscriber reading the address bar
+  // sees the transition that has just completed rather than the one before it.
+  function announceSelection() {
+    panelSubscribers.forEach(function (subscriber) { subscriber(selectedTaskId); });
   }
 
   // The panel contract a row opts into, and the ONE selector both halves of
@@ -316,6 +357,7 @@
     panelGeneration += 1;
     desiredTaskId = taskId;
     const generation = panelGeneration;
+    pendingOpenGeneration = generation;
     // `null` means "no panel to show", whatever went wrong — a transport
     // failure, a non-OK answer, or a body that never finished reading. The
     // three are one outcome here and share one recovery below; an EMPTY body
@@ -343,6 +385,9 @@
     // point of its own, and the gap between "headers arrived" and "body read"
     // is long enough for another click to land in it.
     if (generation !== panelGeneration) return;
+    // Settled from here on, one way or the other: nothing this request does
+    // afterwards is still pending.
+    pendingOpenGeneration = 0;
     if (markup === null) {
       panelFetchFailed(push);
       return;
@@ -364,6 +409,7 @@
     if (push && selectionIn(window.location.href) !== taskId) {
       window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
     }
+    announceSelection();
   }
 
   function panelFetchFailed(push) {
@@ -376,6 +422,11 @@
       // next Forward onto that very selection would match the intent, return
       // early, and leave the previous task's panel sitting under it.
       desiredTaskId = selectedTaskId;
+      // Announced anyway: a host that lit the clicked node the moment the
+      // click landed has to be told the open did NOT happen, or the canvas
+      // keeps a node lit for a panel that never opened and a URL that never
+      // moved.
+      announceSelection();
       return;
     }
     // Back or forward. The browser moved the URL BEFORE this ran, so the panel
@@ -390,6 +441,7 @@
     if (host) host.innerHTML = "";
     selectedTaskId = "";
     desiredTaskId = "";
+    announceSelection();
   }
 
   function closePanel(options) {
@@ -403,6 +455,33 @@
     if (!options || options.push !== false) {
       window.history.pushState({ selected: "" }, "", selectionUrl(""));
     }
+    announceSelection();
+  }
+
+  // Drop a panel open that has not painted yet, and leave what IS on screen
+  // alone. The graph page's canvas calls this the moment a node tap starts a
+  // new gesture: an open from an EARLIER click may still be in flight, and its
+  // response would insert the panel BESIDE the canvas (D9) — narrowing the
+  // canvas, refitting it, and moving the node out from under a pointer that is
+  // halfway through a double-click. That is the failure the `onetap` debounce
+  // exists to prevent, reached through an older request instead of through
+  // this gesture's own (round-2 correctness f-001).
+  //
+  // Only the INTENT is walked back, the same way a failed open walks it back,
+  // because there is nothing on screen to undo. What is ALREADY on screen is
+  // left exactly as it is — an operator who opened a panel and then began a
+  // gesture elsewhere still has the panel they asked for, and a server-
+  // rendered one is not disturbed either. Nothing is announced: the selection
+  // has not changed, and announcing it would re-render the host's own view of
+  // it in the middle of the gesture this exists to protect.
+  //
+  // The test is whether a request is PENDING, not whether the ids differ: they
+  // are equal for a `focus=` the page loaded with, and the client's fallback
+  // open for it is exactly a response that must not land mid-gesture.
+  function supersedePendingOpen() {
+    if (pendingOpenGeneration !== panelGeneration) return;
+    panelGeneration += 1;
+    desiredTaskId = selectedTaskId;
   }
 
   function handlePanelClick(event) {
@@ -796,5 +875,56 @@
   document.addEventListener("click", handlePanelClick);
   document.addEventListener("keydown", handlePanelKeydown);
   window.addEventListener("popstate", handlePanelPopstate);
-  connect();
+
+  // The stream opens once every DEFERRED SCRIPT on the page has run, not at the
+  // end of this one.
+  //
+  // The graph page loads this file, then a ~400KB Cytoscape bundle, then
+  // `graph.js` — and `graph.js` is what subscribes below, for the "graph
+  // changed" pill. A stream opened here would consume a matching `task.updated`
+  // (and record its id in `seenEvents`, so a retry is deduplicated away) while
+  // the browser was still fetching the library, with nothing to replay it to
+  // when the subscriber finally arrives: the pill would never appear for an
+  // event that really did land, and this page has no reconcile to cover for it.
+  //
+  // Deferred scripts all execute before `DOMContentLoaded`, which is exactly
+  // the guarantee "after every subscriber has registered" needs — so the
+  // browser's own ordering does the work, with no replay buffer to bound.
+  //
+  // `"interactive"` is the state a DEFERRED script runs in, not `"loading"`:
+  // the parser sets it before working through the deferred list, and it stays
+  // there until the load event. So both are "not ready yet", and only
+  // `"complete"` means DOMContentLoaded is certainly past. `load` is the
+  // backstop for the one entry neither covers — a file injected between the two
+  // events, whose DOMContentLoaded will never come again.
+  let streamStarted = false;
+  function startStream() {
+    if (streamStarted) return;
+    streamStarted = true;
+    connect();
+  }
+
+  if (document.readyState === "complete") {
+    startStream();
+  } else {
+    document.addEventListener("DOMContentLoaded", startStream);
+    window.addEventListener("load", startStream);
+  }
+
+  // The seam the graph page's canvas opens the panel through (D9: ONE panel
+  // implementation for rows and nodes). A Cytoscape node is drawn on a canvas
+  // and has no DOM row to click, so it cannot reach the delegated handler
+  // above — but everything behind that handler, the URL push included, is the
+  // same code either way. Published last, so a page that loads `graph.js`
+  // after this file finds it ready.
+  window.LithosLens = window.LithosLens || {};
+  window.LithosLens.panel = {
+    open: openPanel,
+    close: closePanel,
+    supersedePending: supersedePendingOpen,
+    onChange: function (subscriber) { panelSubscribers.push(subscriber); }
+  };
+  window.LithosLens.events = {
+    subscribe: function (subscriber) { eventSubscribers.push(subscriber); }
+  };
 })();

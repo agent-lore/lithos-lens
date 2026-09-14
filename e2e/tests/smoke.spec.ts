@@ -913,3 +913,764 @@ test("a skeleton link does not propagate a retired query param", async ({
     "/tasks/e2e-retired-param",
   );
 });
+
+// ── The graph canvas (T2-A4), driven against the real Cytoscape ─────────────
+//
+// `tests/test_tasks_js.py` pins this behaviour against a stubbed library,
+// which is where the interleavings and the "no fetch" assertions live. These
+// drive the vendored 3.30.3 bundle itself, because "the toggle works" and "the
+// toggle works with the library we actually ship" are different claims.
+
+test("the canvas draws the graph and collapses the text behind a toggle", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  const canvas = page.locator('[data-graph-canvas][data-canvas-state="ready"]');
+  await expect(canvas).toBeVisible();
+
+  // The text baseline is collapsed but present — D3's promise, and the reason
+  // a screen reader and a PR screenshot still get the whole page.
+  await expect(page.locator("[data-graph-layers]")).toBeHidden();
+  await expect(page.locator('[data-graph-layer="4"]')).toBeAttached();
+  await page.locator("[data-toggle-text]").click();
+  await expect(page.locator("[data-graph-layers]")).toBeVisible();
+
+  // The legend is persistent: it explains the arrowheads, so it never goes
+  // away with the text.
+  await expect(page.locator("[data-graph-legend]")).toBeVisible();
+});
+
+test("toggling the overlays adds their edges and remembers them in the URL", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const types = () =>
+    page.evaluate(() =>
+      (window as any).LithosLensGraph.shown().edges.map((edge: any) => edge.type),
+    );
+
+  // Every toolbar control is a real link — the no-JS page is the baseline —
+  // so "applied client-side with no fetch" is a claim about the BROWSER's own
+  // default action, not just about `fetch`. A handler that dropped
+  // `preventDefault()` would reload `/tasks/graph` and land on the very same
+  // URL showing the very same edges, which the assertions below cannot tell
+  // from a client-side toggle (round-8 test-quality f-011). So the main
+  // document is counted and stamped: a reload would both request it again and
+  // wipe the stamp.
+  const documentRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      documentRequests.push(request.url());
+    }
+  });
+  await page.evaluate(() => {
+    (window as any).__sameDocument = true;
+  });
+  const sameDocument = () =>
+    page.evaluate(() => (window as any).__sameDocument === true);
+
+  // Default: dependency flow only, hierarchy and provenance switched off even
+  // though both are already in the payload (D6/D8).
+  expect(await types()).not.toContain("parent_child");
+  expect(await types()).not.toContain("discovered_from");
+
+  await page.locator('[data-toggle-overlay="hierarchy"]').click();
+  await expect(page).toHaveURL(/overlays=hierarchy/);
+  expect(await types()).toContain("parent_child");
+  expect(await sameDocument()).toBe(true);
+
+  await page.locator('[data-toggle-overlay="provenance"]').click();
+  expect(await types()).toContain("discovered_from");
+  // The context ghost the provenance edge points from: a task resolved outside
+  // this open-only scope, in the payload from the first render so the toggle
+  // needs no fetch.
+  const source = await page.evaluate(() =>
+    (window as any).LithosLensGraph.node("loom-research-old").style("display"),
+  );
+  expect(source).not.toBe("none");
+
+  // Back walks the exploration without a reload, re-applying the URL's
+  // overlays from the same static payload.
+  await page.goBack();
+  expect(await types()).not.toContain("discovered_from");
+  await page.goBack();
+  expect(await types()).not.toContain("parent_child");
+  await expect(page).not.toHaveURL(/overlays=/);
+
+  // The isolated toggle is the same kind of link and the same promise.
+  await page.locator("[data-toggle-isolated]").click();
+  await expect(page).toHaveURL(/isolated=1/);
+  await expect(page.locator("[data-isolated-disclosure]")).toHaveJSProperty(
+    "open",
+    true,
+  );
+
+  // Four toggles and two history steps later: one document, never re-fetched.
+  expect(await sameDocument()).toBe(true);
+  expect(documentRequests).toEqual([]);
+});
+
+/**
+ * Put the pointer on a drawn node and answer where it now is.
+ *
+ * A node on a canvas has no DOM element to click, so a test that reached for
+ * Cytoscape's own `emit("tap")` would prove only that the handler is wired: it
+ * bypasses the renderer's hit-testing and the browser's pointer-to-`tap`
+ * translation, which is where an intercepting layer, a dead pointer surface or
+ * nodes painted away from their hit regions would show up (round-8
+ * test-quality f-011). So the tests below aim real pointer input at the pixels
+ * the library says the node occupies, and assert first that those pixels are
+ * on the canvas at all.
+ *
+ * The pointer is WALKED there rather than teleported, which is both what a
+ * hand does and what the library needs: Cytoscape accepts a press only at
+ * coordinates inside the container box it has cached, and pointer movement
+ * over the canvas is what refreshes that cache after the page has scrolled.
+ */
+async function pointerOnNode(
+  page: import("@playwright/test").Page,
+  taskId: string,
+) {
+  const canvas = page.locator("[data-graph-canvas]");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const at = await page.evaluate((id) => {
+    const graph = (window as any).LithosLensGraph;
+    const node = graph.node(id);
+    const point = node.renderedPosition();
+    return {
+      x: point.x,
+      y: point.y,
+      // Aiming at a point that is off the canvas would hit whatever IS there
+      // and quietly test nothing, so the test refuses to aim at one.
+      inView:
+        node.style("display") !== "none" &&
+        point.x >= 0 &&
+        point.y >= 0 &&
+        point.x <= graph.cy.width() &&
+        point.y <= graph.cy.height(),
+    };
+  }, taskId);
+  expect(at.inView, `${taskId} is not drawn inside the canvas`).toBe(true);
+  const point = { x: box.x + at.x, y: box.y + at.y };
+  await page.mouse.move(point.x, point.y);
+  return point;
+}
+
+test("clicking a node opens that task's panel beside the canvas and pushes focus", async ({
+  page,
+}) => {
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  // The node is drawn on a canvas, so the click goes through Cytoscape's own
+  // event surface rather than a DOM row — which is the whole reason the panel
+  // is reachable as an API (D9: one implementation for rows and nodes). Real
+  // pointer input at the node's own pixels, so the renderer's hit-testing is
+  // under test along with the handler.
+  const ship = await pointerOnNode(page, "loom-ship");
+  await page.mouse.click(ship.x, ship.y);
+
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-ship/);
+
+  // Close clears the selection and nothing else: the scope survives, and the
+  // node stops being lit. `pushState` fires no `popstate`, so the canvas only
+  // learns of this because the panel announces it (round-1 correctness f-002).
+  await page.locator("[data-panel-host] [data-panel-close]").click();
+  await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/focus=/);
+  await expect(page).toHaveURL(/project=lithos-loom/);
+  const lit = await page.evaluate(
+    () => (window as any).LithosLensGraph.cy.nodes(".focused").length,
+  );
+  expect(lit).toBe(0);
+});
+
+/** An hour. See `holdMultiClickWindowOpen`. */
+const HELD_MULTI_CLICK_WINDOW_MS = 3_600_000;
+
+/**
+ * Hold Cytoscape's multi-click window open for the whole of a gesture test.
+ *
+ * A pair of real clicks is classified by the library against ONE number, twice
+ * over: `dbltap` is emitted when the two DOM event timestamps are within
+ * `multiClickDebounceTime`, and the `onetap` that would otherwise settle the
+ * first click is a `setTimeout` armed with the same value. A test that drove
+ * the pair at the shipped 250ms would be asserting on the runner's scheduling:
+ * a stalled worker lets the timer win, correct code opens a panel mid-gesture,
+ * and the failure looks exactly like the regression the test exists to catch
+ * (round-3 test-quality f-002).
+ *
+ * Setting the window is the only lever that binds BOTH halves, and it is the
+ * page's own knob rather than a shim. A faked browser clock would not do: the
+ * `dbltap` comparison is between two native DOM `event.timeStamp`s, which the
+ * page never mints and a clock shim therefore cannot control — freezing
+ * `setTimeout` would hold `onetap` off while the window lapsed anyway, leaving
+ * the second click a separate gesture.
+ *
+ * An hour is not a bigger margin, it is a bound: every test here is capped by
+ * Playwright's own per-test timeout (30s by default), so a stall long enough to
+ * expire this window aborts the test as a timeout — a harness fault, reported
+ * as one — instead of quietly reclassifying the gesture. It is also as long as
+ * it may safely be: a `setTimeout` delay past 2^31-1ms is clamped to fire at
+ * once (the trap `tasks.js` chains around), which would spring `onetap`
+ * immediately and do the precise opposite of this.
+ *
+ * The window's LENGTH is not the claim under test. The page's rule — a pair
+ * inside the window is one gesture, and only a same-node pair is that node's
+ * double-click — reads the same at 250ms as at an hour, and the pair outside
+ * the window has a test of its own below that touches none of this.
+ */
+async function holdMultiClickWindowOpen(page: import("@playwright/test").Page) {
+  await page.evaluate(
+    (ms) => (window as any).LithosLensGraph.cy.multiClickDebounceTime(ms),
+    HELD_MULTI_CLICK_WINDOW_MS,
+  );
+}
+
+test("double-clicking a node leaves the canvas for that task's own page", async ({
+  page,
+}) => {
+  // The other half of the canvas's pointer contract (D8): one click selects
+  // beside the picture, two leave for the whole task. Driven as real pointer
+  // input for the same reason the single click is — Cytoscape synthesises
+  // `dbltap` from two taps it hit-tested itself, and nothing short of a mouse
+  // proves that translation still happens on the page we ship.
+  //
+  // From an UNSELECTED graph, which is the state a double-click ordinarily
+  // starts in and the one round-2 correctness f-001 was about: the first click
+  // used to open the panel beside the canvas, the flex layout narrowed it, the
+  // refit moved the node — and the second click landed on the background with
+  // no `dbltap` to show for it. The gap below is a FLOOR and nothing more —
+  // long enough that a local panel fragment would have come back inside it, so
+  // the old interleaving is reproduced rather than out-run. Nothing is asked of
+  // its upper end: the window above is held open for the whole gesture.
+  const panelRequests: string[] = [];
+  await page.route(/fragment=panel/, async (route) => {
+    panelRequests.push(route.request().url());
+    await route.continue();
+  });
+
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(page.locator("[data-panel-host] [data-task-panel]")).toHaveCount(0);
+  await holdMultiClickWindowOpen(page);
+
+  const placed = () =>
+    page.evaluate(() => {
+      const at = (window as any).LithosLensGraph.node(
+        "loom-ship",
+      ).renderedPosition();
+      return [Math.round(at.x), Math.round(at.y)];
+    });
+
+  const before = await placed();
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  // The hit target the second click is about to use has not moved — which is
+  // the invariant, whatever a first click is allowed to do.
+  expect(await placed()).toEqual(before);
+  await page.mouse.down();
+  await page.mouse.up();
+
+  await page.waitForURL("**/tasks/loom-ship");
+  // A whole-document navigation, not the panel: the task's own page is up.
+  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+  await expect(page.locator('[data-task-detail="loom-ship"]')).toBeVisible();
+  // And the panel the operator never asked for was never even requested.
+  expect(panelRequests).toEqual([]);
+});
+
+test("a superseded panel response neither opens nor moves the graph", async ({
+  page,
+}) => {
+  // Round-3 correctness f-001 and test-quality f-002, in the browser they are
+  // about. One panel is OPEN, a second open is still in flight, and a
+  // double-click starts on a third node: the pending response must be dropped
+  // — it would narrow the canvas and refit it between the two clicks — while
+  // the panel already on screen must be left exactly where it is, because
+  // clearing THAT widens the canvas and refits it just the same. Both failures
+  // look identical from the operator's chair: the second click lands on the
+  // background and the navigation never happens.
+  //
+  // The two panels are opened through the page's own API rather than by
+  // clicking, and deliberately: Cytoscape's multi-click detector measures TIME
+  // alone, so a setup click would pair with the gesture's opening click and the
+  // test would be about that instead. It is also the truer setup — the `focus=`
+  // fallback that f-001 was found in starts its open without any tap at all.
+  let releaseShip = () => {};
+  const shipHeld = new Promise<void>((resolve) => {
+    releaseShip = resolve;
+  });
+  let shipAsked = () => {};
+  const shipRequested = new Promise<void>((resolve) => {
+    shipAsked = resolve;
+  });
+  await page.route(/fragment=panel/, async (route) => {
+    if (route.request().url().includes("loom-ship")) {
+      shipAsked();
+      await shipHeld;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  // The panel on screen …
+  // Not awaited inside the page: `open()` answers with a promise, and
+  // `evaluate` would wait on it — which is the one thing a HELD response makes
+  // impossible. The assertions below are what waits.
+  await page.evaluate(() => {
+    (window as any).LithosLens.panel.open("loom-schema");
+  });
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-schema"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-schema/);
+  // … and the one still in flight behind it.
+  await page.evaluate(() => {
+    (window as any).LithosLens.panel.open("loom-ship");
+  });
+  await shipRequested;
+
+  await holdMultiClickWindowOpen(page);
+  const placed = () =>
+    page.evaluate(() => {
+      const at = (window as any).LithosLensGraph.node(
+        "loom-announce",
+      ).renderedPosition();
+      return [Math.round(at.x), Math.round(at.y)];
+    });
+  const before = await placed();
+  await pointerOnNode(page, "loom-announce");
+  await page.mouse.down();
+  await page.mouse.up();
+  // The held answer lands HERE, between the two halves of the gesture.
+  releaseShip();
+  await page.waitForTimeout(100);
+
+  // Neither panel moved the page: `loom-schema` is still open under its own
+  // URL, `loom-ship` never arrived, and the hit target the second click is
+  // about to use is exactly where it was measured.
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-schema"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-schema/);
+  expect(await placed()).toEqual(before);
+
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForURL("**/tasks/loom-announce");
+  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+});
+
+test("two quick clicks on different nodes select the second, never leave", async ({
+  page,
+}) => {
+  // Round-2 correctness f-002, in the browser it was found in. Cytoscape's
+  // multi-click detector measures TIME and nothing else, so a click on one
+  // node followed inside the window by a click on another is a `dbltap` on the
+  // second — and taken at face value the page left for a detail page from a
+  // node the operator had clicked exactly once. The same debounce swallows
+  // that node's `onetap`, so its panel did not open either: the click that
+  // meant "show me this" navigated away instead.
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await holdMultiClickWindowOpen(page);
+
+  await pointerOnNode(page, "loom-schema");
+  await page.mouse.down();
+  await page.mouse.up();
+  // A floor again, not a deadline: long enough to be an ordinary human pair,
+  // with the window held open around it.
+  await page.waitForTimeout(100);
+  // Nothing has moved, so the second node is still where it was measured.
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+
+  // The second click is a SINGLE click on `loom-ship`, and is answered as one.
+  await expect(
+    page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/tasks\/graph\?/);
+  await expect(page).toHaveURL(/focus=loom-ship/);
+});
+
+test("two clicks on a node with the panel between them are two single clicks", async ({
+  page,
+}) => {
+  // The other side of the boundary, and the one case the held-open window
+  // above deliberately cannot reach: a pair the library has already settled.
+  // No delay is asserted here at all — the wait is for the PANEL the first
+  // click opened, which only exists once Cytoscape decided that click was a
+  // single one, so the second click is provably a new gesture however long the
+  // host took to get there. Clicking the same node twice slowly must stay two
+  // single clicks: the page may not accumulate taps into a navigation.
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).__sameDocument = true;
+  });
+
+  const panel = page.locator('[data-panel-host] [data-panel-task="loom-ship"]');
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(panel).toBeVisible();
+
+  // The panel narrowed the canvas and the viewport refitted, so the node is
+  // re-measured — the second click goes wherever it is NOW.
+  await pointerOnNode(page, "loom-ship");
+  await page.mouse.down();
+  await page.mouse.up();
+
+  await expect(panel).toBeVisible();
+  await expect(page).toHaveURL(/focus=loom-ship/);
+  // The same document throughout: a navigation would have replaced it.
+  expect(await page.evaluate(() => (window as any).__sameDocument === true)).toBe(
+    true,
+  );
+});
+
+test("the canvas ranks every node by the layer the text gives it", async ({
+  page,
+}) => {
+  // D3, in the browser that ships it: the picture is printed above the text
+  // layers, and the two may not disagree. Cytoscape's breadth-first ranks by
+  // SHORTEST path while the server layers by longest, so this is the claim a
+  // layout left to its own devices gets wrong (round-1 correctness f-001).
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const bands = await page.evaluate(() => {
+    const payload = JSON.parse(
+      document.querySelector("[data-graph-payload]")!.textContent!,
+    );
+    const graph = (window as any).LithosLensGraph;
+    const out: Record<string, { min: number; max: number }> = {};
+    payload.nodes.forEach((node: any) => {
+      const y = graph.node(node.id).position().y;
+      const band = out[node.layer] || (out[node.layer] = { min: y, max: y });
+      band.min = Math.min(band.min, y);
+      band.max = Math.max(band.max, y);
+    });
+    return out;
+  });
+
+  // A cycle's members stack inside one slot, so a layer holding one spans a
+  // band rather than a line — but the bands stay ordered and disjoint.
+  const layers = Object.keys(bands)
+    .map(Number)
+    .sort((a, b) => a - b);
+  expect(layers.length).toBeGreaterThan(2);
+  for (let i = 1; i < layers.length; i += 1) {
+    expect(bands[layers[i - 1]].max).toBeLessThan(bands[layers[i]].min);
+  }
+});
+
+test("the focused panel is there with no JavaScript at all", async ({ browser }) => {
+  // D9's baseline, and the only check that can prove it: with scripting off
+  // there is no canvas to click, so a panel the CLIENT creates is no baseline
+  // at all. The text page has to be complete on its own here too.
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+  try {
+    await page.goto("/tasks/graph?project=lithos-loom&focus=loom-ship");
+    await expect(
+      page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+    ).toBeVisible();
+    // The canvas never appears, and the text baseline is not collapsed behind
+    // a toggle only JavaScript can operate.
+    await expect(page.locator("[data-graph-canvas]")).toBeHidden();
+    await expect(page.locator("[data-graph-layers]")).toBeVisible();
+    await expect(page.locator("[data-toggle-text]")).toBeHidden();
+    // And Close is an ordinary link back to the unfocused graph.
+    await expect(
+      page.locator("[data-panel-host] [data-panel-close]"),
+    ).toHaveAttribute("href", /project=lithos-loom/);
+  } finally {
+    await context.close();
+  }
+});
+
+test("the event stream waits for the deferred scripts that subscribe to it", async ({
+  page,
+}) => {
+  // Round-4 correctness f-008, in the browser it was found in. The graph page
+  // loads `tasks.js`, then a ~400KB Cytoscape bundle, then `graph.js` — and
+  // `graph.js` is what subscribes for the "graph changed" pill. A stream opened
+  // at the end of `tasks.js` consumes (and deduplicates) a matching event while
+  // the library is still in flight, with nothing to replay it to.
+  //
+  // So the claim under test is a SEQUENCE: `/tasks/events` must not be
+  // requested until every deferred script has run.
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // EventSource CONSTRUCTIONS, not network requests. Probed both ways: a page
+  // that connects twice (`connect()` closes the first stream and opens a
+  // second) shows two constructions and still only one request in Playwright's
+  // request log, so the request count cannot tell the two apart and the thing
+  // actually under test is the construction.
+  await page.addInitScript(() => {
+    const Real = window.EventSource;
+    (window as any).__streams = [];
+    class Counting extends Real {
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        (window as any).__streams.push(String(url));
+      }
+    }
+    (window as any).EventSource = Counting;
+  });
+  const streams = () =>
+    page.evaluate(() => ((window as any).__streams || []).length);
+
+  await page.route("**/vendor/cytoscape.min.js", async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  const navigation = page.goto("/tasks/graph?project=lithos-loom");
+  // `tasks.js` publishes this at the very END of its own execution, after the
+  // point where it used to open the stream — so once it exists, an early
+  // connection would already have happened.
+  await page.waitForFunction(() => (window as any).LithosLens !== undefined);
+  expect(await streams()).toBe(0);
+
+  release();
+  await navigation;
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  // And it connects — ONCE. A real page fires `DOMContentLoaded` and then
+  // `load`, and both start the stream, so this is also what pins the
+  // idempotence guard between them.
+  await page.waitForLoadState("load");
+  await expect.poll(streams, { timeout: 5000 }).toBe(1);
+});
+
+test("a narrow canvas keeps its labels readable and says the view is partial", async ({
+  page,
+}) => {
+  // Round-6 review: Cytoscape scales text with the viewport, so fitting the
+  // whole graph into a 320px column drew the labels at under three pixels —
+  // the nodes, the arrowheads, the dimmed ghost and the compound cycle all
+  // became unreadable, which is everything the canvas is for. The automatic
+  // fit stops at a readable floor instead, and the overflow is panned.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const narrow = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const box = document.querySelector("[data-graph-canvas]") as HTMLElement;
+    return {
+      rendered: parseFloat(graph.node("loom-ship").style("font-size")) * graph.cy.zoom(),
+      clipped: box.dataset.canvasClipped,
+      scrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(narrow.rendered).toBeGreaterThanOrEqual(10);
+  // Bigger than its box at that size, so the page says so …
+  expect(narrow.clipped).toBe("true");
+  await expect(page.locator("[data-graph-pan-hint]")).toBeVisible();
+  // … and the overflow is clipped to the canvas rather than widening the page.
+  expect(narrow.scrollWidth).toBeLessThanOrEqual(320);
+
+  // Given room, the whole graph fits and the page stops claiming otherwise.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await expect(page.locator("[data-graph-pan-hint]")).toBeHidden();
+  await expect(
+    page.locator("[data-graph-canvas]"),
+  ).toHaveAttribute("data-canvas-clipped", "false");
+  const wide = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    return parseFloat(graph.node("loom-ship").style("font-size")) * graph.cy.zoom();
+  });
+  expect(wide).toBeGreaterThanOrEqual(10);
+});
+
+test("a clipped graph can be dragged to the part that is off screen", async ({
+  page,
+}) => {
+  // The legibility floor deliberately shows only part of the graph at narrow
+  // widths and tells the operator to drag — so panning is the ONLY way to
+  // reach the rest without zooming back below readability. A drag that had
+  // gone inert (nodes grabbable instead of the canvas panning, box selection
+  // claiming the gesture, pointer events lost) would leave the legible
+  // fragment as the only reachable part of the picture.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+
+  const state = () =>
+    page.evaluate(() => {
+      const graph = (window as any).LithosLensGraph;
+      const cycle = graph.node("loom-cycle-a").renderedBoundingBox();
+      return {
+        pan: graph.cy.pan(),
+        zoom: graph.cy.zoom(),
+        // Is the cycle's first member inside the canvas, in the canvas's own
+        // coordinates? That is what "reachable" means here.
+        inView:
+          cycle.x1 >= 0 &&
+          cycle.y1 >= 0 &&
+          cycle.x2 <= graph.cy.width() &&
+          cycle.y2 <= graph.cy.height(),
+      };
+    });
+
+  const before = await state();
+  expect(before.inView).toBe(false);
+  const placedBefore = await page.evaluate(() =>
+    JSON.stringify((window as any).LithosLensGraph.positions()),
+  );
+
+  const canvas = page.locator("[data-graph-canvas]");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
+  const drag = async (from: { x: number; y: number }) => {
+    await page.mouse.move(box.x + from.x, box.y + from.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + from.x + 220, box.y + from.y + 120, {
+      steps: 12,
+    });
+    await page.mouse.up();
+  };
+
+  // A drag that lands ON a node moves nothing. Cytoscape makes nodes grabbable
+  // by default, so without `autoungrabify` this would drag that node out of
+  // its rank — a picture that no longer matches the text layers printed under
+  // it, from the very gesture the operator is being told to use. Done first,
+  // while it is known which nodes are actually under the canvas.
+  const grip = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const inside = graph.cy.nodes().filter((node: any) => {
+      if (node.style("display") === "none") return false;
+      const at = node.renderedBoundingBox();
+      return (
+        at.x1 >= 0 &&
+        at.y1 >= 0 &&
+        at.x2 <= graph.cy.width() &&
+        at.y2 <= graph.cy.height()
+      );
+    });
+    return inside.length ? inside.first().renderedPosition() : null;
+  });
+  expect(grip).not.toBeNull();
+  await drag(grip!);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify((window as any).LithosLensGraph.positions()),
+    ),
+  ).toBe(placedBefore);
+
+  await drag({ x: 10, y: 10 });
+
+  const after = await state();
+  expect(after.pan).not.toEqual(before.pan);
+  expect(after.inView).toBe(true);
+  // A pan, not a zoom, and not a re-placement: the readable floor survives the
+  // gesture and so does the layout.
+  expect(after.zoom).toBeCloseTo(before.zoom, 5);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify((window as any).LithosLensGraph.positions()),
+    ),
+  ).toBe(placedBefore);
+
+});
+
+test("the partial-view notice follows the viewport, not just the fit", async ({
+  page,
+}) => {
+  // The notice is the operator's instruction to pan, so it has to stay true
+  // once they do. It was computed only during an automatic fit, which left it
+  // claiming a limit that zooming out had removed — and hiding one that
+  // zooming in had created.
+  const notice = page.locator("[data-graph-pan-hint]");
+  const canvas = page.locator("[data-graph-canvas]");
+  const zoomTo = (level: number) =>
+    page.evaluate(
+      (value) => (window as any).LithosLensGraph.cy.zoom(value),
+      level,
+    );
+
+  // Narrow: clipped, and zooming out until the whole graph fits clears it.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+
+  await zoomTo(0.15);
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  await expect(notice).toBeHidden();
+
+  // Wide: the whole graph fits, and zooming in takes it out of view again.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  await expect(notice).toBeHidden();
+
+  await zoomTo(1.5);
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+
+  // And the test is about POSITION, not size: a graph smaller than its canvas
+  // is off screen all the same once it has been panned past the edge.
+  await page.reload();
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "false");
+  const fits = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const drawn = graph.cy
+      .nodes()
+      .filter((node: any) => node.style("display") !== "none")
+      .renderedBoundingBox();
+    return drawn.w <= graph.cy.width() && drawn.h <= graph.cy.height();
+  });
+  expect(fits).toBe(true);
+  await page.evaluate(() =>
+    (window as any).LithosLensGraph.cy.panBy({ x: 2000, y: 0 }),
+  );
+  await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
+  await expect(notice).toBeVisible();
+});

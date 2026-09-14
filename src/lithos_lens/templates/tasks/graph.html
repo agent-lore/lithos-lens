@@ -169,6 +169,36 @@
       <a data-toggle-isolated href="{{ graph_url(params, isolated=not params.show_isolated) }}">
         {{ "Hide isolated tasks" if params.show_isolated else "Show isolated tasks" }}
       </a>
+      {#
+        D8's two overlays, off by default. LINKS, so a browser with no
+        JavaScript still records the choice in the URL and gets the server's
+        answer; `graph.js` intercepts the click and applies them from the
+        payload it already holds — context ghosts included — with no fetch, and
+        `popstate` re-applies whatever the URL says.
+
+        The text hierarchy tree below is deliberately unaffected by either: it
+        is always rendered.
+      #}
+      {% for overlay, label in (("hierarchy", "hierarchy"), ("provenance", "provenance")) %}
+        <a
+          data-toggle-overlay="{{ overlay }}"
+          data-overlay-on="{{ "true" if overlay in params.overlays else "false" }}"
+          aria-pressed="{{ "true" if overlay in params.overlays else "false" }}"
+          href="{{ graph_url(params, toggle_overlay=overlay) }}"
+        >{{ "Hide" if overlay in params.overlays else "Show" }} {{ label }}</a>
+      {% endfor %}
+      {# Revealed by `graph.js` only: with no canvas there is nothing for the
+         text to be shown INSTEAD of, and the button would toggle the whole
+         page away. #}
+      <button type="button" class="graph-text-toggle" data-toggle-text aria-expanded="false" hidden>
+        Show as text
+      </button>
+      {# Never an auto re-layout (D8): a consumed task event whose `task_id` is
+         a node on this page raises this and waits for the operator. The href is
+         this same URL, so activating it is an ordinary reload. #}
+      <a class="graph-refresh-pill" data-graph-refresh-pill href="{{ graph_url(params) }}" hidden>
+        graph changed — refresh
+      </a>
       {% if view.as_of %}
         {# The OLDEST contributing fetch, not this request's clock: edge upserts
            emit no event upstream, so this is the page's staleness bound. #}
@@ -262,6 +292,47 @@
       </ul>
     </section>
 
+    {#
+      The Cytoscape surface (D8) and the side panel beside it (D9), which is the
+      one panel implementation the dashboard uses — hosted here rather than
+      overlaid, because on this page there is a canvas to sit beside.
+
+      Hidden until `graph.js` has a canvas up, so the no-JS baseline is
+      untouched and a vendored script that fails to load leaves the page exactly
+      as A3 rendered it.
+    #}
+    <section class="graph-canvas-layout" data-graph-canvas-layout>
+      {# The CANVAS is what is hidden until `graph.js` has one up — not the
+         section around it, which also holds the panel: with scripting off the
+         panel below is the only thing the focused task says, and a surface
+         hidden as a whole would hide D9's baseline along with the empty box.
+         An empty host collapses on its own (`.task-panel-host:empty`). #}
+      <div class="graph-canvas" data-graph-canvas data-canvas-state="pending" hidden></div>
+      {# Server-rendered OPEN when the request carried `focus=` — D9's no-JS
+         baseline, the same one `?selected=` gives the dashboard. The host also
+         carries the id the REQUEST named and the URL the server built for it,
+         so Back and Forward can reopen a task that has no node to read it off
+         (exactly the dashboard's reason, and its spelling). #}
+      {# No whitespace inside the element, deliberately: beside the canvas this
+         host is a FLEX ITEM, and `.task-panel-host:empty` is what collapses it
+         when nothing is selected. A newline between the tags is a text node,
+         `:empty` stops matching, and the picture loses a quarter of its width
+         to a panel that is not there. #}
+      <div
+        class="graph-panel-host task-panel-host"
+        data-panel-host
+        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}
+      >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
+      {# Raised by `graph.js` only while the picture is larger than the canvas
+         can hold at a readable size. The alternative — scaling the whole graph
+         down to fit — draws labels and arrowheads too small to read, which is
+         the one thing the canvas was added to do. #}
+      <p class="graph-pan-hint" data-graph-pan-hint hidden>
+        Showing part of the graph — drag to pan, or read it all under
+        <strong>Show as text</strong>.
+      </p>
+    </section>
+
     <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
@@ -275,7 +346,7 @@
       {% endif %}
     </section>
 
-    <section class="panel" data-graph-layers>
+    <section class="panel" data-graph-layers data-graph-text>
       <h2>Layers</h2>
       {% for layer in view.layers %}
         <h3>Layer {{ layer.index }}</h3>
@@ -301,7 +372,7 @@
     {% if view.isolated %}
       {# Collapsed on a project graph, open on an epic one: hiding an epic's
          edge-less children would misrepresent its progress (D8). #}
-      <details class="panel" data-isolated-disclosure {% if params.show_isolated %}open{% endif %}>
+      <details class="panel" data-graph-text data-isolated-disclosure {% if params.show_isolated %}open{% endif %}>
         <summary><span data-isolated-count>{{ view.isolated | length }}</span> isolated tasks</summary>
         <ol data-isolated-list>
           {% for node in view.isolated %}{{ node_row(view, node) }}{% endfor %}
@@ -309,7 +380,7 @@
       </details>
     {% endif %}
 
-    <section class="panel" data-hierarchy>
+    <section class="panel" data-hierarchy data-graph-text>
       <h2>Hierarchy</h2>
       {% if view.hierarchy %}
         <ul data-hierarchy-tree>
@@ -328,5 +399,34 @@
 
     {# A4 draws from exactly this: same nodes, same layers, same chain. #}
     <script type="application/json" data-graph-payload>{{ view.payload_json | safe }}</script>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if view and not view.refused and view.nodes %}
+    {#
+      The interactive layer (D8), loaded on THIS page only: Cytoscape is a
+      ~400KB vendored bundle and no other surface draws a graph.
+
+      `tasks.js` comes first and for one reason — the side panel is one
+      implementation for dashboard rows and graph nodes (D9), and `graph.js`
+      opens it through the API that file publishes rather than growing a second
+      copy. It is told this page's own selection parameter, and told NOT to
+      reconcile: a task event here raises the "graph changed" pill, because
+      re-rendering the board's way would re-fetch a whole graph assembly and
+      move the canvas under the operator's cursor.
+    #}
+    <script>
+      window.LithosLensTasks = {
+        selectionParam: {{ graph_selection_key | tojson }},
+        panelAliasPath: {{ task_detail_alias_path | tojson }},
+        panelAliasKey: {{ task_detail_alias_key | tojson }},
+        liveRefresh: false,
+        eventsUrl: "/tasks/events"
+      };
+    </script>
+    <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
+    <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
+    <script src="{{ url_for('static', path='graph.js') }}" defer></script>
   {% endif %}
 {% endblock %}

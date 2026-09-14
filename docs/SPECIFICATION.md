@@ -394,10 +394,11 @@ leaving the board. One implementation for two host pages (§5.5 of
 REQUIREMENTS), rendered from one template that extends no layout:
 
 - `GET /tasks?selected=<task_id>` renders the board with the panel already
-  open. That is the no-JS baseline — a shared link, a screen reader and a
-  browser with scripting off all land on the same thing — and `selected` is the
-  dashboard's *only* selection parameter. The graph page's is `focus` (§5.12);
-  neither page carries the other's.
+  open, and `GET /tasks/graph?…&focus=<task_id>` does the same beside the
+  canvas. That is the no-JS baseline — a shared link, a screen reader and a
+  browser with scripting off all land on the same thing — and each host page
+  has exactly ONE selection parameter: `selected` on the dashboard, `focus` on
+  the graph page (§5.12); neither carries the other's.
 - `GET /tasks/{task_id}?fragment=panel` answers with the partial and nothing
   else. A row click fetches it — from the URL the SERVER wrote onto the row, so
   the id encoding and the board's preserved filters have one definition — swaps
@@ -695,9 +696,9 @@ the hierarchy tree out.
 
 `GET /tasks/graph` renders one scope's dependency graph as **server-rendered
 text**. That is the first-class baseline, not a fallback: the page is complete
-and reviewable with no JavaScript, and the Cytoscape rendering (a later T2
-slice) is enhancement drawn from the same embedded payload, so the picture and
-the text cannot disagree.
+and reviewable with no JavaScript, and the Cytoscape rendering (§5.12.1) is
+enhancement drawn from the same embedded payload, so the picture and the text
+cannot disagree.
 
 **Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
 page renders a picker listing every project the snapshot observes under both
@@ -705,8 +706,13 @@ page renders a picker listing every project the snapshot observes under both
 default by scope KIND, opposite ways round — a project graph is about what can
 still run (resolved hidden, isolates folded), an epic graph about an
 initiative's progress (closed children shown, isolates open). `focus=` is the
-page's single selection parameter and `selected=` is accepted as an alias it
-canonicalises; `overlays=hierarchy,provenance` is carried for the client layer.
+page's single selection parameter and `selected=` is accepted as a
+compatibility alias that the route **redirects away** (307 to the same URL with
+`focus=` and no `selected=`) before it reads anything: both clients read
+`focus`, so a page served under the alias would render a panel with no node lit
+and a Close that pushed a URL still carrying the alias. A request carrying a
+selection **server-renders that task's side panel** beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
+`url` open), and a read that fails there costs the panel rather than the graph; `overlays=hierarchy,provenance` is carried for the client layer.
 A scope over `graph.max_tasks` (ghosts counted), or one whose out-of-set
 endpoints would cost more classification reads than one render may spend, is
 **refused** with a "narrow your scope" panel naming the count — never rendered
@@ -721,9 +727,12 @@ chain; the topological layers as one `<ol>` per layer; the "N isolated tasks"
 disclosure; the `parent_child` hierarchy tree, always rendered; and a
 `<script type="application/json">` payload carrying nodes (with completeness
 and layer), edges (with state and reason), layers, cycles, ghosts, the longest
-chain with its `exact | lower_bound` flag, roots, isolated, incomplete and
-`as_of`. The toolbar states `as_of` — the OLDEST contributing fetch — because
-edge upserts emit no upstream event and the TTL is the staleness bound.
+chain with its `exact | lower_bound` flag and its condensations' members,
+roots, isolated, incomplete and `as_of`. Each node additionally carries its claims and the detail URL
+`tasks.task_detail_path` built for it — the two things the canvas needs and
+the topology does not imply. The toolbar states `as_of` — the OLDEST
+contributing fetch — because edge upserts emit no upstream event and the TTL
+is the staleness bound.
 
 Each node row carries its status, type, claims and, for a ghost, its project
 chip with links to the ghost's detail page and to its own project's graph. Its
@@ -833,6 +842,137 @@ queued is not one of its three outcomes, and is carried by the span field
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
 
+#### 5.12.1 Cytoscape rendering
+
+With JavaScript, `static/graph.js` draws the embedded payload with the vendored
+Cytoscape 3.30.3 — loaded on this page, and only when there is a graph to draw
+(not the picker, not a refusal, not an empty scope). It adds nothing the text
+does not already state: status, type, ghost-ness, cycle membership, the longest
+chain and the isolated set are all payload fields, and the only thing the
+client derives is which nodes an `active` dependency edge in this graph points
+at. Lens still never re-implements the readiness predicate.
+
+- **Layout** is `breadthfirst`, directed, from the server's own `roots`, run
+  **once** and never again — no physics, and no re-layout for any later event.
+  The layout sees the dependency edges only: an epic's `parent_child` edges are
+  added afterwards, or hierarchy would decide the shape of a picture that is
+  about dependency flow. What it decides is the ORDER of the nodes across a
+  rank; the **rank itself is the payload's `layer`**, because the server layers
+  by longest path and `breadthfirst` ranks by shortest — on `A → B → C → D`
+  plus `A → D` the library draws D level with B while the text underneath says
+  layer 3, and a picture contradicting the layers it is printed above is what
+  §5.12's "the picture and the text cannot disagree" rules out. (The library's
+  own `maximal` option is the server's rule, but it is abandoned as soon as the
+  graph has a cycle, which a dependency graph routinely does.) A slot in a rank
+  is a **condensation**, not a node: a cycle takes one place in its layer and
+  its members stack inside a **compound parent** there, exactly as the server
+  layers it. Ranks are stacked **cumulatively** — each is as tall as its
+  tallest condensation — because nothing bounds an SCC below the node guard and
+  a fixed pitch lets a large cycle's stack spill into the rank above and the
+  rank below, which is the contradiction this placement exists to prevent.
+- **Colour is status** (open / completed / cancelled, plus the dashed `unknown`
+  style for a ghost whose status could not be read), **shape is type** (ellipse
+  task, round-rectangle epic, diamond gate); a node something in this graph
+  blocks is tinted, and a claimed one pulses (suppressed under
+  `prefers-reduced-motion`). Ghosts are dimmed and carry their project on the
+  label. `unknown` edges take the `unknown` style, inactive ones are faded, and
+  the longest blocking chain is traced — over **active dependency edges**
+  only (it is the longest *blocking* chain, so a `parent_child` or
+  `discovered_from` edge running between the same two tasks is not a step of
+  it), matched by **condensation**, since the chain is a walk over the
+  condensed graph and names a cycle by its representative while the edge that
+  enters it may land on any member. The condensation it matches on is the
+  chain's OWN — the payload's `longest_chain.members`, parallel to its
+  `nodes` — and not a node's `cycle`, which is the all-edge SCC the picture is
+  drawn from: an open `A → B` inside a loop closed by an inactive `B → C` and
+  `C → A` is one drawn cycle and a live two-chain at once, and reading the
+  chain through the drawn cycle there would trace an answer the text does not
+  state.
+- **Every edge carries an arrowhead**; `blocks` is solid and `waits_on_gate`
+  dashed. `parent_child` (thin, light) and `discovered_from` (dotted) are
+  **overlays, off by default**, toggled in the toolbar and remembered in the
+  URL as `overlays=hierarchy,provenance`. Both overlays' edges and their
+  context ghosts are already in the payload, so a toggle is a client-side
+  show/hide with **no fetch**, and `popstate` re-applies whatever the URL
+  says. An overlay draws in the endpoints it needs — an isolated node folded
+  away by default is revealed when a switched-on overlay connects it, since
+  hiding it would hide the edges just asked for. A context ghost appears only
+  with its overlay.
+- The **isolated toggle** (`isolated=1|0`) moves the canvas and the text
+  disclosure together; the plain-language **legend** is persistent; and **show
+  as text** collapses the text layers behind the canvas without removing them
+  — the text stays in the DOM.
+- **Click** a node and its panel opens beside the canvas through the same
+  implementation the dashboard's rows use (§5.6.1), pushing `focus=` after the
+  swap; **double-click** navigates to the task's page via the URL the server
+  built. The node lights on the first tap, but the panel waits for the click to
+  settle as a single one (Cytoscape's 250ms multi-click window): a panel opened
+  mid-gesture narrows the canvas, and the refit that follows would move the
+  node out from under the second click. That window is measured by TIME alone,
+  so a pair inside it counts as a double-click only when both clicks were on
+  the SAME node; a pair spanning two nodes (or the background and a node) is
+  the second one's single click, and opens its panel. A tap on a node also
+  **supersedes any panel open still in flight** — an earlier click's, or the
+  client's own fallback for a `focus=` the server could not render: an answer
+  landing between the two halves of a double-click would narrow the canvas at
+  exactly the moment the debounce exists to protect. A panel that has already
+  arrived is left alone — only the unpainted request is dropped, and dropping
+  it moves nothing on screen.
+  Every panel transition is announced back to the canvas, because it
+  moves the URL by `pushState` and `pushState` fires no `popstate`: without it,
+  closing the panel would clear `focus` and leave the node still lit. A
+  `focus=` already in the URL is answered by the SERVER (§5.12), and the client
+  fetches that panel only when the server did not.
+- **Every toolbar link follows the live URL.** The overlay and isolated links
+  are rebuilt on each render, and so are the two the server wrote and the
+  client never re-applies — the resolved toggle and the refresh pill — because
+  every other control here moves the URL without a reload, and a pill still
+  pointing at the address the page loaded on would silently drop the overlays
+  and the focus set on the way to needing it.
+- **The automatic fit never scales below legibility.** Cytoscape scales text
+  with the viewport, so fitting a graph into a narrow box shrinks its labels
+  with it — at 320px the demo graph fitted to zoom 0.26 and drew a 10-unit font
+  at under three pixels, which communicates none of what the canvas is for. The
+  fit therefore stops at the zoom that still renders a label at 10px; past that
+  the graph overflows its box and is panned, and the page says so ("showing part
+  of the graph") whenever anything is measurably out of view — recomputed on
+  every Cytoscape `viewport` change, not only on a fit, because panning a
+  clipped graph back into view makes it whole and zooming in on a fitted one
+  takes it out again. "Out of view" is a test of POSITION against the canvas
+  rect, not of size: a graph smaller than its box is off screen all the same
+  once it has been panned past the edge. A drag is always a PAN — nodes are
+  ungrabbable and box selection is off — because "once placed, nothing moves"
+  is what lets the ranks be trusted against the text layers. Every label the
+  canvas draws — a cycle box's caption included — uses the one font size the
+  floor is derived from, or it would be sub-legible exactly when the floor
+  binds. Zooming out further is the operator's to do; only the automatic
+  scaling is bounded.
+- **Cytoscape is handed opaque element ids**, never a task's own. A task id is
+  an arbitrary non-empty string (§5.1), and the shipped 3.30.3 throws inside
+  `breadthfirst` on an element called `__proto__`, `constructor` or `toString`
+  — its internal maps are prototype-bearing. Synthesising ids also makes the
+  compound parents and the edges collision-free by construction, where a key
+  built from `from::to` would merge the payload edges `a::b → c` and
+  `a → b::c` and silently drop one of them. Every client-side lookup keyed by
+  an id uses a null-prototype map for the same reason, and an ordered PAIR of
+  ids — the chain's steps — is a nested map rather than a joined string, which
+  could not tell the step `a>b → c` from the step `a → b>c`.
+- **Events** raise a "graph changed — refresh" pill when a consumed task
+  event's `task_id` is a node on the page, and do nothing else: this page tells
+  `tasks.js` not to reconcile, because re-rendering the board's way would
+  re-fetch a whole graph assembly per event and move the canvas under the
+  operator's cursor. Edge upserts emit no event at all, so the pill is a hint
+  and `as_of` remains the page's real staleness bound.
+
+  The stream itself opens on **`DOMContentLoaded`**, not at the end of
+  `tasks.js`: deferred scripts all run before that event, and on this page the
+  subscriber is in the last of them, behind a ~400KB library. A stream opened
+  earlier would consume a matching event — and record its id in the dedup set —
+  while the library was still in flight, with nothing to replay it to and no
+  reconcile to cover for it. (`"interactive"`, not `"loading"`, is the state a
+  deferred script runs in; a file injected between `DOMContentLoaded` and `load`
+  is caught by a `load` backstop.)
+
 The side panel (§5.6.1) is counted by **`lens_tasks_panel_opens_total`**
 (`source` in `url` | `fragment`) — the SSR baseline and the click-fetched
 partial, which are the two things the request can actually distinguish. The
@@ -873,8 +1013,9 @@ Key characteristics:
 
 - FastAPI + Jinja templates for primary rendering
 - static CSS for presentation
-- lightweight browser JavaScript for SSE, fragment refresh, and date-picker
-  synchronization
+- lightweight browser JavaScript for SSE, fragment refresh, the side panel, and
+  date-picker synchronization
+- one vendored library, Cytoscape, loaded by the task graph page alone (§5.12.1)
 - no SPA framework
 
 The application is designed to remain usable in partially degraded conditions

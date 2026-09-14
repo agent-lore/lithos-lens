@@ -25,7 +25,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_layout` | L | 6 | 4 |
 | `lithos_lens.graph_page` | L | 1 | 6 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
-| `lithos_lens.graph_view` | S | 10 | 0 |
+| `lithos_lens.graph_view` | M | 10 | 1 |
 | `lithos_lens.pr_reconciliation` | M | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
@@ -145,6 +145,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `HierarchyRowView`
 - class `Banner` — One honesty banner. ``id`` is the test/CSS hook, ``text`` the sentence.
 - class `GraphPageView` — Everything `/tasks/graph` renders for one scope.
+- def `payload_json` — D3's embedded payload — the same node set, layers and chain as the text.
 
 ### `lithos_lens.pr_reconciliation`
 - class `ReconciliationStyle` — How ONE reconciliation state renders: its text, its colour, its rank.

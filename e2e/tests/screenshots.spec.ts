@@ -38,6 +38,41 @@ test.describe.configure({ mode: "default", retries: 1 });
 
 const ARTIFACTS_DIR = path.resolve(__dirname, "..", "artifacts");
 
+/**
+ * The canvas never scales the graph below legibility (T2-A4, round-6 review).
+ *
+ * Cytoscape scales text with the viewport, so a fit that shrinks the graph into
+ * a narrow box shrinks the labels with it — at 320px the loom graph fitted to
+ * zoom 0.26 and drew its labels at under three pixels, which is a picture that
+ * communicates none of what the canvas was added to show. The automatic fit
+ * therefore stops at a readable floor and the graph overflows to be panned;
+ * this asserts the floor held and that a clipped view SAYS it is partial,
+ * rather than letting a fragment read as the whole graph.
+ *
+ * Asserted inside `ready()`, so it is checked at every captured width.
+ */
+async function canvasIsLegible(page: Page) {
+  const drawn = await page.evaluate(() => {
+    const graph = (window as any).LithosLensGraph;
+    const box = document.querySelector("[data-graph-canvas]") as HTMLElement;
+    // The SMALLEST label on the canvas, not a sampled one: a cycle's box
+    // carries a caption of its own, and a floor that held for the nodes while
+    // that rendered at six pixels would be a floor in name only.
+    const sizes = graph.cy
+      .nodes()
+      .filter((node: any) => node.style("display") !== "none")
+      .map((node: any) => parseFloat(node.style("font-size")) * graph.cy.zoom());
+    return {
+      rendered: Math.min(...sizes),
+      clipped: box.dataset.canvasClipped === "true",
+    };
+  });
+  expect(drawn.rendered).toBeGreaterThanOrEqual(10);
+  const hint = page.locator("[data-graph-pan-hint]");
+  if (drawn.clipped) await expect(hint).toBeVisible();
+  else await expect(hint).toBeHidden();
+}
+
 const WIDTHS = [320, 768, 1024, 1440] as const;
 
 const PAGES: ReadonlyArray<{
@@ -228,43 +263,125 @@ const PAGES: ReadonlyArray<{
     slug: "graph-project",
     url: "/tasks/graph?project=lithos-loom",
     ready: async (page) => {
-      await expect(page.locator("[data-graph-layers]")).toBeVisible();
-      // 1. The cycle callout, and the SCC Lens can actually SHAPE — bracketed
-      //    in its layer, which is the convention the legend explains.
+      // Since T2-A4 this is the CANVAS artifact: Cytoscape draws from the same
+      // payload and collapses the text behind "show as text" (D3), so what a
+      // reviewer looks at here is the picture — arrowheads, the cycle as a
+      // compound node, the ghost dimmed — with the legend that explains it.
+      const canvas = page.locator('[data-graph-canvas][data-canvas-state="ready"]');
+      await expect(canvas).toBeVisible();
+      // 1. The cycle callout, and the SCC Lens can actually SHAPE — drawn as a
+      //    compound parent, which is the convention the legend explains.
       await expect(page.locator("[data-cycle-callout]")).toBeVisible();
-      await expect(
-        page.locator('[data-cycle-group="loom-cycle-b"]'),
-      ).toBeVisible();
-      await expect(page.locator('[data-marker="in-cycle"]').first()).toBeVisible();
-      // 2. A ghost with its project chip — the cross-project `blocks` edge,
-      //    and the one row on this page that belongs to another scope.
-      await expect(
-        page.locator('[data-ghost-project="lithos-lens"]'),
-      ).toBeVisible();
-      // 3. The legend and the chain line, both of which the text baseline
-      //    needs because it has no arrows to read direction from.
+      await expect(canvas).toHaveAttribute("data-canvas-cycles", "1");
+      // The members are INSIDE the box, which is the whole convention: a
+      // parent node drawn beside them would bracket nothing.
+      const inBox = await page.evaluate(() => {
+        const graph = (window as any).LithosLensGraph;
+        // Cytoscape's element ids are opaque here (a task id may be
+        // `__proto__`, which the library itself cannot hold), so the box's
+        // members are compared as elements rather than as strings.
+        const children = graph.cycle("loom-cycle-b").children();
+        const expected = ["loom-cycle-a", "loom-cycle-b"].map((id) =>
+          graph.node(id).id(),
+        );
+        return {
+          children: children.map((node: any) => node.id()).sort(),
+          expected: expected.sort(),
+        };
+      });
+      expect(inBox.children).toEqual(inBox.expected);
+      expect(inBox.children.length).toBe(2);
+      // 2. The ghost: drawn, dimmed, and carrying its project on the label —
+      //    the cross-project `blocks` edge, the one node here that belongs to
+      //    another scope.
+      const ghost = await page.evaluate(() => {
+        const node = (window as any).LithosLensGraph.node("lens-graph-page");
+        return { opacity: Number(node.style("opacity")), label: node.data("label") };
+      });
+      expect(ghost.opacity).toBeLessThan(1);
+      expect(ghost.label).toContain("lithos-lens");
+      // 3. ARROWHEADS ON EVERY EDGE (D8) — the claim this whole artifact is
+      //    for, since direction is the one thing a graph must not be readable
+      //    two ways.
+      const drawn = await page.evaluate(() =>
+        (window as any).LithosLensGraph.shown(),
+      );
+      expect(drawn.edges.length).toBeGreaterThan(0);
+      expect(
+        drawn.edges.filter((edge: any) => edge.arrow !== "triangle"),
+      ).toEqual([]);
+      // 4. The legend and the chain line, both persistent beside the canvas.
       await expect(page.locator("[data-graph-legend]")).toBeVisible();
       await expect(
         page.locator('[data-longest-chain][data-chain-bound="exact"]'),
       ).toBeVisible();
-      // 4. Depth: the demo's chain is five deep, so layer 4 must exist — a
-      //    flattened graph would still render, and would be the wrong picture.
-      await expect(page.locator('[data-graph-layer="4"]')).toBeVisible();
-      // 5. The disclosure, CLOSED: collapsed on a project scope is the
+      // 5. The text is COLLAPSED, not gone: depth (the demo's chain is five
+      //    deep), the bracketed cycle, the ghost chip and the hierarchy tree
+      //    are all still in the DOM behind the "show as text" toggle.
+      await expect(page.locator("[data-graph-layers]")).toBeHidden();
+      await expect(page.locator('[data-graph-layer="4"]')).toBeAttached();
+      await expect(page.locator('[data-cycle-group="loom-cycle-b"]')).toBeAttached();
+      await expect(page.locator('[data-ghost-project="lithos-lens"]')).toBeAttached();
+      await expect(
+        page.locator("[data-hierarchy-tree] [data-hierarchy-node]").first(),
+      ).toBeAttached();
+      await expect(page.locator("[data-toggle-text]")).toBeVisible();
+      // 6. The disclosure, CLOSED: collapsed on a project scope is the
       //    acceptance criterion, and `open` is the other artifact below.
       await expect(page.locator("[data-isolated-disclosure]")).toHaveJSProperty(
         "open",
         false,
       );
-      // 6. The hierarchy tree, which is rendered whatever the overlays say.
-      await expect(
-        page.locator("[data-hierarchy-tree] [data-hierarchy-node]").first(),
-      ).toBeVisible();
       // 7. And it is the HEALTHY picture: no cycle-signal banner belongs on
       //    the artifact the PRD promises, or "signal incomplete" reads as
       //    this page's normal state.
       await expect(page.locator("[data-graph-banner]")).toHaveCount(0);
       await expect(page.locator("[data-graph-refusal]")).toHaveCount(0);
+      // 8. And it is READABLE at this width, whichever width that is.
+      await canvasIsLegible(page);
+    },
+  },
+  {
+    // The other half of A4, which no still of the default view can show: both
+    // overlays switched on from the URL, and the side panel open BESIDE the
+    // canvas (D9) rather than overlaying it the way the dashboard's does.
+    slug: "graph-focus",
+    url: "/tasks/graph?project=lithos-loom&overlays=hierarchy,provenance&focus=loom-ship",
+    ready: async (page) => {
+      await expect(
+        page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      // The panel the URL's `focus` opened, showing THAT task.
+      await expect(
+        page.locator('[data-panel-host] [data-panel-task="loom-ship"]'),
+      ).toBeVisible();
+      // Both overlays drawn from the payload — including the provenance edge
+      // whose source is a completed task outside this open-only scope, which
+      // is the context ghost D6 resolves on every request so that toggling
+      // costs no fetch.
+      const types = await page.evaluate(() =>
+        (window as any).LithosLensGraph.shown().edges.map((edge: any) => edge.type),
+      );
+      expect(types).toContain("parent_child");
+      expect(types).toContain("discovered_from");
+      const source = await page.evaluate(() =>
+        (window as any).LithosLensGraph.node("loom-research-old").style("display"),
+      );
+      expect(source).not.toBe("none");
+      // The canvas gave the panel its room: Cytoscape sizes its drawing
+      // surface to the container once and does not watch it, so without the
+      // resize the graph would be painted straight across the panel that just
+      // opened — a picture no reviewer could read and no assertion on the
+      // markup would catch.
+      const sized = await page.evaluate(() => {
+        const node = document.querySelector("[data-graph-canvas]") as HTMLElement;
+        return {
+          container: node.clientWidth,
+          drawn: (window as any).LithosLensGraph.cy.width(),
+        };
+      });
+      expect(sized.drawn).toBe(sized.container);
+      await canvasIsLegible(page);
     },
   },
   {
@@ -276,6 +393,14 @@ const PAGES: ReadonlyArray<{
     slug: "graph-degraded",
     url: `${GRAPH_BASE_URL}/tasks/graph?epic=${GRAPH_DEGRADED_SCOPE}`,
     ready: async (page) => {
+      // THE TEXT artifact, deliberately: the markers below are sentences, not
+      // shapes, so this capture takes the canvas's "show as text" toggle back
+      // to the baseline A3 renders — which also proves the toggle restores it
+      // rather than merely hiding it (D3: the text stays in the DOM).
+      await expect(
+        page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await page.locator("[data-toggle-text]").click();
       // Still a graph, not an error page: degraded means partial, not absent.
       await expect(page.locator("[data-graph-layers]")).toBeVisible();
       // 1. The banner naming what the read did …

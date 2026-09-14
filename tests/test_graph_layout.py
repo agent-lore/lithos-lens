@@ -429,11 +429,18 @@ def test_a_cyclic_condensation_counts_once_in_the_chain() -> None:
     # B and C are one condensation, represented by B: A -> {B,C} -> D is 3.
     assert chain.nodes == ("A", "B", "D")
     assert chain.length == 3
+    # And the chain says what each of those three HOLDS, because nothing else
+    # in the render does: a client tracing it has to know the step into the
+    # condensation may land on C.
+    assert chain.members == (("A",), ("B", "C"), ("D",))
     # Focus resolves by MEMBERSHIP, so the member that is not the
-    # representative names the same condensation and traces the same chain.
+    # representative names the same condensation and traces the same chain —
+    # membership included, or the focused chain would be traced by a client
+    # that has only been told its representatives.
     for member in ("B", "C"):
         focused = longest_blocking_chain(topology, through=member)
         assert (focused.nodes, focused.length) == (chain.nodes, 3)
+        assert focused.members == (("A",), ("B", "C"), ("D",))
 
 
 def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:
@@ -455,6 +462,11 @@ def test_chain_condenses_the_active_projection_not_the_all_edge_one() -> None:
     assert chain.nodes == ("A", "B")
     assert chain.length == 2
     assert chain.bound == "exact"
+    # …and the chain's own membership is the ACTIVE partition, not that one
+    # (round-9 correctness f-001). A client mapping these ids through a node's
+    # display cycle would call `A -> B` internal to a condensation and mark
+    # completed C as on the chain.
+    assert chain.members == (("A",), ("B",))
 
 
 def test_focusing_a_node_on_the_longest_chain_keeps_that_chain() -> None:

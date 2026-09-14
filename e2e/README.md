@@ -97,7 +97,13 @@ e2e/artifacts/note-missing-1440.png
 
 The covered pages are the healthy dashboard and its truncated twin, four
 task-detail shapes, the graph page (`graph-picker`, `graph-project`,
-`graph-degraded`, `graph-refused`) and three note states. Each entry's
+`graph-focus`, `graph-degraded`, `graph-refused`) and three note states. Since
+T2-A4 the graph page's captures split by what they exist to show:
+`graph-project` and `graph-focus` are the CANVAS (arrowheads, the cycle as a
+compound node, the dimmed ghost, the overlays, the panel beside it), while
+`graph-degraded` takes the "show as text" toggle back to the text baseline,
+because the markers that capture is for are sentences rather than shapes. Each
+entry's
 `ready()` waits on **every** marker its picture exists to prove — this is the
 only place some of those claims are visible at all, and a capture that
 silently lost one must fail the suite rather than hand a reviewer a

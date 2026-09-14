@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from opentelemetry.trace import Span
 
@@ -35,7 +35,13 @@ from lithos_lens.graph_page import (
 )
 from lithos_lens.graph_scope import GraphScopeLimits
 from lithos_lens.state import AppState
-from lithos_lens.tasks import TaskRecord, default_since
+from lithos_lens.task_detail import TaskDetailData, load_task_detail
+from lithos_lens.tasks import (
+    GRAPH_SELECTION_KEY,
+    PANEL_SELECTION_KEY,
+    TaskRecord,
+    default_since,
+)
 from lithos_lens.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -53,9 +59,13 @@ def register_graph_routes(
     # filter set, so it does not travel through `request_filters`.
     templates.env.globals["graph_url"] = graph_url
     templates.env.globals["edge_legend"] = EDGE_LEGEND
+    # The page's single selection parameter, handed to `tasks.js` so the one
+    # panel implementation is told which key this host uses rather than
+    # carrying a copy of both pages' vocabularies (D9).
+    templates.env.globals["graph_selection_key"] = GRAPH_SELECTION_KEY
 
     @app.get("/tasks/graph", response_class=HTMLResponse)
-    async def tasks_graph(request: Request) -> HTMLResponse:
+    async def tasks_graph(request: Request) -> Response:
         """The dependency graph of one scope, or the picker when none is given.
 
         The no-JS baseline is the WHOLE page here (D3): layers, callout,
@@ -71,6 +81,16 @@ def register_graph_routes(
         fetch?" is a question the server span cannot answer.
         """
         params = parse_graph_params(dict(request.query_params))
+        # `selected=` is the DASHBOARD's selection parameter, accepted here as a
+        # compatibility alias (D8). Canonicalising it means REPLACING it, not
+        # merely reading it: this page has one selection parameter, and both
+        # clients read `focus`. A page served under the alias would render the
+        # panel while no node was lit, Escape would be inert, and closing would
+        # push a URL that still carried `selected=` — so the next reload, or the
+        # next Back, would reopen the panel the operator just closed. Redirected
+        # before any read, because the answer costs nothing to compute.
+        if PANEL_SELECTION_KEY in request.query_params:
+            return RedirectResponse(graph_url(params), status_code=307)
         snapshot = await state.refresh_health()
         context: dict[str, object] = {
             "config": state.config,
@@ -82,6 +102,11 @@ def register_graph_routes(
             "epics": (),
             "error": "",
             "offline": snapshot.lithos != "ok",
+            # The side panel's three hooks, filled in below when this render
+            # actually draws a graph (D9's no-JS baseline for `focus=`).
+            "panel": None,
+            "selected_id": params.focus,
+            "panel_close_url": graph_url(params, focus=""),
         }
         with get_tracer().start_as_current_span(GRAPH_SPAN) as span:
             if snapshot.lithos != "ok":
@@ -135,6 +160,8 @@ def register_graph_routes(
                 return templates.TemplateResponse(request, "tasks/graph.html", context)
 
             context["view"] = view
+            if not view.refused and view.nodes:
+                context["panel"] = await _focused_panel(state, params)
             _record(
                 span,
                 params,
@@ -142,6 +169,42 @@ def register_graph_routes(
                 view=view,
             )
             return templates.TemplateResponse(request, "tasks/graph.html", context)
+
+
+async def _focused_panel(
+    state: AppState, params: GraphPageParams
+) -> TaskDetailData | None:
+    """The panel `?focus=<id>` asks for, server-rendered (D9, T2-A4).
+
+    `focus` is this page's single selection parameter and it opens the SAME
+    panel a dashboard row does — so, like `?selected=` there, a deep link or a
+    shared URL has to arrive with the panel already up. The client layer is
+    enhancement over this, not the thing that creates it: with scripting off
+    there is no canvas to click and the panel is the only way the focused task
+    says anything at all.
+
+    Read AFTER the graph rather than beside it. The scope assembly is this
+    page's long pole and holds the fan-out semaphore for its whole duration, so
+    a concurrent panel read would contend with it for the one MCP session
+    rather than overlap it — and a failure here must cost the panel, never the
+    graph, which is why it degrades to `None` (an empty host, the same as no
+    focus) instead of reaching the route's scope-error branch.
+    """
+    if not params.focus:
+        return None
+    tasks_config = state.config.tasks
+    try:
+        detail = await load_task_detail(
+            state.lithos_client,
+            params.focus,
+            convention=tasks_config.project_convention,
+            tag_key=tasks_config.project_tag_key,
+        )
+    except Exception:
+        logger.warning("graph page focus panel failed", exc_info=True)
+        return None
+    metrics.tasks_panel_opens().add(1, {"source": "url"})
+    return detail
 
 
 async def _master_rows(state: AppState, params: GraphPageParams) -> list[TaskRecord]:

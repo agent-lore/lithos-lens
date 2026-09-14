@@ -14,6 +14,7 @@ renders that.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -30,7 +31,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from lithos_lens import graph_cycles, graph_scope
+from lithos_lens import graph_cycles, graph_routes, graph_scope
 from lithos_lens.config import DEFAULT_TASKS_FRONTIER_LIMIT, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_graph_dataset import edge_index
@@ -55,6 +56,13 @@ from lithos_lens.tasks import (
 )
 from lithos_lens.web import create_app
 from tests.conftest import metric_points, metric_value
+
+# The A4 canvas harness, borrowed rather than rebuilt: the payload's chain
+# membership is a claim with a PRODUCER here and a CONSUMER in `graph.js`, and
+# a contract asserted only on one side of a serialisation is the hole this
+# import closes (round-2 test-quality f-001). Underscored because they are that
+# module's own helpers; nothing in `lithos_lens` is reached privately.
+from tests.test_tasks_js import NODE, _edge_style, _graph_run
 
 pytestmark = pytest.mark.anyio
 
@@ -1740,12 +1748,129 @@ def test_the_payload_carries_D3_s_whole_schema(
     # The chain, its bound, and the roots the canvas lays out from.
     assert data["longest_chain"]["bound"] == "lower_bound"
     assert data["longest_chain"]["length"] == len(data["longest_chain"]["nodes"])
+    # Each chain node with what its condensation HOLDS, parallel to `nodes`.
+    # The chain condenses the ACTIVE projection and the nodes' `cycle` is the
+    # all-edge one, so this is the only statement of that partition the canvas
+    # can trace the chain by.
+    members = data["longest_chain"]["members"]
+    assert len(members) == len(data["longest_chain"]["nodes"])
+    assert [group[0] for group in members] == data["longest_chain"]["nodes"]
     assert "cyc-a" in data["roots"]
     assert set(data["roots"]) <= {node["id"] for node in data["nodes"]}
     # And it still agrees with the text about where every node is rendered.
     assert {node["id"]: node["layer"] for node in data["nodes"]} == rendered_layers(
         html
     )
+
+
+def _mixed_cycle_fake() -> GraphFakeClient:
+    """A drawn cycle the ACTIVE projection does not agree is one.
+
+    ``cyc-a -> cyc-b`` is live; ``cyc-b -> cyc-c`` is inactive (its dependent
+    completed) and ``cyc-c -> cyc-a`` is inactive (its predecessor did). All
+    three are ONE all-edge SCC — the box the canvas draws — while the active
+    projection makes three nodes and the longest chain is ``cyc-a -> cyc-b``.
+    """
+    return GraphFakeClient(
+        dataset(
+            [task("cyc-a"), task("cyc-b"), task("cyc-c", status="completed")],
+            [
+                ("cyc-a", "cyc-b", "blocks"),
+                ("cyc-b", "cyc-c", "blocks"),
+                ("cyc-c", "cyc-a", "blocks"),
+            ],
+        )
+    )
+
+
+def _active_cycle_fake() -> GraphFakeClient:
+    """The other shape: a cycle that IS one in the active projection too.
+
+    ``p -> cyc-y``, ``cyc-x <-> cyc-y``, ``cyc-x -> d``. The chain condenses
+    the loop and names it by ``cyc-x``, while the edge that enters it lands on
+    ``cyc-y`` — so a membership serialised as singletons breaks the trace
+    exactly at that boundary.
+    """
+    return GraphFakeClient(
+        dataset(
+            [
+                task("p", project="lens"),
+                task("cyc-x", project="lens"),
+                task("cyc-y", project="lens"),
+                task("d", project="lens"),
+            ],
+            [
+                ("p", "cyc-y", "blocks"),
+                ("cyc-x", "cyc-y", "blocks"),
+                ("cyc-y", "cyc-x", "blocks"),
+                ("cyc-x", "d", "blocks"),
+            ],
+        )
+    )
+
+
+MIXED_CYCLE_URL = f"/tasks/graph?project={PROJECT}&include_resolved=1"
+ACTIVE_CYCLE_URL = "/tasks/graph?project=lens"
+
+
+def test_the_payloads_chain_membership_is_the_active_partition(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The chain names condensations of the ACTIVE projection, and the payload
+    has to state THAT partition — the canvas has nothing else to trace the
+    chain by, and the `cycle` each node carries is the all-edge one the picture
+    is drawn from (round-2 test-quality f-001).
+
+    Asserted as the exact groups, on the two shapes that fail differently:
+    serialising the drawn cycle's membership breaks the first, and serialising
+    a singleton per chain node breaks the second.
+    """
+    mixed = payload(get(lithos_lens_config_env, _mixed_cycle_fake(), MIXED_CYCLE_URL))
+    active = payload(
+        get(lithos_lens_config_env, _active_cycle_fake(), ACTIVE_CYCLE_URL)
+    )
+
+    # One drawn cycle of three, and a chain of two that holds one task each.
+    assert mixed["cycles"][0]["members"] == ["cyc-a", "cyc-b", "cyc-c"]
+    assert [node["cycle"] for node in mixed["nodes"]] == ["cyc-a"] * 3
+    assert mixed["longest_chain"]["nodes"] == ["cyc-a", "cyc-b"]
+    assert mixed["longest_chain"]["members"] == [["cyc-a"], ["cyc-b"]]
+    # And where the loop IS live, the chain's middle condensation holds both
+    # members — the one the chain names and the one the entering edge lands on.
+    assert active["longest_chain"]["nodes"] == ["p", "cyc-x", "d"]
+    assert active["longest_chain"]["members"] == [["p"], ["cyc-x", "cyc-y"], ["d"]]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_canvas_traces_the_chain_the_served_payload_states(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same two payloads, SERVED by this route and drawn by the real
+    `graph.js` against the real Cytoscape — the producer and the consumer in
+    one test, so a membership serialised wrong cannot be green at both ends
+    while the picture contradicts the text (round-2 test-quality f-001)."""
+    served = payload(get(lithos_lens_config_env, _mixed_cycle_fake(), MIXED_CYCLE_URL))
+    mixed = _graph_run([], href=f"http://lens.test{MIXED_CYCLE_URL}", payload=served)
+    served = payload(
+        get(lithos_lens_config_env, _active_cycle_fake(), ACTIVE_CYCLE_URL)
+    )
+    active = _graph_run([], href=f"http://lens.test{ACTIVE_CYCLE_URL}", payload=served)
+
+    # The live step inside the drawn cycle is traced …
+    assert "chain" in _edge_style(mixed, "cyc-a", "cyc-b", "blocks")["classes"]
+    assert "chain" in mixed["styles"]["cyc-a"]["classes"]
+    assert "chain" in mixed["styles"]["cyc-b"]["classes"]
+    # … and the completed task the chain does not name is not accented, though
+    # the picture draws it in the same box.
+    assert "chain" not in mixed["styles"]["cyc-c"]["classes"]
+    assert mixed["styles"]["cyc-c"]["parent"] == "cycle::cyc-a"
+
+    # And where the loop is live, the trace crosses it: the edge enters at the
+    # member the chain does NOT name, and both members are on it.
+    assert "chain" in _edge_style(active, "p", "cyc-y", "blocks")["classes"]
+    assert "chain" in _edge_style(active, "cyc-x", "d", "blocks")["classes"]
+    assert "chain" in active["styles"]["cyc-x"]["classes"]
+    assert "chain" in active["styles"]["cyc-y"]["classes"]
 
 
 # ── The route's own shape: picker and refusal ───────────────────────────
@@ -2532,3 +2657,319 @@ def test_the_picker_and_an_offline_page_carry_their_own_outcomes(
             ).value
             == 1
         ), outcome
+
+
+# ── What A4's canvas is handed (D8/D9) ──────────────────────────────────
+#
+# The canvas itself is a Cytoscape instance and is asserted in
+# `tests/test_tasks_js.py` (browser behaviour) and the e2e captures (pixels).
+# What belongs HERE is the server's half of that contract: the fields the
+# picture cannot derive, the toolbar URLs the overlays are remembered in, and
+# the fact that the vendored bundle is loaded on a page that has a graph to
+# draw and on no other.
+
+
+def test_the_payload_carries_the_claims_and_detail_url_the_canvas_cannot_derive(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Two fields the picture needs and nothing in the topology implies.
+
+    A claim is what makes a node "in progress" on the canvas, and the detail
+    URL is `tasks.task_detail_path`'s answer — the rule that an id colliding
+    with a page under `/tasks/` is addressed through the query alias lives
+    there, and a double-click that rebuilt it in the browser would send the
+    operator to the graph PAGE for a task called `graph`.
+    """
+    rows = [task("a"), task("graph")]
+    data = FakeLithosDataset(
+        tasks=tuple(rows),
+        edges=edge_index((("a", "graph", "blocks"),)),
+        claims={"a": (ClaimRecord(agent="worker-a", aspect="impl"),)},
+    )
+    fake = GraphFakeClient(data)
+
+    nodes = {
+        node["id"]: node
+        for node in payload(
+            get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+        )["nodes"]
+    }
+
+    assert nodes["a"]["claims"] == ["worker-a"]
+    assert nodes["graph"]["claims"] == []
+    assert nodes["a"]["detail_url"] == task_detail_path("a")
+    assert nodes["graph"]["detail_url"] == "/tasks/id?task_id=graph"
+
+
+def test_an_overlay_toggle_flips_its_own_overlay_and_leaves_the_other_alone() -> None:
+    """D8's two overlays are independent switches, so the link that turns one
+    on must not turn the other off as a side effect. An empty result drops the
+    parameter entirely — "absent" and "none" are the same state, which is what
+    lets the client read a missing parameter as no overlays."""
+    none = parse_graph_params({"project": PROJECT})
+    both = parse_graph_params({"project": PROJECT, "overlays": "hierarchy,provenance"})
+
+    assert "overlays=hierarchy" in graph_url(none, toggle_overlay="hierarchy")
+    assert "provenance" not in graph_url(none, toggle_overlay="hierarchy")
+    assert "overlays=hierarchy" in graph_url(both, toggle_overlay="provenance")
+    assert "provenance" not in graph_url(both, toggle_overlay="provenance")
+    assert "overlays=" not in graph_url(
+        parse_graph_params({"project": PROJECT, "overlays": "hierarchy"}),
+        toggle_overlay="hierarchy",
+    )
+    # And the rest of the page's state rides along, the way every other toggle
+    # link does — an overlay switch is not a new scope.
+    focused = parse_graph_params({"project": PROJECT, "focus": "abc", "isolated": "1"})
+    switched = graph_url(focused, toggle_overlay="provenance")
+    assert "focus=abc" in switched
+    assert "isolated=1" in switched
+
+
+def test_the_toolbar_offers_both_overlays_and_the_canvas_hosts_the_panel_beside_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The no-JS half of A4: both overlays are real links carrying the URL the
+    choice is remembered in, and the CANVAS — not the surface around it — is
+    rendered hidden, so a browser that never runs `graph.js` sees exactly the
+    text page A3 shipped. The surface stays visible because the side panel
+    lives in it (D9), and hiding the pair would hide the panel too."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert 'data-toggle-overlay="hierarchy"' in html
+    assert 'data-toggle-overlay="provenance"' in html
+    assert "overlays=hierarchy" in html and "overlays=provenance" in html
+    canvas = only_group(r"(<div class=\"graph-canvas\"[^>]*>)", html)
+    assert "data-graph-canvas" in canvas
+    assert "hidden" in canvas
+    surface = only_group(r"(<section class=\"graph-canvas-layout\"[^>]*>)", html)
+    assert "hidden" not in surface, "the side panel's own surface is hidden too"
+    assert "data-panel-host" in html
+    # Off by default, both of them (D8): the default view is dependency flow.
+    assert 'data-overlay-on="false"' in html
+    assert 'data-overlay-on="true"' not in html
+
+
+def test_the_overlay_toggles_report_the_state_the_url_asks_for(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(
+        lithos_lens_config_env,
+        fake,
+        f"/tasks/graph?project={PROJECT}&overlays=hierarchy",
+    )
+
+    hierarchy = only_group(r"(<a\s+data-toggle-overlay=\"hierarchy\".*?</a>)", html)
+    provenance = only_group(r"(<a\s+data-toggle-overlay=\"provenance\".*?</a>)", html)
+    assert 'data-overlay-on="true"' in hierarchy
+    assert "Hide hierarchy" in hierarchy
+    assert 'data-overlay-on="false"' in provenance
+    assert "Show provenance" in provenance
+
+
+def test_cytoscape_loads_on_a_drawn_scope_and_on_no_other_state(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ~400KB vendored bundle, on the one page that draws a graph and only
+    when there is something to draw: the picker, a refusal and an empty scope
+    have no canvas, so shipping the parser to them is pure cost."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    drawn = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    picker = get(lithos_lens_config_env, fake, "/tasks/graph")
+    empty = get(lithos_lens_config_env, fake, "/tasks/graph?project=nobody-here")
+    board = get(lithos_lens_config_env, fake, "/tasks")
+    # The refusal is RENDERED, not assumed: it is the state whose whole point
+    # is that the scope was too big to draw, which is the last page that should
+    # pay for a graph library (round-8 test-quality f-011).
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "1")
+    refused = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    monkeypatch.delenv("LITHOS_LENS_GRAPH_MAX_TASKS")
+    assert "data-graph-refusal" in refused
+    assert "data-graph-canvas" not in refused
+
+    for asset in ("vendor/cytoscape.min.js", "graph.js"):
+        assert asset in drawn, asset
+        assert asset not in picker, asset
+        assert asset not in empty, asset
+        assert asset not in board, asset
+        assert asset not in refused, asset
+    # And the panel it shares with the dashboard is told THIS page's selection
+    # parameter, because one implementation serves both hosts (D9).
+    assert 'selectionParam: "focus"' in drawn
+    # …without the reconcile the board runs: a task event here raises the
+    # "graph changed" pill instead of re-fetching a whole graph assembly.
+    assert "liveRefresh: false" in drawn
+
+
+#: The graph page's one vendored dependency is pinned in a DOCUMENT, not here:
+#: `docs/vendor-assets.md` is where the version, the source URL and the
+#: checksum are recorded (Lens serves production frontend dependencies from
+#: local files, never a CDN). The test below reads that row rather than
+#: restating it — a pin spelled twice is a pin that can disagree with itself.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VENDOR_ASSETS_DOC = REPO_ROOT / "docs/vendor-assets.md"
+
+
+def test_the_vendored_cytoscape_is_the_asset_the_docs_pin() -> None:
+    """A4 is written against Cytoscape 3.30.3 — its layout, its event surface
+    and its style vocabulary — and `tests/test_tasks_js.py` drives the SHIPPED
+    bundle for exactly that reason. Asserting only that a file named
+    `vendor/cytoscape.min.js` is referenced would pass on any other version, or
+    on any other file with that name (round-8 test-quality f-011)."""
+    row = only_group(
+        r"(\| Cytoscape\.js \|[^\n]*)", VENDOR_ASSETS_DOC.read_text(encoding="utf-8")
+    )
+    _, _, path, version, _source, digest, _ = (cell.strip() for cell in row.split("|"))
+    bundle = REPO_ROOT / path.strip("`")
+
+    assert version == "3.30.3", "docs/vendor-assets.md no longer pins the A4 version"
+    assert bundle.is_file(), bundle
+    assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest.strip("`")
+    # And the bundle says so itself, so a re-minified build of another release
+    # carrying the recorded name cannot pass for it.
+    assert f'version="{version}"' in bundle.read_text(encoding="utf-8")
+
+
+def test_a_focus_in_the_url_server_renders_that_task_s_panel(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D9's no-JS baseline. `focus` is this page's single selection parameter
+    and it opens the SAME panel a dashboard row does, so a deep link or a
+    shared URL has to arrive with the panel already up — with scripting off
+    there is no canvas to click, and the panel is the only thing the focused
+    task says at all. The client layer is enhancement over this, never the
+    thing that creates it.
+    """
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    focused = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b"
+    )
+    plain = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    assert 'data-panel-task="b"' in focused, "no panel in the server's own HTML"
+    assert "B" in only_group(r"(<aside class=\"task-panel\".*?</aside>)", focused)
+    # The host carries the id the REQUEST named and the URL the server built
+    # for it, the way the dashboard's does — that pair is what reopens a task
+    # with no node to read it off.
+    assert 'data-panel-selected="b"' in focused
+    # Close clears the selection and nothing else: the scope survives it.
+    close = only_group(r'href="([^"]+)" data-panel-close', focused)
+    assert f"project={PROJECT}" in close
+    assert "focus=" not in close
+    # …and an unfocused render carries no panel at all.
+    assert "data-task-panel" not in plain
+
+
+def test_a_focus_naming_no_task_leaves_the_graph_standing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A bad id in a shared URL must not cost the operator the graph: Lithos's
+    own `task_not_found` renders the not-found PANEL beside a perfectly good
+    picture, exactly as it does beside the board."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=nobody"
+    )
+
+    assert "data-graph-layers" in html
+    assert 'data-panel-state="not-found"' in html
+
+
+def test_the_focus_panel_is_counted_as_a_url_open(
+    lithos_lens_config_env: Path, metric_reader: InMemoryMetricReader
+) -> None:
+    """`lens_tasks_panel_opens_total{source="url"}` is the SSR baseline's
+    counter (§5.12), and the graph page's `focus=` is one of its two hosts."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b")
+
+    assert (
+        metric_value(metric_reader, "lens_tasks_panel_opens_total", source="url").value
+        == 1
+    )
+
+
+def test_an_unselected_panel_host_is_empty_so_the_canvas_keeps_the_width(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Beside the canvas the host is a flex item, and `.task-panel-host:empty`
+    is the rule that collapses it when nothing is selected. A newline between
+    its tags is a text node — `:empty` stops matching and the picture loses a
+    quarter of its width to a panel that is not there."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+
+    host = only_group(r"(<div\s+class=\"graph-panel-host[^>]*>.*?</div>)", html)
+    assert host.endswith("></div>"), host
+
+
+def test_the_dashboards_selected_alias_is_replaced_by_focus(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D8 gives this page ONE selection parameter and accepts the dashboard's
+    `selected=` as a compatibility alias — which means replacing it, not just
+    reading it. Served under the alias, the panel would render while no node
+    was lit, Escape would be inert, and closing would push a URL still carrying
+    `selected=`, so the next reload reopened the panel just closed.
+    """
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/graph?project={PROJECT}&selected=b", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    location = unescape(response.headers["location"])
+    assert "focus=b" in location
+    assert "selected=" not in location
+    assert f"project={PROJECT}" in location
+
+
+def test_focus_wins_over_the_alias_and_the_alias_still_goes(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A hand-edited URL carrying both names one selection, not two: `focus`
+    is the page's own and the alias is dropped, so closing cannot leave a stale
+    one behind."""
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            f"/tasks/graph?project={PROJECT}&selected=a&focus=b", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    location = unescape(response.headers["location"])
+    assert "focus=b" in location
+    assert "selected=" not in location and "=a" not in location
+
+
+def test_a_panel_read_that_raises_leaves_the_graph_standing(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel is one read beside a whole graph assembly, so its failure may
+    cost the panel and nothing else: an empty host beside a perfectly good
+    picture, never the scope-error page."""
+
+    async def boom(*args: object, **kwargs: object) -> object:
+        raise LithosToolError("detail read failed", code="internal_error")
+
+    monkeypatch.setattr(graph_routes, "load_task_detail", boom)
+    fake = GraphFakeClient(dataset([task("a"), task("b")], [("a", "b", "blocks")]))
+
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b")
+
+    assert "data-graph-layers" in html
+    assert "data-graph-error" not in html
+    host = only_group(r"(<div\s+class=\"graph-panel-host[^>]*>.*?</div>)", html)
+    assert host.endswith("></div>"), host

@@ -169,3 +169,57 @@ test("a task event refreshes the open side panel without losing the selection", 
   await expect(page).toHaveURL(/\?project=lithos-loom&selected=loom-worker$/);
   await expect(page.locator(".task-board")).toBeVisible();
 });
+
+test("a task event for a node on the graph page raises the pill and moves nothing", async ({
+  page,
+  request,
+}) => {
+  // D8: the graph stays still while it is read. An event that touches a node
+  // on this page raises "graph changed — refresh" and stops there; a re-layout
+  // under the operator's cursor is exactly the behaviour this replaces.
+  //
+  // It lives in THIS phase because it publishes at all — the event fans to
+  // every connected tab, and `task.updated` would send any open dashboard into
+  // a reconcile.
+  await page.goto("/tasks/graph?project=lithos-loom");
+  await expect(
+    page.locator('[data-graph-canvas][data-canvas-state="ready"]'),
+  ).toBeVisible();
+  const before = await page.evaluate(() =>
+    JSON.stringify((window as any).LithosLensGraph.positions()),
+  );
+
+  const pill = page.locator("[data-graph-refresh-pill]");
+  await expect(pill).toBeHidden();
+
+  // Re-published until it lands: the graph page carries no live-status chrome
+  // to wait on, so "the subscription is up" is not otherwise observable, and
+  // one publish into a tab that is still connecting would be a silent miss.
+  // Each carries its own id, or the client's dedup would drop the retries.
+  await expect
+    .poll(
+      async () => {
+        const response = await request.post("/tasks/events/publish", {
+          data: {
+            id: `evt-e2e-graph-pill-${Date.now()}`,
+            type: "task.updated",
+            task_id: "loom-ship",
+            // The board's reconcile is off on this page anyway (`liveRefresh`),
+            // but a true flag here would also move fixture rows under any other
+            // tab the suite has open.
+            requires_refresh: false,
+          },
+        });
+        expect(response.status()).toBe(202);
+        return pill.isVisible();
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  // …and the picture did not move.
+  const after = await page.evaluate(() =>
+    JSON.stringify((window as any).LithosLensGraph.positions()),
+  );
+  expect(after).toBe(before);
+});
