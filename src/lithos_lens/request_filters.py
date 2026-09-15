@@ -43,6 +43,8 @@ from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     PANEL_FRAGMENT_KEY,
     PANEL_FRAGMENT_VALUE,
+    PANEL_SCOPE_KEY,
+    PANEL_SNAPSHOT_KEY,
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
@@ -74,6 +76,13 @@ _PRESERVED_FILTER_KEYS = (
 # reason: ``chain`` describes one expansion walk, so re-emitting it onto a
 # board, tag or detail URL would carry a walk into navigation it has nothing to
 # do with. Measured here, emitted only by the one builder that owns it.
+# The graph panel's ``canvas_bound`` / ``canvas_chain`` (T2-A7) are deliberately
+# absent: a bounded flag and two integers, rendered into one sentence and
+# re-emitted into nothing, so they multiply no bytes. Measuring them would also
+# make Lens's own appended annotation able to push a request the page already
+# accepted past this ceiling, refusing the panel of a graph it just drew
+# (round-5 correctness f-009) — which is why they are named apart from
+# ``chain`` rather than sharing its key.
 _MEASURED_QUERY_KEYS = (*_PRESERVED_FILTER_KEYS, "chain")
 
 
@@ -276,7 +285,14 @@ def task_detail_url(request: Request, task_id: str) -> str:
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 
-def panel_fragment_url(request: Request, task_id: str) -> str:
+def panel_fragment_url(
+    request: Request,
+    task_id: str,
+    *,
+    scope: str = "",
+    include_resolved: bool | None = None,
+    snapshot: str = "",
+) -> str:
     """Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
 
     Emitted onto every row as ``data-panel-url`` so the click handler in
@@ -288,9 +304,40 @@ def panel_fragment_url(request: Request, task_id: str) -> str:
     generated tasks URL uses, so the panel's own Expand and Close links come
     back carrying the scope the operator is browsing under rather than dropping
     it the moment the panel opens.
+
+    ``scope`` is the graph page's own — ``project:<slug>`` / ``epic:<id>`` —
+    and it is what turns on the downstream impact line (D10, T2-A7). It is
+    passed rather than derived from the request because the board's ``project``
+    filter is a different thing from a graph scope, and reading one as the
+    other would make the dashboard's panel claim a count over a graph nobody
+    assembled.
+
+    That difference runs the other way too, which is why a scoped panel URL
+    carries NO preserved filters: the graph page's ``project=`` / ``epic=`` are
+    scope SELECTORS from a query vocabulary of their own, admitted without the
+    board's byte ceiling (that ceiling bounds what a response re-emits per row,
+    and this page has no rows). Copying one into the fragment as though it were
+    a filter hands the detail route a query it refuses — and a refused fragment
+    is an empty panel, so Back would restore a focused node with nothing beside
+    it (round-6 correctness f-010). Nothing is lost by dropping them: the graph
+    page sets no board filters, and the panel's own Close comes from the host
+    (``panel_close_url``) rather than from this query.
+
+    ``snapshot`` travels with it: the scope names which graph to assemble, and
+    this names the one the page is DRAWING (``GraphPageView.fingerprint``), so
+    a panel whose read finds a moved graph says so instead of counting over it.
     """
-    params = _preserved_filter_params(request)
+    params = [] if scope else _preserved_filter_params(request)
     params.append((PANEL_FRAGMENT_KEY, PANEL_FRAGMENT_VALUE))
+    if scope:
+        params.append((PANEL_SCOPE_KEY, scope))
+        if include_resolved is not None:
+            # The scope's membership travels WITH the scope: the panel has to
+            # assemble the same graph its page did, or a click and a deep link
+            # to the same task answer differently.
+            params.append(("include_resolved", "1" if include_resolved else "0"))
+        if snapshot:
+            params.append((PANEL_SNAPSHOT_KEY, snapshot))
     path = task_detail_path(task_id)
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 

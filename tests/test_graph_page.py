@@ -261,6 +261,17 @@ class GraphFakeClient:
             task_id, direction=direction, types=types
         )
 
+    def replace_dataset(self, data: FakeLithosDataset) -> None:
+        """Swap the fixture under a LIVE client — "Lithos moved" as a fixture.
+
+        The dataset is frozen, so a test cannot edit one in place; and the
+        interesting window is BETWEEN two requests of the same session, where
+        the app's caches and its edge-read history are already warm. Replacing
+        the wrapped client is the whole of it — the call logs above are this
+        object's and survive.
+        """
+        self._client = FakeLithosClient(dataset=data)
+
     def __getattr__(self, name: str) -> Any:
         # Everything the app touches that this page does not: health probes,
         # agent lists, findings. Delegated rather than reimplemented.
@@ -1715,11 +1726,15 @@ def test_the_payload_carries_D3_s_whole_schema(
         "cycles",
         "ghosts",
         "longest_chain",
+        # The DP behind every chain this page can be asked to trace (T2-A7):
+        # focus transitions are client-side, so one chain is not enough.
+        "active_chain",
         "roots",
         "isolated",
         "incomplete",
         "as_of",
     }
+    assert set(data["active_chain"]) == {"of", "up", "down", "chain"}
     # Shape and verdict are separate fields because they are separate facts:
     # the canvas groups on `cycle` and marks on `flagged`.
     verdicts = {node["id"]: (node["cycle"], node["flagged"]) for node in data["nodes"]}
@@ -1727,6 +1742,11 @@ def test_the_payload_carries_D3_s_whole_schema(
     assert verdicts["open-task"] == ("", False)
     completeness = {node["id"]: node["completeness"] for node in data["nodes"]}
     assert completeness["broken"] == "edges_unknown"
+    # D8's lower bound, per node (T2-A7): `broken`'s edge list failed, so the
+    # SCOPE is incomplete and every node in it is one. The local, per-component
+    # case — and what the canvas does with the field — is pinned end to end by
+    # `test_the_lower_bound_is_per_component_from_the_payload_to_the_request`.
+    assert {node["bound"] for node in data["nodes"]} == {True}
     assert completeness["ghost"] == "status_unknown"
     assert completeness["cyc-a"] == "ok"
     assert data["ghosts"] == ["ghost"]
@@ -2002,6 +2022,51 @@ def test_selected_is_canonicalised_to_focus_and_defaults_flip_by_scope_kind() ->
         {"epic": "e1", "overlays": "hierarchy,bogus"}
     ).overlays
     assert overlays == ("hierarchy",)
+
+
+def test_a_focus_id_is_read_and_canonicalised_byte_for_byte() -> None:
+    """A task id is an arbitrary non-empty string (§5.1), so `" task "` is an
+    id Lens can really be handed — and it is a DIFFERENT id from `"task"`.
+    Trimming the selection parameter would look the other node up, and through
+    the `selected=` redirect would write the trimmed id into the URL bar
+    permanently; the client reads the same parameter raw, so it would also
+    split the two halves of the page (round-1 correctness f-003)."""
+    spaced = parse_graph_params({"project": "loom", "focus": " task "})
+    aliased = parse_graph_params({"project": "loom", "selected": " task "})
+
+    assert spaced.focus == " task "
+    assert aliased.focus == " task "
+    # The canonicalising redirect carries the id it was given, not a trimmed
+    # one — percent-encoded, which is what makes the space survive the URL.
+    assert "focus=+task+" in graph_url(aliased)
+    # Absent and empty are the only "no focus" there is.
+    assert parse_graph_params({"project": "loom"}).focus == ""
+    assert parse_graph_params({"project": "loom", "focus": ""}).focus == ""
+
+
+def test_a_focus_with_surrounding_space_focuses_that_node_and_not_its_neighbour(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same rule where it is visible: two nodes whose ids differ only in
+    the whitespace around them. The deep link names one of them, and the panel,
+    the lit node and the chain it traces must all be that one's."""
+    fake = GraphFakeClient(
+        dataset(
+            [task(" task "), task("task"), task("next")],
+            (("task", "next", "blocks"),),
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=%20task%20"
+    )
+
+    assert 'data-panel-selected=" task "' in html
+    assert 'data-graph-node=" task "' in html
+    # `task` blocks `next`; the node actually asked for blocks nothing, so the
+    # panel counts ITS neighbourhood — a trimmed read would print 1 here, the
+    # neighbour's answer under the focused node's name.
+    assert "Completing this frees 0 in this graph" in unescape(html)
 
 
 def test_a_new_scope_url_drops_the_current_page_s_focus() -> None:

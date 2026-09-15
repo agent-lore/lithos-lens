@@ -316,26 +316,19 @@ def _signal(
     because the other half of the pair is never issued at all.
     """
 
-    def covers(read: ProjectRead, task: TaskRecord) -> bool:
-        """Whether ``read`` would have returned ``task`` had it been blocked."""
-        if not read.ok:
-            return False
-        convention: ProjectConvention = (
-            "metadata" if read.by == READ_BY_PROJECT else "tag"
-        )
-        return read.project in task_projects(
-            task, convention=convention, tag_key=tag_key
-        )
-
     rows: dict[str, TaskRecord] = {}
-    blockers: dict[str, list[BlockerRecord]] = {}
+    blockers: dict[str, dict[tuple[str, str, str, str], BlockerRecord]] = {}
     for read in reads:
         for row in read.rows:
             rows.setdefault(row.task.id, row.task)
-            merged = blockers.setdefault(row.task.id, [])
-            merged.extend(blocker for blocker in row.blockers if blocker not in merged)
+            merged = blockers.setdefault(row.task.id, {})
+            for blocker in row.blockers:
+                # First one wins, so the merged row keeps the message of
+                # whichever read answered first — the same arbitrary-but-stable
+                # choice the fold makes about everything else here.
+                merged.setdefault(_blocker_identity(blocker), blocker)
     blocked = tuple(
-        BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id]))
+        BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id].values()))
         for task_id, task in rows.items()
     )
     in_scope = {node.id for node in scope.nodes if not node.ghost}
@@ -367,7 +360,7 @@ def _signal(
             # one (D4). Unknown, and said so rather than implied.
             projectless.append(node.id)
             unknown.add(node.id)
-        elif not any(covers(read, node.task) for read in reads):
+        elif not any(read_covers(read, node.task, tag_key=tag_key) for read in reads):
             unknown.add(node.id)
 
     return CycleSignal(
@@ -380,6 +373,52 @@ def _signal(
         unknown=frozenset(unknown),
         projectless=tuple(projectless),
     )
+
+
+def _blocker_identity(blocker: BlockerRecord) -> tuple[str, str, str, str]:
+    """What makes two rows from two reads the SAME blocker.
+
+    The pair of reads is two independent samples, not one snapshot, and
+    ``message`` is presentation text sampled with them: a gate's carries its
+    ``ready_at``, a cycle's the path it was detected through, and either can be
+    rewritten between the two calls while the blocking FACT stands still.
+    Deduplicating on the whole record would then keep both copies, and the one
+    consumer that reads the merged tuple's LENGTH — ``graph_impact``'s
+    sole-blocker count — would see two blockers where Lithos reported one and
+    withhold M's "immediately" from a dependent this task alone is blocking
+    (round-1 correctness f-002).
+
+    So identity is the four fields the answer is actually computed from — the
+    same four ``graph_impact.impact_fingerprint`` folds into its digest, and
+    the same four ``read_covers`` and the cycle markers read.
+    """
+    return (blocker.kind, blocker.task_id, blocker.type, blocker.status)
+
+
+def read_covers(read: ProjectRead, task: TaskRecord, *, tag_key: str) -> bool:
+    """Whether ``read`` would have returned ``task`` had it been blocked (D4).
+
+    Coverage belongs to the READ, not to the project: ``project=<slug>`` is
+    §5B.1's metadata convention and ``tags=["<key>:<slug>"]`` the tag one, so a
+    complete response from a filter this task cannot match establishes nothing
+    about it. And only a complete response establishes ABSENCE at all — a
+    truncated, failed or unissued read is silence, never "not blocked".
+    """
+    if not read.ok:
+        return False
+    convention: ProjectConvention = "metadata" if read.by == READ_BY_PROJECT else "tag"
+    return read.project in task_projects(task, convention=convention, tag_key=tag_key)
+
+
+def blocked_coverage(signal: CycleSignal, task: TaskRecord, *, tag_key: str) -> bool:
+    """Whether some complete read could have returned ``task``.
+
+    The question the cycle markers ask of an in-scope task, asked here of any
+    task — which is what the downstream impact count needs (D10): a DEPENDENT
+    may be a ghost, and its sole-blocker fact is exactly why its project is in
+    the coverage set.
+    """
+    return any(read_covers(read, task, tag_key=tag_key) for read in signal.reads)
 
 
 def _read_kinds(convention: ProjectConvention) -> tuple[str, ...]:

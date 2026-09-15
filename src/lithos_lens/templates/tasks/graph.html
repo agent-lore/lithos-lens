@@ -187,6 +187,25 @@
           href="{{ graph_url(params, toggle_overlay=overlay) }}"
         >{{ "Hide" if overlay in params.overlays else "Show" }} {{ label }}</a>
       {% endfor %}
+      {#
+        Search (D8): jump to a task by title substring or id prefix, within the
+        payload this page already carries — no fetch, and no server round trip.
+        Revealed by `graph.js` for the same reason the text toggle is: with no
+        scripting there is nothing to jump TO, and the browser's own find is
+        what searches the text baseline.
+      #}
+      <div class="graph-search" data-graph-search-control hidden>
+        <label class="graph-search-label" for="graph-search">Find a task</label>
+        <input
+          class="graph-search-input"
+          id="graph-search"
+          type="search"
+          autocomplete="off"
+          placeholder="title or id"
+          data-graph-search
+        >
+        <ul class="graph-search-results" data-graph-search-results></ul>
+      </div>
       {# Revealed by `graph.js` only: with no canvas there is nothing for the
          text to be shown INSTEAD of, and the button would toggle the whole
          page away. #}
@@ -321,7 +340,7 @@
       <div
         class="graph-panel-host task-panel-host"
         data-panel-host
-        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id) }}"{% endif %}
+        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id, scope=graph_scope_param(params), include_resolved=params.include_resolved, snapshot=view.fingerprint) }}"{% endif %}
       >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
       {# Raised by `graph.js` only while the picture is larger than the canvas
          can hold at a readable size. The alternative — scaling the whole graph
@@ -333,11 +352,22 @@
       </p>
     </section>
 
-    <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}">
+    {# In focus mode this is the chain THROUGH the focused task, which replaces
+       the scope's longest (D7/D8) — and says so, because a chain through a
+       mid-graph task is routinely shorter and an unlabelled number here would
+       understate the graph's own longest.
+
+       The three focus-dependent parts are their own elements because the
+       focus MOVES without this page being re-rendered: `graph.js` rewrites
+       the "through" clause, the length and the node list on every transition,
+       from the same projection it re-traces the canvas with. The lower-bound
+       wording around them is the scope's (an unreadable edge anywhere, D7)
+       and does not move with the focus, so it stays the server's. #}
+    <section class="panel" data-longest-chain data-chain-bound="{{ "exact" if view.chain.exact else "lower_bound" }}"{% if view.chain.through %} data-chain-through="{{ view.chain.through.id }}"{% endif %}>
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
         <p>
-          Longest blocking chain
+          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}</span>
           ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
           <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
         </p>
@@ -403,7 +433,7 @@
 {% endblock %}
 
 {% block scripts %}
-  {% if view and not view.refused and view.nodes %}
+  {% if view and not view.refused %}
     {#
       The interactive layer (D8), loaded on THIS page only: Cytoscape is a
       ~400KB vendored bundle and no other surface draws a graph.
@@ -415,18 +445,41 @@
       reconcile: a task event here raises the "graph changed" pill, because
       re-rendering the board's way would re-fetch a whole graph assembly and
       move the canvas under the operator's cursor.
+
+      The PANEL half is loaded whenever this page rendered a panel host, nodes
+      or none: a scope with nothing to draw still opens the panel its `focus=`
+      names (§5.12), and D8 requires Close and Escape to remove `focus` by
+      `pushState` — which is `tasks.js`'s to do. Without it the Close link
+      would follow its href and reload the document, and Escape would do
+      nothing at all (round-6 correctness f-004). The CANVAS half below stays
+      gated on there being something to draw: Cytoscape over an empty payload
+      is 400KB spent on an empty box.
     #}
     <script>
       window.LithosLensTasks = {
         selectionParam: {{ graph_selection_key | tojson }},
         panelAliasPath: {{ task_detail_alias_path | tojson }},
         panelAliasKey: {{ task_detail_alias_key | tojson }},
+        {# The scope every panel this page opens counts its impact over (D10).
+           Handed to `tasks.js` because it is what the browser-built fetch URL
+           would otherwise lack: a node has no row to read a server-built URL
+           off, and a panel fetched without the scope renders no impact at
+           all. #}
+        panelScope: {{ graph_scope_param(params) | tojson }},
+        panelScopeResolved: {{ params.include_resolved | tojson }},
+        {# The graph THIS render drew, so a panel fetched later can tell the
+           same graph from one that has moved since — the canvas does not
+           re-lay-out under the operator (D8), so an impact counted over a
+           moved graph would be read beside a picture of the older one. #}
+        panelSnapshot: {{ view.fingerprint | tojson }},
         liveRefresh: false,
         eventsUrl: "/tasks/events"
       };
     </script>
     <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
-    <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
-    <script src="{{ url_for('static', path='graph.js') }}" defer></script>
+    {% if view.nodes %}
+      <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
+      <script src="{{ url_for('static', path='graph.js') }}" defer></script>
+    {% endif %}
   {% endif %}
 {% endblock %}

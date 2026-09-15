@@ -169,6 +169,12 @@ classDiagram
     +misses int
     +ghost_reads int
   }
+  class CanvasNotes {
+    +stated bool
+    +relations_exact bool
+    +chain_position int
+    +chain_length int
+  }
   class ChainView {
     +exact bool
     +unreadable_nodes int
@@ -225,6 +231,19 @@ classDiagram
     +type str
     +state EdgeState
     +reason str
+  }
+  class DownstreamImpact {
+    +focus str
+    +state str
+    +frees int
+    +exact bool
+    +immediately int | None
+    +covered int
+    +unclassified tuple[str, ...]
+    +relations_exact bool
+    +chain_position int
+    +chain_length int
+    +stale bool
   }
   class EdgeCacheEntry {
     +task_id str
@@ -288,6 +307,7 @@ classDiagram
     +show_isolated bool
   }
   class GraphPageView {
+    +fingerprint str
     +edge_types tuple[str, ...]
     +edge_count int
     +coverage tuple[str, ...]
@@ -313,6 +333,13 @@ classDiagram
   class HierarchyRowView {
     +depth int
     +has_children bool
+  }
+  class ImpactClient
+  class ImpactScope {
+    +kind str
+    +key str
+    +include_resolved bool
+    +fingerprint str
   }
   class LayerGroup {
     +id str
@@ -354,6 +381,7 @@ classDiagram
     +blocked_via_cycle bool
     +unresolvable bool
     +focused bool
+    +bound bool
   }
   class PageTail {
     +shown int
@@ -441,6 +469,7 @@ classDiagram
   BlockerLevel "1" --> "1" LinkPage : page
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
   ChainView "1" --> "0..*" NodeView : nodes
+  ChainView "1" --> "0..1" NodeView : through
   Condensation "1" --> "0..1" Cycle : cycle
   CycleSignal "1" --> "0..*" BlockedTaskRecord : blocked
   CycleSignal "1" --> "0..*" BlockedTaskRecord : verdicts
@@ -467,6 +496,7 @@ classDiagram
   GraphPageView "1" --> "0..*" CycleView : cycles
   GraphPageView "1" --> "0..*" CycleView : external_cycles
   GraphPageView "1" --> "0..*" CycleView : unshaped_cycles
+  GraphPageView "1" --> "0..1" DownstreamImpact : impact
   GraphPageView "1" --> "0..*" EdgeView : incoming
   GraphPageView "1" --> "1" GraphPageParams : params
   GraphPageView "1" --> "0..*" HierarchyRowView : hierarchy

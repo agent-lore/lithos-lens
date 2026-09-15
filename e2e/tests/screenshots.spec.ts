@@ -344,7 +344,10 @@ const PAGES: ReadonlyArray<{
   {
     // The other half of A4, which no still of the default view can show: both
     // overlays switched on from the URL, and the side panel open BESIDE the
-    // canvas (D9) rather than overlaying it the way the dashboard's does.
+    // canvas (D9) rather than overlaying it the way the dashboard's does —
+    // and, from A7, EXPLORATION MODE on a mid-chain node: `loom-ship` sits at
+    // step 4 of the depth-5 chain, so its ancestors and descendants light and
+    // the rest of the board dims around it.
     slug: "graph-focus",
     url: "/tasks/graph?project=lithos-loom&overlays=hierarchy,provenance&focus=loom-ship",
     ready: async (page) => {
@@ -381,6 +384,35 @@ const PAGES: ReadonlyArray<{
         };
       });
       expect(sized.drawn).toBe(sized.container);
+      // Focus mode (D8), which is the whole reason this capture is worth a
+      // reviewer's eye: the classes are what the dimming is drawn FROM, so a
+      // still that looks right for the wrong reason is caught here.
+      const lighting = await page.evaluate(() => {
+        const graph = (window as any).LithosLensGraph;
+        const of = (name: string) =>
+          graph.cy
+            .nodes()
+            .filter((node: any) => node.hasClass(name))
+            .map((node: any) => node.data("label"))
+            .length;
+        return { lit: of("focus-lit"), dimmed: of("focus-dimmed") };
+      });
+      // The chain through it — schema → transport → worker → ship → announce —
+      // plus the cross-project ghost it blocks.
+      expect(lighting.lit).toBeGreaterThanOrEqual(5);
+      expect(lighting.dimmed).toBeGreaterThan(0);
+      // D10's line, from the demo board's own arithmetic: `loom-ship` blocks
+      // `loom-announce` and the lens ghost, and Lithos names it as the sole
+      // unsatisfied blocker of both — the cross-project half of the count is
+      // the one no single-project read could have answered.
+      await expect(page.locator("[data-panel-impact]")).toHaveText(
+        /frees 2 in this graph, 2 immediately/,
+      );
+      // The chain line follows the focus (D7).
+      await expect(page.locator("[data-longest-chain]")).toHaveAttribute(
+        "data-chain-through",
+        "loom-ship",
+      );
       await canvasIsLegible(page);
     },
   },

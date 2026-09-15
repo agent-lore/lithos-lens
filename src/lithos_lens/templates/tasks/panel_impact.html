@@ -1,0 +1,95 @@
+{#
+  The panel's downstream-impact slot (§5.5.1, D10) and the two notes about the
+  CANVAS beside it (D7/D8), in one file because three of the panel's branches
+  render them: the ordinary panel, and the two where the task itself could not
+  be read. A focused node's canvas statements do not depend on that read — the
+  operator is looking at a lit neighbourhood and a traced chain either way, and
+  hiding "what the canvas lights is a lower bound" behind a successful
+  `task_get` left a focused lower-bound picture beside "Task unavailable" with
+  neither statement (round-4 correctness f-007).
+
+  Context: `impact` (a graph_view.DownstreamImpact) or nothing, which is what
+  every panel with no `scope=` gets — the dashboard's renders this file and
+  states nothing.
+#}
+    {#
+      Downstream impact (§5.5.1, D10) — "frees N in this graph, M immediately".
+      N is counted over a SCOPE's active projection and M comes from that
+      scope's coverage-set blocked reads, so neither figure exists until the
+      panel is handed a `scope=` (the graph page passes its own; the dashboard
+      passes none and renders nothing here). Every branch below is a field on
+      `impact`, because each is a claim with a rule behind it: `≥` is "something
+      downstream is unreadable", a WITHHELD M is "Lithos's sole-blocker fact was
+      not covered for every dependent" — never a zero, which would read as
+      "nothing is freed immediately" — and a resolved task carries no
+      future-tense line at all.
+    #}
+    <div data-panel-impact-slot>
+      {% if impact %}
+        {% if impact.open %}
+          <p
+            class="panel-impact"
+            data-panel-impact
+            data-impact-state="open"
+            data-impact-frees="{{ impact.frees }}"
+            data-impact-bound="{{ "exact" if impact.exact else "lower_bound" }}"
+            {% if impact.withheld %}data-impact-withheld="true"{% else %}data-impact-immediate="{{ impact.immediately }}"{% endif %}
+          >{% if impact.withheld %}Completing this frees {% if not impact.exact %}≥ {% endif %}{{ impact.frees }} in this graph; how many immediately is withheld — the blocked read covered {{ impact.covered }} of {{ impact.frees }} dependents.{% else %}Completing this frees {% if not impact.exact %}≥ {% endif %}{{ impact.frees }} in this graph, {{ impact.immediately }} immediately.{% endif %}</p>
+          {% if impact.unclassified %}
+            {# Named, never counted (D10): Lens cannot classify the relation, so
+               folding these into N either way would be a guess. #}
+            <p class="panel-impact-note" data-panel-impact-unclassified>
+              Not counted, relation unreadable: {{ impact.unclassified | join(", ") }}.
+            </p>
+          {% endif %}
+        {% elif impact.state == "completed" %}
+          <p class="panel-impact" data-panel-impact data-impact-state="completed">This task is completed; no pending impact.</p>
+        {% elif impact.state == "stale" %}
+          {# The figures and the panel around them disagree about what they are
+             describing: either the scope re-assembled for this panel is not the
+             graph the page is drawing (D8 leaves the canvas where it is), or the
+             focal task's own state moved between the two reads this panel is
+             made of. "In this graph" would then name two different answers at
+             once, so both numbers are withheld and the refresh that resolves it
+             is what is named instead. #}
+          <p class="panel-impact" data-panel-impact data-impact-state="stale">This graph has changed — refresh to see what completing this frees.</p>
+        {% elif impact.state == "cancelled" %}
+          <p class="panel-impact" data-panel-impact data-impact-state="cancelled">This task is cancelled — its dependents are unsatisfiable.</p>
+        {% elif impact.state == "unknown" %}
+          <p class="panel-impact" data-panel-impact data-impact-state="unknown">This task's status could not be read, so its impact is unknown.</p>
+        {% elif impact.stale %}
+          {# `none` over a graph whose PICTURE moved. The state above says
+             "refresh to see what completing this frees", which is a
+             future-tense impact line and the one sentence D10 forbids an epic
+             — so the degradation is stated without it, and the notes below go
+             with it, being claims about a canvas this answer is no longer of.
+             A move in the blocked rows alone never reaches here: an epic
+             states no figures for those to falsify. #}
+          <p class="panel-impact" data-panel-impact data-impact-state="none" data-impact-stale="true">This graph has changed — refresh to see what surrounds this.</p>
+        {% endif %}
+        {#
+          `none` — an epic — states no sentence of its own (D10): it carries no
+          `blocks` edges, and a zero would read as "finishing this frees
+          nobody". The notes below still render, because D8's lower-bound
+          statement and D7's chain position are about the CANVAS rather than
+          about N, and a focused epic is on the chain and lights a
+          neighbourhood like any other node.
+        #}
+        {% if not impact.relations_exact %}
+          {# D8: the lit set on the canvas is a LOWER BOUND when an unreadable
+             edge list or an `unknown` edge sits in this task's neighbourhood —
+             said here, or a dimmed node reads as "unrelated" when Lens only
+             failed to look. #}
+          <p class="panel-impact-note" data-panel-focus-bound>
+            Some edges around this task could not be read, so what the canvas
+            lights is a lower bound of what surrounds it.
+          </p>
+        {% endif %}
+        {% if impact.on_chain %}
+          {# The position is on the SCOPE's longest chain (D7), not on the one
+             focus mode traces — a task is trivially on the chain through
+             itself, and saying so would state nothing. #}
+          <p class="panel-impact-note" data-panel-chain-position>On the longest chain ({{ impact.chain_position }} of {{ impact.chain_length }}).</p>
+        {% endif %}
+      {% endif %}
+    </div>

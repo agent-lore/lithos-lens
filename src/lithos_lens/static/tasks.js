@@ -293,10 +293,50 @@
     const alias = new URLSearchParams();
     alias.set(config.panelAliasKey || "task_id", taskId);
     alias.set("fragment", "panel");
+    // The graph page's scope, when it gave us one: the downstream impact line
+    // (D10) is a count within ONE assembled graph, so a panel fetched without
+    // it renders no impact at all. A node has no row to read a server-built
+    // URL off — this alias IS the graph page's panel URL — which is why the
+    // scope is configuration rather than something the server appended.
+    if (config.panelScope) {
+      alias.set("scope", config.panelScope);
+      // With the scope's own membership: the panel must assemble the graph
+      // THIS page is showing, and a resolved task is a node in one and not in
+      // the other.
+      alias.set("include_resolved", config.panelScopeResolved ? "1" : "0");
+      // …and the identity of the graph that page is DRAWING. The scope names
+      // which graph to assemble; only this says WHICH ONE the canvas beside
+      // the panel is showing, so an impact counted over a graph that has moved
+      // since the page loaded is withheld rather than printed beside the older
+      // picture the page deliberately still holds.
+      if (config.panelSnapshot) alias.set("snapshot", config.panelSnapshot);
+    }
     return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
   }
 
+  // What the HOST page says it is drawing around a task, when it has anything
+  // to say (the graph canvas does: D7's chain position and D8's lower bound are
+  // facts about the picture on screen, and the panel's own rebuild is a later
+  // read of a graph that may have moved). Registered rather than computed here:
+  // this file knows nothing about canvases, and the values come from the
+  // server's own payload either way.
+  let describePanel = null;
+
   function panelUrlFor(taskId) {
+    return describedUrl(resolvePanelUrl(taskId), taskId);
+  }
+
+  function describedUrl(url, taskId) {
+    const described = describePanel && describePanel(taskId);
+    if (!described) return url;
+    const target = new URL(url, window.location.href);
+    Object.keys(described).forEach(function (key) {
+      if (described[key]) target.searchParams.set(key, described[key]);
+    });
+    return target.pathname + target.search;
+  }
+
+  function resolvePanelUrl(taskId) {
     // Both sources here are URLs the SERVER built, and that is the point: task
     // ids are arbitrary strings, and the id that collides with a page under
     // `/tasks/` (`graph`) must be addressed through the query alias or the
@@ -330,6 +370,16 @@
     return new URL(url, window.location.href).searchParams.get(selectionParam) || "";
   }
 
+  //: The live address, in the shape `selectionUrl` builds — what a push is
+  //: compared against, so an open that would not MOVE the URL writes no
+  //: history entry (a second identical entry is invisible until the operator
+  //: leaves, and then the Back that should clear the selection lands on its
+  //: twin and appears to do nothing).
+  function here() {
+    const url = new URL(window.location.href);
+    return url.pathname + url.search + url.hash;
+  }
+
   // This page's URL with the selection parameter set to `taskId`, or removed
   // when it is empty. Built from the live URL rather than from a remembered
   // query string, so closing the panel preserves every filter, the epic scope
@@ -352,6 +402,12 @@
     const host = panelHost();
     if (!host || !taskId) return;
     const push = !options || options.push !== false;
+    // The URL this open pushes. Normally this page's own with the selection
+    // set — but a host that has to change something ELSE in the same
+    // transition passes it (the graph page focusing a hidden isolate reveals
+    // it with `isolated=1`, D8), because two pushes would be two history
+    // entries and Back would then undo half of one move.
+    const target = (options && options.url) || selectionUrl(taskId);
     // Claimed BEFORE the fetch: from here on, anything that changes the
     // selection supersedes this request, whichever order the responses land in.
     panelGeneration += 1;
@@ -406,8 +462,12 @@
     // Back that should leave the task would then land on its twin, match
     // `desiredTaskId` in the popstate handler, and do nothing until pressed a
     // second time.
-    if (push && selectionIn(window.location.href) !== taskId) {
-      window.history.pushState({ selected: taskId }, "", selectionUrl(taskId));
+    //
+    // Compared as whole URLS, not as ids: a caller-supplied `url` carries more
+    // than the selection (the isolated reveal above), and an open that leaves
+    // the selection alone while changing the rest of the address IS a move.
+    if (push && target !== here()) {
+      window.history.pushState({ selected: taskId }, "", target);
     }
     announceSelection();
   }
@@ -922,7 +982,11 @@
     open: openPanel,
     close: closePanel,
     supersedePending: supersedePendingOpen,
-    onChange: function (subscriber) { panelSubscribers.push(subscriber); }
+    onChange: function (subscriber) { panelSubscribers.push(subscriber); },
+    // The host describes its canvas for EVERY panel URL this file builds — a
+    // click, a search hit, a Back — rather than for the one transition that
+    // asked, because the canvas is the same one under all of them.
+    describe: function (provider) { describePanel = provider; }
   };
   window.LithosLens.events = {
     subscribe: function (subscriber) { eventSubscribers.push(subscriber); }
