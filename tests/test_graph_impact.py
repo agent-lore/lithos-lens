@@ -92,6 +92,18 @@ def attribute(html: str, name: str) -> str:
     return match.group(1) if match else ""
 
 
+def snapshot(html: str) -> str:
+    """The fingerprint of the graph this render DREW, off its own config block.
+
+    Read from the page rather than recomputed, because the claim under test is
+    that the page and the panel agree about which graph is on screen — and a
+    test that computed its own fingerprint would agree with neither.
+    """
+    match = re.search(r'panelSnapshot: "([^"]*)"', html)
+    assert match, "the page handed the panel no snapshot"
+    return match.group(1)
+
+
 def chain_line(html: str) -> str:
     match = re.search(r"data-longest-chain.*?</section>", unescape(html), re.DOTALL)
     assert match, "no chain section"
@@ -697,6 +709,10 @@ def test_the_graph_page_hands_the_panel_its_own_scope(
     assert "include_resolved=1" in unescape(html)
     assert f'panelScope: "project:{PROJECT}"' in html
     assert "panelScopeResolved: true" in html
+    # And the identity of the graph it DREW, on both halves too: the scope name
+    # fixes which tasks are asked for, not which ones came back.
+    assert f"snapshot={snapshot(html)}" in unescape(html)
+    assert snapshot(html)
 
 
 def test_an_impact_scope_is_parsed_with_the_pages_own_defaults() -> None:
@@ -738,3 +754,127 @@ def test_the_fragment_routes_reads_carry_the_configured_frontier_limit(
         (PROJECT, None),
         (None, [f"project:{PROJECT}"]),
     ]
+
+
+def test_a_panel_counting_over_a_moved_graph_says_so_instead_of_a_number(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The panel fetched on its own re-assembles the scope, and the scope NAME
+    only fixes which tasks are asked for — not which ones come back. Between
+    the page's read and the click, Lithos can move: here a fourth dependent
+    appears, so a count taken now would say 4 while the canvas — which D8
+    deliberately does not re-lay-out — is still drawing the three-node picture
+    the page loaded with. "Frees N in this graph" would then name two different
+    graphs at once, so the panel says the graph changed and withholds both
+    figures."""
+    fake = GraphFakeClient(impact_dataset())
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(f"/tasks/graph?project={PROJECT}&focus=root").text)
+        drawn = snapshot(page)
+        # Lithos moves: `one` picks up a fourth task waiting on it.
+        fake.replace_dataset(
+            dataset(
+                [task(name) for name in (*IMPACT_TASKS, "four")],
+                (*IMPACT_EDGES, ("one", "four", "blocks")),
+                blocked={
+                    "one": (blocker("root"),),
+                    "two": (blocker("one"),),
+                    "three": (blocker("one"),),
+                    "four": (blocker("one"),),
+                },
+            )
+        )
+        stale = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+        # The SAME fetch without the page's snapshot is the number the moved
+        # graph yields — which is exactly what must not be printed beside the
+        # picture above.
+        unpinned = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+        ).text
+
+    assert "frees 3 in this graph, 1 immediately" in slot(page)
+    assert "This graph has changed since the page loaded" in slot(stale)
+    assert "in this graph" not in slot(stale)
+    assert attribute(stale, "data-impact-frees") == ""
+    assert attribute(stale, "data-impact-state") == "stale"
+    assert "frees 4 in this graph" in slot(unpinned)
+
+
+def test_a_panel_over_the_graph_still_on_screen_counts_it_as_before(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half of that rule, and the one that keeps it from withholding
+    the line forever: a snapshot the re-assembled graph still matches is the
+    page's own graph, warm from the per-task cache, so the click answers
+    exactly what the server-rendered panel did — and a RELOAD after the change
+    counts the new graph, because that is the picture on screen then."""
+    fake = GraphFakeClient(impact_dataset())
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(
+            unescape(client.get(f"/tasks/graph?project={PROJECT}&focus=root").text)
+        )
+        same = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+        fake.replace_dataset(
+            dataset(
+                [task(name) for name in (*IMPACT_TASKS, "four")],
+                (*IMPACT_EDGES, ("one", "four", "blocks")),
+                blocked={
+                    "one": (blocker("root"),),
+                    "two": (blocker("one"),),
+                    "three": (blocker("one"),),
+                    "four": (blocker("one"),),
+                },
+            )
+        )
+        reloaded = unescape(
+            client.get(f"/tasks/graph?project={PROJECT}&focus=root").text
+        )
+        after = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={snapshot(reloaded)}"
+        ).text
+
+    assert "frees 3 in this graph, 1 immediately" in slot(same)
+    assert "frees 4 in this graph, 1 immediately" in slot(reloaded)
+    assert "frees 4 in this graph, 1 immediately" in slot(after)
+
+
+def test_a_fingerprint_follows_the_graph_and_not_the_tasks_own_text(
+    lithos_lens_config_env: Path,
+) -> None:
+    """What the fingerprint is OVER: the nodes and the edges D10's figures are
+    derived from. A re-titled task moves no count and no lit set, so it must
+    not withhold the line — a detector that fired on every edit would cost the
+    impact line permanently rather than when it is actually wrong."""
+    fake = GraphFakeClient(impact_dataset())
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        before = snapshot(
+            unescape(client.get(f"/tasks/graph?project={PROJECT}&focus=root").text)
+        )
+        fake.replace_dataset(
+            dataset(
+                [task(name, title=f"Renamed {name}") for name in IMPACT_TASKS],
+                IMPACT_EDGES,
+                blocked={
+                    "one": (blocker("root"),),
+                    "two": (blocker("one"),),
+                    "three": (blocker("one"),),
+                },
+            )
+        )
+        renamed = unescape(
+            client.get(f"/tasks/graph?project={PROJECT}&focus=root").text
+        )
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={before}"
+        ).text
+
+    assert snapshot(renamed) == before
+    assert "frees 3 in this graph, 1 immediately" in slot(panel)

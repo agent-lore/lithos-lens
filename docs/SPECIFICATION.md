@@ -82,13 +82,17 @@ The current application exposes these routes:
   every id Lens can be handed is a server-generated UUID).
   `tasks.task_detail_path` is the one place that decides, shared by the board,
   the graph page and the knowledge produced-by chip.
-- `GET /tasks/{task_id}?fragment=panel[&scope=project:<slug>|epic:<id>][&include_resolved=1|0]`
+- `GET /tasks/{task_id}?fragment=panel[&scope=project:<slug>|epic:<id>][&include_resolved=1|0][&snapshot=<fingerprint>]`
   Renders the task's side-panel partial (§5.6.1) — the same reads as the detail
   page through a template that extends no layout. This is what a dashboard row
   click fetches. `scope=` names the graph the **downstream impact** line is
   counted over (§5.6.1); a panel fetched without it states no impact, because N
   is a count within one fetched graph. `include_resolved` travels with the
-  scope so the panel assembles the same graph the page it was opened from did.
+  scope so the panel assembles the same graph the page it was opened from did,
+  and `snapshot=` is the fingerprint of the graph that page is DRAWING — the
+  scope name fixes which tasks are asked for, not which ones come back, so a
+  re-assembly that no longer matches it states "this graph has changed" instead
+  of a count (§5.6.1).
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -510,9 +514,16 @@ only failed to look.
 The graph page's own render computes this from the scope and cycle signal it
 already holds; a panel fetched on its own rebuilds that scope, which the
 per-task edge cache (§5.10) makes affordable because the graph the operator is
-looking at is warm. Either way the impact costs the line and nothing else: a
-scope that fails, is refused, or does not hold the task renders the rest of the
-panel unchanged.
+looking at is warm. A rebuild is not the same graph by default, though: the
+scope NAME only fixes which tasks are asked for, and the canvas deliberately
+does not re-lay-out under the operator (§5.12.1) — so every panel URL the graph
+page emits carries `snapshot=`, a fingerprint of the node and edge set that
+render drew. When the rebuilt scope no longer matches it, both figures are
+withheld and the panel states "this graph has changed since the page loaded —
+refresh", because "frees N **in this graph**" would otherwise name one graph
+while the picture beside it shows another. Either way the impact costs the line
+and nothing else: a scope that fails, is refused, or does not hold the task
+renders the rest of the panel unchanged.
 
 An unknown id renders the **not-found panel** at HTTP 200 on both routes —
 never a 500, and never at the cost of the board beside it — and a read that
@@ -1040,11 +1051,13 @@ at. Lens still never re-implements the readiness predicate.
   canvas causes, since it narrows the box — is followed by re-centring the
   focused node, or the fit would quietly undo the centring the click that
   opened the panel just applied.
-- **The panel a node click fetches carries this page's scope**, so its
-  downstream impact (§5.6.1) counts over the graph on screen. A node has no DOM
-  row to read a server-built URL off, so the page hands `tasks.js` the scope and
-  its `include_resolved` directly; the URL is otherwise the query alias, which
-  is the one form that addresses every id.
+- **The panel a node click fetches carries this page's scope and snapshot**, so
+  its downstream impact (§5.6.1) counts over the graph on screen — or, when the
+  re-assembled graph no longer matches the fingerprint, says so rather than
+  counting over one picture beside another. A node has no DOM row to read a
+  server-built URL off, so the page hands `tasks.js` the scope, its
+  `include_resolved` and the fingerprint directly; the URL is otherwise the
+  query alias, which is the one form that addresses every id.
 - **Cytoscape is handed opaque element ids**, never a task's own. A task id is
   an arbitrary non-empty string (§5.1), and the shipped 3.30.3 throws inside
   `breadthfirst` on an element called `__proto__`, `constructor` or `toString`

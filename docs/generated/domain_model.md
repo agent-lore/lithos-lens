@@ -300,6 +300,7 @@ classDiagram
     +show_isolated bool
   }
   class GraphPageView {
+    +fingerprint str
     +edge_types tuple[str, ...]
     +edge_count int
     +coverage tuple[str, ...]
@@ -331,6 +332,7 @@ classDiagram
     +kind str
     +key str
     +include_resolved bool
+    +fingerprint str
   }
   class LayerGroup {
     +id str

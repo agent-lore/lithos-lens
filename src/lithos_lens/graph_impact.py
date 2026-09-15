@@ -35,6 +35,7 @@ which has no graph page around it to borrow an assembly from.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -81,6 +82,11 @@ IMPACT_OPEN = "open"
 IMPACT_COMPLETED = "completed"
 IMPACT_CANCELLED = "cancelled"
 IMPACT_UNKNOWN = "unknown"
+#: The graph the page is DRAWING is not the graph this panel just assembled, so
+#: there is no honest "in this graph" to count over — see
+#: :func:`scope_fingerprint`. A state rather than a silent ``None``: the panel
+#: was asked for the line and the reason it has no number is worth a sentence.
+IMPACT_STALE = "stale"
 
 #: The ``scope=`` the panel fragment route accepts, ``<kind>:<key>``.
 SCOPE_SEPARATOR = ":"
@@ -95,11 +101,22 @@ class ImpactScope:
     a resolved task is a node at all, and a focal task one of them holds and
     the other does not would answer a click differently from the deep link to
     the same address.
+
+    ``fingerprint`` is the rest of that requirement. A scope NAME only fixes
+    which tasks are asked for, not which ones came back: the panel's read runs
+    after the page's, and between the two a task can be created, completed or
+    re-linked — while the canvas, by design, is still drawing the graph it
+    loaded with (D8 forbids an auto re-layout; the page raises "graph changed —
+    refresh" instead). The fingerprint is that drawn graph's identity, so a
+    count that would be over a DIFFERENT graph is withheld rather than printed
+    beside a picture that disagrees with it.
     """
 
     kind: str = ""
     key: str = ""
     include_resolved: bool = False
+    #: The page's :func:`scope_fingerprint`, empty when the caller named none.
+    fingerprint: str = ""
 
     @property
     def scoped(self) -> bool:
@@ -110,7 +127,11 @@ class ImpactClient(GraphScopeClient, CycleSignalClient, Protocol):
     """The scope reads plus the blocked reads — the same surface a page needs."""
 
 
-def parse_impact_scope(raw: str | None, resolved: str | None = None) -> ImpactScope:
+def parse_impact_scope(
+    raw: str | None,
+    resolved: str | None = None,
+    fingerprint: str | None = None,
+) -> ImpactScope:
     """Parse ``project:<slug>`` / ``epic:<id>``; anything else is no scope.
 
     An id may itself contain ``:`` (task ids are arbitrary non-empty strings),
@@ -122,6 +143,10 @@ def parse_impact_scope(raw: str | None, resolved: str | None = None) -> ImpactSc
     parser and the same by-kind defaults the page uses
     (:func:`~lithos_lens.graph_scope.parse_flag`) so the panel and its page
     never assemble different graphs from the same two values.
+
+    ``fingerprint`` is taken as given — it is only ever compared against one
+    Lens computes itself, so an unparseable or invented value can do nothing
+    but withhold the line.
     """
     kind, _, key = (raw or "").strip().partition(SCOPE_SEPARATOR)
     if kind not in (SCOPE_PROJECT, SCOPE_EPIC) or not key.strip():
@@ -130,7 +155,41 @@ def parse_impact_scope(raw: str | None, resolved: str | None = None) -> ImpactSc
         kind=kind,
         key=key.strip(),
         include_resolved=parse_flag(resolved, kind == SCOPE_EPIC),
+        fingerprint=(fingerprint or "").strip(),
     )
+
+
+def scope_fingerprint(scope: TaskGraphScope) -> str:
+    """The identity of one assembled graph, as far as D10's figures can see it.
+
+    Over the node set (id, the status the count reads, the completeness that
+    turns a status into ``unknown``, and the ghost kind that decides whether it
+    is drawn at all by default) and the edge set (endpoints, type and the state
+    the active projection is read from) — which is exactly the material N, the
+    lit set and the chain are derived from, and nothing else.
+    A re-titled task or a fresh claim moves neither figure, so neither moves
+    this: a fingerprint that changed on every heartbeat would withhold the line
+    permanently rather than when it is actually wrong.
+
+    Truncated to 16 hex digits because it travels in a URL and is compared to
+    a value Lens produced itself in the same process — this is a change
+    detector, not a defence against a forged one, and a caller that invents a
+    value only costs itself the line.
+    """
+    material = "\x1e".join(
+        [
+            f"{node.id}\x1f{node.status}\x1f{node.completeness}\x1f{node.ghost_kind}"
+            for node in sorted(scope.nodes, key=lambda node: node.id)
+        ]
+        + [
+            f"{edge.from_task_id}\x1f{edge.to_task_id}\x1f{edge.type}\x1f{edge.state}"
+            for edge in sorted(
+                scope.edges,
+                key=lambda edge: (edge.from_task_id, edge.to_task_id, edge.type),
+            )
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def downstream_impact(
@@ -366,7 +425,10 @@ async def load_impact(
 
     ``None`` whenever the answer would not be honest: a scope too large to
     render is also too large to count over, and a refusal there must not turn
-    into a number here.
+    into a number here. A scope the caller fingerprinted that no longer
+    assembles to the same graph is the one degraded case that still renders —
+    as :data:`IMPACT_STALE`, because the operator is looking at the older graph
+    and "refresh" is the answer.
     """
     limits = limits or GraphScopeLimits()
     if not scope.scoped or not focus:
@@ -393,6 +455,15 @@ async def load_impact(
         )
     if assembled.refused or assembled.node(focus) is None:
         return None
+    if scope.fingerprint and scope_fingerprint(assembled) != scope.fingerprint:
+        # The page that opened this panel is drawing a DIFFERENT graph from the
+        # one this read just assembled — a task created, completed or re-linked
+        # since it loaded. "Frees N in this graph" has no honest answer then:
+        # the canvas deliberately has not moved (D8), so a number counted here
+        # would disagree with the lit set and the chain beside it. Said, not
+        # silently dropped — and the page's own "graph changed" pill is the
+        # action it points at.
+        return DownstreamImpact(focus=focus, state=IMPACT_STALE)
     if len(coverage_projects(assembled, convention=convention, tag_key=tag_key)) > (
         limits.max_tasks
     ):

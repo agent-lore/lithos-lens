@@ -340,7 +340,7 @@
       <div
         class="graph-panel-host task-panel-host"
         data-panel-host
-        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id, scope=graph_scope_param(params), include_resolved=params.include_resolved) }}"{% endif %}
+        {% if selected_id %}data-panel-selected="{{ selected_id }}" data-panel-url="{{ panel_fragment_url(request, selected_id, scope=graph_scope_param(params), include_resolved=params.include_resolved, snapshot=view.fingerprint) }}"{% endif %}
       >{% if panel %}{% with detail = panel %}{% include "tasks/panel.html" %}{% endwith %}{% endif %}</div>
       {# Raised by `graph.js` only while the picture is larger than the canvas
          can hold at a readable size. The alternative — scaling the whole graph
@@ -458,6 +458,11 @@
            all. #}
         panelScope: {{ graph_scope_param(params) | tojson }},
         panelScopeResolved: {{ params.include_resolved | tojson }},
+        {# The graph THIS render drew, so a panel fetched later can tell the
+           same graph from one that has moved since — the canvas does not
+           re-lay-out under the operator (D8), so an impact counted over a
+           moved graph would be read beside a picture of the older one. #}
+        panelSnapshot: {{ view.fingerprint | tojson }},
         liveRefresh: false,
         eventsUrl: "/tasks/events"
       };

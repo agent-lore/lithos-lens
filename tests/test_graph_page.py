@@ -261,6 +261,17 @@ class GraphFakeClient:
             task_id, direction=direction, types=types
         )
 
+    def replace_dataset(self, data: FakeLithosDataset) -> None:
+        """Swap the fixture under a LIVE client — "Lithos moved" as a fixture.
+
+        The dataset is frozen, so a test cannot edit one in place; and the
+        interesting window is BETWEEN two requests of the same session, where
+        the app's caches and its edge-read history are already warm. Replacing
+        the wrapped client is the whole of it — the call logs above are this
+        object's and survive.
+        """
+        self._client = FakeLithosClient(dataset=data)
+
     def __getattr__(self, name: str) -> Any:
         # Everything the app touches that this page does not: health probes,
         # agent lists, findings. Delegated rather than reimplemented.

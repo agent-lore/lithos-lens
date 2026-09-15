@@ -1233,7 +1233,7 @@ const vm = require("vm");
 const [
   tasksPath, graphPath, cytoscapePath, initialHref, actionsRaw, payloadRaw,
   reducedMotionRaw, servedPanelRaw, panelFetchRaw, readyStateRaw, lifecycleRaw,
-  panelScopeRaw,
+  panelScopeRaw, panelSnapshotRaw,
 ] = process.argv.slice(1);
 // Which document lifecycle events the browser fires once both files have run.
 // The page's own is `DOMContentLoaded` then `load`; a script that arrived after
@@ -1456,6 +1456,10 @@ sandbox.window = {
     // tests here are about; the one test that asks for it sets it.
     panelScope: panelScopeRaw || "",
     panelScopeResolved: false,
+    // The identity of the graph THIS page drew (T2-A7): it travels with the
+    // scope so a panel fetched later can be told it is counting over a graph
+    // that has since moved.
+    panelSnapshot: panelSnapshotRaw || "",
     liveRefresh: false,
     eventsUrl: "/tasks/events",
   },
@@ -2411,6 +2415,7 @@ def _graph_run(
     ready_state: str = "interactive",
     lifecycle: str = "DOMContentLoaded",
     panel_scope: str = "",
+    panel_snapshot: str = "",
 ) -> dict:
     """Load tasks.js then graph.js against one embedded payload, run ``actions``.
 
@@ -2429,7 +2434,9 @@ def _graph_run(
     both files have loaded; ``lifecycle`` is which events it fires there (the
     page's own sequence is ``DOMContentLoaded,load``, and a file that arrived
     after the first of those sees only ``load``); ``panel_scope`` is the graph
-    scope the page hands ``tasks.js`` for the panel's impact line (D10).
+    scope the page hands ``tasks.js`` for the panel's impact line (D10), and
+    ``panel_snapshot`` the fingerprint of the graph that page DREW, which
+    travels with it.
     """
     assert NODE is not None
     result = subprocess.run(
@@ -2450,6 +2457,7 @@ def _graph_run(
             ready_state,
             lifecycle,
             panel_scope,
+            panel_snapshot,
         ],
         capture_output=True,
         text=True,
@@ -3300,11 +3308,19 @@ def test_a_deep_link_onto_a_folded_isolate_reveals_it_without_a_new_entry() -> N
 def test_a_panel_opened_from_the_graph_carries_the_pages_scope() -> None:
     """D10's impact line is a count within ONE assembled graph, so the scope
     travels on the fetch — and a node has no row to read a server-built URL
-    off, which is why the page hands `tasks.js` its scope directly."""
-    result = _focus_run(["tap:c"], panel_scope="project:loom")
+    off, which is why the page hands `tasks.js` its scope directly.
+
+    The SNAPSHOT travels with it: the scope names which graph to assemble, and
+    only the fingerprint names the one this canvas is drawing, so the panel's
+    own read can tell "the same graph" from "the scope as it is now" — which
+    the canvas, by design, is not showing (D8)."""
+    result = _focus_run(
+        ["tap:c"], panel_scope="project:loom", panel_snapshot="a1b2c3d4e5f60718"
+    )
 
     assert result["fetches"] == [
-        "/tasks/id?task_id=c&fragment=panel&scope=project%3Aloom&include_resolved=0"
+        "/tasks/id?task_id=c&fragment=panel&scope=project%3Aloom"
+        "&include_resolved=0&snapshot=a1b2c3d4e5f60718"
     ]
 
 

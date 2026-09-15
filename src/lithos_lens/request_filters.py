@@ -44,6 +44,7 @@ from lithos_lens.tasks import (
     PANEL_FRAGMENT_KEY,
     PANEL_FRAGMENT_VALUE,
     PANEL_SCOPE_KEY,
+    PANEL_SNAPSHOT_KEY,
     TAG_FILTER_KEY,
     TAG_FILTER_KEYS,
     honored_tags,
@@ -283,6 +284,7 @@ def panel_fragment_url(
     *,
     scope: str = "",
     include_resolved: bool | None = None,
+    snapshot: str = "",
 ) -> str:
     """Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
 
@@ -302,6 +304,10 @@ def panel_fragment_url(
     filter is a different thing from a graph scope, and reading one as the
     other would make the dashboard's panel claim a count over a graph nobody
     assembled.
+
+    ``snapshot`` travels with it: the scope names which graph to assemble, and
+    this names the one the page is DRAWING (``GraphPageView.fingerprint``), so
+    a panel whose read finds a moved graph says so instead of counting over it.
     """
     params = _preserved_filter_params(request)
     params.append((PANEL_FRAGMENT_KEY, PANEL_FRAGMENT_VALUE))
@@ -312,6 +318,8 @@ def panel_fragment_url(
             # assemble the same graph its page did, or a click and a deep link
             # to the same task answer differently.
             params.append(("include_resolved", "1" if include_resolved else "0"))
+        if snapshot:
+            params.append((PANEL_SNAPSHOT_KEY, snapshot))
     path = task_detail_path(task_id)
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 

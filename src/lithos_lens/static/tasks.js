@@ -304,6 +304,12 @@
       // THIS page is showing, and a resolved task is a node in one and not in
       // the other.
       alias.set("include_resolved", config.panelScopeResolved ? "1" : "0");
+      // …and the identity of the graph that page is DRAWING. The scope names
+      // which graph to assemble; only this says WHICH ONE the canvas beside
+      // the panel is showing, so an impact counted over a graph that has moved
+      // since the page loaded is withheld rather than printed beside the older
+      // picture the page deliberately still holds.
+      if (config.panelSnapshot) alias.set("snapshot", config.panelSnapshot);
     }
     return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
   }

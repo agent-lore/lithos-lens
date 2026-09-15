@@ -75,6 +75,7 @@ from lithos_lens.tasks import (
     PANEL_FRAGMENT_VALUE,
     PANEL_SCOPE_KEY,
     PANEL_SELECTION_KEY,
+    PANEL_SNAPSHOT_KEY,
     TASK_DETAIL_ALIAS_KEY,
     TASK_DETAIL_ALIAS_PATH,
     TaskRecord,
@@ -597,10 +598,15 @@ async def _panel_impact(
     Degrades to ``None``, never to an error: the impact is one line of a panel
     whose other sections are already loaded, so a scope that fails, is refused,
     or does not hold this task costs the line and nothing else.
+
+    That rebuild is trusted only as far as the page's ``snapshot=`` says: a
+    graph that has MOVED since the page loaded costs the figures and says so
+    (``graph_impact.IMPACT_STALE``), because the canvas has not moved with it.
     """
     scope = parse_impact_scope(
         request.query_params.get(PANEL_SCOPE_KEY),
         request.query_params.get("include_resolved"),
+        request.query_params.get(PANEL_SNAPSHOT_KEY),
     )
     if not scope.scoped:
         return None
