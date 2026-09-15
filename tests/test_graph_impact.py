@@ -727,6 +727,10 @@ def test_the_graph_page_hands_the_panel_its_own_scope(
     assert "include_resolved=1" in unescape(html)
     assert f'panelScope: "project:{PROJECT}"' in html
     assert "panelScopeResolved: true" in html
+    # A drawn scope loads the canvas half too — the gate that keeps Cytoscape
+    # off an empty page must not keep it off a full one.
+    assert "cytoscape.min.js" in html
+    assert "graph.js" in html
     # And the identity of the graph it DREW, on both halves too: the scope name
     # fixes which tasks are asked for, not which ones came back.
     assert f"snapshot={snapshot(html)}" in unescape(html)
@@ -1079,6 +1083,15 @@ def test_an_empty_scope_still_opens_the_panel_its_focus_names(
     assert 'data-panel-task="done"' in html
     assert 'class="badge badge-completed">completed</span>' in html
     assert slot(html) == "This task is completed; no pending impact."
+    # And the panel CONTROLLER comes with it. A server-rendered panel with no
+    # `tasks.js` behind it is a panel whose Close reloads the document and
+    # whose Escape does nothing — D8 requires both to remove `focus` by
+    # `pushState` (round-6 correctness f-004). The canvas half stays gated on
+    # there being something to draw.
+    assert f'panelScope: "project:{PROJECT}"' in html
+    assert "tasks.js" in html
+    assert "cytoscape.min.js" not in html
+    assert "graph.js" not in html
 
 
 def test_a_resolved_focus_keeps_its_line_when_the_scope_read_fails(

@@ -811,8 +811,13 @@ own scope, and a read that fails there costs the panel rather than the graph.
 The panel does not depend on the canvas having anything to draw: a scope that
 renders "nothing to draw" — a project whose last task resolved while
 `include_resolved` is off — still opens the panel its `focus=` names, and the
-resolved wording that panel owes (§5.6.1). Only a REFUSED scope renders
-neither, having no host to put a panel in. `overlays=hierarchy,provenance` is
+resolved wording that panel owes (§5.6.1). The panel CONTROLLER loads with it:
+`tasks.js` and its configuration are emitted whenever this page rendered a
+panel host, because Close and Escape remove `focus` by `pushState` and that is
+its job — without it the Close link would follow its href and reload the page.
+Only the canvas half (Cytoscape and `graph.js`) is gated on there being nodes
+to draw. A REFUSED scope renders neither panel nor canvas, having no host to
+put one in. `overlays=hierarchy,provenance` is
 carried for the client layer.
 A `focus=` the scope actually holds also **replaces the chain line with the
 longest chain THROUGH that task** (§5.11), named as such: a chain through a

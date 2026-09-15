@@ -962,6 +962,31 @@ def test_closing_on_the_graph_page_clears_focus_and_keeps_the_graph_state() -> N
     assert result["panel"] == ""
 
 
+#: The graph page at its emptiest: a scope whose only task has resolved, so the
+#: render draws nothing and loads no canvas — `tasks.js` is the ONLY script on
+#: the page (`tasks/graph.html`). The panel is server-rendered from `focus=`
+#: all the same (§5.12), and D8's Close and Escape are still owed.
+EMPTY_GRAPH_HREF = "http://lens.test/tasks/graph?project=lithos-loom&focus=done"
+
+
+def test_close_and_escape_clear_focus_with_no_canvas_on_the_page() -> None:
+    """The zero-node boundary, run the way that page actually loads: this
+    harness is `tasks.js` ALONE, which is the whole script set of a graph page
+    with nothing to draw. Both halves of D8's close contract have to work
+    without `graph.js` — the Close link must not follow its href and reload the
+    document, and Escape must not be inert (round-6 correctness f-004)."""
+    closed = _panel_run(["close"], EMPTY_GRAPH_HREF, selection_param="focus")
+    escaped = _panel_run(["escape"], EMPTY_GRAPH_HREF, selection_param="focus")
+
+    for result in (closed, escaped):
+        assert result["pushed"] == ["/tasks/graph?project=lithos-loom"]
+        assert result["panel"] == ""
+    # The click was answered HERE rather than by the browser: an unprevented
+    # Close is a document navigation, which is the defect wearing a URL that
+    # happens to look right.
+    assert closed["prevented"] == ["close"]
+
+
 def test_back_on_the_graph_page_restores_the_focus_in_the_url() -> None:
     """…and back/forward read the same parameter they wrote."""
     result = _panel_run(

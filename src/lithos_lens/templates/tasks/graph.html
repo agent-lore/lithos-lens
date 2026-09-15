@@ -433,7 +433,7 @@
 {% endblock %}
 
 {% block scripts %}
-  {% if view and not view.refused and view.nodes %}
+  {% if view and not view.refused %}
     {#
       The interactive layer (D8), loaded on THIS page only: Cytoscape is a
       ~400KB vendored bundle and no other surface draws a graph.
@@ -445,6 +445,15 @@
       reconcile: a task event here raises the "graph changed" pill, because
       re-rendering the board's way would re-fetch a whole graph assembly and
       move the canvas under the operator's cursor.
+
+      The PANEL half is loaded whenever this page rendered a panel host, nodes
+      or none: a scope with nothing to draw still opens the panel its `focus=`
+      names (§5.12), and D8 requires Close and Escape to remove `focus` by
+      `pushState` — which is `tasks.js`'s to do. Without it the Close link
+      would follow its href and reload the document, and Escape would do
+      nothing at all (round-6 correctness f-004). The CANVAS half below stays
+      gated on there being something to draw: Cytoscape over an empty payload
+      is 400KB spent on an empty box.
     #}
     <script>
       window.LithosLensTasks = {
@@ -468,7 +477,9 @@
       };
     </script>
     <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
-    <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
-    <script src="{{ url_for('static', path='graph.js') }}" defer></script>
+    {% if view.nodes %}
+      <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
+      <script src="{{ url_for('static', path='graph.js') }}" defer></script>
+    {% endif %}
   {% endif %}
 {% endblock %}
