@@ -408,10 +408,7 @@ def create_app(
                 },
             )
         detail = await _load_detail(state, task_id)
-        impact = await _panel_impact(request, state, task_id) if panel else None
-        # …against the badge beside them, which is a LATER read than the
-        # figures are (`graph_impact.reconciled_impact`, round-2 f-002).
-        impact = reconciled_impact(impact, detail.task)
+        impact = await _panel_impact(request, state, task_id, detail) if panel else None
         if panel:
             metrics.tasks_panel_opens().add(1, {"source": "fragment"})
         return templates.TemplateResponse(
@@ -589,20 +586,22 @@ async def _load_detail(state: AppState, task_id: str) -> TaskDetailData:
 
 
 async def _panel_impact(
-    request: Request, state: AppState, task_id: str
+    request: Request, state: AppState, task_id: str, detail: TaskDetailData
 ) -> DownstreamImpact | None:
     """D10's impact line for a panel fetched with a `scope=` (T2-A7).
 
     The graph page's own render passes its already-assembled answer through
     (`graph_routes`); this is the path a CLICKED panel takes, where there is no
-    page assembly to borrow and the scope has to be rebuilt — affordably,
-    because the per-task edge cache is warm for the graph the operator is
-    looking at.
+    page assembly to borrow and the scope has to be rebuilt — affordably, because
+    the per-task edge cache is warm for the graph the operator is looking at.
 
-    Degrades to ``None``, never to an error: the impact is one line of a panel
-    whose other sections are already loaded, so a scope that fails, is refused,
-    or does not hold this task costs the line and nothing else — and the rebuild
-    is trusted only as far as ``snapshot=`` says (``graph_impact.load_impact``).
+    Degrades to the LINE, never to an error: the impact sits in a panel whose
+    other sections are already loaded, so a scope that fails, is refused, or no
+    longer holds this task costs it and nothing else — and the rebuild is
+    trusted only as far as ``snapshot=`` says (``graph_impact.load_impact``).
+    Reconciled here, where the scope is parsed: "was an impact asked for at
+    all?" decides whether a panel with no assembly still states D10's resolved
+    wording (``graph_impact.reconciled_impact``).
     """
     scope = parse_impact_scope(
         request.query_params.get(PANEL_SCOPE_KEY),
@@ -612,9 +611,10 @@ async def _panel_impact(
     if not scope.scoped:
         return None
     tasks_config = state.config.tasks
+    impact = None
     try:
         master = await _impact_master(state, scope)
-        return await load_impact(
+        impact = await load_impact(
             state.lithos_client,
             scope=scope,
             focus=task_id,
@@ -630,7 +630,7 @@ async def _panel_impact(
         )
     except Exception:
         logger.warning("panel impact assembly failed", exc_info=True)
-        return None
+    return reconciled_impact(impact, detail.task, scoped=True)
 
 
 async def _impact_master(state: AppState, scope: ImpactScope) -> list[TaskRecord]:

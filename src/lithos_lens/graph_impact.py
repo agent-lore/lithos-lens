@@ -316,7 +316,10 @@ def downstream_impact(
 
 
 def reconciled_impact(
-    impact: DownstreamImpact | None, task: TaskRecord | None
+    impact: DownstreamImpact | None,
+    task: TaskRecord | None,
+    *,
+    scoped: bool = False,
 ) -> DownstreamImpact | None:
     """D10's line, kept only while the panel around it agrees about the focus.
 
@@ -349,18 +352,31 @@ def reconciled_impact(
       refresh is what resolves it. A panel whose task could not be read at all
       (``None``) reads the same way: it has no badge to agree with, and its
       markup carries the failure instead.
+
+    A panel with NO impact at all is the third case, and ``scoped`` is what
+    makes it answerable. D10's resolved wording is a statement about the TASK,
+    not a count over a graph, so a panel that ASKED for an impact still states
+    it when the assembly could produce none — the rebuilt scope no longer holds
+    the focus (a task that resolves leaves an ``include_resolved=0`` project
+    graph the moment it does), the scope was refused, or the read failed
+    (round-4 correctness f-002). ``scoped`` is false for every panel that
+    asked for no impact line — the dashboard's — and an epic is excluded here
+    exactly as it is in :func:`downstream_impact`, so neither gains a line it
+    never had.
     """
+    resolved = _resolved_focus(task)
     if impact is None:
+        if scoped and resolved and task is not None and task.task_type != "epic":
+            return DownstreamImpact(focus=task.id, state=resolved)
         return None
     if task is None:
         return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
-    state = _focal_state(task.status)
-    if state == impact.state:
+    if _focal_state(task.status) == impact.state:
         return impact
-    if state in (IMPACT_COMPLETED, IMPACT_CANCELLED):
+    if resolved:
         return DownstreamImpact(
             focus=impact.focus,
-            state=state,
+            state=resolved,
             relations_exact=impact.relations_exact,
             chain_position=impact.chain_position,
             chain_length=impact.chain_length,
@@ -371,6 +387,18 @@ def reconciled_impact(
 def _focal_state(status: str) -> str:
     """The impact state a focal task in ``status`` carries (D10)."""
     return IMPACT_OPEN if status == IMPACT_OPEN else _resolved_state(status)
+
+
+def _resolved_focus(task: TaskRecord | None) -> str:
+    """``completed``/``cancelled`` when the panel's own read says so, else "".
+
+    The one question both branches above ask of the panel's record: D10 gives
+    those two states words that need no graph behind them.
+    """
+    if task is None or task.status == IMPACT_OPEN:
+        return ""
+    state = _resolved_state(task.status)
+    return state if state in (IMPACT_COMPLETED, IMPACT_CANCELLED) else ""
 
 
 def _resolved_state(status: str) -> str:

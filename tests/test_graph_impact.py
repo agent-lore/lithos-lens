@@ -991,6 +991,100 @@ def test_a_focus_that_completes_while_the_page_reads_it_says_it_completed(
     assert "On the longest chain (1 of 3)." in slot(html)
 
 
+def isolate_dataset(solo: TaskStatusName = "open") -> FakeLithosDataset:
+    """One ISOLATED task beside a pair that is not, in the same project.
+
+    An isolate is the shape that leaves the graph entirely when it resolves: no
+    edge names it, so a project scope with `include_resolved=0` — the default —
+    stops holding it the moment it is no longer on the open list.
+    """
+    return dataset(
+        [task("solo", status=solo), task("root"), task("one")],
+        (("root", "one", "blocks"),),
+        blocked={"one": (blocker("root"),)},
+    )
+
+
+def test_a_focus_that_resolved_out_of_the_graph_still_says_it_completed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The panel can lose its focus from the GRAPH and still owe D10's sentence.
+
+    A completed task leaves an `include_resolved=0` project scope: the master
+    lists open tasks only, and no edge names an isolate, so the rebuilt graph
+    has no node to count over and the impact assembles to nothing at all. The
+    panel's own read still says `completed`, and "completed; no pending impact"
+    is a statement about the TASK rather than a count over a graph — so an
+    empty slot there is the same D10 violation as a future-tense one (round-4
+    correctness f-002)."""
+    fake = GraphFakeClient(isolate_dataset())
+    page_url = f"/tasks/graph?project={PROJECT}&focus=solo&isolated=1"
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(page_url).text)
+        drawn = snapshot(page)
+        fake.replace_dataset(isolate_dataset(solo="completed"))
+        panel = client.get(
+            f"/tasks/solo?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+
+    # The task really did leave the graph the panel re-assembles …
+    assert 'data-graph-node="solo"' in page
+    assert 'class="badge badge-completed">completed</span>' in panel
+    # … and the line is D10's, not an empty slot.
+    assert slot(panel) == "This task is completed; no pending impact."
+    assert attribute(panel, "data-impact-state") == "completed"
+
+
+def test_a_focus_cancelled_out_of_the_graph_says_so_on_the_page_too(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same rule on the SERVER-rendered panel, and for the cancelled
+    wording — and here it needs no race at all: a deep link to an isolate that
+    resolved BEFORE the page was asked for renders a graph that never held it,
+    so this render computes no impact, while the panel read beside it names the
+    state D10 has words for."""
+    fake = GraphFakeClient(isolate_dataset(solo="cancelled"))
+
+    html = get(
+        lithos_lens_config_env,
+        fake,
+        f"/tasks/graph?project={PROJECT}&focus=solo&isolated=1",
+    )
+
+    # The graph really does not hold it …
+    assert 'data-graph-node="solo"' not in html
+    assert 'class="badge badge-cancelled">cancelled</span>' in html
+    # … and the panel still carries D10's line for a cancelled focus.
+    assert slot(html) == "This task is cancelled — its dependents are unsatisfiable."
+
+
+def test_a_panel_that_asked_for_no_impact_gains_none_from_a_resolved_task(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The guards on that rule, which are the reason it is not simply "state it
+    whenever the task is resolved": a panel with no `scope=` asked for no
+    impact line at all (the dashboard's), and an epic is given none by D10
+    whatever its state. Neither may gain one from the branch above."""
+    fake = GraphFakeClient(
+        dataset(
+            [
+                task("solo", status="completed"),
+                task("epic", task_type="epic", status="completed"),
+                task("child"),
+            ],
+            (("epic", "child", "parent_child"),),
+        )
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        unscoped = client.get("/tasks/solo?fragment=panel").text
+        epic = client.get(f"/tasks/epic?fragment=panel&scope=project:{PROJECT}").text
+
+    assert slot(unscoped) == ""
+    assert slot(epic) == ""
+
+
 class CompletingMidPanelClient(GraphFakeClient):
     """Completes the focal task between the panel's DETAIL read and its count.
 
@@ -1478,6 +1572,23 @@ def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None
     assert reconciled_impact(open_impact, task("root")) is open_impact
     assert reconciled_impact(done, task("root", status="completed")) is done
     assert reconciled_impact(None, task("root")) is None
+
+    # No impact at all — the rebuilt scope lost the focus, or the assembly
+    # failed — and a SCOPED panel still owes D10's words for a resolved task …
+    for status in ("completed", "cancelled"):
+        lost = reconciled_impact(None, task("root", status=status), scoped=True)
+        assert lost is not None
+        assert (lost.state, lost.focus, lost.frees) == (status, "root", 0)
+    # … while nothing that asked for no line, or that D10 gives none, gains one.
+    assert reconciled_impact(None, task("root", status="completed")) is None
+    assert reconciled_impact(None, task("root"), scoped=True) is None
+    assert reconciled_impact(None, None, scoped=True) is None
+    assert (
+        reconciled_impact(
+            None, task("epic", task_type="epic", status="completed"), scoped=True
+        )
+        is None
+    )
 
     # A resolved badge is answered in D10's words for it …
     for status in ("completed", "cancelled"):

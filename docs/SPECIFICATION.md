@@ -554,9 +554,16 @@ another sentence; the parts of the line that belong to the graph rather than to
 the focal status (the chain position, the lower-bound note) carry over
 unchanged. Every other disagreement — figures counted for a resolved task under
 an **open** badge, a status Lens cannot name, a task the panel could not read
-at all — has no fact to state and degrades to the withheld line above. Either
-way the impact costs the line and nothing else: a scope that fails, is refused,
-or does not hold the task renders the rest of the panel unchanged.
+at all — has no fact to state and degrades to the withheld line above. The
+resolved wording is owed even when the panel could assemble **no impact at
+all**: a task that resolves leaves an `include_resolved=0` project graph the
+moment it does (nothing names an isolate), so the rebuild finds no node to
+count over — and an empty slot under a `completed` badge is the same omission
+as a future-tense one. A panel that asked for no `scope=` is untouched by that
+(the dashboard's panel states no impact), and an epic is excluded from it
+exactly as it is from the count. Either way the impact costs the line and
+nothing else: a scope that fails, is refused, or does not hold the task renders
+the rest of the panel unchanged.
 
 An unknown id renders the **not-found panel** at HTTP 200 on both routes —
 never a 500, and never at the cost of the board beside it — and a read that

@@ -181,7 +181,11 @@ def register_graph_routes(
                 # future-tense number under a `completed` badge (round-2
                 # correctness f-002).
                 context["impact"] = reconciled_impact(
-                    view.impact, panel.task if panel else None
+                    view.impact,
+                    panel.task if panel else None,
+                    # This render IS the scope, so a focus that resolved out of
+                    # it still gets D10's wording for that (round-4 f-002).
+                    scoped=True,
                 )
             _record(
                 span,
