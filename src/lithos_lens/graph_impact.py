@@ -435,6 +435,14 @@ def _downstream(scope: TaskGraphScope, focus: str) -> tuple[tuple[str, ...], set
     lower bound for the OTHER reason — an unreadable edge list — is not asked
     here, because it is not a question about this walk: the scope's own
     ``incomplete`` set answers it (D10).
+
+    A downstream GHOST is counted and then stopped at (D5/D10). Lens never read
+    its edge list, so anything beyond it is not in this graph: the edges that
+    appear to leave one were reported by somebody ELSE's list — two in-scope
+    tasks can name the same out-of-scope task, one as a dependent and one as a
+    blocker, and the assembly materialises it once between them. Walking
+    through it would count a task the fetched topology does not reach from here
+    and print it inside "frees N in this graph" (round-6 correctness f-013).
     """
     successors: dict[str, list[str]] = {}
     unknown_out: dict[str, list[str]] = {}
@@ -455,7 +463,9 @@ def _downstream(scope: TaskGraphScope, focus: str) -> tuple[tuple[str, ...], set
                 continue
             seen.add(dependent)
             reached.append(dependent)
-            queue.append(dependent)
+            node = scope.node(dependent)
+            if node is not None and not node.ghost:
+                queue.append(dependent)
     unclassified = {
         dependent
         for task_id in seen

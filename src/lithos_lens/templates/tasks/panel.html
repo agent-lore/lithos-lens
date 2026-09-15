@@ -25,9 +25,31 @@
   {% if filter_query_rejected %}
     <p class="warning-text" data-panel-state="filters-rejected">The filters in this link are too large to apply.</p>
   {% elif offline %}
+    {# A header with CLOSE, like every other degraded branch: this response is
+       an OPENED panel — the client swaps it in and pushes the selection behind
+       it — and D8/D9 give the operator two ways to clear that selection,
+       Escape and Close. Without the control the swap removes the one the page
+       loaded with, leaving a focused canvas nothing can unfocus but the
+       keyboard (round-6 correctness f-014). The href is the host's own; on the
+       graph page the client intercepts the click and pushes the live URL. #}
+    <header class="task-panel-header">
+      <p class="eyebrow">Task panel</p>
+      <h2>Task unavailable</h2>
+      <div class="task-panel-actions">
+        <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
+      </div>
+    </header>
     <p class="warning-text" data-panel-state="offline">Lithos is offline or degraded. Task detail is unavailable.</p>
     {% include "tasks/panel_impact.html" %}
   {% elif detail is none %}
+    {# The same control, for the same reason as the offline branch above. #}
+    <header class="task-panel-header">
+      <p class="eyebrow">Task panel</p>
+      <h2>Task unavailable</h2>
+      <div class="task-panel-actions">
+        <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
+      </div>
+    </header>
     <p class="warning-text" data-panel-state="unavailable">Could not load this task from Lithos.</p>
     {% include "tasks/panel_impact.html" %}
   {% elif detail.not_found %}

@@ -496,6 +496,35 @@ def test_a_sole_blocked_downstream_ghost_is_counted_immediately(
     assert "other" in read_projects
 
 
+def test_a_downstream_ghost_is_a_leaf_even_when_an_edge_appears_to_leave_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D5's leaf rule, at the case that makes it a rule (round-6 correctness
+    f-013). Lens never reads a ghost's OWN edge list, so an edge that seems to
+    leave one was reported by somebody else's: here `root` names `far` as its
+    dependent and in-scope `beyond` names `far` as its blocker, and the
+    assembly materialises `far` once between them. Walking through it would
+    count `beyond` inside "frees N in this graph" on the strength of a hop the
+    fetched topology does not contain."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("root"), task("beyond"), task("far", project="other")],
+            (("root", "far", "blocks"), ("far", "beyond", "blocks")),
+            blocked={"far": (blocker("root"),), "beyond": (blocker("far"),)},
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    # The ghost itself is a dependent and is counted …
+    assert "frees 1 in this graph, 1 immediately" in slot(html)
+    # … and `beyond` is drawn, so this is a claim about the WALK rather than
+    # about membership.
+    assert 'data-graph-node="beyond"' in html
+
+
 def test_a_truncated_read_for_a_dependents_project_withholds_the_figure(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1223,6 +1252,47 @@ def test_the_lower_bound_is_per_component_from_the_payload_to_the_request(
     ]
 
 
+def test_a_graph_scope_is_not_carried_into_its_panel_url_as_a_filter(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A graph scope is a SELECTOR, not a board filter (round-6 correctness
+    f-010).
+
+    `/tasks/graph` has a query vocabulary of its own and no byte ceiling over
+    it — that ceiling bounds what a response re-emits per row, and this page
+    has no rows — so a slug longer than `MAX_FILTER_QUERY_BYTES` is an admitted
+    scope the page renders. Copying it into the panel URL as a preserved filter
+    hands the detail route a query it refuses at 400, and `tasks.js` answers a
+    refused fragment by clearing the panel: Back to the first focus would
+    restore the node, the lighting and the URL with nothing beside them.
+    """
+    at_ceiling = "p" * (MAX_FILTER_QUERY_BYTES - len(urlencode([("project", "")])))
+    # Both sides of the board's ceiling, because the graph route admits either:
+    # one the filter parser would preserve, and one it would call oversized.
+    for slug in (at_ceiling, at_ceiling + "p" * 64):
+        fake = GraphFakeClient(
+            dataset(
+                [task("root", project=slug), task("one", project=slug)],
+                (("root", "one", "blocks"),),
+            )
+        )
+
+        with client_for(lithos_lens_config_env, fake) as client:
+            page = unescape(client.get(f"/tasks/graph?project={slug}&focus=root").text)
+            host = re.search(r'data-panel-url="([^"]*)"', page)
+            assert host, "the page rendered no panel URL for its own focus"
+            panel = client.get(host.group(1))
+
+        # The page is served, and the panel URL it built for the node it
+        # focused carries the scope — never the selector as a filter.
+        assert 'data-graph-node="root"' in page
+        assert "project=" not in host.group(1)
+        assert "scope=project%3A" in host.group(1)
+        assert panel.status_code == 200
+        assert "data-filter-rejected" not in panel.text
+        assert "frees 1 in this graph" in slot(panel.text)
+
+
 def test_an_offline_panel_still_states_what_the_canvas_is_showing(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -1255,6 +1325,10 @@ def test_an_offline_panel_still_states_what_the_canvas_is_showing(
 
     # The outage is still reported, and no task detail is invented for it …
     assert 'data-panel-state="offline"' in panel
+    # … the panel this opened can still be CLOSED — the swap replaced the
+    # control the page loaded with, and Escape is only half of D8's contract
+    # (round-6 correctness f-014) …
+    assert "data-panel-close" in panel
     # … while the canvas beside the panel is described as it is.
     assert "lower bound of what surrounds it" in slot(panel)
     assert "On the longest chain (2 of 3)." in slot(panel)

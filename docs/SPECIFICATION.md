@@ -413,6 +413,12 @@ REQUIREMENTS), rendered from one template that extends no layout:
   it into the board and pushes `selected` onto the URL with `pushState`. The
   push happens after the swap, so a failed fetch never leaves the address bar
   claiming an open panel.
+- **Every branch of the panel carries Close**, the degraded ones included: an
+  offline answer, an unreadable task and an unknown id are all OPENED panels —
+  the client swaps them in and pushes the selection behind them — and the swap
+  removes whatever control the page loaded with. Escape is only half of that
+  contract; a panel with no Close leaves a focused canvas nothing but the
+  keyboard can clear.
 - Closing (the Close link, or Escape) clears `selected` and nothing else: the
   filters, the epic scope, the resolved-since window and the **fragment** are
   rebuilt from the live URL. The fragment counts because the summary cards link
@@ -461,7 +467,13 @@ REQUIREMENTS), rendered from one template that extends no layout:
   projectless work is distinguishable from a field that failed to render.
 - **Every row on the board opens one**, the Gates section included: a gate is a
   task, and "what is this gate holding up?" is the Blocks list the panel
-  already answers. The contract a row opts into is `data-task-id` plus the
+  already answers. A row's panel URL carries the board's preserved filters, so
+  the panel's own links come back inside the scope the operator is browsing; a
+  GRAPH-hosted one carries none of them, because that page's `project=` /
+  `epic=` are scope selectors from a query vocabulary of its own rather than
+  board filters — copying one in as a filter would hand the detail route a
+  query it may refuse, and a refused fragment is an empty panel beside a node
+  the canvas is still focusing. The contract a row opts into is `data-task-id` plus the
   server-built `data-panel-url` — not the `data-task-row` hook the live-event
   handlers use to rewrite claim and status chrome in place, which a gate row
   does not carry.
@@ -482,7 +494,11 @@ is two figures from two authorities (§5.7 of REQUIREMENTS):
 
 - **N** is Lens's own walk — the open transitive dependents of this task over
   the scope's **active projection** of `blocks` + `waits_on_gate`, within the
-  graph that scope fetched, downstream ghosts counted as the leaves they are.
+  graph that scope fetched, downstream ghosts counted as the leaves they are —
+  counted when reached and never walked THROUGH, because Lens read no edge list
+  for one: an edge that appears to leave a ghost was reported by somebody
+  else's list, and following it would count a task this graph does not reach
+  from here.
   It reads `≥ N` in two states, and both are the scope's rather than the walk's
   to know: the **scope is incomplete** — any task's `edge_list` read failed,
   wherever it sits, because an unread edge list is precisely the evidence that
@@ -1091,7 +1107,12 @@ at. Lens still never re-implements the readiness predicate.
   `focus-lit`, everything else `focus-dimmed`, and anything Lens cannot place
   relative to it `focus-unknown` — a node whose own edge list failed, or one
   reached only over an `unknown` edge, is neither lit nor dimmed, because its
-  relation is not known in either direction. The walk crosses `active` edges
+  relation is not known in either direction. That last class is **transitive**:
+  past an endpoint Lens could not read, the edges beyond it were reported by
+  somebody else's list and "which way round" is not a question the payload can
+  answer, so everything the unknown frontier goes on to reach is unknown too —
+  while a node the active walk lit keeps its lighting, an independently known
+  path being knowledge the frontier does not take away. The walk crosses `active` edges
   only, so a completed predecessor is not an ancestor however many hops the
   drawn graph offers. Closing the panel, or Escape, removes `focus` and every
   class with it; `popstate` re-applies `focus`, `overlays` and `isolated` from
@@ -1117,7 +1138,10 @@ at. Lens still never re-implements the readiness predicate.
   pushed under.
 - **Search** is a toolbar input matching a title SUBSTRING or an id PREFIX over
   the payload's own nodes — a title is remembered in fragments, an id is pasted
-  from its start — and selecting a match (click, or Enter for the first one) is
+  from its start. The two domains read the same keystrokes differently: a title
+  is prose, so its query is trimmed; an id is an arbitrary non-empty string
+  (§5.1), so its prefix is matched against the query verbatim, and only a truly
+  empty box offers nothing. Selecting a match (click, or Enter for the first one) is
   an ordinary focus transition. No fetch and no server round trip; it is
   revealed by the client, because with no scripting there is nothing to jump to
   and the browser's own find searches the text baseline.

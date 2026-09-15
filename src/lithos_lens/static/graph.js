@@ -147,8 +147,19 @@
   const activeOut = dict();
   const activeIn = dict();
   const unknownEnds = dict();
+  // Every dependency edge, direction dropped: what the unknown frontier
+  // spreads along once it has been crossed. Past an endpoint Lens could not
+  // read, "which way round" is not a question the payload can answer — the
+  // edges beyond it were reported by somebody else's list — so a node hanging
+  // off one is related to the focus only through that unreadable hop, whatever
+  // direction it hangs in (round-6 correctness f-012).
+  const related = dict();
   edges.forEach(function (edge) {
     if (!DEPENDENCY_EDGE_TYPES[edge.type]) return;
+    if (edge.state === "active" || edge.state === "unknown") {
+      (related[edge.from] = related[edge.from] || []).push(edge.to);
+      (related[edge.to] = related[edge.to] || []).push(edge.from);
+    }
     if (edge.state === "active") {
       (activeOut[edge.from] = activeOut[edge.from] || []).push(edge.to);
       (activeIn[edge.to] = activeIn[edge.to] || []).push(edge.from);
@@ -199,11 +210,31 @@
     nodes.forEach(function (node) {
       if (node.completeness === "edges_unknown") unknown[node.id] = true;
     });
+    // The frontier: far ends of the `unknown` edges that touch the lit set.
+    const queue = [];
+    const crossed = dict();
     Object.keys(lit).forEach(function (id) {
       (unknownEnds[id] || []).forEach(function (other) {
-        if (!lit[other]) unknown[other] = true;
+        if (lit[other] || crossed[other]) return;
+        crossed[other] = true;
+        queue.push(other);
       });
     });
+    // …and everything the frontier goes on to reach, which D8 classes the same
+    // way: "reached only through an `unknown` edge" is transitive, and a node
+    // two hops past an unreadable endpoint is no more placeable than the
+    // endpoint itself. A node the ACTIVE walk already lit keeps its lighting —
+    // an independently known path to the focus is knowledge, and the unknown
+    // frontier does not take it away (round-6 correctness f-012).
+    while (queue.length) {
+      const current = queue.shift();
+      unknown[current] = true;
+      (related[current] || []).forEach(function (next) {
+        if (lit[next] || crossed[next]) return;
+        crossed[next] = true;
+        queue.push(next);
+      });
+    }
     return { lit: lit, unknown: unknown };
   }
 
@@ -1185,14 +1216,22 @@
   const SEARCH_LIMIT = 8;
 
   function searchMatches(query) {
-    const needle = String(query || "").trim().toLowerCase();
-    if (!needle) return [];
+    // Two domains, so two readings of the same keystrokes. A TITLE is prose:
+    // the spaces around what somebody typed are not part of what they meant,
+    // so it is matched against the trimmed query. An ID is an arbitrary
+    // non-empty string (§5.1) — `" task "` is an id Lens can really be handed,
+    // which is why `focus=` carries one byte for byte — so trimming here would
+    // make that id's own prefix unsearchable and an all-spaces id unreachable
+    // (round-6 correctness f-011). Only a truly EMPTY box offers nothing.
+    const raw = String(query || "").toLowerCase();
+    const needle = raw.trim();
+    if (!raw) return [];
     return nodes
       .filter(function (node) {
         const label = String(node.label || "").toLowerCase();
         return (
-          label.indexOf(needle) !== -1 ||
-          String(node.id).toLowerCase().indexOf(needle) === 0
+          (needle !== "" && label.indexOf(needle) !== -1) ||
+          String(node.id).toLowerCase().indexOf(raw) === 0
         );
       })
       .slice(0, SEARCH_LIMIT);

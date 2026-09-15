@@ -1911,6 +1911,7 @@ CYTOSCAPE_JS = (
 def _node(
     task_id: str,
     *,
+    title: str = "",
     layer: int = 0,
     status: str = "open",
     task_type: str = "task",
@@ -1927,7 +1928,9 @@ def _node(
     """One payload node in the shape `graph_view.payload_json` emits."""
     return {
         "id": task_id,
-        "label": task_id.title(),
+        # The label is the TITLE the server rendered, which is a field of its
+        # own: title-casing the id is only the fixture's shorthand for it.
+        "label": title or task_id.title(),
         "status": status,
         "type": task_type,
         "layer": layer,
@@ -3129,6 +3132,53 @@ def test_a_node_off_the_scope_chain_says_only_what_it_lights() -> None:
     ]
 
 
+#: The unknown frontier, two hops deep: `focus` blocks ghost `unread`, whose
+#: status could not be read, and `unread`'s list names `beyond`. Both edges are
+#: `unknown` because the endpoint between them is.
+UNKNOWN_CHAIN_PAYLOAD: dict = _payload(
+    [
+        _node("focus"),
+        _node(
+            "unread",
+            layer=1,
+            ghost="dependency",
+            status="unknown",
+            completeness="status_unknown",
+            projects=("lens",),
+        ),
+        _node("beyond", layer=2),
+        _node("apart"),
+    ],
+    [
+        _edge("focus", "unread", state="unknown"),
+        _edge("unread", "beyond", state="unknown"),
+    ],
+    roots=["focus", "apart"],
+)
+
+
+def test_a_node_reached_only_through_unknown_edges_is_unknown_at_any_depth() -> None:
+    """D8's `unknown` class is about REACHABILITY, not about adjacency
+    (round-6 correctness f-012). `beyond` sits two hops from the focus and
+    every hop runs through an endpoint Lens could not read, so it can be called
+    neither a descendant nor unrelated — and dimming it says "unrelated", which
+    is the one thing this graph does not know."""
+    final = _graph_run(
+        [],
+        href=GRAPH_CANVAS_HREF + "&focus=focus",
+        payload=UNKNOWN_CHAIN_PAYLOAD,
+        served_panel="focus",
+    )["final"]
+
+    assert final["focused"] == ["focus"]
+    assert final["lit"] == ["focus"]
+    assert final["unknownRelation"] == ["beyond", "unread"]
+    # …and a node with no path to the focus at all is still plain unrelated:
+    # the frontier spreads from what the focus reaches, not from every
+    # unreadable corner of the graph.
+    assert final["dimmed"] == ["apart"]
+
+
 def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
     """The ordinary state of the page: nothing is lit because nothing is
     focused, and a class left behind from a cleared focus would dim two thirds
@@ -3348,6 +3398,46 @@ def test_a_search_matches_a_title_anywhere_and_an_id_from_its_start() -> None:
     assert by_title["search"] == ["hidden"]
     assert by_id["search"] == ["off-b"]
     assert no_match["search"] == []
+
+
+#: Ids that are legal (§5.1: arbitrary non-empty strings) and that a query the
+#: title domain would normalise cannot reach: one wrapped in spaces, one made
+#: of nothing else. Their labels are the ids title-cased, so a query of spaces
+#: matches no TITLE substring once it is trimmed away — a hit is the id domain
+#: answering or nothing is.
+WHITESPACE_ID_PAYLOAD: dict = _payload(
+    [
+        _node(" task ", title="Zzz"),
+        _node("   ", title="Yyy"),
+        _node("plain", title="Www"),
+    ],
+    [],
+)
+
+
+def test_a_search_matches_an_id_whose_own_prefix_contains_whitespace() -> None:
+    """The id domain is matched RAW (round-6 correctness f-011). A title is
+    prose and its query is trimmed; an id is a string Lens was handed, and
+    `" task "` is one — the same reason `focus=` carries it byte for byte. A
+    query normalised for titles makes that id's own prefix unsearchable, and an
+    id of spaces unreachable at any length."""
+    result = _graph_run(
+        ["search: t", "search:   ", "search: ", "search:pla", "search:"],
+        payload=WHITESPACE_ID_PAYLOAD,
+    )
+    spaced, blanks, single, plain, empty = result["states"]
+
+    # No title here contains a `t`, so this hit is the ID domain or nothing.
+    assert spaced["search"] == [" task "]
+    # Three spaces reach the id that IS three spaces …
+    assert blanks["search"] == ["   "]
+    # … and one space reaches both ids that start with one.
+    assert single["search"] == [" task ", "   "]
+    # The ordinary query is untouched: still a prefix over ids …
+    assert plain["search"] == ["plain"]
+    # … and an EMPTY box still offers nothing, which is the one input that
+    # means "no search" rather than "a search for whitespace".
+    assert empty["search"] == []
 
 
 def test_clicking_another_node_replaces_the_focus_and_the_panel() -> None:

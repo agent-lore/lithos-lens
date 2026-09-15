@@ -312,11 +312,22 @@ def panel_fragment_url(
     other would make the dashboard's panel claim a count over a graph nobody
     assembled.
 
+    That difference runs the other way too, which is why a scoped panel URL
+    carries NO preserved filters: the graph page's ``project=`` / ``epic=`` are
+    scope SELECTORS from a query vocabulary of their own, admitted without the
+    board's byte ceiling (that ceiling bounds what a response re-emits per row,
+    and this page has no rows). Copying one into the fragment as though it were
+    a filter hands the detail route a query it refuses — and a refused fragment
+    is an empty panel, so Back would restore a focused node with nothing beside
+    it (round-6 correctness f-010). Nothing is lost by dropping them: the graph
+    page sets no board filters, and the panel's own Close comes from the host
+    (``panel_close_url``) rather than from this query.
+
     ``snapshot`` travels with it: the scope names which graph to assemble, and
     this names the one the page is DRAWING (``GraphPageView.fingerprint``), so
     a panel whose read finds a moved graph says so instead of counting over it.
     """
-    params = _preserved_filter_params(request)
+    params = [] if scope else _preserved_filter_params(request)
     params.append((PANEL_FRAGMENT_KEY, PANEL_FRAGMENT_VALUE))
     if scope:
         params.append((PANEL_SCOPE_KEY, scope))
