@@ -3028,6 +3028,42 @@ def test_a_node_reached_only_through_an_unknown_edge_is_neither_lit_nor_dimmed()
         assert name not in final["dimmed"], name
 
 
+#: Two ids that differ only in the whitespace AROUND them. Both are legal —
+#: a task id is an arbitrary non-empty string (§5.1) — and they are different
+#: tasks, which is what makes a trimmed read of `focus=` light the wrong one.
+WHITESPACE_PAYLOAD: dict = _payload(
+    [_node(" task "), _node("task"), _node("next", layer=1)],
+    [_edge("task", "next")],
+    roots=[" task ", "task"],
+)
+
+
+def test_a_focus_id_with_surrounding_space_lights_that_node_not_its_neighbour() -> None:
+    """The CLIENT half of round-1 correctness f-003, which the server-side
+    regression cannot reach: `graph.js` reads the same `focus=` off the same
+    URL, and a trim on either side alone is a split — the server renders one
+    task's panel while the canvas lights the other's neighbourhood. Here the
+    deep link names `" task "`, which blocks nothing, while its trimmed
+    neighbour `task` blocks `next`."""
+    result = _graph_run(
+        [],
+        href=GRAPH_CANVAS_HREF + "&focus=%20task%20",
+        payload=WHITESPACE_PAYLOAD,
+        served_panel=" task ",
+    )
+    final = result["final"]
+
+    assert final["focused"] == [" task "]
+    # Lit is the focus and its active relations — it has none, so it is alone;
+    # a trimmed read would light `task` and `next` and dim the spaced one.
+    assert final["lit"] == [" task "]
+    assert final["dimmed"] == ["next", "task"]
+    # …and D9's no-JS baseline is kept rather than re-requested: the server
+    # already rendered the panel for the id this URL actually names.
+    assert result["fetches"] == []
+    assert final["panel"] == "panel:server: task "
+
+
 def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
     """The ordinary state of the page: nothing is lit because nothing is
     focused, and a class left behind from a cleared focus would dim two thirds

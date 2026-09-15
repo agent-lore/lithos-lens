@@ -504,16 +504,21 @@ states "completed; no pending impact" and a **cancelled** one "its dependents
 are unsatisfiable" — neither has pending edges, so neither carries a
 future-tense number — and an **epic** states no FIGURES at all, since a zero
 there would read as "finishing this frees nobody" rather than "this is not that
-kind of task" (nor a chain position: §5.11's chain is the blocking one, and an
-epic sits on no `blocks` edge). Beside it, "on the longest chain (k of n)" gives the task's
+kind of task". Beside it, "on the longest chain (k of n)" gives the task's
 position on the SCOPE's chain (§5.12) when it is on it; a task is trivially on
 the chain through itself, so stating that would state nothing. And when the
 scope is incomplete, or an `unknown` edge touches the focused task's own
 neighbourhood, the panel says that what the canvas lights is a **lower bound**
 of what surrounds it — a dimmed node must not read as "unrelated" when Lens
-only failed to look. That last statement is about the CANVAS rather than about
-N, so a focused **epic** carries it too: it has no figures to withhold, and its
-neighbourhood degrades like any other node's.
+only failed to look. Both of those last two are claims about the CANVAS rather
+than about N, so a focused **epic** carries them like any other node: it is on
+the scope's longest chain whenever the chain holds it — a scope whose blocking
+projection is one node wide puts it there — and its neighbourhood degrades the
+same way. What an epic never carries is the future-tense clause: where a task
+whose panel no longer matches the graph on screen reads "refresh to see what
+completing this frees" (below), an epic says only that the graph has changed,
+and withholds the canvas notes with the figures — they describe the assembly
+this panel just made, which is not the one being drawn.
 
 The graph page's own render computes this from the scope and cycle signal it
 already holds; a panel fetched on its own rebuilds that scope, which the

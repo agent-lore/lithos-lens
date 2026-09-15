@@ -237,6 +237,7 @@ classDiagram
     +relations_exact bool
     +chain_position int
     +chain_length int
+    +stale bool
   }
   class EdgeCacheEntry {
     +task_id str

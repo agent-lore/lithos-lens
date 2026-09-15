@@ -287,30 +287,30 @@ def downstream_impact(
     ``None`` when there is nothing to state at all: a focus this graph does not
     hold, so no projection exists to count over. An EPIC answers
     :data:`IMPACT_NONE` rather than ``None`` — D10 gives it no figures (a zero
-    would read as "finishing this frees nobody"), but D8's lower-bound
-    statement about the lit set is a claim about the canvas rather than about
-    N, and the panel owes it for a focused epic too.
+    would read as "finishing this frees nobody"), while D8's lower-bound
+    statement and D7's chain position are claims about the CANVAS rather than
+    about N, and the panel owes a focused epic both.
     """
     node = scope.node(focus)
     if node is None:
         return None
+    position, length = _chain_position(focus, chain)
     if node.task.task_type == "epic":
-        # No numbers, and a zero would read as "finishing this frees nobody"
-        # rather than "this is not that kind of task". What is left is the
-        # annotation focus mode owes the canvas whatever the focal node is:
-        # D8's lower-bound statement about the lit set is not D10's arithmetic,
-        # and an epic focused in a scope with an unreadable edge list lights a
-        # degraded neighbourhood like any other node.
-        # The chain position is left off with the figures: D7's chain is the
-        # BLOCKING one, an epic sits on no `blocks` edge, and "on the longest
-        # chain (1 of 1)" for a node that is alone on a chain of itself states
-        # nothing an operator can use.
+        # No FIGURES, and a zero would read as "finishing this frees nobody"
+        # rather than "this is not that kind of task". Everything else the
+        # panel says under a focus is a claim about the CANVAS rather than
+        # about N, and is owed for an epic like any other focused node: D8's
+        # lower-bound statement about the lit set, and D7's position on the
+        # scope's longest chain when the epic is on it — which a scope whose
+        # blocking projection is one node wide is exactly the boundary for
+        # (round-2 correctness f-001, f-005).
         return DownstreamImpact(
             focus=focus,
             state=IMPACT_NONE,
             relations_exact=_relations_exact(scope, focus),
+            chain_position=position,
+            chain_length=length,
         )
-    position, length = _chain_position(focus, chain)
     if node.status != "open":
         # Completed, cancelled, or a ghost Lens could not read. None of the
         # three supports a future-tense number: the first two have no pending
@@ -672,6 +672,16 @@ async def load_impact(
         # the blocked reads because M is one of the two figures and it comes
         # from them — a comparison made before would pin the picture and leave
         # M free to move behind it (round-1 correctness f-001).
+        #
+        # An EPIC is the one focal node with nothing to BE stale: D10 states no
+        # figures for it, so the sentence this branch exists to withhold —
+        # "refresh to see what completing this frees" — is one it must never
+        # carry in the first place (round-2 correctness f-004). It says the
+        # graph moved and drops the notes instead, which are the only claims it
+        # had and are claims about a picture this assembly is no longer of.
+        focal = assembled.node(focus)
+        if focal is not None and focal.task.task_type == "epic":
+            return DownstreamImpact(focus=focus, state=IMPACT_NONE, stale=True)
         return DownstreamImpact(focus=focus, state=IMPACT_STALE)
     topology = build_topology(
         [node.task for node in assembled.nodes],

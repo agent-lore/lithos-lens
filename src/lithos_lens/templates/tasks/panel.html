@@ -180,13 +180,21 @@
           <p class="panel-impact" data-panel-impact data-impact-state="cancelled">This task is cancelled — its dependents are unsatisfiable.</p>
         {% elif impact.state == "unknown" %}
           <p class="panel-impact" data-panel-impact data-impact-state="unknown">This task's status could not be read, so its impact is unknown.</p>
+        {% elif impact.stale %}
+          {# `none` over a MOVED graph. The state above says "refresh to see
+             what completing this frees", which is a future-tense impact line
+             and the one sentence D10 forbids an epic — so the degradation is
+             stated without it, and the notes below are dropped with the
+             figures, being claims about a picture this answer is no longer of. #}
+          <p class="panel-impact" data-panel-impact data-impact-state="none" data-impact-stale="true">This graph has changed — refresh to see what surrounds this.</p>
         {% endif %}
         {#
-          `none` — an epic — states no sentence here at all (D10): it carries
-          no `blocks` edges, and a zero would read as "finishing this frees
+          `none` — an epic — states no sentence of its own (D10): it carries no
+          `blocks` edges, and a zero would read as "finishing this frees
           nobody". The notes below still render, because D8's lower-bound
-          statement is about the LIT SET on the canvas rather than about N, and
-          a focused epic's neighbourhood degrades like any other node's.
+          statement and D7's chain position are about the CANVAS rather than
+          about N, and a focused epic is on the chain and lights a
+          neighbourhood like any other node.
         #}
         {% if not impact.relations_exact %}
           {# D8: the lit set on the canvas is a LOWER BOUND when an unreadable

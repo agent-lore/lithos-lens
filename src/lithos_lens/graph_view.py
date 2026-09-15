@@ -137,6 +137,12 @@ class DownstreamImpact:
     #: Zero when it is not on it — the line is not rendered then.
     chain_position: int = 0
     chain_length: int = 0
+    #: The graph these were computed over is not the one the canvas is drawing.
+    #: Carried BESIDE ``state`` rather than as one of its values, because the
+    #: focal node can be one D10 states no figures for at all: "refresh to see
+    #: what completing this frees" is the one sentence an EPIC must never
+    #: carry, moved graph or not (round-2 correctness f-004).
+    stale: bool = False
 
     @property
     def open(self) -> bool:

@@ -22,7 +22,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
-| `lithos_lens.graph_impact` | M | 2 | 5 |
+| `lithos_lens.graph_impact` | L | 2 | 5 |
 | `lithos_lens.graph_layout` | L | 6 | 6 |
 | `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |

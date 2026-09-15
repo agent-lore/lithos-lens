@@ -673,15 +673,21 @@ def test_a_resolved_focal_task_states_no_pending_impact(
     assert "cancelled — its dependents are unsatisfiable" in slot(cancelled)
 
 
-def test_an_epic_carries_no_impact_line_at_all(
+def test_an_epic_carries_no_impact_figures_at_all(
     lithos_lens_config_env: Path,
 ) -> None:
     """An epic has no `blocks` edges, so a zero here would read as "finishing
-    this frees nobody" rather than "this is not that kind of task" (D10)."""
+    this frees nobody" rather than "this is not that kind of task" (D10).
+
+    `a -> b` is this scope's blocking projection, so the epic is off the
+    longest chain and off the degraded paths too: the slot is empty because
+    D10 states nothing for it, not because some other claim happened to be
+    absent. The two claims a focused epic DOES carry — D7's position on the
+    chain when it is on one, and D8's lower-bound note — are next door."""
     fake = GraphFakeClient(
         dataset(
-            [task("epic", task_type="epic"), task("child")],
-            (("epic", "child", "parent_child"),),
+            [task("epic", task_type="epic"), task("child"), task("a"), task("b")],
+            (("epic", "child", "parent_child"), ("a", "b", "blocks")),
         )
     )
 
@@ -730,12 +736,15 @@ def test_a_focused_epic_still_says_when_its_lit_set_is_a_lower_bound(
         assert "lower bound of what surrounds it" in slot(rendered)
 
 
-def test_a_focused_epic_in_a_complete_scope_still_says_nothing(
+def test_a_focused_epic_on_the_longest_chain_still_states_its_position(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The other half: the note is a DEGRADATION, not a new line for epics.
-    Every edge list here was read in full, so the canvas shows the whole
-    neighbourhood and the slot stays empty."""
+    """D7's line is not D10's, and suppressing the figures must not take it
+    with them (round-2 correctness f-005). This scope's blocking projection is
+    one node wide, so the epic IS the scope's longest chain — the page says
+    "Longest blocking chain (1)" over it — and the panel owes the position.
+    The lower-bound note is absent here for its own reason: every edge list was
+    read in full, so it is a DEGRADATION rather than a new line for epics."""
     fake = GraphFakeClient(
         dataset(
             [task("epic", task_type="epic"), task("child")],
@@ -747,7 +756,46 @@ def test_a_focused_epic_in_a_complete_scope_still_says_nothing(
         lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=epic"
     )
 
-    assert slot(html) == ""
+    assert "On the longest chain (1 of 1)." in slot(html)
+    # …and still no figures, and nothing standing in for them.
+    assert "frees" not in slot(html)
+    assert attribute(html, "data-impact-state") == ""
+    assert "data-panel-focus-bound" not in html
+
+
+def test_a_focused_epic_over_a_moved_graph_says_so_without_the_frees_wording(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The fingerprint check runs BEFORE the focal node is classified, so an
+    epic clicked after the graph moved was answered with the general stale
+    sentence — "refresh to see what completing this frees" — which is a
+    future-tense impact line, and the one D10 says an epic never carries
+    (round-2 correctness f-004). The move is real and worth stating, so it is
+    stated without the figures it has none of; the canvas notes go with them,
+    being claims about a picture this assembly is no longer of."""
+    tasks = [task("epic", task_type="epic"), task("child"), task("apart")]
+    fake = GraphFakeClient(dataset(tasks, (("epic", "child", "parent_child"),)))
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(f"/tasks/graph?project={PROJECT}").text)
+        drawn = snapshot(page)
+        # Lithos moves under the page: one more task, so the assembly the
+        # panel makes for itself is not the graph on screen.
+        fake.replace_dataset(
+            dataset([*tasks, task("late")], (("epic", "child", "parent_child"),))
+        )
+        panel = client.get(
+            f"/tasks/epic?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+
+    assert "This graph has changed" in slot(panel)
+    assert "frees" not in slot(panel)
+    assert "completing this" not in slot(panel).lower()
+    assert attribute(panel, "data-impact-stale") == "true"
+    # The notes are withheld with the figures: they describe the assembly this
+    # panel just made, which is not the one the canvas is drawing.
+    assert "data-panel-focus-bound" not in panel
+    assert "longest chain" not in slot(panel)
 
 
 def test_one_blocker_reported_twice_with_two_messages_stays_one_blocker(
@@ -1303,8 +1351,10 @@ def test_a_panel_that_asked_for_no_impact_gains_none_from_a_resolved_task(
 ) -> None:
     """The guards on that rule, which are the reason it is not simply "state it
     whenever the task is resolved": a panel with no `scope=` asked for no
-    impact line at all (the dashboard's), and an epic is given none by D10
-    whatever its state. Neither may gain one from the branch above."""
+    impact line at all (the dashboard's), and an epic is given no FIGURES and
+    no resolved wording by D10 whatever its state. Neither may gain one from
+    the branch above. (The epic's chain position is a separate claim, D7's, and
+    it is stated — see `test_a_focused_epic_on_the_longest_chain_...`.)"""
     fake = GraphFakeClient(
         dataset(
             [
@@ -1321,7 +1371,9 @@ def test_a_panel_that_asked_for_no_impact_gains_none_from_a_resolved_task(
         epic = client.get(f"/tasks/epic?fragment=panel&scope=project:{PROJECT}").text
 
     assert slot(unscoped) == ""
-    assert slot(epic) == ""
+    assert "no pending impact" not in slot(epic)
+    assert "frees" not in slot(epic)
+    assert attribute(epic, "data-impact-state") == ""
 
 
 class CompletingMidPanelClient(GraphFakeClient):
@@ -1923,3 +1975,18 @@ def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None
         assert answer is not None
         assert answer.state == "stale"
         assert answer.frees == 0
+
+    # An EPIC's line is the exception to all of it: it makes no claim about the
+    # focal status, so no badge can disagree with it and nothing here may turn
+    # it into "refresh to see what completing this frees" — the one sentence
+    # D10 forbids an epic, moved graph or not (round-2 correctness f-004).
+    for moved in (False, True):
+        epic_line = DownstreamImpact(
+            focus="epic", state="none", stale=moved, chain_position=1, chain_length=1
+        )
+        for record in (
+            task("epic", task_type="epic"),
+            task("epic", task_type="epic", status="completed"),
+            None,
+        ):
+            assert reconciled_impact(epic_line, record, scoped=True) is epic_line
