@@ -684,12 +684,18 @@ which way an arrow reads.
 - **An absent hierarchy node says which absence it is.** Exactly one ending
   means the task HAS no parent epic: the chain runs off the top of the forest
   without passing one, and the fragment simply draws no hierarchy node. The
-  other three — the walk's depth bound, a `parent_child` loop, and an ancestor
-  whose `task_get` or `edge_list` failed — mean Lens could not decide, and the
-  fragment says so in its own line ("this task's parent epic could not be
-  determined", with which of the three it was). The picture is identical
-  either way, so silence there would report a task with an epic as a task
-  without one; the reason also rides on the render's span.
+  other three — the walk's depth bound, a `parent_child` loop, and a read that
+  failed (an ancestor's `task_get` or `edge_list`, or the FOCAL task's own
+  edge list, which is where the first parent edge would have been) — mean Lens
+  could not decide, and the fragment says so in its own line ("this task's
+  parent epic could not be determined", with which of the three it was). The
+  picture is identical either way, so silence there would report a task with an
+  epic as a task without one; the reason also rides on the render's span.
+  Which of the four it is, is decided on the ancestor left PENDING — including
+  after the last hop the bound allows. A walk that spends its final hop
+  reaching the top of the forest has answered, and one that spends it arriving
+  back at a task it already visited has found a loop; only an ancestor left
+  genuinely unexplored is the bound's own outcome.
 - **The cap counts the focal task.** `[graph].mini_graph_max_nodes` (40) is the
   whole picture, filled in one deterministic priority — focal task, parent
   epic, depth-1 blockers, depth-1 dependents, depth-2 blockers, each tier in

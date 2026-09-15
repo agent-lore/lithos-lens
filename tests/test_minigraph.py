@@ -717,6 +717,97 @@ def test_an_epic_past_the_walk_s_depth_bound_is_reported_as_undetermined(
     assert "deeper than this walk reads" in html
 
 
+def plain_chain(length: int) -> tuple[list[TaskRecord], list[tuple[str, str, str]]]:
+    """``p<length-1> -> … -> p00 -> task``: plain ancestors, no epic anywhere."""
+    chain = [f"p{index:02d}" for index in range(length)]
+    tasks = [
+        made("task", created_at="2026-09-01T00:00:00+00:00"),
+        *(
+            made(name, created_at=f"2026-09-01T00:00:{index + 1:02d}+00:00")
+            for index, name in enumerate(chain)
+        ),
+    ]
+    edges = [(chain[0], "task", "parent_child")]
+    edges += [
+        (chain[index + 1], chain[index], "parent_child")
+        for index in range(len(chain) - 1)
+    ]
+    return tasks, edges
+
+
+def test_a_chain_that_ends_exactly_on_the_bound_is_an_answer_not_a_depth(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The last hop the bound allows can PROVE there is no epic above.
+
+    Ten plain ancestors and nothing over the tenth: the walk spends every hop
+    it has and reaches the top of the forest, which is the one ending that
+    settles the tier. Reporting "deeper than this walk reads" there would
+    invent an unknown out of an answer (round-3 correctness f-002).
+    """
+    tasks, edges = plain_chain(PARENT_BREADCRUMB_MAX_DEPTH)
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "", "a proven absence was reported as a bound"
+
+
+def test_a_loop_closed_on_the_last_hop_is_a_cycle_not_a_depth(
+    lithos_lens_config_env: Path,
+) -> None:
+    """…and the same hop can prove a LOOP, which is its own unknown.
+
+    The tenth ancestor points back at one the walk has already visited: the
+    chain is not deeper than the bound, it is circular, and the two are
+    different answers to "why is there no epic here".
+    """
+    tasks, edges = plain_chain(PARENT_BREADCRUMB_MAX_DEPTH)
+    edges.append(
+        (
+            f"p{PARENT_BREADCRUMB_MAX_DEPTH // 2:02d}",
+            f"p{PARENT_BREADCRUMB_MAX_DEPTH - 1:02d}",
+            "parent_child",
+        )
+    )
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "cycle"
+
+
+def test_a_failed_focal_edge_read_leaves_the_parent_tier_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The focal task's own edge list is where its parent edge lives.
+
+    When that read fails there is no hierarchy edge to walk from, so the tier
+    is unknowable — and the fragment said "settled" before, which claimed this
+    task has no epic on the strength of a read that never landed (round-3
+    correctness f-002).
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("epic", created_at="2026-09-01T00:00:00+00:00", task_type="epic"),
+                made("task", created_at="2026-09-01T00:00:01+00:00"),
+            ],
+            [("epic", "task", "parent_child")],
+        ),
+        edge_failures={"task"},
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "unreadable"
+    # …and the edge read's own marker is beside it: one says the picture is
+    # partial, the other says which promise went unkept.
+    assert "data-mini-graph-incomplete" in html
+
+
 def test_an_ancestor_whose_record_cannot_be_read_leaves_the_tier_unknown(
     lithos_lens_config_env: Path,
 ) -> None:

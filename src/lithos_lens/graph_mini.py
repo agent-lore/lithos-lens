@@ -212,6 +212,7 @@ async def load_mini_graph(
         lithos,
         edges,
         focal.id,
+        edges_unreadable=focal.id in incomplete,
         cache=cache,
         limiter=limiter,
         tally=tally,
@@ -424,6 +425,7 @@ async def _parent_epic(
     edges: Mapping[tuple[str, str, str], EdgeRecord],
     focal_id: str,
     *,
+    edges_unreadable: bool = False,
     cache: GraphCache,
     limiter: asyncio.Semaphore,
     tally: CacheTally,
@@ -453,25 +455,46 @@ async def _parent_epic(
     page's breadcrumb shares), :data:`PARENT_EPIC_CYCLE` (a ``parent_child``
     loop in what the contract calls a forest) and
     :data:`PARENT_EPIC_UNREADABLE` (an ancestor's ``task_get`` or
-    ``edge_list`` failed) — mean Lens could not DECIDE, and they are returned
-    as the third value rather than collapsed into the first. An absent node is
-    the same picture either way, so the fragment says which of the two it is
-    (round-2 correctness f-002); a walk that swallowed the difference would
-    report a task with an epic as a task without one.
+    ``edge_list`` failed, or ``edges_unreadable`` — the FOCAL task's own edge
+    list, which is where the first parent edge would have been) — mean Lens
+    could not DECIDE, and they are returned as the third value rather than
+    collapsed into the first. An absent node is the same picture either way,
+    so the fragment says which of the two it is (round-2 correctness f-002); a
+    walk that swallowed the difference would report a task with an epic as a
+    task without one.
+
+    Which of the four it is, is decided ON THE PENDING ANCESTOR and nowhere
+    else — including after the last hop the bound allows. A walk that spent
+    its final hop proving there is nothing above has ANSWERED, and reporting
+    "deeper than this reads" there would invent an unknown; one that spent it
+    arriving back at a task it already visited has found a cycle, not a depth
+    (round-3 correctness f-002). Only an ancestor left genuinely unexplored is
+    the bound's own outcome.
     """
+    if edges_unreadable:
+        # The focal task's edge list is where its parent edge lives, so a read
+        # that failed leaves the whole tier unknowable — not absent.
+        return "", (), PARENT_EPIC_UNREADABLE
     entries: list[EdgeCacheEntry] = []
     seen = {focal_id}
     # Lithos enforces a single parent, so the first is the chain; a second one
     # would be a forest violation and this tier is not a place to render it.
     above = _neighbours(edges, focal_id, (PARENT_EDGE_TYPE,), up=True)
     ancestor = above[0] if above else ""
-    for _ in range(PARENT_BREADCRUMB_MAX_DEPTH):
+    # One extra turn over the bound, which classifies and never walks: the
+    # ancestor the last hop left pending gets the same three-way reading as
+    # every other one.
+    for hop in range(PARENT_BREADCRUMB_MAX_DEPTH + 1):
         if not ancestor:
             # Off the top of the forest: an answer, and the only one that
             # means this task genuinely has no epic above it.
             return "", tuple(entries), ""
         if ancestor in seen:
             return "", tuple(entries), PARENT_EPIC_CYCLE
+        if hop == PARENT_BREADCRUMB_MAX_DEPTH:
+            # An unexplored ancestor with no hops left: the bound, and the one
+            # ending it may claim.
+            return "", tuple(entries), PARENT_EPIC_DEPTH
         seen.add(ancestor)
         await _resolve(lithos, (ancestor,), known, records, unknown, limiter, tally)
         record = records.get(ancestor)
@@ -492,6 +515,7 @@ async def _parent_epic(
             up=True,
         )
         ancestor = parents[0] if parents else ""
+    # Unreachable: the loop's own head answers every exit above.
     return "", tuple(entries), PARENT_EPIC_DEPTH
 
 
