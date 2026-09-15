@@ -30,6 +30,7 @@ from lithos_lens.graph_mini import (
     DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES as MODULE_DEFAULT_MAX_NODES,
 )
 from lithos_lens.graph_mini import (
+    MAX_MINI_GRAPH_READS,
     MiniGraphLimits,
     load_mini_graph,
 )
@@ -1102,6 +1103,7 @@ def test_a_rendered_fragment_records_its_shape_on_the_assembly_span(
         "lens.minigraph.outcome": "rendered",
         "lens.minigraph.nodes": 4,
         "lens.minigraph.capped": False,
+        "lens.minigraph.refused_reads": 0,
         "lens.minigraph.not_shown": 0,
         # The focal task and its one drawn blocker, both read cold; the
         # dependent and the epic are leaves, and the open snapshot answered
@@ -1310,6 +1312,143 @@ def test_the_mini_graph_reuses_the_edge_cache_the_graph_page_warmed(
         assert client.get("/tasks/task/minigraph").status_code == 200
 
     assert len(fake.edge_calls) == warm, "the mini-graph re-read a warm entry"
+
+
+async def test_a_neighbourhood_past_the_read_budget_is_refused_before_it_reads() -> (
+    None
+):
+    """The cap bounds the PICTURE; this bounds the work behind it.
+
+    `task_edge_list` caps no edge count, so the first-hop fan-out is sized by
+    whoever wrote the edges rather than by `mini_graph_max_nodes`: classifying
+    every first-hop endpoint costs a `task_get` apiece and enumerating depth 2
+    costs an `edge_list` per depth-1 blocker, both of them BEFORE the cap can
+    exclude a single node. A semaphore bounds how many of those run at once
+    and not how many are queued — and a queued read's own deadline does not
+    start until it acquires the gates — so a mini-graph drawing one node could
+    queue thousands of calls (round-7 f-001).
+
+    Refused rather than half-drawn, and the refusal must arrive with no
+    neighbour read ISSUED: the point is the queue that never forms.
+    """
+    blockers = 12
+    tasks, edges = runaway(0, blockers=blockers)
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    view = await load_mini_graph(
+        fake,
+        "task",
+        master=[],
+        cache=GraphCache(),
+        limits=MiniGraphLimits(max_nodes=1, max_reads=5),
+    )
+
+    assert view.refused
+    # One `task_get` per blocker to classify it, one `edge_list` apiece to
+    # enumerate depth 2 — the work a display cap cannot bound.
+    assert view.refused_reads == blockers * 2
+    assert view.nodes == ()
+    assert not view.tail.truncated
+    # The focal task's own record and edge list are what the frontier is read
+    # FROM, so both are spent before the budget is evaluable; nothing past
+    # them is — not one of the twelve blockers was read.
+    assert fake.get_calls == ["task"]
+    assert fake.edge_calls == ["task"]
+
+
+async def test_the_depth_two_records_are_bounded_by_the_same_budget() -> None:
+    """The second unbounded phase, and the one a spare slot invites.
+
+    Depth 2 is enumerated from every depth-1 blocker, so the candidate set is
+    edge-sized too — and one slot left under the cap is not a licence to read
+    a record for each of them to find out which candidate takes it.
+    """
+    tasks = [made("task", created_at="2026-09-01T00:00:00+00:00")]
+    edges = [("b", "task", "blocks")]
+    tasks.append(made("b", created_at="2026-09-01T00:00:01+00:00"))
+    for index in range(30):
+        tasks.append(made(f"deep{index:02d}", created_at="2026-09-02T00:00:00+00:00"))
+        edges.append((f"deep{index:02d}", "b", "blocks"))
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    # Two reads is room for the one blocker's record and its edge list, and no
+    # room for the thirty records behind it.
+    view = await load_mini_graph(
+        fake,
+        "task",
+        master=[],
+        cache=GraphCache(),
+        limits=MiniGraphLimits(max_nodes=CAP, max_reads=2),
+    )
+
+    assert view.refused
+    assert view.refused_reads == 32
+    # The first phase was inside the budget, so its reads were made; the
+    # thirty behind them never were.
+    assert fake.get_calls == ["task", "b"]
+    assert sorted(fake.edge_calls) == ["b", "task"]
+
+
+async def test_a_neighbourhood_inside_the_budget_is_drawn_as_usual() -> None:
+    """The guard is a ceiling, not a second cap: an ordinary render is untouched."""
+    tasks, edges = runaway(60, blockers=2, parent=True)
+    view = await load_mini_graph(
+        GraphFakeClient(dataset(tasks, edges)),
+        "task",
+        master=list(tasks),
+        cache=GraphCache(),
+    )
+
+    assert not view.refused
+    assert view.refused_reads == 0
+    assert len(view.nodes) == CAP
+    # 62 first-hop endpoints and 2 blocker edge lists, well inside the net.
+    assert MAX_MINI_GRAPH_READS == 1000
+
+
+def test_a_refused_fragment_draws_nothing_and_says_what_it_would_cost(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The route's answer to a neighbourhood past the net, end to end.
+
+    Eleven hundred blockers, every one of them open and therefore free to
+    classify — the cost that remains is one `edge_list` apiece to enumerate
+    depth 2, which is past the budget on its own. No canvas, no payload and no
+    tail: the fragment states the reads instead, still offers the full graph,
+    and the blocker chain below it is untouched.
+    """
+    tasks, edges = runaway(0, blockers=MAX_MINI_GRAPH_READS + 100)
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+    assert 'data-refusal-reads="1100"' in html
+    assert "1100 reads of related tasks" in text
+    assert "data-graph-payload" not in html
+    assert "data-graph-canvas" not in html
+    assert 'data-link-tail="minigraph"' not in html
+    # The one link a refusal can still offer, and the text baseline's promise.
+    href = re.search(r'data-mini-graph-focus href="([^"]+)"', html)
+    assert href and f"project={PROJECT}" in href.group(1)
+    assert "focus=task" in href.group(1)
+    assert "The blocker chain below is unaffected." in text
+    # The focal task's edge list, and not one of the 1,100 the neighbourhood
+    # named: the reviewer's reproduction was 1,102 of each.
+    assert fake.edge_calls == ["task"]
+    assert fake.get_calls == []
+    attributes = dict(minigraph_span(spans).attributes or {})
+    assert attributes["lens.minigraph.outcome"] == "refused"
+    assert attributes["lens.minigraph.refused_reads"] == 1100
+    assert attributes["lens.minigraph.nodes"] == 0
+    assert (
+        metric_value(
+            metric_reader, "lens_tasks_minigraph_renders_total", outcome="refused"
+        ).value
+        == 1
+    )
 
 
 def test_the_detail_page_hosts_the_fragment_above_its_blocker_chain(

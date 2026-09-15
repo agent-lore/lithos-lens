@@ -21,7 +21,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.gates` | L | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
-| `lithos_lens.graph_fanout` | S | 1 | 3 |
+| `lithos_lens.graph_fanout` | S | 1 | 4 |
 | `lithos_lens.graph_impact` | M | 2 | 5 |
 | `lithos_lens.graph_layout` | L | 6 | 6 |
 | `lithos_lens.graph_mini` | L | 2 | 1 |
@@ -102,6 +102,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
 - def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
 - def `partition_far_endpoints` — Split ghost candidates into "already known" and "needs a read".
+- def `pending_reads` — How many ``task_get`` calls resolving ``candidates`` would QUEUE.
 - def `resolve_far_endpoints` — Read every pending candidate, filling ``resolved`` and returning failures.
 
 ### `lithos_lens.graph_impact`

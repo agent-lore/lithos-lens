@@ -712,6 +712,20 @@ which way an arrow reads.
   is accountable for — is the same number either way. A cap of one is a legal
   configuration and the boundary of that arithmetic: no neighbour is drawn, and
   the tail says so rather than falling back to the page's default size.
+- **A read budget, beside the node cap.** The cap bounds the PICTURE, and the
+  work behind it is not the same thing: the first-hop record reads and the
+  depth-two edge reads are both sized by the edges, which Lithos does not cap,
+  so a mini-graph drawing one node could otherwise queue thousands of calls
+  (a semaphore bounds how many run at once, never how many are queued). A
+  render may therefore queue at most `MAX_MINI_GRAPH_READS` reads — an
+  internal safety net like §5.10's ghost-resolution bound, not an operator's
+  dial — counted before each phase enqueues anything. Past it the fragment is
+  REFUSED: it draws no picture and states the read count instead, offering the
+  focus link, and the blocker chain below it is unaffected. Refusing is what
+  the exact remainder costs — a tail that promises "21 more not shown" may not
+  itself take unbounded work to count, so Lens declines rather than drawing
+  part of a neighbourhood it never finished reading. The refusal rides on the
+  render's span and is its own `outcome` on the counter.
 - **There are no ghosts.** Every node is a task the neighbourhood named, drawn
   as itself; a depth-1 dependent is a leaf because the scope STOPS there, not
   because Lens could not read it. The two completeness markers mean what they
@@ -747,9 +761,9 @@ which way an arrow reads.
   removal detached — the Cytoscape instance, its resize observer and the
   claimed-node animation, whose completion callback is what re-arms it.
   Teardown is decided by the old container having left the document, not by a
-  replacement arriving, because three states draw no replacement at all: the
-  fragment's offline branch, its assembly-error branch, and a request that
-  never lands. Otherwise a tab left open would accumulate one live instance,
+  replacement arriving, because four states draw no replacement at all: the
+  fragment's offline branch, its assembly-error branch, its refusal branch,
+  and a request that never lands. Otherwise a tab left open would accumulate one live instance,
   observer and animation per task event. The
   exploration classes are off — every node on a mini-graph is in the focal
   task's neighbourhood, so lighting them would say nothing.
@@ -1164,9 +1178,11 @@ reason — it is a multi-phase fan-out too. Each fragment opens one
 outcome, the node count, whether the cap bound, how many neighbours it left
 out, and that render's own cache hits, misses and neighbour reads. The counter
 beside it is `lens_tasks_minigraph_renders_total` (`outcome` in `rendered` |
-`capped` | `offline` | `error`), with `capped` split out because how often 40
-nodes is not enough is the only evidence there is for whether the knob is set
-near the corpus's shape. The node count stays on the span: it is a
+`capped` | `refused` | `offline` | `error`), with `capped` split out because
+how often 40 nodes is not enough is the only evidence there is for whether the
+knob is set near the corpus's shape, and `refused` split out because it is the
+work bound rather than the node cap — no picture at all, and the reads that
+would have been queued ride on the span beside it. The node count stays on the span: it is a
 distribution per task, which is the same cardinality the rule above forbids.
 
 #### 5.12.1 Cytoscape rendering

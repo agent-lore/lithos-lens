@@ -59,9 +59,9 @@ let disposeLensMiniGraph = null;
 //: The element that mini-graph was drawn into, so its teardown can be decided
 //: by whether it is still in the document rather than by a replacement canvas
 //: turning up (round-2 correctness f-005). The fragment's other branches — an
-//: offline answer, an assembly error — carry no canvas at all, and a request
-//: that never lands carries nothing; in all three the picture is detached and
-//: has to go anyway.
+//: offline answer, an assembly error, a refused neighbourhood — carry no
+//: canvas at all, and a request that never lands carries nothing; in all of
+//: them the picture is detached and has to go anyway.
 let lensMiniGraphContainer = null;
 
 const initLensGraph = function () {
@@ -1754,9 +1754,9 @@ const initLensGraph = function () {
 */
 (function () {
   // A mini-graph whose container has left the document, disposed of WITHOUT
-  // waiting for a replacement to arrive. Three states reach here and none of
-  // them draws a canvas: the fragment answered offline, the fragment answered
-  // with an assembly error, and the request never landed at all. In each the
+  // waiting for a replacement to arrive. Four states reach here and none of
+  // them draws a canvas: the fragment answered offline, with an assembly
+  // error, or with a refusal, and the request never landed at all. In each the
   // picture is already detached — `tasks.js` replaced the detail article by
   // hand — so the instance, its observer and its animations are unreachable
   // and must not be left running (round-2 correctness f-005).

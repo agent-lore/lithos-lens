@@ -365,6 +365,7 @@ classDiagram
   class MiniGraphLimits {
     +max_nodes int
     +fetch_concurrency int
+    +max_reads int
   }
   class MiniGraphView {
     +task_id str
@@ -374,6 +375,7 @@ classDiagram
     +parent_epic_unknown str
     +as_of datetime | None
     +incomplete Mapping[str, str]
+    +refused_reads int
     +cache_hits int
     +cache_misses int
     +ghost_reads int

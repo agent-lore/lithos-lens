@@ -524,7 +524,10 @@ def tasks_graph_cycle_reads() -> Any:
 def tasks_minigraph_renders() -> Any:
     """Counter of detail mini-graph fragment renders (§5.6, T2-A5).
 
-    Labels: ``outcome`` in ``rendered`` | ``capped`` | ``offline`` | ``error``.
+    Labels: ``outcome`` in ``rendered`` | ``capped`` | ``refused`` |
+    ``offline`` | ``error``. ``refused`` is the work bound rather than the node
+    cap: the neighbourhood named more reads than one fragment may queue, so no
+    picture was drawn at all (``graph_mini.MAX_MINI_GRAPH_READS``).
 
     ``capped`` is split out rather than folded into ``rendered`` because it is
     the evidence for the one knob this surface has: a mini-graph that hits

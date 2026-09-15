@@ -301,7 +301,13 @@ def register_graph_routes(
                 )
             context["view"] = view
             _record_minigraph(
-                span, outcome="capped" if view.capped else "rendered", view=view
+                span,
+                outcome="refused"
+                if view.refused
+                else "capped"
+                if view.capped
+                else "rendered",
+                view=view,
             )
             return templates.TemplateResponse(request, "tasks/minigraph.html", context)
 
@@ -320,6 +326,10 @@ def _record_minigraph(
     if view is not None:
         span.set_attribute("lens.minigraph.nodes", view.node_count)
         span.set_attribute("lens.minigraph.capped", view.capped)
+        # Zero unless the render refused; then it is the reads the
+        # neighbourhood would have queued, which is the evidence for whether
+        # `MAX_MINI_GRAPH_READS` sits anywhere near the corpus's shape.
+        span.set_attribute("lens.minigraph.refused_reads", view.refused_reads)
         span.set_attribute("lens.minigraph.not_shown", view.tail.remaining)
         # Empty when the hierarchy tier is settled; a reason when D11's node
         # could not be decided, which is the half of that promise a node count

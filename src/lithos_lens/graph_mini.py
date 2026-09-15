@@ -17,7 +17,10 @@ bounds it, and both are D11's:
   (``created_at``, ``id``) order — so which 40 nodes an operator sees does not
   depend on which edge Lithos happened to return first. The remainder is
   reported through T1's shared tail rather than clipped silently, and the
-  focus link opens the full project graph on this task.
+  focus link opens the full project graph on this task. The cap bounds the
+  PICTURE, which the work behind it is not: :data:`MAX_MINI_GRAPH_READS`
+  refuses a neighbourhood too large to READ, because an exact remainder may
+  not cost unbounded work to count.
 
 Two rules here differ from the graph page's and are stated rather than
 inherited:
@@ -64,6 +67,7 @@ from lithos_lens.graph_fanout import (
     GHOST_RESOLUTION_BUDGET_S,
     GraphScopeClient,
     partition_far_endpoints,
+    pending_reads,
     read_edges,
     resolve_far_endpoints,
 )
@@ -109,6 +113,12 @@ from lithos_lens.tasks import (
 #: Mirrors the ``[lithos-lens.graph]`` default, like ``graph_scope``'s two do.
 DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES = 40
 
+#: The most reads one render may QUEUE — the same internal net as
+#: ``graph_fanout.MAX_GHOST_RESOLUTION_READS``, for the reason stated there,
+#: and not an operator's dial. Past it the fragment is refused rather than
+#: drawn from a neighbourhood Lens never finished reading.
+MAX_MINI_GRAPH_READS = 1000
+
 #: This scope's kind, in the payload the client reads. Neither ``project`` nor
 #: ``epic``: a mini-graph is one TASK's neighbourhood, and a payload claiming
 #: a project scope would invite a client to treat it as the project's graph.
@@ -134,6 +144,7 @@ class MiniGraphLimits:
 
     max_nodes: int = DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES
     fetch_concurrency: int = DEFAULT_GRAPH_FETCH_CONCURRENCY
+    max_reads: int = MAX_MINI_GRAPH_READS
 
 
 @dataclass(frozen=True)
@@ -160,6 +171,11 @@ class MiniGraphView:
     as_of: datetime | None = None
     #: task_id -> why its ``edge_list`` read failed.
     incomplete: Mapping[str, str] = field(default_factory=dict)
+    #: Non-zero when this render REFUSED: the reads the neighbourhood would
+    #: have queued past :data:`MAX_MINI_GRAPH_READS`, the guard's own evidence.
+    #: Such a view draws nothing and carries no tail — half a picture, or a
+    #: remainder counted off a half-read neighbourhood, claims too much.
+    refused_reads: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
     ghost_reads: int = 0
@@ -171,6 +187,10 @@ class MiniGraphView:
     @property
     def capped(self) -> bool:
         return self.tail.truncated
+
+    @property
+    def refused(self) -> bool:
+        return self.refused_reads > 0
 
 
 async def load_mini_graph(
@@ -189,7 +209,8 @@ async def load_mini_graph(
     the reason D5 consults it: an OPEN neighbour is already on it, so the
     common case costs no ``task_get`` at all. One semaphore covers this
     render's whole fan-out — the cached ``edge_list`` misses and the neighbour
-    reads together — so the bound is per render rather than per phase.
+    reads together — so the bound is per render rather than per phase, and
+    ``limits.max_reads`` bounds the QUEUE behind it, which no semaphore does.
 
     Raises whatever the focal ``task_get`` raises: a mini-graph for a task
     Lens cannot read is not a smaller mini-graph, and the route answers with
@@ -204,6 +225,23 @@ async def load_mini_graph(
     unknown: set[str] = set()
     focal = known.get(task_id) or await lithos.task_get(task_id)
     records[focal.id] = focal
+    projects = task_projects(focal, convention=convention, tag_key=tag_key)
+    focus_url = (
+        graph_url(GraphPageParams(kind=SCOPE_PROJECT, key=projects[0], focus=focal.id))
+        if projects
+        else ""
+    )
+
+    def refused(count: int) -> MiniGraphView:
+        # Carries what discovering the refusal COST, as the page's does.
+        return MiniGraphView(
+            task_id=focal.id,
+            focus_url=focus_url,
+            refused_reads=count,
+            cache_hits=tally.hits,
+            cache_misses=tally.misses,
+            ghost_reads=tally.ghost_reads,
+        )
 
     entries, incomplete = await read_edges(lithos, (focal,), cache, limiter, tally)
     edges = _index(entry.edges for entry in entries)
@@ -238,6 +276,16 @@ async def load_mini_graph(
     dependents = _fresh(
         _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=False), claimed
     )
+    # What the next two phases would QUEUE, counted BEFORE either enqueues a
+    # read: one `task_get` per cold first-hop endpoint, one `edge_list` per
+    # depth-1 blocker the cache has not warmed. Both are sized by the edge
+    # writer rather than by the cap, so a one-node picture could otherwise
+    # queue thousands of calls (round-7 f-001). The parent walk is not counted
+    # here: PARENT_BREADCRUMB_MAX_DEPTH already bounds it.
+    cold = sum(1 for blocker in frontier if cache.get(blocker) is None)
+    queued = pending_reads((*frontier, *dependents), known, records) + cold
+    if queued > limits.max_reads:
+        return refused(queued)
     await _resolve(
         lithos, (*frontier, *dependents), known, records, unknown, limiter, tally
     )
@@ -284,7 +332,11 @@ async def load_mini_graph(
         # The last tier, and the only one whose RECORDS wait on a slot being
         # left for it: with the cap already spent, depth 2 is counted rather
         # than drawn, and reading a record apiece would be a fan-out nothing
-        # renders.
+        # renders. One slot left is no licence to read the whole tier: which
+        # candidate takes it is decided from the records, so the budget holds.
+        queued += pending_reads(deeper, known, records)
+        if queued > limits.max_reads:
+            return refused(queued)
         await _resolve(lithos, deeper, known, records, unknown, limiter, tally)
         selected.extend(_ordered(deeper, records)[:room])
 
@@ -318,7 +370,6 @@ async def load_mini_graph(
         # the focal task with no neighbours, which is the answer, not clutter.
         show_isolated=True,
     )
-    projects = task_projects(focal, convention=convention, tag_key=tag_key)
     return MiniGraphView(
         task_id=focal.id,
         nodes=tuple(views.values()),
@@ -352,13 +403,7 @@ async def load_mini_graph(
             # over a picture showing none of them.
             size=max(0, limits.max_nodes - 1),
         ),
-        focus_url=(
-            graph_url(
-                GraphPageParams(kind=SCOPE_PROJECT, key=projects[0], focus=focal.id)
-            )
-            if projects
-            else ""
-        ),
+        focus_url=focus_url,
         parent_epic_unknown=parent_unknown,
         as_of=scope.as_of,
         incomplete=incomplete,
