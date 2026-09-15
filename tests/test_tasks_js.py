@@ -3132,9 +3132,21 @@ def test_a_node_off_the_scope_chain_says_only_what_it_lights() -> None:
     ]
 
 
-#: The unknown frontier, two hops deep: `focus` blocks ghost `unread`, whose
-#: status could not be read, and `unread`'s list names `beyond`. Both edges are
-#: `unknown` because the endpoint between them is.
+#: The unknown frontier and everything hanging off the far side of it.
+#:
+#: `focus` blocks ghost `unread`, whose status could not be read, and `unread`'s
+#: list names `beyond` — both edges `unknown` because the endpoint between them
+#: is. PAST that boundary the edges are ordinary ACTIVE ones, in both
+#: orientations: `beyond -> after` leaves it and `feeder -> beyond` arrives at
+#: it. Neither endpoint can be placed relative to the focus — every route to
+#: one runs through `unread` — so the frontier has to spread along active edges
+#: too, and in both directions, which is why the walk drops direction once it
+#: has crossed (round-7 test-quality f-005).
+#:
+#: `sibling` is the control: the focus reaches it over an all-active path of
+#: its own AND it sits on the far side of the boundary (`beyond -> sibling`).
+#: An independently known path is knowledge, so it stays LIT — the precedence
+#: the frontier walk leans on.
 UNKNOWN_CHAIN_PAYLOAD: dict = _payload(
     [
         _node("focus"),
@@ -3147,13 +3159,22 @@ UNKNOWN_CHAIN_PAYLOAD: dict = _payload(
             projects=("lens",),
         ),
         _node("beyond", layer=2),
+        _node("after", layer=3),
+        _node("feeder"),
+        _node("sibling", layer=1),
         _node("apart"),
     ],
     [
         _edge("focus", "unread", state="unknown"),
         _edge("unread", "beyond", state="unknown"),
+        # Past the boundary, in both orientations.
+        _edge("beyond", "after"),
+        _edge("feeder", "beyond"),
+        # The control, reachable two ways.
+        _edge("focus", "sibling"),
+        _edge("beyond", "sibling"),
     ],
-    roots=["focus", "apart"],
+    roots=["focus", "feeder", "apart"],
 )
 
 
@@ -3162,7 +3183,13 @@ def test_a_node_reached_only_through_unknown_edges_is_unknown_at_any_depth() -> 
     (round-6 correctness f-012). `beyond` sits two hops from the focus and
     every hop runs through an endpoint Lens could not read, so it can be called
     neither a descendant nor unrelated — and dimming it says "unrelated", which
-    is the one thing this graph does not know."""
+    is the one thing this graph does not know.
+
+    Everything past that boundary is in the same position, however ordinary its
+    own edges are and whichever way round they point: `after` is blocked by
+    `beyond` and `feeder` blocks it, and a route to either still runs through
+    the endpoint Lens could not read (round-7 test-quality f-005).
+    """
     final = _graph_run(
         [],
         href=GRAPH_CANVAS_HREF + "&focus=focus",
@@ -3171,8 +3198,14 @@ def test_a_node_reached_only_through_unknown_edges_is_unknown_at_any_depth() -> 
     )["final"]
 
     assert final["focused"] == ["focus"]
-    assert final["lit"] == ["focus"]
-    assert final["unknownRelation"] == ["beyond", "unread"]
+    # The frontier spreads along ACTIVE edges past the boundary (`after`,
+    # `feeder`) and in both orientations — `feeder` is only reachable against
+    # the direction of its own edge.
+    assert final["unknownRelation"] == ["after", "beyond", "feeder", "unread"]
+    # …while a node the active walk reached from the focus keeps its lighting:
+    # `sibling` touches the far side too, and an independently known path is
+    # knowledge the frontier does not take away.
+    assert final["lit"] == ["focus", "sibling"]
     # …and a node with no path to the focus at all is still plain unrelated:
     # the frontier spreads from what the focus reaches, not from every
     # unreadable corner of the graph.
