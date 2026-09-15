@@ -53,6 +53,20 @@
         <span data-mini-graph-as-of>as of <time datetime="{{ view.as_of.isoformat() }}">{{ view.as_of.strftime("%H:%M:%S") }}</time></span>
       {% endif %}
     </p>
+    {% if view.parent_epic_unknown %}
+      {# D11 promises the parent epic as a node, and an absent node looks the
+         same whether the task has none or Lens could not find out. This is the
+         second case, named: the walk hit its depth bound, a `parent_child`
+         loop, or an ancestor it could not read. A task that genuinely has no
+         epic renders nothing here. #}
+      <p class="warning-text" data-mini-graph-parent-unknown="{{ view.parent_epic_unknown }}">
+        This task's parent epic could not be determined
+        {%- if view.parent_epic_unknown == "depth" %} — its hierarchy is deeper than this walk reads
+        {%- elif view.parent_epic_unknown == "cycle" %} — its parent chain loops back on itself
+        {%- else %} — a task above it could not be read
+        {%- endif %}, so no epic is drawn above.
+      </p>
+    {% endif %}
     {% if view.incomplete %}
       <p class="warning-text" data-mini-graph-incomplete>
         <strong>{{ view.incomplete | length }}</strong>

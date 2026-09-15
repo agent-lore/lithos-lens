@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from lithos_lens.config import DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES
 from lithos_lens.graph_cache import GraphCache
@@ -31,8 +33,10 @@ from lithos_lens.graph_mini import (
     MiniGraphLimits,
     load_mini_graph,
 )
-from lithos_lens.task_links import BLOCKER_EDGE_TYPES
+from lithos_lens.graph_routes import MINI_GRAPH_SPAN
+from lithos_lens.task_links import BLOCKER_EDGE_TYPES, PARENT_BREADCRUMB_MAX_DEPTH
 from lithos_lens.tasks import TaskRecord, TaskStatusName
+from tests.conftest import metric_value
 from tests.test_graph_page import GraphFakeClient, client_for, dataset
 
 pytestmark = pytest.mark.anyio
@@ -82,6 +86,17 @@ def payload(html: str) -> dict[str, Any]:
 
 def node_ids(html: str) -> set[str]:
     return {node["id"] for node in payload(html)["nodes"]}
+
+
+def labels(html: str) -> dict[str, str]:
+    """task id -> the label the payload carries, which is the drawn text."""
+    return {node["id"]: node["label"] for node in payload(html)["nodes"]}
+
+
+def parent_unknown(html: str) -> str:
+    """The reason the hierarchy tier could not be decided, or ``""``."""
+    match = re.search(r'data-mini-graph-parent-unknown="([^"]+)"', html)
+    return match.group(1) if match else ""
 
 
 def edge_pairs(html: str) -> set[tuple[str, str, str]]:
@@ -144,6 +159,10 @@ def test_a_blocked_task_draws_two_hops_up_one_down_and_its_parent(
     html = fragment(lithos_lens_config_env, fake, "task")
 
     assert node_ids(html) == {"c", "b", "task", "d", "epic"}
+    # D11 asks for the parent epic as a LABELLED node: the label is the title
+    # the server read, and an empty or wrong one would leave every id
+    # assertion here green over an unnamed circle.
+    assert labels(html)["epic"] == "Epic"
     assert edge_pairs(html) == {
         ("c", "b", edge_type),
         ("b", "task", edge_type),
@@ -606,13 +625,21 @@ def test_the_parent_tier_walks_past_a_plain_task_to_the_epic(
     html = fragment(lithos_lens_config_env, fake, "task")
 
     assert node_ids(html) == {"task", "epic"}
+    assert labels(html)["epic"] == "Epic"
     assert edge_pairs(html) == set()
+    assert "data-mini-graph-parent-unknown" not in html, "the tier was decided"
 
 
 def test_a_task_with_no_ancestor_epic_gets_no_parent_node(
     lithos_lens_config_env: Path,
 ) -> None:
-    """A plain parent is not an epic, and the tier says nothing rather than lying."""
+    """A plain parent is not an epic, and the tier says nothing rather than lying.
+
+    This is the ONE absence that is an answer: the chain runs off the top of
+    the forest without passing an epic, so the fragment draws no hierarchy
+    node AND raises no "could not determine" line — the three tests below are
+    the cases where it must.
+    """
     fake = GraphFakeClient(
         dataset(
             [
@@ -625,13 +652,19 @@ def test_a_task_with_no_ancestor_epic_gets_no_parent_node(
     html = fragment(lithos_lens_config_env, fake, "task")
 
     assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "", "a decided absence is not an unknown"
     assert 'data-link-tail="minigraph"' not in html, "an absent tier is not a remainder"
 
 
 def test_the_parent_walk_stops_on_a_cycle_rather_than_climbing_forever(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The hierarchy is a forest by contract, and a broken one is still bounded."""
+    """The hierarchy is a forest by contract, and a broken one is still bounded.
+
+    Bounded AND named: the walk cannot say whether an epic sits on a chain
+    that loops, so the fragment reports that rather than rendering the same
+    empty space a task with no epic gets (round-2 correctness f-002).
+    """
     fake = GraphFakeClient(
         dataset(
             [
@@ -644,6 +677,89 @@ def test_the_parent_walk_stops_on_a_cycle_rather_than_climbing_forever(
     html = fragment(lithos_lens_config_env, fake, "task")
 
     assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "cycle"
+    assert "parent chain loops back on itself" in html
+
+
+def test_an_epic_past_the_walk_s_depth_bound_is_reported_as_undetermined(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The safety bound is real, so the absence it produces has to be named.
+
+    The walk climbs at most ``PARENT_BREADCRUMB_MAX_DEPTH`` hops — the detail
+    breadcrumb's own bound on a sequential read chain. An epic one hop past it
+    is a legal hierarchy Lens did not reach, and rendering that as "no parent
+    epic" would state something the walk never established (round-2
+    correctness f-002).
+    """
+    chain = [f"p{index:02d}" for index in range(PARENT_BREADCRUMB_MAX_DEPTH)]
+    tasks = [
+        made("task", created_at="2026-09-01T00:00:00+00:00"),
+        made("epic", created_at="2026-09-01T00:00:00+00:00", task_type="epic"),
+        *(
+            made(name, created_at=f"2026-09-01T00:00:{index + 1:02d}+00:00")
+            for index, name in enumerate(chain)
+        ),
+    ]
+    # `epic -> p09 -> … -> p00 -> task`: the epic sits one hop past the bound.
+    edges = [(chain[0], "task", "parent_child")]
+    edges += [
+        (chain[index + 1], chain[index], "parent_child")
+        for index in range(len(chain) - 1)
+    ]
+    edges.append(("epic", chain[-1], "parent_child"))
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "depth"
+    assert "deeper than this walk reads" in html
+
+
+def test_an_ancestor_whose_record_cannot_be_read_leaves_the_tier_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An unread ancestor is neither an epic nor proof that there is none."""
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made(
+                    "middle",
+                    created_at="2026-09-01T00:00:00+00:00",
+                    status="completed",
+                ),
+                made("task", created_at="2026-09-01T00:00:01+00:00"),
+            ],
+            [("middle", "task", "parent_child")],
+        ),
+        get_failures={"middle"},
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task"}, "an unread ancestor is not a hierarchy node"
+    assert parent_unknown(html) == "unreadable"
+    assert "a task above it could not be read" in html
+
+
+def test_an_ancestor_whose_edges_cannot_be_read_leaves_the_tier_unknown(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The chain ABOVE an unreadable ancestor is unknowable, not empty."""
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("middle", created_at="2026-09-01T00:00:00+00:00"),
+                made("task", created_at="2026-09-01T00:00:01+00:00"),
+            ],
+            [("middle", "task", "parent_child")],
+        ),
+        edge_failures={"middle"},
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task"}
+    assert parent_unknown(html) == "unreadable"
 
 
 # ── The focus link, and the fragment's own chrome ───────────────────────
@@ -765,6 +881,133 @@ def test_the_payload_turns_the_hierarchy_overlay_on(
     assert scope["overlays"] == ["hierarchy"]
     assert scope["focus"] == "task"
     assert scope["isolated"] is True
+
+
+# ── Telemetry (`lens.tasks.minigraph`) ──────────────────────────────────
+
+
+def minigraph_span(spans: InMemorySpanExporter) -> Any:
+    """The LAST `lens.tasks.minigraph` span — one per fragment render."""
+    matching = [
+        span for span in spans.get_finished_spans() if span.name == MINI_GRAPH_SPAN
+    ]
+    assert matching, [span.name for span in spans.get_finished_spans()]
+    return matching[-1]
+
+
+def test_a_rendered_fragment_records_its_shape_on_the_assembly_span(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The PRD's telemetry point for this fragment, in full.
+
+    The span carries what this render drew and what it spent; the counter
+    carries the outcome, whose labels are a bounded set. Both are the only
+    evidence there is for whether the one knob this surface has is set near
+    the corpus's shape, so a silent drop of either is a real regression.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("epic", created_at="2026-09-01T00:00:00+00:00", task_type="epic"),
+                made("b", created_at="2026-09-01T00:00:01+00:00"),
+                made("task", created_at="2026-09-01T00:00:02+00:00"),
+                made("d", created_at="2026-09-01T00:00:03+00:00"),
+            ],
+            [
+                ("b", "task", "blocks"),
+                ("task", "d", "blocks"),
+                ("epic", "task", "parent_child"),
+            ],
+        )
+    )
+
+    fragment(lithos_lens_config_env, fake, "task")
+
+    assert dict(minigraph_span(spans).attributes or {}) == {
+        "lens.minigraph.task_id": "task",
+        "lens.minigraph.outcome": "rendered",
+        "lens.minigraph.nodes": 4,
+        "lens.minigraph.capped": False,
+        "lens.minigraph.not_shown": 0,
+        # The focal task and its one drawn blocker, both read cold; the
+        # dependent and the epic are leaves, and the open snapshot answered
+        # every record without a `task_get`.
+        "lens.minigraph.cache_hits": 0,
+        "lens.minigraph.cache_misses": 2,
+        "lens.minigraph.ghost_reads": 0,
+        "lens.minigraph.parent_epic_unknown": "",
+    }
+    assert (
+        metric_value(
+            metric_reader, "lens_tasks_minigraph_renders_total", outcome="rendered"
+        ).value
+        == 1
+    )
+
+
+def test_a_capped_render_is_counted_apart_from_an_uncapped_one(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """`capped` is its own outcome: how often 40 is not enough IS the signal."""
+    tasks, edges = runaway(60)
+    fragment(lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task")
+
+    attributes = dict(minigraph_span(spans).attributes or {})
+    assert attributes["lens.minigraph.outcome"] == "capped"
+    assert attributes["lens.minigraph.nodes"] == CAP
+    assert attributes["lens.minigraph.capped"] is True
+    assert attributes["lens.minigraph.not_shown"] == 21
+    assert (
+        metric_value(
+            metric_reader, "lens_tasks_minigraph_renders_total", outcome="capped"
+        ).value
+        == 1
+    )
+
+
+def test_an_offline_fragment_is_counted_as_offline_not_as_an_error(
+    lithos_lens_config_env: Path,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """Lithos being down is not this fragment failing, and the label says so."""
+    fake = GraphFakeClient(
+        dataset([made("task", created_at="2026-09-01T00:00:00+00:00")], []),
+        health="unreachable",
+    )
+
+    fragment(lithos_lens_config_env, fake, "task")
+
+    assert (
+        metric_value(
+            metric_reader, "lens_tasks_minigraph_renders_total", outcome="offline"
+        ).value
+        == 1
+    )
+
+
+def test_a_failed_assembly_is_counted_as_an_error(
+    lithos_lens_config_env: Path,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    """The fourth label, and the branch that renders no payload at all."""
+    fake = GraphFakeClient(
+        dataset([made("task", created_at="2026-09-01T00:00:00+00:00")], []),
+        get_failures={"task"},
+        list_failures={"open"},
+    )
+
+    fragment(lithos_lens_config_env, fake, "task")
+
+    assert (
+        metric_value(
+            metric_reader, "lens_tasks_minigraph_renders_total", outcome="error"
+        ).value
+        == 1
+    )
 
 
 # ── Degradation ─────────────────────────────────────────────────────────

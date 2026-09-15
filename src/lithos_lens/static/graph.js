@@ -56,6 +56,13 @@
 // with fleet traffic — so the incoming boot disposes of the outgoing picture
 // before it draws (round-1 correctness f-005).
 let disposeLensMiniGraph = null;
+//: The element that mini-graph was drawn into, so its teardown can be decided
+//: by whether it is still in the document rather than by a replacement canvas
+//: turning up (round-2 correctness f-005). The fragment's other branches — an
+//: offline answer, an assembly error — carry no canvas at all, and a request
+//: that never lands carries nothing; in all three the picture is detached and
+//: has to go anyway.
+let lensMiniGraphContainer = null;
 
 const initLensGraph = function () {
   const container = document.querySelector("[data-graph-canvas]");
@@ -1583,6 +1590,7 @@ const initLensGraph = function () {
   // document, and a disposer there would be a handle nothing ever pulls.
   let disposed = false;
   if (mini) {
+    lensMiniGraphContainer = container;
     disposeLensMiniGraph = function () {
       disposed = true;
       if (resizeObserver) resizeObserver.disconnect();
@@ -1608,13 +1616,15 @@ const initLensGraph = function () {
   if (!reduceMotion) {
     cy.nodes(".claimed").forEach(function (node) {
       if (typeof node.animate !== "function") return;
+      // Guarded HERE rather than in the loop below: this is what every
+      // completion callback re-enters, including the intermediate one, so a
+      // completion that lands after `cy.destroy()` stops instead of animating
+      // a node on a destroyed instance (round-2 test-quality f-009).
       const breathe = function (to, next) {
+        if (disposed) return;
         node.animate({ style: { "overlay-opacity": to } }, { duration: 900, complete: next });
       };
-      const loop = function () {
-        if (disposed) return;
-        breathe(0.2, function () { breathe(0.06, loop); });
-      };
+      const loop = function () { breathe(0.2, function () { breathe(0.06, loop); }); };
       loop();
     });
   }
@@ -1700,6 +1710,27 @@ const initLensGraph = function () {
   blocker level — costs one selector query and nothing else.
 */
 (function () {
+  // A mini-graph whose container has left the document, disposed of WITHOUT
+  // waiting for a replacement to arrive. Three states reach here and none of
+  // them draws a canvas: the fragment answered offline, the fragment answered
+  // with an assembly error, and the request never landed at all. In each the
+  // picture is already detached — `tasks.js` replaced the detail article by
+  // hand — so the instance, its observer and its animations are unreachable
+  // and must not be left running (round-2 correctness f-005).
+  const reap = function () {
+    if (!disposeLensMiniGraph) return;
+    if (lensMiniGraphContainer && lensMiniGraphContainer.isConnected) return;
+    disposeLensMiniGraph();
+    disposeLensMiniGraph = null;
+    lensMiniGraphContainer = null;
+  };
   initLensGraph();
-  document.addEventListener("htmx:afterSwap", initLensGraph);
+  document.addEventListener("htmx:afterSwap", function () {
+    reap();
+    initLensGraph();
+  });
+  // The reconcile's own signal. `tasks.js` swaps the detail article in by
+  // hand, so nothing else announces the removal — and the request that would
+  // have replaced the picture may never be made, let alone answered.
+  document.addEventListener("lens:fragment-replaced", reap);
 })();

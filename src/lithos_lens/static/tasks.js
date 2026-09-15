@@ -206,6 +206,12 @@
     setLiveStatus(currentLiveState, currentLiveDetail);
   }
 
+  //: Dispatched on `document` after a fragment is swapped in by hand. The one
+  //: consumer today is `graph.js`, which tears down a mini-graph the swap
+  //: detached; the name travels in `detail` so a later consumer can tell which
+  //: fragment moved without re-querying the DOM.
+  const FRAGMENT_REPLACED = "lens:fragment-replaced";
+
   function replaceFragment(doc, name) {
     const current = document.querySelector(`[data-refresh-fragment="${name}"]`);
     const next = doc.querySelector(`[data-refresh-fragment="${name}"]`);
@@ -217,6 +223,14 @@
     // the detail fragment (T1-S8) goes inert at the first reconcile - roughly
     // 30s after the page loads, or sooner on any task event.
     if (window.htmx) window.htmx.process(next);
+    // Anything DRAWN into the fragment just removed is now detached with no
+    // event of its own behind it: this replacement is a hand-made one, so
+    // there is no `htmx:beforeCleanupElement` and no `unload`. The detail
+    // page's mini-graph (T2-A5) holds a Cytoscape instance, a resize observer
+    // and a running animation, and the fragment that replaces it may answer
+    // offline, answer with an error, or never arrive — so the removal is
+    // announced here rather than left for a successor to notice.
+    document.dispatchEvent(new CustomEvent(FRAGMENT_REPLACED, { detail: { name } }));
   }
 
   function handleEvent(event) {

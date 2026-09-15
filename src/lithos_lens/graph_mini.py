@@ -111,6 +111,14 @@ DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES = 40
 #: a project scope would invite a client to treat it as the project's graph.
 SCOPE_TASK = "task"
 
+#: Why the parent-epic tier is absent when Lens could not DECIDE it — never
+#: because the task has none. An absent hierarchy node looks the same either
+#: way, so the fragment states which of the two happened (D11's tier is a
+#: promise, and silence about a promise reads as "there is nothing there").
+PARENT_EPIC_DEPTH = "depth"
+PARENT_EPIC_CYCLE = "cycle"
+PARENT_EPIC_UNREADABLE = "unreadable"
+
 #: The edge types a mini-graph draws. Dependencies, plus the one hierarchy
 #: edge that carries the parent epic; ``discovered_from`` is excluded by D11
 #: and its absence here is what excludes it.
@@ -139,6 +147,12 @@ class MiniGraphView:
     #: belongs to no project — a graph needs a scope, and inventing one for a
     #: projectless task would link to a page that cannot hold it.
     focus_url: str = ""
+    #: Empty when the hierarchy tier is settled — the epic is drawn, or the
+    #: chain provably holds none. Otherwise one of :data:`PARENT_EPIC_DEPTH`,
+    #: :data:`PARENT_EPIC_CYCLE` or :data:`PARENT_EPIC_UNREADABLE`, and the
+    #: fragment says the epic could not be determined rather than showing the
+    #: same empty space a task with no epic gets.
+    parent_epic_unknown: str = ""
     #: The OLDEST contributing fetch, the same staleness bound the page states.
     as_of: datetime | None = None
     #: task_id -> why its ``edge_list`` read failed.
@@ -194,7 +208,7 @@ async def load_mini_graph(
     # First tier to name an id owns it: a task that both blocks this one and
     # waits on it (a two-cycle) is ONE node, drawn in the tier D11 fills first.
     claimed = {focal.id}
-    epic, epic_entries = await _parent_epic(
+    epic, epic_entries, parent_unknown = await _parent_epic(
         lithos,
         edges,
         focal.id,
@@ -333,6 +347,7 @@ async def load_mini_graph(
             if projects
             else ""
         ),
+        parent_epic_unknown=parent_unknown,
         as_of=scope.as_of,
         incomplete=incomplete,
         cache_hits=tally.hits,
@@ -415,7 +430,7 @@ async def _parent_epic(
     known: Mapping[str, TaskRecord],
     records: dict[str, TaskRecord],
     unknown: set[str],
-) -> tuple[str, tuple[EdgeCacheEntry, ...]]:
+) -> tuple[str, tuple[EdgeCacheEntry, ...], str]:
     """The nearest ANCESTOR EPIC, walking ``parent_child`` up from the focal.
 
     D11's hierarchy tier is "the parent epic", and an immediate parent is not
@@ -427,16 +442,22 @@ async def _parent_epic(
     ``task_links.PARENT_BREADCRUMB_MAX_DEPTH`` and by a seen-set, which is the
     bound and the cycle guard the detail page's own breadcrumb walk uses.
 
-    Three answers end the walk with NO epic, and each is the honest one:
-    nothing above the focal, no epic below the depth bound, and an ancestor
-    whose own record could not be read — Lens cannot say whether an unread
-    ancestor is the epic, and a tier that guessed would put a wrong label on
-    the picture.
-
     An epic further up than the immediate parent is drawn as a labelled node
     with no edge to it: the tasks BETWEEN them are not members of this scope
     (D11 asks for one node, not the chain), and an edge straight from the epic
     to the focal would be a relation Lithos never wrote.
+
+    Exactly ONE ending means "this task has no parent epic": the chain runs
+    out above the focal without passing one. The other three —
+    :data:`PARENT_EPIC_DEPTH` (the walk's safety bound, which the detail
+    page's breadcrumb shares), :data:`PARENT_EPIC_CYCLE` (a ``parent_child``
+    loop in what the contract calls a forest) and
+    :data:`PARENT_EPIC_UNREADABLE` (an ancestor's ``task_get`` or
+    ``edge_list`` failed) — mean Lens could not DECIDE, and they are returned
+    as the third value rather than collapsed into the first. An absent node is
+    the same picture either way, so the fragment says which of the two it is
+    (round-2 correctness f-002); a walk that swallowed the difference would
+    report a task with an epic as a task without one.
     """
     entries: list[EdgeCacheEntry] = []
     seen = {focal_id}
@@ -445,17 +466,25 @@ async def _parent_epic(
     above = _neighbours(edges, focal_id, (PARENT_EDGE_TYPE,), up=True)
     ancestor = above[0] if above else ""
     for _ in range(PARENT_BREADCRUMB_MAX_DEPTH):
-        if not ancestor or ancestor in seen:
-            break
+        if not ancestor:
+            # Off the top of the forest: an answer, and the only one that
+            # means this task genuinely has no epic above it.
+            return "", tuple(entries), ""
+        if ancestor in seen:
+            return "", tuple(entries), PARENT_EPIC_CYCLE
         seen.add(ancestor)
         await _resolve(lithos, (ancestor,), known, records, unknown, limiter, tally)
         record = records.get(ancestor)
         if record is None:
-            break
+            return "", tuple(entries), PARENT_EPIC_UNREADABLE
         if record.task_type == EPIC_TASK_TYPE:
-            return ancestor, tuple(entries)
-        step, _ = await read_edges(lithos, (record,), cache, limiter, tally)
+            return ancestor, tuple(entries), ""
+        step, failed = await read_edges(lithos, (record,), cache, limiter, tally)
         entries.extend(step)
+        if failed:
+            # The chain above this ancestor is unreadable, so whether an epic
+            # sits on it is unknowable — not "no".
+            return "", tuple(entries), PARENT_EPIC_UNREADABLE
         parents = _neighbours(
             _index(entry.edges for entry in step),
             ancestor,
@@ -463,7 +492,7 @@ async def _parent_epic(
             up=True,
         )
         ancestor = parents[0] if parents else ""
-    return "", tuple(entries)
+    return "", tuple(entries), PARENT_EPIC_DEPTH
 
 
 def _fresh(candidates: Sequence[str], claimed: set[str]) -> tuple[str, ...]:

@@ -371,6 +371,7 @@ classDiagram
     +edge_types tuple[str, ...]
     +payload_json str
     +focus_url str
+    +parent_epic_unknown str
     +as_of datetime | None
     +incomplete Mapping[str, str]
     +cache_hits int

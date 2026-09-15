@@ -244,20 +244,26 @@ const PAGES: ReadonlyArray<{
         "loom-transport",
         "loom-worker",
       ]);
-      // 2. ARROWHEADS ON EVERY EDGE, the same claim the project graph's
+      // 2. The parent epic is a LABELLED node — D11's words, and a claim
+      //    about the text actually drawn rather than about the id behind it.
+      const epicLabel = await page.evaluate(
+        () => (window as any).LithosLensMiniGraph.node("loom-epic").data("label"),
+      );
+      expect(epicLabel).toBe("Loom run harness");
+      // 3. ARROWHEADS ON EVERY EDGE, the same claim the project graph's
       //    artifact makes and the same styling vocabulary behind it (D11).
       expect(drawn.edges.length).toBeGreaterThan(0);
       expect(
         drawn.edges.filter((edge: any) => edge.arrow !== "triangle"),
       ).toEqual([]);
-      // 3. The legend that says which way an arrow reads, and the focus link
+      // 4. The legend that says which way an arrow reads, and the focus link
       //    into the full project graph.
       await expect(page.locator("[data-mini-graph-legend] li").first()).toBeVisible();
       await expect(page.locator("[data-mini-graph-focus]")).toHaveAttribute(
         "href",
         /project=lithos-loom.*focus=loom-ship/,
       );
-      // 4. And the text baseline is untouched BELOW it: the blocker chain the
+      // 5. And the text baseline is untouched BELOW it: the blocker chain the
       //    mini-graph illustrates, and the "Blocks:" line for the dependents
       //    it draws downstream.
       await expect(

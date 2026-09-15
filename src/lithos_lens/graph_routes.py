@@ -321,6 +321,12 @@ def _record_minigraph(
         span.set_attribute("lens.minigraph.nodes", view.node_count)
         span.set_attribute("lens.minigraph.capped", view.capped)
         span.set_attribute("lens.minigraph.not_shown", view.tail.remaining)
+        # Empty when the hierarchy tier is settled; a reason when D11's node
+        # could not be decided, which is the half of that promise a node count
+        # cannot show.
+        span.set_attribute(
+            "lens.minigraph.parent_epic_unknown", view.parent_epic_unknown
+        )
         span.set_attribute("lens.minigraph.cache_hits", view.cache_hits)
         span.set_attribute("lens.minigraph.cache_misses", view.cache_misses)
         span.set_attribute("lens.minigraph.ghost_reads", view.ghost_reads)

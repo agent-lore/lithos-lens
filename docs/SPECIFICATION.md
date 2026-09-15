@@ -677,13 +677,19 @@ which way an arrow reads.
   task type rather than a level of the hierarchy, so `epic -> task -> task` is
   a legal shape and the nearest parent is routinely a plain task. The
   `parent_child` chain is walked up to the first epic, bounded by the same
-  depth limit and seen-set as the detail page's breadcrumb; a chain with no
-  epic in it, or one whose next ancestor could not be read, yields no
-  hierarchy node at all rather than a plain task labelled as one. When the
-  epic is further up than the immediate parent it is drawn as a labelled node
-  with no edge: the tasks between are not members of this scope, and an edge
-  straight from the epic to the focal task would be a relation Lithos never
-  wrote.
+  depth limit and seen-set as the detail page's breadcrumb. When the epic is
+  further up than the immediate parent it is drawn as a labelled node with no
+  edge: the tasks between are not members of this scope, and an edge straight
+  from the epic to the focal task would be a relation Lithos never wrote.
+- **An absent hierarchy node says which absence it is.** Exactly one ending
+  means the task HAS no parent epic: the chain runs off the top of the forest
+  without passing one, and the fragment simply draws no hierarchy node. The
+  other three — the walk's depth bound, a `parent_child` loop, and an ancestor
+  whose `task_get` or `edge_list` failed — mean Lens could not decide, and the
+  fragment says so in its own line ("this task's parent epic could not be
+  determined", with which of the three it was). The picture is identical
+  either way, so silence there would report a task with an epic as a task
+  without one; the reason also rides on the render's span.
 - **The cap counts the focal task.** `[graph].mini_graph_max_nodes` (40) is the
   whole picture, filled in one deterministic priority — focal task, parent
   epic, depth-1 blockers, depth-1 dependents, depth-2 blockers, each tier in
@@ -726,10 +732,15 @@ which way an arrow reads.
   exploration state to lose. The layout is deterministic from the server's
   roots, so an unchanged neighbourhood redraws in the same places. That swap
   is a hand-made one (`tasks.js` parses and inserts the fragment itself), so
-  no HTMX cleanup runs behind it and the incoming boot DISPOSES of the picture
-  it replaces — the Cytoscape instance, its resize observer and the
-  claimed-node animation — instead of leaving one of each running on a
-  detached element per task event. The
+  no HTMX cleanup runs behind it: the swap announces itself on `document`
+  (`lens:fragment-replaced`) and the mini-graph DISPOSES of the picture that
+  removal detached — the Cytoscape instance, its resize observer and the
+  claimed-node animation, whose completion callback is what re-arms it.
+  Teardown is decided by the old container having left the document, not by a
+  replacement arriving, because three states draw no replacement at all: the
+  fragment's offline branch, its assembly-error branch, and a request that
+  never lands. Otherwise a tab left open would accumulate one live instance,
+  observer and animation per task event. The
   exploration classes are off — every node on a mini-graph is in the focal
   task's neighbourhood, so lighting them would say nothing — and a
   neighbourhood too large for the box says so rather than being scaled below
