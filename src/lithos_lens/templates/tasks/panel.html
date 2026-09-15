@@ -168,11 +168,14 @@
         {% elif impact.state == "completed" %}
           <p class="panel-impact" data-panel-impact data-impact-state="completed">This task is completed; no pending impact.</p>
         {% elif impact.state == "stale" %}
-          {# The scope re-assembled for this panel is not the graph the page is
-             drawing (D8 leaves the canvas where it is). "In this graph" would
-             then name two different graphs at once, so the numbers are withheld
-             and the refresh the page already offers is what is named. #}
-          <p class="panel-impact" data-panel-impact data-impact-state="stale">This graph has changed since the page loaded — refresh to see what completing this frees.</p>
+          {# The figures and the panel around them disagree about what they are
+             describing: either the scope re-assembled for this panel is not the
+             graph the page is drawing (D8 leaves the canvas where it is), or the
+             focal task's own state moved between the two reads this panel is
+             made of. "In this graph" would then name two different answers at
+             once, so both numbers are withheld and the refresh that resolves it
+             is what is named instead. #}
+          <p class="panel-impact" data-panel-impact data-impact-state="stale">This graph has changed — refresh to see what completing this frees.</p>
         {% elif impact.state == "cancelled" %}
           <p class="panel-impact" data-panel-impact data-impact-state="cancelled">This task is cancelled — its dependents are unsatisfiable.</p>
         {% else %}

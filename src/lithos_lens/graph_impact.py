@@ -36,6 +36,7 @@ which has no graph page around it to borrow an assembly from.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -199,74 +200,58 @@ def impact_fingerprint(
     blocked rows are folded out of two concurrent reads per project and their
     order follows whichever answered first (``graph_cycles._signal``).
 
+    The material is serialised as canonical JSON rather than joined on a
+    separator. Task ids are arbitrary non-empty strings (§5.1) and nothing
+    normalises control characters out of them, so a chosen separator is one an
+    id may legitimately CONTAIN — and a digest over joined fields then reads
+    ``a -> b<sep>c`` and ``a<sep>b -> c`` as the same edge, letting a moved
+    graph pass the equality check and print the wrong count (round-2
+    correctness f-003). JSON's own escaping is what makes the encoding
+    injective; every value stays a distinct element of a nested array.
+
     Truncated to 16 hex digits because it travels in a URL and is compared to
     a value Lens produced itself in the same process — this is a change
     detector, not a defence against a forged one, and a caller that invents a
     value only costs itself the line.
     """
     held = set(scope.node_ids)
-    parts = [
-        _join(
-            "node",
-            node.id,
-            node.status,
-            node.completeness,
-            node.ghost_kind,
-            *sorted(task_projects(node.task, convention="both", tag_key=tag_key)),
-        )
-        for node in sorted(scope.nodes, key=lambda node: node.id)
+    material = [
+        sorted(
+            [
+                node.id,
+                node.status,
+                node.completeness,
+                node.ghost_kind,
+                sorted(task_projects(node.task, convention="both", tag_key=tag_key)),
+            ]
+            for node in scope.nodes
+        ),
+        sorted(
+            [edge.from_task_id, edge.to_task_id, edge.type, edge.state]
+            for edge in scope.edges
+        ),
+        sorted(signal.coverage),
+        sorted(
+            # The OUTCOME, not the reason: "this read cannot establish absence"
+            # is the whole of what M asks of it (``graph_cycles.read_covers``).
+            [read.project, read.by, read.truncated, bool(read.error), read.unmade]
+            for read in signal.reads
+        ),
+        sorted(
+            [
+                record.task.id,
+                sorted(
+                    [blocker.kind, blocker.task_id, blocker.type, blocker.status]
+                    for blocker in record.blockers
+                ),
+            ]
+            for record in signal.blocked
+            if record.task.id in held
+        ),
+        sorted(signal.projectless),
     ]
-    parts.extend(
-        _join("edge", edge.from_task_id, edge.to_task_id, edge.type, edge.state)
-        for edge in sorted(
-            scope.edges,
-            key=lambda edge: (edge.from_task_id, edge.to_task_id, edge.type),
-        )
-    )
-    parts.append(_join("coverage", *sorted(signal.coverage)))
-    parts.extend(
-        # The OUTCOME, not the reason: "this read cannot establish absence" is
-        # the whole of what M asks of it (``graph_cycles.read_covers``).
-        _join(
-            "read",
-            read.project,
-            read.by,
-            "truncated" if read.truncated else "",
-            "failed" if read.error else "",
-            "unmade" if read.unmade else "",
-        )
-        for read in sorted(signal.reads, key=lambda read: (read.project, read.by))
-    )
-    parts.extend(
-        _join(
-            "blocked",
-            record.task.id,
-            # A blocker's own fields carry a DIFFERENT separator, or a row's
-            # fields and its blockers' would be indistinguishable in the digest.
-            *sorted(
-                "\x1d".join(
-                    (blocker.kind, blocker.task_id, blocker.type, blocker.status)
-                )
-                for blocker in record.blockers
-            ),
-        )
-        for record in sorted(
-            (record for record in signal.blocked if record.task.id in held),
-            key=lambda record: record.task.id,
-        )
-    )
-    parts.append(_join("projectless", *sorted(signal.projectless)))
-    return hashlib.sha256("\x1e".join(parts).encode("utf-8")).hexdigest()[:16]
-
-
-def _join(*values: str) -> str:
-    """One fingerprint part, field-separated — never concatenated.
-
-    A separator the fields cannot contain is what keeps two different graphs
-    from hashing alike: ``("ab", "c")`` and ``("a", "bc")`` are different
-    answers and must be different strings.
-    """
-    return "\x1f".join(values)
+    encoded = json.dumps(material, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def downstream_impact(
@@ -328,6 +313,39 @@ def downstream_impact(
         chain_position=position,
         chain_length=length,
     )
+
+
+def reconciled_impact(
+    impact: DownstreamImpact | None, task: TaskRecord | None
+) -> DownstreamImpact | None:
+    """D10's line, kept only while the panel around it agrees about the focus.
+
+    A focused panel is TWO reads, and this is the join between them. The impact
+    is computed from the graph assembly's view of the focal task; the header
+    beside it — title, type, and the STATUS BADGE — is a later, independent
+    ``task_get`` (``graph_routes._focused_panel``, ``web._load_detail``). A task
+    that completes between the two renders "Completing this frees 3 in this
+    graph" under a ``completed`` badge, which is the one sentence D10 says a
+    resolved task must never carry (round-2 correctness f-002).
+
+    So the impact is kept only while the badge's own status is the one it was
+    counted for, and otherwise degrades to :data:`IMPACT_STALE` — the same
+    answer a moved graph gets from :func:`impact_fingerprint`, for the same
+    reason: the numbers cannot be recomputed from the read that disagreed with
+    them, and a refresh is what resolves it. A panel whose task could not be
+    read at all (``None``) reads the same way; it has no badge to agree with,
+    and its markup carries the failure instead.
+    """
+    if impact is None:
+        return None
+    if task is not None and _focal_state(task.status) == impact.state:
+        return impact
+    return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
+
+
+def _focal_state(status: str) -> str:
+    """The impact state a focal task in ``status`` carries (D10)."""
+    return IMPACT_OPEN if status == IMPACT_OPEN else _resolved_state(status)
 
 
 def _resolved_state(status: str) -> str:

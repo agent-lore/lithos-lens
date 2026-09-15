@@ -22,7 +22,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
-| `lithos_lens.graph_impact` | M | 2 | 4 |
+| `lithos_lens.graph_impact` | M | 2 | 5 |
 | `lithos_lens.graph_layout` | L | 6 | 6 |
 | `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
@@ -108,6 +108,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `parse_impact_scope` — Parse ``project:<slug>`` / ``epic:<id>``; anything else is no scope.
 - def `impact_fingerprint` — The identity of one assembled ANSWER — everything D10's figures rest on.
 - def `downstream_impact` — D10's two figures for ``focus`` over an assembled scope, pure.
+- def `reconciled_impact` — D10's line, kept only while the panel around it agrees about the focus.
 - def `load_impact` — Assemble ``scope`` and answer D10 for ``focus`` — the fragment route's path.
 
 ### `lithos_lens.graph_layout`

@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 from opentelemetry.trace import Span
 
 from lithos_lens import metrics
+from lithos_lens.graph_impact import reconciled_impact
 from lithos_lens.graph_page import (
     EDGE_LEGEND,
     SCOPE_PROJECT,
@@ -171,8 +172,17 @@ def register_graph_routes(
 
             context["view"] = view
             if not view.refused and view.nodes:
-                context["panel"] = await _focused_panel(state, params)
-                context["impact"] = view.impact
+                panel = await _focused_panel(state, params)
+                context["panel"] = panel
+                # Reconciled against the panel's OWN read of the focal task,
+                # not handed over whole: the impact is this render's arithmetic
+                # over the graph, the badge beside it is a later `task_get`,
+                # and a task that completed between the two must not carry a
+                # future-tense number under a `completed` badge (round-2
+                # correctness f-002).
+                context["impact"] = reconciled_impact(
+                    view.impact, panel.task if panel else None
+                )
             _record(
                 span,
                 params,

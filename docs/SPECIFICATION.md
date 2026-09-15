@@ -529,14 +529,26 @@ edge upsert emits no event (§5.10) and a warm edge cache can reproduce a
 byte-identical graph while Lithos's sole-blocker row has gained a second
 blocker, moving M with nothing on the canvas to show for it. So the comparison
 is made **after** the blocked read, not before it, and when it fails both
-figures are withheld and the panel states "this graph has changed since the
-page loaded — refresh", because "frees N **in this graph**, M immediately"
-would otherwise name one graph while the picture beside it shows another.
-Titles, claims, blocker messages and error reasons are excluded — they move no
-figure, and a fingerprint that changed on every heartbeat would withhold the
-line permanently rather than when it is wrong. Either way the impact costs the line
-and nothing else: a scope that fails, is refused, or does not hold the task
-renders the rest of the panel unchanged.
+figures are withheld and the panel states "this graph has changed — refresh",
+because "frees N **in this graph**, M immediately" would otherwise name one
+graph while the picture beside it shows another. Titles, claims, blocker
+messages and error reasons are excluded — they move no figure, and a
+fingerprint that changed on every heartbeat would withhold the line permanently
+rather than when it is wrong. The material is serialised as **canonical JSON**
+before hashing: a task id is an arbitrary non-empty string (§5.1) and nothing
+normalises control characters out of one, so a digest that joined its fields on
+a separator would read `a -> b<sep>c` and `a<sep>b -> c` as the same edge and
+let a moved graph pass the check.
+
+The same rule binds the panel's two HALVES, which are two reads whichever route
+serves them: the figures come from the graph assembly's view of the focal task,
+and the header beside them — title, type, status badge — from a later, separate
+`task_get`. A task that resolves between the two would put "Completing this
+frees N …" under a `completed` badge, or the resolved wording under an `open`
+one. So the impact is kept only while the badge's own status is the state it
+was counted for, and otherwise degrades to the same withheld line. Either way
+the impact costs the line and nothing else: a scope that fails, is refused, or
+does not hold the task renders the rest of the panel unchanged.
 
 An unknown id renders the **not-found panel** at HTTP 200 on both routes —
 never a 500, and never at the cost of the board beside it — and a read that

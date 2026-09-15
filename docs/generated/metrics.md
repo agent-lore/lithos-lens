@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **35** (102 module-level)
+- Cross-component edges: **35** (103 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 10 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -42,14 +42,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 5 | 2662 | 2127 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 20 | 9321 | 7125 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 21 |
+| TaskGraph | 20 | 9339 | 7141 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 20 |
 | Tasks | 3 | 1350 | 983 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 4 |
 | Telemetry | 2 | 1091 | 793 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 1773 | 1381 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 4 | 1784 | 1385 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **48**, lines: **19627**, SLOC: **15032**
+- Modules: **48**, lines: **19656**, SLOC: **15052**
 - Largest module: `lithos_lens.frontier` (850 lines)
 - Modules over 800 lines: **2**
   - `lithos_lens.frontier`
@@ -57,7 +57,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **627**, cyclomatic > 10: **36**
+- Functions: **628**, cyclomatic > 10: **35**
 
 Top 10 most complex functions:
 
@@ -85,4 +85,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **74** (83 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.91** (37570 test lines / 19627 source lines)
+- Test-to-source line ratio: **1.92** (37741 test lines / 19656 source lines)

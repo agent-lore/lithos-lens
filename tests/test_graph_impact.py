@@ -23,7 +23,12 @@ import pytest
 
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.graph_cycles import READ_BY_PROJECT, CycleSignal, ProjectRead
-from lithos_lens.graph_impact import impact_fingerprint, parse_impact_scope
+from lithos_lens.graph_impact import (
+    downstream_impact,
+    impact_fingerprint,
+    parse_impact_scope,
+    reconciled_impact,
+)
 from lithos_lens.graph_scope import (
     COMPLETENESS_EDGES_UNKNOWN,
     EDGE_ACTIVE,
@@ -32,8 +37,9 @@ from lithos_lens.graph_scope import (
     GraphNode,
     TaskGraphScope,
 )
+from lithos_lens.graph_view import DownstreamImpact
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
-from lithos_lens.tasks import TaskStatusName
+from lithos_lens.tasks import TaskRecord, TaskStatusName
 from tests.test_graph_page import (
     PROJECT,
     GraphFakeClient,
@@ -808,7 +814,7 @@ def test_a_panel_counting_over_a_moved_graph_says_so_instead_of_a_number(
         ).text
 
     assert "frees 3 in this graph, 1 immediately" in slot(page)
-    assert "This graph has changed since the page loaded" in slot(stale)
+    assert "This graph has changed" in slot(stale)
     assert "in this graph" not in slot(stale)
     assert attribute(stale, "data-impact-frees") == ""
     assert attribute(stale, "data-impact-state") == "stale"
@@ -916,6 +922,110 @@ def moved_blocked_dataset() -> FakeLithosDataset:
     )
 
 
+def resolved_focus_dataset() -> FakeLithosDataset:
+    """The impact fixture after its FOCAL task completed — the same graph,
+    minus the blocked row Lithos stops reporting for a resolved task."""
+    return dataset(
+        [task("root", status="completed"), task("one"), task("two"), task("three")],
+        IMPACT_EDGES,
+        blocked={"two": (blocker("one"),), "three": (blocker("one"),)},
+    )
+
+
+class CompletingClient(GraphFakeClient):
+    """A fake whose focal task completes the moment the PANEL reads it.
+
+    The window the graph route really has: `load_graph_page` returns, and only
+    then does `_focused_panel` issue its own `task_get` for the focused task
+    (the two are deliberately sequential — the scope assembly holds the fan-out
+    gate for its whole duration). A task that resolves inside that window is an
+    ORDINARY concurrent completion, and the swap here is exactly it: the graph
+    was assembled against the open board, the panel's own read is not.
+    """
+
+    def __init__(self, before: FakeLithosDataset, after: FakeLithosDataset, focus: str):
+        super().__init__(before)
+        self._after = after
+        self._focus = focus
+        self.completed = False
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        if task_id == self._focus and not self.completed:
+            self.completed = True
+            self.replace_dataset(self._after)
+        return await super().task_get(task_id)
+
+
+def test_a_focus_that_completes_while_the_page_reads_it_carries_no_numbers(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A focused panel is TWO reads: the impact is this render's arithmetic
+    over the graph it assembled, and the badge above it is a later `task_get`.
+    A task that completes between them would put "Completing this frees 3 in
+    this graph" under a `completed` badge — the one sentence D10 says a
+    resolved task must never carry (round-2 correctness f-002). The figures go
+    rather than the badge: they were counted for a task that is no longer in
+    that state, and nothing on this page can recount them."""
+    fake = CompletingClient(impact_dataset(), resolved_focus_dataset(), "root")
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=root"
+    )
+
+    assert fake.completed, "the panel never read the focal task"
+    # The badge the operator sees is the panel's own read …
+    assert 'class="badge badge-completed">completed</span>' in html
+    # … and no future-tense number is under it.
+    assert "in this graph" not in slot(html)
+    assert attribute(html, "data-impact-frees") == ""
+    assert "This graph has changed" in slot(html)
+    assert attribute(html, "data-impact-state") == "stale"
+
+
+class CompletingMidPanelClient(GraphFakeClient):
+    """Completes the focal task between the panel's DETAIL read and its count.
+
+    The fragment route reads the detail first and assembles the impact after
+    it (`web.task_detail`), and the impact's first call is the master task
+    list — so swapping there is the completion that lands between one panel's
+    two reads.
+    """
+
+    def __init__(self, before: FakeLithosDataset, after: FakeLithosDataset):
+        super().__init__(before)
+        self._after = after
+        self.completed = False
+
+    async def list_tasks(self, **kwargs: object) -> list[TaskRecord]:
+        if not self.completed:
+            self.completed = True
+            self.replace_dataset(self._after)
+        return await super().list_tasks(**kwargs)
+
+
+def test_a_focus_that_completes_before_the_fragments_count_carries_none_either(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The same join on the CLICKED panel, where the two reads run the other
+    way round: `_load_detail` first, the impact's own assembly after it. A task
+    that completes in between leaves an `open` badge over "This task is
+    completed; no pending impact" — contradictory in the other direction, and
+    withheld for the same reason."""
+    fake = CompletingMidPanelClient(impact_dataset(), resolved_focus_dataset())
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&include_resolved=1"
+        ).text
+
+    assert fake.completed, "the panel never assembled an impact at all"
+    # The badge is the panel's own read, taken before the completion …
+    assert 'class="badge badge-open">open</span>' in panel
+    # … and the line under it does not answer for a different task's state.
+    assert "no pending impact" not in slot(panel)
+    assert "This graph has changed" in slot(panel)
+
+
 def resolving_dataset(second: TaskStatusName = "open") -> FakeLithosDataset:
     """`root` blocks `one` and `two`, and only `one` is a blocked ROW.
 
@@ -960,7 +1070,7 @@ def test_a_blocked_row_that_moved_under_a_warm_cache_withholds_both_figures(
     # And the ANSWER is not: a reload — the page the operator is told to fetch
     # — states the new M.
     assert "frees 3 in this graph, 0 immediately" in slot(reloaded)
-    assert "This graph has changed since the page loaded" in slot(stale)
+    assert "This graph has changed" in slot(stale)
     assert attribute(stale, "data-impact-frees") == ""
     assert attribute(stale, "data-impact-state") == "stale"
 
@@ -991,7 +1101,7 @@ def test_a_dependent_resolving_within_the_same_membership_withholds_them_too(
     assert "frees 2 in this graph, 1 immediately" in slot(page)
     assert node_ids(reloaded) == node_ids(page), "the membership was meant to hold"
     assert "frees 1 in this graph, 1 immediately" in slot(reloaded)
-    assert "This graph has changed since the page loaded" in slot(stale)
+    assert "This graph has changed" in slot(stale)
     assert attribute(stale, "data-impact-frees") == ""
 
 
@@ -1274,6 +1384,46 @@ def test_no_immaterial_change_withholds_the_line(
     )
 
 
+def separator_scope(edge: tuple[str, str]) -> TaskGraphScope:
+    """Four tasks whose ids CONTAIN the characters a joined digest would use.
+
+    A task id is an arbitrary non-empty string (§5.1) and nothing normalises
+    control characters out of one, so these are ids Lens can really be handed.
+    """
+    return TaskGraphScope(
+        kind="project",
+        key=PROJECT,
+        nodes=tuple(
+            GraphNode(task(task_id)) for task_id in ("a", "b\x1fc", "a\x1fb", "c")
+        ),
+        edges=(
+            GraphEdge(
+                EdgeRecord(from_task_id=edge[0], to_task_id=edge[1], type="blocks"),
+                state=EDGE_ACTIVE,
+            ),
+        ),
+    )
+
+
+def test_two_graphs_that_differ_only_across_a_separator_are_not_the_same() -> None:
+    """`a -> b\x1fc` and `a\x1fb -> c` are different graphs — focusing `a`
+    frees one task in the first and nobody in the second — over the same four
+    nodes. A digest that JOINED its fields on a separator would serialise the
+    two edges identically and let a moved graph pass the equality check with
+    the wrong count behind it (round-2 correctness f-003)."""
+    blocks = separator_scope(("a", "b\x1fc"))
+    strands = separator_scope(("a\x1fb", "c"))
+    signal = CycleSignal()
+
+    assert impact_fingerprint(blocks, signal) != impact_fingerprint(strands, signal)
+    # …and the two really do answer differently, which is what makes a shared
+    # digest a wrong count rather than a harmless one.
+    blocking = downstream_impact(blocks, signal, focus="a")
+    stranded = downstream_impact(strands, signal, focus="a")
+    assert blocking is not None and blocking.frees == 1
+    assert stranded is not None and stranded.frees == 0
+
+
 def test_the_fingerprint_ignores_the_order_two_reads_merged_in() -> None:
     """A row's blockers are merged across the pair of reads D4 issues per
     project, in whichever order they answered (`graph_cycles._signal`). The
@@ -1296,3 +1446,24 @@ def test_the_fingerprint_ignores_the_order_two_reads_merged_in() -> None:
     # …and it is not simply blind to the blockers: one MORE of them is M's own
     # difference between "freed by this" and "still waiting on something else".
     assert impact_fingerprint(fingerprint_scope(), forward) != baseline_fingerprint()
+
+
+def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None:
+    """The join itself, at the four answers it has to give. A panel whose task
+    could not be read has no badge for the figures to agree WITH, so it reads
+    the same way a disagreement does — its own markup carries the failure."""
+    open_impact = DownstreamImpact(focus="root", state="open", frees=3, immediately=1)
+    done = DownstreamImpact(focus="root", state="completed")
+
+    assert reconciled_impact(open_impact, task("root")) is open_impact
+    assert reconciled_impact(done, task("root", status="completed")) is done
+    assert reconciled_impact(None, task("root")) is None
+    for mismatch, record in (
+        (open_impact, task("root", status="completed")),
+        (done, task("root")),
+        (open_impact, None),
+    ):
+        answer = reconciled_impact(mismatch, record)
+        assert answer is not None
+        assert answer.state == "stale"
+        assert answer.frees == 0

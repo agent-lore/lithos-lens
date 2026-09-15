@@ -39,6 +39,7 @@ from lithos_lens.graph_impact import (
     ImpactScope,
     load_impact,
     parse_impact_scope,
+    reconciled_impact,
 )
 from lithos_lens.graph_routes import register_graph_routes
 from lithos_lens.graph_scope import GraphScopeLimits
@@ -408,6 +409,9 @@ def create_app(
             )
         detail = await _load_detail(state, task_id)
         impact = await _panel_impact(request, state, task_id) if panel else None
+        # …against the badge beside them, which is a LATER read than the
+        # figures are (`graph_impact.reconciled_impact`, round-2 f-002).
+        impact = reconciled_impact(impact, detail.task)
         if panel:
             metrics.tasks_panel_opens().add(1, {"source": "fragment"})
         return templates.TemplateResponse(
@@ -597,11 +601,8 @@ async def _panel_impact(
 
     Degrades to ``None``, never to an error: the impact is one line of a panel
     whose other sections are already loaded, so a scope that fails, is refused,
-    or does not hold this task costs the line and nothing else.
-
-    That rebuild is trusted only as far as the page's ``snapshot=`` says: a
-    graph that has MOVED since the page loaded costs the figures and says so
-    (``graph_impact.IMPACT_STALE``), because the canvas has not moved with it.
+    or does not hold this task costs the line and nothing else — and the rebuild
+    is trusted only as far as ``snapshot=`` says (``graph_impact.load_impact``).
     """
     scope = parse_impact_scope(
         request.query_params.get(PANEL_SCOPE_KEY),
