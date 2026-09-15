@@ -169,6 +169,12 @@ classDiagram
     +misses int
     +ghost_reads int
   }
+  class CanvasNotes {
+    +stated bool
+    +relations_exact bool
+    +chain_position int
+    +chain_length int
+  }
   class ChainView {
     +exact bool
     +unreadable_nodes int
@@ -375,6 +381,7 @@ classDiagram
     +blocked_via_cycle bool
     +unresolvable bool
     +focused bool
+    +bound bool
   }
   class PageTail {
     +shown int

@@ -22,10 +22,11 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 3 |
-| `lithos_lens.graph_impact` | L | 2 | 6 |
+| `lithos_lens.graph_impact` | M | 2 | 5 |
 | `lithos_lens.graph_layout` | L | 6 | 6 |
 | `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
+| `lithos_lens.graph_snapshot` | M | 1 | 4 |
 | `lithos_lens.graph_view` | M | 11 | 3 |
 | `lithos_lens.pr_reconciliation` | M | 1 | 2 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
@@ -104,10 +105,9 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 
 ### `lithos_lens.graph_impact`
 - class `ImpactScope` — The scope a panel fragment was asked to count its impact over.
+- def `with_canvas_notes` — Put the CLIENT's account of its canvas onto D10's line (D7/D8).
 - class `ImpactClient` — The scope reads plus the blocked reads — the same surface a page needs.
 - def `parse_impact_scope` — Parse ``project:<slug>`` / ``epic:<id>``; anything else is no scope.
-- def `impact_fingerprint` — The identity of one assembled ANSWER — everything D10's figures rest on.
-- def `canvas_holds` — Whether two fingerprints name the same PICTURE (D8's canvas).
 - def `downstream_impact` — D10's two figures for ``focus`` over an assembled scope, pure.
 - def `reconciled_impact` — D10's line, kept only while the panel around it agrees about the focus.
 - def `load_impact` — Assemble ``scope`` and answer D10 for ``focus`` — the fragment route's path.
@@ -149,6 +149,13 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `with_master_claims` — Carry the master list's inline claims onto records fetched elsewhere.
 - def `assemble_scope` — Fan out for cache misses and build the scope from what came back.
 - def `dependency_edge_state` — Classify one ``blocks`` / ``waits_on_gate`` edge from both endpoints.
+
+### `lithos_lens.graph_snapshot`
+- class `CanvasNotes` — What the CLIENT says it is drawing around the focus (D7/D8).
+- def `parse_canvas_notes` — Read ``bound=lower|exact`` and ``chain=<k>:<n>`` off a panel request.
+- def `impact_fingerprint` — The identity of one assembled ANSWER — everything D10's figures rest on.
+- def `canvas_holds` — Whether two fingerprints name the same PICTURE (D8's canvas).
+- def `lower_bound_nodes` — Every node whose focus view is a LOWER BOUND of what surrounds it (D8).
 
 ### `lithos_lens.graph_view`
 - class `GraphPageParams` — One graph page's URL state (D8), parsed once.

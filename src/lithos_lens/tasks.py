@@ -172,6 +172,11 @@ PANEL_SCOPE_KEY = "scope"
 #: this is what stops figures assembled from a moved graph being printed beside
 #: a canvas that is deliberately still showing the older one (D8/D10, T2-A7).
 PANEL_SNAPSHOT_KEY = "snapshot"
+#: What the CLIENT is DRAWING around the focus, which only it can know: D7's
+#: position and D8's lower bound are claims about the picture on screen, which
+#: the panel's own rebuild is a later read of (``graph_snapshot.CanvasNotes``).
+PANEL_BOUND_KEY = "bound"
+PANEL_CHAIN_KEY = "chain"
 
 
 def task_detail_path(task_id: str) -> str:

@@ -551,13 +551,33 @@ canvas to show for it. So the comparison is made **after** the blocked read,
 not before it, and when either half fails both figures are withheld and the
 panel states "this graph has changed — refresh", because "frees N **in this
 graph**, M immediately" would otherwise name one graph while the picture beside
-it shows another. What survives that withholding is decided by the canvas half
-alone: D8's "what the canvas lights is a lower bound" and D7's "on the longest
-chain (k of n)" are claims about the PICTURE, and a blocked row that moved
-under an unchanged graph falsifies neither — so they are stated beside the
-withheld figures, and dropped with them only when the picture itself moved. A
-focused **epic** is the limit of that rule: its line is nothing but those
-notes, so a move in the answer half leaves it untouched entirely.
+it shows another. A focused **epic** is the limit of that rule: D10 states no
+figures for it, so a move in the answer half leaves its line untouched
+entirely.
+
+**What the canvas shows is the CLIENT's to state.** D8's "what the canvas
+lights is a lower bound" and D7's "on the longest chain (k of n)" are claims
+about the PICTURE, not about the figures — and the picture is the static
+payload the browser is focusing, which the panel's own rebuild may no longer
+be: it can hold a different topology, or nothing at all when the scope has
+since been refused, failed, or lost the focal node. So every panel the graph
+page fetches carries `bound=lower|exact` and `chain=<k>:<n>` beside its
+`scope=` and `snapshot=`, and those are what the panel renders. Both come from
+the server either way — the lower bound rides in the payload per node, and the
+position is read off the chain the payload ships — so the browser restates D7
+and D8 rather than reimplementing them. A panel asked without them (any caller
+that is drawing nothing) answers from its own assembly, keeping the notes when
+the canvas half of the fingerprint still holds and dropping them with the
+figures when it does not; it never invents a claim about a picture nobody
+named. The server-rendered `focus=` page needs none of this: its assembly IS
+what it draws.
+
+Those two statements are also independent of the panel's OWN read of the focal
+task. A `task_get` that fails renders "Task unavailable" — and still renders
+them, because the operator is looking at a focused, lit neighbourhood either
+way. What that panel does not render is a figure or a "refresh": there is no
+focal status to count against, and no refresh resolves a failed read, so the
+line degrades to its notes alone and the panel's markup carries the error.
 
 Titles, claims, blocker messages and error reasons are excluded from both
 halves — they move no figure, and a fingerprint that changed on every heartbeat

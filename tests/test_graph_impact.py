@@ -29,9 +29,7 @@ from lithos_lens.graph_cycles import (
     ProjectRead,
 )
 from lithos_lens.graph_impact import (
-    canvas_holds,
     downstream_impact,
-    impact_fingerprint,
     parse_impact_scope,
     reconciled_impact,
 )
@@ -43,6 +41,7 @@ from lithos_lens.graph_scope import (
     GraphNode,
     TaskGraphScope,
 )
+from lithos_lens.graph_snapshot import canvas_holds, impact_fingerprint
 from lithos_lens.graph_view import DownstreamImpact
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import TaskRecord, TaskStatusName
@@ -1009,12 +1008,16 @@ def test_the_fragment_routes_reads_carry_the_configured_frontier_limit(
 #: lower bound; `root` sits in the middle of the three-node blocking chain.
 def bounded_dataset(
     blocked: dict[str, tuple[BlockerRecord, ...]] | None = None,
-    extra: bool = False,
+    relink: bool = False,
 ) -> FakeLithosDataset:
     tasks = [task("above"), task("root"), task("one")]
     edges = [("above", "root", "blocks"), ("root", "one", "blocks")]
-    if extra:
-        # A node and an edge the page never drew — the PICTURE moving.
+    if relink:
+        # The PICTURE moving: a node and an edge the page never drew. (An edge
+        # retype alone cannot be staged from HERE — the panel re-reads edges
+        # through the warm per-task cache, so it would see the drawn ones and
+        # agree. Which field belongs to which HALF is pinned directly, on the
+        # fingerprint, by `MATERIAL_HALVES` below.)
         tasks.append(task("late"))
         edges.append(("root", "late", "blocks"))
     return dataset(
@@ -1060,25 +1063,106 @@ def test_a_blocked_row_that_moved_withholds_the_figures_and_keeps_the_notes(
     assert "On the longest chain (2 of 3)." in slot(panel)
 
 
-def test_a_picture_that_moved_withholds_the_notes_with_the_figures(
+#: What the graph page's client says it is drawing around `root` in
+#: `bounded_dataset()`: a lit set that is a lower bound, and the middle step of
+#: the three-node chain. Read off the payload by `graph.js` and stated back on
+#: every panel it fetches (`graph_snapshot.CanvasNotes`).
+DRAWN_AROUND_ROOT = "&bound=lower&chain=2:3"
+
+
+def test_a_picture_that_moved_still_states_what_the_canvas_is_showing(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The other half of that rule. A node and an edge appear, so the lit set
-    and the chain this panel would describe are not the ones the canvas is
-    drawing — D8 leaves it where it is — and a note about "what the canvas
-    lights" would then be about a picture nobody is looking at."""
+    """The case the halves alone cannot answer (round-4 correctness f-006). A
+    node and an edge appear, so the graph this panel just assembled is not the
+    one being drawn — D8 leaves the canvas where it is — and the FIGURES go
+    with the disagreement. D7's position and D8's lower bound do not: the
+    operator is still looking at `root` lit in the middle of the same
+    three-node chain, and the client says so when it asks. The panel states
+    what the canvas shows rather than what its own rebuild found."""
     fake = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
 
     with client_for(lithos_lens_config_env, fake) as client:
         drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
-        fake.replace_dataset(bounded_dataset(extra=True))
-        panel = client.get(
+        fake.replace_dataset(bounded_dataset(relink=True))
+        described = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={drawn}{DRAWN_AROUND_ROOT}"
+        ).text
+        # The same fetch from something that is drawing NOTHING — no canvas to
+        # describe, so no claim about one.
+        undescribed = client.get(
             f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
         ).text
 
-    assert "This graph has changed" in slot(panel)
-    assert "data-panel-focus-bound" not in panel
-    assert "longest chain" not in slot(panel)
+    assert "This graph has changed" in slot(described)
+    assert attribute(described, "data-impact-frees") == ""
+    assert "lower bound of what surrounds it" in slot(described)
+    assert "On the longest chain (2 of 3)." in slot(described)
+    # Withheld, never invented: a caller that describes no canvas gets the
+    # figures withheld AND no statement about a picture nobody named.
+    assert "data-panel-focus-bound" not in undescribed
+    assert "longest chain" not in slot(undescribed)
+
+
+def test_a_scope_that_can_no_longer_answer_still_states_the_canvas(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Earlier than staleness, and the same rule (round-4 correctness f-006):
+    the rebuilt scope no longer holds the focus at all — here `root` resolved
+    out of an `include_resolved=0` project graph — so there are no figures to
+    withhold and nothing D10 can say. The canvas is still drawing it, focused,
+    on the same chain, so the notes are still owed."""
+    fake = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+        fake.replace_dataset(
+            dataset(
+                [task("above"), task("root", status="completed"), task("one")],
+                [("above", "root", "blocks"), ("root", "one", "blocks")],
+            )
+        )
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={drawn}{DRAWN_AROUND_ROOT}"
+        ).text
+
+    assert "frees" not in slot(panel)
+    assert "lower bound of what surrounds it" in slot(panel)
+    assert "On the longest chain (2 of 3)." in slot(panel)
+
+
+def test_a_panel_whose_task_read_failed_still_states_the_canvas(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D7's and D8's statements are about the PICTURE, so they cannot be
+    conditional on the later `task_get` succeeding (round-4 correctness f-007).
+    The canvas has `root` focused and its neighbourhood lit either way, and a
+    panel that renders "Task unavailable" beside it while dropping both
+    statements leaves a lower-bound picture reading as an exact one."""
+    # The page reads no `task_get` for an in-scope node, so the failure lands
+    # on the panel's own read and nothing else.
+    fake = GraphFakeClient(
+        bounded_dataset(), edge_failures={"above"}, get_failures={"root"}
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={drawn}{DRAWN_AROUND_ROOT}"
+        ).text
+
+    # The read failure is still reported — the panel does not pretend to have
+    # the task …
+    assert 'data-panel-state="error"' in panel
+    # … and the canvas beside it is still described.
+    assert "lower bound of what surrounds it" in slot(panel)
+    assert "On the longest chain (2 of 3)." in slot(panel)
+    # No figures: the focal status this panel could not read is what D10 counts
+    # against, so nothing here is a count.
+    assert "frees" not in slot(panel)
 
 
 def test_a_focused_epic_is_not_stale_when_only_the_blocked_rows_moved(
@@ -1103,7 +1187,10 @@ def test_a_focused_epic_is_not_stale_when_only_the_blocked_rows_moved(
 
     assert "This graph has changed" not in slot(panel)
     assert "frees" not in slot(panel)
+    # Its WHOLE note set, which is its whole line: D8's lower bound and D7's
+    # position (round-4 test-quality f-003).
     assert "lower bound of what surrounds it" in slot(panel)
+    assert "On the longest chain (1 of 1)." in slot(panel)
 
 
 def test_a_panel_counting_over_a_moved_graph_says_so_instead_of_a_number(
@@ -1807,6 +1894,44 @@ MATERIAL_CHANGES: tuple[
 )
 
 
+#: And WHICH half of the fingerprint each of them moves (round-4 test-quality
+#: f-003). "Moves the digest" is not the whole contract: the two halves answer
+#: different questions, and a canvas field filed under the answer half would
+#: let a panel keep D7's position and D8's lower bound — computed from a
+#: topology the canvas is NOT showing — through an edge relink that changed the
+#: picture. CANVAS is everything the drawing and N rest on; ANSWER is M's
+#: material, which moves no line on screen.
+CANVAS_HALF = "canvas"
+ANSWER_HALF = "answer"
+MATERIAL_HALVES: dict[str, str] = {
+    "node status": CANVAS_HALF,
+    "node completeness": CANVAS_HALF,
+    "ghost kind": CANVAS_HALF,
+    "edge source": CANVAS_HALF,
+    "edge target": CANVAS_HALF,
+    "edge type": CANVAS_HALF,
+    "edge state": CANVAS_HALF,
+    # A project slug decides which READ could have covered a task (D4/§5B.1)
+    # and nothing that is drawn.
+    "node projects": ANSWER_HALF,
+    "project convention": ANSWER_HALF,
+    "blocker set": ANSWER_HALF,
+    "blocked rows": ANSWER_HALF,
+    "coverage set": ANSWER_HALF,
+    "read truncated": ANSWER_HALF,
+    "read failed": ANSWER_HALF,
+    "read unmade": ANSWER_HALF,
+    "projectless": ANSWER_HALF,
+}
+
+
+def test_every_material_field_is_filed_in_a_half() -> None:
+    """The table above and the halves below name the same fields — a mutation
+    with no stated half would be tested for "moves the digest" alone, which is
+    the weaker half of the contract."""
+    assert MATERIAL_HALVES.keys() == {name for name, _ in MATERIAL_CHANGES}
+
+
 @pytest.mark.parametrize(
     ("name", "mutate"), MATERIAL_CHANGES, ids=[name for name, _ in MATERIAL_CHANGES]
 )
@@ -1815,12 +1940,17 @@ def test_every_material_field_moves_the_fingerprint(
 ) -> None:
     """One field at a time, each of which can change N, M, the lit set or
     whether M may be stated — and none of which changes the node MEMBERSHIP, so
-    a fingerprint over ids alone would be green on every case here."""
+    a fingerprint over ids alone would be green on every case here. Each is
+    also asserted into its HALF: the digest moving says the figures are
+    withheld, the half says whether the notes about the canvas survive with
+    them."""
     scope, signal = mutate()
+    moved = impact_fingerprint(scope, signal)
 
-    assert impact_fingerprint(scope, signal) != baseline_fingerprint(), (
-        f"{name} left the fingerprint unchanged"
-    )
+    assert moved != baseline_fingerprint(), f"{name} left the fingerprint unchanged"
+    assert canvas_holds(moved, baseline_fingerprint()) == (
+        MATERIAL_HALVES[name] == ANSWER_HALF
+    ), f"{name} is filed in the wrong half"
 
 
 #: The other half of the contract: text and arrival order move no figure, so
@@ -2110,7 +2240,6 @@ def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None
     for mismatch, record in (
         (done, task("root")),
         (open_impact, replace(task("root"), status="archived")),  # type: ignore[arg-type]
-        (open_impact, None),
     ):
         answer = reconciled_impact(mismatch, record)
         assert answer is not None
@@ -2125,6 +2254,16 @@ def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None
             mismatch.chain_position,
             mismatch.chain_length,
         )
+
+    # A panel that could not read its focal task at all is NOT that: there is
+    # no badge to disagree with and no refresh that resolves a failed read, so
+    # it keeps the notes with no figures and no sentence, and its own markup
+    # carries the failure (round-4 correctness f-007).
+    unread = reconciled_impact(open_impact, None, scoped=True)
+    assert unread is not None
+    assert (unread.state, unread.frees) == ("none", 0)
+    assert unread.relations_exact is False
+    assert (unread.chain_position, unread.chain_length) == (1, 3)
 
     # An EPIC's line is the exception to all of it: it makes no claim about the
     # focal status, so no badge can disagree with it and nothing here may turn

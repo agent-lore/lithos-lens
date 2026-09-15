@@ -80,6 +80,7 @@ source_modules = [
     "lithos_lens.graph_layout",
     "lithos_lens.graph_cycles",
     "lithos_lens.graph_view",
+    "lithos_lens.graph_snapshot",
     "lithos_lens.graph_impact",
     "lithos_lens.graph_page",
     "lithos_lens.frontier",

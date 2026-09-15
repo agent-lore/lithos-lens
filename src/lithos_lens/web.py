@@ -35,15 +35,7 @@ from lithos_lens.fake_lithos import (
     fake_lithos_enabled,
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
-from lithos_lens.graph_impact import (
-    ImpactScope,
-    load_impact,
-    parse_impact_scope,
-    reconciled_impact,
-)
-from lithos_lens.graph_routes import register_graph_routes
-from lithos_lens.graph_scope import GraphScopeLimits
-from lithos_lens.graph_view import SCOPE_PROJECT, DownstreamImpact
+from lithos_lens.graph_routes import panel_impact, register_graph_routes
 from lithos_lens.knowledge import (
     render_markdown,
 )
@@ -74,12 +66,9 @@ from lithos_lens.tasks import (
     MAX_FILTER_TAG_CHIPS,
     PANEL_FRAGMENT_KEY,
     PANEL_FRAGMENT_VALUE,
-    PANEL_SCOPE_KEY,
     PANEL_SELECTION_KEY,
-    PANEL_SNAPSHOT_KEY,
     TASK_DETAIL_ALIAS_KEY,
     TASK_DETAIL_ALIAS_PATH,
-    TaskRecord,
     default_since,
     format_display_date,
     format_tag,
@@ -408,7 +397,7 @@ def create_app(
                 },
             )
         detail = await _load_detail(state, task_id)
-        impact = await _panel_impact(request, state, task_id, detail) if panel else None
+        impact = await panel_impact(request, state, task_id, detail) if panel else None
         if panel:
             metrics.tasks_panel_opens().add(1, {"source": "fragment"})
         return templates.TemplateResponse(
@@ -583,73 +572,6 @@ async def _load_detail(state: AppState, task_id: str) -> TaskDetailData:
         convention=tasks_config.project_convention,
         tag_key=tasks_config.project_tag_key,
     )
-
-
-async def _panel_impact(
-    request: Request, state: AppState, task_id: str, detail: TaskDetailData
-) -> DownstreamImpact | None:
-    """D10's impact line for a panel fetched with a `scope=` (T2-A7).
-
-    The graph page's own render passes its already-assembled answer through
-    (`graph_routes`); this is the path a CLICKED panel takes, where there is no
-    page assembly to borrow and the scope has to be rebuilt — affordably, because
-    the per-task edge cache is warm for the graph the operator is looking at.
-
-    Degrades to the LINE, never to an error: the impact sits in a panel whose
-    other sections are already loaded, so a scope that fails, is refused, or no
-    longer holds this task costs it and nothing else — and the rebuild is
-    trusted only as far as ``snapshot=`` says (``graph_impact.load_impact``).
-    Reconciled here, where the scope is parsed: "was an impact asked for at
-    all?" decides whether a panel with no assembly still states D10's resolved
-    wording (``graph_impact.reconciled_impact``).
-    """
-    scope = parse_impact_scope(
-        request.query_params.get(PANEL_SCOPE_KEY),
-        request.query_params.get("include_resolved"),
-        request.query_params.get(PANEL_SNAPSHOT_KEY),
-    )
-    if not scope.scoped:
-        return None
-    tasks_config = state.config.tasks
-    impact = None
-    try:
-        master = await _impact_master(state, scope)
-        impact = await load_impact(
-            state.lithos_client,
-            scope=scope,
-            focus=task_id,
-            master=master,
-            cache=state.graph_cache,
-            limits=GraphScopeLimits(
-                max_tasks=state.config.graph.max_tasks,
-                fetch_concurrency=state.config.graph.fetch_concurrency,
-            ),
-            frontier_limit=tasks_config.frontier_limit,
-            convention=tasks_config.project_convention,
-            tag_key=tasks_config.project_tag_key,
-        )
-    except Exception:
-        logger.warning("panel impact assembly failed", exc_info=True)
-    return reconciled_impact(impact, detail.task, scoped=True)
-
-
-async def _impact_master(state: AppState, scope: ImpactScope) -> list[TaskRecord]:
-    """The snapshot one impact scope needs — the graph page's own rule.
-
-    Open always; the two bounded ``resolved_since`` windows only for a project
-    scope that asked to include resolved tasks, which is the one branch that
-    turns those rows into nodes. An epic's closed children come from
-    ``task_children``, so they cost no list call here.
-    """
-    rows = list(await state.lithos_client.list_tasks(status="open"))
-    if not (scope.include_resolved and scope.kind == SCOPE_PROJECT):
-        return rows
-    since = default_since(state.config.tasks.default_time_range_days)
-    for status in ("completed", "cancelled"):
-        rows.extend(
-            await state.lithos_client.list_tasks(status=status, resolved_since=since)
-        )
-    return rows
 
 
 def _selected_id(request: Request) -> str:

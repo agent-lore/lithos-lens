@@ -314,7 +314,29 @@
     return `${config.panelAliasPath || "/tasks/id"}?${alias.toString()}`;
   }
 
+  // What the HOST page says it is drawing around a task, when it has anything
+  // to say (the graph canvas does: D7's chain position and D8's lower bound are
+  // facts about the picture on screen, and the panel's own rebuild is a later
+  // read of a graph that may have moved). Registered rather than computed here:
+  // this file knows nothing about canvases, and the values come from the
+  // server's own payload either way.
+  let describePanel = null;
+
   function panelUrlFor(taskId) {
+    return describedUrl(resolvePanelUrl(taskId), taskId);
+  }
+
+  function describedUrl(url, taskId) {
+    const described = describePanel && describePanel(taskId);
+    if (!described) return url;
+    const target = new URL(url, window.location.href);
+    Object.keys(described).forEach(function (key) {
+      if (described[key]) target.searchParams.set(key, described[key]);
+    });
+    return target.pathname + target.search;
+  }
+
+  function resolvePanelUrl(taskId) {
     // Both sources here are URLs the SERVER built, and that is the point: task
     // ids are arbitrary strings, and the id that collides with a page under
     // `/tasks/` (`graph`) must be addressed through the query alias or the
@@ -960,7 +982,11 @@
     open: openPanel,
     close: closePanel,
     supersedePending: supersedePendingOpen,
-    onChange: function (subscriber) { panelSubscribers.push(subscriber); }
+    onChange: function (subscriber) { panelSubscribers.push(subscriber); },
+    // The host describes its canvas for EVERY panel URL this file builds — a
+    // click, a search hit, a Back — rather than for the one transition that
+    // asked, because the canvas is the same one under all of them.
+    describe: function (provider) { describePanel = provider; }
   };
   window.LithosLens.events = {
     subscribe: function (subscriber) { eventSubscribers.push(subscriber); }

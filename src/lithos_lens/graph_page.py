@@ -45,7 +45,7 @@ from lithos_lens.graph_cycles import (
     load_cycle_signal,
 )
 from lithos_lens.graph_fanout import GraphScopeClient
-from lithos_lens.graph_impact import downstream_impact, impact_fingerprint
+from lithos_lens.graph_impact import downstream_impact
 from lithos_lens.graph_layout import (
     BlockingChain,
     Topology,
@@ -64,6 +64,7 @@ from lithos_lens.graph_scope import (
     load_epic_scope,
     load_project_scope,
 )
+from lithos_lens.graph_snapshot import impact_fingerprint, lower_bound_nodes
 from lithos_lens.graph_view import (
     KNOWN_OVERLAYS,
     SCOPE_EPIC,
@@ -319,6 +320,10 @@ def _node_views(
         and edge.from_task_id in unresolved
     }
     isolated = set(folded)
+    # One pass for every node (D8's lower bound is a property of a whole
+    # connected component), because the payload carries it per node: the client
+    # states it back for whichever node it later fetches a panel for.
+    bounded = lower_bound_nodes(scope)
     views: dict[str, NodeView] = {}
     for node in scope.nodes:
         views[node.id] = NodeView(
@@ -344,6 +349,7 @@ def _node_views(
             blocked_via_cycle=node.id in via_cycle,
             unresolvable=node.id in unresolvable,
             focused=bool(params.focus) and node.id == params.focus,
+            bound=node.id in bounded,
         )
     return views
 

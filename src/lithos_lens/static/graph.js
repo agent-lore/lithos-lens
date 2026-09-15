@@ -438,6 +438,27 @@
     return urlWith(changes);
   }
 
+  // What the panel for `taskId` would be stating ABOUT THIS CANVAS (D7/D8).
+  //
+  // The panel is a second read of a scope this page already assembled, and the
+  // canvas deliberately does not re-lay-out under the operator (D8) — so by the
+  // time a click is answered, that rebuild can hold a different picture, or
+  // none at all (refused, failed, or no longer holding the node). The two
+  // statements the panel makes about the PICTURE are therefore this page's to
+  // supply, and both are read straight off the payload rather than recomputed:
+  // `bound` is the server's own per-node answer (`graph_snapshot`), and the
+  // position is the focus's place on the scope's longest chain, the one the
+  // server traced (round-4 correctness f-006).
+  function canvasNotes(taskId) {
+    const node = byId[taskId];
+    if (!node) return null;
+    const step = scopeChain.indexOf(chainCondensationOf(taskId));
+    return {
+      bound: node.bound ? "lower" : "exact",
+      chain: step < 0 ? "" : step + 1 + ":" + scopeChain.length
+    };
+  }
+
   // Every way this page changes the selection goes through here — a node tap,
   // a search hit, the client's own fallback for a `focus=` the server could
   // not answer — so the URL, the panel and the canvas move together. The panel
@@ -1274,6 +1295,8 @@
   // no longer names.
   const panelApi = panel();
   if (panelApi && panelApi.onChange) panelApi.onChange(render);
+  // …and every panel this page opens is told what the canvas beside it shows.
+  if (panelApi && panelApi.describe) panelApi.describe(canvasNotes);
 
   // What the previous tap was on, whatever it was on.
   //

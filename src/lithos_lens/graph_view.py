@@ -187,6 +187,12 @@ class NodeView:
     blocked_via_cycle: bool = False
     unresolvable: bool = False
     focused: bool = False
+    #: D8's lower bound, for THIS node: focusing it lights a neighbourhood that
+    #: is not the whole of what surrounds it (``graph_snapshot``). Carried per
+    #: node rather than only for the focused one because a focus transition is
+    #: client-side, and the client states this fact back when it fetches the
+    #: panel of a node it is drawing (round-4 correctness f-006).
+    bound: bool = False
 
     @property
     def edges_unknown(self) -> bool:
@@ -475,6 +481,11 @@ def payload_json(
                 "ghost_kind": node.ghost_kind,
                 "projects": list(node.projects),
                 "completeness": node.completeness,
+                # D8's lower bound for this node, which the canvas does not
+                # draw but the PANEL states — and a panel fetched for a node
+                # clicked later is answered by a rebuild that may no longer be
+                # this picture, so the client states it back from here.
+                "bound": node.bound,
                 # What the canvas needs and cannot derive (A4): the claims that
                 # make a node "in progress", and the detail URL a double-click
                 # navigates to — `tasks.task_detail_path` owns the rule that an

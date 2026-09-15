@@ -30,6 +30,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -1921,6 +1922,7 @@ def _node(
     flagged: bool = False,
     isolated: bool = False,
     detail_url: str = "",
+    bound: bool = False,
 ) -> dict:
     """One payload node in the shape `graph_view.payload_json` emits."""
     return {
@@ -1940,6 +1942,10 @@ def _node(
         "cycle_unknown": False,
         "blocked_via_cycle": False,
         "isolated": isolated,
+        # D8's lower bound for THIS node, as the server answers it
+        # (`graph_snapshot.lower_bound_nodes`): the canvas does not draw it,
+        # the panel states it, and the page hands it back when it asks for one.
+        "bound": bound,
     }
 
 
@@ -2429,6 +2435,20 @@ GRAPH_CANVAS_HREF = "http://lens.test/tasks/graph?project=loom"
 EPIC_CANVAS_HREF = "http://lens.test/tasks/graph?epic=loom-epic"
 
 
+def node_panel(task_id: str, chain: str = "") -> str:
+    """The panel URL a graph focus transition fetches.
+
+    The fragment, plus this page's own account of the canvas beside it (D7/D8,
+    round-4 correctness f-006): `bound` is whether focusing that node lights a
+    lower bound of its neighbourhood, and `chain` its place on the scope's
+    longest chain when it is on one. The panel's own rebuild is a later read of
+    a graph the canvas is deliberately still showing, so those two facts travel
+    from the page that IS showing it.
+    """
+    url = f"/tasks/id?task_id={task_id}&fragment=panel&bound=exact"
+    return url + (f"&chain={quote(chain, safe='')}" if chain else "")
+
+
 def _graph_run(
     actions: list[str],
     href: str = GRAPH_CANVAS_HREF,
@@ -2880,8 +2900,8 @@ def test_clicking_a_node_opens_that_task_s_panel_and_pushes_focus() -> None:
     implementation, and `focus` is the graph page's only selection key."""
     result = _graph_run(["tap:ship"])
 
-    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
-    assert result["final"]["panel"] == "panel:/tasks/id?task_id=ship&fragment=panel"
+    assert result["fetches"] == [node_panel("ship", "2:3")]
+    assert result["final"]["panel"] == "panel:" + node_panel("ship", "2:3")
     assert result["pushed"] == ["/tasks/graph?project=loom&focus=ship"]
     assert result["final"]["focused"] == ["ship"]
 
@@ -2976,7 +2996,7 @@ def test_a_focus_the_server_did_not_answer_is_opened_without_a_second_entry() ->
     would leave a twin entry the first Back appears to ignore."""
     result = _graph_run([], href="http://lens.test/tasks/graph?project=loom&focus=ship")
 
-    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    assert result["fetches"] == [node_panel("ship", "2:3")]
     assert result["pushed"] == []
     assert result["final"]["focused"] == ["ship"]
 
@@ -3064,6 +3084,49 @@ def test_a_focus_id_with_surrounding_space_lights_that_node_not_its_neighbour() 
     assert final["panel"] == "panel:server: task "
 
 
+#: A picture whose lit sets are a LOWER BOUND (D8) — `murky`'s own edge list
+#: could not be read, so the scope is incomplete and every node in it is bound
+#: — with `mid` in the middle of a three-node chain.
+BOUNDED_PAYLOAD: dict = _payload(
+    [
+        _node("top", bound=True),
+        _node("mid", layer=1, bound=True),
+        _node("end", layer=2, bound=True),
+        _node("murky", layer=1, completeness="edges_unknown", bound=True),
+    ],
+    [_edge("top", "mid"), _edge("mid", "end")],
+    longest_chain={"nodes": ["top", "mid", "end"], "length": 3, "bound": "exact"},
+    incomplete={"murky": "edge_list failed"},
+    roots=["top", "murky"],
+)
+
+
+def test_a_panel_request_carries_what_this_canvas_shows_around_the_node() -> None:
+    """D7's position and D8's lower bound are claims about the PICTURE, and the
+    panel answering a click is a second read of a graph this canvas is
+    deliberately still showing (D8 forbids the re-layout). So the page states
+    both when it asks — the server's own per-node answer and the focus's place
+    on the chain it traced — and the panel renders those instead of whatever
+    its rebuild would say (round-4 correctness f-006)."""
+    result = _graph_run(["tap:mid"], payload=BOUNDED_PAYLOAD)
+
+    assert result["fetches"] == [
+        "/tasks/id?task_id=mid&fragment=panel&bound=lower&chain=2%3A3"
+    ]
+    # The canvas the panel was told about is the one on screen.
+    assert result["final"]["focused"] == ["mid"]
+    assert result["final"]["lit"] == ["end", "mid", "top"]
+
+
+def test_a_node_off_the_scope_chain_says_only_what_it_lights() -> None:
+    """The position is the focus's place on the SCOPE's longest chain, and a
+    node that is not on it has none to state — so the request carries the lower
+    bound alone rather than a position invented from the chain through it."""
+    result = _graph_run(["tap:murky"], payload=BOUNDED_PAYLOAD)
+
+    assert result["fetches"] == ["/tasks/id?task_id=murky&fragment=panel&bound=lower"]
+
+
 def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
     """The ordinary state of the page: nothing is lit because nothing is
     focused, and a class left behind from a cleared focus would dim two thirds
@@ -3148,7 +3211,7 @@ def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
     }
     assert cleared["traced"] == ["a", "b", "c", "d", "e"]
     assert cleared["tracedEdges"] == ["a>b", "b>c", "c>d", "d>e"]
-    assert result["fetches"] == ["/tasks/id?task_id=off-b&fragment=panel"]
+    assert result["fetches"] == [node_panel("off-b")]
 
 
 def test_back_re_traces_the_chain_of_the_focus_it_returns_to() -> None:
@@ -3297,7 +3360,7 @@ def test_clicking_another_node_replaces_the_focus_and_the_panel() -> None:
         "/tasks/graph?project=loom&focus=a",
         "/tasks/graph?project=loom&focus=e",
     ]
-    assert second["panel"] == "panel:/tasks/id?task_id=e&fragment=panel"
+    assert second["panel"] == "panel:" + node_panel("e", "5:5")
     assert second["lit"] == ["a", "b", "c", "d", "e"]
 
 
@@ -3328,14 +3391,14 @@ def test_back_after_two_focuses_restores_the_first_with_its_panel() -> None:
     assert restored["href"] == "http://lens.test/tasks/graph?project=loom&focus=off-a"
     assert restored["focused"] == ["off-a"]
     assert restored["lit"] == ["off-a", "off-b"]
-    assert restored["panel"] == "panel:/tasks/id?task_id=off-a&fragment=panel"
+    assert restored["panel"] == "panel:" + node_panel("off-a")
     # A panel is a fetch; the GRAPH is not re-requested and the page is not
     # navigated — that is what "no reload" means here.
     assert result["navigations"] == []
     assert result["fetches"] == [
-        "/tasks/id?task_id=off-a&fragment=panel",
-        "/tasks/id?task_id=c&fragment=panel",
-        "/tasks/id?task_id=off-a&fragment=panel",
+        node_panel("off-a"),
+        node_panel("c", "3:5"),
+        node_panel("off-a"),
     ]
 
 
@@ -3381,7 +3444,7 @@ def test_a_panel_opened_from_the_graph_carries_the_pages_scope() -> None:
 
     assert result["fetches"] == [
         "/tasks/id?task_id=c&fragment=panel&scope=project%3Aloom"
-        "&include_resolved=0&snapshot=a1b2c3d4e5f60718"
+        "&include_resolved=0&snapshot=a1b2c3d4e5f60718&bound=exact&chain=3%3A5"
     ]
 
 
@@ -3423,8 +3486,8 @@ def test_a_click_inside_another_node_s_multi_click_window_opens_its_panel() -> N
         final = result["final"]
         assert "/tasks/ship" not in final["href"], f"navigated after {gesture}"
         # The second click was a single click on `ship`, and is answered as one.
-        assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
-        assert final["panel"] == "panel:/tasks/id?task_id=ship&fragment=panel"
+        assert result["fetches"] == [node_panel("ship", "2:3")]
+        assert final["panel"] == "panel:" + node_panel("ship", "2:3")
         assert "focus=ship" in final["href"]
         assert final["focused"] == ["ship"]
 
@@ -3449,7 +3512,7 @@ def test_the_first_click_of_a_double_click_opens_no_panel() -> None:
     assert pending["final"]["panel"] == ""
     assert pending["pushed"] == []
     # The same tap, once the window closes with no second click: the panel.
-    assert settled["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    assert settled["fetches"] == [node_panel("ship", "2:3")]
     assert "focus=ship" in settled["final"]["href"]
 
 
@@ -3472,7 +3535,7 @@ def test_an_older_panel_request_cannot_land_inside_a_double_click() -> None:
     )
 
     # The settled single click really did ask for `schema`'s panel …
-    assert result["fetches"] == ["/tasks/id?task_id=schema&fragment=panel"]
+    assert result["fetches"] == [node_panel("schema", "1:3")]
     # … and the answer, landing after the double-click had begun, is dropped.
     assert result["states"][2]["panel"] == "", "a stale panel opened mid-gesture"
     assert result["pushed"] == [], "a stale open moved the URL mid-gesture"
@@ -3488,7 +3551,7 @@ def test_a_settled_panel_survives_a_gesture_that_starts_elsewhere() -> None:
     result = _graph_run(["tap:schema", "release", "firsttap:ship"], panel_fetch="hold")
     final = result["final"]
 
-    assert final["panel"] == "panel:/tasks/id?task_id=schema&fragment=panel"
+    assert final["panel"] == "panel:" + node_panel("schema", "1:3")
     assert result["pushed"] == ["/tasks/graph?project=loom&focus=schema"]
     # The new gesture still lights its own node, which is all a raw tap does.
     assert final["focused"] == ["ship"]
@@ -3509,7 +3572,7 @@ def test_a_startup_panel_request_is_superseded_like_any_other() -> None:
     )
 
     # The fallback really did ask for the panel the server did not send …
-    assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"]
+    assert result["fetches"] == [node_panel("ship", "2:3")]
     # … and the answer, landing after a gesture had begun, is dropped: no panel
     # beside the canvas, and the ring stays on the node being clicked.
     assert result["states"][1]["panel"] == "", "a stale panel opened mid-gesture"
@@ -3537,10 +3600,10 @@ def test_superseding_a_pending_open_leaves_the_panel_already_on_screen() -> None
     states = result["states"]
 
     assert result["fetches"] == [
-        "/tasks/id?task_id=schema&fragment=panel",
-        "/tasks/id?task_id=ship&fragment=panel",
+        node_panel("schema", "1:3"),
+        node_panel("ship", "2:3"),
     ]
-    schema_panel = "panel:/tasks/id?task_id=schema&fragment=panel"
+    schema_panel = "panel:" + node_panel("schema", "1:3")
     # On screen before the gesture, and still there after the superseded
     # response lands — the operator did not ask for it to go.
     assert states[2]["panel"] == schema_panel
@@ -3576,10 +3639,10 @@ def test_an_open_is_still_pending_while_its_body_is_arriving() -> None:
     states = result["states"]
 
     assert result["fetches"] == [
-        "/tasks/id?task_id=schema&fragment=panel",
-        "/tasks/id?task_id=ship&fragment=panel",
+        node_panel("schema", "1:3"),
+        node_panel("ship", "2:3"),
     ]
-    schema_panel = "panel:/tasks/id?task_id=schema&fragment=panel"
+    schema_panel = "panel:" + node_panel("schema", "1:3")
     # Headers in hand and the gesture begun: nothing has been written yet …
     assert states[3]["panel"] == schema_panel
     assert states[4]["panel"] == schema_panel
@@ -3689,7 +3752,7 @@ def test_a_node_open_that_never_arrives_leaves_no_ring_and_no_focus() -> None:
         result = _graph_run(["tap:ship"], panel_fetch=outcome)
         final = result["final"]
 
-        assert result["fetches"] == ["/tasks/id?task_id=ship&fragment=panel"], outcome
+        assert result["fetches"] == [node_panel("ship", "2:3")], outcome
         assert final["focused"] == [], f"{outcome}: the node stayed lit"
         assert "focus=" not in final["href"], outcome
         assert result["pushed"] == [], outcome

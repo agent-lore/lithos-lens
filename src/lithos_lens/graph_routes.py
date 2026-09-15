@@ -3,8 +3,11 @@
 Its own module for the reason `knowledge_routes.py` is: the task routes in
 `web.py` are already at the 800-line ceiling, and this page's assembly — one
 master read, one scope, one cycle-signal fan-out, one fold — shares no state
-with them. Registered as a closure over app/state/templates, the shape
-`create_app` already uses.
+with them. The side panel's downstream-impact line (:func:`panel_impact`) is
+here for the same two reasons: it is the graph feature's, and it is assembled
+the same way, from the same scope and the same cache. The route itself is
+registered as a closure over app/state/templates, the shape `create_app`
+already uses.
 
 Registration ORDER matters and is the one thing a reader must not rearrange:
 `/tasks/graph` has to be attached before `/tasks/{task_id}`, or Starlette
@@ -22,7 +25,13 @@ from fastapi.templating import Jinja2Templates
 from opentelemetry.trace import Span
 
 from lithos_lens import metrics
-from lithos_lens.graph_impact import reconciled_impact
+from lithos_lens.graph_impact import (
+    ImpactScope,
+    load_impact,
+    parse_impact_scope,
+    reconciled_impact,
+    with_canvas_notes,
+)
 from lithos_lens.graph_page import (
     EDGE_LEGEND,
     SCOPE_PROJECT,
@@ -36,11 +45,17 @@ from lithos_lens.graph_page import (
     scope_param,
 )
 from lithos_lens.graph_scope import GraphScopeLimits
+from lithos_lens.graph_snapshot import parse_canvas_notes
+from lithos_lens.graph_view import DownstreamImpact
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
 from lithos_lens.tasks import (
     GRAPH_SELECTION_KEY,
+    PANEL_BOUND_KEY,
+    PANEL_CHAIN_KEY,
+    PANEL_SCOPE_KEY,
     PANEL_SELECTION_KEY,
+    PANEL_SNAPSHOT_KEY,
     TaskRecord,
     default_since,
 )
@@ -333,3 +348,81 @@ def _record(
         ):
             if count:
                 metrics.tasks_graph_cycle_reads().add(count, {"outcome": read_outcome})
+
+
+async def panel_impact(
+    request: Request, state: AppState, task_id: str, detail: TaskDetailData
+) -> DownstreamImpact | None:
+    """D10's impact line for a panel fetched with a `scope=` (T2-A7).
+
+    The graph page's own render passes its already-assembled answer through
+    (`graph_routes`); this is the path a CLICKED panel takes, where there is no
+    page assembly to borrow and the scope has to be rebuilt — affordably, because
+    the per-task edge cache is warm for the graph the operator is looking at.
+
+    Degrades to the LINE, never to an error: the impact sits in a panel whose
+    other sections are already loaded, so a scope that fails, is refused, or no
+    longer holds this task costs it and nothing else — and the rebuild is
+    trusted only as far as ``snapshot=`` says (``graph_impact.load_impact``).
+    Reconciled here, where the scope is parsed: "was an impact asked for at
+    all?" decides whether a panel with no assembly still states D10's resolved
+    wording (``graph_impact.reconciled_impact``).
+    """
+    scope = parse_impact_scope(
+        request.query_params.get(PANEL_SCOPE_KEY),
+        request.query_params.get("include_resolved"),
+        request.query_params.get(PANEL_SNAPSHOT_KEY),
+    )
+    if not scope.scoped:
+        return None
+    # What the canvas beside this panel is DRAWING (D7/D8). Stated by the client
+    # because this rebuild is a later read of a graph the page is deliberately
+    # still showing: it can hold a different picture, or — refused, failed, or
+    # no longer holding the focus — none at all, while the operator is looking
+    # at a focused node with its neighbourhood lit (round-4 correctness f-006).
+    notes = parse_canvas_notes(
+        request.query_params.get(PANEL_BOUND_KEY),
+        request.query_params.get(PANEL_CHAIN_KEY),
+    )
+    tasks_config = state.config.tasks
+    impact = None
+    try:
+        master = await _impact_master(state, scope)
+        impact = await load_impact(
+            state.lithos_client,
+            scope=scope,
+            focus=task_id,
+            master=master,
+            cache=state.graph_cache,
+            limits=GraphScopeLimits(
+                max_tasks=state.config.graph.max_tasks,
+                fetch_concurrency=state.config.graph.fetch_concurrency,
+            ),
+            frontier_limit=tasks_config.frontier_limit,
+            convention=tasks_config.project_convention,
+            tag_key=tasks_config.project_tag_key,
+        )
+    except Exception:
+        logger.warning("panel impact assembly failed", exc_info=True)
+    return with_canvas_notes(
+        reconciled_impact(impact, detail.task, scoped=True), notes, focus=task_id
+    )
+
+
+async def _impact_master(state: AppState, scope: ImpactScope) -> list[TaskRecord]:
+    """The snapshot one impact scope needs — the graph page's own rule.
+
+    Open always; the two bounded ``resolved_since`` windows only for a project
+    scope that asked to include resolved tasks, which is the one branch that
+    turns those rows into nodes. An epic's closed children come from
+    ``task_children``, so they cost no list call here.
+    """
+    rows = list(await state.lithos_client.list_tasks(status="open"))
+    if not (scope.include_resolved and scope.kind == SCOPE_PROJECT):
+        return rows
+    since = default_since(state.config.tasks.default_time_range_days)
+    for status in ("completed", "cancelled"):
+        rows.extend(
+            await state.lithos_client.list_tasks(status=status, resolved_since=since)
+        )
+    return rows

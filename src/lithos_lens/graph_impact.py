@@ -35,10 +35,8 @@ which has no graph page around it to borrow an assembly from.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from lithos_lens.graph_cache import GraphCache
@@ -63,13 +61,18 @@ from lithos_lens.graph_scope import (
     load_epic_scope,
     load_project_scope,
 )
+from lithos_lens.graph_snapshot import (
+    CanvasNotes,
+    canvas_holds,
+    impact_fingerprint,
+    lower_bound_nodes,
+)
 from lithos_lens.graph_view import (
     SCOPE_EPIC,
     SCOPE_PROJECT,
     DownstreamImpact,
     parse_flag,
 )
-from lithos_lens.task_filtering import task_projects
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
@@ -98,10 +101,6 @@ IMPACT_STALE = "stale"
 
 #: The ``scope=`` the panel fragment route accepts, ``<kind>:<key>``.
 SCOPE_SEPARATOR = ":"
-#: Between a fingerprint's two halves — the canvas and the answer counted over
-#: it (:func:`impact_fingerprint`). A character no hex digest can contain, so
-#: the join is unambiguous however the two values move.
-FINGERPRINT_SEPARATOR = "."
 
 
 @dataclass(frozen=True)
@@ -135,6 +134,40 @@ class ImpactScope:
     @property
     def scoped(self) -> bool:
         return bool(self.kind and self.key)
+
+
+def with_canvas_notes(
+    impact: DownstreamImpact | None, notes: CanvasNotes, *, focus: str
+) -> DownstreamImpact | None:
+    """Put the CLIENT's account of its canvas onto D10's line (D7/D8).
+
+    The FIGURES are untouched — they are the server's arithmetic over its own
+    reads, and nothing the browser says can make a withheld N honest. The notes
+    are replaced wholesale, because they describe the picture and the client is
+    the one looking at it.
+
+    A line that does not exist at all is still owed them: an assembly that was
+    refused, failed, or no longer holds the focus produces no impact, while the
+    canvas goes on drawing the focused node with its neighbourhood lit. That
+    answers :data:`IMPACT_NONE` — no figures, the notes alone — rather than
+    silence (round-4 correctness f-006).
+    """
+    if not notes.stated:
+        return impact
+    if impact is None:
+        return DownstreamImpact(
+            focus=focus,
+            state=IMPACT_NONE,
+            relations_exact=notes.relations_exact,
+            chain_position=notes.chain_position,
+            chain_length=notes.chain_length,
+        )
+    return replace(
+        impact,
+        relations_exact=notes.relations_exact,
+        chain_position=notes.chain_position,
+        chain_length=notes.chain_length,
+    )
 
 
 class ImpactClient(GraphScopeClient, CycleSignalClient, Protocol):
@@ -171,160 +204,6 @@ def parse_impact_scope(
         include_resolved=parse_flag(resolved, kind == SCOPE_EPIC),
         fingerprint=(fingerprint or "").strip(),
     )
-
-
-def impact_fingerprint(
-    scope: TaskGraphScope,
-    signal: CycleSignal,
-    *,
-    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
-) -> str:
-    """The identity of one assembled ANSWER — everything D10's figures rest on.
-
-    TWO digests joined by :data:`FINGERPRINT_SEPARATOR`, because a panel that
-    no longer reproduces the page's answer has two different things to say
-    depending on WHICH half moved (round-3 correctness f-006):
-
-    - the **canvas** half — the node set (id, the status the count reads, the
-      completeness that turns a status into ``unknown`` and marks an unread
-      edge list, the ghost kind that decides whether it is drawn at all) and
-      the edge set (endpoints, type and the state the active projection is read
-      from). This is the PICTURE: what is drawn, what N is walked over, which
-      nodes light under a focus, where the longest chain runs — so while it
-      holds, the panel's statements ABOUT that picture are still true of what
-      the operator is looking at, whatever else moved (:func:`_stale_impact`).
-    - the **answer** half — the project slugs coverage is matched by, kept
-      apart by the convention that carries each; the coverage set; each read's
-      outcome; the blocked rows for the nodes this graph holds, by blocker kind,
-      predecessor, type and status; and the projectless set. This is M's
-      material, read fresh on every panel with no cache under it.
-
-    The answer half is what makes this a fingerprint of the ANSWER rather than
-    of the picture. An eventless edge upsert elsewhere in the fleet (ROADMAP
-    gap #1) can add a second blocker to a dependent while every edge entry this
-    scope reads stays warm: the drawn graph is then byte-identical and M has
-    still moved from 1 to 0 (round-1 correctness f-001). Nothing else
-    downstream would notice, so it is caught here or not at all — and, the
-    halves being compared separately, catching it costs the FIGURES and not the
-    notes beside them.
-
-    What is deliberately NOT in it: titles, claims, blocker MESSAGES, error
-    reasons — text that moves no figure and no class on the canvas. A
-    fingerprint that changed on every heartbeat would withhold the line
-    permanently rather than when it is actually wrong. Rows for tasks outside
-    this graph are left out for the same reason: a scoped read legitimately
-    names them, and no figure here is counted over them.
-
-    Order is imposed on every part, because none of it arrives ordered: the
-    blocked rows are folded out of two concurrent reads per project and their
-    order follows whichever answered first (``graph_cycles._signal``).
-
-    Each half is 16 hex digits (:func:`_digest`, where the encoding is argued):
-    the pair travels in a URL and is compared to a value Lens produced itself
-    in the same process, so this is a change detector, not a defence against a
-    forged one. The separator is safe where one between FIELDS would not be —
-    a hex digest cannot contain it.
-    """
-    return FINGERPRINT_SEPARATOR.join(
-        (
-            _digest(_canvas_material(scope)),
-            _digest(_answer_material(scope, signal, tag_key)),
-        )
-    )
-
-
-def canvas_holds(drawn: str, given: str) -> bool:
-    """Whether two fingerprints name the same PICTURE (D8's canvas).
-
-    What a stale panel asks before deciding what to withhold: the figures
-    belong to the whole answer, the notes beside them only to the drawing
-    (round-3 correctness f-006). A ``given`` that is not a fingerprint Lens
-    emitted — invented, or truncated by a hand-edited URL — answers False and
-    so withholds everything, the default the whole comparison has.
-    """
-    left, right = _canvas_half(drawn), _canvas_half(given)
-    return bool(left) and left == right
-
-
-def _canvas_half(fingerprint: str) -> str:
-    parts = fingerprint.split(FINGERPRINT_SEPARATOR)
-    return parts[0] if len(parts) == 2 and all(parts) else ""
-
-
-def _digest(material: list[object]) -> str:
-    """One half's material, canonically encoded and hashed.
-
-    Canonical JSON rather than fields joined on a separator: task ids are
-    arbitrary non-empty strings (§5.1) that nothing normalises control
-    characters out of, so a chosen separator is one an id may legitimately
-    CONTAIN — a digest over joined fields then reads ``a -> b<sep>c`` and
-    ``a<sep>b -> c`` as the same edge, letting a moved graph pass the check and
-    print the wrong count (round-2 correctness f-003). JSON's own escaping is
-    what makes the encoding injective: every value stays a distinct element.
-    """
-    encoded = json.dumps(material, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
-
-
-def _canvas_material(scope: TaskGraphScope) -> list[object]:
-    """The drawn picture: what N is walked over and what focus mode classes."""
-    return [
-        sorted(
-            [node.id, node.status, node.completeness, node.ghost_kind]
-            for node in scope.nodes
-        ),
-        sorted(
-            [edge.from_task_id, edge.to_task_id, edge.type, edge.state]
-            for edge in scope.edges
-        ),
-    ]
-
-
-def _answer_material(
-    scope: TaskGraphScope, signal: CycleSignal, tag_key: str
-) -> list[object]:
-    """M's material: whose blocked fact was read, how, and what it said."""
-    held = set(scope.node_ids)
-    return [
-        sorted(
-            [
-                node.id,
-                # Per CONVENTION, never unioned. Coverage belongs to the READ
-                # (``graph_cycles.read_covers``): a complete ``project=<slug>``
-                # response establishes the absence only of tasks carrying that
-                # slug in ``metadata.project``, a ``tags=`` one only of tasks
-                # carrying the tag. So the same slug rewritten from one
-                # convention to the other — an edit that moves no id, no status
-                # and no edge — can turn a covered dependent into an uncovered
-                # one and M from a figure into a withheld line, and a digest
-                # over the union would call the two graphs the same.
-                sorted(
-                    task_projects(node.task, convention="metadata", tag_key=tag_key)
-                ),
-                sorted(task_projects(node.task, convention="tag", tag_key=tag_key)),
-            ]
-            for node in scope.nodes
-        ),
-        sorted(signal.coverage),
-        sorted(
-            # The OUTCOME, not the reason: "this read cannot establish absence"
-            # is the whole of what M asks of it (``graph_cycles.read_covers``).
-            [read.project, read.by, read.truncated, bool(read.error), read.unmade]
-            for read in signal.reads
-        ),
-        sorted(
-            [
-                record.task.id,
-                sorted(
-                    [blocker.kind, blocker.task_id, blocker.type, blocker.status]
-                    for blocker in record.blockers
-                ),
-            ]
-            for record in signal.blocked
-            if record.task.id in held
-        ),
-        sorted(signal.projectless),
-    ]
 
 
 def downstream_impact(
@@ -441,8 +320,9 @@ def reconciled_impact(
       that disagreed with them, so the FIGURES degrade to :data:`IMPACT_STALE`
       and a refresh is what resolves it, while the notes about the canvas carry
       over (:func:`_stale_line`). A panel whose task could not be read at all
-      (``None``) reads the same way: it has no badge to agree with, and its
-      markup carries the failure instead.
+      (``None``) has no badge to agree with and no refresh that would resolve
+      one, so it keeps the notes with no figures and no sentence at all — its
+      markup carries the failure itself (round-4 correctness f-007).
 
     A panel with NO impact at all is the third case, and ``scoped`` is what
     makes it answerable. D10's resolved wording is a statement about the TASK,
@@ -467,7 +347,13 @@ def reconciled_impact(
             return DownstreamImpact(focus=task.id, state=resolved)
         return None
     if task is None:
-        return _stale_line(impact)
+        # The panel could not read the focal task at all, so there is no status
+        # for D10 to count against and no badge for a figure to disagree with
+        # — and also nothing to REFRESH away, which "this graph has changed"
+        # would tell the operator to do. The line degrades to its notes, which
+        # are about the canvas and have nothing to do with that read, and the
+        # panel's own markup carries the failure (round-4 correctness f-007).
+        return _figureless(impact)
     if _focal_state(task.status) == impact.state:
         return impact
     if resolved:
@@ -479,6 +365,17 @@ def reconciled_impact(
             chain_length=impact.chain_length,
         )
     return _stale_line(impact)
+
+
+def _figureless(impact: DownstreamImpact) -> DownstreamImpact:
+    """:data:`IMPACT_NONE` — no figures, no sentence, the canvas notes alone."""
+    return DownstreamImpact(
+        focus=impact.focus,
+        state=IMPACT_NONE,
+        relations_exact=impact.relations_exact,
+        chain_position=impact.chain_position,
+        chain_length=impact.chain_length,
+    )
 
 
 def _stale_line(impact: DownstreamImpact) -> DownstreamImpact:
@@ -569,42 +466,8 @@ def _downstream(scope: TaskGraphScope, focus: str) -> tuple[tuple[str, ...], set
 
 
 def _relations_exact(scope: TaskGraphScope, focus: str) -> bool:
-    """Whether focus mode's LIT SET is the whole of what surrounds this task.
-
-    Two ways it is not, and D8 states both: the SCOPE is incomplete — an
-    unreadable edge list anywhere is evidence that the projection Lens can see
-    is not all of it, wherever the gap turns out to be — or an ``unknown`` edge
-    touches the focused node's own neighbourhood, which is a relation Lens
-    cannot classify in either direction. The second is a question about THIS
-    node, so it is walked; the first is not, so it is not.
-
-    The walk is symmetric where :func:`_downstream` is not, because the canvas
-    lights ancestors AND descendants (D8). Either way the picture is a lower
-    bound of the neighbourhood and the panel says so, rather than letting a
-    dimmed node read as "unrelated".
-    """
-    if scope.incomplete:
-        return False
-    neighbours: dict[str, list[str]] = {}
-    unknown_at: set[str] = set()
-    for edge in scope.edges:
-        if not edge.dependency:
-            continue
-        if edge.active:
-            neighbours.setdefault(edge.from_task_id, []).append(edge.to_task_id)
-            neighbours.setdefault(edge.to_task_id, []).append(edge.from_task_id)
-        elif edge.state == EDGE_UNKNOWN:
-            unknown_at.update((edge.from_task_id, edge.to_task_id))
-    seen = {focus}
-    queue = [focus]
-    while queue:
-        current = queue.pop(0)
-        for other in neighbours.get(current, ()):
-            if other in seen:
-                continue
-            seen.add(other)
-            queue.append(other)
-    return not (seen & unknown_at)
+    """Whether focus mode's lit set is the whole of what surrounds ``focus``."""
+    return focus not in lower_bound_nodes(scope)
 
 
 def _sole_blocker_count(
