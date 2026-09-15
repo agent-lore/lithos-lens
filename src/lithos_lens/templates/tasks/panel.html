@@ -178,9 +178,16 @@
           <p class="panel-impact" data-panel-impact data-impact-state="stale">This graph has changed — refresh to see what completing this frees.</p>
         {% elif impact.state == "cancelled" %}
           <p class="panel-impact" data-panel-impact data-impact-state="cancelled">This task is cancelled — its dependents are unsatisfiable.</p>
-        {% else %}
+        {% elif impact.state == "unknown" %}
           <p class="panel-impact" data-panel-impact data-impact-state="unknown">This task's status could not be read, so its impact is unknown.</p>
         {% endif %}
+        {#
+          `none` — an epic — states no sentence here at all (D10): it carries
+          no `blocks` edges, and a zero would read as "finishing this frees
+          nobody". The notes below still render, because D8's lower-bound
+          statement is about the LIT SET on the canvas rather than about N, and
+          a focused epic's neighbourhood degrades like any other node's.
+        #}
         {% if not impact.relations_exact %}
           {# D8: the lit set on the canvas is a LOWER BOUND when an unreadable
              edge list or an `unknown` edge sits in this task's neighbourhood —

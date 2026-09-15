@@ -502,15 +502,18 @@ is two figures from two authorities (§5.7 of REQUIREMENTS):
 Rendered "frees N in this graph, M immediately". A **completed** focal task
 states "completed; no pending impact" and a **cancelled** one "its dependents
 are unsatisfiable" — neither has pending edges, so neither carries a
-future-tense number — and an **epic** carries no impact line at all, since a
-zero there would read as "finishing this frees nobody" rather than "this is not
-that kind of task". Beside it, "on the longest chain (k of n)" gives the task's
+future-tense number — and an **epic** states no FIGURES at all, since a zero
+there would read as "finishing this frees nobody" rather than "this is not that
+kind of task" (nor a chain position: §5.11's chain is the blocking one, and an
+epic sits on no `blocks` edge). Beside it, "on the longest chain (k of n)" gives the task's
 position on the SCOPE's chain (§5.12) when it is on it; a task is trivially on
 the chain through itself, so stating that would state nothing. And when the
 scope is incomplete, or an `unknown` edge touches the focused task's own
 neighbourhood, the panel says that what the canvas lights is a **lower bound**
 of what surrounds it — a dimmed node must not read as "unrelated" when Lens
-only failed to look.
+only failed to look. That last statement is about the CANVAS rather than about
+N, so a focused **epic** carries it too: it has no figures to withhold, and its
+neighbourhood degrades like any other node's.
 
 The graph page's own render computes this from the scope and cycle signal it
 already holds; a panel fetched on its own rebuilds that scope, which the
@@ -807,7 +810,11 @@ page's single selection parameter and `selected=` is accepted as a
 compatibility alias that the route **redirects away** (307 to the same URL with
 `focus=` and no `selected=`) before it reads anything: both clients read
 `focus`, so a page served under the alias would render a panel with no node lit
-and a Close that pushed a URL still carrying the alias. A request carrying a
+and a Close that pushed a URL still carrying the alias. The selection value is
+read and redirected **byte for byte**: a task id is an arbitrary non-empty
+string (§5.1), so trimming it would look a different node up and — through that
+redirect — write the trimmed id into the URL bar permanently; only an absent or
+empty parameter is "no focus". A request carrying a
 selection **server-renders that task's side panel** beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
 `url` open), with that panel's downstream impact computed from this render's
 own scope, and a read that fails there costs the panel rather than the graph.
@@ -868,7 +875,13 @@ project among the in-scope tasks AND the downstream ghosts — where a pair is
 each at `tasks.frontier_limit`, with `len == limit` treated as truncation. The
 pair is unioned **per task**: the two calls are independent reads rather than
 one snapshot, so a task's blockers are merged across every response that names
-it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict). A
+it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict), and
+two rows are the SAME blocker when their kind, predecessor, edge type and
+predecessor status agree. The human-readable `message` is deliberately not part
+of that identity: it is presentation text sampled with each read — a gate's
+carries its `ready_at` — and counting one blocker twice because its wording
+moved between the two calls would withhold §5.5.1's "immediately" from a
+dependent this task alone is blocking. A
 task is cycle-status *known* when it appears in any response, or when some read
 that **could have matched it** answered in full — and that is a question about
 the convention each read expresses (§5B.1): `project=<slug>` is the metadata

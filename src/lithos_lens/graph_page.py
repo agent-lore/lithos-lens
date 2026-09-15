@@ -640,9 +640,16 @@ def parse_graph_params(query: Mapping[str, str]) -> GraphPageParams:
         kind=kind,
         key=key,
         include_resolved=include_resolved,
-        focus=(
-            query.get(GRAPH_SELECTION_KEY) or query.get(PANEL_SELECTION_KEY) or ""
-        ).strip(),
+        # Byte-for-byte, deliberately NOT stripped. A task id is an arbitrary
+        # non-empty string (§5.1), so ``" task "`` is an id Lens can really be
+        # handed — and trimming one here would look a different node up, trace
+        # a different chain, fetch a different panel, and (through the
+        # ``selected=`` redirect) canonicalise the wrong id into the URL bar
+        # permanently. The client reads the same parameter raw
+        # (``graph.js``: ``params.get(SELECTION_PARAM)``), so trimming on this
+        # side is also a server/client split. Only ABSENT and empty are "no
+        # focus", which is the one distinction this parse has to make.
+        focus=query.get(GRAPH_SELECTION_KEY) or query.get(PANEL_SELECTION_KEY) or "",
         overlays=tuple(
             overlay
             for overlay in KNOWN_OVERLAYS

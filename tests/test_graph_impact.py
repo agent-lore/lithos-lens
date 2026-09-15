@@ -692,6 +692,115 @@ def test_an_epic_carries_no_impact_line_at_all(
     assert slot(html) == ""
 
 
+def test_a_focused_epic_still_says_when_its_lit_set_is_a_lower_bound(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Two rules, and the second must not be suppressed with the first
+    (round-1 correctness f-001). D10 gives an epic no FIGURES — it carries no
+    `blocks` edges, and a zero would read as "finishing this frees nobody".
+    D8's lower-bound note is a claim about the CANVAS: an unreadable edge list
+    anywhere in the scope means the lit set around the focused node is a lower
+    bound, whatever kind of node it is, and a dimmed node would otherwise read
+    as "unrelated" when Lens only failed to look."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("epic", task_type="epic"), task("child"), task("apart")],
+            (("epic", "child", "parent_child"),),
+        ),
+        edge_failures={"apart"},
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        html = unescape(client.get(f"/tasks/graph?project={PROJECT}&focus=epic").text)
+        # The same panel a CLICK on that node fetches, which is the other path
+        # to it and re-assembles the scope on its own.
+        clicked = client.get(
+            f"/tasks/epic?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={snapshot(html)}"
+        ).text
+
+    for rendered in (html, clicked):
+        # No numbers, and no sentence standing in for the ones D10 withholds —
+        # including the "this graph has changed" one, which would be a claim
+        # about figures that were never counted.
+        assert "frees" not in slot(rendered)
+        assert attribute(rendered, "data-impact-state") == ""
+        # …and the statement about the picture, which is not D10's to withhold.
+        assert "data-panel-focus-bound" in rendered
+        assert "lower bound of what surrounds it" in slot(rendered)
+
+
+def test_a_focused_epic_in_a_complete_scope_still_says_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half: the note is a DEGRADATION, not a new line for epics.
+    Every edge list here was read in full, so the canvas shows the whole
+    neighbourhood and the slot stays empty."""
+    fake = GraphFakeClient(
+        dataset(
+            [task("epic", task_type="epic"), task("child")],
+            (("epic", "child", "parent_child"),),
+        )
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=epic"
+    )
+
+    assert slot(html) == ""
+
+
+def test_one_blocker_reported_twice_with_two_messages_stays_one_blocker(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D4's read pair is two independent samples, not one snapshot.
+
+    A gate's blocker message carries its `ready_at`, so an update between the
+    two calls comes back as different TEXT in the second response while the
+    blocking fact — kind, predecessor, type, status — stands still. Merging on
+    the whole record keeps both copies, and M, which reads the merged tuple's
+    LENGTH, then sees two blockers where Lithos reported one and withholds
+    "immediately" from a dependent this gate alone is blocking (round-1
+    correctness f-002)."""
+    waiting = task("waiting")
+
+    def rows(message: str) -> list[BlockedTaskRecord]:
+        return [
+            BlockedTaskRecord(
+                task=waiting,
+                blockers=(
+                    BlockerRecord(
+                        kind="gate",
+                        task_id="gate",
+                        type="waits_on_gate",
+                        status="open",
+                        message=message,
+                    ),
+                ),
+            )
+        ]
+
+    fake = GraphFakeClient(
+        dataset(
+            [task("gate", task_type="gate"), waiting],
+            (("gate", "waiting", "waits_on_gate"),),
+        ),
+        # The metadata half answers first with the old `ready_at`; the tag half
+        # answers with the new one, the same blocker either way.
+        blocked_rows={
+            PROJECT: rows("Waiting on gate: ready at 09:00."),
+            f"project:{PROJECT}": rows("Waiting on gate: ready at 10:00."),
+        },
+    )
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=gate"
+    )
+
+    assert "frees 1 in this graph, 1 immediately" in slot(html)
+    assert attribute(html, "data-impact-withheld") == ""
+
+
 # ── The panel fetched on its own (the `scope=` fragment route) ──────────
 
 
@@ -711,6 +820,69 @@ def test_the_fragment_route_counts_the_impact_over_the_scope_it_is_given(
     assert "frees 3 in this graph, 1 immediately" in slot(scoped)
     assert slot(unscoped) == ""
     assert slot(nonsense) == ""
+
+
+def test_the_fragment_route_counts_an_epic_scope_the_way_its_page_drew_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """`scope=epic:<id>` is the other half of the panel's contract (D10), and
+    it is a DIFFERENT assembly from a project's: membership comes from
+    `task_children` rather than from §5B.1 projects, `include_resolved`
+    defaults the opposite way — a finished child is half of an initiative's
+    progress — and the coverage set spans every project those children sit in
+    (D4). The claim is made against the PAGE's own snapshot, so the panel's
+    independent assembly has to reproduce the graph the epic page drew, node
+    for node and read for read, or the fingerprint check answers "this graph
+    has changed" instead of a number.
+
+    `child` blocks `mid`, which blocks `far` in another project; `done` is the
+    closed child, a node here by the epic default and still not something
+    completing `child` frees.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                task("epic", task_type="epic"),
+                task("child"),
+                task("mid"),
+                task("far", project="other"),
+                task("done", status="completed"),
+            ],
+            (
+                ("epic", "child", "parent_child"),
+                ("epic", "mid", "parent_child"),
+                ("epic", "far", "parent_child"),
+                ("epic", "done", "parent_child"),
+                ("child", "mid", "blocks"),
+                ("mid", "far", "blocks"),
+                ("child", "done", "blocks"),
+            ),
+            children={"epic": ("child", "mid", "far", "done")},
+            blocked={"mid": (blocker("child"),), "far": (blocker("mid"),)},
+        )
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get("/tasks/graph?epic=epic&focus=child").text)
+        panel = client.get(
+            f"/tasks/child?fragment=panel&scope=epic:epic&snapshot={snapshot(page)}"
+        ).text
+
+    # N is the two OPEN transitive dependents; the closed child is a node in
+    # this scope (the epic default) and its edge is satisfied, not pending.
+    # M is `mid`, the one whose blocked row names `child` as its sole blocker.
+    assert 'data-graph-node="done"' in page
+    assert "frees 2 in this graph, 1 immediately" in slot(page)
+    # The panel assembled the epic scope on its own and answered the same —
+    # which is what the page's snapshot pins.
+    assert "frees 2 in this graph, 1 immediately" in slot(panel)
+    assert "This graph has changed" not in slot(panel)
+    # …including M's coverage across BOTH projects the children span: `far`'s
+    # own project is read, or its absence from a `loom` response would be
+    # silence rather than an answer.
+    assert (None, ["project:other"]) in [
+        (call["project"], call["tags"]) for call in fake.blocked_calls
+    ]
 
 
 def test_the_graph_page_hands_the_panel_its_own_scope(

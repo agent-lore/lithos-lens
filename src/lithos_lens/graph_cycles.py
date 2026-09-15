@@ -317,14 +317,18 @@ def _signal(
     """
 
     rows: dict[str, TaskRecord] = {}
-    blockers: dict[str, list[BlockerRecord]] = {}
+    blockers: dict[str, dict[tuple[str, str, str, str], BlockerRecord]] = {}
     for read in reads:
         for row in read.rows:
             rows.setdefault(row.task.id, row.task)
-            merged = blockers.setdefault(row.task.id, [])
-            merged.extend(blocker for blocker in row.blockers if blocker not in merged)
+            merged = blockers.setdefault(row.task.id, {})
+            for blocker in row.blockers:
+                # First one wins, so the merged row keeps the message of
+                # whichever read answered first — the same arbitrary-but-stable
+                # choice the fold makes about everything else here.
+                merged.setdefault(_blocker_identity(blocker), blocker)
     blocked = tuple(
-        BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id]))
+        BlockedTaskRecord(task=task, blockers=tuple(blockers[task_id].values()))
         for task_id, task in rows.items()
     )
     in_scope = {node.id for node in scope.nodes if not node.ghost}
@@ -369,6 +373,26 @@ def _signal(
         unknown=frozenset(unknown),
         projectless=tuple(projectless),
     )
+
+
+def _blocker_identity(blocker: BlockerRecord) -> tuple[str, str, str, str]:
+    """What makes two rows from two reads the SAME blocker.
+
+    The pair of reads is two independent samples, not one snapshot, and
+    ``message`` is presentation text sampled with them: a gate's carries its
+    ``ready_at``, a cycle's the path it was detected through, and either can be
+    rewritten between the two calls while the blocking FACT stands still.
+    Deduplicating on the whole record would then keep both copies, and the one
+    consumer that reads the merged tuple's LENGTH — ``graph_impact``'s
+    sole-blocker count — would see two blockers where Lithos reported one and
+    withhold M's "immediately" from a dependent this task alone is blocking
+    (round-1 correctness f-002).
+
+    So identity is the four fields the answer is actually computed from — the
+    same four ``graph_impact.impact_fingerprint`` folds into its digest, and
+    the same four ``read_covers`` and the cycle markers read.
+    """
+    return (blocker.kind, blocker.task_id, blocker.type, blocker.status)
 
 
 def read_covers(read: ProjectRead, task: TaskRecord, *, tag_key: str) -> bool:

@@ -84,6 +84,12 @@ IMPACT_OPEN = "open"
 IMPACT_COMPLETED = "completed"
 IMPACT_CANCELLED = "cancelled"
 IMPACT_UNKNOWN = "unknown"
+#: A focal node D10 gives no figures at all — an epic, which carries no
+#: ``blocks`` edges. The line is not "zero freed"; there is no N to state. The
+#: view model still exists, because D8's statement about the LIT SET is a
+#: separate claim about the CANVAS and an epic's neighbourhood degrades exactly
+#: like anything else's (round-1 correctness f-001).
+IMPACT_NONE = "none"
 #: The graph the page is DRAWING is not the graph this panel just assembled, so
 #: there is no honest "in this graph" to count over — see
 #: :func:`impact_fingerprint`. A state rather than a silent ``None``: the panel
@@ -278,14 +284,32 @@ def downstream_impact(
 ) -> DownstreamImpact | None:
     """D10's two figures for ``focus`` over an assembled scope, pure.
 
-    ``None`` when there is nothing to state: a focus this graph does not hold
-    (so no projection exists to count over), or an epic — an epic carries no
-    ``blocks`` edges and D10 gives it no impact line rather than a zero, which
-    would read as "finishing this frees nobody".
+    ``None`` when there is nothing to state at all: a focus this graph does not
+    hold, so no projection exists to count over. An EPIC answers
+    :data:`IMPACT_NONE` rather than ``None`` — D10 gives it no figures (a zero
+    would read as "finishing this frees nobody"), but D8's lower-bound
+    statement about the lit set is a claim about the canvas rather than about
+    N, and the panel owes it for a focused epic too.
     """
     node = scope.node(focus)
-    if node is None or node.task.task_type == "epic":
+    if node is None:
         return None
+    if node.task.task_type == "epic":
+        # No numbers, and a zero would read as "finishing this frees nobody"
+        # rather than "this is not that kind of task". What is left is the
+        # annotation focus mode owes the canvas whatever the focal node is:
+        # D8's lower-bound statement about the lit set is not D10's arithmetic,
+        # and an epic focused in a scope with an unreadable edge list lights a
+        # degraded neighbourhood like any other node.
+        # The chain position is left off with the figures: D7's chain is the
+        # BLOCKING one, an epic sits on no `blocks` edge, and "on the longest
+        # chain (1 of 1)" for a node that is alone on a chain of itself states
+        # nothing an operator can use.
+        return DownstreamImpact(
+            focus=focus,
+            state=IMPACT_NONE,
+            relations_exact=_relations_exact(scope, focus),
+        )
     position, length = _chain_position(focus, chain)
     if node.status != "open":
         # Completed, cancelled, or a ghost Lens could not read. None of the
@@ -378,6 +402,12 @@ def reconciled_impact(
     exactly as it is in :func:`downstream_impact`, so neither gains a line it
     never had.
     """
+    if impact is not None and impact.state == IMPACT_NONE:
+        # An epic's line makes no claim about the focal STATUS — it carries no
+        # figures for a badge to disagree with, only D8's statement about the
+        # canvas — so there is nothing here to reconcile and nothing a later
+        # read could turn stale.
+        return impact
     resolved = _resolved_focus(task)
     if impact is None:
         if scoped and resolved and task is not None and task.task_type != "epic":
