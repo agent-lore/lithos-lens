@@ -1775,6 +1775,58 @@ button,
 /* `width: auto` against the shared control rule, which stretches every button
    to the full row — right for the filter form it was written for, wrong for a
    toggle sitting inline among the toolbar's links. */
+/* ── The detail page's mini-graph (§5.6, T2-A5) ─────────────────────────
+   One task's neighbourhood, drawn above the text chain it illustrates. Shorter
+   than the graph page's canvas on purpose: this is a glance at five or ten
+   nodes beside a page of text, not a surface to explore, and a half-viewport
+   box here would push the blocker chain — the accessible baseline — below the
+   fold on every detail page. */
+.mini-graph-canvas {
+  flex: 1 1 auto;
+  /* Tall enough for the rule's own worst case at the zoom floor `graph.js`
+     holds: two blocker ranks above the focal task and one of dependents below
+     is four rows at 110px, which a shorter box would clip on every blocked
+     task. Still well short of the graph page's, because the text chain under
+     it is the baseline and must not be pushed off the fold. */
+  height: clamp(22rem, 55vh, 32rem);
+  margin: 0.5rem 0;
+  width: 100%;
+}
+
+.mini-graph h2 small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.mini-graph-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mini-graph-legend li {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.1rem 0;
+}
+
+.mini-graph-links {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0;
+}
+
+/* The empty host the fragment is swapped into: no chrome of its own, so a
+   detail page whose mini-graph never arrives looks exactly as it did before
+   this slice. */
+.mini-graph-host:empty {
+  display: none;
+}
+
 /* The canvas never scales the graph below legibility, so a graph bigger than
    its box overflows and is panned. This says so, rather than letting a
    fragment read as the whole picture. */

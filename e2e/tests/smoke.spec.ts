@@ -1255,7 +1255,10 @@ test("double-clicking a node leaves the canvas for that task's own page", async 
 
   await page.waitForURL("**/tasks/loom-ship");
   // A whole-document navigation, not the panel: the task's own page is up.
-  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+  // The GRAPH PAGE's chrome is what has to be gone — the detail page carries a
+  // canvas of its own since T2-A5 (the mini-graph), so a canvas count would
+  // now fail on a navigation that worked.
+  await expect(page.locator("[data-graph-toolbar]")).toHaveCount(0);
   await expect(page.locator('[data-task-detail="loom-ship"]')).toBeVisible();
   // And the panel the operator never asked for was never even requested.
   expect(panelRequests).toEqual([]);
@@ -1348,7 +1351,9 @@ test("a superseded panel response neither opens nor moves the graph", async ({
   await page.mouse.down();
   await page.mouse.up();
   await page.waitForURL("**/tasks/loom-transport");
-  await expect(page.locator("[data-graph-canvas]")).toHaveCount(0);
+  // The graph page's toolbar, not its canvas: the detail page draws a
+  // mini-graph of its own (T2-A5) into a canvas with the same hook.
+  await expect(page.locator("[data-graph-toolbar]")).toHaveCount(0);
 });
 
 test("two quick clicks on different nodes select the second, never leave", async ({

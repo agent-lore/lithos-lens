@@ -98,6 +98,13 @@ The current application exposes these routes:
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
   Renders one expanded level of a task's blocker chain (HTMX fragment).
+- `GET /tasks/{task_id}/minigraph`
+  Renders the detail page's **mini-graph** (§5.6.2) — the embedded payload and
+  the canvas container the shared graph client draws into, plus the fragment's
+  own text: the legend, the focus link into the full project graph, and the
+  tail counting whatever the cap left out. An HTMX fragment on the same terms
+  as the two above, fetched after the page rather than assembled inside it, so
+  the text baseline never waits on the picture drawn above it.
 - `GET /tasks/graph`
   Renders the dependency graph of one scope — `?project=<slug>` or
   `?epic=<id>` — and, with no scope, a picker of the projects and open epics
@@ -373,6 +380,10 @@ two cannot disagree about why a task is where it is. It shows:
 - **blockers**, each labelled: a satisfied predecessor (the edge survives
   completion and is still shown, but never as a reason the task cannot run), an
   unsatisfiable one, or a cycle
+- **the mini-graph** (§5.6.2), above the chain: this task's neighbourhood —
+  blockers two hops up, dependents one hop down, the parent epic — drawn by
+  the same client module the graph page uses. Progressive enhancement over the
+  chain below it, never a replacement for it
 - **the blocker chain**, expandable one level at a time to a bounded depth; a
   level that would revisit the chain reports the cycle instead of walking it
 - **Blocks:** — the level-1 dependents (outgoing `blocks` / `waits_on_gate`)
@@ -644,6 +655,66 @@ merely failed says so instead, because "this task does not exist" is Lithos's
 answer rather than a transport outcome. The open panel carries its own refresh
 fragment, so the reconcile that keeps the board live keeps the panel's blocker
 and dependent statuses live too without rebuilding it under the cursor.
+
+#### 5.6.2 Mini-graph
+
+`GET /tasks/{task_id}/minigraph` renders the picture the detail page shows
+above its blocker chain. It is a **scope** in the sense §5.10 gives the word —
+assembled over the same per-task edge cache, serialised into the same embedded
+payload, drawn by the same client module — so the neighbourhood above the chain
+and the project graph one link away cannot disagree about a colour, a shape or
+which way an arrow reads.
+
+- **Membership: two up, one down.** Incoming `blocks` / `waits_on_gate` edges
+  to depth 2, outgoing to depth 1, and the parent epic as a single labelled
+  node. `discovered_from` is excluded in both directions: the page renders
+  provenance as its own text section, and a non-blocking relation inside a
+  picture read as blocking would be misread. Depth-2 blockers are enumerated
+  from the depth-1 blockers that are actually DRAWN — a blocker the cap cut is
+  not on the picture, so its own blockers are not part of it either.
+- **The cap counts the focal task.** `[graph].mini_graph_max_nodes` (40) is the
+  whole picture, filled in one deterministic priority — focal task, parent
+  epic, depth-1 blockers, depth-1 dependents, depth-2 blockers, each tier in
+  (`created_at`, `id`) order — so which nodes an operator sees does not depend
+  on which edge Lithos happened to list first. What the cap left out is counted
+  through the page's one shared tail, which states the size that actually bound
+  this list rather than the 25-row neighbour page every other list on the page
+  uses. That tail counts NEIGHBOURS: the cap includes the focal task, the
+  sentence is about the tasks around it, and the remainder — the figure the cap
+  is accountable for — is the same number either way.
+- **There are no ghosts.** Every node is a task the neighbourhood named, drawn
+  as itself; a depth-1 dependent is a leaf because the scope STOPS there, not
+  because Lens could not read it. The two completeness markers mean what they
+  mean everywhere else: a node whose `task_get` failed is drawn with `status
+  unknown` (never dropped — hiding a possibly-live blocker is the wrong way to
+  err) and every edge touching it is `unknown`; a node whose `edge_list` failed
+  is marked `edges unknown`, and the fragment says how many there were rather
+  than letting a partial neighbourhood read as a whole one.
+- **No cycle verdict.** Cycle membership is Lithos's, from a scoped
+  `task_blocked` read (§5.11), and a per-task fragment has no scope to make one
+  with. The mini-graph draws the shape its edges show and marks no node "in a
+  cycle" — the graph page one link away is where that verdict is rendered.
+- **Its text is only what it alone knows.** No layers, no chain line, no node
+  list: the blocker chain and the `Blocks:` line below it are the accessible
+  baseline, and restating either here would be one claim rendered twice. What
+  the fragment does state is the legend, the `as of` staleness bound, the
+  remainder tail, and a focus link to `/tasks/graph?project=<slug>&focus=<id>`
+  — omitted, with a sentence saying why, for a task that belongs to no project
+  and therefore has no scope to open.
+- **Client-side it is the graph page's module in a narrower mode.** It boots on
+  the `htmx:afterSwap` that delivers the fragment (its canvas does not exist at
+  load), reads its state from the payload rather than from the detail page's
+  URL, writes nothing to history, opens no side panel, and claims its container
+  so a later swap cannot draw a second instance over a live one. The detail
+  page's reconcile replaces the whole detail fragment, so the mini-graph is
+  re-fetched and re-drawn with it — deliberately, because the picture and the
+  chain beneath it may not disagree, and unlike the graph page there is no
+  exploration state to lose. The layout is deterministic from the server's
+  roots, so an unchanged neighbourhood redraws in the same places. The
+  exploration classes are off — every node on a mini-graph is in the focal
+  task's neighbourhood, so lighting them would say nothing — and a
+  neighbourhood too large for the box says so rather than being scaled below
+  legibility.
 
 ### 5.7 Knowledge Surface
 
@@ -1039,6 +1110,17 @@ queued is not one of its three outcomes, and is carried by the span field
 `lens.graph.cycle_reads_unmade` instead. The scope KEY is a span
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
+
+The detail mini-graph (§5.6.2) is instrumented the same way and for the same
+reason — it is a multi-phase fan-out too. Each fragment opens one
+**`lens.tasks.minigraph`** span carrying `lens.minigraph.*`: the task id, the
+outcome, the node count, whether the cap bound, how many neighbours it left
+out, and that render's own cache hits, misses and neighbour reads. The counter
+beside it is `lens_tasks_minigraph_renders_total` (`outcome` in `rendered` |
+`capped` | `offline` | `error`), with `capped` split out because how often 40
+nodes is not enough is the only evidence there is for whether the knob is set
+near the corpus's shape. The node count stays on the span: it is a
+distribution per task, which is the same cardinality the rule above forbids.
 
 #### 5.12.1 Cytoscape rendering
 

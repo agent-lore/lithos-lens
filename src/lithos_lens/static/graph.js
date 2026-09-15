@@ -30,13 +30,40 @@
      because an endpoint Lens could not read makes a relation unknowable
      rather than longer.
 */
-(function () {
+/*
+  TWO HOSTS, ONE MODULE (T2-A5). The graph page embeds its canvas and its
+  payload in the document; the task-detail page's MINI-GRAPH arrives later, as
+  an HTMX fragment, and carries the same two elements inside a
+  `[data-mini-graph]` section. `initLensGraph` therefore runs on whichever host
+  is present — at load for the page, on `htmx:afterSwap` for the fragment — and
+  everything downstream of it reads `mini` for the four things that are the
+  PAGE's and not the picture's: the URL is the graph page's selection state, so
+  the mini-graph neither reads nor writes it; the toolbar, the search box and
+  the "graph changed" pill belong to a page that has them; a node click opens a
+  side panel this host does not have; and the mini-graph's state comes from the
+  payload the server built for it. What is shared is everything that DRAWS —
+  the styling vocabulary, the arrowheads, the layout, the fit — which is D11's
+  "same client module" and the reason this is not a second file.
+*/
+const initLensGraph = function () {
   const container = document.querySelector("[data-graph-canvas]");
-  const source = document.querySelector("[data-graph-payload]");
+  // Already drawn: this is a later swap on a page whose canvas is up, and
+  // re-running over it would build a second Cytoscape instance on the same
+  // element (two layouts, two sets of handlers, one visible picture).
+  if (!container || container.dataset.graphDrawn || !window.cytoscape) return;
+  // A mini-graph's payload is its own: two canvases in one document would
+  // otherwise share whichever payload the document happens to hold first.
+  const miniHost = container.closest("[data-mini-graph]");
+  const mini = !!miniHost;
+  const source = (miniHost || document).querySelector("[data-graph-payload]");
   // Shown only while the picture is bigger than the canvas can hold at a
   // readable size — otherwise it would claim a limit that is not there.
   const panHint = document.querySelector("[data-graph-pan-hint]");
-  if (!container || !source || !window.cytoscape) return;
+  if (!source) return;
+  // Claimed before anything can fail below: a container this run rejected —
+  // an unreadable payload, an empty node set — must not be re-attempted by
+  // every later swap on the page.
+  container.dataset.graphDrawn = "true";
 
   let payload = null;
   try {
@@ -375,6 +402,22 @@
   }
 
   function stateFromUrl() {
+    // A mini-graph's state is the SERVER's, not the address bar's: the detail
+    // page's URL is about a task, not about a scope, and a stray `focus=` or
+    // `overlays=` on it would be another page's parameter read as this
+    // picture's. What the server decided travels in the payload (D11: the
+    // hierarchy overlay is on, because the parent epic is a member of this
+    // scope by decision and would otherwise be drawn with no edge to it).
+    if (mini) {
+      return {
+        overlays: (scope.overlays || []).filter(function (name) {
+          return OVERLAYS.indexOf(name) !== -1;
+        }),
+        isolated: scope.isolated === true,
+        includeResolved: scope.include_resolved === true,
+        focus: scope.focus || ""
+      };
+    }
     const params = new URL(window.location.href).searchParams;
     const overlaysRaw = params.get("overlays");
     return {
@@ -1034,6 +1077,11 @@
   // collection — which would quietly undo the centring the click just applied
   // (round-1 correctness f-003).
   function centreFocus() {
+    // Not in a mini-graph. There, focus mode's subject and the whole picture
+    // are the same thing — the box was fitted to hold this task's
+    // neighbourhood — and centring on the task inside it pushes the blockers
+    // above it off the top of a canvas that had room for them (T2-A5).
+    if (mini) return;
     const state = stateFromUrl();
     if (!state.focus) return;
     const element = elementFor(state.focus);
@@ -1109,7 +1157,11 @@
   function render() {
     const state = stateFromUrl();
     const shown = visibility(state);
-    const focus = focusSets(state.focus);
+    // No lit/dimmed pass in a mini-graph: D8's exploration classes answer
+    // "what surrounds this node in a graph of a hundred?", and here the answer
+    // is every node on the canvas. Dimming the parent epic — the one member
+    // no dependency edge reaches — would fade the very node D11 put there.
+    const focus = mini ? null : focusSets(state.focus);
     let nodeCount = 0;
     let ghostCount = 0;
     cy.nodes().forEach(function (element) {
@@ -1282,6 +1334,11 @@
 
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented) return;
+    // Every control below is the graph PAGE's: the overlay and isolated
+    // toggles, the search results, the show-as-text button. A mini-graph has
+    // none of them, and a handler bound from it would answer for the page's
+    // if both were ever on one document.
+    if (mini) return;
     // Modified and non-primary clicks keep their browser meaning — these are
     // real links, and "open in a new tab" has to stay that.
     if (event.button !== undefined && event.button !== 0) return;
@@ -1325,14 +1382,14 @@
 
   // Back and forward walk the exploration without a reload: the URL is the
   // state, and everything it names is already in the payload.
-  window.addEventListener("popstate", render);
+  if (!mini) window.addEventListener("popstate", render);
 
   // And so does every PANEL transition, which moves the same URL by
   // `pushState` — and `pushState` fires no `popstate`. Without this, closing
   // the panel (or Escape) clears `focus` and the panel while the node stays
   // lit: the canvas would claim a selection the page's one selection parameter
   // no longer names.
-  const panelApi = panel();
+  const panelApi = mini ? null : panel();
   if (panelApi && panelApi.onChange) panelApi.onChange(render);
   // …and every panel this page opens is told what the canvas beside it shows.
   if (panelApi && panelApi.describe) panelApi.describe(canvasNotes);
@@ -1360,6 +1417,11 @@
 
   // The focus ring lands on the FIRST tap, so a click answers immediately …
   cy.on("tap", "node", function (event) {
+    // A mini-graph has no selection to move: the ring is on the task whose
+    // page this is, and the server put it there. The two gestures below are
+    // the page's too — a click opens the side panel this host does not have,
+    // and the task's own detail page is the one the operator is already on.
+    if (mini) return;
     if (!nodeFor(event.target)) return; // the cycle box, chrome not a task
     // … and this tap OPENS a gesture, so the canvas must not move again until
     // it settles. An open started by an EARLIER click can still be in flight,
@@ -1399,6 +1461,7 @@
   // arrives announces itself too, so the ring is walked back rather than left
   // over a selection that never happened.
   cy.on("onetap", "node", function (event) {
+    if (mini) return;
     const node = nodeFor(event.target);
     if (!node) return;
     focusOn(node.id);
@@ -1411,6 +1474,16 @@
   cy.on("dbltap", "node", function (event) {
     const node = nodeFor(event.target);
     if (!node) return;
+    if (mini) {
+      // The one navigation a mini-graph offers: a neighbour's own page. It
+      // opens no panel on the way, because this host has none — and the focal
+      // node's `detail_url` is the page the operator is reading, so a
+      // double-click there is a reload and nothing worse.
+      if (previousTapId === event.target.id() && node.detail_url) {
+        window.location.href = node.detail_url;
+      }
+      return;
+    }
     if (previousTapId !== event.target.id()) {
       // Two clicks, two targets: the operator clicked one node and then
       // another (or the background and then a node) in quick succession, and
@@ -1513,8 +1586,8 @@
   // arrived without one. The push is suppressed either way: the URL already
   // names this selection, and a second identical history entry would make the
   // first Back appear to do nothing.
-  const initial = stateFromUrl();
-  const host = document.querySelector("[data-panel-host]");
+  const initial = mini ? { focus: "", overlays: [], isolated: true } : stateFromUrl();
+  const host = mini ? null : document.querySelector("[data-panel-host]");
   const served = host && host.dataset.panelSelected === initial.focus && host.innerHTML;
   // A deep link onto a task this page is not drawing — a folded isolate, or a
   // context ghost whose overlay is off. The reveal D8 owes it is owed however
@@ -1535,8 +1608,11 @@
 
   // The handle the e2e captures and the JS tests read the canvas through: a
   // Cytoscape graph is pixels, and every claim about it has to be asked of the
-  // instance rather than of the image.
-  window.LithosLensGraph = {
+  // instance rather than of the image. The mini-graph publishes its own rather
+  // than overwriting the page's: the two are different pictures, and a capture
+  // asking `LithosLensGraph` on a detail page should get nothing rather than a
+  // neighbourhood answering for a scope.
+  window[mini ? "LithosLensMiniGraph" : "LithosLensGraph"] = {
     cy: cy,
     // Cytoscape's ids are opaque here (see the top of the file), so asking
     // about a TASK goes through these rather than through `getElementById`.
@@ -1570,4 +1646,21 @@
       return at;
     }
   };
+};
+
+/*
+  Boot: now for a canvas the document already holds, and again for every one an
+  HTMX swap brings in.
+
+  Both are needed and neither covers the other. The graph page embeds its canvas
+  in the document, so this script — deferred — finds it on the first call. The
+  detail page's mini-graph is fetched after load (and re-fetched whenever
+  `tasks.js` replaces the detail fragment and re-processes it), so the only
+  moment it exists is the swap that delivered it. `initLensGraph` claims each
+  container it takes, so a swap elsewhere on the page — a panel, a deeper
+  blocker level — costs one selector query and nothing else.
+*/
+(function () {
+  initLensGraph();
+  document.addEventListener("htmx:afterSwap", initLensGraph);
 })();

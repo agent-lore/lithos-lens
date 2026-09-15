@@ -1302,6 +1302,12 @@ function element(extra) {
     textContent: "",
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] || ""; },
+    // `graph.js` asks its canvas which host it sits in (T2-A5): the graph
+    // page's is in none, and the detail page's mini-graph is inside a
+    // `[data-mini-graph]` section. This page has no such ancestor, and the
+    // mini-graph's own harness (`MINI_HARNESS`) is where the other answer is
+    // given.
+    closest() { return null; },
   }, extra || {});
 }
 
@@ -4008,3 +4014,266 @@ def test_a_file_that_missed_dom_content_loaded_still_gets_its_stream() -> None:
     assert result["eventSources"] == 1, "the stream never opened"
     assert result["streamOpen"] is True
     assert result["final"]["pillHidden"] is False
+
+
+# ── The detail page's mini-graph (T2-A5) ────────────────────────────────
+#
+# Its own harness, deliberately. The graph page's above models a document that
+# HOLDS a canvas, a toolbar, a chain line and a panel host; the detail page has
+# none of those — the mini-graph arrives as an HTMX fragment after the scripts
+# have run, and every one of those controls is absent. A flag on the other
+# harness would have to fake their absence one selector at a time; a document
+# that genuinely lacks them proves the same thing by construction.
+
+MINI_HARNESS = """
+const fs = require("fs");
+const vm = require("vm");
+
+const [graphPath, cytoscapePath, href, payloadRaw, swapsRaw] = process.argv.slice(1);
+const swaps = Number(swapsRaw);
+const pushed = [];
+const replaced = [];
+const listeners = {};
+
+function element(extra) {
+  return Object.assign({
+    dataset: {},
+    hidden: false,
+    textContent: "",
+    setAttribute() {},
+    getAttribute() { return ""; },
+    closest() { return null; },
+  }, extra || {});
+}
+
+const payloadScript = element({ textContent: payloadRaw });
+// The fragment the server swapped in: the canvas, and its OWN payload beside
+// it. `graph.js` reads the payload through this host rather than through the
+// document, which is what keeps two canvases on one page from sharing one.
+const section = element({
+  querySelector(selector) {
+    return selector === "[data-graph-payload]" ? payloadScript : null;
+  },
+});
+const container = element({
+  hidden: true,
+  clientWidth: 1,
+  clientHeight: 1,
+  closest(selector) { return selector === "[data-mini-graph]" ? section : null; },
+});
+
+// Absent until the swap lands — the whole point of booting on `htmx:afterSwap`.
+let swapped = false;
+
+const document = {
+  readyState: "interactive",
+  querySelector(selector) {
+    if (selector === "[data-graph-canvas]") return swapped ? container : null;
+    // Every other selector `graph.js` reaches for is the graph PAGE's chrome:
+    // the toolbar links, the search box, the chain line, the panel host, the
+    // "graph changed" pill. A detail page has none of them, and the answer
+    // here is the same one the browser gives.
+    return null;
+  },
+  querySelectorAll() { return []; },
+  createElement() {
+    return { dataset: {}, style: {}, children: [],
+      appendChild(child) { this.children.push(child); },
+      getContext() { return {}; } };
+  },
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+};
+
+const sandbox = {
+  document, console, URL, URLSearchParams, Math, Date, JSON,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  fetch: () => Promise.reject(new Error("a mini-graph fetches nothing")),
+};
+sandbox.window = {
+  // No `LithosLens.panel`: this host has none, and a click that found one
+  // would open a panel over a page that is already the task's own.
+  LithosLensTasks: {},
+  setTimeout: (fn) => 0,
+  clearTimeout() {},
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  location: {
+    get href() { return href; },
+    set href(value) { pushed.push("nav:" + value); },
+  },
+  history: {
+    pushState(state, title, url) { pushed.push(url); },
+    replaceState(state, title, url) { replaced.push(url); },
+  },
+};
+sandbox.window.window = sandbox.window;
+Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
+
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
+vm.runInContext(`
+  window.cytoscape = function (options) {
+    return cytoscape(Object.assign({}, options, {
+      container: null, headless: true, styleEnabled: true
+    }));
+  };
+`, sandbox);
+vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
+
+const drawnAtLoad = !!sandbox.window.LithosLensMiniGraph;
+swapped = true;
+for (let index = 0; index < swaps; index += 1) {
+  (listeners["htmx:afterSwap"] || []).forEach((listener) => listener({}));
+}
+
+const mini = sandbox.window.LithosLensMiniGraph;
+const drawn = mini ? mini.shown() : { nodes: [], edges: [] };
+console.log(JSON.stringify({
+  drawnAtLoad,
+  // The graph PAGE's handle, which a detail page must not publish: a capture
+  // asking for it here should get nothing rather than a neighbourhood
+  // answering for a scope.
+  pageHandle: !!sandbox.window.LithosLensGraph,
+  nodes: drawn.nodes,
+  edgeTypes: drawn.edges.map((edge) => edge.type).sort(),
+  arrowless: drawn.edges.filter((edge) => !edge.arrow || edge.arrow === "none").length,
+  canvasHidden: container.hidden,
+  canvasState: container.dataset.canvasState || "",
+  canvasNodes: container.dataset.canvasNodes || "",
+  focused: mini
+    ? mini.cy.nodes().filter((node) => node.hasClass("focused")).length
+    : 0,
+  pushed,
+  replaced,
+}));
+"""
+
+#: One blocked task's neighbourhood, as the server builds it: two hops up
+#: (`c → b → task`), one down (`task → d`), and the parent epic on the
+#: hierarchy edge the fragment's payload turns the overlay on for.
+MINI_PAYLOAD: dict = _payload(
+    [
+        _node("epic", task_type="epic"),
+        _node("c"),
+        _node("b", layer=1),
+        _node("task", layer=2),
+        _node("d", layer=3),
+    ],
+    [
+        _edge("c", "b"),
+        _edge("b", "task"),
+        _edge("task", "d"),
+        _edge("epic", "task", "parent_child", state=""),
+    ],
+    kind="task",
+    key="task",
+    focus="task",
+    overlays=["hierarchy"],
+    isolated=True,
+    roots=["c", "epic"],
+    longest_chain={"nodes": [], "length": 0, "bound": "exact"},
+)
+
+#: A detail URL carrying the graph page's own parameters. They are another
+#: page's state and the mini-graph must not read them.
+MINI_HREF = "http://lens.test/tasks/task?focus=elsewhere&overlays=provenance&isolated=0"
+
+
+def _mini_run(
+    payload: dict | None = None, *, swaps: int = 1, href: str = MINI_HREF
+) -> dict:
+    """Load `graph.js` against a detail page, then swap a mini-graph into it."""
+    assert NODE is not None
+    result = subprocess.run(
+        [
+            NODE,
+            "-e",
+            MINI_HARNESS,
+            "--",
+            str(GRAPH_JS),
+            str(CYTOSCAPE_JS),
+            href,
+            json.dumps(payload or MINI_PAYLOAD),
+            str(swaps),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_the_mini_graph_is_drawn_by_the_swap_that_delivers_it() -> None:
+    """D11's "same client module", on a host that has no canvas at load time.
+
+    The fragment is fetched after the page, so the only moment its canvas
+    exists is the `htmx:afterSwap` that brought it in — and a module that only
+    looked at load would leave the detail page with an empty box forever.
+    """
+    result = _mini_run()
+
+    assert result["drawnAtLoad"] is False, "drawn before the fragment arrived"
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+    assert result["canvasHidden"] is False
+    assert result["canvasState"] == "ready"
+    assert result["canvasNodes"] == "5"
+
+
+def test_the_mini_graph_keeps_the_arrowheads_and_the_parent_edge() -> None:
+    """The shared vocabulary is the reason this is one module and not two.
+
+    Both the dependency edges and the hierarchy edge the parent epic hangs on
+    are drawn — the payload turns that overlay on, because the epic is a member
+    of this scope by decision — and every one of them carries an arrowhead.
+    """
+    result = _mini_run()
+
+    assert result["edgeTypes"] == ["blocks", "blocks", "blocks", "parent_child"]
+    assert result["arrowless"] == 0, "an edge whose direction cannot be read"
+    assert result["focused"] == 1, "the focal task carries no ring"
+
+
+def test_the_mini_graph_reads_no_state_from_the_detail_page_s_url() -> None:
+    """The URL here is about a TASK, not a scope.
+
+    The address carries `focus=elsewhere`, `overlays=provenance` and
+    `isolated=0` — the graph page's three parameters, which a shared link or a
+    stale bookmark can put on any URL. The mini-graph's state is the server's,
+    in the payload, so none of them moves the picture: all five nodes stay
+    drawn and the focus ring stays on the focal task.
+    """
+    result = _mini_run()
+
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+    assert result["focused"] == 1
+
+
+def test_the_mini_graph_never_writes_to_history() -> None:
+    """Nothing here owns the address bar.
+
+    On the graph page a focus transition is a `pushState` and a deep-linked
+    focus can be a `replaceState`; on a detail page both would rewrite the URL
+    of a task's own page to say something about a picture above its chain.
+    """
+    result = _mini_run()
+
+    assert result["pushed"] == []
+    assert result["replaced"] == []
+
+
+def test_a_second_swap_does_not_redraw_a_canvas_that_is_already_up() -> None:
+    """A page swaps for many reasons — a panel, a deeper blocker level.
+
+    Re-running over a live canvas would build a second Cytoscape instance on
+    the same element: two layouts, two sets of handlers, one visible picture.
+    """
+    result = _mini_run(swaps=3)
+
+    assert result["canvasNodes"] == "5"
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+
+
+def test_a_detail_page_publishes_no_graph_page_handle() -> None:
+    result = _mini_run()
+
+    assert result["pageHandle"] is False

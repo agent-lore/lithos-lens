@@ -214,6 +214,61 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The detail mini-graph on a BLOCKED task (T2-A5): the artifact D11 names.
+    // `loom-ship` is the one fixture that carries every tier of the rule at
+    // once — blocked by `loom-worker` (itself blocked by `loom-transport`, so
+    // two hops up), blocking `loom-announce` and the cross-project
+    // `lens-graph-page` one hop down, and parented by `loom-epic`.
+    //
+    // This sandbox cannot look at the PNG, so each clause is waited on
+    // separately: a capture that quietly lost the canvas, an edge or the text
+    // chain beneath it must FAIL here rather than produce a healthy-looking
+    // image a reviewer reads as proof it did not.
+    slug: "task-detail-minigraph",
+    url: "/tasks/loom-ship",
+    ready: async (page) => {
+      const canvas = page.locator(
+        '[data-mini-graph] [data-graph-canvas][data-canvas-state="ready"]',
+      );
+      await expect(canvas).toBeVisible();
+      // 1. Two up, one down, plus the parent epic — and NOT `loom-schema`
+      //    (three hops up) or anything `loom-announce` blocks.
+      const drawn = await page.evaluate(() =>
+        (window as any).LithosLensMiniGraph.shown(),
+      );
+      expect(drawn.nodes.sort()).toEqual([
+        "lens-graph-page",
+        "loom-announce",
+        "loom-epic",
+        "loom-ship",
+        "loom-transport",
+        "loom-worker",
+      ]);
+      // 2. ARROWHEADS ON EVERY EDGE, the same claim the project graph's
+      //    artifact makes and the same styling vocabulary behind it (D11).
+      expect(drawn.edges.length).toBeGreaterThan(0);
+      expect(
+        drawn.edges.filter((edge: any) => edge.arrow !== "triangle"),
+      ).toEqual([]);
+      // 3. The legend that says which way an arrow reads, and the focus link
+      //    into the full project graph.
+      await expect(page.locator("[data-mini-graph-legend] li").first()).toBeVisible();
+      await expect(page.locator("[data-mini-graph-focus]")).toHaveAttribute(
+        "href",
+        /project=lithos-loom.*focus=loom-ship/,
+      );
+      // 4. And the text baseline is untouched BELOW it: the blocker chain the
+      //    mini-graph illustrates, and the "Blocks:" line for the dependents
+      //    it draws downstream.
+      await expect(
+        page.locator('[data-blocker-chain] [data-link-list="blockers"] li').first(),
+      ).toBeVisible();
+      await expect(
+        page.locator('[data-dependents] [data-link-list="dependents"] li').first(),
+      ).toBeVisible();
+    },
+  },
+  {
     // The children table and the `epic` type badge.
     slug: "task-detail-children",
     url: "/tasks/influx-epic",

@@ -362,6 +362,21 @@ classDiagram
     +downstream bool
     +gate_elapsed bool
   }
+  class MiniGraphLimits {
+    +max_nodes int
+    +fetch_concurrency int
+  }
+  class MiniGraphView {
+    +task_id str
+    +edge_types tuple[str, ...]
+    +payload_json str
+    +focus_url str
+    +as_of datetime | None
+    +incomplete Mapping[str, str]
+    +cache_hits int
+    +cache_misses int
+    +ghost_reads int
+  }
   class NodeView {
     +id str
     +label str
@@ -386,6 +401,7 @@ classDiagram
   class PageTail {
     +shown int
     +total int
+    +size int
   }
   class ProjectRead {
     +project str
@@ -509,6 +525,8 @@ classDiagram
   LayerGroup "1" --> "0..*" NodeView : members
   LayerView "1" --> "0..*" LayerGroup : groups
   LinkPage "1" --> "0..*" LinkedTask : links
+  MiniGraphView "1" --> "0..*" NodeView : nodes
+  MiniGraphView "1" --> "1" PageTail : tail
   ProjectRead "1" --> "0..*" BlockedTaskRecord : rows
   TaskDetailData "1" --> "1" Breadcrumb : breadcrumb
   TaskDetailData "1" --> "0..*" FindingView : findings

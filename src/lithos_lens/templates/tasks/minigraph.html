@@ -1,0 +1,70 @@
+{#
+  The detail page's mini-graph (§5.6, T2-A5): the focal task's neighbourhood —
+  two hops up, one down, plus the parent epic — drawn by the SAME client module
+  the graph page uses, from the same embedded payload (D3/D11).
+
+  This fragment renders no layers, no chain line and no node list of its own.
+  Its text baseline is already on the page below it: the blocker chain answers
+  "why can't this run", and the "Blocks:" line answers "what is waiting on it".
+  Restating either here would be a second rendering of one claim, and the two
+  would disagree the first time one of them changed.
+
+  What IS text here is what only this fragment knows: how much of the
+  neighbourhood the cap left out, and where to go to see the rest.
+#}
+<section class="panel mini-graph" data-mini-graph="{{ view.task_id if view else '' }}">
+  <h2>Nearby graph <small>blockers two hops up, dependents one down</small></h2>
+  {% if offline %}
+    <p class="warning-text">The mini-graph is unavailable while Lithos is offline.</p>
+  {% elif error %}
+    <p class="warning-text" data-mini-graph-error>{{ error }}</p>
+  {% elif view %}
+    {# Hidden until `graph.js` has a canvas up, exactly as the graph page's is:
+       with no scripting (or a vendored bundle that failed to load) the page is
+       the text baseline below, and an empty box above it would read as a
+       picture that failed rather than as one that was never drawn. #}
+    <div class="graph-canvas mini-graph-canvas" data-graph-canvas data-canvas-state="pending" hidden></div>
+    {# Raised by `graph.js` only while the neighbourhood is larger than this
+       box can hold at a readable size — the same rule, and the same element
+       hook, as the graph page's. Without it a clipped mini-graph would read as
+       the whole of what surrounds this task. #}
+    <p class="graph-pan-hint" data-graph-pan-hint hidden>
+      Showing part of this neighbourhood — drag to pan, or open the full graph below.
+    </p>
+    <ul class="mini-graph-legend" data-mini-graph-legend>
+      {% for edge_type in view.edge_types %}
+        <li data-legend-edge="{{ edge_type }}">{{ edge_legend.get(edge_type, edge_type ~ " edge") }}</li>
+      {% endfor %}
+    </ul>
+    <p class="mini-graph-links">
+      {% if view.focus_url %}
+        {# The full graph, focused on this task (D11). Carries the project slug
+           because a graph renders one scope at a time; a task in no project
+           has none to open, and no link is written rather than one that lands
+           on the scope picker. #}
+        <a data-mini-graph-focus href="{{ view.focus_url }}">Open this task in the project graph</a>
+      {% else %}
+        <span data-mini-graph-unscoped>This task belongs to no project, so it has no project graph to open.</span>
+      {% endif %}
+      {% if view.as_of %}
+        {# The OLDEST contributing fetch, the graph page's staleness bound in
+           the graph page's words: edge upserts emit no event upstream, so this
+           is how old the picture above may be. #}
+        <span data-mini-graph-as-of>as of <time datetime="{{ view.as_of.isoformat() }}">{{ view.as_of.strftime("%H:%M:%S") }}</time></span>
+      {% endif %}
+    </p>
+    {% if view.incomplete %}
+      <p class="warning-text" data-mini-graph-incomplete>
+        <strong>{{ view.incomplete | length }}</strong>
+        of these tasks' edges could not be read, so this neighbourhood is part of what surrounds this task, not all of it.
+      </p>
+    {% endif %}
+    {# The cap's remainder, through the detail page's one tail template — the
+       same voice as the blocker chain's and the children table's, stating the
+       size that actually bound this list (`[graph].mini_graph_max_nodes`). #}
+    {% with tail = view.tail, page_noun = "related tasks", page_label = "minigraph" %}
+      {% include "tasks/link_tail.html" %}
+    {% endwith %}
+    <script type="application/json" data-graph-payload>{{ view.payload_json | safe }}</script>
+  {% endif %}
+</section>
