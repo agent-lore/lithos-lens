@@ -39,6 +39,54 @@ test.describe.configure({ mode: "default", retries: 1 });
 const ARTIFACTS_DIR = path.resolve(__dirname, "..", "artifacts");
 
 /**
+ * A mini-graph is drawn at the model's own scale, never blown up to fill its
+ * box (T2-A5, round-4 correctness f-006).
+ *
+ * The canvas is a fixed, viewport-relative height sized for the RULE's worst
+ * case (two blocker ranks up, one of dependents down). `cy.fit()` has a
+ * minimum readable zoom and had no maximum, so a neighbourhood with little in
+ * it — most commonly the focal task alone — was scaled up until one node
+ * filled the panel. Both halves of the fix are checked here: the automatic fit
+ * is capped at the model scale, and the box gives back the height the small
+ * picture does not need.
+ */
+async function miniGraphIsNotMagnified(page: Page) {
+  const canvas = page.locator(
+    '[data-mini-graph] [data-graph-canvas][data-canvas-state="ready"]',
+  );
+  await expect(canvas).toBeVisible();
+  const drawn = await page.evaluate(() => {
+    const graph = (window as any).LithosLensMiniGraph;
+    const box = document.querySelector(
+      "[data-mini-graph] [data-graph-canvas]",
+    ) as HTMLElement;
+    const nodes = graph.cy.nodes();
+    return {
+      zoom: graph.cy.zoom(),
+      // The tallest node as DRAWN against its own model height: at the cap
+      // these are equal, and magnification is exactly their ratio.
+      scale: Math.max(
+        ...nodes.map((node: any) => node.renderedHeight() / node.height()),
+      ),
+      fontPx: Math.max(
+        ...nodes.map(
+          (node: any) => parseFloat(node.style("font-size")) * graph.cy.zoom(),
+        ),
+      ),
+      height: box.getBoundingClientRect().height,
+    };
+  });
+  // Never magnified: at or below the model's own scale, which is what a
+  // populated mini-graph renders at.
+  expect(drawn.zoom).toBeLessThanOrEqual(1.001);
+  expect(drawn.scale).toBeLessThanOrEqual(1.001);
+  // …and still legible, which is the floor this ceiling must not undo.
+  expect(drawn.fontPx).toBeGreaterThanOrEqual(10);
+  // A one-node picture leaves no half-empty panel behind it either.
+  expect(drawn.height).toBeLessThan(260);
+}
+
+/**
  * The canvas never scales the graph below legibility (T2-A4, round-6 review).
  *
  * Cytoscape scales text with the viewport, so a fit that shrinks the graph into
@@ -282,6 +330,14 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.locator(".children-table tbody tr").first(),
       ).toBeVisible();
+      // …and the FOCAL-ONLY mini-graph, which this fixture also is: an epic
+      // whose only edge points down to a child, so two-up-one-down leaves it
+      // alone on the canvas. The automatic fit has no ceiling of its own, so
+      // that one node was magnified to fill a 22–32rem box — hundreds of
+      // pixels wide, its label bigger than the page's own title (round-4
+      // correctness f-006). Asserted at every captured width, because the box
+      // is a viewport-relative height and the magnification followed it.
+      await miniGraphIsNotMagnified(page);
     },
   },
   {
@@ -296,6 +352,9 @@ const PAGES: ReadonlyArray<{
     url: "/tasks/influx-shard-epic",
     ready: async (page) => {
       await expect(page.locator('[data-link-tail="children"]')).toBeVisible();
+      // The second focal-only mini-graph in these captures, and the one under
+      // the longest page: the same magnification showed up here too.
+      await miniGraphIsNotMagnified(page);
     },
   },
   {

@@ -748,9 +748,16 @@ which way an arrow reads.
   never lands. Otherwise a tab left open would accumulate one live instance,
   observer and animation per task event. The
   exploration classes are off — every node on a mini-graph is in the focal
-  task's neighbourhood, so lighting them would say nothing — and a
-  neighbourhood too large for the box says so rather than being scaled below
-  legibility.
+  task's neighbourhood, so lighting them would say nothing.
+- **The automatic fit is bounded at both ends.** A neighbourhood too large for
+  the box overflows and says so rather than being scaled below legibility; a
+  sparse one — most commonly the focal task alone — is never MAGNIFIED past
+  the model scale the styling vocabulary defines, which is what a populated
+  mini-graph renders at. Without the ceiling one node was blown up to fill a
+  fixed-height panel, with a label larger than the page's own title. Only the
+  automatic fit is bounded: a zoom the operator chooses is theirs. The box
+  itself then gives back the height a small picture does not need, so the
+  glance is a small picture rather than a small picture in an empty panel.
 
 ### 5.7 Knowledge Surface
 

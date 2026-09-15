@@ -680,6 +680,17 @@ const initLensGraph = function () {
   const LABEL_FONT = 14;
   const MIN_RENDERED_FONT = 10;
   const MIN_READABLE_ZOOM = MIN_RENDERED_FONT / LABEL_FONT;
+  // …and, in a MINI-GRAPH, the automatic fit may never MAGNIFY past the
+  // model's own scale. The style below sizes a node in model units (26px, 44
+  // across for an epic) and its label at LABEL_FONT, which is what a populated
+  // neighbourhood renders at — but `cy.fit` has no upper bound of its own, so
+  // a neighbourhood of ONE task was blown up to fill a fixed-height box: a
+  // single node hundreds of pixels wide, its label larger than the page's own
+  // title, above a detail page the picture is supposed to be a glance at
+  // (round-4 correctness f-006). A zoom the OPERATOR chooses is untouched —
+  // this bounds the automatic fit and nothing else. The graph page keeps no
+  // ceiling, because there the canvas IS the page.
+  const MAX_MINI_ZOOM = 1;
   const FIT_PADDING = 24;
 
   const INK = "#1e2723";
@@ -1002,7 +1013,11 @@ const initLensGraph = function () {
   //
   // Floored at MIN_READABLE_ZOOM. A fit that has to go below it is a picture
   // nobody can read — so the graph is shown at legible size, centred on what is
-  // drawn, and overflows the canvas for the operator to pan.
+  // drawn, and overflows the canvas for the operator to pan. In a mini-graph
+  // it is also CEILINGED at MAX_MINI_ZOOM, for the mirror-image reason: a
+  // sparse neighbourhood magnified to fill the box is as unreadable, as a
+  // picture of this task's surroundings, as a dense one shrunk out of
+  // legibility.
   //
   // Whether it came to that is recorded HERE, beside the decision, rather than
   // by the caller: a resize refits too (the panel opening beside the canvas is
@@ -1054,6 +1069,9 @@ const initLensGraph = function () {
     cy.fit(drawn, FIT_PADDING);
     if (cy.zoom() < MIN_READABLE_ZOOM) {
       cy.zoom(MIN_READABLE_ZOOM);
+      cy.center(drawn);
+    } else if (mini && cy.zoom() > MAX_MINI_ZOOM) {
+      cy.zoom(MAX_MINI_ZOOM);
       cy.center(drawn);
     }
     reportVisibility();
@@ -1602,9 +1620,34 @@ const initLensGraph = function () {
     };
   }
 
+  // The height the stylesheet gives a mini-graph is sized for the RULE's
+  // worst case — two blocker ranks above the focal task and one of dependents
+  // below — and most tasks have nothing like that. Once the picture is placed
+  // and its zoom capped, the box gives back the room it does not need, so a
+  // neighbourhood of one task is a small picture rather than a small picture
+  // marooned in an empty panel. Bounded below, so it still reads as a canvas;
+  // never GROWN past the height the stylesheet chose; and run once, because
+  // the extent it measures is in pixels and does not move when the box does.
+  const MIN_MINI_CANVAS_PX = 132;
+
+  function shrinkMiniCanvas() {
+    const drawn = drawnNodes();
+    if (!mini || !drawn.length) return;
+    const extent = drawn.renderedBoundingBox();
+    const needed = Math.max(
+      MIN_MINI_CANVAS_PX,
+      Math.ceil(extent.y2 - extent.y1) + FIT_PADDING * 2
+    );
+    if (needed >= container.clientHeight) return;
+    container.style.height = needed + "px";
+    cy.resize();
+    fitVisible();
+  }
+
   // ── First paint ────────────────────────────────────────────────────────
 
   render();
+  shrinkMiniCanvas();
 
   // A claimed task breathes, because "somebody is working on this right now"
   // is the one status a still picture cannot carry. Guarded on the animation
