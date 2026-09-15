@@ -163,12 +163,12 @@ PANEL_FRAGMENT_VALUE = "panel"
 #: graph and M comes from that graph's coverage-set blocked reads, so neither
 #: figure exists outside a scope.
 PANEL_SCOPE_KEY = "scope"
-#: The identity of the graph the page that opened the panel is DRAWING
-#: (``graph_impact.scope_fingerprint``). The scope name alone fixes which tasks
-#: are asked for, not which ones come back, and the panel's read runs after the
-#: page's — so this is what stops a count assembled from a moved graph being
-#: printed beside a canvas that is deliberately still showing the older one
-#: (D8/D10, T2-A7).
+#: The identity of the ANSWER the page that opened the panel is showing
+#: (``graph_impact.impact_fingerprint``: its nodes and edges, and the blocked
+#: rows M is read from). The scope name alone fixes which tasks are asked for,
+#: not which ones come back, and the panel's reads run after the page's — so
+#: this is what stops figures assembled from a moved graph being printed beside
+#: a canvas that is deliberately still showing the older one (D8/D10, T2-A7).
 PANEL_SNAPSHOT_KEY = "snapshot"
 
 

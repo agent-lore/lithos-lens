@@ -68,6 +68,7 @@ from lithos_lens.graph_view import (
     DownstreamImpact,
     parse_flag,
 )
+from lithos_lens.task_filtering import task_projects
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
@@ -84,7 +85,7 @@ IMPACT_CANCELLED = "cancelled"
 IMPACT_UNKNOWN = "unknown"
 #: The graph the page is DRAWING is not the graph this panel just assembled, so
 #: there is no honest "in this graph" to count over — see
-#: :func:`scope_fingerprint`. A state rather than a silent ``None``: the panel
+#: :func:`impact_fingerprint`. A state rather than a silent ``None``: the panel
 #: was asked for the line and the reason it has no number is worth a sentence.
 IMPACT_STALE = "stale"
 
@@ -103,19 +104,21 @@ class ImpactScope:
     the same address.
 
     ``fingerprint`` is the rest of that requirement. A scope NAME only fixes
-    which tasks are asked for, not which ones came back: the panel's read runs
+    which tasks are asked for, not which ones came back: the panel's reads run
     after the page's, and between the two a task can be created, completed or
-    re-linked — while the canvas, by design, is still drawing the graph it
-    loaded with (D8 forbids an auto re-layout; the page raises "graph changed —
-    refresh" instead). The fingerprint is that drawn graph's identity, so a
-    count that would be over a DIFFERENT graph is withheld rather than printed
-    beside a picture that disagrees with it.
+    re-linked, and Lithos's blocked rows can move under an edge cache that did
+    not — while the canvas, by design, is still drawing the graph it loaded
+    with (D8 forbids an auto re-layout; the page raises "graph changed —
+    refresh" instead). The fingerprint is that drawn ANSWER's identity, both
+    figures' material included (:func:`impact_fingerprint`), so a count that
+    would be over a DIFFERENT graph is withheld rather than printed beside a
+    picture that disagrees with it.
     """
 
     kind: str = ""
     key: str = ""
     include_resolved: bool = False
-    #: The page's :func:`scope_fingerprint`, empty when the caller named none.
+    #: The page's :func:`impact_fingerprint`, empty when the caller named none.
     fingerprint: str = ""
 
     @property
@@ -159,37 +162,111 @@ def parse_impact_scope(
     )
 
 
-def scope_fingerprint(scope: TaskGraphScope) -> str:
-    """The identity of one assembled graph, as far as D10's figures can see it.
+def impact_fingerprint(
+    scope: TaskGraphScope,
+    signal: CycleSignal,
+    *,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> str:
+    """The identity of one assembled ANSWER — everything D10's figures rest on.
 
-    Over the node set (id, the status the count reads, the completeness that
-    turns a status into ``unknown``, and the ghost kind that decides whether it
-    is drawn at all by default) and the edge set (endpoints, type and the state
-    the active projection is read from) — which is exactly the material N, the
-    lit set and the chain are derived from, and nothing else.
-    A re-titled task or a fresh claim moves neither figure, so neither moves
-    this: a fingerprint that changed on every heartbeat would withhold the line
-    permanently rather than when it is actually wrong.
+    Both authorities, because both move independently and only one of them is
+    cached. N is Lens's walk over the scope, so the node set (id, the status
+    the count reads, the completeness that turns a status into ``unknown``, the
+    ghost kind that decides whether it is drawn at all, and the project slugs
+    coverage is decided by) and the edge set (endpoints, type and the state the
+    active projection is read from) are in it. M is LITHOS's sole-blocker fact,
+    read fresh on every panel with no cache under it, so the blocked rows for
+    the nodes this graph holds — each row's blockers by kind, predecessor, type
+    and status — are in it too, along with the coverage set and each read's
+    outcome, which together decide whether M is withheld at all.
+
+    The blocked half is what makes this a fingerprint of the ANSWER rather than
+    of the picture. An eventless edge upsert elsewhere in the fleet
+    (ROADMAP gap #1) can add a second blocker to a dependent while every edge
+    entry this scope reads stays warm: the drawn graph is then byte-identical
+    and M has still moved from 1 to 0 (round-1 correctness f-001). Nothing else
+    downstream would notice, so it is caught here or not at all.
+
+    What is deliberately NOT in it: titles, claims, blocker MESSAGES, error
+    reasons — text that moves no figure and no class on the canvas. A
+    fingerprint that changed on every heartbeat would withhold the line
+    permanently rather than when it is actually wrong. Rows for tasks outside
+    this graph are left out for the same reason: a scoped read legitimately
+    names them, and no figure here is counted over them.
+
+    Order is imposed on every part, because none of it arrives ordered: the
+    blocked rows are folded out of two concurrent reads per project and their
+    order follows whichever answered first (``graph_cycles._signal``).
 
     Truncated to 16 hex digits because it travels in a URL and is compared to
     a value Lens produced itself in the same process — this is a change
     detector, not a defence against a forged one, and a caller that invents a
     value only costs itself the line.
     """
-    material = "\x1e".join(
-        [
-            f"{node.id}\x1f{node.status}\x1f{node.completeness}\x1f{node.ghost_kind}"
-            for node in sorted(scope.nodes, key=lambda node: node.id)
-        ]
-        + [
-            f"{edge.from_task_id}\x1f{edge.to_task_id}\x1f{edge.type}\x1f{edge.state}"
-            for edge in sorted(
-                scope.edges,
-                key=lambda edge: (edge.from_task_id, edge.to_task_id, edge.type),
-            )
-        ]
+    held = set(scope.node_ids)
+    parts = [
+        _join(
+            "node",
+            node.id,
+            node.status,
+            node.completeness,
+            node.ghost_kind,
+            *sorted(task_projects(node.task, convention="both", tag_key=tag_key)),
+        )
+        for node in sorted(scope.nodes, key=lambda node: node.id)
+    ]
+    parts.extend(
+        _join("edge", edge.from_task_id, edge.to_task_id, edge.type, edge.state)
+        for edge in sorted(
+            scope.edges,
+            key=lambda edge: (edge.from_task_id, edge.to_task_id, edge.type),
+        )
     )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    parts.append(_join("coverage", *sorted(signal.coverage)))
+    parts.extend(
+        # The OUTCOME, not the reason: "this read cannot establish absence" is
+        # the whole of what M asks of it (``graph_cycles.read_covers``).
+        _join(
+            "read",
+            read.project,
+            read.by,
+            "truncated" if read.truncated else "",
+            "failed" if read.error else "",
+            "unmade" if read.unmade else "",
+        )
+        for read in sorted(signal.reads, key=lambda read: (read.project, read.by))
+    )
+    parts.extend(
+        _join(
+            "blocked",
+            record.task.id,
+            # A blocker's own fields carry a DIFFERENT separator, or a row's
+            # fields and its blockers' would be indistinguishable in the digest.
+            *sorted(
+                "\x1d".join(
+                    (blocker.kind, blocker.task_id, blocker.type, blocker.status)
+                )
+                for blocker in record.blockers
+            ),
+        )
+        for record in sorted(
+            (record for record in signal.blocked if record.task.id in held),
+            key=lambda record: record.task.id,
+        )
+    )
+    parts.append(_join("projectless", *sorted(signal.projectless)))
+    return hashlib.sha256("\x1e".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _join(*values: str) -> str:
+    """One fingerprint part, field-separated — never concatenated.
+
+    A separator the fields cannot contain is what keeps two different graphs
+    from hashing alike: ``("ab", "c")`` and ``("a", "bc")`` are different
+    answers and must be different strings.
+    """
+    return "\x1f".join(values)
 
 
 def downstream_impact(
@@ -425,9 +502,9 @@ async def load_impact(
 
     ``None`` whenever the answer would not be honest: a scope too large to
     render is also too large to count over, and a refusal there must not turn
-    into a number here. A scope the caller fingerprinted that no longer
-    assembles to the same graph is the one degraded case that still renders —
-    as :data:`IMPACT_STALE`, because the operator is looking at the older graph
+    into a number here. A scope the caller fingerprinted whose reads no longer
+    reproduce the same ANSWER is the one degraded case that still renders — as
+    :data:`IMPACT_STALE`, because the operator is looking at the older graph
     and "refresh" is the answer.
     """
     limits = limits or GraphScopeLimits()
@@ -455,15 +532,6 @@ async def load_impact(
         )
     if assembled.refused or assembled.node(focus) is None:
         return None
-    if scope.fingerprint and scope_fingerprint(assembled) != scope.fingerprint:
-        # The page that opened this panel is drawing a DIFFERENT graph from the
-        # one this read just assembled — a task created, completed or re-linked
-        # since it loaded. "Frees N in this graph" has no honest answer then:
-        # the canvas deliberately has not moved (D8), so a number counted here
-        # would disagree with the lit set and the chain beside it. Said, not
-        # silently dropped — and the page's own "graph changed" pill is the
-        # action it points at.
-        return DownstreamImpact(focus=focus, state=IMPACT_STALE)
     if len(coverage_projects(assembled, convention=convention, tag_key=tag_key)) > (
         limits.max_tasks
     ):
@@ -476,6 +544,20 @@ async def load_impact(
         tag_key=tag_key,
         fetch_concurrency=limits.fetch_concurrency,
     )
+    if (
+        scope.fingerprint
+        and impact_fingerprint(assembled, signal, tag_key=tag_key) != scope.fingerprint
+    ):
+        # The page that opened this panel is not looking at what these reads
+        # just answered — a task created, completed or re-linked since it
+        # loaded, or a blocked row that moved under an edge cache that did not.
+        # "Frees N in this graph, M immediately" has no honest answer then: the
+        # canvas deliberately has not moved (D8), so figures counted here would
+        # disagree with the lit set and the chain beside them. Checked AFTER
+        # the blocked reads because M is one of the two figures and it comes
+        # from them — a comparison made before would pin the picture and leave
+        # M free to move behind it (round-1 correctness f-001).
+        return DownstreamImpact(focus=focus, state=IMPACT_STALE)
     topology = build_topology(
         [node.task for node in assembled.nodes],
         [edge.edge for edge in assembled.edges],

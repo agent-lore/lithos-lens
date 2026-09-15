@@ -89,10 +89,11 @@ The current application exposes these routes:
   counted over (§5.6.1); a panel fetched without it states no impact, because N
   is a count within one fetched graph. `include_resolved` travels with the
   scope so the panel assembles the same graph the page it was opened from did,
-  and `snapshot=` is the fingerprint of the graph that page is DRAWING — the
-  scope name fixes which tasks are asked for, not which ones come back, so a
-  re-assembly that no longer matches it states "this graph has changed" instead
-  of a count (§5.6.1).
+  and `snapshot=` is the fingerprint of the ANSWER that page is showing — its
+  nodes and edges AND the blocked rows M is read from. The scope name fixes
+  which tasks are asked for, not which ones come back, so reads that no longer
+  reproduce that fingerprint state "this graph has changed" instead of a count
+  (§5.6.1).
 - `GET /tasks/{task_id}/findings`
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
@@ -514,14 +515,26 @@ only failed to look.
 The graph page's own render computes this from the scope and cycle signal it
 already holds; a panel fetched on its own rebuilds that scope, which the
 per-task edge cache (§5.10) makes affordable because the graph the operator is
-looking at is warm. A rebuild is not the same graph by default, though: the
+looking at is warm. A rebuild is not the same answer by default, though: the
 scope NAME only fixes which tasks are asked for, and the canvas deliberately
 does not re-lay-out under the operator (§5.12.1) — so every panel URL the graph
-page emits carries `snapshot=`, a fingerprint of the node and edge set that
-render drew. When the rebuilt scope no longer matches it, both figures are
-withheld and the panel states "this graph has changed since the page loaded —
-refresh", because "frees N **in this graph**" would otherwise name one graph
-while the picture beside it shows another. Either way the impact costs the line
+page emits carries `snapshot=`, a fingerprint of what that render answered.
+It covers **both** authorities, because they move independently and only one of
+them is cached: the node set (id, status, completeness, ghost kind, project
+slugs) and the edge set (endpoints, type, state) that N is walked over, and the
+blocked rows for those nodes — each row's blockers by kind, predecessor, type
+and status — together with the coverage set and each read's outcome, which is
+what decides whether M is stated at all. The blocked half is load-bearing: an
+edge upsert emits no event (§5.10) and a warm edge cache can reproduce a
+byte-identical graph while Lithos's sole-blocker row has gained a second
+blocker, moving M with nothing on the canvas to show for it. So the comparison
+is made **after** the blocked read, not before it, and when it fails both
+figures are withheld and the panel states "this graph has changed since the
+page loaded — refresh", because "frees N **in this graph**, M immediately"
+would otherwise name one graph while the picture beside it shows another.
+Titles, claims, blocker messages and error reasons are excluded — they move no
+figure, and a fingerprint that changed on every heartbeat would withhold the
+line permanently rather than when it is wrong. Either way the impact costs the line
 and nothing else: a scope that fails, is refused, or does not hold the task
 renders the rest of the panel unchanged.
 
@@ -1052,9 +1065,9 @@ at. Lens still never re-implements the readiness predicate.
   focused node, or the fit would quietly undo the centring the click that
   opened the panel just applied.
 - **The panel a node click fetches carries this page's scope and snapshot**, so
-  its downstream impact (§5.6.1) counts over the graph on screen — or, when the
-  re-assembled graph no longer matches the fingerprint, says so rather than
-  counting over one picture beside another. A node has no DOM row to read a
+  its downstream impact (§5.6.1) counts over the answer on screen — or, when
+  its own reads no longer reproduce that fingerprint, says so rather than
+  stating figures beside a picture they do not belong to. A node has no DOM row to read a
   server-built URL off, so the page hands `tasks.js` the scope, its
   `include_resolved` and the fingerprint directly; the URL is otherwise the
   query alias, which is the one form that addresses every id.

@@ -345,12 +345,12 @@ class GraphPageView:
     #: the scope holds. Computed here rather than by the panel route because
     #: this render already has the scope and the cycle signal in hand.
     impact: DownstreamImpact | None = None
-    #: The identity of the graph this render DREW
-    #: (``graph_impact.scope_fingerprint``), carried into every panel URL the
-    #: page emits. A panel fetched on its own re-assembles the scope, and this
-    #: is what lets that read tell "the same graph, warm from the cache" from
-    #: "the scope as it is now" — the second must not print a count beside a
-    #: canvas that is still showing the first (D8/D10).
+    #: The identity of what this render ANSWERED — its graph and the blocked
+    #: rows behind M (``graph_impact.impact_fingerprint``) — carried into every
+    #: panel URL the page emits. A panel fetched on its own re-runs both reads,
+    #: and this is what lets it tell "the same answer, warm from the cache"
+    #: from "the scope as it is now": the second must not print figures beside
+    #: a canvas that is still showing the first (D8/D10).
     fingerprint: str = ""
     banners: tuple[Banner, ...] = ()
     edge_types: tuple[str, ...] = ()

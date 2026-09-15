@@ -106,7 +106,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `ImpactScope` — The scope a panel fragment was asked to count its impact over.
 - class `ImpactClient` — The scope reads plus the blocked reads — the same surface a page needs.
 - def `parse_impact_scope` — Parse ``project:<slug>`` / ``epic:<id>``; anything else is no scope.
-- def `scope_fingerprint` — The identity of one assembled graph, as far as D10's figures can see it.
+- def `impact_fingerprint` — The identity of one assembled ANSWER — everything D10's figures rest on.
 - def `downstream_impact` — D10's two figures for ``focus`` over an assembled scope, pure.
 - def `load_impact` — Assemble ``scope`` and answer D10 for ``focus`` — the fragment route's path.
 

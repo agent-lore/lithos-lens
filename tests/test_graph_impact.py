@@ -14,14 +14,26 @@ The fixtures are the smallest graph each rule needs, and the fake's demo board
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import replace
 from html import unescape
 from pathlib import Path
 
 import pytest
 
 from lithos_lens.fake_dataset import FakeLithosDataset
-from lithos_lens.graph_impact import parse_impact_scope
-from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
+from lithos_lens.graph_cycles import READ_BY_PROJECT, CycleSignal, ProjectRead
+from lithos_lens.graph_impact import impact_fingerprint, parse_impact_scope
+from lithos_lens.graph_scope import (
+    COMPLETENESS_EDGES_UNKNOWN,
+    EDGE_ACTIVE,
+    EDGE_INACTIVE,
+    GraphEdge,
+    GraphNode,
+    TaskGraphScope,
+)
+from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
+from lithos_lens.tasks import TaskStatusName
 from tests.test_graph_page import (
     PROJECT,
     GraphFakeClient,
@@ -878,3 +890,409 @@ def test_a_fingerprint_follows_the_graph_and_not_the_tasks_own_text(
 
     assert snapshot(renamed) == before
     assert "frees 3 in this graph, 1 immediately" in slot(panel)
+
+
+def node_ids(html: str) -> list[str]:
+    """The node membership of a rendered page, from its own payload."""
+    return sorted(node["id"] for node in payload(html)["nodes"])
+
+
+def moved_blocked_dataset() -> FakeLithosDataset:
+    """The acceptance fixture after an EDGE UPSERT this page cannot see.
+
+    `other -> one` lands in Lithos. Edge upserts emit no event (ROADMAP gap
+    #1), `other` is in another project so this scope never reads it, and
+    `one`'s own edge entry is warm — so every edge Lens fetches is the one it
+    already had. Only Lithos's blocked row for `one` has moved, and M with it.
+    """
+    return dataset(
+        [task(name) for name in IMPACT_TASKS] + [task("other", project="elsewhere")],
+        (*IMPACT_EDGES, ("other", "one", "blocks")),
+        blocked={
+            "one": (blocker("root"), blocker("other")),
+            "two": (blocker("one"),),
+            "three": (blocker("one"),),
+        },
+    )
+
+
+def resolving_dataset(second: TaskStatusName = "open") -> FakeLithosDataset:
+    """`root` blocks `one` and `two`, and only `one` is a blocked ROW.
+
+    So `two` resolving moves nothing Lithos said about this graph: it is the
+    smallest fixture in which a status — and the state of the edge into it —
+    is the whole of what changed.
+    """
+    return dataset(
+        [task("root"), task("one"), task("two", status=second)],
+        (("root", "one", "blocks"), ("root", "two", "blocks")),
+        blocked={"one": (blocker("root"),)},
+    )
+
+
+def test_a_blocked_row_that_moved_under_a_warm_cache_withholds_both_figures(
+    lithos_lens_config_env: Path,
+) -> None:
+    """M is LITHOS's fact, read fresh on every panel with no cache under it, so
+    it can move while the graph does not: an eventless edge upsert on a task
+    outside this scope adds a second blocker to `one`, and the panel that used
+    to say "1 immediately" would say "0" beside a canvas whose every node and
+    edge is unchanged (round-1 correctness f-001). Both figures are withheld
+    instead — the picture agreeing is not the same as the ANSWER agreeing."""
+    fake = GraphFakeClient(impact_dataset())
+    page_url = f"/tasks/graph?project={PROJECT}&focus=root"
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(page_url).text)
+        drawn = snapshot(page)
+        fake.replace_dataset(moved_blocked_dataset())
+        stale = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+        reloaded = unescape(client.get(page_url).text)
+
+    assert "frees 3 in this graph, 1 immediately" in slot(page)
+    # The GRAPH is byte-identical across the change — same nodes, same edges,
+    # warm from the cache — which is exactly why a fingerprint over the picture
+    # alone could not catch this.
+    assert payload(reloaded)["nodes"] == payload(page)["nodes"]
+    assert payload(reloaded)["edges"] == payload(page)["edges"]
+    # And the ANSWER is not: a reload — the page the operator is told to fetch
+    # — states the new M.
+    assert "frees 3 in this graph, 0 immediately" in slot(reloaded)
+    assert "This graph has changed since the page loaded" in slot(stale)
+    assert attribute(stale, "data-impact-frees") == ""
+    assert attribute(stale, "data-impact-state") == "stale"
+
+
+def test_a_dependent_resolving_within_the_same_membership_withholds_them_too(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The scope half of the same rule, with no membership change to lean on.
+
+    `two` carries no blocked row — nothing Lithos says about this graph moves
+    when it completes — so under `include_resolved=1` the ONLY differences are
+    its own status and the state of the edge into it (D6, satisfied now). N
+    drops from 2 to 1 on that alone, and the panel must not answer either
+    number beside the picture of the other."""
+    fake = GraphFakeClient(resolving_dataset())
+    page_url = f"/tasks/graph?project={PROJECT}&focus=root&include_resolved=1"
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(page_url).text)
+        drawn = snapshot(page)
+        fake.replace_dataset(resolving_dataset(second="completed"))
+        stale = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&include_resolved=1&snapshot={drawn}"
+        ).text
+        reloaded = unescape(client.get(page_url).text)
+
+    assert "frees 2 in this graph, 1 immediately" in slot(page)
+    assert node_ids(reloaded) == node_ids(page), "the membership was meant to hold"
+    assert "frees 1 in this graph, 1 immediately" in slot(reloaded)
+    assert "This graph has changed since the page loaded" in slot(stale)
+    assert attribute(stale, "data-impact-frees") == ""
+
+
+# ── What the fingerprint is OVER (round-2 test-quality f-001) ───────────
+#
+# The route tests above prove the detector FIRES; these prove it is watching
+# the right material. Every field below can move a figure, the lit set or the
+# chain without moving any other — so a fingerprint that dropped one would stay
+# green on all of them while the panel went back to counting over a graph the
+# canvas is not showing. Pure, one mutation per case, over the two authorities
+# D10 reads (the scope, and Lithos's blocked rows).
+
+FINGERPRINT_NODES = (
+    GraphNode(task("root")),
+    GraphNode(task("one")),
+    GraphNode(task("far", project="elsewhere"), ghost=True, ghost_kind="dependency"),
+)
+FINGERPRINT_EDGES = (
+    GraphEdge(
+        EdgeRecord(from_task_id="root", to_task_id="one", type="blocks"),
+        state=EDGE_ACTIVE,
+    ),
+    GraphEdge(
+        EdgeRecord(from_task_id="one", to_task_id="far", type="blocks"),
+        state=EDGE_ACTIVE,
+    ),
+)
+FINGERPRINT_ROWS = (
+    BlockedTaskRecord(task=task("one"), blockers=(blocker("root"),)),
+    BlockedTaskRecord(
+        task=task("far", project="elsewhere"), blockers=(blocker("one"),)
+    ),
+)
+
+
+def fingerprint_scope(**changes: object) -> TaskGraphScope:
+    """The baseline graph both authorities are fingerprinted over."""
+    return replace(
+        TaskGraphScope(
+            kind="project",
+            key=PROJECT,
+            nodes=FINGERPRINT_NODES,
+            edges=FINGERPRINT_EDGES,
+        ),
+        **changes,  # type: ignore[arg-type]
+    )
+
+
+def fingerprint_signal(**changes: object) -> CycleSignal:
+    """The baseline blocked signal: one complete read, two rows."""
+    return replace(
+        CycleSignal(
+            coverage=(PROJECT, "elsewhere"),
+            reads=(
+                ProjectRead(project=PROJECT, by=READ_BY_PROJECT, rows=FINGERPRINT_ROWS),
+            ),
+            blocked=FINGERPRINT_ROWS,
+            verdicts=FINGERPRINT_ROWS[:1],
+        ),
+        **changes,  # type: ignore[arg-type]
+    )
+
+
+def baseline_fingerprint() -> str:
+    return impact_fingerprint(fingerprint_scope(), fingerprint_signal())
+
+
+def with_node(index: int, **changes: object) -> TaskGraphScope:
+    nodes = list(FINGERPRINT_NODES)
+    nodes[index] = replace(nodes[index], **changes)  # type: ignore[arg-type]
+    return fingerprint_scope(nodes=tuple(nodes))
+
+
+def with_edge(index: int, **changes: object) -> TaskGraphScope:
+    edges = list(FINGERPRINT_EDGES)
+    edges[index] = replace(edges[index], **changes)  # type: ignore[arg-type]
+    return fingerprint_scope(edges=tuple(edges))
+
+
+def with_edge_record(index: int, **changes: object) -> TaskGraphScope:
+    edges = list(FINGERPRINT_EDGES)
+    edges[index] = replace(edges[index], edge=replace(edges[index].edge, **changes))  # type: ignore[arg-type]
+    return fingerprint_scope(edges=tuple(edges))
+
+
+#: (name, what one mutation produces). Each moves a figure, a class on the
+#: canvas, or whether M may be stated at all — so each must move the digest.
+MATERIAL_CHANGES: tuple[
+    tuple[str, Callable[[], tuple[TaskGraphScope, CycleSignal]]], ...
+] = (
+    # N counts OPEN dependents, so a status is a figure.
+    (
+        "node status",
+        lambda: (
+            with_node(1, task=replace(task("one"), status="completed")),
+            fingerprint_signal(),
+        ),
+    ),
+    # An unreadable edge list is what makes N a lower bound (D10).
+    (
+        "node completeness",
+        lambda: (
+            with_node(1, completeness=COMPLETENESS_EDGES_UNKNOWN),
+            fingerprint_signal(),
+        ),
+    ),
+    # A context ghost is not on the default canvas; a dependency one is.
+    (
+        "ghost kind",
+        lambda: (with_node(2, ghost_kind="context"), fingerprint_signal()),
+    ),
+    # The project slugs a coverage read is matched against (D4/§5B.1).
+    (
+        "node projects",
+        lambda: (
+            with_node(1, task=replace(task("one"), tags=("project:elsewhere",))),
+            fingerprint_signal(),
+        ),
+    ),
+    (
+        "edge source",
+        lambda: (with_edge_record(1, from_task_id="root"), fingerprint_signal()),
+    ),
+    (
+        "edge target",
+        lambda: (with_edge_record(1, to_task_id="root"), fingerprint_signal()),
+    ),
+    (
+        "edge type",
+        lambda: (with_edge_record(1, type="waits_on_gate"), fingerprint_signal()),
+    ),
+    # Only the ACTIVE projection is walked (D6).
+    ("edge state", lambda: (with_edge(1, state=EDGE_INACTIVE), fingerprint_signal())),
+    # M itself: a second blocker means completing the focus frees nobody now.
+    (
+        "blocker set",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                blocked=(
+                    replace(
+                        FINGERPRINT_ROWS[0],
+                        blockers=(blocker("root"), blocker("other")),
+                    ),
+                    FINGERPRINT_ROWS[1],
+                )
+            ),
+        ),
+    ),
+    # A row that appears or disappears for a task this graph holds.
+    (
+        "blocked rows",
+        lambda: (fingerprint_scope(), fingerprint_signal(blocked=FINGERPRINT_ROWS[:1])),
+    ),
+    # Whether M may be stated at all: the read plan, and how it ended.
+    (
+        "coverage set",
+        lambda: (fingerprint_scope(), fingerprint_signal(coverage=(PROJECT,))),
+    ),
+    (
+        "read truncated",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                reads=(replace(fingerprint_signal().reads[0], truncated=True),)
+            ),
+        ),
+    ),
+    (
+        "read failed",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                reads=(replace(fingerprint_signal().reads[0], error="internal_error"),)
+            ),
+        ),
+    ),
+    (
+        "read unmade",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                reads=(replace(fingerprint_signal().reads[0], unmade=True),)
+            ),
+        ),
+    ),
+    (
+        "projectless",
+        lambda: (fingerprint_scope(), fingerprint_signal(projectless=("one",))),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate"), MATERIAL_CHANGES, ids=[name for name, _ in MATERIAL_CHANGES]
+)
+def test_every_material_field_moves_the_fingerprint(
+    name: str, mutate: Callable[[], tuple[TaskGraphScope, CycleSignal]]
+) -> None:
+    """One field at a time, each of which can change N, M, the lit set or
+    whether M may be stated — and none of which changes the node MEMBERSHIP, so
+    a fingerprint over ids alone would be green on every case here."""
+    scope, signal = mutate()
+
+    assert impact_fingerprint(scope, signal) != baseline_fingerprint(), (
+        f"{name} left the fingerprint unchanged"
+    )
+
+
+#: The other half of the contract: text and arrival order move no figure, so
+#: they must not withhold the line. A detector that fired on these would cost
+#: the impact permanently rather than when it is actually wrong.
+IMMATERIAL_CHANGES: tuple[
+    tuple[str, Callable[[], tuple[TaskGraphScope, CycleSignal]]], ...
+] = (
+    (
+        "task title",
+        lambda: (
+            with_node(1, task=replace(task("one"), title="Renamed")),
+            fingerprint_signal(),
+        ),
+    ),
+    (
+        "blocker message",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                blocked=(
+                    replace(
+                        FINGERPRINT_ROWS[0],
+                        blockers=(replace(blocker("root"), message="Reworded."),),
+                    ),
+                    FINGERPRINT_ROWS[1],
+                )
+            ),
+        ),
+    ),
+    # The fold that builds these orders them by whichever of two concurrent
+    # reads answered first (`graph_cycles._signal`), so arrival order must not
+    # be a difference — it would withhold the line at random.
+    (
+        "row order",
+        lambda: (
+            fingerprint_scope(
+                nodes=tuple(reversed(FINGERPRINT_NODES)),
+                edges=tuple(reversed(FINGERPRINT_EDGES)),
+            ),
+            fingerprint_signal(blocked=tuple(reversed(FINGERPRINT_ROWS))),
+        ),
+    ),
+    # A scoped read legitimately names tasks this graph never fetched, and no
+    # figure here is counted over them.
+    (
+        "rows for tasks outside the graph",
+        lambda: (
+            fingerprint_scope(),
+            fingerprint_signal(
+                blocked=(
+                    *FINGERPRINT_ROWS,
+                    BlockedTaskRecord(task=task("stranger"), blockers=(blocker("x"),)),
+                )
+            ),
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate"),
+    IMMATERIAL_CHANGES,
+    ids=[name for name, _ in IMMATERIAL_CHANGES],
+)
+def test_no_immaterial_change_withholds_the_line(
+    name: str, mutate: Callable[[], tuple[TaskGraphScope, CycleSignal]]
+) -> None:
+    scope, signal = mutate()
+
+    assert impact_fingerprint(scope, signal) == baseline_fingerprint(), (
+        f"{name} moved the fingerprint"
+    )
+
+
+def test_the_fingerprint_ignores_the_order_two_reads_merged_in() -> None:
+    """A row's blockers are merged across the pair of reads D4 issues per
+    project, in whichever order they answered (`graph_cycles._signal`). The
+    same two blockers arriving the other way round are the same fact, and a
+    digest that disagreed would withhold the impact line at random."""
+    both = (blocker("root"), blocker("other"))
+    forward = fingerprint_signal(
+        blocked=(replace(FINGERPRINT_ROWS[0], blockers=both), FINGERPRINT_ROWS[1])
+    )
+    backward = fingerprint_signal(
+        blocked=(
+            FINGERPRINT_ROWS[1],
+            replace(FINGERPRINT_ROWS[0], blockers=tuple(reversed(both))),
+        )
+    )
+
+    assert impact_fingerprint(fingerprint_scope(), forward) == impact_fingerprint(
+        fingerprint_scope(), backward
+    )
+    # …and it is not simply blind to the blockers: one MORE of them is M's own
+    # difference between "freed by this" and "still waiting on something else".
+    assert impact_fingerprint(fingerprint_scope(), forward) != baseline_fingerprint()

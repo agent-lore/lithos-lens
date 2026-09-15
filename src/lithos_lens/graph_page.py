@@ -45,7 +45,7 @@ from lithos_lens.graph_cycles import (
     load_cycle_signal,
 )
 from lithos_lens.graph_fanout import GraphScopeClient
-from lithos_lens.graph_impact import downstream_impact, scope_fingerprint
+from lithos_lens.graph_impact import downstream_impact, impact_fingerprint
 from lithos_lens.graph_layout import (
     BlockingChain,
     Topology,
@@ -240,7 +240,7 @@ def build_graph_page(
         unshaped_cycles=unshaped,
         chain=_chain_view(shown, views, scope, through=views.get(focus)),
         impact=impact,
-        fingerprint=scope_fingerprint(scope),
+        fingerprint=impact_fingerprint(scope, signal, tag_key=tag_key),
         banners=_banners(scope, signal),
         edge_types=_edge_types(scope),
         as_of=scope.as_of,
