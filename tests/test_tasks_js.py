@@ -4029,11 +4029,23 @@ MINI_HARNESS = """
 const fs = require("fs");
 const vm = require("vm");
 
-const [graphPath, cytoscapePath, href, payloadRaw, swapsRaw] = process.argv.slice(1);
+const [graphPath, cytoscapePath, href, payloadRaw, swapsRaw, replacementsRaw] =
+  process.argv.slice(1);
 const swaps = Number(swapsRaw);
+// How many of those swaps REPLACE the fragment — a fresh canvas element, which
+// is what `tasks.js` leaves behind when a task event reconciles the detail
+// page. The rest re-fire the event over the canvas already on screen.
+const replacements = Number(replacementsRaw || 0);
 const pushed = [];
 const replaced = [];
 const listeners = {};
+// Cytoscape instances this run built and tore down. A leak is invisible to the
+// drawn picture — the newest instance answers every query either way — so it
+// is counted here instead (round-1 correctness f-005).
+let built = 0;
+let destroyed = 0;
+// Every observer the boot installed, and whether it was disconnected.
+const observers = [];
 
 function element(extra) {
   return Object.assign({
@@ -4055,15 +4067,28 @@ const section = element({
     return selector === "[data-graph-payload]" ? payloadScript : null;
   },
 });
-const container = element({
-  hidden: true,
-  clientWidth: 1,
-  clientHeight: 1,
-  closest(selector) { return selector === "[data-mini-graph]" ? section : null; },
-});
+function canvas() {
+  return element({
+    hidden: true,
+    clientWidth: 1,
+    clientHeight: 1,
+    closest(selector) { return selector === "[data-mini-graph]" ? section : null; },
+  });
+}
 
 // Absent until the swap lands — the whole point of booting on `htmx:afterSwap`.
+let container = canvas();
 let swapped = false;
+
+class ResizeObserver {
+  constructor(callback) {
+    this.callback = callback;
+    this.live = true;
+    observers.push(this);
+  }
+  observe() {}
+  disconnect() { this.live = false; }
+}
 
 const document = {
   readyState: "interactive",
@@ -4090,6 +4115,7 @@ const sandbox = {
   fetch: () => Promise.reject(new Error("a mini-graph fetches nothing")),
 };
 sandbox.window = {
+  ResizeObserver,
   // No `LithosLens.panel`: this host has none, and a click that found one
   // would open a panel over a page that is already the task's own.
   LithosLensTasks: {},
@@ -4110,11 +4136,17 @@ Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
 
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
+sandbox.__built = () => { built += 1; };
+sandbox.__destroyed = () => { destroyed += 1; };
 vm.runInContext(`
   window.cytoscape = function (options) {
-    return cytoscape(Object.assign({}, options, {
+    var cy = cytoscape(Object.assign({}, options, {
       container: null, headless: true, styleEnabled: true
     }));
+    __built();
+    var destroy = cy.destroy.bind(cy);
+    cy.destroy = function () { __destroyed(); return destroy(); };
+    return cy;
   };
 `, sandbox);
 vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
@@ -4122,6 +4154,9 @@ vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
 const drawnAtLoad = !!sandbox.window.LithosLensMiniGraph;
 swapped = true;
 for (let index = 0; index < swaps; index += 1) {
+  // A replacement swap hands the page a NEW element, exactly as a reconcile
+  // does; the element the previous picture was drawn into is simply gone.
+  if (index && index <= replacements) container = canvas();
   (listeners["htmx:afterSwap"] || []).forEach((listener) => listener({}));
 }
 
@@ -4129,6 +4164,12 @@ const mini = sandbox.window.LithosLensMiniGraph;
 const drawn = mini ? mini.shown() : { nodes: [], edges: [] };
 console.log(JSON.stringify({
   drawnAtLoad,
+  built,
+  destroyed,
+  liveObservers: observers.filter((observer) => observer.live).length,
+  // A listener on `document` outlives the element the picture was drawn into,
+  // so one per boot is the leak this asserts against.
+  documentClickListeners: (listeners["click"] || []).length,
   // The graph PAGE's handle, which a detail page must not publish: a capture
   // asking for it here should get nothing rather than a neighbourhood
   // answering for a scope.
@@ -4179,7 +4220,11 @@ MINI_HREF = "http://lens.test/tasks/task?focus=elsewhere&overlays=provenance&iso
 
 
 def _mini_run(
-    payload: dict | None = None, *, swaps: int = 1, href: str = MINI_HREF
+    payload: dict | None = None,
+    *,
+    swaps: int = 1,
+    replacements: int = 0,
+    href: str = MINI_HREF,
 ) -> dict:
     """Load `graph.js` against a detail page, then swap a mini-graph into it."""
     assert NODE is not None
@@ -4194,6 +4239,7 @@ def _mini_run(
             href,
             json.dumps(payload or MINI_PAYLOAD),
             str(swaps),
+            str(replacements),
         ],
         capture_output=True,
         text=True,
@@ -4266,10 +4312,35 @@ def test_a_second_swap_does_not_redraw_a_canvas_that_is_already_up() -> None:
 
     Re-running over a live canvas would build a second Cytoscape instance on
     the same element: two layouts, two sets of handlers, one visible picture.
+    The COUNT is the assertion, because the picture is not: the newest instance
+    answers every query whether there is one of it or three.
     """
     result = _mini_run(swaps=3)
 
+    assert result["built"] == 1, "a live canvas was drawn into twice"
+    assert result["destroyed"] == 0
     assert result["canvasNodes"] == "5"
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+
+
+def test_a_replaced_fragment_disposes_the_picture_it_replaced() -> None:
+    """The detail reconcile's own shape (round-1 correctness f-005).
+
+    `tasks.js` swaps a parsed detail fragment in by hand on every
+    `requires_refresh` task event, so the canvas is REPLACED with no HTMX
+    cleanup behind it. Each boot must therefore dispose of the one before it:
+    otherwise a tab left open under fleet traffic accumulates a detached
+    Cytoscape instance, a live `ResizeObserver` and a self-re-arming animation
+    per event, none of which anything can reach to stop.
+    """
+    result = _mini_run(swaps=4, replacements=3)
+
+    assert result["built"] == 4, "each replacement draws the fragment it was given"
+    assert result["destroyed"] == 3, "a replaced picture was left running"
+    assert result["liveObservers"] == 1, "a detached canvas is still being watched"
+    # And the page-only handler is never installed here, however many times the
+    # fragment arrives: `document` outlives every one of those canvases.
+    assert result["documentClickListeners"] == 0
     assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
 
 

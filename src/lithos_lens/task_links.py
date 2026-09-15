@@ -287,15 +287,21 @@ class PageTail:
     first 25 are listed above" under forty drawn nodes would state a figure
     the list was never measured against. It is the applied cap or nothing —
     not an override of ``bounded_page``'s.
+
+    ``None`` is what "this caller states no size of its own" means, and it is
+    deliberately not ``0``: a configured cap really can leave room for zero
+    neighbours (``mini_graph_max_nodes = 1`` is the focal task and nothing
+    else), and a falsy sentinel would answer that boundary with the default
+    25 — the one number the list was certainly not measured against.
     """
 
     shown: int = 0
     total: int = 0
-    size: int = 0
+    size: int | None = None
 
     @property
     def page_size(self) -> int:
-        return self.size or LINK_PAGE_SIZE
+        return LINK_PAGE_SIZE if self.size is None else self.size
 
     @property
     def remaining(self) -> int:

@@ -401,7 +401,7 @@ classDiagram
   class PageTail {
     +shown int
     +total int
-    +size int
+    +size int | None
   }
   class ProjectRead {
     +project str

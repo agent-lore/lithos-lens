@@ -19,7 +19,7 @@ bounds it, and both are D11's:
   reported through T1's shared tail rather than clipped silently, and the
   focus link opens the full project graph on this task.
 
-Two rules here are narrower than the graph page's and are stated rather than
+Two rules here differ from the graph page's and are stated rather than
 inherited:
 
 - **There are no ghosts.** Every node is a task the neighbourhood named, drawn
@@ -28,12 +28,13 @@ inherited:
   own ``task_get`` failed carries ``status unknown``, and only one whose
   ``edge_list`` failed carries ``edges unknown`` — the same two markers, for
   the same two reasons, as everywhere else.
-- **Depth-2 is enumerated from the depth-1 blockers that are DRAWN.** A
-  blocker the cap cut is not on the picture, so its own blockers are not part
-  of it either — and reading them would be fan-out spent on nodes no tier can
-  reach. That keeps the tail's total exact for what this rule admits: it
-  counts every candidate the rule names, drawn or not, rather than a number
-  that would need an unbounded read to state.
+- **Depth 2 is enumerated from EVERY depth-1 blocker**, including the ones
+  the cap cut. The tail counts the whole neighbourhood D11 defines, so a
+  blocker that is only counted still contributes its own blockers to the
+  remainder; enumerating only the drawn ones would quietly shrink the number
+  an operator reads. What that costs is one cached ``edge_list`` per depth-1
+  blocker — a tier that already costs one record read apiece — and the
+  RECORDS behind depth 2 are read only when a slot could still hold one.
 
 No cycle signal is read here. Cycle membership is Lithos's verdict from a
 SCOPED ``task_blocked`` read (D4), and a per-task fragment has no scope to
@@ -49,6 +50,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from lithos_lens.epic_strip import EPIC_TASK_TYPE
 from lithos_lens.graph_cache import (
     CacheTally,
     EdgeCacheEntry,
@@ -89,6 +91,7 @@ from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import (
     BLOCKER_EDGE_TYPES,
+    PARENT_BREADCRUMB_MAX_DEPTH,
     PARENT_EDGE_TYPE,
     PageTail,
 )
@@ -97,6 +100,7 @@ from lithos_lens.tasks import (
     DEFAULT_PROJECT_TAG_KEY,
     ProjectConvention,
     TaskRecord,
+    parse_timestamp,
 )
 
 #: Mirrors the ``[lithos-lens.graph]`` default, like ``graph_scope``'s two do.
@@ -190,9 +194,18 @@ async def load_mini_graph(
     # First tier to name an id owns it: a task that both blocks this one and
     # waits on it (a two-cycle) is ONE node, drawn in the tier D11 fills first.
     claimed = {focal.id}
-    parents = _fresh(
-        _neighbours(edges, focal.id, (PARENT_EDGE_TYPE,), up=True), claimed
+    epic, epic_entries = await _parent_epic(
+        lithos,
+        edges,
+        focal.id,
+        cache=cache,
+        limiter=limiter,
+        tally=tally,
+        known=known,
+        records=records,
+        unknown=unknown,
     )
+    parents = _fresh((epic,) if epic else (), claimed)
     blockers = _fresh(
         _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=True), claimed
     )
@@ -200,37 +213,17 @@ async def load_mini_graph(
         _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=False), claimed
     )
     await _resolve(
-        lithos,
-        (*parents, *blockers, *dependents),
-        known,
-        records,
-        unknown,
-        limiter,
-        tally,
+        lithos, (*blockers, *dependents), known, records, unknown, limiter, tally
     )
 
-    selected = [focal.id]
-    room = max(0, limits.max_nodes - 1)
-    total = 1
-    # "The parent epic as a single labelled node" — one, even in the forest
-    # violation where an id has two, because the tier is the PARENT and not a
-    # hierarchy walk.
-    ordered_blockers = _ordered(blockers, records)
-    tiers = (
-        _ordered(parents, records)[:1],
-        ordered_blockers,
-        _ordered(dependents, records),
-    )
-    for tier in tiers:
-        total += len(tier)
-        taken = tier[:room]
-        selected.extend(taken)
-        room -= len(taken)
-
-    drawn_blockers = [blocker for blocker in ordered_blockers if blocker in selected]
+    # Depth 2 is read from EVERY depth-1 blocker, not only from the ones that
+    # fit: the tail counts the whole neighbourhood D11 defines, so a blocker
+    # the cap cut still contributes its own blockers to the remainder. The
+    # reads are bounded by the depth-1 tier, which already costs one record
+    # read apiece.
     deeper_entries, deeper_incomplete = await read_edges(
         lithos,
-        [_record(records, blocker) for blocker in drawn_blockers],
+        [_record(records, blocker) for blocker in blockers],
         cache,
         limiter,
         tally,
@@ -240,16 +233,34 @@ async def load_mini_graph(
     deeper = _fresh(
         [
             blocker_of_blocker
-            for blocker in drawn_blockers
+            for blocker in blockers
             for blocker_of_blocker in _neighbours(
                 edges, blocker, BLOCKER_EDGE_TYPES, up=True
             )
         ],
         claimed,
     )
-    await _resolve(lithos, deeper, known, records, unknown, limiter, tally)
-    total += len(deeper)
-    selected.extend(_ordered(deeper, records)[:room])
+
+    selected = [focal.id]
+    room = max(0, limits.max_nodes - 1)
+    # Every candidate the rule names, drawn or not — what the tail's total is
+    # counted from, so the remainder is the whole of what is not shown.
+    total = 1 + len(parents) + len(blockers) + len(dependents) + len(deeper)
+    for tier in (
+        _ordered(parents, records),
+        _ordered(blockers, records),
+        _ordered(dependents, records),
+    ):
+        taken = tier[:room]
+        selected.extend(taken)
+        room -= len(taken)
+    if room and deeper:
+        # The last tier, and the only one whose RECORDS wait on a slot being
+        # left for it: with the cap already spent, depth 2 is counted rather
+        # than drawn, and reading a record apiece would be a fan-out nothing
+        # renders.
+        await _resolve(lithos, deeper, known, records, unknown, limiter, tally)
+        selected.extend(_ordered(deeper, records)[:room])
 
     scope = _scope(
         task_id=focal.id,
@@ -258,7 +269,7 @@ async def load_mini_graph(
         unknown=unknown,
         edges=edges,
         incomplete=incomplete,
-        entries=(*entries, *deeper_entries),
+        entries=(*entries, *epic_entries, *deeper_entries),
         tally=tally,
     )
     topology = build_topology(
@@ -307,7 +318,13 @@ async def load_mini_graph(
         # The remainder is the same number either way, which is the figure the
         # cap is actually accountable for.
         tail=PageTail(
-            shown=len(selected) - 1, total=total - 1, size=limits.max_nodes - 1
+            shown=len(selected) - 1,
+            total=total - 1,
+            # EXPLICIT, including zero: a cap of one leaves no room beside the
+            # focal task, and a tail that fell back to the detail page's
+            # 25-row default there would print "the first 25 are listed above"
+            # over a picture showing none of them.
+            size=max(0, limits.max_nodes - 1),
         ),
         focus_url=(
             graph_url(
@@ -387,6 +404,68 @@ def _neighbours(
     return tuple(found)
 
 
+async def _parent_epic(
+    lithos: GraphScopeClient,
+    edges: Mapping[tuple[str, str, str], EdgeRecord],
+    focal_id: str,
+    *,
+    cache: GraphCache,
+    limiter: asyncio.Semaphore,
+    tally: CacheTally,
+    known: Mapping[str, TaskRecord],
+    records: dict[str, TaskRecord],
+    unknown: set[str],
+) -> tuple[str, tuple[EdgeCacheEntry, ...]]:
+    """The nearest ANCESTOR EPIC, walking ``parent_child`` up from the focal.
+
+    D11's hierarchy tier is "the parent epic", and an immediate parent is not
+    one: Lithos's hierarchy is a forest of TASKS (``epic`` is a task type, not
+    a level), so ``epic -> middle -> focal`` is a legal shape in which the
+    immediate parent is a plain task. Taking it would both label a task as the
+    epic and leave the real one off the picture, so the chain is walked — one
+    hop at a time through the same cache, bounded by
+    ``task_links.PARENT_BREADCRUMB_MAX_DEPTH`` and by a seen-set, which is the
+    bound and the cycle guard the detail page's own breadcrumb walk uses.
+
+    Three answers end the walk with NO epic, and each is the honest one:
+    nothing above the focal, no epic below the depth bound, and an ancestor
+    whose own record could not be read — Lens cannot say whether an unread
+    ancestor is the epic, and a tier that guessed would put a wrong label on
+    the picture.
+
+    An epic further up than the immediate parent is drawn as a labelled node
+    with no edge to it: the tasks BETWEEN them are not members of this scope
+    (D11 asks for one node, not the chain), and an edge straight from the epic
+    to the focal would be a relation Lithos never wrote.
+    """
+    entries: list[EdgeCacheEntry] = []
+    seen = {focal_id}
+    # Lithos enforces a single parent, so the first is the chain; a second one
+    # would be a forest violation and this tier is not a place to render it.
+    above = _neighbours(edges, focal_id, (PARENT_EDGE_TYPE,), up=True)
+    ancestor = above[0] if above else ""
+    for _ in range(PARENT_BREADCRUMB_MAX_DEPTH):
+        if not ancestor or ancestor in seen:
+            break
+        seen.add(ancestor)
+        await _resolve(lithos, (ancestor,), known, records, unknown, limiter, tally)
+        record = records.get(ancestor)
+        if record is None:
+            break
+        if record.task_type == EPIC_TASK_TYPE:
+            return ancestor, tuple(entries)
+        step, _ = await read_edges(lithos, (record,), cache, limiter, tally)
+        entries.extend(step)
+        parents = _neighbours(
+            _index(entry.edges for entry in step),
+            ancestor,
+            (PARENT_EDGE_TYPE,),
+            up=True,
+        )
+        ancestor = parents[0] if parents else ""
+    return "", tuple(entries)
+
+
 def _fresh(candidates: Sequence[str], claimed: set[str]) -> tuple[str, ...]:
     """Ids no earlier tier took, claiming them for this one as it goes."""
     taken: list[str] = []
@@ -418,6 +497,12 @@ async def _resolve(
     the marker says exactly what happened.
     """
     resolved, pending = partition_far_endpoints(candidates, tuple(known.values()))
+    # Anything an earlier phase already read — the ancestor walk and the
+    # neighbour tiers overlap when one task both parents and blocks this one —
+    # is answered from what is in hand rather than read a second time.
+    warm = {task_id: records[task_id] for task_id in pending if task_id in records}
+    resolved.update(warm)
+    pending = tuple(task_id for task_id in pending if task_id not in warm)
     # The gather is cancelled with the deadline, so `resolved` holds whatever
     # landed before it; the rest fall through as unknown below, which is the
     # same answer a failed read gets.
@@ -438,17 +523,23 @@ def _record(records: Mapping[str, TaskRecord], task_id: str) -> TaskRecord:
 def _ordered(candidates: Sequence[str], records: Mapping[str, TaskRecord]) -> list[str]:
     """One tier in (``created_at``, ``id``) order — D11's within-tier rule.
 
-    A candidate whose record could not be read has no ``created_at`` to sort
-    by and takes the empty string, which is where ``graph_layout``'s own
-    ordering puts an unknown timestamp too.
+    The timestamp is NORMALISED to UTC before it is compared, exactly as
+    ``graph_layout``'s own ordering does it: two legal ISO stamps written at
+    different offsets order lexically the wrong way round
+    (``2026-09-01T00:30:00+01:00`` is BEFORE ``2026-09-01T00:00:00+00:00``),
+    and at the cap that decides which task is drawn and which is only counted.
+
+    A candidate whose record could not be read — or whose stamp cannot be
+    parsed — has no time to sort by and takes the empty string, which is where
+    that same ordering puts an unknown timestamp too.
     """
-    return sorted(
-        candidates,
-        key=lambda task_id: (
-            records[task_id].created_at if task_id in records else "",
-            task_id,
-        ),
-    )
+
+    def key(task_id: str) -> tuple[str, str]:
+        record = records.get(task_id)
+        parsed = parse_timestamp(record.created_at) if record is not None else None
+        return (parsed.isoformat() if parsed is not None else "", task_id)
+
+    return sorted(candidates, key=key)
 
 
 # ── The scope, and the views over it ───────────────────────────────────

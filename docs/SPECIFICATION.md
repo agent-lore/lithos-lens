@@ -669,9 +669,21 @@ which way an arrow reads.
   to depth 2, outgoing to depth 1, and the parent epic as a single labelled
   node. `discovered_from` is excluded in both directions: the page renders
   provenance as its own text section, and a non-blocking relation inside a
-  picture read as blocking would be misread. Depth-2 blockers are enumerated
-  from the depth-1 blockers that are actually DRAWN — a blocker the cap cut is
-  not on the picture, so its own blockers are not part of it either.
+  picture read as blocking would be misread. Depth 2 is enumerated from EVERY
+  depth-1 blocker, the ones the cap cut included, because the remainder below
+  counts the whole neighbourhood the rule names; only the RECORDS behind
+  depth 2 wait until a slot could still hold one.
+- **The parent epic is an ancestor, not the immediate parent.** `epic` is a
+  task type rather than a level of the hierarchy, so `epic -> task -> task` is
+  a legal shape and the nearest parent is routinely a plain task. The
+  `parent_child` chain is walked up to the first epic, bounded by the same
+  depth limit and seen-set as the detail page's breadcrumb; a chain with no
+  epic in it, or one whose next ancestor could not be read, yields no
+  hierarchy node at all rather than a plain task labelled as one. When the
+  epic is further up than the immediate parent it is drawn as a labelled node
+  with no edge: the tasks between are not members of this scope, and an edge
+  straight from the epic to the focal task would be a relation Lithos never
+  wrote.
 - **The cap counts the focal task.** `[graph].mini_graph_max_nodes` (40) is the
   whole picture, filled in one deterministic priority — focal task, parent
   epic, depth-1 blockers, depth-1 dependents, depth-2 blockers, each tier in
@@ -681,7 +693,9 @@ which way an arrow reads.
   this list rather than the 25-row neighbour page every other list on the page
   uses. That tail counts NEIGHBOURS: the cap includes the focal task, the
   sentence is about the tasks around it, and the remainder — the figure the cap
-  is accountable for — is the same number either way.
+  is accountable for — is the same number either way. A cap of one is a legal
+  configuration and the boundary of that arithmetic: no neighbour is drawn, and
+  the tail says so rather than falling back to the page's default size.
 - **There are no ghosts.** Every node is a task the neighbourhood named, drawn
   as itself; a depth-1 dependent is a leaf because the scope STOPS there, not
   because Lens could not read it. The two completeness markers mean what they
@@ -710,7 +724,12 @@ which way an arrow reads.
   re-fetched and re-drawn with it — deliberately, because the picture and the
   chain beneath it may not disagree, and unlike the graph page there is no
   exploration state to lose. The layout is deterministic from the server's
-  roots, so an unchanged neighbourhood redraws in the same places. The
+  roots, so an unchanged neighbourhood redraws in the same places. That swap
+  is a hand-made one (`tasks.js` parses and inserts the fragment itself), so
+  no HTMX cleanup runs behind it and the incoming boot DISPOSES of the picture
+  it replaces — the Cytoscape instance, its resize observer and the
+  claimed-node animation — instead of leaving one of each running on a
+  detached element per task event. The
   exploration classes are off — every node on a mini-graph is in the focal
   task's neighbourhood, so lighting them would say nothing — and a
   neighbourhood too large for the box says so rather than being scaled below

@@ -45,6 +45,18 @@
   the styling vocabulary, the arrowheads, the layout, the fit — which is D11's
   "same client module" and the reason this is not a second file.
 */
+//: Teardown for the mini-graph currently on screen, or null.
+//
+// The detail page's reconcile REPLACES the whole detail article (`tasks.js`
+// swaps a parsed fragment in by hand), so the canvas this file drew into is
+// detached with no HTMX cleanup event behind it and no `beforeunload` to
+// follow. Cytoscape does not notice: its instance, its `ResizeObserver` and a
+// claimed node's repeating animation all stay live on a node nothing can see.
+// One swap per task event, on a tab left open for a day, is a leak that grows
+// with fleet traffic — so the incoming boot disposes of the outgoing picture
+// before it draws (round-1 correctness f-005).
+let disposeLensMiniGraph = null;
+
 const initLensGraph = function () {
   const container = document.querySelector("[data-graph-canvas]");
   // Already drawn: this is a later swap on a page whose canvas is up, and
@@ -64,6 +76,12 @@ const initLensGraph = function () {
   // an unreadable payload, an empty node set — must not be re-attempted by
   // every later swap on the page.
   container.dataset.graphDrawn = "true";
+  // …and the picture this one replaces goes now, whether or not this boot
+  // gets as far as drawing: the element it was drawn into is already detached.
+  if (mini && disposeLensMiniGraph) {
+    disposeLensMiniGraph();
+    disposeLensMiniGraph = null;
+  }
 
   let payload = null;
   try {
@@ -1332,13 +1350,13 @@ const initLensGraph = function () {
     return (window.LithosLens || {}).panel || null;
   }
 
-  document.addEventListener("click", function (event) {
+  // NOT INSTALLED in mini mode. Every control below is the graph PAGE's — the
+  // overlay and isolated toggles, the search results, the show-as-text button
+  // — so a mini-graph has nothing to answer for; and a listener on `document`
+  // outlives the element the picture was drawn into, which is how a page that
+  // re-swaps its detail fragment would accumulate one per swap.
+  if (!mini) document.addEventListener("click", function (event) {
     if (event.defaultPrevented) return;
-    // Every control below is the graph PAGE's: the overlay and isolated
-    // toggles, the search results, the show-as-text button. A mini-graph has
-    // none of them, and a handler bound from it would answer for the page's
-    // if both were ever on one document.
-    if (mini) return;
     // Modified and non-primary clicks keep their browser meaning — these are
     // real links, and "open in a new tab" has to stay that.
     if (event.button !== undefined && event.button !== 0) return;
@@ -1539,10 +1557,11 @@ const initLensGraph = function () {
   // the panel opening BESIDE the canvas (D9) — which narrows it — would leave
   // the graph drawn across the panel that just opened. Same for a window
   // resize. Re-measured and re-fitted, never re-laid-out.
+  let resizeObserver = null;
   if (typeof window.ResizeObserver === "function") {
     let width = container.clientWidth;
     let height = container.clientHeight;
-    new window.ResizeObserver(function () {
+    resizeObserver = new window.ResizeObserver(function () {
       if (container.clientWidth === width && container.clientHeight === height) {
         return;
       }
@@ -1555,7 +1574,24 @@ const initLensGraph = function () {
       // the panel beside the canvas is — would otherwise undo the centring the
       // click that opened it just applied (round-1 correctness f-003).
       centreFocus();
-    }).observe(container);
+    });
+    resizeObserver.observe(container);
+  }
+
+  // Everything this boot holds that outlives its element, in one place. Only
+  // a mini-graph registers it: the graph page's canvas lives as long as its
+  // document, and a disposer there would be a handle nothing ever pulls.
+  let disposed = false;
+  if (mini) {
+    disposeLensMiniGraph = function () {
+      disposed = true;
+      if (resizeObserver) resizeObserver.disconnect();
+      // Stops the renderer, the event handlers and every running animation —
+      // including the claimed-node pulse, which re-arms itself from its own
+      // completion callback and is guarded by `disposed` as well, because a
+      // completion already queued must not start the next one.
+      cy.destroy();
+    };
   }
 
   // ── First paint ────────────────────────────────────────────────────────
@@ -1575,7 +1611,10 @@ const initLensGraph = function () {
       const breathe = function (to, next) {
         node.animate({ style: { "overlay-opacity": to } }, { duration: 900, complete: next });
       };
-      const loop = function () { breathe(0.2, function () { breathe(0.06, loop); }); };
+      const loop = function () {
+        if (disposed) return;
+        breathe(0.2, function () { breathe(0.06, loop); });
+      };
       loop();
     });
   }

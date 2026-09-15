@@ -31,6 +31,7 @@ from lithos_lens.graph_mini import (
     MiniGraphLimits,
     load_mini_graph,
 )
+from lithos_lens.task_links import BLOCKER_EDGE_TYPES
 from lithos_lens.tasks import TaskRecord, TaskStatusName
 from tests.test_graph_page import GraphFakeClient, client_for, dataset
 
@@ -103,7 +104,9 @@ def tail_of(html: str) -> tuple[int, str]:
 # ── Membership: two hops up, one down, the parent epic ──────────────────
 
 
+@pytest.mark.parametrize("edge_type", BLOCKER_EDGE_TYPES)
 def test_a_blocked_task_draws_two_hops_up_one_down_and_its_parent(
+    edge_type: str,
     lithos_lens_config_env: Path,
 ) -> None:
     """The slice's first acceptance criterion, verbatim.
@@ -112,6 +115,12 @@ def test_a_blocked_task_draws_two_hops_up_one_down_and_its_parent(
     epic parents it: the mini-graph is exactly those five nodes. C is depth 2
     upstream (reached through B's own edge list), D is depth 1 downstream, and
     E — a dependent of D — is depth 2 DOWNSTREAM, which the rule stops before.
+
+    Run over BOTH blocker edge types at every one of those positions. D11 names
+    ``blocks`` and ``waits_on_gate`` together and never distinguishes them, so
+    a rule applied to one and not the other — a `waits_on_gate` predecessor
+    dropped two hops up, a gated dependent missing downstream — is a defect
+    this fixture has to be able to see.
     """
     fake = GraphFakeClient(
         dataset(
@@ -124,10 +133,10 @@ def test_a_blocked_task_draws_two_hops_up_one_down_and_its_parent(
                 made("e", created_at="2026-09-01T00:00:06+00:00"),
             ],
             [
-                ("c", "b", "blocks"),
-                ("b", "task", "blocks"),
-                ("task", "d", "blocks"),
-                ("d", "e", "blocks"),
+                ("c", "b", edge_type),
+                ("b", "task", edge_type),
+                ("task", "d", edge_type),
+                ("d", "e", edge_type),
                 ("epic", "task", "parent_child"),
             ],
         )
@@ -136,9 +145,9 @@ def test_a_blocked_task_draws_two_hops_up_one_down_and_its_parent(
 
     assert node_ids(html) == {"c", "b", "task", "d", "epic"}
     assert edge_pairs(html) == {
-        ("c", "b", "blocks"),
-        ("b", "task", "blocks"),
-        ("task", "d", "blocks"),
+        ("c", "b", edge_type),
+        ("b", "task", edge_type),
+        ("task", "d", edge_type),
         ("epic", "task", "parent_child"),
     }
 
@@ -174,7 +183,13 @@ def test_provenance_is_never_drawn_in_a_mini_graph(
 def test_a_waits_on_gate_blocker_is_drawn_like_any_other(
     lithos_lens_config_env: Path,
 ) -> None:
-    """Both blocker edge types are in scope upstream AND downstream (D11)."""
+    """A gate is a node like any other, carrying the type the canvas shapes by.
+
+    Where the two blocker edge types are ADMITTED is the membership test
+    above, which runs over both at every depth; what this adds is the `gate`
+    task type travelling into the payload, since shape = type is half of the
+    vocabulary D11 shares with the graph page.
+    """
     fake = GraphFakeClient(
         dataset(
             [
@@ -368,6 +383,269 @@ def test_depth_two_blockers_fill_last_and_are_counted_when_they_do_not_fit(
     assert tail_of(html)[0] == 1
 
 
+def test_depth_two_is_counted_for_a_blocker_the_cap_left_out(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D11's remainder is the whole neighbourhood, not the drawn part of it.
+
+    Forty depth-1 blockers, each with one distinct blocker of its own: the
+    rule names eighty neighbours, the cap draws thirty-nine, and forty-one are
+    not shown. Enumerating depth 2 only from the blockers that FIT would leave
+    the fortieth blocker's own predecessor out of both the picture and the
+    count — a remainder that reads as exact while quietly understating what
+    surrounds the task (round-1 correctness f-001).
+    """
+    tasks = [made("task", created_at="2026-09-01T00:00:00+00:00")]
+    edges: list[tuple[str, str, str]] = []
+    for index in range(CAP):
+        blocker = f"b{index:02d}"
+        deeper = f"deep{index:02d}"
+        tasks.append(made(blocker, created_at=f"2026-09-02T00:{index:02d}:00+00:00"))
+        tasks.append(made(deeper, created_at=f"2026-09-03T00:{index:02d}:00+00:00"))
+        edges.append((blocker, "task", "blocks"))
+        edges.append((deeper, blocker, "blocks"))
+    fake = GraphFakeClient(dataset(tasks, edges))
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    drawn = node_ids(html)
+    assert len(drawn) == CAP
+    assert drawn == {"task"} | {f"b{index:02d}" for index in range(CAP - 1)}
+    remaining, sentence = tail_of(html)
+    assert remaining == 41, "the capped-out blocker's own blocker went uncounted"
+    assert "This task has 80 related tasks in all" in sentence
+    # Every depth-1 blocker's edge list was read — that IS the enumeration, and
+    # the count above cannot be honest without it.
+    assert {f"b{index:02d}" for index in range(CAP)} <= set(fake.edge_calls)
+
+
+def test_the_blocker_tier_draws_the_oldest_blockers_when_the_cap_binds(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The within-tier rule holds in the BLOCKER tier, not only among dependents.
+
+    Sixty blockers sharing one ``created_at``, their edges written in reverse
+    id order: the answer rests entirely on the ``id`` tie-break, so an
+    implementation that kept the edge list's own order would draw the wrong
+    thirty-nine.
+    """
+    tasks = [made("task", created_at="2026-09-01T00:00:00+00:00")]
+    edges: list[tuple[str, str, str]] = []
+    for index in reversed(range(60)):
+        blocker = f"b{index:02d}"
+        tasks.append(made(blocker, created_at="2026-09-02T00:00:00+00:00"))
+        edges.append((blocker, "task", "blocks"))
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert node_ids(html) == {"task"} | {f"b{index:02d}" for index in range(CAP - 1)}
+
+
+@pytest.mark.parametrize(
+    ("max_nodes", "drawn"),
+    [
+        # The cap lands INSIDE each multi-node tier in turn — the blockers,
+        # then the dependents, then the depth-2 blockers — so a tie-break
+        # regression is visible wherever it is made.
+        (2, {"task", "b-first"}),
+        (4, {"task", "b-first", "b-second", "d-first"}),
+        (
+            6,
+            {"task", "b-first", "b-second", "d-first", "d-second", "deep-first"},
+        ),
+    ],
+)
+async def test_a_capped_tier_breaks_ties_on_the_id_when_the_stamps_match(
+    max_nodes: int, drawn: set[str]
+) -> None:
+    """Equal ``created_at`` across all three tiers, edges written in reverse order.
+
+    Every candidate here was created at the same instant, so ``id`` is the
+    whole of the answer — and every edge is written second-before-first, so an
+    implementation that followed the edge list would draw the other one.
+    """
+    tasks = [made("task", created_at="2026-09-01T00:00:00+00:00")]
+    edges: list[tuple[str, str, str]] = []
+    for name in ("b-second", "b-first"):
+        tasks.append(made(name, created_at="2026-09-02T00:00:00+00:00"))
+        edges.append((name, "task", "blocks"))
+    for name in ("d-second", "d-first"):
+        tasks.append(made(name, created_at="2026-09-02T00:00:00+00:00"))
+        edges.append(("task", name, "blocks"))
+    for name in ("deep-second", "deep-first"):
+        tasks.append(made(name, created_at="2026-09-02T00:00:00+00:00"))
+        edges.append((name, "b-first", "blocks"))
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    view = await load_mini_graph(
+        fake,
+        "task",
+        master=[],
+        cache=GraphCache(),
+        limits=MiniGraphLimits(max_nodes=max_nodes),
+    )
+
+    assert {node.id for node in view.nodes} == drawn
+    # Six neighbours however few of them fit: two blockers, two dependents and
+    # the two blockers of `b-first`.
+    assert view.tail.total == 6
+    assert view.tail.remaining == 6 - (len(drawn) - 1)
+
+
+async def test_a_tier_orders_by_the_instant_not_by_the_timestamp_string() -> None:
+    """Two legal ISO stamps at different offsets (round-1 correctness f-003).
+
+    ``+01:00`` at 00:30 is 23:30 UTC the day before — chronologically BEFORE
+    ``+00:00`` at 00:00 — while lexically it sorts after. With one slot left,
+    a string comparison draws the newer task and hides the older one, which is
+    the opposite of the rule D11 states.
+    """
+    tasks = (
+        made("task", created_at="2026-09-01T00:00:00+00:00"),
+        made("a-newer", created_at="2026-09-01T00:00:00+00:00"),
+        made("z-older", created_at="2026-09-01T00:30:00+01:00"),
+    )
+    edges = (("task", "a-newer", "blocks"), ("task", "z-older", "blocks"))
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    view = await load_mini_graph(
+        fake, "task", master=[], cache=GraphCache(), limits=MiniGraphLimits(max_nodes=2)
+    )
+
+    assert {node.id for node in view.nodes} == {"task", "z-older"}
+    assert view.tail.remaining == 1
+
+
+async def test_a_cap_of_one_draws_the_focal_task_and_says_so() -> None:
+    """The configured lower boundary (round-1 correctness f-004).
+
+    ``mini_graph_max_nodes = 1`` is a legal value and the exact edge of a cap
+    that counts the focal task: no neighbour may be drawn, and the tail has to
+    say the size it applied. A page size that fell back to the detail page's
+    25 would claim twenty-five listed rows above an empty picture.
+    """
+    tasks, edges = runaway(3)
+    fake = GraphFakeClient(dataset(tasks, edges))
+
+    view = await load_mini_graph(
+        fake, "task", master=[], cache=GraphCache(), limits=MiniGraphLimits(max_nodes=1)
+    )
+
+    assert {node.id for node in view.nodes} == {"task"}
+    assert view.tail.shown == 0
+    assert view.tail.total == 3
+    assert view.tail.remaining == 3
+    assert view.tail.page_size == 0
+
+
+def test_a_cap_of_one_renders_a_tail_that_names_the_size_it_applied(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """…and the sentence an operator reads says none were listed, not 25."""
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "1")
+    tasks, edges = runaway(3)
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert node_ids(html) == {"task"}
+    remaining, sentence = tail_of(html)
+    assert remaining == 3
+    assert "3 more related tasks not shown." in sentence
+    assert "the first 0 are listed above" in sentence
+
+
+def test_the_route_passes_the_configured_cap_into_the_assembly(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The knob reaches the fragment through the ROUTE, not only the function.
+
+    `[graph].mini_graph_max_nodes` is parsed by config tests and honoured by
+    `load_mini_graph`'s own tests; this is the wire between them, and without
+    it the route could hand the assembly its default and every other test
+    would still pass.
+    """
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "6")
+    tasks, edges = runaway(12)
+    html = fragment(
+        lithos_lens_config_env, GraphFakeClient(dataset(tasks, edges)), "task"
+    )
+
+    assert len(node_ids(html)) == 6
+    remaining, sentence = tail_of(html)
+    assert remaining == 7
+    assert "the first 5 are listed above" in sentence
+
+
+# ── The parent tier is the parent EPIC ──────────────────────────────────
+
+
+def test_the_parent_tier_walks_past_a_plain_task_to_the_epic(
+    lithos_lens_config_env: Path,
+) -> None:
+    """`epic -> middle -> focal` is a legal hierarchy (round-1 correctness f-002).
+
+    ``epic`` is a task TYPE, not a level, so the immediate parent is routinely
+    a plain task. D11 asks for the parent EPIC: the walk climbs to it, and the
+    task in between is not a member of this scope — one labelled node, not the
+    chain. There is no direct edge between them for the same reason, and
+    inventing one would be a relation Lithos never wrote.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("epic", created_at="2026-09-01T00:00:00+00:00", task_type="epic"),
+                made("middle", created_at="2026-09-01T00:00:01+00:00"),
+                made("task", created_at="2026-09-01T00:00:02+00:00"),
+            ],
+            [("epic", "middle", "parent_child"), ("middle", "task", "parent_child")],
+        )
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task", "epic"}
+    assert edge_pairs(html) == set()
+
+
+def test_a_task_with_no_ancestor_epic_gets_no_parent_node(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A plain parent is not an epic, and the tier says nothing rather than lying."""
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("plain", created_at="2026-09-01T00:00:00+00:00"),
+                made("task", created_at="2026-09-01T00:00:01+00:00"),
+            ],
+            [("plain", "task", "parent_child")],
+        )
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task"}
+    assert 'data-link-tail="minigraph"' not in html, "an absent tier is not a remainder"
+
+
+def test_the_parent_walk_stops_on_a_cycle_rather_than_climbing_forever(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The hierarchy is a forest by contract, and a broken one is still bounded."""
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("up", created_at="2026-09-01T00:00:00+00:00"),
+                made("task", created_at="2026-09-01T00:00:01+00:00"),
+            ],
+            [("up", "task", "parent_child"), ("task", "up", "parent_child")],
+        )
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"task"}
+
+
 # ── The focus link, and the fragment's own chrome ───────────────────────
 
 
@@ -419,6 +697,49 @@ def test_the_fragment_carries_the_legend_for_the_edges_it_drew(
     assert 'data-legend-edge="blocks"' in html
     assert "A → B means A blocks B" in html
     assert 'data-legend-edge="parent_child"' not in html
+
+
+def test_the_fragment_renders_no_layers_chain_or_node_list_of_its_own(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D11: "it renders no layers of its own" — the text below IS the baseline.
+
+    The graph page's text hooks are the ones that would duplicate it: layers,
+    the longest-chain line, the per-node rows, the hierarchy tree and the
+    isolated disclosure. A second rendering of the blocker chain here would
+    not fail any assertion about what the PAGE shows, so the absence is
+    asserted against the fragment itself.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("epic", created_at="2026-09-01T00:00:00+00:00", task_type="epic"),
+                made("b", created_at="2026-09-01T00:00:01+00:00"),
+                made("task", created_at="2026-09-01T00:00:02+00:00"),
+                made("d", created_at="2026-09-01T00:00:03+00:00"),
+            ],
+            [
+                ("b", "task", "blocks"),
+                ("task", "d", "blocks"),
+                ("epic", "task", "parent_child"),
+            ],
+        )
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    # The payload carries every node; the MARKUP names none of them.
+    assert node_ids(html) == {"epic", "b", "task", "d"}
+    for hook in (
+        "data-graph-layers",
+        "data-graph-layer=",
+        "data-graph-node=",
+        "data-longest-chain",
+        "data-chain-nodes",
+        "data-hierarchy-tree",
+        "data-isolated-disclosure",
+        "data-graph-text",
+    ):
+        assert hook not in html, f"the mini-graph rendered {hook} text of its own"
 
 
 def test_the_payload_turns_the_hierarchy_overlay_on(
