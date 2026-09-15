@@ -546,9 +546,17 @@ and the header beside them — title, type, status badge — from a later, separ
 `task_get`. A task that resolves between the two would put "Completing this
 frees N …" under a `completed` badge, or the resolved wording under an `open`
 one. So the impact is kept only while the badge's own status is the state it
-was counted for, and otherwise degrades to the same withheld line. Either way
-the impact costs the line and nothing else: a scope that fails, is refused, or
-does not hold the task renders the rest of the panel unchanged.
+was counted for, and a disagreement is answered by which way it runs. A badge
+that has **resolved** states D10's own wording for that state — "completed; no
+pending impact", or the cancelled wording — because that answer needs no
+arithmetic, and a refresh notice there would be the forbidden future tense in
+another sentence; the parts of the line that belong to the graph rather than to
+the focal status (the chain position, the lower-bound note) carry over
+unchanged. Every other disagreement — figures counted for a resolved task under
+an **open** badge, a status Lens cannot name, a task the panel could not read
+at all — has no fact to state and degrades to the withheld line above. Either
+way the impact costs the line and nothing else: a scope that fails, is refused,
+or does not hold the task renders the rest of the panel unchanged.
 
 An unknown id renders the **not-found panel** at HTTP 200 on both routes —
 never a 500, and never at the cost of the board beside it — and a read that

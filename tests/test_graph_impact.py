@@ -956,16 +956,20 @@ class CompletingClient(GraphFakeClient):
         return await super().task_get(task_id)
 
 
-def test_a_focus_that_completes_while_the_page_reads_it_carries_no_numbers(
+def test_a_focus_that_completes_while_the_page_reads_it_says_it_completed(
     lithos_lens_config_env: Path,
 ) -> None:
     """A focused panel is TWO reads: the impact is this render's arithmetic
     over the graph it assembled, and the badge above it is a later `task_get`.
     A task that completes between them would put "Completing this frees 3 in
     this graph" under a `completed` badge — the one sentence D10 says a
-    resolved task must never carry (round-2 correctness f-002). The figures go
-    rather than the badge: they were counted for a task that is no longer in
-    that state, and nothing on this page can recount them."""
+    resolved task must never carry (round-2 correctness f-002).
+
+    The figures go rather than the badge, and what replaces them is D10's own
+    answer for a resolved task rather than a refresh notice: "completed; no
+    pending impact" needs no arithmetic, and telling the operator to refresh —
+    in the future tense D10 forbids a resolved task — would be the same defect
+    in another sentence (round-3 correctness f-002)."""
     fake = CompletingClient(impact_dataset(), resolved_focus_dataset(), "root")
 
     html = get(
@@ -975,11 +979,16 @@ def test_a_focus_that_completes_while_the_page_reads_it_carries_no_numbers(
     assert fake.completed, "the panel never read the focal task"
     # The badge the operator sees is the panel's own read …
     assert 'class="badge badge-completed">completed</span>' in html
-    # … and no future-tense number is under it.
-    assert "in this graph" not in slot(html)
+    # … and under it, the line D10 gives that state — no numbers, no future
+    # tense, no refresh notice.
+    assert slot(html).startswith("This task is completed; no pending impact.")
+    assert attribute(html, "data-impact-state") == "completed"
     assert attribute(html, "data-impact-frees") == ""
-    assert "This graph has changed" in slot(html)
-    assert attribute(html, "data-impact-state") == "stale"
+    assert "in this graph" not in slot(html)
+    assert "refresh" not in slot(html)
+    # The rest of the line belongs to the GRAPH, not to the focal status, so it
+    # survives: this task still sits where it did on the longest chain.
+    assert "On the longest chain (1 of 3)." in slot(html)
 
 
 class CompletingMidPanelClient(GraphFakeClient):
@@ -1449,18 +1458,42 @@ def test_the_fingerprint_ignores_the_order_two_reads_merged_in() -> None:
 
 
 def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None:
-    """The join itself, at the four answers it has to give. A panel whose task
-    could not be read has no badge for the figures to agree WITH, so it reads
-    the same way a disagreement does — its own markup carries the failure."""
-    open_impact = DownstreamImpact(focus="root", state="open", frees=3, immediately=1)
+    """The join itself, at every answer it has to give. Agreement passes the
+    line through untouched; a badge that has RESOLVED states D10's own wording
+    for that state; and everything else — figures counted for a resolved task
+    under an open badge, a status Lens cannot name, a task the panel could not
+    read at all — has no fact to state and degrades to the neutral line."""
+    open_impact = DownstreamImpact(
+        focus="root",
+        state="open",
+        frees=3,
+        immediately=1,
+        relations_exact=False,
+        chain_position=1,
+        chain_length=3,
+    )
     done = DownstreamImpact(focus="root", state="completed")
 
+    # Agreement: the same object, not a rebuilt one.
     assert reconciled_impact(open_impact, task("root")) is open_impact
     assert reconciled_impact(done, task("root", status="completed")) is done
     assert reconciled_impact(None, task("root")) is None
+
+    # A resolved badge is answered in D10's words for it …
+    for status in ("completed", "cancelled"):
+        resolved = reconciled_impact(open_impact, task("root", status=status))
+        assert resolved is not None
+        assert resolved.state == status
+        assert resolved.frees == 0
+        # … and the parts of the line that belong to the GRAPH survive, which
+        # is exactly what `downstream_impact` builds for a resolved node.
+        assert resolved.relations_exact is False
+        assert (resolved.chain_position, resolved.chain_length) == (1, 3)
+
+    # … and every other disagreement has nothing to state.
     for mismatch, record in (
-        (open_impact, task("root", status="completed")),
         (done, task("root")),
+        (open_impact, replace(task("root"), status="archived")),  # type: ignore[arg-type]
         (open_impact, None),
     ):
         answer = reconciled_impact(mismatch, record)

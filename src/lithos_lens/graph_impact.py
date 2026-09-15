@@ -329,17 +329,42 @@ def reconciled_impact(
     resolved task must never carry (round-2 correctness f-002).
 
     So the impact is kept only while the badge's own status is the one it was
-    counted for, and otherwise degrades to :data:`IMPACT_STALE` — the same
-    answer a moved graph gets from :func:`impact_fingerprint`, for the same
-    reason: the numbers cannot be recomputed from the read that disagreed with
-    them, and a refresh is what resolves it. A panel whose task could not be
-    read at all (``None``) reads the same way; it has no badge to agree with,
-    and its markup carries the failure instead.
+    counted for. A disagreement is answered two ways, because the two
+    directions are not the same question:
+
+    - The badge says **completed or cancelled**. D10 has words for that state
+      and they need no arithmetic — "completed; no pending impact", or the
+      cancelled wording — so the panel STATES them, the way the same task's own
+      render would a moment later (round-3 correctness f-002). Telling the
+      operator to refresh a resolved task, in a future tense D10 forbids it,
+      would be the defect this function exists to prevent wearing another
+      sentence. The rest of the line is the GRAPH's, not the focal status's, so
+      the chain position and the lower-bound note carry over unchanged —
+      exactly what :func:`downstream_impact` builds for a resolved node.
+    - The badge says **open** (or nothing readable) against figures counted for
+      a resolved task, or against a state Lens cannot name. There is no
+      resolved fact to state and the numbers cannot be recomputed from the read
+      that disagreed with them, so the line degrades to :data:`IMPACT_STALE` —
+      the same answer a moved graph gets from :func:`impact_fingerprint`, and a
+      refresh is what resolves it. A panel whose task could not be read at all
+      (``None``) reads the same way: it has no badge to agree with, and its
+      markup carries the failure instead.
     """
     if impact is None:
         return None
-    if task is not None and _focal_state(task.status) == impact.state:
+    if task is None:
+        return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
+    state = _focal_state(task.status)
+    if state == impact.state:
         return impact
+    if state in (IMPACT_COMPLETED, IMPACT_CANCELLED):
+        return DownstreamImpact(
+            focus=impact.focus,
+            state=state,
+            relations_exact=impact.relations_exact,
+            chain_position=impact.chain_position,
+            chain_length=impact.chain_length,
+        )
     return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
 
 
