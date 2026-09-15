@@ -22,7 +22,12 @@ from pathlib import Path
 import pytest
 
 from lithos_lens.fake_dataset import FakeLithosDataset
-from lithos_lens.graph_cycles import READ_BY_PROJECT, CycleSignal, ProjectRead
+from lithos_lens.graph_cycles import (
+    READ_BY_PROJECT,
+    READ_BY_TAG,
+    CycleSignal,
+    ProjectRead,
+)
 from lithos_lens.graph_impact import (
     downstream_impact,
     impact_fingerprint,
@@ -1386,6 +1391,21 @@ MATERIAL_CHANGES: tuple[
             fingerprint_signal(),
         ),
     ),
+    # …and WHICH convention carries a slug, because coverage is decided per
+    # READ: `project=` is matched against the metadata slug alone and `tags=`
+    # against the tag ones (`graph_cycles.read_covers`). The same slug moved
+    # between the two conventions leaves the union — and everything else here
+    # — untouched while the coverage answer behind M changes.
+    (
+        "project convention",
+        lambda: (
+            with_node(
+                1,
+                task=replace(task("one"), tags=(), metadata={"project": PROJECT}),
+            ),
+            fingerprint_signal(),
+        ),
+    ),
     (
         "edge source",
         lambda: (with_edge_record(1, from_task_id="root"), fingerprint_signal()),
@@ -1587,6 +1607,64 @@ def test_two_graphs_that_differ_only_across_a_separator_are_not_the_same() -> No
     stranded = downstream_impact(strands, signal, focus="a")
     assert blocking is not None and blocking.frees == 1
     assert stranded is not None and stranded.frees == 0
+
+
+def convention_scope(*, tagged: bool) -> TaskGraphScope:
+    """`root` blocks one open dependent in `loom`, under ONE convention.
+
+    The two graphs differ in nothing a reader of the canvas could see: same
+    ids, statuses, edges, and the same project slug on the same node — only
+    the place the slug is written moves (§5B.1's two conventions).
+    """
+    dependent = (
+        task("dep")
+        if tagged
+        else replace(task("dep"), tags=(), metadata={"project": PROJECT})
+    )
+    return TaskGraphScope(
+        kind="project",
+        key=PROJECT,
+        nodes=(GraphNode(task("root")), GraphNode(dependent)),
+        edges=(
+            GraphEdge(
+                EdgeRecord(from_task_id="root", to_task_id="dep", type="blocks"),
+                state=EDGE_ACTIVE,
+            ),
+        ),
+    )
+
+
+def test_a_slug_that_moves_between_conventions_is_a_different_answer() -> None:
+    """Coverage belongs to the READ, not to the project (`read_covers`): a
+    complete `project=loom` response establishes the absence of a task whose
+    slug is in `metadata.project` and nothing about one carrying the tag, and
+    the truncated `tags=` half establishes nothing either way. So the same
+    dependent, the same slug, written the other way round is the difference
+    between stating M and withholding it — and a fingerprint over the UNION of
+    the two conventions would call the two graphs the same and print the stale
+    answer beside the picture (external f-001)."""
+    signal = CycleSignal(
+        coverage=(PROJECT,),
+        reads=(
+            ProjectRead(project=PROJECT, by=READ_BY_PROJECT),
+            ProjectRead(project=PROJECT, by=READ_BY_TAG, truncated=True),
+        ),
+    )
+    metadata_side = convention_scope(tagged=False)
+    tagged_side = convention_scope(tagged=True)
+
+    covered = downstream_impact(metadata_side, signal, focus="root")
+    withheld = downstream_impact(tagged_side, signal, focus="root")
+
+    # The complete `project=` read answers for the metadata-stamped dependent…
+    assert covered is not None and covered.frees == 1
+    assert covered.immediately == 0 and covered.covered == 1
+    # …and for the tagged one only the truncated `tags=` read could have.
+    assert withheld is not None and withheld.frees == 1
+    assert withheld.immediately is None and withheld.covered == 0
+    assert impact_fingerprint(metadata_side, signal) != impact_fingerprint(
+        tagged_side, signal
+    )
 
 
 def test_the_fingerprint_ignores_the_order_two_reads_merged_in() -> None:

@@ -521,7 +521,10 @@ does not re-lay-out under the operator (§5.12.1) — so every panel URL the gra
 page emits carries `snapshot=`, a fingerprint of what that render answered.
 It covers **both** authorities, because they move independently and only one of
 them is cached: the node set (id, status, completeness, ghost kind, project
-slugs) and the edge set (endpoints, type, state) that N is walked over, and the
+slugs — kept apart by the convention that carries each, §5B.1, because coverage
+belongs to the read and a slug rewritten from `metadata.project` to a
+`project:<slug>` tag changes which read could have answered for that task) and
+the edge set (endpoints, type, state) that N is walked over, and the
 blocked rows for those nodes — each row's blockers by kind, predecessor, type
 and status — together with the coverage set and each read's outcome, which is
 what decides whether M is stated at all. The blocked half is load-bearing: an

@@ -175,8 +175,9 @@ def impact_fingerprint(
     cached. N is Lens's walk over the scope, so the node set (id, the status
     the count reads, the completeness that turns a status into ``unknown``, the
     ghost kind that decides whether it is drawn at all, and the project slugs
-    coverage is decided by) and the edge set (endpoints, type and the state the
-    active projection is read from) are in it. M is LITHOS's sole-blocker fact,
+    coverage is decided by, kept apart by the convention that carries each) and
+    the edge set (endpoints, type and the state the active projection is read
+    from) are in it. M is LITHOS's sole-blocker fact,
     read fresh on every panel with no cache under it, so the blocked rows for
     the nodes this graph holds — each row's blockers by kind, predecessor, type
     and status — are in it too, along with the coverage set and each read's
@@ -222,7 +223,20 @@ def impact_fingerprint(
                 node.status,
                 node.completeness,
                 node.ghost_kind,
-                sorted(task_projects(node.task, convention="both", tag_key=tag_key)),
+                # Per CONVENTION, never unioned. Coverage belongs to the READ
+                # (``graph_cycles.read_covers``): a complete ``project=<slug>``
+                # response establishes the absence only of tasks carrying that
+                # slug in ``metadata.project``, and a ``tags=`` one only of
+                # tasks carrying the tag. So the same slug rewritten from one
+                # convention to the other — an equivalent-looking edit that
+                # moves no id, no status and no edge — can turn a covered
+                # dependent into an uncovered one and M from a figure into a
+                # withheld line. A digest over the union would call those two
+                # graphs the same and print the stale answer.
+                sorted(
+                    task_projects(node.task, convention="metadata", tag_key=tag_key)
+                ),
+                sorted(task_projects(node.task, convention="tag", tag_key=tag_key)),
             ]
             for node in scope.nodes
         ),
