@@ -29,12 +29,15 @@ inherited:
   ``edge_list`` failed carries ``edges unknown`` — the same two markers, for
   the same two reasons, as everywhere else.
 - **Depth 2 is enumerated from EVERY depth-1 blocker**, including the ones
-  the cap cut. The tail counts the whole neighbourhood D11 defines, so a
-  blocker that is only counted still contributes its own blockers to the
-  remainder; enumerating only the drawn ones would quietly shrink the number
-  an operator reads. What that costs is one cached ``edge_list`` per depth-1
-  blocker — a tier that already costs one record read apiece — and the
-  RECORDS behind depth 2 are read only when a slot could still hold one.
+  the cap cut and the one an earlier TIER drew (a parent epic may also block
+  its own child — Lithos puts no type restriction on ``blocks``). The tail
+  counts the whole neighbourhood D11 defines, so a blocker that is only
+  counted, or drawn as the hierarchy node, still contributes its own blockers
+  to the remainder; enumerating only the drawn blockers would quietly shrink
+  the number an operator reads. What that costs is one cached ``edge_list``
+  per depth-1 blocker — a frontier that already costs one record read apiece
+  — and the RECORDS behind depth 2 are read only when a slot could still hold
+  one.
 
 No cycle signal is read here. Cycle membership is Lithos's verdict from a
 SCOPED ``task_blocked`` read (D4), and a per-task fragment has no scope to
@@ -220,25 +223,33 @@ async def load_mini_graph(
         records=records,
         unknown=unknown,
     )
+    # The DEPTH-1 BLOCKER FRONTIER, before any tier claims it. Tier membership
+    # answers "which node does this id get drawn as", and depth 2 asks a
+    # different question — "whose blockers are depth 2?" — whose answer is
+    # every task with a blocker edge into the focal, however it is drawn. The
+    # two were one list, and the case that separates them is real: Lithos puts
+    # no type restriction on `blocks`, so a parent epic may also block its own
+    # child. The parent tier claimed that epic, the blocker list lost it, and
+    # its own blockers were never read or counted — silently absent from a
+    # picture that reported no remainder (round-5 correctness f-007).
+    frontier = _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=True)
     parents = _fresh((epic,) if epic else (), claimed)
-    blockers = _fresh(
-        _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=True), claimed
-    )
+    blockers = _fresh(frontier, claimed)
     dependents = _fresh(
         _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=False), claimed
     )
     await _resolve(
-        lithos, (*blockers, *dependents), known, records, unknown, limiter, tally
+        lithos, (*frontier, *dependents), known, records, unknown, limiter, tally
     )
 
     # Depth 2 is read from EVERY depth-1 blocker, not only from the ones that
     # fit: the tail counts the whole neighbourhood D11 defines, so a blocker
     # the cap cut still contributes its own blockers to the remainder. The
-    # reads are bounded by the depth-1 tier, which already costs one record
+    # reads are bounded by the depth-1 frontier, which already costs one record
     # read apiece.
     deeper_entries, deeper_incomplete = await read_edges(
         lithos,
-        [_record(records, blocker) for blocker in blockers],
+        [_record(records, blocker) for blocker in frontier],
         cache,
         limiter,
         tally,
@@ -248,7 +259,7 @@ async def load_mini_graph(
     deeper = _fresh(
         [
             blocker_of_blocker
-            for blocker in blockers
+            for blocker in frontier
             for blocker_of_blocker in _neighbours(
                 edges, blocker, BLOCKER_EDGE_TYPES, up=True
             )

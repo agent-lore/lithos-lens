@@ -670,9 +670,13 @@ which way an arrow reads.
   node. `discovered_from` is excluded in both directions: the page renders
   provenance as its own text section, and a non-blocking relation inside a
   picture read as blocking would be misread. Depth 2 is enumerated from EVERY
-  depth-1 blocker, the ones the cap cut included, because the remainder below
-  counts the whole neighbourhood the rule names; only the RECORDS behind
-  depth 2 wait until a slot could still hold one.
+  depth-1 blocker — the ones the cap cut included, and the one an earlier TIER
+  draws (Lithos puts no type restriction on `blocks`, so a parent epic may
+  also block its own child) — because the remainder below counts the whole
+  neighbourhood the rule names. Tier membership decides which node an id is
+  drawn as; the frontier decides whose blockers are depth 2, and they are not
+  the same question. Only the RECORDS behind depth 2 wait until a slot could
+  still hold one.
 - **The parent epic is an ancestor, not the immediate parent.** `epic` is a
   task type rather than a level of the hierarchy, so `epic -> task -> task` is
   a legal shape and the nearest parent is routinely a plain task. The

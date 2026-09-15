@@ -630,6 +630,52 @@ def test_the_parent_tier_walks_past_a_plain_task_to_the_epic(
     assert "data-mini-graph-parent-unknown" not in html, "the tier was decided"
 
 
+def test_a_parent_epic_that_also_blocks_still_contributes_its_own_blockers(
+    lithos_lens_config_env: Path,
+) -> None:
+    """One task, two relations — and depth 2 reaches through it either way.
+
+    Lithos puts no type restriction on ``blocks`` (`lithos_task_edge_upsert`
+    takes any two existing tasks), so a parent epic that also blocks its own
+    child is a graph Lens can be handed. The hierarchy tier draws that epic,
+    which used to remove it from the blocker list — and the blocker list was
+    also the frontier depth 2 was read from, so the epic's OWN blocker was
+    never read, never drawn and never counted, under a tail that reported no
+    remainder (round-5 correctness f-007).
+
+    Tier membership decides which node an id is drawn as; the frontier decides
+    whose blockers are depth 2. They are different questions and this fixture
+    is where they diverge.
+    """
+    fake = GraphFakeClient(
+        dataset(
+            [
+                made("deep", created_at="2026-09-01T00:00:00+00:00"),
+                made("epic", created_at="2026-09-01T00:00:01+00:00", task_type="epic"),
+                made("task", created_at="2026-09-01T00:00:02+00:00"),
+            ],
+            [
+                ("deep", "epic", "blocks"),
+                ("epic", "task", "blocks"),
+                ("epic", "task", "parent_child"),
+            ],
+        )
+    )
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"deep", "epic", "task"}
+    assert edge_pairs(html) == {
+        ("deep", "epic", "blocks"),
+        ("epic", "task", "blocks"),
+        ("epic", "task", "parent_child"),
+    }
+    # Two neighbours, both drawn: nothing to report as a remainder.
+    assert 'data-link-tail="minigraph"' not in html
+    # The read that makes the count honest: the epic's edge list, even though
+    # the epic is drawn by the hierarchy tier rather than the blocker one.
+    assert sorted(fake.edge_calls) == ["epic", "task"]
+
+
 def test_a_task_with_no_ancestor_epic_gets_no_parent_node(
     lithos_lens_config_env: Path,
 ) -> None:
