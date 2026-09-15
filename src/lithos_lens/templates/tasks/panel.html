@@ -181,11 +181,13 @@
         {% elif impact.state == "unknown" %}
           <p class="panel-impact" data-panel-impact data-impact-state="unknown">This task's status could not be read, so its impact is unknown.</p>
         {% elif impact.stale %}
-          {# `none` over a MOVED graph. The state above says "refresh to see
-             what completing this frees", which is a future-tense impact line
-             and the one sentence D10 forbids an epic — so the degradation is
-             stated without it, and the notes below are dropped with the
-             figures, being claims about a picture this answer is no longer of. #}
+          {# `none` over a graph whose PICTURE moved. The state above says
+             "refresh to see what completing this frees", which is a
+             future-tense impact line and the one sentence D10 forbids an epic
+             — so the degradation is stated without it, and the notes below go
+             with it, being claims about a canvas this answer is no longer of.
+             A move in the blocked rows alone never reaches here: an epic
+             states no figures for those to falsify. #}
           <p class="panel-impact" data-panel-impact data-impact-state="none" data-impact-stale="true">This graph has changed — refresh to see what surrounds this.</p>
         {% endif %}
         {#

@@ -85,10 +85,10 @@ IMPACT_COMPLETED = "completed"
 IMPACT_CANCELLED = "cancelled"
 IMPACT_UNKNOWN = "unknown"
 #: A focal node D10 gives no figures at all — an epic, which carries no
-#: ``blocks`` edges. The line is not "zero freed"; there is no N to state. The
-#: view model still exists, because D8's statement about the LIT SET is a
-#: separate claim about the CANVAS and an epic's neighbourhood degrades exactly
-#: like anything else's (round-1 correctness f-001).
+#: ``blocks`` edges. Not "zero freed"; there is no N to state. The view model
+#: still exists because D8's lower bound and D7's chain position are claims
+#: about the CANVAS, owed for a focused epic like any other node (round-1
+#: correctness f-001, round-2 f-005).
 IMPACT_NONE = "none"
 #: The graph the page is DRAWING is not the graph this panel just assembled, so
 #: there is no honest "in this graph" to count over — see
@@ -98,6 +98,10 @@ IMPACT_STALE = "stale"
 
 #: The ``scope=`` the panel fragment route accepts, ``<kind>:<key>``.
 SCOPE_SEPARATOR = ":"
+#: Between a fingerprint's two halves — the canvas and the answer counted over
+#: it (:func:`impact_fingerprint`). A character no hex digest can contain, so
+#: the join is unambiguous however the two values move.
+FINGERPRINT_SEPARATOR = "."
 
 
 @dataclass(frozen=True)
@@ -177,24 +181,32 @@ def impact_fingerprint(
 ) -> str:
     """The identity of one assembled ANSWER — everything D10's figures rest on.
 
-    Both authorities, because both move independently and only one of them is
-    cached. N is Lens's walk over the scope, so the node set (id, the status
-    the count reads, the completeness that turns a status into ``unknown``, the
-    ghost kind that decides whether it is drawn at all, and the project slugs
-    coverage is decided by, kept apart by the convention that carries each) and
-    the edge set (endpoints, type and the state the active projection is read
-    from) are in it. M is LITHOS's sole-blocker fact,
-    read fresh on every panel with no cache under it, so the blocked rows for
-    the nodes this graph holds — each row's blockers by kind, predecessor, type
-    and status — are in it too, along with the coverage set and each read's
-    outcome, which together decide whether M is withheld at all.
+    TWO digests joined by :data:`FINGERPRINT_SEPARATOR`, because a panel that
+    no longer reproduces the page's answer has two different things to say
+    depending on WHICH half moved (round-3 correctness f-006):
 
-    The blocked half is what makes this a fingerprint of the ANSWER rather than
-    of the picture. An eventless edge upsert elsewhere in the fleet
-    (ROADMAP gap #1) can add a second blocker to a dependent while every edge
-    entry this scope reads stays warm: the drawn graph is then byte-identical
-    and M has still moved from 1 to 0 (round-1 correctness f-001). Nothing else
-    downstream would notice, so it is caught here or not at all.
+    - the **canvas** half — the node set (id, the status the count reads, the
+      completeness that turns a status into ``unknown`` and marks an unread
+      edge list, the ghost kind that decides whether it is drawn at all) and
+      the edge set (endpoints, type and the state the active projection is read
+      from). This is the PICTURE: what is drawn, what N is walked over, which
+      nodes light under a focus, where the longest chain runs — so while it
+      holds, the panel's statements ABOUT that picture are still true of what
+      the operator is looking at, whatever else moved (:func:`_stale_impact`).
+    - the **answer** half — the project slugs coverage is matched by, kept
+      apart by the convention that carries each; the coverage set; each read's
+      outcome; the blocked rows for the nodes this graph holds, by blocker kind,
+      predecessor, type and status; and the projectless set. This is M's
+      material, read fresh on every panel with no cache under it.
+
+    The answer half is what makes this a fingerprint of the ANSWER rather than
+    of the picture. An eventless edge upsert elsewhere in the fleet (ROADMAP
+    gap #1) can add a second blocker to a dependent while every edge entry this
+    scope reads stays warm: the drawn graph is then byte-identical and M has
+    still moved from 1 to 0 (round-1 correctness f-001). Nothing else
+    downstream would notice, so it is caught here or not at all — and, the
+    halves being compared separately, catching it costs the FIGURES and not the
+    notes beside them.
 
     What is deliberately NOT in it: titles, claims, blocker MESSAGES, error
     reasons — text that moves no figure and no class on the canvas. A
@@ -207,48 +219,91 @@ def impact_fingerprint(
     blocked rows are folded out of two concurrent reads per project and their
     order follows whichever answered first (``graph_cycles._signal``).
 
-    The material is serialised as canonical JSON rather than joined on a
-    separator. Task ids are arbitrary non-empty strings (§5.1) and nothing
-    normalises control characters out of them, so a chosen separator is one an
-    id may legitimately CONTAIN — and a digest over joined fields then reads
-    ``a -> b<sep>c`` and ``a<sep>b -> c`` as the same edge, letting a moved
-    graph pass the equality check and print the wrong count (round-2
-    correctness f-003). JSON's own escaping is what makes the encoding
-    injective; every value stays a distinct element of a nested array.
-
-    Truncated to 16 hex digits because it travels in a URL and is compared to
-    a value Lens produced itself in the same process — this is a change
-    detector, not a defence against a forged one, and a caller that invents a
-    value only costs itself the line.
+    Each half is 16 hex digits (:func:`_digest`, where the encoding is argued):
+    the pair travels in a URL and is compared to a value Lens produced itself
+    in the same process, so this is a change detector, not a defence against a
+    forged one. The separator is safe where one between FIELDS would not be —
+    a hex digest cannot contain it.
     """
+    return FINGERPRINT_SEPARATOR.join(
+        (
+            _digest(_canvas_material(scope)),
+            _digest(_answer_material(scope, signal, tag_key)),
+        )
+    )
+
+
+def canvas_holds(drawn: str, given: str) -> bool:
+    """Whether two fingerprints name the same PICTURE (D8's canvas).
+
+    What a stale panel asks before deciding what to withhold: the figures
+    belong to the whole answer, the notes beside them only to the drawing
+    (round-3 correctness f-006). A ``given`` that is not a fingerprint Lens
+    emitted — invented, or truncated by a hand-edited URL — answers False and
+    so withholds everything, the default the whole comparison has.
+    """
+    left, right = _canvas_half(drawn), _canvas_half(given)
+    return bool(left) and left == right
+
+
+def _canvas_half(fingerprint: str) -> str:
+    parts = fingerprint.split(FINGERPRINT_SEPARATOR)
+    return parts[0] if len(parts) == 2 and all(parts) else ""
+
+
+def _digest(material: list[object]) -> str:
+    """One half's material, canonically encoded and hashed.
+
+    Canonical JSON rather than fields joined on a separator: task ids are
+    arbitrary non-empty strings (§5.1) that nothing normalises control
+    characters out of, so a chosen separator is one an id may legitimately
+    CONTAIN — a digest over joined fields then reads ``a -> b<sep>c`` and
+    ``a<sep>b -> c`` as the same edge, letting a moved graph pass the check and
+    print the wrong count (round-2 correctness f-003). JSON's own escaping is
+    what makes the encoding injective: every value stays a distinct element.
+    """
+    encoded = json.dumps(material, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def _canvas_material(scope: TaskGraphScope) -> list[object]:
+    """The drawn picture: what N is walked over and what focus mode classes."""
+    return [
+        sorted(
+            [node.id, node.status, node.completeness, node.ghost_kind]
+            for node in scope.nodes
+        ),
+        sorted(
+            [edge.from_task_id, edge.to_task_id, edge.type, edge.state]
+            for edge in scope.edges
+        ),
+    ]
+
+
+def _answer_material(
+    scope: TaskGraphScope, signal: CycleSignal, tag_key: str
+) -> list[object]:
+    """M's material: whose blocked fact was read, how, and what it said."""
     held = set(scope.node_ids)
-    material = [
+    return [
         sorted(
             [
                 node.id,
-                node.status,
-                node.completeness,
-                node.ghost_kind,
                 # Per CONVENTION, never unioned. Coverage belongs to the READ
                 # (``graph_cycles.read_covers``): a complete ``project=<slug>``
                 # response establishes the absence only of tasks carrying that
-                # slug in ``metadata.project``, and a ``tags=`` one only of
-                # tasks carrying the tag. So the same slug rewritten from one
-                # convention to the other — an equivalent-looking edit that
-                # moves no id, no status and no edge — can turn a covered
-                # dependent into an uncovered one and M from a figure into a
-                # withheld line. A digest over the union would call those two
-                # graphs the same and print the stale answer.
+                # slug in ``metadata.project``, a ``tags=`` one only of tasks
+                # carrying the tag. So the same slug rewritten from one
+                # convention to the other — an edit that moves no id, no status
+                # and no edge — can turn a covered dependent into an uncovered
+                # one and M from a figure into a withheld line, and a digest
+                # over the union would call the two graphs the same.
                 sorted(
                     task_projects(node.task, convention="metadata", tag_key=tag_key)
                 ),
                 sorted(task_projects(node.task, convention="tag", tag_key=tag_key)),
             ]
             for node in scope.nodes
-        ),
-        sorted(
-            [edge.from_task_id, edge.to_task_id, edge.type, edge.state]
-            for edge in scope.edges
         ),
         sorted(signal.coverage),
         sorted(
@@ -270,8 +325,6 @@ def impact_fingerprint(
         ),
         sorted(signal.projectless),
     ]
-    encoded = json.dumps(material, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def downstream_impact(
@@ -385,9 +438,9 @@ def reconciled_impact(
     - The badge says **open** (or nothing readable) against figures counted for
       a resolved task, or against a state Lens cannot name. There is no
       resolved fact to state and the numbers cannot be recomputed from the read
-      that disagreed with them, so the line degrades to :data:`IMPACT_STALE` —
-      the same answer a moved graph gets from :func:`impact_fingerprint`, and a
-      refresh is what resolves it. A panel whose task could not be read at all
+      that disagreed with them, so the FIGURES degrade to :data:`IMPACT_STALE`
+      and a refresh is what resolves it, while the notes about the canvas carry
+      over (:func:`_stale_line`). A panel whose task could not be read at all
       (``None``) reads the same way: it has no badge to agree with, and its
       markup carries the failure instead.
 
@@ -414,7 +467,7 @@ def reconciled_impact(
             return DownstreamImpact(focus=task.id, state=resolved)
         return None
     if task is None:
-        return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
+        return _stale_line(impact)
     if _focal_state(task.status) == impact.state:
         return impact
     if resolved:
@@ -425,7 +478,25 @@ def reconciled_impact(
             chain_position=impact.chain_position,
             chain_length=impact.chain_length,
         )
-    return DownstreamImpact(focus=impact.focus, state=IMPACT_STALE)
+    return _stale_line(impact)
+
+
+def _stale_line(impact: DownstreamImpact) -> DownstreamImpact:
+    """:data:`IMPACT_STALE`, keeping what the disagreement did not touch.
+
+    The FIGURES go: they were counted for a focal status this panel's own read
+    does not agree with. The notes are the GRAPH's — the canvas this render
+    drew is what the operator is looking at either way — so they carry over as
+    they do into the resolved wording above, and for the same reason (round-3
+    correctness f-006).
+    """
+    return DownstreamImpact(
+        focus=impact.focus,
+        state=IMPACT_STALE,
+        relations_exact=impact.relations_exact,
+        chain_position=impact.chain_position,
+        chain_length=impact.chain_length,
+    )
 
 
 def _focal_state(status: str) -> str:
@@ -659,30 +730,6 @@ async def load_impact(
         tag_key=tag_key,
         fetch_concurrency=limits.fetch_concurrency,
     )
-    if (
-        scope.fingerprint
-        and impact_fingerprint(assembled, signal, tag_key=tag_key) != scope.fingerprint
-    ):
-        # The page that opened this panel is not looking at what these reads
-        # just answered — a task created, completed or re-linked since it
-        # loaded, or a blocked row that moved under an edge cache that did not.
-        # "Frees N in this graph, M immediately" has no honest answer then: the
-        # canvas deliberately has not moved (D8), so figures counted here would
-        # disagree with the lit set and the chain beside them. Checked AFTER
-        # the blocked reads because M is one of the two figures and it comes
-        # from them — a comparison made before would pin the picture and leave
-        # M free to move behind it (round-1 correctness f-001).
-        #
-        # An EPIC is the one focal node with nothing to BE stale: D10 states no
-        # figures for it, so the sentence this branch exists to withhold —
-        # "refresh to see what completing this frees" — is one it must never
-        # carry in the first place (round-2 correctness f-004). It says the
-        # graph moved and drops the notes instead, which are the only claims it
-        # had and are claims about a picture this assembly is no longer of.
-        focal = assembled.node(focus)
-        if focal is not None and focal.task.task_type == "epic":
-            return DownstreamImpact(focus=focus, state=IMPACT_NONE, stale=True)
-        return DownstreamImpact(focus=focus, state=IMPACT_STALE)
     topology = build_topology(
         [node.task for node in assembled.nodes],
         [edge.edge for edge in assembled.edges],
@@ -694,10 +741,59 @@ async def load_impact(
             if node.completeness == COMPLETENESS_STATUS_UNKNOWN
         ],
     )
-    return downstream_impact(
+    impact = downstream_impact(
         assembled,
         signal,
         focus=focus,
         chain=longest_blocking_chain(topology),
         tag_key=tag_key,
+    )
+    drawn = impact_fingerprint(assembled, signal, tag_key=tag_key)
+    if not scope.fingerprint or drawn == scope.fingerprint:
+        return impact
+    # The page that opened this panel is not looking at what these reads just
+    # answered — a task created, completed or re-linked since it loaded, or a
+    # blocked row that moved under an edge cache that did not. Compared AFTER
+    # the blocked reads because M is one of the two figures and comes from
+    # them: comparing before would pin the picture and leave M free to move
+    # behind it (round-1 correctness f-001). The whole answer is computed first
+    # and then degraded, because which of its parts survive is the question
+    # `_stale_impact` answers.
+    return _stale_impact(
+        impact, focus=focus, canvas_holds=canvas_holds(drawn, scope.fingerprint)
+    )
+
+
+def _stale_impact(
+    impact: DownstreamImpact | None, *, focus: str, canvas_holds: bool
+) -> DownstreamImpact:
+    """What survives a snapshot this assembly no longer reproduces.
+
+    The FIGURES never do: "frees N in this graph, M immediately" names the
+    graph beside it, the canvas deliberately has not moved (D8), and a count
+    over reads that disagree with the drawn answer has no honest place to be
+    printed — whichever half moved, since N rests on the canvas and M on the
+    answer.
+
+    The NOTES are a different question, and the reason the fingerprint has two
+    halves (round-3 correctness f-006). D8's lower bound and D7's "on the
+    longest chain (k of n)" are claims about the PICTURE, which a blocked row
+    moving under an unchanged graph falsifies neither of — so they are carried
+    while the canvas half holds, and dropped with the figures when it does not,
+    where they would describe an assembly nobody is looking at. An EPIC is
+    where that decides the whole line: D10 states no figures for it, so its
+    line is nothing BUT those notes (round-2 correctness f-004). With the
+    canvas unchanged nothing about it is stale; with it moved the epic says so,
+    never in the future tense the general sentence uses — D10 forbids it that
+    one wording.
+    """
+    if impact is None:  # the focus is in scope by here; belt and braces
+        return DownstreamImpact(focus=focus, state=IMPACT_STALE)
+    figureless = impact.state == IMPACT_NONE  # an epic: notes and nothing else
+    if canvas_holds:
+        return impact if figureless else _stale_line(impact)
+    return DownstreamImpact(
+        focus=focus,
+        state=IMPACT_NONE if figureless else IMPACT_STALE,
+        stale=figureless,
     )

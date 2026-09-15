@@ -29,6 +29,7 @@ from lithos_lens.graph_cycles import (
     ProjectRead,
 )
 from lithos_lens.graph_impact import (
+    canvas_holds,
     downstream_impact,
     impact_fingerprint,
     parse_impact_scope,
@@ -1003,6 +1004,108 @@ def test_the_fragment_routes_reads_carry_the_configured_frontier_limit(
     ]
 
 
+#: The scope both f-006 regressions start from: `above`'s edge list fails, so
+#: the scope is incomplete and every claim about the focus's neighbourhood is a
+#: lower bound; `root` sits in the middle of the three-node blocking chain.
+def bounded_dataset(
+    blocked: dict[str, tuple[BlockerRecord, ...]] | None = None,
+    extra: bool = False,
+) -> FakeLithosDataset:
+    tasks = [task("above"), task("root"), task("one")]
+    edges = [("above", "root", "blocks"), ("root", "one", "blocks")]
+    if extra:
+        # A node and an edge the page never drew — the PICTURE moving.
+        tasks.append(task("late"))
+        edges.append(("root", "late", "blocks"))
+    return dataset(
+        tasks,
+        edges,
+        blocked=blocked or {"one": (blocker("root"),), "root": (blocker("above"),)},
+    )
+
+
+def test_a_blocked_row_that_moved_withholds_the_figures_and_keeps_the_notes(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The fingerprint has two halves because a panel has two kinds of claim
+    (round-3 correctness f-006). Here only Lithos's blocked row moves — `one`
+    picks up a second blocker, which is exactly the eventless change M is
+    fingerprinted against — while the nodes, the edges, the unread edge list
+    and the chain are identical. The FIGURES still go: they were counted over
+    reads the drawn answer no longer matches. D8's lower bound and D7's
+    position do not: they are claims about the picture on screen, and that
+    picture has not moved."""
+    fake = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        page = unescape(client.get(f"/tasks/graph?project={PROJECT}").text)
+        drawn = snapshot(page)
+        fake.replace_dataset(
+            bounded_dataset(
+                {
+                    "one": (blocker("root"), blocker("other")),
+                    "root": (blocker("above"),),
+                }
+            )
+        )
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+
+    assert "This graph has changed" in slot(panel)
+    assert attribute(panel, "data-impact-frees") == ""
+    # …and both statements about the canvas survive it.
+    assert "data-panel-focus-bound" in panel
+    assert "lower bound of what surrounds it" in slot(panel)
+    assert "On the longest chain (2 of 3)." in slot(panel)
+
+
+def test_a_picture_that_moved_withholds_the_notes_with_the_figures(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other half of that rule. A node and an edge appear, so the lit set
+    and the chain this panel would describe are not the ones the canvas is
+    drawing — D8 leaves it where it is — and a note about "what the canvas
+    lights" would then be about a picture nobody is looking at."""
+    fake = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+        fake.replace_dataset(bounded_dataset(extra=True))
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+
+    assert "This graph has changed" in slot(panel)
+    assert "data-panel-focus-bound" not in panel
+    assert "longest chain" not in slot(panel)
+
+
+def test_a_focused_epic_is_not_stale_when_only_the_blocked_rows_moved(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An epic's whole line is those notes — D10 states no figures for it — so
+    the answer half cannot make it wrong. With the picture unchanged there is
+    nothing to refresh, and saying so would cost the operator the only thing
+    the panel had to tell them."""
+    tasks = [task("epic", task_type="epic"), task("child"), task("apart")]
+    edges = (("epic", "child", "parent_child"),)
+    fake = GraphFakeClient(dataset(tasks, edges), edge_failures={"apart"})
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+        fake.replace_dataset(
+            dataset(tasks, edges, blocked={"child": (blocker("apart"),)})
+        )
+        panel = client.get(
+            f"/tasks/epic?fragment=panel&scope=project:{PROJECT}&snapshot={drawn}"
+        ).text
+
+    assert "This graph has changed" not in slot(panel)
+    assert "frees" not in slot(panel)
+    assert "lower bound of what surrounds it" in slot(panel)
+
+
 def test_a_panel_counting_over_a_moved_graph_says_so_instead_of_a_number(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -1793,6 +1896,44 @@ def test_no_immaterial_change_withholds_the_line(
     )
 
 
+def test_a_fingerprint_separates_the_picture_from_the_answer_over_it() -> None:
+    """Which HALF moved is the question a stale panel has to answer before it
+    knows what to withhold (round-3 correctness f-006): the figures belong to
+    the whole answer, the notes beside them only to the picture. A blocked row
+    that moved leaves the canvas half standing; a node's status — which changes
+    what is drawn, what N counts and where the chain runs — does not."""
+    baseline = baseline_fingerprint()
+    rows_moved = impact_fingerprint(
+        fingerprint_scope(),
+        fingerprint_signal(
+            blocked=(
+                replace(
+                    FINGERPRINT_ROWS[0], blockers=(blocker("root"), blocker("other"))
+                ),
+                FINGERPRINT_ROWS[1],
+            )
+        ),
+    )
+    picture_moved = impact_fingerprint(
+        with_node(1, task=replace(task("one"), status="completed")),
+        fingerprint_signal(),
+    )
+
+    # Both are changes — the whole fingerprint moves either way, which is what
+    # withholds the figures …
+    assert rows_moved != baseline
+    assert picture_moved != baseline
+    # … and only one of them is a change to what the operator is looking at.
+    assert canvas_holds(rows_moved, baseline)
+    assert not canvas_holds(picture_moved, baseline)
+    assert canvas_holds(baseline, baseline)
+    # A value Lens never emitted holds nothing: an invented or hand-truncated
+    # snapshot withholds everything rather than half-answering from a guess.
+    assert not canvas_holds(baseline, "garbage")
+    assert not canvas_holds(baseline, baseline.split(".")[0])
+    assert not canvas_holds(baseline, "")
+
+
 def separator_scope(edge: tuple[str, str]) -> TaskGraphScope:
     """Four tasks whose ids CONTAIN the characters a joined digest would use.
 
@@ -1975,6 +2116,15 @@ def test_an_impact_is_kept_only_while_the_panel_agrees_about_the_focus() -> None
         assert answer is not None
         assert answer.state == "stale"
         assert answer.frees == 0
+        # The FIGURES are what the badge disagreed with. The notes beside them
+        # describe the canvas this render drew, which is the picture on screen
+        # either way, so they carry over here exactly as into the resolved
+        # wording above (round-3 correctness f-006).
+        assert answer.relations_exact is mismatch.relations_exact
+        assert (answer.chain_position, answer.chain_length) == (
+            mismatch.chain_position,
+            mismatch.chain_length,
+        )
 
     # An EPIC's line is the exception to all of it: it makes no claim about the
     # focal status, so no badge can disagree with it and nothing here may turn

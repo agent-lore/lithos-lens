@@ -42,14 +42,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 5 | 2662 | 2127 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 20 | 9483 | 7225 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 21 |
-| Tasks | 3 | 1350 | 983 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 4 |
+| TaskGraph | 20 | 9579 | 7308 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 21 |
+| Tasks | 3 | 1352 | 983 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 4 |
 | Telemetry | 2 | 1091 | 793 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 4 | 1795 | 1389 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **48**, lines: **19811**, SLOC: **15140**
+- Modules: **48**, lines: **19909**, SLOC: **15223**
 - Largest module: `lithos_lens.frontier` (850 lines)
 - Modules over 800 lines: **2**
   - `lithos_lens.frontier`
@@ -57,7 +57,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **630**, cyclomatic > 10: **36**
+- Functions: **637**, cyclomatic > 10: **36**
 
 Top 10 most complex functions:
 
@@ -70,9 +70,9 @@ Top 10 most complex functions:
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 18 | `lithos_lens.graph_layout.build_topology` |
 | 17 | `lithos_lens.graph_page.build_graph_page` |
-| 16 | `lithos_lens.graph_impact.load_impact` |
 | 16 | `lithos_lens.graph_page._node_views` |
 | 16 | `lithos_lens.graph_page.graph_url` |
+| 15 | `lithos_lens.task_filtering.board_visible_ids` |
 
 ## Seams
 
@@ -85,4 +85,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **74** (83 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.94** (38370 test lines / 19811 source lines)
+- Test-to-source line ratio: **1.93** (38520 test lines / 19909 source lines)

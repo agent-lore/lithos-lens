@@ -527,29 +527,47 @@ looking at is warm. A rebuild is not the same answer by default, though: the
 scope NAME only fixes which tasks are asked for, and the canvas deliberately
 does not re-lay-out under the operator (§5.12.1) — so every panel URL the graph
 page emits carries `snapshot=`, a fingerprint of what that render answered.
-It covers **both** authorities, because they move independently and only one of
-them is cached: the node set (id, status, completeness, ghost kind, project
-slugs — kept apart by the convention that carries each, §5B.1, because coverage
-belongs to the read and a slug rewritten from `metadata.project` to a
-`project:<slug>` tag changes which read could have answered for that task) and
-the edge set (endpoints, type, state) that N is walked over, and the
-blocked rows for those nodes — each row's blockers by kind, predecessor, type
-and status — together with the coverage set and each read's outcome, which is
-what decides whether M is stated at all. The blocked half is load-bearing: an
-edge upsert emits no event (§5.10) and a warm edge cache can reproduce a
-byte-identical graph while Lithos's sole-blocker row has gained a second
-blocker, moving M with nothing on the canvas to show for it. So the comparison
-is made **after** the blocked read, not before it, and when it fails both
-figures are withheld and the panel states "this graph has changed — refresh",
-because "frees N **in this graph**, M immediately" would otherwise name one
-graph while the picture beside it shows another. Titles, claims, blocker
-messages and error reasons are excluded — they move no figure, and a
-fingerprint that changed on every heartbeat would withhold the line permanently
-rather than when it is wrong. The material is serialised as **canonical JSON**
-before hashing: a task id is an arbitrary non-empty string (§5.1) and nothing
-normalises control characters out of one, so a digest that joined its fields on
-a separator would read `a -> b<sep>c` and `a<sep>b -> c` as the same edge and
-let a moved graph pass the check.
+
+It is **two digests**, joined, because they move independently and only one of
+them is cached — and because a panel that finds them moved has two different
+things to say:
+
+- the **canvas** half: the node set (id, status, completeness, ghost kind) and
+  the edge set (endpoints, type, state). This is the picture — what is drawn,
+  what N is walked over, which nodes light under a focus, where the longest
+  chain runs.
+- the **answer** half: the project slugs coverage is matched by (kept apart by
+  the convention that carries each, §5B.1, because coverage belongs to the read
+  and a slug rewritten from `metadata.project` to a `project:<slug>` tag
+  changes which read could have answered for that task), the coverage set, each
+  read's outcome, and the blocked rows for those nodes — each row's blockers by
+  kind, predecessor, type and status — which together decide M and whether it
+  is stated at all.
+
+The answer half is load-bearing: an edge upsert emits no event (§5.10) and a
+warm edge cache can reproduce a byte-identical graph while Lithos's
+sole-blocker row has gained a second blocker, moving M with nothing on the
+canvas to show for it. So the comparison is made **after** the blocked read,
+not before it, and when either half fails both figures are withheld and the
+panel states "this graph has changed — refresh", because "frees N **in this
+graph**, M immediately" would otherwise name one graph while the picture beside
+it shows another. What survives that withholding is decided by the canvas half
+alone: D8's "what the canvas lights is a lower bound" and D7's "on the longest
+chain (k of n)" are claims about the PICTURE, and a blocked row that moved
+under an unchanged graph falsifies neither — so they are stated beside the
+withheld figures, and dropped with them only when the picture itself moved. A
+focused **epic** is the limit of that rule: its line is nothing but those
+notes, so a move in the answer half leaves it untouched entirely.
+
+Titles, claims, blocker messages and error reasons are excluded from both
+halves — they move no figure, and a fingerprint that changed on every heartbeat
+would withhold the line permanently rather than when it is wrong. Each half's
+material is serialised as **canonical JSON** before hashing: a task id is an
+arbitrary non-empty string (§5.1) and nothing normalises control characters out
+of one, so a digest that joined its fields on a separator would read
+`a -> b<sep>c` and `a<sep>b -> c` as the same edge and let a moved graph pass
+the check. (The two HALVES are joined on a separator, which is safe where the
+fields are not: a hex digest cannot contain one.)
 
 The same rule binds the panel's two HALVES, which are two reads whichever route
 serves them: the figures come from the graph assembly's view of the focal task,
