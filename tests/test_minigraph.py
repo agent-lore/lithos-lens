@@ -630,6 +630,26 @@ def test_the_parent_tier_walks_past_a_plain_task_to_the_epic(
     assert "data-mini-graph-parent-unknown" not in html, "the tier was decided"
 
 
+def blocking_parent_epic() -> tuple[list[TaskRecord], list[tuple[str, str, str]]]:
+    """``deep --blocks--> epic --blocks--> task``, with ``epic`` also its parent.
+
+    One task wearing two relations, which is the shape where tier membership
+    and the depth-1 blocker frontier disagree.
+    """
+    return (
+        [
+            made("deep", created_at="2026-09-01T00:00:00+00:00"),
+            made("epic", created_at="2026-09-01T00:00:01+00:00", task_type="epic"),
+            made("task", created_at="2026-09-01T00:00:02+00:00"),
+        ],
+        [
+            ("deep", "epic", "blocks"),
+            ("epic", "task", "blocks"),
+            ("epic", "task", "parent_child"),
+        ],
+    )
+
+
 def test_a_parent_epic_that_also_blocks_still_contributes_its_own_blockers(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -647,20 +667,7 @@ def test_a_parent_epic_that_also_blocks_still_contributes_its_own_blockers(
     whose blockers are depth 2. They are different questions and this fixture
     is where they diverge.
     """
-    fake = GraphFakeClient(
-        dataset(
-            [
-                made("deep", created_at="2026-09-01T00:00:00+00:00"),
-                made("epic", created_at="2026-09-01T00:00:01+00:00", task_type="epic"),
-                made("task", created_at="2026-09-01T00:00:02+00:00"),
-            ],
-            [
-                ("deep", "epic", "blocks"),
-                ("epic", "task", "blocks"),
-                ("epic", "task", "parent_child"),
-            ],
-        )
-    )
+    fake = GraphFakeClient(dataset(*blocking_parent_epic()))
     html = fragment(lithos_lens_config_env, fake, "task")
 
     assert node_ids(html) == {"deep", "epic", "task"}
@@ -673,6 +680,34 @@ def test_a_parent_epic_that_also_blocks_still_contributes_its_own_blockers(
     assert 'data-link-tail="minigraph"' not in html
     # The read that makes the count honest: the epic's edge list, even though
     # the epic is drawn by the hierarchy tier rather than the blocker one.
+    assert sorted(fake.edge_calls) == ["epic", "task"]
+
+
+def test_a_blocker_behind_an_overlapped_epic_is_counted_when_the_cap_hides_it(
+    lithos_lens_config_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The capped half of the overlap, which is where it could go quiet.
+
+    Same graph as above, with room for one neighbour: the parent tier takes it
+    and ``deep`` — a depth-2 blocker reached THROUGH the epic the hierarchy
+    tier drew — must be counted in the remainder rather than dropped. An
+    assembly that enumerated depth 2 only while a slot remained would pass the
+    uncapped test above and every other cap test (those use blockers that stay
+    in the blocker tier), and would quietly report a neighbourhood of one
+    (round-6 test-quality f-012).
+    """
+    monkeypatch.setenv("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "2")
+    fake = GraphFakeClient(dataset(*blocking_parent_epic()))
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    assert node_ids(html) == {"epic", "task"}, "the cap draws the focal and its epic"
+    remaining, sentence = tail_of(html)
+    assert remaining == 1, "the hidden depth-2 blocker went uncounted"
+    assert "1 more related tasks not shown." in sentence
+    assert "This task has 2 related tasks in all" in sentence
+    assert "the first 1 are listed above" in sentence
+    # Still read, still counted: the frontier does not shrink with the cap.
     assert sorted(fake.edge_calls) == ["epic", "task"]
 
 
