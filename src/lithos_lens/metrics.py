@@ -521,6 +521,31 @@ def tasks_graph_cycle_reads() -> Any:
     )
 
 
+def tasks_minigraph_renders() -> Any:
+    """Counter of detail mini-graph fragment renders (§5.6, T2-A5).
+
+    Labels: ``outcome`` in ``rendered`` | ``capped`` | ``refused`` |
+    ``offline`` | ``error``. ``refused`` is the work bound rather than the node
+    cap: the neighbourhood named more reads than one fragment may queue, so no
+    picture was drawn at all (``graph_mini.MAX_MINI_GRAPH_READS``).
+
+    ``capped`` is split out rather than folded into ``rendered`` because it is
+    the evidence for the one knob this surface has: a mini-graph that hits
+    ``[graph].mini_graph_max_nodes`` is a neighbourhood the operator is seeing
+    part of, and how often that happens is what says whether 40 is anywhere
+    near the corpus's shape. The node count rides on the span, not here — it
+    is a distribution per task, which is exactly the cardinality this module's
+    rule keeps off a label.
+    """
+    return _instrument(
+        "lens_tasks_minigraph_renders_total",
+        lambda meter: meter.create_counter(
+            "lens_tasks_minigraph_renders_total",
+            description="Task-detail mini-graph renders by outcome.",
+        ),
+    )
+
+
 def tasks_panel_opens() -> Any:
     """Counter of side-panel renders by where the request came from (§5.5).
 

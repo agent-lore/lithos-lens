@@ -82,6 +82,7 @@ const sandbox = {
   EventSource,
   console,
   URL,
+  CustomEvent,
   // Controlled clock: the harness asserts on exact delays, and advances time
   // by a timer's own delay when it fires (so a chained sleep converges).
   Date: new Proxy(Date, {
@@ -267,6 +268,9 @@ let cursor = 0;
 const pushed = [];
 const fetches = [];      // { url, settle } — settled by an explicit action
 const prevented = [];
+// Every event the page announced on `document` — the hand-made fragment
+// replacement is the one that has a listener elsewhere (T2-A5).
+const announced = [];
 const listeners = {};    // document/window listeners, by type
 const sse = {};          // EventSource listeners, by type
 const timers = new Map();
@@ -382,6 +386,14 @@ const document = {
   querySelectorAll() { return { length: 0, forEach() {} }; },
   createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
+  // because that removal has no event of its own: the page's own listeners
+  // are the only thing that can hear it.
+  dispatchEvent(event) {
+    announced.push(event.type);
+    (listeners[event.type] || []).forEach((listener) => listener(event));
+    return true;
+  },
 };
 
 class EventSource {
@@ -411,6 +423,7 @@ const sandbox = {
   EventSource,
   console,
   URL,
+  CustomEvent,
   URLSearchParams,
   DOMParser: class {
     parseFromString(text) {
@@ -581,6 +594,7 @@ const ACTIONS = {
     pushed,
     fetches: fetches.map((entry) => entry.url),
     prevented,
+    announced,
     href: href(),
     panel: host.innerHTML,
     board,
@@ -864,6 +878,10 @@ def test_a_task_event_refreshes_the_open_panel_alongside_the_board() -> None:
     assert result["href"] == "http://lens.test/tasks?project=influx&selected=alpha"
     # No history entry: a refresh is not a navigation.
     assert result["pushed"] == ["/tasks?project=influx&selected=alpha"]
+    # …and the replacement announces itself, because it is made by hand: the
+    # detail page's mini-graph (T2-A5) is drawn into a fragment this swap
+    # detaches, and nothing else tells it so (round-2 correctness f-005).
+    assert result["announced"].count("lens:fragment-replaced") == 2
 
 
 def test_a_reconcile_fetched_for_one_selection_never_paints_another() -> None:
@@ -1302,6 +1320,12 @@ function element(extra) {
     textContent: "",
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] || ""; },
+    // `graph.js` asks its canvas which host it sits in (T2-A5): the graph
+    // page's is in none, and the detail page's mini-graph is inside a
+    // `[data-mini-graph]` section. This page has no such ancestor, and the
+    // mini-graph's own harness (`MINI_HARNESS`) is where the other answer is
+    // given.
+    closest() { return null; },
   }, extra || {});
 }
 
@@ -1404,6 +1428,13 @@ const document = {
     };
   },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
+  // because that removal has no event of its own: the page's own listeners
+  // are the only thing that can hear it.
+  dispatchEvent(event) {
+    (listeners[event.type] || []).forEach((listener) => listener(event));
+    return true;
+  },
 };
 
 // The canvas re-measures itself through one of these (D9: the panel opens
@@ -1431,6 +1462,7 @@ const sandbox = {
   EventSource,
   console,
   URL,
+  CustomEvent,
   URLSearchParams,
   Math,
   Date,
@@ -4008,3 +4040,474 @@ def test_a_file_that_missed_dom_content_loaded_still_gets_its_stream() -> None:
     assert result["eventSources"] == 1, "the stream never opened"
     assert result["streamOpen"] is True
     assert result["final"]["pillHidden"] is False
+
+
+# ── The detail page's mini-graph (T2-A5) ────────────────────────────────
+#
+# Its own harness, deliberately. The graph page's above models a document that
+# HOLDS a canvas, a toolbar, a chain line and a panel host; the detail page has
+# none of those — the mini-graph arrives as an HTMX fragment after the scripts
+# have run, and every one of those controls is absent. A flag on the other
+# harness would have to fake their absence one selector at a time; a document
+# that genuinely lacks them proves the same thing by construction.
+
+MINI_HARNESS = """
+const fs = require("fs");
+const vm = require("vm");
+
+const [graphPath, cytoscapePath, href, payloadRaw, actionsRaw] = process.argv.slice(1);
+const actions = JSON.parse(actionsRaw);
+const pushed = [];
+const replaced = [];
+const listeners = {};
+// Cytoscape instances this run built and tore down. A leak is invisible to the
+// drawn picture — the newest instance answers every query either way — so it
+// is counted here instead (round-1 correctness f-005).
+let built = 0;
+let destroyed = 0;
+// Every observer the boot installed, and whether it was disconnected.
+const observers = [];
+// Every animation the page started, with the completion callback it handed
+// over. The claimed-node pulse re-arms itself from that callback, so firing a
+// captured one AFTER disposal is the only way to see whether the guard holds
+// (round-2 test-quality f-009).
+const animations = [];
+
+function element(extra) {
+  return Object.assign({
+    dataset: {},
+    hidden: false,
+    textContent: "",
+    // The DOM's own answer to "is this still on the page?", which is what the
+    // teardown decides on: a replaced detail article leaves its canvas
+    // detached whether or not anything arrives to take its place.
+    isConnected: true,
+    setAttribute() {},
+    getAttribute() { return ""; },
+    closest() { return null; },
+  }, extra || {});
+}
+
+const payloadScript = element({ textContent: payloadRaw });
+// The fragment the server swapped in: the canvas, and its OWN payload beside
+// it. `graph.js` reads the payload through this host rather than through the
+// document, which is what keeps two canvases on one page from sharing one.
+const section = element({
+  querySelector(selector) {
+    return selector === "[data-graph-payload]" ? payloadScript : null;
+  },
+});
+
+function canvas() {
+  return element({
+    hidden: true,
+    clientWidth: 1,
+    clientHeight: 1,
+    closest(selector) { return selector === "[data-mini-graph]" ? section : null; },
+  });
+}
+
+// Absent until the swap lands — the whole point of booting on `htmx:afterSwap`.
+let container = canvas();
+let present = false;
+
+class ResizeObserver {
+  constructor(callback) {
+    this.callback = callback;
+    this.live = true;
+    observers.push(this);
+  }
+  observe() {}
+  disconnect() { this.live = false; }
+}
+
+const document = {
+  readyState: "interactive",
+  querySelector(selector) {
+    if (selector === "[data-graph-canvas]") return present ? container : null;
+    // Every other selector `graph.js` reaches for is the graph PAGE's chrome:
+    // the toolbar links, the search box, the chain line, the panel host, the
+    // "graph changed" pill. A detail page has none of them, and the answer
+    // here is the same one the browser gives.
+    return null;
+  },
+  querySelectorAll() { return []; },
+  createElement() {
+    return { dataset: {}, style: {}, children: [],
+      appendChild(child) { this.children.push(child); },
+      getContext() { return {}; } };
+  },
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
+  // because that removal has no event of its own: the page's own listeners
+  // are the only thing that can hear it.
+  dispatchEvent(event) {
+    (listeners[event.type] || []).forEach((listener) => listener(event));
+    return true;
+  },
+};
+
+const sandbox = {
+  document, console, URL, URLSearchParams, Math, Date, JSON, CustomEvent,
+  setTimeout, clearTimeout, setInterval, clearInterval,
+  fetch: () => Promise.reject(new Error("a mini-graph fetches nothing")),
+};
+sandbox.window = {
+  ResizeObserver,
+  // No `LithosLens.panel`: this host has none, and a click that found one
+  // would open a panel over a page that is already the task's own.
+  LithosLensTasks: {},
+  setTimeout: (fn) => 0,
+  clearTimeout() {},
+  addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+  location: {
+    get href() { return href; },
+    set href(value) { pushed.push("nav:" + value); },
+  },
+  history: {
+    pushState(state, title, url) { pushed.push(url); },
+    replaceState(state, title, url) { replaced.push(url); },
+  },
+};
+sandbox.window.window = sandbox.window;
+Object.assign(sandbox, { setTimeout: sandbox.window.setTimeout });
+
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
+sandbox.__built = () => { built += 1; };
+sandbox.__destroyed = () => { destroyed += 1; };
+sandbox.__animated = (complete) => { animations.push(complete); };
+vm.runInContext(`
+  window.cytoscape = function (options) {
+    var cy = cytoscape(Object.assign({}, options, {
+      container: null, headless: true, styleEnabled: true
+    }));
+    __built();
+    var destroy = cy.destroy.bind(cy);
+    cy.destroy = function () { __destroyed(); return destroy(); };
+    // Element animations are recorded through the shared Collection prototype
+    // — patched ONCE, because every collection in this build inherits from it
+    // and the page mints a fresh one per call.
+    var sample = cy.nodes()[0];
+    if (sample) {
+      var proto = Object.getPrototypeOf(sample);
+      if (!proto.__lensPatched) {
+        proto.__lensPatched = true;
+        var animate = proto.animate;
+        proto.animate = function (properties, options) {
+          __animated(options && options.complete);
+          return animate.call(this, properties, options);
+        };
+      }
+    }
+    return cy;
+  };
+`, sandbox);
+vm.runInContext(fs.readFileSync(graphPath, "utf8"), sandbox);
+
+function fire(type) {
+  (listeners[type] || []).forEach((listener) => listener({}));
+}
+
+const drawnAtLoad = !!sandbox.window.LithosLensMiniGraph;
+const trace = [];
+actions.forEach((action) => {
+  if (action === "swap") {
+    // The fragment arrives (first time) or an unrelated swap re-fires over the
+    // canvas already on screen.
+    present = true;
+    fire("htmx:afterSwap");
+  } else if (action === "replace") {
+    // A reconcile: the detail article is replaced, so the old canvas is
+    // detached and a NEW one arrives in the fragment that answers.
+    container.isConnected = false;
+    container = canvas();
+    present = true;
+    fire("lens:fragment-replaced");
+    fire("htmx:afterSwap");
+  } else if (action === "detach") {
+    // The article is replaced and the fragment that answers has NO canvas —
+    // the offline branch, the error branch, or a request that never lands.
+    container.isConnected = false;
+    present = false;
+    fire("lens:fragment-replaced");
+  } else if (action === "empty-swap") {
+    // …and the answer that did arrive carried no canvas.
+    fire("htmx:afterSwap");
+  } else if (action === "pulse") {
+    // A queued animation completion landing after whatever happened above.
+    const before = animations.length;
+    const complete = animations[animations.length - 1];
+    if (typeof complete === "function") complete();
+    trace.push("pulse:" + (animations.length - before));
+  }
+});
+
+const mini = sandbox.window.LithosLensMiniGraph;
+const drawn = mini ? mini.shown() : { nodes: [], edges: [] };
+console.log(JSON.stringify({
+  drawnAtLoad,
+  built,
+  destroyed,
+  liveObservers: observers.filter((observer) => observer.live).length,
+  // A listener on `document` outlives the element the picture was drawn into,
+  // so one per boot is the leak this asserts against.
+  documentClickListeners: (listeners["click"] || []).length,
+  animations: animations.length,
+  trace,
+  // The graph PAGE's handle, which a detail page must not publish: a capture
+  // asking for it here should get nothing rather than a neighbourhood
+  // answering for a scope.
+  pageHandle: !!sandbox.window.LithosLensGraph,
+  nodes: drawn.nodes,
+  labels: mini
+    ? drawn.nodes.reduce((into, id) => {
+        into[id] = mini.node(id).data("label");
+        return into;
+      }, {})
+    : {},
+  edgeTypes: drawn.edges.map((edge) => edge.type).sort(),
+  arrowless: drawn.edges.filter((edge) => !edge.arrow || edge.arrow === "none").length,
+  canvasHidden: container.hidden,
+  canvasState: container.dataset.canvasState || "",
+  canvasNodes: container.dataset.canvasNodes || "",
+  focused: mini
+    ? mini.cy.nodes().filter((node) => node.hasClass("focused")).length
+    : 0,
+  pushed,
+  replaced,
+}));
+"""
+
+#: One blocked task's neighbourhood, as the server builds it: two hops up
+#: (`c → b → task`), one down (`task → d`), and the parent epic on the
+#: hierarchy edge the fragment's payload turns the overlay on for.
+MINI_PAYLOAD: dict = _payload(
+    [
+        _node("epic", title="Loom run harness", task_type="epic"),
+        _node("c"),
+        _node("b", layer=1),
+        # CLAIMED, because the claimed-node pulse is the one thing a disposed
+        # picture keeps doing on its own: it re-arms from its own completion
+        # callback, so a teardown that stopped everything else would still
+        # leave this running (round-2 test-quality f-009).
+        _node("task", layer=2, claims=("agent-zero",)),
+        _node("d", layer=3),
+    ],
+    [
+        _edge("c", "b"),
+        _edge("b", "task"),
+        _edge("task", "d"),
+        _edge("epic", "task", "parent_child", state=""),
+    ],
+    kind="task",
+    key="task",
+    focus="task",
+    overlays=["hierarchy"],
+    isolated=True,
+    roots=["c", "epic"],
+    longest_chain={"nodes": [], "length": 0, "bound": "exact"},
+)
+
+#: A detail URL carrying the graph page's own parameters. They are another
+#: page's state and the mini-graph must not read them.
+MINI_HREF = "http://lens.test/tasks/task?focus=elsewhere&overlays=provenance&isolated=0"
+
+
+#: The ordinary run: the fragment arrives once and stays.
+MINI_SWAP = ["swap"]
+
+
+def _mini_run(
+    payload: dict | None = None,
+    *,
+    actions: list[str] | None = None,
+    href: str = MINI_HREF,
+) -> dict:
+    """Load `graph.js` against a detail page, then drive ``actions``.
+
+    ``swap`` delivers (or re-announces) the fragment; ``replace`` is a
+    reconcile that swaps a NEW canvas in; ``detach`` is a reconcile whose
+    answer carries no canvas at all — the offline branch, the error branch, or
+    a request that never lands; ``empty-swap`` is that answer arriving;
+    ``pulse`` fires the last animation completion the page queued.
+    """
+    assert NODE is not None
+    result = subprocess.run(
+        [
+            NODE,
+            "-e",
+            MINI_HARNESS,
+            "--",
+            str(GRAPH_JS),
+            str(CYTOSCAPE_JS),
+            href,
+            json.dumps(payload or MINI_PAYLOAD),
+            json.dumps(actions or MINI_SWAP),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_the_mini_graph_is_drawn_by_the_swap_that_delivers_it() -> None:
+    """D11's "same client module", on a host that has no canvas at load time.
+
+    The fragment is fetched after the page, so the only moment its canvas
+    exists is the `htmx:afterSwap` that brought it in — and a module that only
+    looked at load would leave the detail page with an empty box forever.
+    """
+    result = _mini_run()
+
+    assert result["drawnAtLoad"] is False, "drawn before the fragment arrived"
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+    assert result["canvasHidden"] is False
+    assert result["canvasState"] == "ready"
+    assert result["canvasNodes"] == "5"
+
+
+def test_the_mini_graph_keeps_the_arrowheads_and_the_parent_edge() -> None:
+    """The shared vocabulary is the reason this is one module and not two.
+
+    Both the dependency edges and the hierarchy edge the parent epic hangs on
+    are drawn — the payload turns that overlay on, because the epic is a member
+    of this scope by decision — and every one of them carries an arrowhead.
+    """
+    result = _mini_run()
+
+    assert result["edgeTypes"] == ["blocks", "blocks", "blocks", "parent_child"]
+    assert result["arrowless"] == 0, "an edge whose direction cannot be read"
+    assert result["focused"] == 1, "the focal task carries no ring"
+
+
+def test_the_mini_graph_reads_no_state_from_the_detail_page_s_url() -> None:
+    """The URL here is about a TASK, not a scope.
+
+    The address carries `focus=elsewhere`, `overlays=provenance` and
+    `isolated=0` — the graph page's three parameters, which a shared link or a
+    stale bookmark can put on any URL. The mini-graph's state is the server's,
+    in the payload, so none of them moves the picture: all five nodes stay
+    drawn and the focus ring stays on the focal task.
+    """
+    result = _mini_run()
+
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+    assert result["focused"] == 1
+
+
+def test_the_mini_graph_never_writes_to_history() -> None:
+    """Nothing here owns the address bar.
+
+    On the graph page a focus transition is a `pushState` and a deep-linked
+    focus can be a `replaceState`; on a detail page both would rewrite the URL
+    of a task's own page to say something about a picture above its chain.
+    """
+    result = _mini_run()
+
+    assert result["pushed"] == []
+    assert result["replaced"] == []
+
+
+def test_a_second_swap_does_not_redraw_a_canvas_that_is_already_up() -> None:
+    """A page swaps for many reasons — a panel, a deeper blocker level.
+
+    Re-running over a live canvas would build a second Cytoscape instance on
+    the same element: two layouts, two sets of handlers, one visible picture.
+    The COUNT is the assertion, because the picture is not: the newest instance
+    answers every query whether there is one of it or three.
+    """
+    result = _mini_run(actions=["swap", "swap", "swap"])
+
+    assert result["built"] == 1, "a live canvas was drawn into twice"
+    assert result["destroyed"] == 0
+    assert result["canvasNodes"] == "5"
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+
+
+def test_a_replaced_fragment_disposes_the_picture_it_replaced() -> None:
+    """The detail reconcile's own shape (round-1 correctness f-005).
+
+    `tasks.js` swaps a parsed detail fragment in by hand on every
+    `requires_refresh` task event, so the canvas is REPLACED with no HTMX
+    cleanup behind it. Each boot must therefore dispose of the one before it:
+    otherwise a tab left open under fleet traffic accumulates a detached
+    Cytoscape instance, a live `ResizeObserver` and a self-re-arming animation
+    per event, none of which anything can reach to stop.
+    """
+    result = _mini_run(actions=["swap", "replace", "replace", "replace"])
+
+    assert result["built"] == 4, "each replacement draws the fragment it was given"
+    assert result["destroyed"] == 3, "a replaced picture was left running"
+    assert result["liveObservers"] == 1, "a detached canvas is still being watched"
+    # And the page-only handler is never installed here, however many times the
+    # fragment arrives: `document` outlives every one of those canvases.
+    assert result["documentClickListeners"] == 0
+    assert sorted(result["nodes"]) == ["b", "c", "d", "epic", "task"]
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        # The reconcile's answer carries no canvas: the fragment rendered its
+        # offline branch, or its assembly-error branch.
+        ["swap", "detach", "empty-swap"],
+        # …or the request never landed at all, so nothing arrives to notice.
+        ["swap", "detach"],
+    ],
+)
+def test_a_replacement_that_never_draws_still_disposes_the_old_picture(
+    actions: list[str],
+) -> None:
+    """Teardown may not wait for a successor (round-2 correctness f-005).
+
+    `tasks.js` replaces the detail article by hand, so the canvas is detached
+    the moment the reconcile runs — before the fragment is even requested. Two
+    of the fragment's own branches draw nothing (offline, error) and a failed
+    request draws nothing at all, so a teardown conditional on a replacement
+    canvas leaves a live instance, observer and animation on a detached node
+    for as long as that state lasts.
+    """
+    result = _mini_run(actions=actions)
+
+    assert result["built"] == 1
+    assert result["destroyed"] == 1, "the detached picture was left running"
+    assert result["liveObservers"] == 0, "a detached canvas is still being watched"
+
+
+def test_an_animation_completion_after_disposal_schedules_no_further_pulse() -> None:
+    """The claimed-node pulse re-arms itself, so disposal has to stop it.
+
+    The pulse animates, and its completion callback animates again — a loop
+    nothing outside it holds a handle to. `cy.destroy()` does not unqueue a
+    completion already in flight, so firing one after disposal must schedule
+    NOTHING rather than start the next breath on a destroyed instance.
+    """
+    running = _mini_run(actions=["swap", "pulse"])
+    disposed = _mini_run(actions=["swap", "detach", "pulse"])
+
+    # The live picture keeps breathing: a completion arms the next animation.
+    assert running["trace"] == ["pulse:1"]
+    # The disposed one does not, and the count says so rather than the picture.
+    assert disposed["destroyed"] == 1
+    assert disposed["trace"] == ["pulse:0"], "a disposed graph re-armed its pulse"
+
+
+def test_the_parent_epic_is_drawn_with_the_label_the_server_gave_it() -> None:
+    """D11 asks for a LABELLED node, which is a claim about the text drawn.
+
+    The id is what every other assertion here reads, and an empty or wrong
+    label would leave all of them green while the picture showed an unnamed
+    circle where the epic should be.
+    """
+    result = _mini_run()
+
+    assert result["labels"]["epic"] == "Loom run harness"
+
+
+def test_a_detail_page_publishes_no_graph_page_handle() -> None:
+    result = _mini_run()
+
+    assert result["pageHandle"] is False

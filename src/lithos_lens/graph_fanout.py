@@ -11,7 +11,7 @@ deadline inside them.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from lithos_lens.graph_cache import (
@@ -133,6 +133,22 @@ def partition_far_endpoints(
         else:
             pending.append(far_id)
     return resolved, tuple(pending)
+
+
+def pending_reads(
+    candidates: Sequence[str],
+    known: Mapping[str, TaskRecord],
+    in_hand: Mapping[str, TaskRecord],
+) -> int:
+    """How many ``task_get`` calls resolving ``candidates`` would QUEUE.
+
+    The partition above, counted rather than performed, so a caller can apply
+    its work budget BEFORE the gather rather than after it — the queue is what
+    an edge writer controls. An OPEN candidate is on the master snapshot and
+    one an earlier phase already read is ``in_hand``; neither is work.
+    """
+    _, pending = partition_far_endpoints(candidates, tuple(known.values()))
+    return len({task_id for task_id in pending if task_id not in in_hand})
 
 
 async def resolve_far_endpoints(

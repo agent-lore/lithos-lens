@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection.
 
 **Tier:** Foundation
 
@@ -21,9 +21,10 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.gates` | L | 5 | 5 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
-| `lithos_lens.graph_fanout` | S | 1 | 3 |
+| `lithos_lens.graph_fanout` | S | 1 | 4 |
 | `lithos_lens.graph_impact` | M | 2 | 5 |
 | `lithos_lens.graph_layout` | L | 6 | 6 |
+| `lithos_lens.graph_mini` | L | 2 | 1 |
 | `lithos_lens.graph_page` | L | 1 | 7 |
 | `lithos_lens.graph_scope` | L | 5 | 7 |
 | `lithos_lens.graph_snapshot` | M | 1 | 4 |
@@ -101,6 +102,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `GraphScopeClient` — The narrow client surface scope assembly needs.
 - def `read_edges` — One cache read per node; failures become ``incomplete``, not silence.
 - def `partition_far_endpoints` — Split ghost candidates into "already known" and "needs a read".
+- def `pending_reads` — How many ``task_get`` calls resolving ``candidates`` would QUEUE.
 - def `resolve_far_endpoints` — Read every pending candidate, filling ``resolved`` and returning failures.
 
 ### `lithos_lens.graph_impact`
@@ -125,6 +127,11 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `longest_paths` — The longest path from each node over ``neighbours``, in walk order.
 - def `longest_blocking_chain` — The longest chain of blocking work in this graph, by node count (D7).
 - def `hierarchy_rows` — The scope's ``parent_child`` forest, flattened into indented rows.
+
+### `lithos_lens.graph_mini`
+- class `MiniGraphLimits` — What one mini-graph render may draw, and what it may spend doing it.
+- class `MiniGraphView` — One rendered mini-graph: its nodes, its payload, and its honesty.
+- def `load_mini_graph` — Assemble the mini-graph for one task (D11).
 
 ### `lithos_lens.graph_page`
 - class `GraphPageClient` — The client surface one graph page needs: the scope reads plus blocked.
