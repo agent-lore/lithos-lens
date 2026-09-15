@@ -45,7 +45,7 @@ from lithos_lens.graph_page import (
     scope_param,
 )
 from lithos_lens.graph_scope import GraphScopeLimits
-from lithos_lens.graph_snapshot import parse_canvas_notes
+from lithos_lens.graph_snapshot import CanvasNotes, parse_canvas_notes
 from lithos_lens.graph_view import DownstreamImpact
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
@@ -350,6 +350,31 @@ def _record(
                 metrics.tasks_graph_cycle_reads().add(count, {"outcome": read_outcome})
 
 
+def panel_canvas(request: Request, task_id: str) -> DownstreamImpact | None:
+    """What a panel can state with NO Lithos read at all (D7/D8, T2-A7).
+
+    The offline path's line, and the reason it has one: D7's position and D8's
+    lower bound describe the picture the page is still showing, they arrived in
+    this request (:class:`~lithos_lens.graph_snapshot.CanvasNotes`), and a
+    health probe that went red since the page loaded changes neither. The panel
+    beside them still says Lithos is unavailable — this adds no task detail and
+    no D10 figures, which are counted over an assembly this request cannot make
+    (round-5 correctness f-008).
+
+    ``None`` for every panel that described no canvas, which is every panel but
+    the graph page's.
+    """
+    return with_canvas_notes(None, _canvas_notes(request), focus=task_id)
+
+
+def _canvas_notes(request: Request) -> CanvasNotes:
+    """The client's account of what it is drawing, off the panel request."""
+    return parse_canvas_notes(
+        request.query_params.get(PANEL_BOUND_KEY),
+        request.query_params.get(PANEL_CHAIN_KEY),
+    )
+
+
 async def panel_impact(
     request: Request, state: AppState, task_id: str, detail: TaskDetailData
 ) -> DownstreamImpact | None:
@@ -380,10 +405,7 @@ async def panel_impact(
     # still showing: it can hold a different picture, or — refused, failed, or
     # no longer holding the focus — none at all, while the operator is looking
     # at a focused node with its neighbourhood lit (round-4 correctness f-006).
-    notes = parse_canvas_notes(
-        request.query_params.get(PANEL_BOUND_KEY),
-        request.query_params.get(PANEL_CHAIN_KEY),
-    )
+    notes = _canvas_notes(request)
     tasks_config = state.config.tasks
     impact = None
     try:

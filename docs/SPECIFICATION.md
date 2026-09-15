@@ -561,8 +561,12 @@ about the PICTURE, not about the figures — and the picture is the static
 payload the browser is focusing, which the panel's own rebuild may no longer
 be: it can hold a different topology, or nothing at all when the scope has
 since been refused, failed, or lost the focal node. So every panel the graph
-page fetches carries `bound=lower|exact` and `chain=<k>:<n>` beside its
-`scope=` and `snapshot=`, and those are what the panel renders. Both come from
+page fetches carries `canvas_bound=lower|exact` and `canvas_chain=<k>:<n>`
+beside its `scope=` and `snapshot=`, and those are what the panel renders.
+(Named apart from the blocker trail's `chain`, and deliberately outside the
+filter-query byte budget: they are re-emitted into nothing, and an annotation
+Lens appends to its own URL must never push a request the page was already
+served under past that ceiling and have the panel refused.) Both come from
 the server either way — the lower bound rides in the payload per node, and the
 position is read off the chain the payload ships — so the browser restates D7
 and D8 rather than reimplementing them. A panel asked without them (any caller
@@ -572,12 +576,16 @@ figures when it does not; it never invents a claim about a picture nobody
 named. The server-rendered `focus=` page needs none of this: its assembly IS
 what it draws.
 
-Those two statements are also independent of the panel's OWN read of the focal
-task. A `task_get` that fails renders "Task unavailable" — and still renders
-them, because the operator is looking at a focused, lit neighbourhood either
-way. What that panel does not render is a figure or a "refresh": there is no
-focal status to count against, and no refresh resolves a failed read, so the
-line degrades to its notes alone and the panel's markup carries the error.
+Those two statements are also independent of every later READ. A `task_get`
+that fails renders "Task unavailable" — and a health probe that has gone red
+since the page loaded renders the offline panel — and both still render them,
+because the operator is looking at a focused, lit neighbourhood either way and
+neither fact needs a live Lithos call: they describe the page's own static
+payload and they arrived in the request. What those panels do not render is a
+figure or a "refresh": there is no focal status to count against, and neither
+a failed read nor an outage is what a refresh of the GRAPH would resolve, so
+the line degrades to its notes alone and the panel's own markup carries the
+error.
 
 Titles, claims, blocker messages and error reasons are excluded from both
 halves — they move no figure, and a fingerprint that changed on every heartbeat

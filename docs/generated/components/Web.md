@@ -11,7 +11,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.graph_routes` | M | 0 | 2 |
+| `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 13 |
 | `lithos_lens.web` | L | 0 | 1 |
@@ -20,6 +20,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 ### `lithos_lens.graph_routes`
 - def `register_graph_routes` — Attach `GET /tasks/graph` (scope picker + one scope's graph).
+- def `panel_canvas` — What a panel can state with NO Lithos read at all (D7/D8, T2-A7).
 - def `panel_impact` — D10's impact line for a panel fetched with a `scope=` (T2-A7).
 
 ### `lithos_lens.knowledge_routes`

@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from html import unescape
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 
@@ -44,7 +45,7 @@ from lithos_lens.graph_scope import (
 from lithos_lens.graph_snapshot import canvas_holds, impact_fingerprint
 from lithos_lens.graph_view import DownstreamImpact
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
-from lithos_lens.tasks import TaskRecord, TaskStatusName
+from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES, TaskRecord, TaskStatusName
 from tests.test_graph_page import (
     PROJECT,
     GraphFakeClient,
@@ -1067,7 +1068,7 @@ def test_a_blocked_row_that_moved_withholds_the_figures_and_keeps_the_notes(
 #: `bounded_dataset()`: a lit set that is a lower bound, and the middle step of
 #: the three-node chain. Read off the payload by `graph.js` and stated back on
 #: every panel it fetches (`graph_snapshot.CanvasNotes`).
-DRAWN_AROUND_ROOT = "&bound=lower&chain=2:3"
+DRAWN_AROUND_ROOT = "&canvas_bound=lower&canvas_chain=2:3"
 
 
 def test_a_picture_that_moved_still_states_what_the_canvas_is_showing(
@@ -1131,6 +1132,170 @@ def test_a_scope_that_can_no_longer_answer_still_states_the_canvas(
     assert "frees" not in slot(panel)
     assert "lower bound of what surrounds it" in slot(panel)
     assert "On the longest chain (2 of 3)." in slot(panel)
+
+
+def bounded_components_fake() -> GraphFakeClient:
+    """Two disconnected, COMPLETE components, one of them degraded.
+
+    `a1 -> a2 -> a3` is the scope's longest chain and `a3` also points at a
+    ghost whose status could not be read, so that edge is `unknown` and every
+    node in A's component sits beside a relation Lens cannot classify.
+    `b1 -> b2` is its own component with nothing unreadable anywhere near it.
+    No edge LIST failed, so the scope itself is complete — which is what makes
+    this a test of D8's LOCAL caveat rather than of the scope-wide one.
+    """
+    return GraphFakeClient(
+        dataset(
+            [task(name) for name in ("a1", "a2", "a3", "b1", "b2")],
+            (
+                ("a1", "a2", "blocks"),
+                ("a2", "a3", "blocks"),
+                ("a3", "gone", "blocks"),
+                ("b1", "b2", "blocks"),
+            ),
+        ),
+        get_failures={"gone"},
+    )
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_lower_bound_is_per_component_from_the_payload_to_the_request(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The producer and the consumer of D8's lower bound (round-5 test-quality
+    f-004).
+
+    With a complete scope the caveat is LOCAL: it belongs to the focused node's
+    own neighbourhood, so an `unknown` edge hanging off one component says
+    nothing about a task in another. The server answers that per node and puts
+    it in the payload; the canvas states it back for whichever node the
+    operator clicks. Both halves are checked against the same assembled graph,
+    because a rule that degenerated to "any unknown edge bounds everything" —
+    or a `bound` that never left the server — would still leave both sides
+    self-consistent.
+    """
+    fake = bounded_components_fake()
+    page = get(lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}")
+    drawn = payload(page)
+
+    # The PRODUCER: per node, per component.
+    bound = {node["id"]: node["bound"] for node in drawn["nodes"]}
+    assert bound["a1"] is True
+    assert bound["a2"] is True
+    assert bound["a3"] is True
+    assert bound["b1"] is False
+    assert bound["b2"] is False
+
+    # …and the sentence the server itself renders for each focus, which is what
+    # the panel below has to go on saying after a client-side transition.
+    degraded = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=a2"
+    )
+    healthy = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=b1"
+    )
+    assert "lower bound of what surrounds it" in slot(degraded)
+    assert "On the longest chain (2 of 3)." in slot(degraded)
+    assert "lower bound of what surrounds it" not in slot(healthy)
+    assert "longest chain" not in slot(healthy)
+
+    # The CONSUMER: the same two facts, off the same payload, on the panel
+    # request each click makes.
+    inside = _graph_run(
+        ["tap:a2"],
+        href=f"http://lens.test/tasks/graph?project={PROJECT}",
+        payload=drawn,
+    )
+    outside = _graph_run(
+        ["tap:b1"],
+        href=f"http://lens.test/tasks/graph?project={PROJECT}",
+        payload=drawn,
+    )
+
+    assert inside["fetches"] == [
+        "/tasks/id?task_id=a2&fragment=panel&canvas_bound=lower&canvas_chain=2%3A3"
+    ]
+    # `b1` is in the clean component AND off the scope's longest chain, so it
+    # claims neither — a payload that carried one flag for the whole graph
+    # would have it saying `lower` here.
+    assert outside["fetches"] == [
+        "/tasks/id?task_id=b1&fragment=panel&canvas_bound=exact"
+    ]
+
+
+def test_an_offline_panel_still_states_what_the_canvas_is_showing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Lithos going quiet between the page load and the click costs the task
+    detail and D10's figures — not the two statements about the picture
+    (round-5 correctness f-008).
+
+    Those describe the graph this page is still drawing and they arrive IN the
+    request, so no live read is involved in either. The fragment is a 200 the
+    client swaps in and pushes `focus=` behind, so a panel that dropped them
+    would leave a focused, lower-bound canvas claiming an exact one — beside a
+    panel that never said so.
+    """
+    healthy = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
+    # The same fixture behind a health probe that has gone red. Two clients
+    # rather than one because the probe is cached for `health.refresh_interval_s`
+    # (minimum 1s) — the ORDERING under test is the page's render, then a panel
+    # request that finds Lithos unavailable.
+    offline = GraphFakeClient(
+        bounded_dataset(), edge_failures={"above"}, health="unreachable"
+    )
+
+    with client_for(lithos_lens_config_env, healthy) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+    with client_for(lithos_lens_config_env, offline) as client:
+        panel = client.get(
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={drawn}{DRAWN_AROUND_ROOT}"
+        ).text
+
+    # The outage is still reported, and no task detail is invented for it …
+    assert 'data-panel-state="offline"' in panel
+    # … while the canvas beside the panel is described as it is.
+    assert "lower bound of what surrounds it" in slot(panel)
+    assert "On the longest chain (2 of 3)." in slot(panel)
+    # No figures: D10's are counted over an assembly this request cannot make.
+    assert "frees" not in slot(panel)
+    assert attribute(panel, "data-impact-frees") == ""
+
+
+def test_a_canvas_annotation_cannot_push_a_panel_past_the_filter_ceiling(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Lens's own annotations are not the operator's filters, and must not be
+    measured as though they were (round-5 correctness f-009).
+
+    The board's preserved filters ride on every panel URL the server builds, so
+    a filter set the router ALREADY ACCEPTED can sit exactly at
+    `MAX_FILTER_QUERY_BYTES` — and the panel of the node that page just drew
+    has to be answerable. Under a key the budget measures (the blocker trail's
+    `chain` is one) appending `2:3` would carry that request past the ceiling
+    and the fragment would be refused at 400, which `tasks.js` answers by
+    CLEARING the panel: Back would land on a focused node with no panel at all.
+    """
+    at_ceiling = "p" * (MAX_FILTER_QUERY_BYTES - len(urlencode([("project", "")])))
+    fake = GraphFakeClient(bounded_dataset(), edge_failures={"above"})
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        drawn = snapshot(unescape(client.get(f"/tasks/graph?project={PROJECT}").text))
+        fragment = (
+            f"/tasks/root?fragment=panel&scope=project:{PROJECT}"
+            f"&snapshot={drawn}{DRAWN_AROUND_ROOT}&project="
+        )
+        panel = client.get(fragment + at_ceiling)
+        # One byte more of FILTER is over the ceiling and refused, which is what
+        # makes the request above exactly at it rather than comfortably under.
+        over = client.get(fragment + at_ceiling + "p")
+
+    assert panel.status_code == 200
+    assert "data-filter-rejected" not in panel.text
+    assert "lower bound of what surrounds it" in slot(panel.text)
+    assert "On the longest chain (2 of 3)." in slot(panel.text)
+    assert over.status_code == 400
 
 
 def test_a_panel_whose_task_read_failed_still_states_the_canvas(

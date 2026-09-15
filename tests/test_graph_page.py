@@ -1742,6 +1742,11 @@ def test_the_payload_carries_D3_s_whole_schema(
     assert verdicts["open-task"] == ("", False)
     completeness = {node["id"]: node["completeness"] for node in data["nodes"]}
     assert completeness["broken"] == "edges_unknown"
+    # D8's lower bound, per node (T2-A7): `broken`'s edge list failed, so the
+    # SCOPE is incomplete and every node in it is one. The local, per-component
+    # case — and what the canvas does with the field — is pinned end to end by
+    # `test_the_lower_bound_is_per_component_from_the_payload_to_the_request`.
+    assert {node["bound"] for node in data["nodes"]} == {True}
     assert completeness["ghost"] == "status_unknown"
     assert completeness["cyc-a"] == "ok"
     assert data["ghosts"] == ["ghost"]

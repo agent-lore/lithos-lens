@@ -2445,8 +2445,8 @@ def node_panel(task_id: str, chain: str = "") -> str:
     a graph the canvas is deliberately still showing, so those two facts travel
     from the page that IS showing it.
     """
-    url = f"/tasks/id?task_id={task_id}&fragment=panel&bound=exact"
-    return url + (f"&chain={quote(chain, safe='')}" if chain else "")
+    url = f"/tasks/id?task_id={task_id}&fragment=panel&canvas_bound=exact"
+    return url + (f"&canvas_chain={quote(chain, safe='')}" if chain else "")
 
 
 def _graph_run(
@@ -3111,7 +3111,7 @@ def test_a_panel_request_carries_what_this_canvas_shows_around_the_node() -> Non
     result = _graph_run(["tap:mid"], payload=BOUNDED_PAYLOAD)
 
     assert result["fetches"] == [
-        "/tasks/id?task_id=mid&fragment=panel&bound=lower&chain=2%3A3"
+        "/tasks/id?task_id=mid&fragment=panel&canvas_bound=lower&canvas_chain=2%3A3"
     ]
     # The canvas the panel was told about is the one on screen.
     assert result["final"]["focused"] == ["mid"]
@@ -3124,7 +3124,9 @@ def test_a_node_off_the_scope_chain_says_only_what_it_lights() -> None:
     bound alone rather than a position invented from the chain through it."""
     result = _graph_run(["tap:murky"], payload=BOUNDED_PAYLOAD)
 
-    assert result["fetches"] == ["/tasks/id?task_id=murky&fragment=panel&bound=lower"]
+    assert result["fetches"] == [
+        "/tasks/id?task_id=murky&fragment=panel&canvas_bound=lower"
+    ]
 
 
 def test_an_unfocused_graph_carries_none_of_the_three_classes() -> None:
@@ -3444,7 +3446,8 @@ def test_a_panel_opened_from_the_graph_carries_the_pages_scope() -> None:
 
     assert result["fetches"] == [
         "/tasks/id?task_id=c&fragment=panel&scope=project%3Aloom"
-        "&include_resolved=0&snapshot=a1b2c3d4e5f60718&bound=exact&chain=3%3A5"
+        "&include_resolved=0&snapshot=a1b2c3d4e5f60718"
+        "&canvas_bound=exact&canvas_chain=3%3A5"
     ]
 
 

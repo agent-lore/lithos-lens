@@ -35,7 +35,11 @@ from lithos_lens.fake_lithos import (
     fake_lithos_enabled,
 )
 from lithos_lens.frontier import AttentionPolicy, load_dashboard
-from lithos_lens.graph_routes import panel_impact, register_graph_routes
+from lithos_lens.graph_routes import (
+    panel_canvas,
+    panel_impact,
+    register_graph_routes,
+)
 from lithos_lens.knowledge import (
     render_markdown,
 )
@@ -394,6 +398,12 @@ def create_app(
                     "active_view": "tasks",
                     "detail": None,
                     "offline": True,
+                    # The two statements about the CANVAS survive the outage:
+                    # they describe the graph this page is still showing and
+                    # they arrived in the request, so a health probe that went
+                    # red between the page load and the click costs the task
+                    # detail and D10's figures, not them (round-5 f-008).
+                    "impact": panel_canvas(request, task_id) if panel else None,
                 },
             )
         detail = await _load_detail(state, task_id)

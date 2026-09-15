@@ -76,6 +76,13 @@ _PRESERVED_FILTER_KEYS = (
 # reason: ``chain`` describes one expansion walk, so re-emitting it onto a
 # board, tag or detail URL would carry a walk into navigation it has nothing to
 # do with. Measured here, emitted only by the one builder that owns it.
+# The graph panel's ``canvas_bound`` / ``canvas_chain`` (T2-A7) are deliberately
+# absent: a bounded flag and two integers, rendered into one sentence and
+# re-emitted into nothing, so they multiply no bytes. Measuring them would also
+# make Lens's own appended annotation able to push a request the page already
+# accepted past this ceiling, refusing the panel of a graph it just drew
+# (round-5 correctness f-009) — which is why they are named apart from
+# ``chain`` rather than sharing its key.
 _MEASURED_QUERY_KEYS = (*_PRESERVED_FILTER_KEYS, "chain")
 
 

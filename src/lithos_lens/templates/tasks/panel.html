@@ -26,6 +26,7 @@
     <p class="warning-text" data-panel-state="filters-rejected">The filters in this link are too large to apply.</p>
   {% elif offline %}
     <p class="warning-text" data-panel-state="offline">Lithos is offline or degraded. Task detail is unavailable.</p>
+    {% include "tasks/panel_impact.html" %}
   {% elif detail is none %}
     <p class="warning-text" data-panel-state="unavailable">Could not load this task from Lithos.</p>
     {% include "tasks/panel_impact.html" %}

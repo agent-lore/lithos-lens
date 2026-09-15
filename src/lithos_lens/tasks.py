@@ -164,19 +164,19 @@ PANEL_FRAGMENT_VALUE = "panel"
 #: figure exists outside a scope.
 PANEL_SCOPE_KEY = "scope"
 #: The identity of the ANSWER the page that opened the panel is showing
-#: (``graph_impact.impact_fingerprint``: two digests, one over the PICTURE —
-#: its nodes and edges — and one over the blocked rows M is read from, so a
-#: panel that finds one of them moved knows which of its claims survive).
-#: The scope name alone fixes which tasks are asked for,
-#: not which ones come back, and the panel's reads run after the page's — so
-#: this is what stops figures assembled from a moved graph being printed beside
-#: a canvas that is deliberately still showing the older one (D8/D10, T2-A7).
+#: (``graph_snapshot.impact_fingerprint``: two digests, one over the PICTURE
+#: and one over the blocked rows M is read from, so a panel that finds one of
+#: them moved knows which of its claims survive). The scope name alone fixes
+#: which tasks are asked for, not which ones come back, and the panel's reads
+#: run after the page's — so this is what stops figures assembled from a moved
+#: graph being printed beside a canvas deliberately still showing the older one.
 PANEL_SNAPSHOT_KEY = "snapshot"
 #: What the CLIENT is DRAWING around the focus, which only it can know: D7's
-#: position and D8's lower bound are claims about the picture on screen, which
-#: the panel's own rebuild is a later read of (``graph_snapshot.CanvasNotes``).
-PANEL_BOUND_KEY = "bound"
-PANEL_CHAIN_KEY = "chain"
+#: position and D8's lower bound are claims about the picture on screen
+#: (``graph_snapshot.CanvasNotes``). Named apart from the blocker trail's
+#: ``chain`` on purpose — see ``request_filters._MEASURED_QUERY_KEYS``.
+PANEL_BOUND_KEY = "canvas_bound"
+PANEL_CHAIN_KEY = "canvas_chain"
 
 
 def task_detail_path(task_id: str) -> str:

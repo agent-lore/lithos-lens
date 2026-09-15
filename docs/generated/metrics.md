@@ -45,11 +45,11 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 21 | 9759 | 7442 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 22 |
 | Tasks | 3 | 1357 | 985 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 4 |
 | Telemetry | 2 | 1091 | 793 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 1810 | 1399 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 4 | 1849 | 1420 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **49**, lines: **20109**, SLOC: **15369**
+- Modules: **49**, lines: **20148**, SLOC: **15390**
 - Largest module: `lithos_lens.frontier` (850 lines)
 - Modules over 800 lines: **2**
   - `lithos_lens.frontier`
@@ -57,7 +57,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **641**, cyclomatic > 10: **37**
+- Functions: **643**, cyclomatic > 10: **37**
 
 Top 10 most complex functions:
 
@@ -85,4 +85,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **75** (83 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.93** (38722 test lines / 20109 source lines)
+- Test-to-source line ratio: **1.93** (38895 test lines / 20148 source lines)

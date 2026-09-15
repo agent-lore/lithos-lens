@@ -454,8 +454,8 @@
     if (!node) return null;
     const step = scopeChain.indexOf(chainCondensationOf(taskId));
     return {
-      bound: node.bound ? "lower" : "exact",
-      chain: step < 0 ? "" : step + 1 + ":" + scopeChain.length
+      canvas_bound: node.bound ? "lower" : "exact",
+      canvas_chain: step < 0 ? "" : step + 1 + ":" + scopeChain.length
     };
   }
 
