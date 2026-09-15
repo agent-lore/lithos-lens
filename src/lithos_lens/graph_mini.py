@@ -18,9 +18,9 @@ bounds it, and both are D11's:
   depend on which edge Lithos happened to return first. The remainder is
   reported through T1's shared tail rather than clipped silently, and the
   focus link opens the full project graph on this task. The cap bounds the
-  PICTURE, which the work behind it is not: :data:`MAX_MINI_GRAPH_READS`
-  refuses a neighbourhood too large to READ, because an exact remainder may
-  not cost unbounded work to count.
+  PICTURE and not the work behind it, so :data:`MAX_MINI_GRAPH_READS` refuses
+  a neighbourhood too large to READ: an exact remainder may not cost
+  unbounded work.
 
 Two rules here differ from the graph page's and are stated rather than
 inherited:
@@ -114,9 +114,9 @@ from lithos_lens.tasks import (
 DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES = 40
 
 #: The most reads one render may QUEUE — the same internal net as
-#: ``graph_fanout.MAX_GHOST_RESOLUTION_READS``, for the reason stated there,
-#: and not an operator's dial. Past it the fragment is refused rather than
-#: drawn from a neighbourhood Lens never finished reading.
+#: ``graph_fanout.MAX_GHOST_RESOLUTION_READS``, for the reason stated there and
+#: not an operator's dial. Past it the fragment is refused rather than drawn
+#: from a neighbourhood Lens never finished reading.
 MAX_MINI_GRAPH_READS = 1000
 
 #: This scope's kind, in the payload the client reads. Neither ``project`` nor
@@ -172,9 +172,8 @@ class MiniGraphView:
     #: task_id -> why its ``edge_list`` read failed.
     incomplete: Mapping[str, str] = field(default_factory=dict)
     #: Non-zero when this render REFUSED: the reads the neighbourhood would
-    #: have queued past :data:`MAX_MINI_GRAPH_READS`, the guard's own evidence.
-    #: Such a view draws nothing and carries no tail — half a picture, or a
-    #: remainder counted off a half-read neighbourhood, claims too much.
+    #: have queued past :data:`MAX_MINI_GRAPH_READS`. Such a view draws nothing
+    #: and no tail — a count off a half-read neighbourhood claims too much.
     refused_reads: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -277,13 +276,14 @@ async def load_mini_graph(
         _neighbours(edges, focal.id, BLOCKER_EDGE_TYPES, up=False), claimed
     )
     # What the next two phases would QUEUE, counted BEFORE either enqueues a
-    # read: one `task_get` per cold first-hop endpoint, one `edge_list` per
-    # depth-1 blocker the cache has not warmed. Both are sized by the edge
-    # writer rather than by the cap, so a one-node picture could otherwise
-    # queue thousands of calls (round-7 f-001). The parent walk is not counted
-    # here: PARENT_BREADCRUMB_MAX_DEPTH already bounds it.
-    cold = sum(1 for blocker in frontier if cache.get(blocker) is None)
-    queued = pending_reads((*frontier, *dependents), known, records) + cold
+    # read: a `task_get` per first-hop endpoint the snapshot cannot answer,
+    # and an `edge_list` per depth-1 blocker — EVERY one, warm or not. A cache
+    # hit is no reservation: the entry can reach its TTL or be flushed by a
+    # task event in the await between this count and the gather, and a ceiling
+    # holding for some interleavings only is not one (round-8 f-001). Both
+    # phases are sized by the edge writer, not by the cap (round-7 f-001); the
+    # parent walk is bounded already by PARENT_BREADCRUMB_MAX_DEPTH.
+    queued = pending_reads((*frontier, *dependents), known, records) + len(frontier)
     if queued > limits.max_reads:
         return refused(queued)
     await _resolve(
@@ -332,7 +332,7 @@ async def load_mini_graph(
         # The last tier, and the only one whose RECORDS wait on a slot being
         # left for it: with the cap already spent, depth 2 is counted rather
         # than drawn, and reading a record apiece would be a fan-out nothing
-        # renders. One slot left is no licence to read the whole tier: which
+        # renders. One slot left is no licence to read the tier: which
         # candidate takes it is decided from the records, so the budget holds.
         queued += pending_reads(deeper, known, records)
         if queued > limits.max_reads:

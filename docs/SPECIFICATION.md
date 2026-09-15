@@ -719,7 +719,11 @@ which way an arrow reads.
   (a semaphore bounds how many run at once, never how many are queued). A
   render may therefore queue at most `MAX_MINI_GRAPH_READS` reads — an
   internal safety net like §5.10's ghost-resolution bound, not an operator's
-  dial — counted before each phase enqueues anything. Past it the fragment is
+  dial — counted before each phase enqueues anything, and counted over the
+  WHOLE frontier rather than over its cold half: a cache hit is not a
+  reservation, since the entry can reach its TTL or be flushed by a task event
+  in the await between the count and the gather, and a ceiling that holds for
+  some interleavings only is not a ceiling. Past it the fragment is
   REFUSED: it draws no picture and states the read count instead, offering the
   focus link, and the blocker chain below it is unaffected. Refusing is what
   the exact remainder costs — a tail that promises "21 more not shown" may not

@@ -35,6 +35,7 @@ from lithos_lens.graph_mini import (
     load_mini_graph,
 )
 from lithos_lens.graph_routes import MINI_GRAPH_SPAN
+from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import BLOCKER_EDGE_TYPES, PARENT_BREADCRUMB_MAX_DEPTH
 from lithos_lens.tasks import TaskRecord, TaskStatusName
 from tests.conftest import metric_value
@@ -1387,6 +1388,91 @@ async def test_the_depth_two_records_are_bounded_by_the_same_budget() -> None:
     # thirty behind them never were.
     assert fake.get_calls == ["task", "b"]
     assert sorted(fake.edge_calls) == ["b", "task"]
+
+
+class FlushingClient:
+    """A fake whose ``task_get`` FLUSHES the edge cache under the render.
+
+    Not a contrivance: an edge upsert emits no event upstream, so a task event
+    is the only signal that can invalidate a per-task entry (D2), and the hub
+    evicts on one. A render's record fan-out is exactly where that lands —
+    between the budget's look at the cache and the gather the budget is meant
+    to bound. Expiry at the TTL has the same effect and the same timing.
+    """
+
+    def __init__(self, inner: GraphFakeClient, cache: GraphCache) -> None:
+        self.inner = inner
+        self._cache = cache
+
+    async def task_get(self, task_id: str) -> TaskRecord:
+        if task_id != "task":
+            self._cache.flush()
+        return await self.inner.task_get(task_id)
+
+    async def task_edge_list(
+        self, task_id: str, *, direction: str = "both", types: list[str] | None = None
+    ) -> list[EdgeRecord]:
+        return await self.inner.task_edge_list(
+            task_id, direction=direction, types=types
+        )
+
+    async def task_children(
+        self,
+        task_id: str,
+        *,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[TaskRecord]:
+        return await self.inner.task_children(
+            task_id, recursive=recursive, include_closed=include_closed
+        )
+
+
+async def test_a_warm_frontier_is_counted_because_a_cache_hit_is_no_promise() -> None:
+    """Warmth at the check is not warmth at the gather, so it buys nothing.
+
+    The budget's look at the cache and `read_edges`'s own `edges_for` are
+    separated by the first-hop RECORD fan-out's await, and an entry can reach
+    its TTL or be flushed by a task event in that gap. Counting a warm blocker
+    as free therefore made the ceiling hold for some interleavings and not
+    others: with eight blockers warm at the check and flushed during the
+    record reads, a render budgeted for eight reads drew a one-node picture
+    and issued sixteen (round-8 correctness f-001).
+
+    So every depth-1 blocker counts, warm or not — the ceiling is on the work
+    the render may QUEUE, and the only figure that bounds it in every order is
+    the one the cache cannot revoke.
+    """
+    blockers = 8
+    tasks, edges = runaway(0, blockers=blockers)
+    cache = GraphCache()
+    # Warm every blocker's entry first, exactly as a graph-page render would.
+    await load_mini_graph(
+        GraphFakeClient(dataset(tasks, edges)),
+        "task",
+        master=[],
+        cache=cache,
+        limits=MiniGraphLimits(max_nodes=1),
+    )
+    assert cache.size == blockers + 1
+
+    fake = FlushingClient(GraphFakeClient(dataset(tasks, edges)), cache)
+    view = await load_mini_graph(
+        fake,
+        "task",
+        master=[],
+        cache=cache,
+        # Room for the eight records and nothing else — which is what a render
+        # that trusted the warm entries would have believed it needed.
+        limits=MiniGraphLimits(max_nodes=1, max_reads=blockers),
+    )
+
+    assert view.refused
+    assert view.refused_reads == blockers * 2
+    # The focal record is read before the budget is evaluable; nothing else is,
+    # so the flush never happens and the queue never forms.
+    assert fake.inner.get_calls == ["task"]
+    assert fake.inner.edge_calls == []
 
 
 async def test_a_neighbourhood_inside_the_budget_is_drawn_as_usual() -> None:
