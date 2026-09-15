@@ -171,7 +171,14 @@ def register_graph_routes(
                 return templates.TemplateResponse(request, "tasks/graph.html", context)
 
             context["view"] = view
-            if not view.refused and view.nodes:
+            # Not gated on the NODE COUNT, only on the refusal: a scope that
+            # holds nothing to draw still renders this page's panel host, and
+            # `focus=` owes that panel whatever the canvas has to show (D9) —
+            # a project whose last task completed answers "nothing to draw"
+            # AND "this task is completed; no pending impact", never silence
+            # (round-5 correctness f-002). A REFUSED scope renders neither: it
+            # has no host to put a panel in.
+            if not view.refused:
                 panel = await _focused_panel(state, params)
                 context["panel"] = panel
                 # Reconciled against the panel's OWN read of the focal task,

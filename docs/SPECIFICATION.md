@@ -807,7 +807,13 @@ compatibility alias that the route **redirects away** (307 to the same URL with
 and a Close that pushed a URL still carrying the alias. A request carrying a
 selection **server-renders that task's side panel** beside the canvas (§5.6.1's panel, this page's no-JS baseline, counted as a
 `url` open), with that panel's downstream impact computed from this render's
-own scope, and a read that fails there costs the panel rather than the graph; `overlays=hierarchy,provenance` is carried for the client layer.
+own scope, and a read that fails there costs the panel rather than the graph.
+The panel does not depend on the canvas having anything to draw: a scope that
+renders "nothing to draw" — a project whose last task resolved while
+`include_resolved` is off — still opens the panel its `focus=` names, and the
+resolved wording that panel owes (§5.6.1). Only a REFUSED scope renders
+neither, having no host to put a panel in. `overlays=hierarchy,provenance` is
+carried for the client layer.
 A `focus=` the scope actually holds also **replaces the chain line with the
 longest chain THROUGH that task** (§5.11), named as such: a chain through a
 mid-graph task is routinely shorter than the graph's longest, and an

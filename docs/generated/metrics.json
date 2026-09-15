@@ -323,7 +323,7 @@
         "functions": 49,
         "largest_module": "lithos_lens.web",
         "largest_module_lines": 800,
-        "lines": 1788,
+        "lines": 1795,
         "modules": 4,
         "public_symbols": 16,
         "sloc": 1389
@@ -335,13 +335,13 @@
       "lithos_lens.frontier",
       "lithos_lens.graph_layout"
     ],
-    "total_lines": 19713,
+    "total_lines": 19720,
     "total_modules": 48,
     "total_sloc": 15104
   },
   "tests": {
     "ratio": 1.92,
-    "src_lines": 19713,
-    "test_lines": 37885
+    "src_lines": 19720,
+    "test_lines": 37934
   }
 }

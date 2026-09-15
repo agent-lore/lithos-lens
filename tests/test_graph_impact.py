@@ -1059,6 +1059,55 @@ def test_a_focus_cancelled_out_of_the_graph_says_so_on_the_page_too(
     assert slot(html) == "This task is cancelled — its dependents are unsatisfiable."
 
 
+def test_an_empty_scope_still_opens_the_panel_its_focus_names(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The boundary the node count used to swallow: a project whose only task
+    has completed draws NOTHING under the default `include_resolved=0`, and the
+    page said so and nothing else — no panel for the `focus=` it was given, and
+    so no impact line either. `focus=` owes its panel whatever the canvas has
+    to show (D9), and a resolved focus owes D10's sentence wherever it is
+    rendered (round-5 correctness f-002). The empty graph itself is untouched:
+    the "nothing to draw" banner is the honest answer to the SCOPE."""
+    fake = GraphFakeClient(dataset([task("done", status="completed")]))
+
+    html = get(
+        lithos_lens_config_env, fake, f"/tasks/graph?project={PROJECT}&focus=done"
+    )
+
+    assert "data-graph-empty" in html, "the scope was meant to draw nothing"
+    assert 'data-panel-task="done"' in html
+    assert 'class="badge badge-completed">completed</span>' in html
+    assert slot(html) == "This task is completed; no pending impact."
+
+
+def test_a_resolved_focus_keeps_its_line_when_the_scope_read_fails(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The degraded path through the same rule. D10's resolved wording needs no
+    graph behind it, so a scope read that FAILS costs the figures — which a
+    resolved task has none of anyway — and not the sentence. Asserted through
+    the route rather than on the helper, because the promise is the panel's:
+    an `except` that went back to answering `None` would empty this slot with
+    every other regression still green (round-5 test-quality f-002)."""
+    fake = GraphFakeClient(
+        dataset([task("done", status="completed"), task("one")]),
+        # The impact's own master read, and only that: the detail beside it
+        # reads the task itself and is untouched.
+        list_failures={"open"},
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        panel = client.get(f"/tasks/done?fragment=panel&scope=project:{PROJECT}").text
+
+    assert any(call["status"] == "open" for call in fake.list_calls), (
+        "the impact never attempted the read that was meant to fail"
+    )
+    assert 'class="badge badge-completed">completed</span>' in panel
+    assert slot(panel) == "This task is completed; no pending impact."
+    assert attribute(panel, "data-impact-frees") == ""
+
+
 def test_a_panel_that_asked_for_no_impact_gains_none_from_a_resolved_task(
     lithos_lens_config_env: Path,
 ) -> None:
