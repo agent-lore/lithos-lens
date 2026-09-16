@@ -98,6 +98,13 @@ The current application exposes these routes:
   Renders the findings fragment used by the task detail page.
 - `GET /tasks/{task_id}/blockers`
   Renders one expanded level of a task's blocker chain (HTMX fragment).
+- `GET /tasks/{task_id}/minigraph`
+  Renders the detail page's **mini-graph** (§5.6.2) — the embedded payload and
+  the canvas container the shared graph client draws into, plus the fragment's
+  own text: the legend, the focus link into the full project graph, and the
+  tail counting whatever the cap left out. An HTMX fragment on the same terms
+  as the two above, fetched after the page rather than assembled inside it, so
+  the text baseline never waits on the picture drawn above it.
 - `GET /tasks/graph`
   Renders the dependency graph of one scope — `?project=<slug>` or
   `?epic=<id>` — and, with no scope, a picker of the projects and open epics
@@ -373,6 +380,10 @@ two cannot disagree about why a task is where it is. It shows:
 - **blockers**, each labelled: a satisfied predecessor (the edge survives
   completion and is still shown, but never as a reason the task cannot run), an
   unsatisfiable one, or a cycle
+- **the mini-graph** (§5.6.2), above the chain: this task's neighbourhood —
+  blockers two hops up, dependents one hop down, the parent epic — drawn by
+  the same client module the graph page uses. Progressive enhancement over the
+  chain below it, never a replacement for it
 - **the blocker chain**, expandable one level at a time to a bounded depth; a
   level that would revisit the chain reports the cycle instead of walking it
 - **Blocks:** — the level-1 dependents (outgoing `blocks` / `waits_on_gate`)
@@ -644,6 +655,131 @@ merely failed says so instead, because "this task does not exist" is Lithos's
 answer rather than a transport outcome. The open panel carries its own refresh
 fragment, so the reconcile that keeps the board live keeps the panel's blocker
 and dependent statuses live too without rebuilding it under the cursor.
+
+#### 5.6.2 Mini-graph
+
+`GET /tasks/{task_id}/minigraph` renders the picture the detail page shows
+above its blocker chain. It is a **scope** in the sense §5.10 gives the word —
+assembled over the same per-task edge cache, serialised into the same embedded
+payload, drawn by the same client module — so the neighbourhood above the chain
+and the project graph one link away cannot disagree about a colour, a shape or
+which way an arrow reads.
+
+- **Membership: two up, one down.** Incoming `blocks` / `waits_on_gate` edges
+  to depth 2, outgoing to depth 1, and the parent epic as a single labelled
+  node. `discovered_from` is excluded in both directions: the page renders
+  provenance as its own text section, and a non-blocking relation inside a
+  picture read as blocking would be misread. Depth 2 is enumerated from EVERY
+  depth-1 blocker — the ones the cap cut included, and the one an earlier TIER
+  draws (Lithos puts no type restriction on `blocks`, so a parent epic may
+  also block its own child) — because the remainder below counts the whole
+  neighbourhood the rule names. Tier membership decides which node an id is
+  drawn as; the frontier decides whose blockers are depth 2, and they are not
+  the same question. Only the RECORDS behind depth 2 wait until a slot could
+  still hold one.
+- **The parent epic is an ancestor, not the immediate parent.** `epic` is a
+  task type rather than a level of the hierarchy, so `epic -> task -> task` is
+  a legal shape and the nearest parent is routinely a plain task. The
+  `parent_child` chain is walked up to the first epic, bounded by the same
+  depth limit and seen-set as the detail page's breadcrumb. When the epic is
+  further up than the immediate parent it is drawn as a labelled node with no
+  edge: the tasks between are not members of this scope, and an edge straight
+  from the epic to the focal task would be a relation Lithos never wrote.
+- **An absent hierarchy node says which absence it is.** Exactly one ending
+  means the task HAS no parent epic: the chain runs off the top of the forest
+  without passing one, and the fragment simply draws no hierarchy node. The
+  other three — the walk's depth bound, a `parent_child` loop, and a read that
+  failed (an ancestor's `task_get` or `edge_list`, or the FOCAL task's own
+  edge list, which is where the first parent edge would have been) — mean Lens
+  could not decide, and the fragment says so in its own line ("this task's
+  parent epic could not be determined", with which of the three it was). The
+  picture is identical either way, so silence there would report a task with an
+  epic as a task without one; the reason also rides on the render's span.
+  Which of the four it is, is decided on the ancestor left PENDING — including
+  after the last hop the bound allows. A walk that spends its final hop
+  reaching the top of the forest has answered, and one that spends it arriving
+  back at a task it already visited has found a loop; only an ancestor left
+  genuinely unexplored is the bound's own outcome.
+- **The cap counts the focal task.** `[graph].mini_graph_max_nodes` (40) is the
+  whole picture, filled in one deterministic priority — focal task, parent
+  epic, depth-1 blockers, depth-1 dependents, depth-2 blockers, each tier in
+  (`created_at`, `id`) order — so which nodes an operator sees does not depend
+  on which edge Lithos happened to list first. What the cap left out is counted
+  through the page's one shared tail, which states the size that actually bound
+  this list rather than the 25-row neighbour page every other list on the page
+  uses. That tail counts NEIGHBOURS: the cap includes the focal task, the
+  sentence is about the tasks around it, and the remainder — the figure the cap
+  is accountable for — is the same number either way. A cap of one is a legal
+  configuration and the boundary of that arithmetic: no neighbour is drawn, and
+  the tail says so rather than falling back to the page's default size.
+- **A read budget, beside the node cap.** The cap bounds the PICTURE, and the
+  work behind it is not the same thing: the first-hop record reads and the
+  depth-two edge reads are both sized by the edges, which Lithos does not cap,
+  so a mini-graph drawing one node could otherwise queue thousands of calls
+  (a semaphore bounds how many run at once, never how many are queued). A
+  render may therefore queue at most `MAX_MINI_GRAPH_READS` reads — an
+  internal safety net like §5.10's ghost-resolution bound, not an operator's
+  dial — counted before each phase enqueues anything, and counted over the
+  WHOLE frontier rather than over its cold half: a cache hit is not a
+  reservation, since the entry can reach its TTL or be flushed by a task event
+  in the await between the count and the gather, and a ceiling that holds for
+  some interleavings only is not a ceiling. Past it the fragment is
+  REFUSED: it draws no picture and states the read count instead, offering the
+  focus link, and the blocker chain below it is unaffected. Refusing is what
+  the exact remainder costs — a tail that promises "21 more not shown" may not
+  itself take unbounded work to count, so Lens declines rather than drawing
+  part of a neighbourhood it never finished reading. The refusal rides on the
+  render's span and is its own `outcome` on the counter.
+- **There are no ghosts.** Every node is a task the neighbourhood named, drawn
+  as itself; a depth-1 dependent is a leaf because the scope STOPS there, not
+  because Lens could not read it. The two completeness markers mean what they
+  mean everywhere else: a node whose `task_get` failed is drawn with `status
+  unknown` (never dropped — hiding a possibly-live blocker is the wrong way to
+  err) and every edge touching it is `unknown`; a node whose `edge_list` failed
+  is marked `edges unknown`, and the fragment says how many there were rather
+  than letting a partial neighbourhood read as a whole one.
+- **No cycle verdict.** Cycle membership is Lithos's, from a scoped
+  `task_blocked` read (§5.11), and a per-task fragment has no scope to make one
+  with. The mini-graph draws the shape its edges show and marks no node "in a
+  cycle" — the graph page one link away is where that verdict is rendered.
+- **Its text is only what it alone knows.** No layers, no chain line, no node
+  list: the blocker chain and the `Blocks:` line below it are the accessible
+  baseline, and restating either here would be one claim rendered twice. What
+  the fragment does state is the legend, the `as of` staleness bound, the
+  remainder tail, and a focus link to `/tasks/graph?project=<slug>&focus=<id>`
+  — omitted, with a sentence saying why, for a task that belongs to no project
+  and therefore has no scope to open.
+- **Client-side it is the graph page's module in a narrower mode.** It boots on
+  the `htmx:afterSwap` that delivers the fragment (its canvas does not exist at
+  load), reads its state from the payload rather than from the detail page's
+  URL, writes nothing to history, opens no side panel, and claims its container
+  so a later swap cannot draw a second instance over a live one. The detail
+  page's reconcile replaces the whole detail fragment, so the mini-graph is
+  re-fetched and re-drawn with it — deliberately, because the picture and the
+  chain beneath it may not disagree, and unlike the graph page there is no
+  exploration state to lose. The layout is deterministic from the server's
+  roots, so an unchanged neighbourhood redraws in the same places. That swap
+  is a hand-made one (`tasks.js` parses and inserts the fragment itself), so
+  no HTMX cleanup runs behind it: the swap announces itself on `document`
+  (`lens:fragment-replaced`) and the mini-graph DISPOSES of the picture that
+  removal detached — the Cytoscape instance, its resize observer and the
+  claimed-node animation, whose completion callback is what re-arms it.
+  Teardown is decided by the old container having left the document, not by a
+  replacement arriving, because four states draw no replacement at all: the
+  fragment's offline branch, its assembly-error branch, its refusal branch,
+  and a request that never lands. Otherwise a tab left open would accumulate one live instance,
+  observer and animation per task event. The
+  exploration classes are off — every node on a mini-graph is in the focal
+  task's neighbourhood, so lighting them would say nothing.
+- **The automatic fit is bounded at both ends.** A neighbourhood too large for
+  the box overflows and says so rather than being scaled below legibility; a
+  sparse one — most commonly the focal task alone — is never MAGNIFIED past
+  the model scale the styling vocabulary defines, which is what a populated
+  mini-graph renders at. Without the ceiling one node was blown up to fill a
+  fixed-height panel, with a label larger than the page's own title. Only the
+  automatic fit is bounded: a zoom the operator chooses is theirs. The box
+  itself then gives back the height a small picture does not need, so the
+  glance is a small picture rather than a small picture in an empty panel.
 
 ### 5.7 Knowledge Surface
 
@@ -1039,6 +1175,19 @@ queued is not one of its three outcomes, and is carried by the span field
 `lens.graph.cycle_reads_unmade` instead. The scope KEY is a span
 attribute only: one Prometheus series per project is the cardinality failure
 §8's rule exists to prevent.
+
+The detail mini-graph (§5.6.2) is instrumented the same way and for the same
+reason — it is a multi-phase fan-out too. Each fragment opens one
+**`lens.tasks.minigraph`** span carrying `lens.minigraph.*`: the task id, the
+outcome, the node count, whether the cap bound, how many neighbours it left
+out, and that render's own cache hits, misses and neighbour reads. The counter
+beside it is `lens_tasks_minigraph_renders_total` (`outcome` in `rendered` |
+`capped` | `refused` | `offline` | `error`), with `capped` split out because
+how often 40 nodes is not enough is the only evidence there is for whether the
+knob is set near the corpus's shape, and `refused` split out because it is the
+work bound rather than the node cap — no picture at all, and the reads that
+would have been queued ride on the span beside it. The node count stays on the span: it is a
+distribution per task, which is the same cardinality the rule above forbids.
 
 #### 5.12.1 Cytoscape rendering
 

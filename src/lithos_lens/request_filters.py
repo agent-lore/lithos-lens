@@ -342,6 +342,18 @@ def panel_fragment_url(
     return f"{path}{'&' if '?' in path else '?'}{urlencode(params)}"
 
 
+def mini_graph_url(task_id: str) -> str:
+    """The detail page's mini-graph fragment for one task (T2-A5).
+
+    No preserved filters, deliberately: the fragment renders a NEIGHBOURHOOD,
+    which is the task's own edges rather than a slice of the board, and every
+    link it emits is either absolute (the project graph) or a task detail URL
+    the shared helpers build. ``task_id`` is encoded as ONE path segment for
+    the reason :func:`blocker_expand_url` gives.
+    """
+    return f"/tasks/{quote(task_id, safe='')}/minigraph"
+
+
 def blocker_expand_url(request: Request, task_id: str, chain: Sequence[str]) -> str:
     """Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
 

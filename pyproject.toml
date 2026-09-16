@@ -83,6 +83,7 @@ source_modules = [
     "lithos_lens.graph_snapshot",
     "lithos_lens.graph_impact",
     "lithos_lens.graph_page",
+    "lithos_lens.graph_mini",
     "lithos_lens.frontier",
     "lithos_lens.gates",
     "lithos_lens.pr_reconciliation",

@@ -102,6 +102,31 @@
         </section>
       {% endif %}
 
+      {#
+        The mini-graph (§5.6, T2-A5), ABOVE the text chain it illustrates —
+        "why can't this run" and "what does finishing this free" as one glance,
+        with the chain and the Blocks line below it as the accessible baseline.
+
+        Fetched rather than rendered inline: the neighbourhood costs a fan-out
+        of its own (an `edge_list` per drawn blocker, a `task_get` per
+        neighbour the open snapshot does not carry), and the page that answers
+        "why can't this run" must not wait on the picture of it. `hx-trigger`
+        is `load`, so it also fires when `tasks.js` swaps a refreshed detail
+        fragment in and re-processes it with htmx — which is what keeps the
+        picture and the chain below it from disagreeing after a task event.
+        The graph page's "never re-layout under the operator" rule does not
+        reach here: there is no exploration state on this canvas to lose, and
+        the layout is deterministic, so an unchanged neighbourhood redraws in
+        the same places.
+      #}
+      <div
+        class="mini-graph-host"
+        data-mini-graph-host
+        hx-get="{{ mini_graph_url(detail.task.id) }}"
+        hx-trigger="load"
+        hx-swap="innerHTML"
+      ></div>
+
       {% if detail.task.status == "open" or detail.blockers.total %}
         <section data-blocker-chain>
           {# "Blocked by" is a claim about the PRESENT. A completed predecessor
@@ -250,5 +275,17 @@
       };
     </script>
     <script src="{{ url_for('static', path='tasks.js') }}" defer></script>
+    {#
+      The mini-graph's client half (D11: the SAME module the graph page draws
+      with, so the two pictures share one colour/shape vocabulary and one
+      arrowhead rule). `graph.js` finds no canvas at load here — the fragment
+      above is still in flight — and boots on the `htmx:afterSwap` that brings
+      it in. The vendored bundle is the cost of that decision, and it is paid
+      after the page: both tags are deferred, so neither blocks the text
+      baseline, and a bundle that fails to load leaves the detail page exactly
+      as the server rendered it.
+    #}
+    <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
+    <script src="{{ url_for('static', path='graph.js') }}" defer></script>
   {% endif %}
 {% endblock %}

@@ -32,6 +32,11 @@ from lithos_lens.graph_impact import (
     reconciled_impact,
     with_canvas_notes,
 )
+from lithos_lens.graph_mini import (
+    MiniGraphLimits,
+    MiniGraphView,
+    load_mini_graph,
+)
 from lithos_lens.graph_page import (
     EDGE_LEGEND,
     SCOPE_PROJECT,
@@ -65,6 +70,9 @@ logger = logging.getLogger(__name__)
 
 #: The assembly span every graph render opens (the PRD's telemetry point).
 GRAPH_SPAN = "lens.tasks.graph"
+
+#: The same, for the detail page's mini-graph fragment (D11).
+MINI_GRAPH_SPAN = "lens.tasks.minigraph"
 
 
 def register_graph_routes(
@@ -216,6 +224,123 @@ def register_graph_routes(
                 view=view,
             )
             return templates.TemplateResponse(request, "tasks/graph.html", context)
+
+    @app.get("/tasks/{task_id}/minigraph", response_class=HTMLResponse)
+    async def task_minigraph(request: Request, task_id: str) -> Response:
+        """The detail page's mini-graph, as an HTMX fragment (D11, T2-A5).
+
+        Its own request for the reason `/tasks/{task_id}/findings` is: the
+        detail page's own reads answer "why can't this run" already, and this
+        neighbourhood costs a fan-out of its own — one `edge_list` per drawn
+        blocker plus a `task_get` per neighbour the open snapshot does not
+        carry. Loaded after the page rather than inside it, so the text
+        baseline is never waiting on the picture drawn above it.
+
+        The whole assembly runs inside one ``lens.tasks.minigraph`` span for
+        the reason the graph page's does: it is a multi-phase fan-out, and
+        "what did this fragment actually fetch?" is not a question the server
+        span can answer.
+        """
+        snapshot = await state.refresh_health()
+        context: dict[str, object] = {
+            "config": state.config,
+            "health": snapshot,
+            "active_view": "tasks",
+            "view": None,
+            "offline": snapshot.lithos != "ok",
+            "error": "",
+        }
+        with get_tracer().start_as_current_span(MINI_GRAPH_SPAN) as span:
+            span.set_attribute("lens.minigraph.task_id", task_id)
+            if snapshot.lithos != "ok":
+                _record_minigraph(span, outcome="offline")
+                return templates.TemplateResponse(
+                    request, "tasks/minigraph.html", context
+                )
+            tasks_config = state.config.tasks
+            try:
+                # The open snapshot, for the reason the graph page reads it: an
+                # OPEN neighbour is already on it, so the common blocker costs
+                # no `task_get` at all. A list read that fails is not fatal
+                # here — every neighbour is readable on its own — so it
+                # degrades to an empty snapshot and more reads, not to no
+                # picture.
+                master = list(
+                    await state.lithos_client.list_tasks(
+                        status="open", with_claims=True
+                    )
+                )
+            except Exception:
+                logger.warning("mini-graph master read failed", exc_info=True)
+                master = []
+            try:
+                view = await load_mini_graph(
+                    state.lithos_client,
+                    task_id,
+                    master=master,
+                    cache=state.graph_cache,
+                    limits=MiniGraphLimits(
+                        max_nodes=state.config.graph.mini_graph_max_nodes,
+                        fetch_concurrency=state.config.graph.fetch_concurrency,
+                    ),
+                    convention=tasks_config.project_convention,
+                    tag_key=tasks_config.project_tag_key,
+                )
+            except Exception:
+                # Including the focal `task_get`: a task Lens cannot read has
+                # no neighbourhood to draw, and the fragment says so rather
+                # than rendering an empty canvas that reads as "nothing here".
+                logger.warning("mini-graph assembly failed", exc_info=True)
+                context["error"] = (
+                    "The mini-graph could not be loaded. "
+                    "The blocker chain below is unaffected."
+                )
+                _record_minigraph(span, outcome="error")
+                return templates.TemplateResponse(
+                    request, "tasks/minigraph.html", context
+                )
+            context["view"] = view
+            _record_minigraph(
+                span,
+                outcome="refused"
+                if view.refused
+                else "capped"
+                if view.capped
+                else "rendered",
+                view=view,
+            )
+            return templates.TemplateResponse(request, "tasks/minigraph.html", context)
+
+
+def _record_minigraph(
+    span: Span, *, outcome: str, view: MiniGraphView | None = None
+) -> None:
+    """`lens.tasks.minigraph`: the PRD's telemetry point for this fragment.
+
+    The node count and the cap are span attributes and the outcome is the
+    counter's label, the same split `_record` makes above: a per-task
+    distribution belongs on a span, and a four-value enum is what a fleet
+    counter can carry.
+    """
+    span.set_attribute("lens.minigraph.outcome", outcome)
+    if view is not None:
+        span.set_attribute("lens.minigraph.nodes", view.node_count)
+        span.set_attribute("lens.minigraph.capped", view.capped)
+        # Zero unless the render refused; then it is the reads the
+        # neighbourhood would have queued, which is the evidence for whether
+        # `MAX_MINI_GRAPH_READS` sits anywhere near the corpus's shape.
+        span.set_attribute("lens.minigraph.refused_reads", view.refused_reads)
+        span.set_attribute("lens.minigraph.not_shown", view.tail.remaining)
+        # Empty when the hierarchy tier is settled; a reason when D11's node
+        # could not be decided, which is the half of that promise a node count
+        # cannot show.
+        span.set_attribute(
+            "lens.minigraph.parent_epic_unknown", view.parent_epic_unknown
+        )
+        span.set_attribute("lens.minigraph.cache_hits", view.cache_hits)
+        span.set_attribute("lens.minigraph.cache_misses", view.cache_misses)
+        span.set_attribute("lens.minigraph.ghost_reads", view.ghost_reads)
+    metrics.tasks_minigraph_renders().add(1, {"outcome": outcome})
 
 
 async def _focused_panel(

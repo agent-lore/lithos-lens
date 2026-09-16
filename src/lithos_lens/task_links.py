@@ -278,17 +278,30 @@ class PageTail:
     voice. Carrying ``total`` rather than a bare truncation flag is the point:
     the operator gets to see how many more there are.
 
-    ``page_size`` is a property, not a field: :data:`LINK_PAGE_SIZE` is the one
-    authoritative page size and no caller may state a different one in the copy
-    an operator reads.
+    ``page_size`` is the size that ACTUALLY bound the list, and every detail
+    page list leaves it at :data:`LINK_PAGE_SIZE` — that is this module's
+    bound, and no caller of :func:`bounded_page` may claim a different one in
+    the copy an operator reads. ``size`` exists for the one surface bounded
+    somewhere else: the detail mini-graph (T2-A5) is capped at
+    ``[graph].mini_graph_max_nodes``, a config knob, and a tail printing "the
+    first 25 are listed above" under forty drawn nodes would state a figure
+    the list was never measured against. It is the applied cap or nothing —
+    not an override of ``bounded_page``'s.
+
+    ``None`` is what "this caller states no size of its own" means, and it is
+    deliberately not ``0``: a configured cap really can leave room for zero
+    neighbours (``mini_graph_max_nodes = 1`` is the focal task and nothing
+    else), and a falsy sentinel would answer that boundary with the default
+    25 — the one number the list was certainly not measured against.
     """
 
     shown: int = 0
     total: int = 0
+    size: int | None = None
 
     @property
     def page_size(self) -> int:
-        return LINK_PAGE_SIZE
+        return LINK_PAGE_SIZE if self.size is None else self.size
 
     @property
     def remaining(self) -> int:

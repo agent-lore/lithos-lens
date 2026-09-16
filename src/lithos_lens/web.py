@@ -54,6 +54,7 @@ from lithos_lens.request_filters import (
     epic_scope_url,
     filter_query_oversized,
     knowledge_tag_url,
+    mini_graph_url,
     note_url,
     panel_fragment_url,
     tag_chip_class,
@@ -212,6 +213,10 @@ def create_app(
     # line offers stays in blocker_chain; the partial asks it.
     templates.env.globals["blocker_expansion"] = blocker_expansion
     templates.env.globals["blocker_expand_url"] = blocker_expand_url
+    # The detail page's mini-graph fragment (§5.6, T2-A5), fetched by HTMX
+    # once the page is up. Built by the server for the same reason every
+    # other generated URL here is: the id encoding has one definition.
+    templates.env.globals["mini_graph_url"] = mini_graph_url
     templates.env.globals["blocker_max_depth"] = BLOCKER_MAX_DEPTH
 
     @asynccontextmanager
