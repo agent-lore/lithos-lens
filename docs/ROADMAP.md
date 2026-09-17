@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.3.0
-Date: 2026-09-04
+Version: 1.4.0
+Date: 2026-09-17
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -50,6 +50,19 @@ blocker chains, provenance and children — and **K1**, the knowledge surface:
 wiki-link resolution, metadata chips and a related panel, plus the `/knowledge`
 landing page with search, recent notes and tag browse.
 
+**Lens 0.4.0** adds **T2**, the task relationship graphs: `/tasks/graph`
+scoped by project or epic — topological text layers with cycles condensed into
+their own layer, the longest blocking chain, and the hierarchy tree as the
+no-JS baseline, with a Cytoscape canvas over it (arrowheads, plain-language
+legend, hierarchy and provenance overlays, isolated-task fold, focus mode with
+ancestors and descendants lit, search); a side panel shared by dashboard rows
+(`?selected=`) and graph nodes (`?focus=`) carrying blockers, dependents,
+parent and downstream impact ("frees N in this graph, M immediately"); and a
+mini-graph on the task detail page. Cross-scope endpoints are one-hop ghosts,
+Lithos's `task_blocked` is the authority on cycle membership, and every graph
+surface is fed by one per-task `edge_list` cache. What follows 0.4.0 is
+decided at the W38 checkpoint (Lithos task `bcaf9379`, by 2026-09-20).
+
 `docs/SPECIFICATION.md` describes this state precisely, and is the document to
 update when behavior changes.
 
@@ -72,7 +85,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 |---|----|---------|---------|--------|-----|--------|
 | 1 | **T1** | Tasks | Graph-native Operator View (read-only) | **shipped** | [t1-graph-native-operator-view.md](./prd/t1-graph-native-operator-view.md) | 0.3.0 |
 | 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
-| 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **next** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
+| 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **shipped** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
 | 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
 | 4 | **T3** | Tasks | Curated write actions | planned | — | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
@@ -114,7 +127,7 @@ specifies was never wired (Lithos task `cdce170a`). It is tracked as a gap
 rather than as unshipped scope — every user-facing surface in the milestone is
 live.
 
-### T2 — Task Relationship Graphs
+### T2 — Task Relationship Graphs — SHIPPED in 0.4.0
 
 PRD: [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md)
 (2026-09-02; **narrowed 2026-09-04**: the first draft bundled graph pages,
@@ -146,6 +159,21 @@ Seven slices; five of the correctness decisions (per-task cache and its
 staleness bound, bounded cycle promise, satisfied-edge drop, ghost rule,
 scoped and truncation-aware blocked read) carry over from the first draft.
 
+Landed across the seven slices as planned, 2026-09-11 → 2026-09-16 (PRs #78,
+#79, #81, #83, #87, #88, #89); `docs/SPECIFICATION.md` §5.10–§5.12 describe
+the graph assembly, topology and page, §5.6.1 the side panel and §5.6.2 the
+mini-graph. Nothing was cut from the PRD's scope and nothing from the
+milestone remains open. Every slice was built by lithos-loom's story-develop
+route — 40 review rounds, about $640 — with two `needs_human` escalations out
+of seven: A6 (external-review remediation budget spent; merged by hand) and A4
+(round budget spent with two findings open; the PR was pushed by hand and
+`develop converge` closed them on the branch). That 2/7 rate against August's
+3/7 on K1 is the measurement the W38 checkpoint asked for. The one accepted
+constraint stands: with no bulk graph fetch (ledger #3) a project graph is
+~100 semaphored, cached `edge_list` calls. Measured on the largest live scope
+(lithos-loom, ~100 nodes, 2026-09-17): about half a second cold, a quarter
+warm — not slow enough to revisit yet.
+
 ### T2b — Operational Insights
 
 The two strands split out of T2 on 2026-09-04, sequenced after it so that
@@ -166,6 +194,11 @@ recorded in REQUIREMENTS §5A, §5.8.4, §5.9 and §5.4.1:
   agent chips with role markers and the registry ∪ config human definition,
   title badge. Debounced **server-side** metric recompute stays at X1 with the
   transition detector it serves.
+
+One piece is already live ahead of the PRD: the Gates section renders loom's
+PR reconciliation state — badge, age, `needs_human` in attention (#85,
+2026-09-13) — pulled forward because lithos-loom's pr-reconciliation S7 needed
+a console to show it on. The rest of T2b is unsequenced.
 
 ### T3 — Curated Write Actions
 

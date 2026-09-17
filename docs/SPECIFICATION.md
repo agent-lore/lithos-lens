@@ -1,8 +1,8 @@
 # Lithos Lens - Specification
 
-Version: 0.3.0  
-Date: 2026-08-31  
-Status: Aligned with Implementation (T1 and K1 shipped)
+Version: 0.4.0  
+Date: 2026-09-17  
+Status: Aligned with Implementation (T1, K1 and T2 shipped)
 
 ## 1. Purpose
 
@@ -1585,11 +1585,8 @@ The following requirement areas are not yet implemented in the current state:
 - LLM-assisted curation, summaries, or browsing assistance (X1) — the LLM
   config block exists and is disabled by default; nothing consumes it
 - authentication
-
-- the task dependency graph's **interactive** layer — T2: `/tasks/graph`
-  renders its server-rendered text baseline (§5.12) over the assembly (§5.10)
-  and topology (§5.11) beneath it, but the Cytoscape canvas, exploration mode,
-  the shared side panel and the detail mini-graph are later slices
+- the planning view rebase, findings feed and operator ergonomics (T2b) —
+  one piece of it is live, the Gates section's PR reconciliation state (§5.3)
 
 One gap is narrower than a milestone and tracked as a task:
 
@@ -1601,9 +1598,10 @@ because they are described in `docs/REQUIREMENTS.md`.
 
 ## 11. Compatibility Statement
 
-This specification describes the behavior of Lithos Lens `0.3.0` as currently
-implemented in this repository — the 0.1.0 foundation plus the **T1**
-graph-native operator view and the **K1** knowledge note view and search.
+This specification describes the behavior of Lithos Lens `0.4.0` as currently
+implemented in this repository — the 0.1.0 foundation, the **T1** graph-native
+operator view and **K1** knowledge note view and search of 0.3.0, and the
+**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2).
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be
