@@ -303,10 +303,10 @@
         "functions": 43,
         "largest_module": "lithos_lens.tasks",
         "largest_module_lines": 829,
-        "lines": 1410,
+        "lines": 1418,
         "modules": 3,
         "public_symbols": 47,
-        "sloc": 1024
+        "sloc": 1022
       },
       "Telemetry": {
         "classes": 0,
@@ -336,13 +336,13 @@
       "lithos_lens.graph_layout",
       "lithos_lens.tasks"
     ],
-    "total_lines": 21240,
+    "total_lines": 21248,
     "total_modules": 50,
-    "total_sloc": 16252
+    "total_sloc": 16250
   },
   "tests": {
-    "ratio": 1.95,
-    "src_lines": 21240,
-    "test_lines": 41432
+    "ratio": 1.96,
+    "src_lines": 21248,
+    "test_lines": 41646
   }
 }

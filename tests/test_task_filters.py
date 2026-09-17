@@ -429,16 +429,33 @@ def test_a_terminal_row_must_pass_both_windows() -> None:
     )
 
 
-def test_created_since_keeps_a_row_whose_creation_date_is_unreadable() -> None:
-    """Same posture as the resolved branch: Lens does not hide a row on a date
-    it could not parse."""
+@pytest.mark.parametrize("created_at", ["", "not-a-date", "26/13/2026"])
+def test_created_since_drops_a_row_whose_creation_date_is_unreadable(
+    created_at: str,
+) -> None:
+    """Regression (correctness/f-001). The OPPOSITE of the resolved branch, and
+    for the reason that branch gives: there the server already applied
+    ``resolved_since`` and returned the row anyway, so keeping it honours a
+    decision upstream made. Nothing applies this window but this predicate, so
+    a row it cannot evaluate has not been shown to satisfy ``created_at >=
+    date`` — keeping it would put an unvouched-for row on a narrowed board and
+    into its section count. ``normalize_task`` turns a missing ``created_at``
+    into ``""``, so this is reachable from real data.
+
+    Without the window it is an ordinary row and still renders.
+    """
     undated = TaskRecord(
-        id="t3", title="Undated", status="open", created_by="planner", created_at=""
+        id="t3",
+        title="Undated",
+        status="open",
+        created_by="planner",
+        created_at=created_at,
     )
 
-    assert matches_filters(
+    assert not matches_filters(
         undated, filters=_filters(created_since="2026-05-01"), status="open"
     )
+    assert matches_filters(undated, filters=_filters(), status="open")
 
 
 def test_created_since_narrows_the_open_side() -> None:

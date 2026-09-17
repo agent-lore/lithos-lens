@@ -315,7 +315,12 @@ Filter behavior:
     it narrows every section, and a row it hides is hidden from the section it
     belonged to rather than moved to another one. It is opt-in: absent means no
     created window, and input it cannot parse falls back to that same default
-    rather than inventing a narrowing.
+    rather than inventing a narrowing. A ROW whose own `created_at` is missing
+    or unreadable is dropped while the window is active — nothing else applies
+    this filter, so a row Lens cannot evaluate has not been shown to satisfy it
+    and must not be counted as though it had. (The resolved window keeps such a
+    row, because there the server applied `resolved_since` and returned it
+    anyway.)
   - **Resolved since (terminal only, by resolution)** — `since`. The one filter
     pushed upstream (`lithos_task_list`'s native `resolved_since`), so it also
     bounds what the completed/cancelled reads fetch; it never narrows open rows,

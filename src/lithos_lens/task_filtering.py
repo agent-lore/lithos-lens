@@ -180,15 +180,23 @@ def matches_filters(
         # the rows are already in hand, and pushing it would change what the
         # terminal reads fetch, which is ``since``'s job alone.
         #
-        # A row whose ``created_at`` cannot be read is KEPT, matching the
-        # resolved branch below: Lens does not hide a row on a date it could
-        # not parse.
+        # A row whose ``created_at`` cannot be read is DROPPED, which is the
+        # opposite of the resolved branch below and deliberately so. That
+        # branch keeps an unreadable row because the SERVER already applied the
+        # window (``resolved_since``) and deliberately returned the row, so
+        # re-deriving the exclusion here could only hide rows upstream had
+        # already admitted. This window is pushed nowhere: no read has filtered
+        # on ``created_at``, so this predicate is the only thing standing
+        # between the operator and a row that has not been shown to satisfy
+        # ``created_at >= date``. Keeping it would put a row on a narrowed
+        # board without evidence of membership, and the section counts would
+        # count it (correctness/f-001). ``normalize_task`` admits the state —
+        # a missing ``created_at`` normalizes to ``""`` — so it is reachable
+        # from real data rather than hypothetical.
         created_date = parse_date(task.created_at)
         created_since_date = parse_date(filters.created_since)
-        if (
-            created_date is not None
-            and created_since_date is not None
-            and created_date < created_since_date
+        if created_since_date is not None and (
+            created_date is None or created_date < created_since_date
         ):
             return False
     if status in TERMINAL_TASK_STATUSES and filters.since:

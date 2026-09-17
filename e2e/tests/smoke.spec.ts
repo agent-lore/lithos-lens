@@ -212,6 +212,46 @@ test("the needs-attention stripe is inset like its siblings, not welded to the c
   }
 });
 
+test("the two date windows sit side by side on the filter bar", async ({
+  page,
+}) => {
+  // Browser truth for the T2 UX pass: "Created since" and "Resolved since" are
+  // different questions, and the labels only do their job when the pair reads
+  // as a pair. The filter bar is an auto-fit grid, so before `.filter-dates`
+  // held the two in one cell the column count dealt them onto different rows —
+  // a layout no server-rendered assertion can see, which is why it is measured
+  // here.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/tasks?since=2026-08-01");
+
+  const created = page.locator('input[name="created_since"]');
+  const resolved = page.locator('input[name="since"]');
+  await expect(created).toBeVisible();
+  await expect(resolved).toBeVisible();
+
+  const wideCreated = (await created.boundingBox())!;
+  const wideResolved = (await resolved.boundingBox())!;
+  // Same row — compared against half a control's height so a sub-pixel grid
+  // difference is not a failure — and Created leads, as the bar renders them.
+  expect(Math.abs(wideCreated.y - wideResolved.y)).toBeLessThan(
+    wideCreated.height / 2,
+  );
+  expect(wideCreated.x).toBeLessThan(wideResolved.x);
+
+  // Below the bar's breakpoint they STACK rather than forcing a second column
+  // the viewport cannot hold: the span is reset there for exactly that reason.
+  await page.setViewportSize({ width: 420, height: 900 });
+  const narrowCreated = (await created.boundingBox())!;
+  const narrowResolved = (await resolved.boundingBox())!;
+  expect(narrowResolved.y).toBeGreaterThan(narrowCreated.y);
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+});
+
 test("a page shorter than the viewport still fills it", async ({ page }) => {
   // Browser truth for the body background fix (#44/#46, deduplicated in #54),
   // which until now had no guard but a reviewer's eye on a screenshot: the
