@@ -30,6 +30,7 @@ from lithos_lens.tasks import (
     TaskRecord,
     TaskStatusName,
     parse_date,
+    parse_timestamp,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,13 +191,33 @@ def matches_filters(
         # between the operator and a row that has not been shown to satisfy
         # ``created_at >= date``. Keeping it would put a row on a narrowed
         # board without evidence of membership, and the section counts would
-        # count it (correctness/f-001). ``normalize_task`` admits the state —
-        # a missing ``created_at`` normalizes to ``""`` — so it is reachable
-        # from real data rather than hypothetical.
-        created_date = parse_date(task.created_at)
+        # count it (round-1 correctness/f-001). ``normalize_task`` admits the
+        # state — a missing ``created_at`` normalizes to ``""`` — so it is
+        # reachable from real data rather than hypothetical.
+        #
+        # The ROW's stamp is read with ``parse_timestamp``, which parses the
+        # WHOLE value and normalizes it to UTC, rather than with ``parse_date``
+        # — that helper reads ``value[:10]`` and is right for the query-string
+        # dates it was written for, but wrong for an upstream timestamp on both
+        # counts (round-2 correctness/f-001):
+        #
+        # - a ten-character prefix cannot tell a timestamp from junk wearing
+        #   one, so ``2026-09-17junk`` and ``2026-09-17T99:99:99`` both read as
+        #   a valid 17 September and slipped past the drop above;
+        # - a prefix is the date in the stamp's OWN offset, not in UTC, so
+        #   ``2026-09-16T23:30:00-05:00`` (17 September in UTC) fell out of a
+        #   17 September window and ``2026-09-17T00:30:00+05:00`` (16
+        #   September in UTC) fell into it. Everything else in Lens compares
+        #   instants in UTC (``parse_timestamp``'s own contract, which the
+        #   age-based attention rules rest on), so this window has to as well.
+        #
+        # ``filters.created_since`` keeps ``parse_date``: it is a bare ISO date
+        # by construction (``normalize_created_since_input``), which is exactly
+        # what that helper reads.
+        created_at = parse_timestamp(task.created_at)
         created_since_date = parse_date(filters.created_since)
         if created_since_date is not None and (
-            created_date is None or created_date < created_since_date
+            created_at is None or created_at.date() < created_since_date
         ):
             return False
     if status in TERMINAL_TASK_STATUSES and filters.since:

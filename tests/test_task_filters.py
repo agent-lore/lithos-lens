@@ -429,7 +429,38 @@ def test_a_terminal_row_must_pass_both_windows() -> None:
     )
 
 
-@pytest.mark.parametrize("created_at", ["", "not-a-date", "26/13/2026"])
+def _created(created_at: str) -> TaskRecord:
+    """An open row carrying one upstream ``created_at`` verbatim.
+
+    ``normalize_task`` does not validate the string — a missing value becomes
+    ``""`` and anything else is preserved as written — so every value these
+    tests pass is one the boundary really admits.
+    """
+    return TaskRecord(
+        id="t3",
+        title="Stamped",
+        status="open",
+        created_by="planner",
+        created_at=created_at,
+    )
+
+
+@pytest.mark.parametrize(
+    "created_at",
+    [
+        "",
+        "not-a-date",
+        "26/13/2026",
+        # Junk wearing a valid ten-character prefix. These are the cases a
+        # ``parse_date(task.created_at)`` guard misses (round-2
+        # correctness/f-001): it reads ``value[:10]``, so both of these were
+        # admitted as a valid 2026-05-02 — inside the window below — even
+        # though nothing can say when the row was actually created.
+        "2026-05-02junk",
+        "2026-05-02T99:99:99",
+        "2026-05-02T10:00:00+99:00",
+    ],
+)
 def test_created_since_drops_a_row_whose_creation_date_is_unreadable(
     created_at: str,
 ) -> None:
@@ -439,23 +470,53 @@ def test_created_since_drops_a_row_whose_creation_date_is_unreadable(
     decision upstream made. Nothing applies this window but this predicate, so
     a row it cannot evaluate has not been shown to satisfy ``created_at >=
     date`` — keeping it would put an unvouched-for row on a narrowed board and
-    into its section count. ``normalize_task`` turns a missing ``created_at``
-    into ``""``, so this is reachable from real data.
+    into its section count.
 
     Without the window it is an ordinary row and still renders.
     """
-    undated = TaskRecord(
-        id="t3",
-        title="Undated",
-        status="open",
-        created_by="planner",
-        created_at=created_at,
-    )
-
     assert not matches_filters(
-        undated, filters=_filters(created_since="2026-05-01"), status="open"
+        _created(created_at),
+        filters=_filters(created_since="2026-05-01"),
+        status="open",
     )
-    assert matches_filters(undated, filters=_filters(), status="open")
+    assert matches_filters(_created(created_at), filters=_filters(), status="open")
+
+
+@pytest.mark.parametrize(
+    ("created_at", "inside"),
+    [
+        # 2026-05-02T04:30 UTC — inside a 2026-05-02 window despite reading
+        # 2026-05-01 in its own offset.
+        ("2026-05-01T23:30:00-05:00", True),
+        # 2026-05-01T19:30 UTC — outside it, despite reading 2026-05-02.
+        ("2026-05-02T00:30:00+05:00", False),
+        # The unambiguous pair, as controls.
+        ("2026-05-02T00:00:00+00:00", True),
+        ("2026-05-01T23:59:59+00:00", False),
+        # A bare date is midnight UTC, the same instant the window names.
+        ("2026-05-02", True),
+    ],
+)
+def test_created_since_compares_the_row_instant_in_utc(
+    created_at: str, inside: bool
+) -> None:
+    """Regression (round-2 correctness/f-001): the window is a date, the row is
+    an instant, and the two are compared in UTC.
+
+    Reading the stamp's first ten characters compares the date in whatever
+    offset the row happens to carry, so the same moment fell on either side of
+    the window depending on who wrote it. Every other instant in Lens is
+    normalized to UTC first (``parse_timestamp``, which the age-based attention
+    rules rest on), and this one is now too.
+    """
+    assert (
+        matches_filters(
+            _created(created_at),
+            filters=_filters(created_since="2026-05-02"),
+            status="open",
+        )
+        is inside
+    )
 
 
 def test_created_since_narrows_the_open_side() -> None:
