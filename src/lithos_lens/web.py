@@ -51,6 +51,7 @@ from lithos_lens.lithos_client import (
 from lithos_lens.request_filters import (
     blocker_expand_url,
     board_is_filtered,
+    created_since_clear_url,
     epic_scope_url,
     filter_query_oversized,
     knowledge_tag_url,
@@ -191,6 +192,7 @@ def create_app(
     templates.env.filters["render_markdown"] = render_markdown
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_tag_clear_url"] = task_tag_clear_url
+    templates.env.globals["created_since_clear_url"] = created_since_clear_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
@@ -656,6 +658,7 @@ async def _render_tasks(
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "created_since": filters.created_since,
                 "epic": filters.epic,
                 "frontier_limit": state.config.tasks.frontier_limit,
             },
@@ -697,6 +700,7 @@ async def _render_tasks(
                 "tags": list(filters.tags),
                 "agent": filters.agent,
                 "since": filters.since,
+                "created_since": filters.created_since,
                 "epic_scope": dashboard.epic_scope,
                 "frontier_limit": dashboard.frontier_limit,
                 "open_total": dashboard.open_total,

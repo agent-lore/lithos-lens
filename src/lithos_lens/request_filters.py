@@ -56,6 +56,7 @@ _PRESERVED_FILTER_KEYS = (
     "project",
     "agent",
     "since",
+    "created_since",
     TAG_FILTER_KEY,
     ADD_TAG_FILTER_KEY,
     "epic",
@@ -257,6 +258,23 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     """
     params = _preserved_filter_params(request, exclude="tag")
     params.extend(("tag", other) for other in tags if other != tag)
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
+
+
+def created_since_clear_url(request: Request) -> str:
+    """Link the ``created_since`` chip to the same board WITHOUT that window.
+
+    The chip is the clear control, the same shape
+    :func:`task_tag_clear_url` gives a tag: every other filter — ``since``
+    included, which is a different window and must survive independently —
+    is rebuilt from the request through the shared allowlist, and only
+    ``created_since`` is dropped.
+
+    Unlike ``since``, which always has a value, the created window is opt-in,
+    so removing it is removing the parameter rather than resetting it to a
+    default the board would keep applying.
+    """
+    params = _preserved_filter_params(request, exclude="created_since")
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 

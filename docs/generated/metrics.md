@@ -16,7 +16,7 @@ lower a budget after improving the code to lock in the gain.
 | `cross_module_private_refs` | 0 | 0 | 0 |
 | `max_module_lines` | 850 | 850 | 0 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 2 | 2 | 0 |
+| `modules_over_800_lines` | 3 | 3 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
@@ -43,21 +43,22 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 22 | 10598 | 8103 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 24 |
-| Tasks | 3 | 1357 | 985 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 4 |
+| Tasks | 3 | 1410 | 1024 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 5 |
 | Telemetry | 2 | 1116 | 814 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 2002 | 1543 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 4 | 2024 | 1561 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **50**, lines: **21165**, SLOC: **16195**
+- Modules: **50**, lines: **21240**, SLOC: **16252**
 - Largest module: `lithos_lens.frontier` (850 lines)
-- Modules over 800 lines: **2**
+- Modules over 800 lines: **3**
   - `lithos_lens.frontier`
   - `lithos_lens.graph_layout`
+  - `lithos_lens.tasks`
 
 ## Complexity
 
-- Functions: **665**, cyclomatic > 10: **39**
+- Functions: **667**, cyclomatic > 10: **40**
 
 Top 10 most complex functions:
 
@@ -69,10 +70,10 @@ Top 10 most complex functions:
 | 23 | `lithos_lens.normalizers.normalize_task` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
+| 19 | `lithos_lens.task_filtering.matches_filters` |
 | 18 | `lithos_lens.graph_layout.build_topology` |
 | 17 | `lithos_lens.graph_page.build_graph_page` |
 | 16 | `lithos_lens.graph_page._node_views` |
-| 16 | `lithos_lens.graph_page.graph_url` |
 
 ## Seams
 
@@ -85,4 +86,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **77** (85 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.94** (41163 test lines / 21165 source lines)
+- Test-to-source line ratio: **1.95** (41432 test lines / 21240 source lines)

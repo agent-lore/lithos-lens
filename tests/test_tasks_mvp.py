@@ -2920,8 +2920,11 @@ def test_terminal_sections_window_by_resolution_time_not_creation_time(
     assert "Ancient task resolved yesterday" in response.text
     # Resolved before the window: still excluded (created_at is irrelevant).
     assert "Old completed task" not in response.text
-    assert "Resolved since" in response.text
-    assert "Created since" not in response.text
+    # Both windows are on the bar; this one is the RESOLVED window, and the
+    # labels are what keep them apart (see the label test below).
+    assert "Resolved since (terminal only, by resolution)" in response.text
+    # The created window is off — nothing was asked of it, so no chip claims it.
+    assert "data-active-filter-created-since" not in response.text
 
     # The window is a resolved_since push, never a created-at `since`.
     terminal_calls = [
@@ -2930,6 +2933,150 @@ def test_terminal_sections_window_by_resolution_time_not_creation_time(
     assert terminal_calls
     assert all(call["resolved_since"] == "2026-04-01" for call in terminal_calls)
     assert all(call["since"] is None for call in terminal_calls)
+
+
+# --- Created since (T2 UX pass) ---------------------------------------------
+#
+# The second date window: "what came in since Monday", which the bar could not
+# ask before. It windows EVERY section by created_at, client-side over rows
+# already loaded, and leaves ``since`` — the resolved window, and the only
+# filter pushed upstream — doing exactly what it did.
+
+
+def test_created_since_windows_the_open_sections_too(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The gap ``since`` never closed: an open row is narrowed by creation date.
+
+    ``Old open task`` was created in 2025 and ``Unclaimed open task`` minutes
+    ago, and both are open — so the only thing that can tell them apart is the
+    created window.
+    """
+    fake = TaskFakeLithosClient()
+    yesterday = (_NOW - timedelta(days=1)).date().isoformat()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        unfiltered = client.get("/tasks?since=2026-04-01")
+        response = client.get(f"/tasks?since=2026-04-01&created_since={yesterday}")
+
+    assert unfiltered.status_code == 200
+    assert "Old open task" in unfiltered.text
+
+    assert response.status_code == 200
+    assert "Unclaimed open task" in response.text
+    assert "Old open task" not in response.text
+    # Hidden from its section, not re-sectioned: nothing promoted it elsewhere.
+    assert "Ancient" not in response.text
+
+
+def test_created_since_changes_no_lithos_read(
+    lithos_lens_config_env: Path,
+) -> None:
+    """It is applied over the loaded snapshot, so the call log is byte-identical
+    with and without it — the terminal reads keep pushing ``since`` as
+    ``resolved_since`` and nothing pushes a created window upstream."""
+    without = TaskFakeLithosClient()
+    with_window = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, without) as client:
+        client.get("/tasks?since=2026-04-01")
+    with _client(lithos_lens_config_env, with_window) as client:
+        client.get("/tasks?since=2026-04-01&created_since=2026-04-21")
+
+    assert with_window.list_calls == without.list_calls
+    terminal_calls = [
+        call
+        for call in with_window.list_calls
+        if call["status"] in {"completed", "cancelled"}
+    ]
+    assert terminal_calls
+    assert all(call["resolved_since"] == "2026-04-01" for call in terminal_calls)
+    assert all(call["since"] is None for call in terminal_calls)
+
+
+def test_a_terminal_row_must_pass_both_windows(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Both active at once: the resolved window admits two terminal rows and the
+    created window keeps only the one created late enough."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&created_since=2026-04-21")
+
+    assert response.status_code == 200
+    # Created 2026-04-21, resolved 2026-04-23 — inside both windows.
+    assert "Recently cancelled task" in response.text
+    # Created 2026-04-20, resolved 2026-04-22 — inside the resolved window only.
+    assert "Recently completed task" not in response.text
+    # Outside both, as it was before this filter existed.
+    assert "Old completed task" not in response.text
+
+
+def test_created_since_renders_a_chip_that_clears_only_itself(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An active created window hides open rows, so the strip must name it — and
+    removing it must leave every other filter standing, the resolved window
+    included."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks?since=2026-04-01&created_since=2026-04-21&agent=planner"
+        )
+        text = response.text
+        assert 'data-active-filter-created-since="2026-04-21"' in text
+        assert "Created since 21/04/2026" in text
+        assert "Old open task" not in text
+        href = unescape(
+            re.findall(r'href="([^"]+)"[^>]*data-active-filter-created-since=', text)[0]
+        )
+        cleared = client.get(href)
+
+    assert "created_since" not in href
+    params = QueryParams(href.split("?", 1)[1])
+    # Everything else the board was scoped by rides through the removal.
+    assert params.get("since") == "2026-04-01"
+    assert params.get("agent") == "planner"
+
+    assert cleared.status_code == 200
+    assert "data-active-filter-created-since" not in cleared.text
+    # Only the created window came off: the row it hid is back, and the agent
+    # filter still hides the rows planner did not create.
+    assert "Old open task" in cleared.text
+    assert "Recently completed task" not in cleared.text
+
+
+def test_the_two_date_labels_say_which_rows_they_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The reason the two were confused in the first place: a label naming only
+    its date says nothing about which rows it narrows. If either phrase is
+    dropped from its label, this fails."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        text = client.get("/tasks?since=2026-04-01").text
+
+    assert "Created since (open + terminal, by creation)" in text
+    assert "Resolved since (terminal only, by resolution)" in text
+
+
+def test_unparseable_created_since_renders_the_board_unwindowed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Handled as an unparseable ``since`` is: discarded, never a 500. The
+    fallback is this field's own default — no window — so a typo cannot narrow
+    the open sections under a date the operator never typed."""
+    fake = TaskFakeLithosClient()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?since=2026-04-01&created_since=not-a-date")
+
+    assert response.status_code == 200
+    assert "Old open task" in response.text
+    assert "data-active-filter-created-since" not in response.text
 
 
 def test_terminal_rows_sort_newest_resolved_first(

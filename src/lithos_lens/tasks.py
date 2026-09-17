@@ -549,15 +549,20 @@ class TaskFilters:
 
     ``projects`` is multi-valued and matches a task under ``project_convention``
     (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
-    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and
-    ``since`` windows only the resolved sections. The convention knobs travel on
-    the filters so the pure predicates below stay pure.
+    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and the two
+    date windows are DIFFERENT questions the filter bar labels apart (§5.4):
+    ``since`` windows only the resolved sections, by ``resolved_at``, and is the
+    one filter pushed upstream; ``created_since`` windows EVERY section, open
+    rows included, by ``created_at``, client-side and opt-in — empty means no
+    created window. The convention knobs travel on the filters so the pure
+    predicates below stay pure.
     """
 
     statuses: tuple[TaskStatusName, ...]
     tags: tuple[str, ...]
     agent: str
     since: str
+    created_since: str = ""
     # ``?epic=<id>`` — scope every section to one epic's descendants. Empty
     # means "no epic scope"; an id that is no longer an open epic resolves to
     # no scope at all (``DashboardData.epic_scope``), not an empty board.
@@ -613,6 +618,9 @@ def parse_filters(
         ),
         agent=(values.get("agent") or [""])[0],
         since=since,
+        created_since=normalize_created_since_input(
+            (values.get("created_since") or [""])[0]
+        ),
         # The epic strip scopes to ONE epic at a time (a chip click), so only
         # the first ``epic`` value is honored.
         epic=(values.get("epic") or [""])[0],
@@ -679,6 +687,27 @@ def normalize_since_input(value: str, *, default_days: int) -> str:
         return default_since(default_days)
     floor = lookback_date(MAX_SINCE_LOOKBACK_DAYS)
     return parsed.isoformat() if parsed >= floor else floor.isoformat()
+
+
+def normalize_created_since_input(value: str) -> str:
+    """Parse the ``?created_since=`` filter into an ISO date, or ``""``.
+
+    The same date syntax, the same ``parse_date`` code path and the same
+    tolerance as :func:`normalize_since_input` — unreadable input is DISCARDED
+    rather than raised, so a mistyped bookmark still renders a board. What
+    differs is the default it falls back to: this window is opt-in, so its
+    default is NO window. Falling back to a lookback would invent a narrowing
+    nobody asked for and hide open rows under a date the operator never typed.
+
+    No :data:`MAX_SINCE_LOOKBACK_DAYS` clamp either: that ceiling bounds the one
+    unbounded FETCH Lens makes, and this window bounds no read at all — it is
+    applied over the snapshot already loaded.
+    """
+    value = value.strip()
+    if not value:
+        return ""
+    parsed = parse_date(value)
+    return parsed.isoformat() if parsed else ""
 
 
 def format_display_date(value: str) -> str:

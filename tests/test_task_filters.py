@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from lithos_lens.task_filtering import (
+    filters_narrow_the_open_side,
     invalid_project_metadata,
     matches_agent,
     matches_filters,
@@ -325,3 +326,124 @@ def test_conventions_conflict_only_when_both_present_and_disagreeing() -> None:
     )
     assert not project_convention_conflict(_task(metadata={"project": "stamped"}))
     assert not project_convention_conflict(_task(tags=("project:tagged",)))
+
+
+# --- The two date windows (§5.4) --------------------------------------------
+#
+# ``since`` is the RESOLVED window (terminal rows, by resolved_at) and ``created
+# _since`` is the CREATED window (every row, by created_at). The cases above
+# pin the first; these pin the second, and the fact that neither reaches into
+# the other.
+
+
+def _terminal(*, created_at: str, resolved_at: str) -> TaskRecord:
+    return TaskRecord(
+        id="t2",
+        title="Terminal",
+        status="completed",
+        created_by="worker",
+        created_at=created_at,
+        resolved_at=resolved_at,
+    )
+
+
+def test_parse_filters_reads_created_since_in_both_date_spellings() -> None:
+    """Same syntax ``since`` accepts — ISO from a bookmark, DD/MM/YYYY from the
+    filter bar's own text input — normalized to ISO either way."""
+    assert (
+        parse_filters([("created_since", "2026-09-14")], default_days=30).created_since
+        == "2026-09-14"
+    )
+    assert (
+        parse_filters([("created_since", "14/09/2026")], default_days=30).created_since
+        == "2026-09-14"
+    )
+
+
+def test_created_since_defaults_to_no_window() -> None:
+    """Unlike ``since``, which must bound the terminal FETCH and so defaults to
+    the configured lookback, the created window is opt-in: absent means absent.
+    A default here would narrow every open section of an unfiltered board."""
+    filters = parse_filters([], default_days=30)
+
+    assert filters.created_since == ""
+    assert filters.since == parse_filters([], default_days=30).since != ""
+
+
+def test_unparseable_created_since_falls_back_to_its_own_default() -> None:
+    """Tolerated exactly as an unparseable ``since`` is — discarded rather than
+    raising, so a mistyped bookmark still renders a board. The fallback is this
+    field's default (no window), because falling back to a lookback would hide
+    open rows under a date the operator never typed."""
+    assert (
+        parse_filters([("created_since", "nonsense")], default_days=30).created_since
+        == ""
+    )
+    assert (
+        parse_filters([("created_since", "32/13/2026")], default_days=30).created_since
+        == ""
+    )
+
+
+def test_created_since_windows_open_rows_by_creation() -> None:
+    """The whole point of the second field: ``since`` never narrows an open row,
+    and ``created_since`` does."""
+    filters = _filters(created_since="2026-04-20")
+    # ``_task`` is created 2026-04-26.
+    assert matches_filters(_task(), filters=filters, status="open")
+    assert not matches_filters(
+        _task(), filters=_filters(created_since="2026-05-01"), status="open"
+    )
+
+
+def test_created_since_is_inclusive_on_its_own_date() -> None:
+    """``created_at >= date`` — a row created ON the date is in the window."""
+    assert matches_filters(
+        _task(), filters=_filters(created_since="2026-04-26"), status="open"
+    )
+
+
+def test_a_terminal_row_must_pass_both_windows() -> None:
+    """They compose rather than override: the resolved window still windows by
+    ``resolved_at`` and the created window still windows by ``created_at``, so a
+    row has to satisfy each on its own date."""
+    row = _terminal(created_at="2026-04-20T10:00:00+00:00", resolved_at="2026-05-10")
+    both = {"statuses": ("completed",), "tags": (), "agent": ""}
+
+    assert matches_filters(
+        row,
+        filters=_filters(**both, since="2026-05-01", created_since="2026-04-01"),
+        status="completed",
+    )
+    # Created too early — passes the resolved window, fails the created one.
+    assert not matches_filters(
+        row,
+        filters=_filters(**both, since="2026-05-01", created_since="2026-04-25"),
+        status="completed",
+    )
+    # Resolved too early — passes the created window, fails the resolved one.
+    assert not matches_filters(
+        row,
+        filters=_filters(**both, since="2026-06-01", created_since="2026-04-01"),
+        status="completed",
+    )
+
+
+def test_created_since_keeps_a_row_whose_creation_date_is_unreadable() -> None:
+    """Same posture as the resolved branch: Lens does not hide a row on a date
+    it could not parse."""
+    undated = TaskRecord(
+        id="t3", title="Undated", status="open", created_by="planner", created_at=""
+    )
+
+    assert matches_filters(
+        undated, filters=_filters(created_since="2026-05-01"), status="open"
+    )
+
+
+def test_created_since_narrows_the_open_side() -> None:
+    """It hides OPEN rows, so every whole-board claim (healthy stripe, empty
+    corpus, the epic strip's scope) must treat the board as narrowed — which is
+    the one thing ``since`` deliberately does not do."""
+    assert filters_narrow_the_open_side(_filters(created_since="2026-05-01"))
+    assert not filters_narrow_the_open_side(_filters(since="2026-05-01"))

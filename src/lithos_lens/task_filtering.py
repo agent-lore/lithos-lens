@@ -172,6 +172,25 @@ def matches_filters(
         return False
     if filters.tags and not all(tag in task.tags for tag in filters.tags):
         return False
+    if filters.created_since:
+        # The CREATED window (§5.4), and the one date filter that narrows
+        # EVERY section: "what came in since Monday" is a question about
+        # intake, so an open row is as much of an answer as a resolved one.
+        # Applied here over the loaded snapshot rather than pushed upstream —
+        # the rows are already in hand, and pushing it would change what the
+        # terminal reads fetch, which is ``since``'s job alone.
+        #
+        # A row whose ``created_at`` cannot be read is KEPT, matching the
+        # resolved branch below: Lens does not hide a row on a date it could
+        # not parse.
+        created_date = parse_date(task.created_at)
+        created_since_date = parse_date(filters.created_since)
+        if (
+            created_date is not None
+            and created_since_date is not None
+            and created_date < created_since_date
+        ):
+            return False
     if status in TERMINAL_TASK_STATUSES and filters.since:
         # Terminal rows are windowed by RESOLUTION time (``resolved_since``
         # upstream), not creation time — a task created months ago and finished
@@ -195,8 +214,9 @@ def filters_narrow_the_open_side(
 ) -> bool:
     """True when these filters hide OPEN rows from the sections.
 
-    The one list every open-side filter must join — tag, agent, project, and
-    the applied ``?epic=`` scope — plus the one status case that matters:
+    The one list every open-side filter must join — tag, agent, project, the
+    ``created_since`` window (§5.4: it windows open rows too, unlike ``since``)
+    and the applied ``?epic=`` scope — plus the one status case that matters:
     dropping ``open`` from the status set takes the whole open side off screen,
     so a degraded row there (claims unknown, say) is hidden rather than absent.
 
@@ -211,6 +231,7 @@ def filters_narrow_the_open_side(
         or bool(filters.tags)
         or bool(filters.agent)
         or bool(filters.projects)
+        or bool(filters.created_since)
         or "open" not in filters.statuses
     )
 
@@ -239,6 +260,9 @@ def filters_narrow_the_board(
     ``since`` is deliberately not narrowing here: it windows only the resolved
     completed/cancelled reads, which the empty-corpus copy names explicitly,
     and the open reads every degraded signal derives from ignore it.
+    ``created_since`` is the opposite case and DOES narrow (via
+    :func:`filters_narrow_the_open_side`) — it hides open rows, so a board
+    carrying one cannot make the whole-system claim.
     """
     return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
         filters.statuses
