@@ -60,8 +60,12 @@ ancestors and descendants lit, search); a side panel shared by dashboard rows
 parent and downstream impact ("frees N in this graph, M immediately"); and a
 mini-graph on the task detail page. Cross-scope endpoints are one-hop ghosts,
 Lithos's `task_blocked` is the authority on cycle membership, and every graph
-surface is fed by one per-task `edge_list` cache. What follows 0.4.0 is
-decided at the W38 checkpoint (Lithos task `bcaf9379`, by 2026-09-20).
+surface is fed by one per-task `edge_list` cache. The W38 checkpoint
+(Lithos task `bcaf9379`, decided 2026-09-16) kept T3 out of September: the
+rest of the month is a **UX pass over the shipped T2 surfaces** — Dave uses
+them and files what he finds (the first were filed the same morning: tag
+autocomplete `e8629bce`, a "created since" filter `cefb9629`, an agent picker
+that fades dead registrations `28105098`) — and T3 revisits in October.
 
 `docs/SPECIFICATION.md` describes this state precisely, and is the document to
 update when behavior changes.
@@ -164,11 +168,16 @@ Landed across the seven slices as planned, 2026-09-11 → 2026-09-16 (PRs #78,
 the graph assembly, topology and page, §5.6.1 the side panel and §5.6.2 the
 mini-graph. Nothing was cut from the PRD's scope and nothing from the
 milestone remains open. Every slice was built by lithos-loom's story-develop
-route — 40 review rounds, about $640 — with two `needs_human` escalations out
-of seven: A6 (external-review remediation budget spent; merged by hand) and A4
-(round budget spent with two findings open; the PR was pushed by hand and
-`develop converge` closed them on the branch). That 2/7 rate against August's
-3/7 on K1 is the measurement the W38 checkpoint asked for. The one accepted
+route — 40 review rounds, about $640. Two of the seven raised a `needs_human`
+gate (A6: external-review remediation budget spent, merged by hand; A4: round
+budget spent with two findings open, PR pushed by hand and `develop converge`
+closed them on the branch) — but the checkpoint's measure is hands, not gates,
+and by that measure every one of the six slices run after the escalation chain
+landed needed a hand somewhere: four host restarts under a run, two operator
+decisions, none a review miss. Against August's 43% on K1 the rate did not
+fall; what moved is that every stop was announced within seconds instead of
+found by looking, and the causes moved from judgement to infrastructure. The
+measurement and the decision are recorded on `bcaf9379`. The one accepted
 constraint stands: with no bulk graph fetch (ledger #3) a project graph is
 ~100 semaphored, cached `edge_list` calls. Measured on the largest live scope
 (lithos-loom, ~100 nodes, 2026-09-17): about half a second cold, a quarter
@@ -201,6 +210,11 @@ PR reconciliation state — badge, age, `needs_human` in attention (#85,
 a console to show it on. The rest of T2b is unsequenced.
 
 ### T3 — Curated Write Actions
+
+Held out of September at the W38 checkpoint (`bcaf9379`, 2026-09-16) because
+the loom intervention rate on T2 had not fallen; revisits in October, with
+`bd66d57c` (no task-edge delete) landing before or alongside the edge slice.
+
 
 Lens's read-only contract relaxes to a small operator-console action set,
 gated behind `[writes] enabled` (default false): approve/complete human gates
