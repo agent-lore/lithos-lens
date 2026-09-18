@@ -11,11 +11,17 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.agent_picker` | S | 1 | 2 |
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 13 |
 | `lithos_lens.tasks` | L | 14 | 14 |
 
 ## Public API
+
+### `lithos_lens.agent_picker`
+- class `AgentOption` — One registration as the picker renders it: who, when, and whether to show.
+- def `show_all_agents` — Whether ``?all_agents=`` asks for the out-of-window registrations too.
+- def `agent_options` — Order every registration by last activity, newest first, and window it.
 
 ### `lithos_lens.normalizers`
 - def `normalize_task`

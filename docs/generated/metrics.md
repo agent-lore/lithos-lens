@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **35** (106 module-level)
+- Cross-component edges: **35** (111 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 10 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 3 | 1204 | 972 | 7 | 2 | 0.22 | 32 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 3 | 1223 | 983 | 7 | 2 | 0.22 | 32 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
@@ -42,14 +42,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 5 | 2662 | 2127 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 22 | 10598 | 8103 | 4 | 1 | 0.20 | 42 (`lithos_lens.frontier.load_dashboard`) | 24 |
-| Tasks | 3 | 1439 | 1023 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 5 |
+| TaskGraph | 22 | 10602 | 8103 | 4 | 1 | 0.20 | 41 (`lithos_lens.frontier.load_dashboard`) | 24 |
+| Tasks | 4 | 1685 | 1204 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1116 | 814 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 2024 | 1561 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 4 | 2062 | 1585 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **50**, lines: **21269**, SLOC: **16251**
+- Modules: **51**, lines: **21576**, SLOC: **16467**
 - Largest module: `lithos_lens.frontier` (850 lines)
 - Modules over 800 lines: **3**
   - `lithos_lens.frontier`
@@ -58,13 +58,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **667**, cyclomatic > 10: **40**
+- Functions: **676**, cyclomatic > 10: **41**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
-| 42 | `lithos_lens.frontier.load_dashboard` |
+| 41 | `lithos_lens.frontier.load_dashboard` |
 | 32 | `lithos_lens.config._apply_env_overrides` |
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
@@ -85,5 +85,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **77** (85 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.96** (41707 test lines / 21269 source lines)
+- Domain models: **78** (86 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.96** (42301 test lines / 21576 source lines)

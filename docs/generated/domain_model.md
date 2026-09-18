@@ -467,8 +467,8 @@ classDiagram
     +roots tuple[str, ...]
     +incomplete frozenset[str]
   }
-  class AgentRecord
-  <<Tasks>> AgentRecord
+  class AgentOption
+  <<Tasks>> AgentOption
   class EpicRollup
   <<Tasks>> EpicRollup
   class FindingRecord
@@ -495,7 +495,7 @@ classDiagram
   CycleSignal "1" --> "0..*" ProjectRead : reads
   CycleView "1" --> "0..*" NodeView : members
   CycleView "1" --> "0..*" NodeView : path
-  DashboardData "1" --> "0..*" AgentRecord : agents
+  DashboardData "1" --> "0..*" AgentOption : agents
   DashboardData "1" --> "0..*" EpicRollup : epics
   DashboardData "1" --> "0..*" GateGroup : gate_groups
   DashboardData "1" --> "0..*" SectionRow : sections
@@ -554,6 +554,14 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class AgentOption {
+    +last_active_at str
+    +age timedelta | None
+    +registered_only bool
+    +holds_claim bool
+    +active bool
+    +ambiguous_name bool
+  }
   class AgentRecord {
     +id str
     +name str
@@ -649,6 +657,7 @@ classDiagram
     +status str
     +metadata dict[str, Any]
   }
+  AgentOption "1" --> "1" AgentRecord : agent
   EpicRollup "1" --> "1" TaskRecord : task
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers

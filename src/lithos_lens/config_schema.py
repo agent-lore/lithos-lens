@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from lithos_lens.agent_picker import DEFAULT_AGENT_INACTIVE_DAYS
 from lithos_lens.errors import ConfigError
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
@@ -59,9 +60,14 @@ DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES = 60
 # An EMPTY list opts out — every ready task is judged again, the pre-2026-09
 # behaviour — which is why the knob is a list and not a bool.
 DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES: tuple[str, ...] = ("trigger:",)
+# How long a registered agent may do nothing before the Agent picker stops
+# offering it by default (§5.4). Re-exported from ``agent_picker``, which owns
+# the behaviour and its own Config-free default, so the shipped value and the
+# module default cannot drift apart.
+DEFAULT_TASKS_AGENT_INACTIVE_DAYS = DEFAULT_AGENT_INACTIVE_DAYS
 # Ceilings for every [lithos-lens.tasks] knob that reaches ``timedelta()`` —
-# the four Needs-attention thresholds and the resolved-window size — in their
-# own units (a year / a week / ten years / a week / ten years). A value beyond
+# the four Needs-attention thresholds, the agent-picker window and the
+# resolved-window size — in their own units. A value beyond
 # these is a misconfiguration (the rule it governs could never fire), and an
 # UNBOUNDED one is worse than useless: a large enough int makes ``timedelta()``
 # raise OverflowError at render time and 500s every /tasks request. Bounding it
@@ -75,6 +81,8 @@ MAX_TASKS_INT_KNOBS: dict[str, int] = {
     "claim_expiring_soon_minutes": 10080,
     "stale_open_age_days": 3650,
     "unclaimed_ready_age_minutes": 10080,
+    # -> agent_picker.agent_options -> timedelta(days=...) once per /tasks.
+    "agent_inactive_days": 3650,
     # -> tasks.default_since(days) -> timedelta(days=...), twice per /tasks.
     # Bounded by T1-S10's window ceiling rather than the overflow-safe 3650:
     # ``lithos_task_list`` takes no row limit, so this window is the ONLY bound
@@ -164,6 +172,10 @@ class TasksConfig:
     claim_expiring_soon_minutes: int = DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
     stale_open_age_days: int = DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
     unclaimed_ready_age_minutes: int = DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
+    # Agent-picker window: a registration with no task, claim or registration
+    # touch inside it is kept out of the default datalist (?all_agents=1 shows
+    # it). Not a Needs-attention threshold — it hides no row.
+    agent_inactive_days: int = DEFAULT_TASKS_AGENT_INACTIVE_DAYS
     # Tag prefixes that mark a ready task as fleet-dispatched (rule 6 scope).
     dispatch_trigger_tag_prefixes: tuple[str, ...] = (
         DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES

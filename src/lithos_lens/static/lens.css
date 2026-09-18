@@ -323,6 +323,26 @@ small {
   margin-right: 0.65rem;
 }
 
+/* The Agent field and its show-all toggle share one filter-bar cell, so the
+   link is drawn under the box it belongs to rather than being dealt onto
+   another row by the bar's auto-fit column count. Same gap as a label's own
+   rows, so the pair reads as one field. */
+.filter-agent {
+  display: grid;
+  gap: 0.35rem;
+}
+
+/* The Agent picker's show-all toggle: a link under the field, sized like the
+   label above it so it reads as that field's own note rather than a control of
+   its own. A <datalist> cannot fade an option, so this is how the out-of-window
+   registrations stay reachable (see dashboard.html). */
+.filter-hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
 /* Submit + reset share one filter-bar cell (see dashboard.html): side by side
    while they fit, wrapping within the cell rather than across the bar's rows. */
 .filter-actions {

@@ -41,6 +41,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from lithos_lens.agent_picker import DEFAULT_AGENT_INACTIVE_DAYS, agent_options
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.epic_strip import (
@@ -155,6 +156,7 @@ async def load_dashboard(
     filters: TaskFilters,
     frontier_limit: int,
     attention: AttentionPolicy | None = None,
+    agent_inactive_days: int = DEFAULT_AGENT_INACTIVE_DAYS,
     now: datetime | None = None,
 ) -> DashboardData:
     """Assemble the dashboard from the parallel Lithos reads.
@@ -177,9 +179,8 @@ async def load_dashboard(
     — the same explicit degraded-data pattern as ``claims_unknown``.
 
     Once the partition settles, ``flag_attention`` promotes the rows that need
-    an operator into the Needs-attention section. ``attention`` carries the
-    rule thresholds (config-backed; defaults when omitted) and ``now`` is
-    injectable so the age-based rules are testable without freezing the clock.
+    an operator into Needs attention. ``attention`` and ``agent_inactive_days``
+    carry the config thresholds; ``now`` is injectable so the ages are testable.
     """
     errors: list[str] = []
     policy = attention or AttentionPolicy()
@@ -241,6 +242,7 @@ async def load_dashboard(
         cast("list[TaskRecord] | BaseException", completed_result),
         cast("list[TaskRecord] | BaseException", cancelled_result),
     )
+    agents_read = cast("list[AgentRecord] | BaseException", agents_result)
 
     # The full open snapshot (unfiltered by agent/tag) resolves blocker-chip
     # predecessor titles even when a predecessor is filtered out of the visible
@@ -613,11 +615,9 @@ async def load_dashboard(
     else:
         stats = cast(dict[str, Any], stats_result)
 
-    agents: tuple[AgentRecord, ...] = ()
-    if isinstance(agents_result, BaseException):
-        errors.append("Could not load agent list.")
-    else:
-        agents = tuple(cast(list[AgentRecord], agents_result))
+    agents = agent_options(
+        agents_read, loaded_tasks, errors, days=agent_inactive_days, now=evaluated_at
+    )
 
     # ``open_total`` counts the open WORKABLE tasks Lens classified. Promoted
     # rows still count (they only changed section), but a promoted human gate

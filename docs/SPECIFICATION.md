@@ -164,6 +164,7 @@ The current configuration model includes:
 - `tasks.claim_expiring_soon_minutes`
 - `tasks.stale_open_age_days`
 - `tasks.unclaimed_ready_age_minutes`
+- `tasks.agent_inactive_days`
 - `tasks.dispatch_trigger_tag_prefixes`
 - `graph.cache_ttl_s`
 - `graph.max_tasks`
@@ -296,7 +297,10 @@ The current dashboard supports these filters:
 - `epic`
   Scopes the board to one epic's children, from the rollup strip.
 - `agent`
-  Creating agent filter.
+  Creator-OR-claimer agent filter; the value is an agent id (or any string the
+  operator types), matched unchanged.
+- `all_agents`
+  Not a row filter: it widens the Agent PICKER to every registration (below).
 - `since`
   **Resolved** lower bound — terminal rows only, by `resolved_at`.
 - `created_since`
@@ -331,6 +335,33 @@ Filter behavior:
     `MAX_SINCE_LOOKBACK_DAYS`.
   - Both may be active together, and a terminal row must then pass each on its
     own date.
+- The **Agent picker** (the `agents` datalist) is `lithos_agent_list` ordered
+  and windowed, not verbatim. Lithos' agent list is a registration log — a row
+  per probe, per session and per host, with no dedupe — so rendering it raw
+  buried the live identities under the dead ones. Each option is labelled with
+  when that registration was last active and the list is sorted by it, most
+  recent first — one timestamp drives both, so the order is the order of the
+  times shown. "Last active" is derived from data the board already loaded, in
+  signal order: an inline claim the agent still holds, dated by the load that
+  observed it (upstream gives a claim no start time, so the instant Lens saw it
+  held is the honest stamp — and being the newest possible one, a live claim
+  leads the list and the label says `claim held`); else the newest `created_at`
+  of a task it created, over every row the load fetched (open snapshot and both
+  resolved windows); else the registration's own `last_seen_at`, which the
+  label calls out as a registration rather than work. No per-agent Lithos call
+  is made for it, and findings are deliberately not consulted — they are not in
+  the snapshot.
+  - An agent with no activity inside `tasks.agent_inactive_days` (default 30)
+    is omitted from the datalist: a `<datalist>` cannot render an option faded,
+    so hiding is the behaviour. `?all_agents=1` includes them — a query
+    parameter, so the choice survives a reload and works with no JavaScript,
+    and the filter form re-emits it so applying a filter keeps it. It is not
+    one of the preserved filter keys: it narrows no row, so it is not carried
+    into every generated link and does not make a board count as filtered.
+  - When two or more registrations share a `name`, every one of their labels
+    also shows the agent id, so duplicates are visibly distinct.
+  - The option VALUE is still the bare agent id, so the `agent` filter and what
+    it matches are unchanged.
 - An active `created_since` appears in the active-filter chip strip, and
   removing that chip drops only that window — `since` and every other filter
   stay applied.
