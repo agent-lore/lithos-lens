@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from lithos_lens import agent_picker
 from lithos_lens.agent_picker import agent_options, show_all_agents
 from lithos_lens.config import load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
@@ -32,21 +33,30 @@ from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.tasks import AgentRecord, ClaimRecord, FindingRecord, TaskRecord
 from lithos_lens.web import create_app
 
-# The route path takes its clock from the REQUEST (``load_dashboard`` reads it),
-# while these fixtures are stamped at import, so every age below is deliberately
-# placed mid-bucket — 2h30 renders "2h" until the gap between import and request
-# exceeds half an hour, and the day-scale ones tolerate twelve. A boundary-
-# hugging fixture (exactly 3h) would fail on a slow or suspended worker with no
-# product regression, which is the one way these assertions could lie.
+# The unit tests below INJECT this clock (``now=_NOW``), so every exact label
+# they assert is computed against a stamp that cannot move. The route tests
+# cannot inject it — ``load_dashboard`` reads the clock during the request — so
+# they stamp their fixture inside the test (see ``_dataset``) and assert the
+# SHAPE of each age rather than its bucket: the ORDER of the options is
+# invariant under any drift (every fixture ages together), an exact "2h" is
+# not. Which bucket a given age renders as is pinned exactly, once, in the
+# injected-clock unit tests.
 _NOW = datetime.now(UTC).replace(microsecond=0)
+
+# Any relative age the picker can render ("0m ago", "2h ago", "13d ago"). What
+# a route label must carry is A TIME, said in the board's own style; the exact
+# text belongs to a test that owns the clock.
+_AGE = r"\d+[mhd] ago"
+
+# The fake claim's validity, as a FIXED far-future stamp rather than an offset
+# from a clock. Nothing in the picker reads it — an inline claim is live state
+# whenever Lithos returns it — but the board's claim-expiring rule does, and a
+# paused worker must not be able to age the fixture into a different board.
+_CLAIM_EXPIRES_AT = "2099-01-01T00:00:00+00:00"
 
 
 def _ago(**delta: float) -> str:
     return (_NOW - timedelta(**delta)).isoformat()
-
-
-def _ahead(**delta: float) -> str:
-    return (_NOW + timedelta(**delta)).isoformat()
 
 
 def _task(
@@ -68,61 +78,73 @@ def _task(
     )
 
 
-# The fixture the acceptance asks for — one agent active today, one active 40
-# days ago, two registrations sharing a name, one never-active registration —
-# plus the three cases that pin the derivation itself: `claimer` (an OLD
-# registration holding a live claim, which must lead the list and say so),
-# `archivist` (whose only activity is on a RESOLVED row) and `steady` (inside
-# the shipped 30-day window but well outside a smaller one).
-_AGENTS = (
-    AgentRecord(id="pilot", name="Pilot", last_seen_at=_ago(days=2)),
-    AgentRecord(id="lens-a", name="Lithos Lens", last_seen_at=_ago(days=1)),
-    AgentRecord(id="lens-b", name="Lithos Lens", last_seen_at=_ago(days=1)),
-    AgentRecord(id="archivist", name="Archivist"),
-    AgentRecord(id="steady", name="Steady", last_seen_at=_ago(days=25)),
-    AgentRecord(id="claimer", name="Claimer", last_seen_at=_ago(days=40)),
-    AgentRecord(id="dormant", name="Dormant", last_seen_at=_ago(days=40)),
-    AgentRecord(id="probe", name="probe-agent"),
-)
-_OPEN_TASKS = (
-    # Two tasks for one registration: the NEWEST dates it. Ordering alone would
-    # not catch the wrong one, so the label assertion below states 2h.
-    _task("t-pilot-old", created_by="pilot", created_at=_ago(days=9)),
-    _task("t-pilot", created_by="pilot", created_at=_ago(hours=2, minutes=30)),
-    _task("t-lens-a", created_by="lens-a", created_at=_ago(hours=5, minutes=30)),
-    _task("t-lens-b", created_by="lens-b", created_at=_ago(hours=8, minutes=30)),
-    _task("t-steady", created_by="steady", created_at=_ago(days=20, hours=12)),
-    _task("t-dormant", created_by="dormant", created_at=_ago(days=40)),
-    # Claimed by `claimer`, created by an identity that is not registered at
-    # all: the picker lists REGISTRATIONS, so the creator must not appear.
-    _task("t-claimed", created_by="retired-planner", created_at=_ago(days=90)),
-)
-_RESOLVED_TASKS = (
-    _task(
-        "t-archived",
-        created_by="archivist",
-        created_at=_ago(days=3, hours=12),
-        status="completed",
-        resolved_at=_ago(days=1),
-    ),
-)
-_TASKS = _OPEN_TASKS + _RESOLVED_TASKS
-
-
 def _dataset() -> FakeLithosDataset:
+    """The route fixture, stamped when a test asks for it.
+
+    Built per call rather than at import so the gap between stamping and the
+    request is one app construction rather than one collection of the whole
+    suite. The ages are mid-bucket for the same reason — belt and braces, since
+    nothing asserted about them depends on which bucket they land in.
+
+    It is the fixture the acceptance asks for — one agent active today, one
+    active 40 days ago, two registrations sharing a name, one never-active
+    registration — plus the three cases that pin the derivation itself:
+    ``claimer`` (an OLD registration holding a live claim, which must lead the
+    list and say so), ``archivist`` (whose only activity is on a RESOLVED row)
+    and ``steady`` (inside the shipped 30-day window, well outside a smaller
+    one).
+    """
+    stamped_at = datetime.now(UTC).replace(microsecond=0)
+
+    def ago(**delta: float) -> str:
+        return (stamped_at - timedelta(**delta)).isoformat()
+
+    agents = (
+        AgentRecord(id="pilot", name="Pilot", last_seen_at=ago(days=2)),
+        AgentRecord(id="lens-a", name="Lithos Lens", last_seen_at=ago(days=1)),
+        AgentRecord(id="lens-b", name="Lithos Lens", last_seen_at=ago(days=1)),
+        AgentRecord(id="archivist", name="Archivist"),
+        AgentRecord(id="steady", name="Steady", last_seen_at=ago(days=25)),
+        AgentRecord(id="claimer", name="Claimer", last_seen_at=ago(days=40)),
+        AgentRecord(id="dormant", name="Dormant", last_seen_at=ago(days=40)),
+        AgentRecord(id="probe", name="probe-agent"),
+    )
+    open_tasks = (
+        # Two tasks for one registration: the NEWEST dates it — which is what
+        # puts `pilot` second rather than down beside `archivist`.
+        _task("t-pilot-old", created_by="pilot", created_at=ago(days=9)),
+        _task("t-pilot", created_by="pilot", created_at=ago(hours=2, minutes=30)),
+        _task("t-lens-a", created_by="lens-a", created_at=ago(hours=5, minutes=30)),
+        _task("t-lens-b", created_by="lens-b", created_at=ago(hours=8, minutes=30)),
+        _task("t-steady", created_by="steady", created_at=ago(days=20, hours=12)),
+        _task("t-dormant", created_by="dormant", created_at=ago(days=40)),
+        # Claimed by `claimer`, created by an identity that is not registered
+        # at all: the picker lists REGISTRATIONS, so the creator must not
+        # appear in it.
+        _task("t-claimed", created_by="retired-planner", created_at=ago(days=90)),
+    )
+    resolved_tasks = (
+        _task(
+            "t-archived",
+            created_by="archivist",
+            created_at=ago(days=3, hours=12),
+            status="completed",
+            resolved_at=ago(days=1),
+        ),
+    )
     return FakeLithosDataset(
-        tasks=_TASKS,
-        ready_ids=frozenset(task.id for task in _OPEN_TASKS if task.id != "t-claimed"),
+        tasks=open_tasks + resolved_tasks,
+        ready_ids=frozenset(task.id for task in open_tasks if task.id != "t-claimed"),
         claims={
             "t-claimed": (
                 ClaimRecord(
                     agent="claimer",
                     aspect="implementation",
-                    expires_at=_ahead(hours=6),
+                    expires_at=_CLAIM_EXPIRES_AT,
                 ),
             )
         },
-        agents=_AGENTS,
+        agents=agents,
         # Findings exist on a row the picker must NOT read: "last finding
         # posted" is deliberately out of scope (it is not in the snapshot).
         findings={
@@ -132,11 +154,11 @@ def _dataset() -> FakeLithosDataset:
                     task_id="t-pilot",
                     agent="pilot",
                     summary="Nothing to see here",
-                    created_at=_ago(minutes=5),
+                    created_at=ago(minutes=5),
                 ),
             )
         },
-        stats={"open_claims": 1, "agents": len(_AGENTS)},
+        stats={"open_claims": 1, "agents": len(agents)},
     )
 
 
@@ -227,16 +249,21 @@ def test_each_option_says_when_that_agent_was_last_active(
         response = client.get("/tasks")
 
     labels = _labels(response.text)
-    # The claim holder leads with its own observed time, not the 40-day-old
-    # registration stamp it would otherwise have been dated by.
+    # The claim holder leads with the time the load OBSERVED the claim, not the
+    # 40-day-old registration stamp it would otherwise have been dated by.
+    # Exact because the load stamps it with its own clock: 0m by construction,
+    # whatever the request's real time is.
     assert labels["claimer"] == "Claimer · 0m ago · claim held"
-    # The NEWEST of pilot's two tasks (2h30), not the 9-day-old one.
-    assert labels["pilot"] == "Pilot · 2h ago"
-    assert labels["lens-a"] == "Lithos Lens (lens-a) · 5h ago"
-    # Activity on a RESOLVED row counts: the picker reads every row the load
-    # fetched, not just the open snapshot.
-    assert labels["archivist"] == "Archivist · 3d ago"
-    assert labels["steady"] == "Steady · 20d ago"
+    # Every other option carries a time in the same style. Which BUCKET each
+    # age lands in is a function of the request's clock, so it is asserted
+    # exactly in the injected-clock unit tests below rather than here; what the
+    # route owes is that the time is there, and the order test above is what
+    # pins the signal each one was derived from (a `pilot` dated by its
+    # 9-day-old task, or an `archivist` whose resolved row went unread, moves).
+    assert re.fullmatch(rf"Pilot · {_AGE}", labels["pilot"])
+    assert re.fullmatch(rf"Lithos Lens \(lens-a\) · {_AGE}", labels["lens-a"])
+    assert re.fullmatch(rf"Archivist · {_AGE}", labels["archivist"])
+    assert re.fullmatch(rf"Steady · {_AGE}", labels["steady"])
 
 
 def test_duplicate_names_carry_their_id_and_singletons_do_not(
@@ -269,7 +296,12 @@ def test_show_all_toggle_brings_the_hidden_registrations_back(
     # The two hidden ones join the end: 40 days old, then the registration
     # nothing ever dated.
     assert values == [*_DEFAULT_ORDER, "dormant", "probe"]
-    assert _labels(response.text)["probe"] == "probe-agent · no activity"
+    labels = _labels(response.text)
+    # Labelled like every other option: the toggle exists to make these
+    # registrations USABLE, and an option stripped of its time is the crowded
+    # list this slice replaced. Only the one nothing ever dated says so.
+    assert re.fullmatch(rf"Dormant · {_AGE}", labels["dormant"])
+    assert labels["probe"] == "probe-agent · no activity"
     # And the form carries the choice through an Apply.
     assert '<input type="hidden" name="all_agents" value="1">' in response.text
 
@@ -380,6 +412,50 @@ def test_a_held_claim_is_dated_by_the_load_that_observed_it() -> None:
     assert options[0].active
     assert options[1].label == "Recent · 1m ago"
     assert errors == []
+
+
+def test_the_label_uses_the_dashboards_own_age_formatter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§5.4 requires the SAME helper the rows state their ages with, not a
+    second formatter that happens to agree today: two roundings of "how long
+    has this been true" read as a contradiction on a board that shows both, and
+    a copy drifts the first time one of them moves. Swapping the helper out
+    must be visible in the label, which a copy would survive."""
+    monkeypatch.setattr(agent_picker, "humanize_age", lambda delta: "AGES")
+
+    options = agent_options(
+        [AgentRecord(id="w", name="W")],
+        [_task("t", created_by="w", created_at=_ago(hours=2))],
+        [],
+        now=_NOW,
+    )
+
+    assert options[0].label == "W · AGES ago"
+
+
+def test_duplicate_names_carry_the_id_in_the_label_exactly() -> None:
+    """The rendered text, with the clock injected: a shared name takes its id,
+    a unique one does not, and each says when — the route asserts the same
+    three properties against a clock it cannot pin."""
+    errors: list[str] = []
+
+    options = agent_options(
+        [
+            AgentRecord(id="lens-a", name="Lithos Lens", last_seen_at=_ago(hours=3)),
+            AgentRecord(id="lens-b", name="Lithos Lens", last_seen_at=_ago(hours=5)),
+            AgentRecord(id="solo", name="Solo", last_seen_at=_ago(hours=1)),
+        ],
+        [],
+        errors,
+        now=_NOW,
+    )
+
+    assert [option.label for option in options] == [
+        "Solo · registered 1h ago",
+        "Lithos Lens (lens-a) · registered 3h ago",
+        "Lithos Lens (lens-b) · registered 5h ago",
+    ]
 
 
 def test_the_newest_task_dates_an_agent() -> None:
