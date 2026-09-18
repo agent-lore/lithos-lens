@@ -211,15 +211,48 @@
           Tag
           <input type="text" name="add_tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
         </label>
-        <label>
-          Agent (creator or claimer)
-          <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
-          <datalist id="agents">
-            {% for agent in dashboard.agents %}
-              <option value="{{ agent.id }}">{{ agent.name or agent.id }}</option>
-            {% endfor %}
-          </datalist>
-        </label>
+        {# The Agent datalist is lithos_agent_list ORDERED and WINDOWED, not
+           verbatim: the registry accumulates a row per probe, per session and
+           per host (59 rows, ~15 live identities), so the picker used to bury
+           the agents that matter under leftovers nobody could tell apart. Each
+           option says when that registration was last active — a task it
+           created, a claim it holds, else its registration stamp — newest
+           first, and the ones idle beyond [tasks] agent_inactive_days are left
+           out. A <datalist> cannot fade an option, so hiding is the behaviour
+           and the toggle below is how they come back; it is a link with a
+           query parameter, so the choice survives a reload and needs no
+           JavaScript. Duplicate names carry their id (agent_picker builds the
+           label), because three rows called "Lithos Lens" are otherwise a
+           guess. The VALUE is still the bare id — the agent filter and what it
+           matches are unchanged. #}
+        {# The field and its toggle are ONE grid child so the link sits under
+           the box it belongs to — and OUTSIDE the <label>, because a link
+           nested in one becomes part of the input's accessible name. #}
+        <div class="filter-agent">
+          <label>
+            Agent (creator or claimer)
+            <input list="agents" name="agent" value="{{ dashboard.filters.agent }}" placeholder="Any agent">
+            <datalist id="agents">
+              {% for option in dashboard.agents %}
+                {% if show_all_agents or option.active %}
+                  <option value="{{ option.id }}">{{ option.label }}</option>
+                {% endif %}
+              {% endfor %}
+            </datalist>
+          </label>
+          {% set hidden_agents = dashboard.agents | rejectattr("active") | list | length %}
+          {% if show_all_agents %}
+            <a class="filter-hint" href="{{ agent_show_all_url(request, show_all=false) }}" data-agent-show-all="on">Showing all {{ dashboard.agents | length }} registrations — show recently active only</a>
+          {% elif hidden_agents %}
+            <a class="filter-hint" href="{{ agent_show_all_url(request, show_all=true) }}" data-agent-show-all="off">Show all agents ({{ hidden_agents }} inactive hidden)</a>
+          {% endif %}
+          {# Keep the picker's scope across a filter submit, the same way the
+             epic scope is kept below: the toggle is a link, so without this an
+             Apply would silently drop it. #}
+          {% if show_all_agents %}
+            <input type="hidden" name="all_agents" value="1">
+          {% endif %}
+        </div>
         {# The two date windows are ONE grid child, for the reason the actions
            below are: the bar's auto-fit column count would otherwise deal them
            onto different rows, and they only read as a pair when adjacent.

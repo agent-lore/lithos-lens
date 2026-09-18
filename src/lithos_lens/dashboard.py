@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from lithos_lens.agent_picker import AgentOption
 from lithos_lens.frontier_join import COUNTERS_BY_FRONTIER
 from lithos_lens.gates import GateGroup, GateRow
 from lithos_lens.tasks import (
     OPEN_SECTIONS,
-    AgentRecord,
     EpicRollup,
     SectionName,
     SectionRow,
@@ -98,7 +98,11 @@ class DashboardData:
     filters: TaskFilters
     summary: TaskSummary
     sections: dict[SectionName, tuple[SectionRow, ...]]
-    agents: tuple[AgentRecord, ...]
+    # Every registration Lithos knows, ordered most-recently-active first and
+    # each carrying its own window verdict (``agent_picker``). The whole list,
+    # in-window or not: the "show all agents" toggle is the template's choice
+    # of how much of it to render, so one ordering serves both.
+    agents: tuple[AgentOption, ...]
     frontier_limit: int
     open_total: int
     # The project universe for the filter dropdown: the UNION of both

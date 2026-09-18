@@ -13,7 +13,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 |---|---|---:|---:|
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
-| `lithos_lens.request_filters` | M | 0 | 15 |
+| `lithos_lens.request_filters` | M | 0 | 16 |
 | `lithos_lens.web` | L | 0 | 1 |
 
 ## Public API
@@ -32,6 +32,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `task_tag_url`
 - def `task_tag_clear_url` — Link an active-filter chip to the same board WITHOUT that one tag.
 - def `created_since_clear_url` — Link the ``created_since`` chip to the same board WITHOUT that window.
+- def `agent_show_all_url` — Link the Agent picker's show-all toggle, keeping every active filter.
 - def `task_detail_url` — Link a task id as ONE path segment, with every reserved character encoded.
 - def `panel_fragment_url` — Link a row to the SIDE PANEL fragment for its task (§5.5, T2-A6).
 - def `mini_graph_url` — The detail page's mini-graph fragment for one task (T2-A5).

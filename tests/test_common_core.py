@@ -524,6 +524,9 @@ def test_env_override_dispatch_trigger_tag_prefixes_rejects_a_blank_entry(
         ("claim_expiring_soon_minutes", 10081),
         ("stale_open_age_days", 3651),
         ("unclaimed_ready_age_minutes", 10081),
+        # Not a Needs-attention threshold either: it feeds the Agent picker's
+        # window (agent_picker.agent_options -> timedelta(days=...)).
+        ("agent_inactive_days", 3651),
         # Not a Needs-attention threshold, but the same sink: it feeds
         # default_since() -> timedelta(days=...) on every /tasks render.
         ("default_time_range_days", 3651),

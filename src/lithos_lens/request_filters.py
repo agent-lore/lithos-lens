@@ -38,6 +38,7 @@ from urllib.parse import quote, urlencode
 
 from fastapi import Request
 
+from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY
 from lithos_lens.tasks import (
     ADD_TAG_FILTER_KEY,
     MAX_FILTER_QUERY_BYTES,
@@ -83,7 +84,10 @@ _PRESERVED_FILTER_KEYS = (
 # make Lens's own appended annotation able to push a request the page already
 # accepted past this ceiling, refusing the panel of a graph it just drew
 # (round-5 correctness f-009) — which is why they are named apart from
-# ``chain`` rather than sharing its key.
+# ``chain`` rather than sharing its key. The agent picker's ``all_agents``
+# (T2-A8) is absent for the same reason and one more: the page never echoes the
+# value it arrived with — the toggle link and the form's hidden input both emit
+# the literal ``1`` — so however large it is sent, it is copied out nowhere.
 _MEASURED_QUERY_KEYS = (*_PRESERVED_FILTER_KEYS, "chain")
 
 
@@ -275,6 +279,26 @@ def created_since_clear_url(request: Request) -> str:
     default the board would keep applying.
     """
     params = _preserved_filter_params(request, exclude="created_since")
+    return f"/tasks?{urlencode(params)}" if params else "/tasks"
+
+
+def agent_show_all_url(request: Request, *, show_all: bool) -> str:
+    """Link the Agent picker's show-all toggle, keeping every active filter.
+
+    The toggle is a LINK rather than a checkbox on the filter form so it works
+    with no JavaScript and takes effect on its own — the operator wants the
+    hidden registrations back while typing into the picker, not after an Apply.
+    A query parameter is what makes that survive a reload and a shared URL.
+
+    ``all_agents`` is deliberately outside :data:`_PRESERVED_FILTER_KEYS` (it
+    narrows no row, so it must not make :func:`board_is_filtered` true), which
+    is why it is appended here rather than echoed: the rest of the URL is the
+    same allowlist rebuild every other builder does, so the choice composes
+    with the live filters instead of resetting them.
+    """
+    params = _preserved_filter_params(request)
+    if show_all:
+        params.append((SHOW_ALL_AGENTS_KEY, "1"))
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 

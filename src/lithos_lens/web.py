@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens import metrics
+from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY, show_all_agents
 from lithos_lens.blocker_chain import (
     BLOCKER_MAX_DEPTH,
     blocker_expansion,
@@ -49,6 +50,7 @@ from lithos_lens.lithos_client import (
     LithosClientProtocol,
 )
 from lithos_lens.request_filters import (
+    agent_show_all_url,
     blocker_expand_url,
     board_is_filtered,
     created_since_clear_url,
@@ -193,6 +195,7 @@ def create_app(
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_tag_clear_url"] = task_tag_clear_url
     templates.env.globals["created_since_clear_url"] = created_since_clear_url
+    templates.env.globals["agent_show_all_url"] = agent_show_all_url
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
@@ -688,6 +691,10 @@ async def _render_tasks(
                         tasks_config.dispatch_trigger_tag_prefixes
                     ),
                 ),
+                # The Agent picker's window (§5.4): a registration idle longer
+                # than this is assembled like any other, then left out of the
+                # default datalist by the template.
+                agent_inactive_days=tasks_config.agent_inactive_days,
             ),
             _selected_panel(request, state),
         )
@@ -730,6 +737,13 @@ async def _render_tasks(
             # the URL that would reopen it.
             "selected_id": _selected_id(request),
             "max_tag_chips": MAX_FILTER_TAG_CHIPS,
+            # Whether the Agent picker offers the out-of-window registrations
+            # too. Read straight off the query (never a preserved filter): it
+            # chooses how much of one datalist renders, not which rows the
+            # board shows.
+            "show_all_agents": show_all_agents(
+                request.query_params.get(SHOW_ALL_AGENTS_KEY, "")
+            ),
             "default_since": default_since(state.config.tasks.default_time_range_days),
         },
     )

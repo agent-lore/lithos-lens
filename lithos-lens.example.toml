@@ -32,6 +32,12 @@ gate_waiting_attention_hours = 24   # human gate waiting on a person
 claim_expiring_soon_minutes = 10    # claim about to lapse (expired claims are unobservable)
 stale_open_age_days = 7             # workable open task nobody resolved
 unclaimed_ready_age_minutes = 60    # ready frontier row the fleet has not picked up
+# The Agent filter picker's window: a registration with no task, no claim and no
+# registration touch inside it is left out of the datalist by default, because
+# lithos_agent_list is a registration log (a row per probe, per session, per
+# host) and the dead ones crowd out the live identities. ?all_agents=1 shows
+# every registration; nothing is ever unfilterable by typing its id.
+agent_inactive_days = 30
 # Rule 6's SCOPE: only ready tasks carrying a tag with one of these prefixes are
 # work a fleet was expected to pick up (loom dispatches on `trigger:...`).
 # Untagged ready work waits for a human to schedule it, so its age says nothing

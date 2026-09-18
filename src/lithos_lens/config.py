@@ -46,6 +46,7 @@ from lithos_lens.config_schema import (
     DEFAULT_LITHOS_URL,
     DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_TASKS_AGENT_INACTIVE_DAYS,
     DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S,
     DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES,
     DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS,
@@ -108,6 +109,7 @@ __all__ = [
     "DEFAULT_LITHOS_URL",
     "DEFAULT_LLM_MAX_TOKENS",
     "DEFAULT_LOG_LEVEL",
+    "DEFAULT_TASKS_AGENT_INACTIVE_DAYS",
     "DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S",
     "DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES",
     "DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS",
@@ -361,6 +363,9 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
         unclaimed_ready_age_minutes=positive_int(
             "unclaimed_ready_age_minutes", DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
         ),
+        agent_inactive_days=positive_int(
+            "agent_inactive_days", DEFAULT_TASKS_AGENT_INACTIVE_DAYS
+        ),
         dispatch_trigger_tag_prefixes=optional_str_list(
             data,
             "dispatch_trigger_tag_prefixes",
@@ -590,6 +595,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
+    agent_inactive_env = os.environ.get("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
     unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     # No "" default, unlike every other read in this pass: an EMPTY value of
     # this knob is meaningful (it is the documented opt-out), so absent and
@@ -661,6 +667,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             ("gate_waiting_attention_hours", gate_wait_env),
             ("claim_expiring_soon_minutes", claim_expiry_env),
             ("stale_open_age_days", stale_open_env),
+            ("agent_inactive_days", agent_inactive_env),
             ("unclaimed_ready_age_minutes", unclaimed_env),
         )
         if raw
