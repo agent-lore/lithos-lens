@@ -13,7 +13,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 |---|---|---:|---:|
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 13 |
-| `lithos_lens.tasks` | L | 14 | 13 |
+| `lithos_lens.tasks` | L | 14 | 14 |
 
 ## Public API
 
@@ -61,6 +61,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `default_since`
 - def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
 - def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
+- def `normalize_created_since_input` — Parse the ``?created_since=`` filter into an ISO date, or ``""``.
 - def `format_display_date`
 - def `format_tag`
 - def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.

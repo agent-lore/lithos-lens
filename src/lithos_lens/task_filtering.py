@@ -30,6 +30,7 @@ from lithos_lens.tasks import (
     TaskRecord,
     TaskStatusName,
     parse_date,
+    parse_timestamp,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,53 @@ def matches_filters(
         return False
     if filters.tags and not all(tag in task.tags for tag in filters.tags):
         return False
+    if filters.created_since:
+        # The CREATED window (§5.4), and the one date filter that narrows
+        # EVERY section: "what came in since Monday" is a question about
+        # intake, so an open row is as much of an answer as a resolved one.
+        # Applied here over the loaded snapshot rather than pushed upstream —
+        # the rows are already in hand, and pushing it would change what the
+        # terminal reads fetch, which is ``since``'s job alone.
+        #
+        # A row whose ``created_at`` cannot be read is DROPPED, which is the
+        # opposite of the resolved branch below and deliberately so. That
+        # branch keeps an unreadable row because the SERVER already applied the
+        # window (``resolved_since``) and deliberately returned the row, so
+        # re-deriving the exclusion here could only hide rows upstream had
+        # already admitted. This window is pushed nowhere: no read has filtered
+        # on ``created_at``, so this predicate is the only thing standing
+        # between the operator and a row that has not been shown to satisfy
+        # ``created_at >= date``. Keeping it would put a row on a narrowed
+        # board without evidence of membership, and the section counts would
+        # count it (round-1 correctness/f-001). ``normalize_task`` admits the
+        # state — a missing ``created_at`` normalizes to ``""`` — so it is
+        # reachable from real data rather than hypothetical.
+        #
+        # The ROW's stamp is read with ``parse_timestamp``, which parses the
+        # WHOLE value and normalizes it to UTC, rather than with ``parse_date``
+        # — that helper reads ``value[:10]`` and is right for the query-string
+        # dates it was written for, but wrong for an upstream timestamp on both
+        # counts (round-2 correctness/f-001):
+        #
+        # - a ten-character prefix cannot tell a timestamp from junk wearing
+        #   one, so ``2026-09-17junk`` and ``2026-09-17T99:99:99`` both read as
+        #   a valid 17 September and slipped past the drop above;
+        # - a prefix is the date in the stamp's OWN offset, not in UTC, so
+        #   ``2026-09-16T23:30:00-05:00`` (17 September in UTC) fell out of a
+        #   17 September window and ``2026-09-17T00:30:00+05:00`` (16
+        #   September in UTC) fell into it. Everything else in Lens compares
+        #   instants in UTC (``parse_timestamp``'s own contract, which the
+        #   age-based attention rules rest on), so this window has to as well.
+        #
+        # ``filters.created_since`` keeps ``parse_date``: it is a bare ISO date
+        # by construction (``normalize_created_since_input``), which is exactly
+        # what that helper reads.
+        created_at = parse_timestamp(task.created_at)
+        created_since_date = parse_date(filters.created_since)
+        if created_since_date is not None and (
+            created_at is None or created_at.date() < created_since_date
+        ):
+            return False
     if status in TERMINAL_TASK_STATUSES and filters.since:
         # Terminal rows are windowed by RESOLUTION time (``resolved_since``
         # upstream), not creation time — a task created months ago and finished
@@ -195,8 +243,9 @@ def filters_narrow_the_open_side(
 ) -> bool:
     """True when these filters hide OPEN rows from the sections.
 
-    The one list every open-side filter must join — tag, agent, project, and
-    the applied ``?epic=`` scope — plus the one status case that matters:
+    The one list every open-side filter must join — tag, agent, project, the
+    ``created_since`` window (§5.4: it windows open rows too, unlike ``since``)
+    and the applied ``?epic=`` scope — plus the one status case that matters:
     dropping ``open`` from the status set takes the whole open side off screen,
     so a degraded row there (claims unknown, say) is hidden rather than absent.
 
@@ -211,6 +260,7 @@ def filters_narrow_the_open_side(
         or bool(filters.tags)
         or bool(filters.agent)
         or bool(filters.projects)
+        or bool(filters.created_since)
         or "open" not in filters.statuses
     )
 
@@ -239,6 +289,9 @@ def filters_narrow_the_board(
     ``since`` is deliberately not narrowing here: it windows only the resolved
     completed/cancelled reads, which the empty-corpus copy names explicitly,
     and the open reads every degraded signal derives from ignore it.
+    ``created_since`` is the opposite case and DOES narrow (via
+    :func:`filters_narrow_the_open_side`) — it hides open rows, so a board
+    carrying one cannot make the whole-system claim.
     """
     return filters_narrow_the_open_side(filters, scope_applied=scope_applied) or set(
         filters.statuses

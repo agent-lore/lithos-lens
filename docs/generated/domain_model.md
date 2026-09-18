@@ -623,6 +623,7 @@ classDiagram
     +tags tuple[str, ...]
     +agent str
     +since str
+    +created_since str
     +epic str
     +projects tuple[str, ...]
     +project_convention ProjectConvention

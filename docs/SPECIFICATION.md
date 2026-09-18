@@ -298,20 +298,47 @@ The current dashboard supports these filters:
 - `agent`
   Creating agent filter.
 - `since`
-  Creation-date lower bound.
+  **Resolved** lower bound — terminal rows only, by `resolved_at`.
+- `created_since`
+  **Created** lower bound — every section, open rows included, by `created_at`.
 
 Filter behavior:
 
 - Filters are parsed by Lens and also applied defensively inside Lens after data
   is fetched from Lithos.
-- `since` accepts ISO `YYYY-MM-DD` and UI-friendly `DD/MM/YYYY` input.
-- The visible dashboard field renders `DD/MM/YYYY`.
-- Open tasks, completed tasks, and cancelled tasks all honor the `since` filter.
+- Both date filters accept ISO `YYYY-MM-DD` and UI-friendly `DD/MM/YYYY` input,
+  and the visible dashboard fields render `DD/MM/YYYY`.
+- The two date windows are different questions, and each field's LABEL says
+  which rows it windows rather than naming only its date:
+  - **Created since (open + terminal, by creation)** — `created_since`. Applied
+    client-side over the snapshot already loaded, so it changes no Lithos read;
+    it narrows every section, and a row it hides is hidden from the section it
+    belonged to rather than moved to another one. It is opt-in: absent means no
+    created window, and input it cannot parse falls back to that same default
+    rather than inventing a narrowing. A ROW's `created_at` is validated in
+    full and normalized to UTC before its date is compared, so a stamp written
+    in another offset falls on the side of the window its instant actually
+    belongs to; a row whose stamp is missing or unreadable is dropped while the
+    window is active — nothing else applies this filter, so a row Lens cannot
+    evaluate has not been shown to satisfy it and must not be counted as though
+    it had. (The resolved window keeps such a row, because there the server
+    applied `resolved_since` and returned it anyway.)
+  - **Resolved since (terminal only, by resolution)** — `since`. The one filter
+    pushed upstream (`lithos_task_list`'s native `resolved_since`), so it also
+    bounds what the completed/cancelled reads fetch; it never narrows open rows,
+    which are the live frontier rather than a time window. It always has a
+    value, defaulting to the configured lookback and clamped by
+    `MAX_SINCE_LOOKBACK_DAYS`.
+  - Both may be active together, and a terminal row must then pass each on its
+    own date.
+- An active `created_since` appears in the active-filter chip strip, and
+  removing that chip drops only that window — `since` and every other filter
+  stay applied.
 - Clicking a task tag in list or detail view navigates back to `/tasks` with
   that tag as the only active tag filter.
-- Existing `status`, `agent`, `since`, and `claimed_state` filters are
-  preserved when clicking a tag, and carried across navigation into the detail
-  and note views.
+- Existing `status`, `agent`, `since`, `created_since`, and `claimed_state`
+  filters are preserved when clicking a tag, and carried across navigation into
+  the detail and note views.
 - Tags with the `project:` prefix are rendered with distinct visual styling but
   are otherwise filtered the same way as other tags.
 - A filter query beyond a fixed byte budget is **refused** with a banner

@@ -220,14 +220,33 @@
             {% endfor %}
           </datalist>
         </label>
-        <label>
-          Resolved since
-          <span class="date-picker-control">
-            <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
-            <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose resolved since date">
-            <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
-          </span>
-        </label>
+        {# The two date windows are ONE grid child, for the reason the actions
+           below are: the bar's auto-fit column count would otherwise deal them
+           onto different rows, and they only read as a pair when adjacent.
+
+           Each label SAYS which rows it windows, in the label and not a
+           tooltip. They are different questions ("what came in since Monday"
+           vs "what got finished since Monday") and the bar carried only the
+           second for long enough that the first was remembered as existing; a
+           label naming only its date is what let them be confused. #}
+        <div class="filter-dates">
+          <label>
+            Created since (open + terminal, by creation)
+            <span class="date-picker-control">
+              <input type="text" name="created_since" data-display-date value="{{ dashboard.filters.created_since | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
+              <input class="date-picker-native" type="date" data-native-date value="{{ dashboard.filters.created_since[:10] }}" aria-label="Choose created since date">
+              <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
+            </span>
+          </label>
+          <label>
+            Resolved since (terminal only, by resolution)
+            <span class="date-picker-control">
+              <input type="text" name="since" data-display-date value="{{ (dashboard.filters.since or default_since) | display_date }}" placeholder="DD/MM/YYYY" inputmode="numeric" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" title="Use DD/MM/YYYY, for example 01/04/2026">
+              <input class="date-picker-native" type="date" data-native-date value="{{ (dashboard.filters.since or default_since)[:10] }}" aria-label="Choose resolved since date">
+              <button class="date-picker-button" type="button" data-open-date-picker aria-label="Open calendar">Cal</button>
+            </span>
+          </label>
+        </div>
         {# Keep the epic scope across a filter submit — the chip strip owns it,
            the form must not silently drop it. #}
         {% if dashboard.epic_scope %}
@@ -253,10 +272,25 @@
         describes the row, never the slice. Each chip links to the same board
         minus that one tag, so it doubles as the clear control while the other
         tags and filters stay put.
+
+        The ``created_since`` window joins the strip for the same reason: it is
+        the one date filter that hides OPEN rows, so a board narrowed by it
+        looks like a board that simply has less work on it unless the strip
+        says so — and like a tag chip, removing it leaves every other filter
+        (the resolved window included) exactly where it was.
       #}
-      {% if dashboard.filters.tags %}
-        <section class="active-filters" aria-label="Active tag filters" data-active-filters>
+      {% if dashboard.filters.tags or dashboard.filters.created_since %}
+        <section class="active-filters" aria-label="Active filters" data-active-filters>
           <span class="active-filters-label">Scoped to</span>
+          {% if dashboard.filters.created_since %}
+            <a class="active-filter-chip"
+               href="{{ created_since_clear_url(request) }}"
+               data-active-filter-created-since="{{ dashboard.filters.created_since }}"
+               aria-label="Clear the created since filter">
+              <span class="active-filter-chip-label">Created since {{ dashboard.filters.created_since | display_date }}</span>
+              <span class="active-filter-chip-clear" aria-hidden="true">&times;</span>
+            </a>
+          {% endif %}
           {% for tag in dashboard.filters.tags[:max_tag_chips] %}
             <a class="active-filter-chip"
                href="{{ task_tag_clear_url(request, dashboard.filters.tags, tag) }}"

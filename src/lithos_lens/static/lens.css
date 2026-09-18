@@ -337,6 +337,19 @@ small {
   width: auto;
 }
 
+/* The two date windows share one filter-bar cell, two bar columns wide, so
+   "Created since" is always drawn BESIDE "Resolved since" rather than being
+   dealt onto the next row by the bar's auto-fit column count — which is the
+   whole point of the pair: the labels distinguish them, and they only read as
+   a pair when they are adjacent. Span reset to one column below 700px, where
+   the bar is single-column and forcing a second would overflow the viewport. */
+.filter-dates {
+  display: grid;
+  gap: 1rem;
+  grid-column: span 2;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
 .date-picker-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.9rem;
@@ -1403,6 +1416,10 @@ button,
   .task-row-meta {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .filter-dates {
+    grid-column: span 1;
   }
 }
 
