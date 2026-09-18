@@ -340,12 +340,17 @@ Filter behavior:
   per probe, per session and per host, with no dedupe — so rendering it raw
   buried the live identities under the dead ones. Each option is labelled with
   when that registration was last active and the list is sorted by it, most
-  recent first. "Last active" is derived from data the board already loaded:
-  the newest `created_at` of a task it created, the registration's own
-  `last_seen_at` as the fallback, and an inline claim it still holds (live
-  state, which carries no start time upstream, so it marks the agent active
-  without being dated). No per-agent Lithos call is made for it, and findings
-  are deliberately not consulted — they are not in the snapshot.
+  recent first — one timestamp drives both, so the order is the order of the
+  times shown. "Last active" is derived from data the board already loaded, in
+  signal order: an inline claim the agent still holds, dated by the load that
+  observed it (upstream gives a claim no start time, so the instant Lens saw it
+  held is the honest stamp — and being the newest possible one, a live claim
+  leads the list and the label says `claim held`); else the newest `created_at`
+  of a task it created, over every row the load fetched (open snapshot and both
+  resolved windows); else the registration's own `last_seen_at`, which the
+  label calls out as a registration rather than work. No per-agent Lithos call
+  is made for it, and findings are deliberately not consulted — they are not in
+  the snapshot.
   - An agent with no activity inside `tasks.agent_inactive_days` (default 30)
     is omitted from the datalist: a `<datalist>` cannot render an option faded,
     so hiding is the behaviour. `?all_agents=1` includes them — a query

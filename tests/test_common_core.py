@@ -382,6 +382,38 @@ def test_needs_attention_knobs_read_from_toml(
     assert config.tasks.unclaimed_ready_age_minutes == 15
 
 
+def test_agent_inactive_days_defaults_to_the_shipped_window(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The Agent picker's window ships configured at 30 days (§5.4): an
+    operator who never writes a [tasks] table gets the documented value, and
+    the picker's own module default cannot drift away from it."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.tasks.agent_inactive_days == 30
+
+
+def test_agent_inactive_days_reads_from_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The TOML key is the primary spelling — the env override is the fallback,
+    so a deployment that only writes the file must still be honoured."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        "agent_inactive_days = 7\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.agent_inactive_days == 7
+    # The [tasks] table is parsed in one pass: a knob written alone must not
+    # reset its neighbours.
+    assert config.tasks.stale_open_age_days == 7
+    assert config.tasks.unclaimed_ready_age_minutes == 60
+
+
 @pytest.mark.parametrize(
     ("env_var", "attribute"),
     [

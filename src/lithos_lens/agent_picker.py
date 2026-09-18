@@ -64,11 +64,14 @@ _TRUTHY = {"1", "true", "yes", "on"}
 class AgentOption:
     """One registration as the picker renders it: who, when, and whether to show.
 
-    ``age`` is measured from :attr:`last_active_at`, the newest DATED signal —
-    a task this agent created, or its registration stamp. A held claim carries
-    no date upstream (``lithos_task_list``'s inline claims have an expiry, not a
-    start), so it rides as :attr:`holds_claim` rather than being back-dated to
-    an instant nothing observed.
+    ``age`` is measured from :attr:`last_active_at`, the newest signal this
+    load saw: an inline claim the agent still holds (observed AT the load, so
+    stamped with its evaluation time), else the newest task it created, else
+    its registration stamp. One timestamp drives both the label and the sort
+    key, which is the property the picker exists for — the list is ordered by
+    the times it shows. Round 1 dated a claim holder by its registration while
+    sorting it as though the claim were current, so a 40-day-old stamp led the
+    list.
     """
 
     agent: AgentRecord
@@ -79,8 +82,11 @@ class AgentOption:
     # label, because "registered 2h ago" and "created something 2h ago" are
     # very different answers to "is this identity live?".
     registered_only: bool = False
+    # Holding an inline claim right now. Decoration only — the claim is already
+    # what :attr:`age` measures — but worth saying: it is the difference
+    # between "was active a moment ago" and "is working on something".
     holds_claim: bool = False
-    # Inside the window (or holding a claim): rendered in the default datalist.
+    # Inside the window: rendered in the default datalist.
     active: bool = False
     # Another registration shares this one's ``name``, so the label shows the id
     # too — the picker's whole failure mode is three identical ``Lithos Lens``
@@ -102,7 +108,7 @@ class AgentOption:
         the rows below.
         """
         if self.age is None:
-            return "claim held" if self.holds_claim else "no activity"
+            return "no activity"
         text = f"{humanize_age(self.age)} ago"
         if self.registered_only:
             text = f"registered {text}"
@@ -161,39 +167,49 @@ def agent_options(
     }
     options = []
     for agent in agents:
-        # The registration stamp is a FALLBACK, never a competitor: an agent
-        # that did something is described by that, even when Lithos touched
-        # last_seen_at more recently than the work happened.
-        stamp = worked_at.get(agent.id) or parse_timestamp(agent.last_seen_at)
-        age = None if stamp is None else evaluated_at - stamp
         holds_claim = agent.id in claimants
+        # One stamp, in signal order. A claim is live state — Lithos reports it
+        # as HELD at the moment of this read — so the load's evaluation time is
+        # when Lens observed the agent active; being the newest possible
+        # instant, it also outranks every date without a second sort term that
+        # could disagree with the text. Then the newest task the agent created.
+        # The registration stamp is the FALLBACK and never a competitor: an
+        # agent that did something is described by that, even when Lithos
+        # touched last_seen_at more recently than the work happened.
+        stamp = (
+            evaluated_at
+            if holds_claim
+            else worked_at.get(agent.id) or parse_timestamp(agent.last_seen_at)
+        )
+        age = None if stamp is None else evaluated_at - stamp
         options.append(
             AgentOption(
                 agent=agent,
                 last_active_at="" if stamp is None else stamp.isoformat(),
                 age=age,
-                registered_only=agent.id not in worked_at and stamp is not None,
+                registered_only=(
+                    not holds_claim and agent.id not in worked_at and stamp is not None
+                ),
                 holds_claim=holds_claim,
-                # A claim is live state, so its holder is active whatever the
-                # dates say — a long-running claim on a task created before the
-                # window would otherwise hide the one agent working right now.
-                active=holds_claim or (age is not None and age <= window),
+                # The window is measured against that one stamp, so a claim
+                # holder is in it by construction — the agent working right now
+                # cannot be hidden by a task older than the window.
+                active=age is not None and age <= window,
                 ambiguous_name=agent.name in shared_names,
             )
         )
     return tuple(sorted(options, key=_recency))
 
 
-def _recency(option: AgentOption) -> tuple[bool, timedelta, str, str]:
-    """Sort key: claim-holders, then newest activity, then a stable tie-break.
+def _recency(option: AgentOption) -> tuple[timedelta, str, str]:
+    """Sort key: newest activity first, then a stable tie-break.
 
-    A held claim outranks every date because it is the only signal about NOW;
-    ages sort ascending (a smaller age is more recent), and an agent with no
-    stamp at all sorts last rather than being dropped — the show-all toggle
-    still has to list it somewhere.
+    The ONE age each option carries, so the order is exactly the order of the
+    times the labels show. Ages sort ascending (a smaller age is more recent),
+    and an agent with no stamp at all sorts last rather than being dropped —
+    the show-all toggle still has to list it somewhere.
     """
     return (
-        not option.holds_claim,
         option.age if option.age is not None else timedelta.max,
         option.agent.name,
         option.agent.id,
