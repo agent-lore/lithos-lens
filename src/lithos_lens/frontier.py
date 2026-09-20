@@ -28,6 +28,12 @@ subtree (per the ``lithos_task_children`` contract) and so does a genuinely
 childless open epic, which must scope to an empty board. One authoritative
 ``lithos_task_get`` breaks that tie — see ``epic_strip._is_open_epic``.
 
+The chrome above the sections — that epic strip and the project quick-switch
+strip beside it — is assembled by ``board_strips`` from the reads in hand, once
+per generation, because both are scoped by the SAME filter predicate and the
+same generation as the sections: a chip must lead to a board with rows on it.
+The assembly's part is to call it at each generation it adopts.
+
 ``classify_open_tasks`` is the pure join; ``load_dashboard`` is the five-call
 assembly that feeds it. Both live here (not in ``tasks.py``) because they
 depend on the task-graph records in ``task_graph.py``.
@@ -43,12 +49,8 @@ from typing import Any, Protocol, cast
 
 from lithos_lens.agent_picker import DEFAULT_AGENT_INACTIVE_DAYS
 from lithos_lens.attention import AttentionPolicy, flag_attention
+from lithos_lens.board_strips import load_board_strips
 from lithos_lens.dashboard import DashboardData, TaskSummary
-from lithos_lens.epic_strip import (
-    EpicStrip,
-    epic_scope_ids,
-    load_epic_rollups,
-)
 from lithos_lens.filter_options import build_filter_options
 from lithos_lens.frontier_fallback import (
     RETRY_FAILED_ERROR,
@@ -63,7 +65,6 @@ from lithos_lens.frontier_join import (
 )
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
-    board_visible_ids,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
     matches_filters,
@@ -299,28 +300,6 @@ async def load_dashboard(
         """
         return {**terminal_index, **open_index}
 
-    async def _load_strip() -> EpicStrip:
-        """The epic strip for the reads currently in hand.
-
-        One definition, called once per generation: the skew retry rebinds the
-        snapshot and the terminal reads, and the strip must follow the
-        generation the sections were built from — its chips AND the board they
-        describe (§5.2.1), which is why the scope is derived here rather than
-        passed in. Without a frontier every open row renders flat, epics
-        included, so nothing rolls up and no type is held back.
-        """
-        return await load_epic_rollups(
-            lithos,
-            open_snapshot,
-            selected=filters.epic,
-            visible_ids=board_visible_ids(
-                open_snapshot,
-                closed_results,
-                filters=filters,
-                open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
-            ),
-        )
-
     def _partition_state(
         snapshot: list[TaskRecord],
         ready_rows: list[TaskRecord],
@@ -394,12 +373,21 @@ async def load_dashboard(
             frontier_only,
         )
 
-    # The epic strip depends on the open snapshot (its epic ids), so it is
-    # fetched here rather than in the main gather. The children reads themselves
-    # stay independent reads (see the module docstring): counts can be a
-    # generation newer, which is why only a non-empty subtree is allowed to scope.
-    strip = await _load_strip()
-    scope_ids = epic_scope_ids(strip.rollups)
+    # The strips depend on the open snapshot (the epic ids in it, and the
+    # projects its rows carry), so they are assembled here rather than in the
+    # main gather — once per generation, because they describe the board the
+    # sections render. The children reads themselves stay independent reads
+    # (see the module docstring): counts can be a generation newer, which is
+    # why only a non-empty subtree is allowed to scope. Without a frontier
+    # every open row renders flat, epics included, so no type is held back.
+    strips = await load_board_strips(
+        lithos,
+        open_snapshot,
+        closed_results,
+        filters=filters,
+        open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
+    )
+    scope_ids = strips.scope_ids
 
     # §14: a failed frontier read renders the master open list flat. Half a
     # frontier is not a classification — rows would land in "Not classified",
@@ -446,10 +434,16 @@ async def load_dashboard(
                     cast("list[TaskRecord] | BaseException", retry_closed[1]),
                 )
                 _read_terminal()
-                # Re-read the strip, so the chips (and their scope) describe
+                # Re-read the strips, so the chips (and their scope) describe
                 # the generation the sections were built from.
-                strip = await _load_strip()
-                scope_ids = epic_scope_ids(strip.rollups)
+                strips = await load_board_strips(
+                    lithos,
+                    open_snapshot,
+                    closed_results,
+                    filters=filters,
+                    open_row_types=PLACED_OPEN_TYPES,
+                )
+                scope_ids = strips.scope_ids
                 state = _partition_state(
                     open_snapshot, ready_list, blocked_records, scope_ids
                 )
@@ -523,7 +517,7 @@ async def load_dashboard(
             index=_blocker_names(open_index),
         )
 
-    if strip.failed:
+    if strips.epics.failed:
         errors.append("Could not load epic progress.")
 
     # The Gates section is open work, so it follows the open sections' switch —
@@ -702,8 +696,13 @@ async def load_dashboard(
         # explanations are claims about the filters, and only these can make a
         # row's membership unknown (a failed stats or agent read cannot).
         unread_statuses=unread_displayed_statuses(closed_results, filters=filters),
-        epics=strip.rollups,
-        epics_hidden=strip.hidden,
+        epics=strips.epics.rollups,
+        epics_hidden=strips.epics.hidden,
+        # The project quick-switch strip (§5.3): the projects of the OPEN rows
+        # this board would show with ``?project=`` removed, so it enumerates
+        # the scope rather than the selection and does not shrink as the
+        # operator clicks between projects.
+        project_chips=strips.projects,
         # An ``?epic=`` that resolves to no scope — no longer an open epic, its
         # children read failed, or an empty subtree Lens could not confirm —
         # shows the whole board with the template's explanation. A CONFIRMED

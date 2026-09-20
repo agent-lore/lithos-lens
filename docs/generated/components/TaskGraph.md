@@ -13,6 +13,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 |---|---|---:|---:|
 | `lithos_lens.attention` | M | 1 | 1 |
 | `lithos_lens.blocker_chain` | M | 2 | 2 |
+| `lithos_lens.board_strips` | S | 2 | 2 |
 | `lithos_lens.dashboard` | M | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
@@ -45,6 +46,12 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `BlockerLevel` — One level of the chain: the task walked to, and its bounded blockers.
 - def `blocker_expansion` — Decide what a blocker line offers: an expander, a cycle callout, or neither.
 - def `load_blocker_level` — Read ONE deeper level of the chain: ``task_id``'s own bounded blockers.
+
+### `lithos_lens.board_strips`
+- class `ProjectChip` — One project in the quick-switch strip (§5.3).
+- class `BoardStrips` — Both strips of one generation, plus the epic scope the first resolved.
+- def `load_board_strips` — Assemble both strips from the reads currently in hand.
+- def `build_project_strip` — The projects inside the current scope, with their open-row counts (§5.3).
 
 ### `lithos_lens.dashboard`
 - class `TaskSummary`

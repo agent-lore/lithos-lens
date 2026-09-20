@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
-from lithos_lens.fake_graph_dataset import graph_fixtures
+from lithos_lens.fake_graph_dataset import ROADMAP_TAG, graph_fixtures
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -286,7 +286,10 @@ def demo_dataset() -> FakeLithosDataset:
                 status="open",
                 created_by="planner",
                 created_at=_ago(hours=3),
-                tags=("project:influx", "area:data"),
+                # In the monthly roadmap scope (``fake_graph_dataset``), which
+                # spans projects: influx, lens and loom rows all carry it, so
+                # the demo has the board the project strip (§5.3) is for.
+                tags=("project:influx", "area:data", ROADMAP_TAG),
             ),
             TaskRecord(
                 id="influx-backfill",
@@ -295,7 +298,7 @@ def demo_dataset() -> FakeLithosDataset:
                 status="open",
                 created_by="planner",
                 created_at=_ago(hours=2),
-                tags=("project:influx", "area:data"),
+                tags=("project:influx", "area:data", ROADMAP_TAG),
             ),
             TaskRecord(
                 id="influx-dashboards",

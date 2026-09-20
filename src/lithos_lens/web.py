@@ -60,6 +60,9 @@ from lithos_lens.request_filters import (
     mini_graph_url,
     note_url,
     panel_fragment_url,
+    project_add_url,
+    project_clear_url,
+    project_remove_url,
     tag_chip_class,
     task_card_url,
     task_detail_url,
@@ -199,6 +202,9 @@ def create_app(
     templates.env.globals["task_detail_url"] = task_detail_url
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
+    templates.env.globals["project_add_url"] = project_add_url
+    templates.env.globals["project_remove_url"] = project_remove_url
+    templates.env.globals["project_clear_url"] = project_clear_url
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
     # The side panel's fetch URL, built server-side per row (§5.5): the id

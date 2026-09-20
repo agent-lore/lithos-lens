@@ -292,6 +292,56 @@ test("epic strip rolls the subtree up and scopes the board", async ({
   ).toHaveCount(0);
 });
 
+test("project strip switches between the projects in a tag scope", async ({
+  page,
+}) => {
+  // The §5.3 item, driven the way an operator drives it: the monthly roadmap
+  // tag spans three projects, and moving between them is clicking, not typing.
+  await page.goto("/tasks?tag=roadmap-2026-09&since=2026-08-01");
+
+  const strip = page.locator("[data-project-strip]");
+  await expect(strip).toBeVisible();
+  // Ordered by open count, then slug — the fixture's 3/2/1 split.
+  await expect(strip.locator("[data-project-chip]")).toHaveText([
+    /lithos-loom\s*3/,
+    /influx\s*2/,
+    /lithos-lens\s*1/,
+  ]);
+
+  await strip.locator('[data-project-chip="lithos-loom"]').click();
+  await expect(page).toHaveURL(/project=lithos-loom/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="loom-schema"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+  ).toHaveCount(0);
+  // The strip did not shrink to the selection: the other projects are still
+  // one click away, with the counts they had.
+  await expect(strip.locator("[data-project-chip]")).toHaveCount(3);
+  await expect(
+    strip.locator('[data-project-chip="lithos-loom"]'),
+  ).toHaveAttribute("aria-current", "true");
+
+  // A second project ORs onto the first…
+  await strip.locator('[data-project-chip="influx"]').click();
+  await expect(page).toHaveURL(/project=lithos-loom,influx/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="loom-schema"]'),
+  ).toBeVisible();
+
+  // …and one click gets back to every project, with the tag scope intact.
+  await page.locator("[data-project-clear]").click();
+  await expect(page).toHaveURL(/tag=roadmap-2026-09/);
+  await expect(page).not.toHaveURL(/project=/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="lens-graph-page"]'),
+  ).toBeVisible();
+});
+
 test("blocked row renders styled blocker chips with a visible label", async ({
   page,
 }) => {

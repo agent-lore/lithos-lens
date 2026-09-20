@@ -46,7 +46,7 @@ Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
@@ -206,7 +206,28 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # next change that grows frontier.py must find the next real seam, because
 # there are six lines left and no argument for a fourth raise that this note
 # has not already spent.
-modules_over_800_lines = 3    # frontier.py (844), graph_layout.py (830), tasks.py (829)
+#
+# Revisited (task ac1380c1, 2026-09-20): the project quick-switch strip needed
+# a builder and a Dashboard field in frontier.py, which at 844 had room for
+# neither. The seam was found rather than the ceiling argued, and it is the one
+# the epic-strip note (0976cf72) named without taking: that note's own defence
+# of building the strip in frontier.py — "it is derived from the same filter
+# predicate and the same generation as the sections" — applies WORD FOR WORD to
+# this second strip, and an argument that covers two strips identically is the
+# description of a responsibility, not of an assembly detail. lithos_lens.
+# board_strips now owns it: both strips of one generation, the epic scope the
+# first resolves and the second is counted under, and the rule they share (a
+# chip must lead to a board with rows on it). The generation discipline is not
+# weakened by the move — it is made explicit, since the reads are passed in at
+# the two points the assembly adopts a generation instead of being closed over
+# as locals the skew retry rebinds. frontier.py keeps the join, the sections,
+# the counters and the degraded-mode policy, and is 843.
+#
+# So the stop-loss is again NOT raised, and the standing is unchanged for the
+# same reason as last time: 843 is still over the 800 threshold, so the
+# exception stands and the next change that grows frontier.py must find the
+# next seam.
+modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (829)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way

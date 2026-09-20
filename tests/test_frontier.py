@@ -3570,3 +3570,267 @@ def test_an_edge_created_after_the_ready_read_still_counts_as_a_waiter() -> None
     row = _gate_row(data, "gate-1")
     assert [waiter.id for waiter in row.waiters] == ["victim"]
     assert row.waiters_label == "blocks 1 task (unverified)"
+
+
+# --- project quick-switch strip (§5.3) -------------------------------------
+
+
+def _in_project(task_id: str, project: str, *tags: str) -> TaskRecord:
+    """An open, unclaimed row carrying the tag convention's project slug."""
+    return _task(task_id, claims=(), tags=(f"project:{project}", *tags))
+
+
+def test_the_project_strip_enumerates_the_projects_of_the_scoped_board() -> None:
+    """The ask (Dave, 2026-09-11): a roadmap tag spans a handful of projects,
+    and the set is already in the snapshot — so the strip offers it with an
+    open-row count each, instead of the operator retyping the Project box.
+    Ordered by count then slug, so it reads as a summary of where the work is.
+    """
+    rows = [
+        _in_project("lens-1", "lithos-lens", "roadmap"),
+        _in_project("lens-2", "lithos-lens", "roadmap"),
+        _in_project("loom-1", "lithos-loom", "roadmap"),
+        _in_project("core-1", "lithos", "roadmap"),
+        # Same project as a scoped row, but outside the tag: it is not on this
+        # board, so it must neither add a chip nor inflate a count.
+        _in_project("core-elsewhere", "lithos"),
+        # A project with NO row in the scope at all.
+        _in_project("other-1", "lithos-other"),
+    ]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 2),
+        ("lithos", 1),
+        ("lithos-loom", 1),
+    ]
+    assert not any(chip.selected for chip in data.project_chips)
+
+
+def test_the_strip_does_not_shrink_as_the_operator_moves_between_projects() -> None:
+    """The strip is scoped by every active filter EXCEPT ``project``, so
+    narrowing to one project marks its chip and leaves the others one click
+    away — with their counts unmoved, because the scope did not change."""
+    rows = [
+        _in_project("lens-1", "lithos-lens", "roadmap"),
+        _in_project("lens-2", "lithos-lens", "roadmap"),
+        _in_project("loom-1", "lithos-loom", "roadmap"),
+        _in_project("core-1", "lithos", "roadmap"),
+    ]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(_FILTERS, tags=("roadmap",), projects=("lithos-loom",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 2),
+        ("lithos", 1),
+        ("lithos-loom", 1),
+    ]
+    assert [chip.slug for chip in data.project_chips if chip.selected] == [
+        "lithos-loom"
+    ]
+    # …and the board itself IS narrowed — the strip's scope is not the board's.
+    assert _section_ids(data.sections, "ready") == ["loom-1"]
+
+
+def test_a_second_project_ors_onto_the_first() -> None:
+    """Projects OR among themselves (``?project=a,b``, what the comma form
+    already means), so adding one widens the board and marks both chips."""
+    rows = [
+        _in_project("lens-1", "lithos-lens", "roadmap"),
+        _in_project("loom-1", "lithos-loom", "roadmap"),
+        _in_project("core-1", "lithos", "roadmap"),
+    ]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(
+        _FILTERS, tags=("roadmap",), projects=("lithos-lens", "lithos-loom")
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert sorted(chip.slug for chip in data.project_chips if chip.selected) == [
+        "lithos-lens",
+        "lithos-loom",
+    ]
+    assert sorted(_section_ids(data.sections, "ready")) == ["lens-1", "loom-1"]
+    # The unselected project is still offered, still counted.
+    assert ("lithos", 1) in [
+        (chip.slug, chip.open_count) for chip in data.project_chips
+    ]
+
+
+def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
+    """§5B.1's both-conventions rule, which is the default posture: loom's
+    issue-mirrored tasks carry ``metadata.project`` and no project TAG, and a
+    strip that read only the tag convention would leave those projects — this
+    UX pass's own tasks among them — out of the scope they are inside."""
+    mirrored = _task(
+        "mirrored",
+        claims=(),
+        tags=("roadmap",),
+        metadata={"project": "lithos-loom"},
+    )
+    tagged = _in_project("tagged", "lithos-lens", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[mirrored, tagged], ready=[mirrored, tagged], blocked=[]
+    )
+
+    data = asyncio.run(
+        load_dashboard(
+            fake, filters=replace(_FILTERS, tags=("roadmap",)), frontier_limit=500
+        )
+    )
+
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 1),
+        ("lithos-loom", 1),
+    ]
+
+
+def test_the_project_strip_counts_open_rows_only() -> None:
+    """The count is "how much open work is there to switch to". A project
+    whose only rows are in the resolved windows holds none, so it is not on the
+    strip — and a resolved row of a project that IS there does not inflate it.
+    """
+    open_row = _in_project("lens-open", "lithos-lens", "roadmap")
+    done = _task(
+        "lens-done",
+        status="completed",
+        tags=("project:lithos-lens", "roadmap"),
+    )
+    archived = _task(
+        "loom-done",
+        status="completed",
+        tags=("project:lithos-loom", "roadmap"),
+    )
+    fake = _FrontierFake(
+        open_tasks=[open_row],
+        ready=[open_row],
+        blocked=[],
+        completed=[done, archived],
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["lens-done", "loom-done"]
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 1)
+    ]
+
+
+def test_the_project_strip_counts_gates_and_not_rolled_up_rows() -> None:
+    """ "Open rows the board would show" is the open sections plus Gates. An
+    epic rolls up into its own strip rather than rendering, so a project whose
+    only match is an epic would be a chip leading to an empty board."""
+    gate = _gate_task("gate-1", tags=("project:lithos-loom", "roadmap"))
+    work = _in_project("lens-1", "lithos-lens", "roadmap")
+    epic = _task("epic-1", task_type="epic", tags=("project:lithos-epics", "roadmap"))
+    fake = _FrontierFake(
+        open_tasks=[gate, work, epic],
+        ready=[work],
+        blocked=[],
+        children={"epic-1": [work]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(
+        load_dashboard(fake, filters=filters, frontier_limit=500, now=_NOW)
+    )
+
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 1),
+        ("lithos-loom", 1),
+    ]
+
+
+def test_a_project_chip_never_leads_to_an_empty_board() -> None:
+    """The acceptance criterion followed the way an operator follows it: take
+    every chip the strip drew and select it — each must leave rows behind."""
+    rows = [
+        _in_project("lens-1", "lithos-lens", "roadmap"),
+        _in_project("loom-1", "lithos-loom", "roadmap"),
+        _in_project("core-1", "lithos", "roadmap"),
+        _in_project("off-1", "lithos-other"),
+    ]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    strip = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [chip.slug for chip in strip.project_chips] == [
+        "lithos",
+        "lithos-lens",
+        "lithos-loom",
+    ]
+    for chip in strip.project_chips:
+        followed = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(filters, projects=(chip.slug,)),
+                frontier_limit=500,
+            )
+        )
+        assert any(followed.sections.values()), chip.slug
+
+
+def test_the_project_strip_follows_the_generation_the_skew_retry_adopted() -> None:
+    """Mirrors the epic strip's own rule: the adopted generation decides which
+    rows the board holds, so counts computed against the first one would name a
+    project the board no longer shows."""
+    stale_row = _in_project("stale-row", "lithos-stale", "roadmap")
+    fresh_row = _in_project("fresh-row", "lithos-fresh", "roadmap")
+    gap = _tagged("gap", "roadmap")
+    fake = _FrontierFake(
+        # First generation holds the stale project's row and ``gap`` (in
+        # neither frontier — the skew trigger); the retry replaces both.
+        open_tasks=[[stale_row, gap], [fresh_row]],
+        ready=[[stale_row], [fresh_row]],
+        blocked=[],
+    )
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert fake.open_calls == 2
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-fresh", 1)
+    ]
+
+
+def test_the_project_strip_composes_with_an_epic_scope() -> None:
+    """The strips compose: inside ``?epic=`` the projects on offer are the
+    projects of THAT epic's rows, so the two chrome rows describe one board."""
+    epic = _epic("epic-1")
+    inside = _in_project("inside", "lithos-lens", "roadmap")
+    outside = _in_project("outside", "lithos-loom", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[epic, inside, outside],
+        ready=[inside, outside],
+        blocked=[],
+        children={"epic-1": [inside]},
+    )
+    filters = replace(_FILTERS, tags=("roadmap",), epic="epic-1")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert data.epic_scope == "epic-1"
+    assert [chip.slug for chip in data.project_chips] == ["lithos-lens"]
+
+
+def test_a_terminal_only_board_draws_no_project_strip() -> None:
+    """With the open side switched off there are no open rows to switch
+    between, so the strip has nothing to say (the template keeps the clear
+    reachable on its own, from the live filter)."""
+    done = _task("done", status="completed", tags=("project:lithos-lens",))
+    fake = _FrontierFake(open_tasks=[], ready=[], blocked=[], completed=[done])
+    filters = TaskFilters(statuses=("completed",), tags=(), agent="", since="")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert _section_ids(data.sections, "completed") == ["done"]
+    assert data.project_chips == ()

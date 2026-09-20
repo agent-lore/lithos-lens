@@ -275,6 +275,23 @@ The dashboard also renders:
   gate the severity model promoted
 - an **Epic rollup strip** summarizing epics by child progress, with a scope
   link that filters the board to one epic
+- a **Project quick-switch strip** below it, enumerating the projects inside the
+  board's current scope so switching between them does not mean retyping the
+  Project box. A tag like `roadmap-2026-09` spans a handful of projects, and the
+  set is already derivable from the snapshot (`task_projects`, §5B.1, so a
+  project carried only in `metadata.project` counts like a tagged one). Each
+  chip carries the project's **open-row count** within that scope — the open
+  sections plus Gates; terminal rows contribute nothing — and the chips order by
+  count then slug. The scope is **every active filter except `project`**, so the
+  strip answers "which projects are in what I am looking at" and does not shrink
+  as the operator clicks between them: clicking an unselected chip adds its slug
+  to `?project=` (projects OR, the comma form), clicking a selected one removes
+  just that slug, and a **Clear** affordance — shown whenever `project` is set —
+  removes the parameter alone, leaving every other filter where it was. Every
+  chip has open rows behind it, so none leads to an empty board (the same rule
+  §5.2.1 gives the epic strip, evaluated under the same generation). The strip
+  is hidden when the scope holds fewer than two projects and no project filter
+  is active
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 
@@ -298,7 +315,10 @@ The current dashboard supports these filters:
   `tags` datalist (below).
 - `project`
   Project scope, honoring the configured convention (metadata key, reserved
-  tag, or both).
+  tag, or both). Multi-select and OR: `?project=a,b` (or repeated `project`
+  pairs) shows either project's rows. The quick-switch strip (§5.3) is the
+  fast way to set it, and the Project box still accepts anything typed — the
+  strip reflects whatever the filter holds, however it got there.
 - `epic`
   Scopes the board to one epic's children, from the rollup strip.
 - `agent`

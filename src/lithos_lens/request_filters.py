@@ -265,6 +265,70 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
 
 
+def project_add_url(request: Request, projects: Sequence[str], project: str) -> str:
+    """Link a project chip to the same board WITH that project added (§5.3).
+
+    Projects OR among themselves — ``?project=a,b`` is "either", which is what
+    ``task_filtering.matches_projects`` already means — so a chip ADDS its slug
+    to the live selection rather than replacing it. Every other filter (tag,
+    epic, status, agent, both date windows) rides along through the same
+    allowlist every generated tasks URL uses: the strip composes with the scope
+    the operator is browsing under instead of resetting it.
+    """
+    if project in projects:
+        return _project_filter_url(request, projects)
+    return _project_filter_url(request, [*projects, project])
+
+
+def project_remove_url(request: Request, projects: Sequence[str], project: str) -> str:
+    """Link a SELECTED project chip to the same board without that one project.
+
+    The selected chip is the live filter, so clicking it removes its own slug
+    and keeps the others — the same shape :func:`task_tag_clear_url` gives a
+    tag, and the reason is the same: a two-project selection must be reducible
+    to either half without retyping it.
+    """
+    return _project_filter_url(
+        request, [other for other in projects if other != project]
+    )
+
+
+def project_clear_url(request: Request) -> str:
+    """Link the strip's Clear affordance to the same board with NO project.
+
+    "Back to all projects" is one click, and it is the only control that can
+    get there once two projects are selected. Only ``project`` is dropped:
+    every other active parameter is rebuilt from the request, so clearing the
+    project filter never widens the tag scope or the date windows with it.
+    """
+    return _project_filter_url(request, ())
+
+
+def _project_filter_url(request: Request, projects: Sequence[str]) -> str:
+    """The board URL carrying exactly ``projects``, every other filter intact.
+
+    ``projects`` is the HONOURED list (``TaskFilters.projects``), not the raw
+    query: the two spellings (repeated and comma-joined) both fold into it, so
+    rebuilding from the request would emit a slug twice or miss one it had
+    collapsed — and the link stays truthful, since removing a chip cannot
+    resurrect a project the board is not filtering by.
+
+    Emitted as ONE comma-joined ``project`` pair, the documented multi-select
+    spelling (``parse_filters`` splits it). Commas are left literal for this
+    pair alone — it is the filter's own separator, and percent-encoding it
+    would make the shared URL unreadable for no gain — while every other value
+    keeps the default encoding, where a comma can be content (a literal tag).
+    The comma form is also the shorter of the two spellings, which is what
+    keeps a strip of chips inside ``MAX_FILTER_QUERY_BYTES``.
+    """
+    params = _preserved_filter_params(request, exclude="project")
+    query = urlencode(params)
+    if projects:
+        selection = urlencode({"project": ",".join(projects)}, safe=",")
+        query = f"{query}&{selection}" if query else selection
+    return f"/tasks?{query}" if query else "/tasks"
+
+
 def created_since_clear_url(request: Request) -> str:
     """Link the ``created_since`` chip to the same board WITHOUT that window.
 

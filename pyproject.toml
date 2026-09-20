@@ -93,6 +93,7 @@ source_modules = [
     "lithos_lens.attention",
     "lithos_lens.frontier_fallback",
     "lithos_lens.frontier_join",
+    "lithos_lens.board_strips",
     "lithos_lens.epic_strip",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_resolver",

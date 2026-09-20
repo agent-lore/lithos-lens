@@ -223,6 +223,7 @@ classDiagram
     +frontier_unplaced bool
     +errors tuple[str, ...]
     +epics_hidden int
+    +project_chips tuple[ProjectChip, ...]
     +unread_statuses frozenset[str]
     +epic_scope str
   }

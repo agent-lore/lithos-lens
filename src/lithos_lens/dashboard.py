@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from lithos_lens.agent_picker import AgentOption
+from lithos_lens.board_strips import ProjectChip
 from lithos_lens.frontier_join import COUNTERS_BY_FRONTIER
 from lithos_lens.gates import GateGroup, GateRow
 from lithos_lens.tasks import (
@@ -171,6 +172,13 @@ class DashboardData:
     # beside the strip rather than absorbed silently — a short strip otherwise
     # reads as "these are all the epics".
     epics_hidden: int = 0
+    # The project quick-switch strip (§5.3): one chip per project inside the
+    # CURRENT scope — every active filter except ``project`` — with its open-row
+    # count, ordered by count then slug. Distinct from ``projects`` above, which
+    # is the filter dropdown's universe over the whole load: this is what the
+    # board in front of the operator is made of, and clicking a chip narrows to
+    # it without shrinking the strip.
+    project_chips: tuple[ProjectChip, ...] = ()
     # The statuses this board DISPLAYS whose read did not answer, so which rows
     # belong to them is unknown rather than known-empty. Narrower than
     # ``errors`` on purpose — only these can hide a row that would have filled
