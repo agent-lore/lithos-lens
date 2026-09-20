@@ -717,6 +717,63 @@ def test_project_filter_matches_both_conventions(
     assert '<option value="influx">' in response.text
 
 
+def _datalist_options(html: str, list_id: str) -> list[str]:
+    """The option VALUES of one datalist, in rendered order."""
+    block = re.search(rf'<datalist id="{list_id}">(.*?)</datalist>', html, re.S)
+    assert block is not None, f"the {list_id} datalist is missing"
+    return re.findall(r'<option value="([^"]*)">', block.group(1))
+
+
+def test_tag_box_offers_the_whole_snapshot_vocabulary(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The Tag box is a discovery surface, like Project and Agent beside it: it
+    offers every tag the load fetched — a cross-project tag, and one carried
+    only by a row inside the resolved window — even while the active project
+    filter hides the rows that carry them."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="open-elsewhere",
+            title="Another project's open task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-24T10:00:00+00:00",
+            tags=("project:ganglion", "needs-human"),
+        )
+    )
+    fake.tasks.append(
+        TaskRecord(
+            id="done-elsewhere",
+            title="Another project's completed task",
+            status="completed",
+            created_by="worker",
+            created_at="2026-04-20T10:00:00+00:00",
+            resolved_at="2026-04-22T10:00:00+00:00",
+            tags=("project:ganglion", "milestone:t2"),
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?project=influx&since=2026-04-01")
+
+    assert response.status_code == 200
+    # The box SUBMITS as before and now offers a vocabulary to submit.
+    assert '<input type="text" name="add_tag" list="tags"' in response.text
+    # Neither ganglion row is on this board…
+    assert "Another project's open task" not in response.text
+    assert "Another project's completed task" not in response.text
+    # …and both their tags are still offerable, sorted and deduped across the
+    # rows that share ``project:influx`` / ``area:docs``.
+    assert _datalist_options(response.text, "tags") == [
+        "area:docs",
+        "milestone:t2",
+        "needs-human",
+        "project:ganglion",
+        "project:influx",
+    ]
+
+
 def test_project_filter_is_preserved_across_navigation(
     lithos_lens_config_env: Path,
 ) -> None:

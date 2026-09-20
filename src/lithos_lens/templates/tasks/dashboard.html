@@ -207,9 +207,20 @@
         {% for tag in dashboard.filters.tags %}
           <input type="hidden" name="tag" value="{{ tag }}">
         {% endfor %}
+        {# The datalist is the union of the tags in the loaded snapshot — open
+           rows and the windowed terminal rows, before these filters narrow
+           anything — so a tag that only ANOTHER project's rows carry
+           (milestone:t2, needs-human) can be found from here instead of having
+           to be known already. Same source and same staleness as the projects
+           list above, and it costs no extra Lithos read. #}
         <label>
           Tag
-          <input type="text" name="add_tag" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
+          <input type="text" name="add_tag" list="tags" value="" placeholder="{{ "Add another tag" if dashboard.filters.tags else "area:docs" }}">
+          <datalist id="tags">
+            {% for tag in dashboard.tags %}
+              <option value="{{ tag }}"></option>
+            {% endfor %}
+          </datalist>
         </label>
         {# The Agent datalist is lithos_agent_list ORDERED and WINDOWED, not
            verbatim: the registry accumulates a row per probe, per session and

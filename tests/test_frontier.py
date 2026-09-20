@@ -1524,6 +1524,113 @@ def test_project_universe_survives_an_active_project_filter() -> None:
     assert data.projects == ("cardinal", "ganglion", "influx")
 
 
+def test_tag_universe_offers_a_tag_only_another_project_carries() -> None:
+    """The Tag box's whole point is discovery: the scope of a view is often a
+    tag that spans projects, and the universe is built over the loaded rows
+    BEFORE the filters narrow — so narrowing to a project that does not carry
+    ``milestone:t2`` must not hide it, exactly as with ``projects``."""
+    mine = _task("mine", claims=(), tags=("project:influx", "area:docs"))
+    other = _task("other", claims=(), tags=("project:ganglion", "milestone:t2"))
+    fake = _FrontierFake(open_tasks=[mine, other], ready=[mine, other], blocked=[])
+
+    wide = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    assert wide.tags == (
+        "area:docs",
+        "milestone:t2",
+        "project:ganglion",
+        "project:influx",
+    )
+
+    scoped = asyncio.run(
+        load_dashboard(
+            fake,
+            filters=replace(_FILTERS, projects=("influx",)),
+            frontier_limit=500,
+        )
+    )
+    # The board is narrowed to the row that has none of them…
+    assert _section_ids(scoped.sections, "ready") == ["mine"]
+    # …and the vocabulary you can switch to is not.
+    assert scoped.tags == wide.tags
+
+
+def test_tag_universe_spans_the_resolved_window_and_stops_at_its_edge() -> None:
+    """The universe is what this load FETCHED: the open snapshot plus the rows
+    the terminal windows returned. A tag carried only by a resolved row inside
+    the window is offered; one carried only by a row the window never returned
+    was never loaded, so it is not."""
+    open_row = _task("open-row", claims=(), tags=("area:docs",))
+    inside = replace(
+        _task("inside", status="completed", tags=("milestone:t2",)),
+        resolved_at="2026-05-10T10:00:00+00:00",
+    )
+    outside = replace(
+        _task("outside", status="completed", tags=("milestone:t1",)),
+        resolved_at="2026-04-01T10:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[open_row],
+        ready=[open_row],
+        blocked=[],
+        completed=[inside, outside],
+    )
+
+    data = asyncio.run(
+        load_dashboard(
+            fake,
+            filters=replace(_FILTERS, since="2026-05-01"),
+            frontier_limit=500,
+        )
+    )
+
+    assert data.tags == ("area:docs", "milestone:t2")
+
+
+def test_tag_universe_is_sorted_and_deduped_across_rows() -> None:
+    """One option per tag, in one order — rows sharing a tag must not offer it
+    twice, and the datalist renders this tuple verbatim."""
+    first = _task("first", claims=(), tags=("needs-human", "area:docs"))
+    second = _task("second", claims=(), tags=("area:docs", "needs-human"))
+    third = _task("third", claims=(), tags=("area:docs",))
+    fake = _FrontierFake(
+        open_tasks=[first, second, third],
+        ready=[first, second, third],
+        blocked=[],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.tags == ("area:docs", "needs-human")
+
+
+def test_tag_universe_costs_no_extra_lithos_read() -> None:
+    """It is folded out of rows the board already holds. The same snapshot with
+    and without tags therefore makes an IDENTICAL call log: no corpus-wide tag
+    read, and no per-tag fan-out."""
+
+    def _fake(tags: tuple[str, ...]) -> _FrontierFake:
+        rows = [_task("a", claims=(), tags=tags), _task("b", claims=(), tags=tags)]
+        done = _task("done", status="completed", tags=tags)
+        return _FrontierFake(open_tasks=rows, ready=rows, blocked=[], completed=[done])
+
+    tagged, bare = _fake(("milestone:t2", "needs-human")), _fake(())
+    with_tags = asyncio.run(
+        load_dashboard(tagged, filters=_FILTERS, frontier_limit=500)
+    )
+    without_tags = asyncio.run(
+        load_dashboard(bare, filters=_FILTERS, frontier_limit=500)
+    )
+
+    assert with_tags.tags == ("milestone:t2", "needs-human")
+    assert without_tags.tags == ()
+    assert tagged.list_calls == bare.list_calls
+    assert tagged.ready_args == bare.ready_args
+    assert tagged.blocked_args == bare.blocked_args
+    assert tagged.get_calls == bare.get_calls
+    assert tagged.children_calls == bare.children_calls
+    assert tagged.edge_list_calls == bare.edge_list_calls
+
+
 def test_disagreeing_project_conventions_warn_to_telemetry(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
