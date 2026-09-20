@@ -63,6 +63,18 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # but must be an explicit, reviewed edit to this file; lower a budget after
 # improving the code to lock in the gain.
 #
+# What a budget is FOR (operator policy, Dave, 2026-09-20, restated because it
+# keeps being read the other way): a budget is a prompt for a decision, not a
+# limit. Crossing one asks "is this a second responsibility, or the same one
+# grown?" — and either answer is legitimate. A real seam gets an extraction; a
+# change that is the same responsibility grown gets a raise, with a note here
+# saying why. A sound architecture and good code are the priority, and an
+# extraction whose only purpose is a number — one concern split across two
+# modules so a counter stays put — is the wrong answer even when it makes the
+# metric look better. The notes below record raises AND extractions; neither
+# is the default, and no note here forbids the next raise. It only asks that
+# the next one be argued as well as these were.
+#
 # Most budgets below are tight ratchets pinned at today's value (any regression
 # fails CI). max_module_lines is the exception: it is a STOP-LOSS ceiling set a
 # little above today's largest module so a big module can't quietly balloon — it
@@ -201,11 +213,12 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # three builders (which stay with their vocabularies, in Tasks). frontier.py
 # makes one call and is 844.
 #
-# So the stop-loss is NOT raised. The exception is not discharged either —
-# 844 is still over the 800 threshold — and the standing is unchanged: the
-# next change that grows frontier.py must find the next real seam, because
-# there are six lines left and no argument for a fourth raise that this note
-# has not already spent.
+# So the stop-loss is NOT raised here, because a real seam existed. The
+# exception is not discharged either — 844 is still over the 800 threshold —
+# so the next change that grows frontier.py answers the same question again:
+# a real seam if there is one, a reasoned raise if there is not. Six lines of
+# headroom is a fact, not an instruction; see the policy at the top of this
+# section.
 modules_over_800_lines = 3    # frontier.py (844), graph_layout.py (830), tasks.py (829)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
