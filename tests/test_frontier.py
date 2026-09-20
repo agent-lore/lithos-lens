@@ -3691,6 +3691,94 @@ def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
     ]
 
 
+def test_every_project_convention_is_enumerated_whatever_the_posture() -> None:
+    """§5B.1: the project UNIVERSE is the union of both conventions "so no
+    project is invisible to its own view", and this strip offers values for
+    that same filter. So the enumeration is ``convention="both"`` — the call
+    ``project_universe`` and the graph scope picker make — and a posture that
+    narrows MATCHING must not narrow what the operator can see is there."""
+    mirrored = _task(
+        "mirrored",
+        claims=(),
+        tags=("roadmap",),
+        metadata={"project": "lithos-loom"},
+    )
+    tagged = _in_project("tagged", "lithos-lens", "roadmap")
+    fake = _FrontierFake(
+        open_tasks=[mirrored, tagged], ready=[mirrored, tagged], blocked=[]
+    )
+
+    for convention in ("both", "tag", "metadata"):
+        data = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(
+                    _FILTERS, tags=("roadmap",), project_convention=convention
+                ),
+                frontier_limit=500,
+            )
+        )
+
+        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+            ("lithos-lens", 1),
+            ("lithos-loom", 1),
+        ], convention
+
+
+def test_the_strip_scope_honours_the_agent_and_created_windows() -> None:
+    """The scope is every active filter except ``project`` — ALL of them. A
+    strip that skipped the agent match or the created window would enumerate a
+    project whose only row this board does not show, which is exactly the
+    dead-end chip §5.2.1's rule exists to remove."""
+    mine = _task(
+        "lens-mine",
+        claims=(),
+        tags=("project:lithos-lens", "roadmap"),
+        created_by="planner",
+        created_at="2026-09-10T10:00:00+00:00",
+    )
+    theirs = _task(
+        "loom-theirs",
+        claims=(),
+        tags=("project:lithos-loom", "roadmap"),
+        created_by="worker",
+        created_at="2026-09-10T10:00:00+00:00",
+    )
+    older = _task(
+        "core-older",
+        claims=(),
+        tags=("project:lithos", "roadmap"),
+        created_by="planner",
+        created_at="2026-01-02T10:00:00+00:00",
+    )
+    rows = [mine, theirs, older]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(
+        _FILTERS,
+        tags=("roadmap",),
+        agent="planner",
+        created_since="2026-09-01",
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    # One row survives both windows, so one project is on the strip: the other
+    # agent's project and the pre-window project are not offered.
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 1)
+    ]
+    # …and the chip that IS offered still leads somewhere.
+    for chip in data.project_chips:
+        followed = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(filters, projects=(chip.slug,)),
+                frontier_limit=500,
+            )
+        )
+        assert any(followed.sections.values()), chip.slug
+
+
 def test_the_project_strip_counts_open_rows_only() -> None:
     """The count is "how much open work is there to switch to". A project
     whose only rows are in the resolved windows holds none, so it is not on the

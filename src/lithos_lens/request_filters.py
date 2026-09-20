@@ -38,7 +38,7 @@ from urllib.parse import quote, urlencode
 
 from fastapi import Request
 
-from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY
+from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY, show_all_agents
 from lithos_lens.tasks import (
     ADD_TAG_FILTER_KEY,
     MAX_FILTER_QUERY_BYTES,
@@ -320,8 +320,21 @@ def _project_filter_url(request: Request, projects: Sequence[str]) -> str:
     keeps the default encoding, where a comma can be content (a literal tag).
     The comma form is also the shorter of the two spellings, which is what
     keeps a strip of chips inside ``MAX_FILTER_QUERY_BYTES``.
+
+    ``all_agents`` rides along too, which is the one thing these builders do
+    that the rest do not. It is outside :data:`_PRESERVED_FILTER_KEYS` for a
+    good reason (it narrows no row, so it must not make
+    :func:`board_is_filtered` true) — but the strip is a NAVIGATION control
+    used while the picker is open, and collapsing the picker back to its
+    windowed list on every chip click undoes a choice the operator made about
+    a different surface. It is re-emitted as the canonical literal ``1`` the
+    toggle itself writes, never the value that arrived, so an oversized
+    ``?all_agents=<huge>`` is copied out nowhere however many chips the strip
+    draws — the property the constant's note relies on.
     """
     params = _preserved_filter_params(request, exclude="project")
+    if show_all_agents(request.query_params.get(SHOW_ALL_AGENTS_KEY, "")):
+        params.append((SHOW_ALL_AGENTS_KEY, "1"))
     query = urlencode(params)
     if projects:
         selection = urlencode({"project": ",".join(projects)}, safe=",")

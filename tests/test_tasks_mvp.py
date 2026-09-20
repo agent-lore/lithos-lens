@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import parse_qs, quote_plus, urlencode, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -5104,9 +5104,89 @@ def test_clicking_a_project_chip_narrows_the_board_without_shrinking_the_strip(
     assert "Loom roadmap item" in two_text
     assert "Lens roadmap item" in two_text
     assert two_text.count('aria-current="true"') == 2
-    # The selected chip now removes ITS OWN project, leaving the other.
+    # An unselected chip announces itself ADDITIVELY: with lithos-loom live,
+    # the lithos-lens control goes to BOTH, so "show only" would be false.
+    assert re.search(
+        r'data-project-chip="lithos-lens"[^>]*aria-label="Add lithos-lens"',
+        one_text,
+        re.S,
+    )
+    assert re.search(
+        r'data-project-chip="lithos-loom"[^>]*aria-label="Remove lithos-loom"',
+        two_text,
+        re.S,
+    )
+
+
+def test_removing_one_project_leaves_the_other_and_everything_else(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The way back out of a two-project selection, followed: clicking the
+    selected chip removes ITS slug only — the other project stays selected, the
+    board keeps its rows, and no unrelated parameter moves."""
+    fake = _three_project_fake()
+    query = (
+        "tag=roadmap-2026-08&project=lithos-loom,lithos-lens"
+        "&since=2026-04-01&all_agents=1"
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        two = client.get(f"/tasks?{query}")
+        remove_href = _project_chip_links(unescape(two.text))["lithos-loom"]
+        one = client.get(remove_href)
+
+    one_text = unescape(one.text)
+
+    assert one.status_code == 200
+    assert parse_qs(urlsplit(remove_href).query) == {
+        "tag": ["roadmap-2026-08"],
+        "since": ["2026-04-01"],
+        "all_agents": ["1"],
+        "project": ["lithos-lens"],
+    }
+    # One project left selected, the other back to an add link…
+    assert re.search(
+        r'data-project-chip="lithos-lens"[^>]*aria-current="true"', one_text, re.S
+    )
+    assert one_text.count('aria-current="true"') == 1
+    # …and the board followed it.
+    assert "Lens roadmap item" in one_text
+    assert "Loom roadmap item" not in one_text
+    # The strip is whole either way — removing a project is not narrowing it.
+    assert _project_chip_counts(one_text) == {
+        "lithos-lens": 2,
+        "lithos": 1,
+        "lithos-loom": 1,
+    }
+
+
+def test_the_project_strip_is_a_labelled_section_below_the_epic_strip(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The rendering contract (§5.3): a third strip, BELOW the active-filters
+    row and the epic strip, carrying its own accessible name. Asserted on the
+    markup rather than left to the screenshots, which are written but never
+    compared — moving the strip above the epic chips, or dropping the label a
+    screen reader announces it by, would otherwise change nothing observable.
+    """
+    fake = _three_project_fake()
+    fake.tasks.append(_epic_row("epic-roadmap", "Roadmap epic"))
+    fake.children["epic-roadmap"] = ["loom-ready"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+
+    text = board.text
+
     assert (
-        _project_chip_links(two_text)["lithos-loom"].count("project=lithos-lens") == 1
+        '<section class="project-strip" aria-label="Projects" data-project-strip>'
+        in text
+    )
+    # Below the two strips it composes with, in that order.
+    assert (
+        text.index("data-active-filters")
+        < text.index("data-epic-strip")
+        < text.index("data-project-strip")
     )
 
 
@@ -5117,9 +5197,34 @@ def test_clearing_the_project_filter_keeps_every_other_parameter(
     the tag scope, the agent, and both date windows are what the operator is
     browsing under and must survive it."""
     fake = _three_project_fake()
+    # Two more projects inside the tag, each held OUT of the scope by one of
+    # the other filters alone — so this board proves the agent match and the
+    # created window really are part of what the strip enumerates, rather than
+    # riding along as parameters nothing tests.
+    fake.tasks.extend(
+        [
+            TaskRecord(
+                id="cardinal-other-agent",
+                title="Cardinal roadmap item",
+                status="open",
+                created_by="worker",
+                created_at=_ago(minutes=20),
+                tags=("project:lithos-cardinal", "roadmap-2026-08"),
+            ),
+            TaskRecord(
+                id="ganglion-pre-window",
+                title="Ganglion roadmap item",
+                status="open",
+                created_by="planner",
+                created_at="2023-06-01T10:00:00+00:00",
+                tags=("project:lithos-ganglion", "roadmap-2026-08"),
+            ),
+        ]
+    )
+    fake.ready_ids.update({"cardinal-other-agent", "ganglion-pre-window"})
     query = (
-        "tag=roadmap-2026-08&project=lithos-loom,lithos-lens&agent=planner"
-        "&since=2026-04-01&created_since=2024-01-01"
+        "status=open&tag=roadmap-2026-08&project=lithos-loom,lithos-lens"
+        "&agent=planner&since=2026-04-01&created_since=2024-01-01&all_agents=1"
     )
 
     with _client(lithos_lens_config_env, fake) as client:
@@ -5128,21 +5233,29 @@ def test_clearing_the_project_filter_keeps_every_other_parameter(
             re.findall(r'href="([^"]+)"[^>]*data-project-clear', board.text)[0]
         )
         cleared = client.get(clear_href)
+        # Controls: drop ONE filter at a time from the cleared board and the
+        # project it was hiding appears. Without these the two assertions above
+        # would hold for a strip that ignored both predicates.
+        any_agent = client.get(clear_href.replace("&agent=planner", ""))
+        any_age = client.get(clear_href.replace("&created_since=2024-01-01", ""))
 
     cleared_text = unescape(cleared.text)
 
     assert board.status_code == 200
     assert "project=" not in clear_href
-    for term in (
-        "tag=roadmap-2026-08",
-        "agent=planner",
-        "since=2026-04-01",
-        "created_since=2024-01-01",
-    ):
-        assert term in clear_href
+    assert parse_qs(urlsplit(clear_href).query) == {
+        "status": ["open"],
+        "tag": ["roadmap-2026-08"],
+        "agent": ["planner"],
+        "since": ["2026-04-01"],
+        "created_since": ["2024-01-01"],
+        "all_agents": ["1"],
+    }
     assert cleared.status_code == 200
     # Every project in the scope is back, none of them selected, and the clear
-    # is gone with the filter it cleared.
+    # is gone with the filter it cleared. The two projects the agent match and
+    # the created window exclude are NOT back — clearing removes `project`
+    # alone.
     assert list(_project_chip_links(cleared_text)) == [
         "lithos-lens",
         "lithos",
@@ -5150,6 +5263,9 @@ def test_clearing_the_project_filter_keeps_every_other_parameter(
     ]
     assert 'aria-current="true"' not in cleared_text
     assert "data-project-clear" not in cleared_text
+
+    assert "lithos-cardinal" in _project_chip_links(unescape(any_agent.text))
+    assert "lithos-ganglion" in _project_chip_links(unescape(any_age.text))
 
 
 def test_the_project_strip_is_drawn_only_where_it_has_switching_to_offer(

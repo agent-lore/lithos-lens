@@ -7,7 +7,8 @@ of these is there work in, and where does clicking take me?* That shared
 subject is this module.
 
 Both obey one rule, which is why they are assembled together rather than in
-``frontier``: **a chip must lead to a non-empty board**. A chip links to the
+``frontier``: **a chip must lead to a non-empty board** (the project strip with
+one §5B.1 residual, named in ``build_project_strip``). A chip links to the
 ACTIVE filters plus its own term, so it can only be drawn when the rows it
 would leave are rows this board actually renders — the same filter predicate
 (``matches_filters``) and the same read generation the sections are built
@@ -151,15 +152,24 @@ def build_project_strip(
     empty; the template still shows the clear affordance while a filter is
     active.
 
-    Slugs come from :func:`~lithos_lens.task_filtering.task_projects` — the one
-    enumeration, shared with ``project_universe`` and the graph scope picker —
-    under the ACTIVE convention, which is §5B.1's both-conventions rule by
-    default: a task carrying ``metadata.project`` alone (loom's issue-mirrored
-    work) counts exactly like a tagged one. Reading it under the active posture
-    rather than always under ``"both"`` is what keeps the no-dead-end-chip rule
-    true: ``matches_projects`` honours only the configured convention, so a
-    slug the posture would not match is a slug whose board is empty, and it
-    must not be offered.
+    Slugs come from :func:`~lithos_lens.task_filtering.task_projects` under
+    ``convention="both"`` — the one enumeration, and the same call
+    ``project_universe`` (the Project datalist) and ``graph_page.
+    observed_projects`` (the scope picker) make. §5B.1 is explicit that the
+    project UNIVERSE is the union of both conventions "so no project is
+    invisible to its own view", and this strip is a control offering values for
+    that same filter, so it obeys the same rule: a task carrying
+    ``metadata.project`` alone (loom's issue-mirrored work) counts exactly like
+    a tagged one, whatever ``project_convention`` is set to.
+
+    That leaves one residual under a NON-default posture, and it is §5B.1's own
+    rather than this strip's: matching honours the configured convention
+    (``matches_projects``), so under ``"tag"`` a metadata-only slug — offered
+    here, and in the datalist beside it, because the universe rule says it must
+    be — filters to nothing. The universe rule wins where the two collide: a
+    project invisible to its own view is the failure §5B.1 names, and the
+    no-dead-end-chip guarantee is stated against the default ``"both"`` posture,
+    where enumeration and matching are the same reading of a row.
 
     Ordered by count descending, then slug — the strip reads as a summary of
     where the work is, and its order is stable while the operator clicks
@@ -176,11 +186,7 @@ def build_project_strip(
         if not matches_filters(task, filters=scope, status="open", scope_ids=scope_ids):
             continue
         counts.update(
-            task_projects(
-                task,
-                convention=scope.project_convention,
-                tag_key=scope.project_tag_key,
-            )
+            task_projects(task, convention="both", tag_key=scope.project_tag_key)
         )
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)

@@ -278,8 +278,12 @@ The dashboard also renders:
 - a **Project quick-switch strip** below it, enumerating the projects inside the
   board's current scope so switching between them does not mean retyping the
   Project box. A tag like `roadmap-2026-09` spans a handful of projects, and the
-  set is already derivable from the snapshot (`task_projects`, §5B.1, so a
-  project carried only in `metadata.project` counts like a tagged one). Each
+  set is already derivable from the snapshot — `task_projects` under
+  `convention="both"`, §5B.1's universe rule (the union of both conventions, so
+  no project is invisible to its own view), which is the same call the Project
+  datalist and the graph scope picker make, so a project carried only in
+  `metadata.project` counts like a tagged one whatever `project_convention` is
+  set to. Each
   chip carries the project's **open-row count** within that scope — the open
   sections plus Gates; terminal rows contribute nothing — and the chips order by
   count then slug. The scope is **every active filter except `project`**, so the

@@ -423,7 +423,10 @@
                href="{{ project_remove_url(request, dashboard.filters.projects, chip.slug) if chip.selected else project_add_url(request, dashboard.filters.projects, chip.slug) }}"
                data-project-chip="{{ chip.slug }}"
                {% if chip.selected %}aria-current="true"{% endif %}
-               aria-label="{{ "Remove" if chip.selected else "Show only" }} {{ chip.slug }}"
+               {# "Add", never "Show only": the chip is ADDITIVE — with one
+                  project already selected it links to BOTH, so "show only"
+                  would announce the opposite of where the link goes. #}
+               aria-label="{{ "Remove" if chip.selected else "Add" }} {{ chip.slug }}"
                title="{{ chip.open_count }} open {{ "row" if chip.open_count == 1 else "rows" }} in {{ chip.slug }} on this board">
               <span class="project-chip-slug">{{ chip.slug }}</span>
               <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
