@@ -3692,22 +3692,16 @@ def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
     ]
 
 
-def test_every_chip_leads_to_a_board_with_its_own_rows_on_it_whatever_the_posture() -> (
-    None
-):
-    """The no-dead-end rule, under each supported ``project_convention``.
+def test_every_project_convention_is_enumerated_whatever_the_posture() -> None:
+    """§5B.1's universe rule: the strip lists the union of both conventions.
 
-    The enumeration is §5B.1's universe (both conventions, the call the Project
-    datalist and the graph scope picker share), but a chip is an OFFER to add
-    ``?project=<slug>`` — so what the strip draws is the universe intersected
-    with what that link would match. Under ``"both"`` those coincide and a
-    metadata-only project counts exactly like a tagged one; under a
-    single-convention posture ``matches_projects`` honours only that
-    convention, so the slug the other one carries names an empty board and is
-    not offered. Every chip is FOLLOWED here, and its count checked against the
-    rows the board then holds: a strip that advertised a slug its own filter
-    cannot reach would fail on the empty board, and one that mis-stated the
-    count would fail on the number.
+    "The project universe (filter dropdowns, Planning View rows) is the union
+    of both conventions' slugs, so no project is invisible to its own view" —
+    the same ``task_projects(…, convention="both", …)`` call ``project_universe``
+    (the Project datalist) and ``graph_page.observed_projects`` (the scope
+    picker) make. A posture that narrows MATCHING narrows none of the three:
+    loom's issue-mirrored rows carry ``metadata.project`` and no project tag,
+    and they are as much a project as any tagged one.
     """
     mirrored = _task(
         "mirrored",
@@ -3719,35 +3713,110 @@ def test_every_chip_leads_to_a_board_with_its_own_rows_on_it_whatever_the_postur
     fake = _FrontierFake(
         open_tasks=[mirrored, tagged], ready=[mirrored, tagged], blocked=[]
     )
-    expected = {
-        "both": [("lithos-lens", 1), ("lithos-loom", 1)],
-        "tag": [("lithos-lens", 1)],
-        "metadata": [("lithos-loom", 1)],
-    }
 
-    for convention, chips in expected.items():
-        filters = replace(_FILTERS, tags=("roadmap",), project_convention=convention)
-        data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
-
-        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == chips, (
-            convention
+    for convention in ("both", "tag", "metadata"):
+        data = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(
+                    _FILTERS, tags=("roadmap",), project_convention=convention
+                ),
+                frontier_limit=500,
+            )
         )
 
-        for chip in data.project_chips:
-            followed = asyncio.run(
-                load_dashboard(
-                    fake,
-                    filters=replace(filters, projects=(chip.slug,)),
-                    frontier_limit=500,
-                )
+        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+            ("lithos-lens", 1),
+            ("lithos-loom", 1),
+        ], convention
+
+
+def test_every_chip_leads_to_a_board_with_its_own_rows_on_it() -> None:
+    """The no-dead-end rule under the live posture, counts included.
+
+    Every chip is FOLLOWED and its count checked against the rows the board
+    then holds, over a scope mixing both conventions and a project the tag
+    filter leaves out: a strip that advertised work the click cannot show — or
+    mis-stated how much — fails here.
+    """
+    mirrored = _task(
+        "mirrored",
+        claims=(),
+        tags=("roadmap",),
+        metadata={"project": "lithos-loom"},
+    )
+    rows = [
+        mirrored,
+        _in_project("lens-1", "lithos-lens", "roadmap"),
+        _in_project("lens-2", "lithos-lens", "roadmap"),
+        _in_project("off-tag", "lithos-other"),
+    ]
+    fake = _FrontierFake(open_tasks=rows, ready=rows, blocked=[])
+    filters = replace(_FILTERS, tags=("roadmap",))
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+        ("lithos-lens", 2),
+        ("lithos-loom", 1),
+    ]
+    for chip in data.project_chips:
+        followed = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(filters, projects=(chip.slug,)),
+                frontier_limit=500,
             )
-            shown = [
-                row.task.id
-                for section in OPEN_SECTIONS
-                for row in followed.sections[section]
-            ]
-            assert shown, (convention, chip.slug)
-            assert len(shown) == chip.open_count, (convention, chip.slug)
+        )
+        shown = [
+            row.task.id
+            for section in OPEN_SECTIONS
+            for row in followed.sections[section]
+        ]
+        assert shown, chip.slug
+        assert len(shown) == chip.open_count, chip.slug
+
+
+def test_a_single_convention_posture_inherits_the_5b1_universe_gap() -> None:
+    """The residual, pinned where it can be found rather than left implicit.
+
+    §5B.1 says the universe unions both conventions AND that
+    ``project_convention`` selects the honoured one for matching, so under a
+    single-convention posture every control that offers the universe — the
+    Project datalist (pinned by
+    ``test_project_universe_unions_both_conventions_under_a_single_posture``)
+    and now this strip — can offer a value the filter will not match. The strip
+    states the same universe the datalist does rather than inventing a second,
+    narrower answer beside it.
+
+    Closing the gap means making ``matches_projects`` read the universe too —
+    a change to §5B.1's normative matching rule and to every filtering surface,
+    which is not this strip's to make. This test is the one to invert with it.
+    """
+    mirrored = _task(
+        "mirrored",
+        claims=(),
+        tags=("roadmap",),
+        metadata={"project": "lithos-loom"},
+    )
+    fake = _FrontierFake(open_tasks=[mirrored], ready=[mirrored], blocked=[])
+    filters = replace(_FILTERS, tags=("roadmap",), project_convention="tag")
+
+    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+    # Offered, because the universe rule says the project exists…
+    assert [chip.slug for chip in data.project_chips] == ["lithos-loom"]
+    assert data.projects == ("lithos-loom",)
+    # …and the datalist's own value behaves identically under this posture:
+    # the tag convention cannot see a metadata-only row.
+    followed = asyncio.run(
+        load_dashboard(
+            fake,
+            filters=replace(filters, projects=("lithos-loom",)),
+            frontier_limit=500,
+        )
+    )
+    assert not any(followed.sections.values())
 
 
 def test_the_strip_scope_honours_the_agent_and_created_windows() -> None:

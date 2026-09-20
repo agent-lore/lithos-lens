@@ -282,12 +282,13 @@ The dashboard also renders:
   `convention="both"`, §5B.1's universe rule (the union of both conventions, so
   no project is invisible to its own view), which is the same call the Project
   datalist and the graph scope picker make, so a project carried only in
-  `metadata.project` counts like a tagged one. A chip is an offer to filter, so
-  that universe is intersected with what `?project=<slug>` would match: under
-  the default `project_convention = "both"` the two coincide, and under a
-  single-convention posture the slug only the other convention carries names an
-  empty board, so it stays in the datalist (a value to type) and off the strip
-  (a link with a count on it). Each
+  `metadata.project` counts like a tagged one, whatever `project_convention` is
+  set to — the strip and the datalist beside it state the same universe, so the
+  two controls never disagree about which projects exist. (Under a
+  single-convention posture that universe can name a project the filter will
+  not match, because §5B.1 also says matching honours the configured
+  convention; the gap is the datalist's too, and closing it means making
+  `matches_projects` read the universe as well.) Each
   chip carries the project's **open-row count** within that scope — the open
   sections plus Gates; terminal rows contribute nothing — and the chips order by
   count then slug. The scope is **every active filter except `project`**, so the
@@ -299,7 +300,8 @@ The dashboard also renders:
   the strip with its Clear stays on a board whose scope holds no project at
   all, because it is then the only way back. Every chip has open rows behind
   it, so none leads to an empty board (the same rule §5.2.1 gives the epic
-  strip, evaluated under the same generation). The strip is hidden when the
+  strip, evaluated under the same generation, and under the default
+  `project_convention`). The strip is hidden when the
   scope holds fewer than two projects and no project filter is active.
   Generated project links carry the board's filter state and nothing else (the
   `request_filters` allowlist, plus `all_agents`): the panel selection, an

@@ -159,19 +159,20 @@ def build_project_strip(
     a task carrying ``metadata.project`` alone (loom's issue-mirrored work)
     counts exactly like a tagged one.
 
-    A chip is not a listing, though — it is an OFFER to add ``?project=<slug>``
-    — so the universe is intersected with what that link would actually match
-    (``_offered_slugs``). Under the default ``"both"`` posture the two are the
-    same reading of a row and the intersection changes nothing. Under a
-    single-convention posture they are not: ``matches_projects`` honours the
-    configured convention (pinned by ``test_project_filter_under_metadata_
-    convention_ignores_the_tag``, and the graph page even issues its scoped
-    reads per posture), so a slug the posture cannot match names a board with no
-    rows on it. Offering it would break the rule both strips exist to keep and
-    would print a count of work the click cannot show. The datalist beside the
-    strip still offers the whole universe, which is the right answer for a box
-    the operator TYPES into: there the slug is a value, not a promise about a
-    board.
+    The universe and what ``?project=<slug>`` MATCHES are the same reading of a
+    row under the default ``project_convention = "both"``, which is where the
+    no-dead-end rule at the top of this module is proved. They come apart under
+    a single-convention posture — ``matches_projects`` honours only the
+    configured one — and that gap is §5B.1's own, not this strip's: the Project
+    datalist beside it has offered unreachable values in exactly that case
+    since the universe rule was written (pinned by
+    ``test_project_universe_unions_both_conventions_under_a_single_posture``).
+    Closing it means making the FILTER read the universe too, which is a change
+    to §5B.1's normative matching rule and to every surface that filters — not
+    something a strip may decide on its own. Until then this strip states the
+    same universe the datalist does, so the two controls never disagree about
+    which projects exist, and ``test_a_single_convention_posture_inherits_the_
+    5b1_universe_gap`` keeps the residual visible instead of silent.
 
     Ordered by count descending, then slug — the strip reads as a summary of
     where the work is, and its order is stable while the operator clicks
@@ -187,29 +188,10 @@ def build_project_strip(
             continue
         if not matches_filters(task, filters=scope, status="open", scope_ids=scope_ids):
             continue
-        counts.update(_offered_slugs(task, scope))
+        counts.update(
+            task_projects(task, convention="both", tag_key=scope.project_tag_key)
+        )
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)
         for slug, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
-
-
-def _offered_slugs(task: TaskRecord, filters: TaskFilters) -> tuple[str, ...]:
-    """The slugs this row may put a chip on: the §5B.1 universe it can reach.
-
-    Two readings of one row, and the chip needs both to agree. The universe is
-    ``convention="both"`` — what the row claims membership of, the enumeration
-    every other project surface shares. The reachable set is what
-    ``matches_projects`` would honour for ``?project=<slug>``, which is the
-    configured posture. They differ only when the posture is single-convention,
-    and only for a slug the other convention carries; there the universe wins
-    the datalist (a typed value) and the reachable set wins the strip (a link
-    with a count on it).
-    """
-    universe = task_projects(task, convention="both", tag_key=filters.project_tag_key)
-    if filters.project_convention == "both":
-        return universe
-    reachable = task_projects(
-        task, convention=filters.project_convention, tag_key=filters.project_tag_key
-    )
-    return tuple(slug for slug in universe if slug in reachable)
