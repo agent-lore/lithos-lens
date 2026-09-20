@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode
 
 from fastapi import Request
 
@@ -274,10 +274,15 @@ def project_add_url(request: Request, projects: Sequence[str], project: str) -> 
     epic, status, agent, both date windows) rides along through the same
     allowlist every generated tasks URL uses: the strip composes with the scope
     the operator is browsing under instead of resetting it.
+
+    Empty when there is no room left in the query budget for the slug — see
+    :func:`_accepted_by_the_filter_budget`. The template draws that chip with
+    its count and WITHOUT a link, rather than offering one the board refuses.
     """
     if project in projects:
         return _project_filter_url(request, projects)
-    return _project_filter_url(request, [*projects, project])
+    url = _project_filter_url(request, [*projects, project])
+    return url if _accepted_by_the_filter_budget(url) else ""
 
 
 def project_remove_url(request: Request, projects: Sequence[str], project: str) -> str:
@@ -319,7 +324,11 @@ def _project_filter_url(request: Request, projects: Sequence[str]) -> str:
     would make the shared URL unreadable for no gain — while every other value
     keeps the default encoding, where a comma can be content (a literal tag).
     The comma form is also the shorter of the two spellings, which is what
-    keeps a strip of chips inside ``MAX_FILTER_QUERY_BYTES``.
+    keeps a strip of chips as small against ``MAX_FILTER_QUERY_BYTES`` as the
+    filter's own vocabulary allows — smaller, but never free: only
+    :func:`project_add_url` can make a query LONGER than the one that arrived,
+    and :func:`_accepted_by_the_filter_budget` is what keeps it inside the
+    ceiling.
 
     ``all_agents`` rides along too, which is the one thing these builders do
     that the rest do not. It is outside :data:`_PRESERVED_FILTER_KEYS` for a
@@ -340,6 +349,44 @@ def _project_filter_url(request: Request, projects: Sequence[str]) -> str:
         selection = urlencode({"project": ",".join(projects)}, safe=",")
         query = f"{query}&{selection}" if query else selection
     return f"/tasks?{query}" if query else "/tasks"
+
+
+def _accepted_by_the_filter_budget(url: str) -> bool:
+    """True when following ``url`` will not be refused as oversized.
+
+    ADDING a project is the one thing any of these builders does that makes
+    the query LONGER than the one that arrived, so it is the one that can hand
+    the operator a link the router then refuses at 400 (round-1 correctness
+    f-001). A request whose allowlisted filters sit exactly on
+    ``MAX_FILTER_QUERY_BYTES`` — ``tag=`` plus a 1,020-byte literal tag — is
+    accepted and draws the strip, and ``&project=a`` is ten bytes it has no
+    room for. Removing and clearing only shrink the query, and the preserved
+    pairs are re-emitted in canonical form, which can only shrink it further,
+    so neither can cross a ceiling its own request already cleared.
+
+    There is no shorter link to build instead: the bytes have to come from
+    somewhere, and every other pair in the query is a filter the board was
+    asked for — dropping one to buy room would answer a different question
+    than the operator asked, silently. So the chip keeps its slug and its
+    count and loses its LINK, which is this module's standing preference
+    stated the other way round: "a chip that renders but 400s when clicked is
+    worse than no chip" (:func:`task_tag_clear_url`).
+
+    Measured over the arriving request's own reading of the string — the
+    ``_MEASURED_QUERY_KEYS`` pairs, re-encoded through ``urlencode`` — rather
+    than by counting the href's bytes, so this cannot drift from
+    :func:`_parse_preserved_filters`. That ``urlencode`` re-encodes the commas
+    of the ``project`` pair is not an approximation of the ceiling but the
+    ceiling itself: the parse measures every arriving query through the same
+    call, so it charges those commas three bytes too.
+    """
+    _, _, query = url.partition("?")
+    measured = [
+        (key, value)
+        for key, value in parse_qsl(query, keep_blank_values=True)
+        if key in _MEASURED_QUERY_KEYS
+    ]
+    return len(urlencode(measured)) <= MAX_FILTER_QUERY_BYTES
 
 
 def created_since_clear_url(request: Request) -> str:

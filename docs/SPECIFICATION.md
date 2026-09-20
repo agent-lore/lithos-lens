@@ -305,7 +305,14 @@ The dashboard also renders:
   scope holds fewer than two projects and no project filter is active.
   Generated project links carry the board's filter state and nothing else (the
   `request_filters` allowlist, plus `all_agents`): the panel selection, an
-  expansion `chain`, a retired filter and any unrecognised key stay behind
+  expansion `chain`, a retired filter and any unrecognised key stay behind.
+  Adding a project is the only one of the three that makes the query longer, so
+  it is the only one bounded by `MAX_FILTER_QUERY_BYTES` (§5.4): on a board
+  whose other filters already fill that budget the chip is drawn with its slug
+  and its count but **without a link**, rather than with one the router would
+  refuse — the bytes would have to come out of a filter the board was asked
+  for. Removing a project and clearing the filter only shrink the query, so
+  they are offered on any board that renders
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 

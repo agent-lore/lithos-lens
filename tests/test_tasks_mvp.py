@@ -5289,6 +5289,107 @@ def test_the_project_strip_is_drawn_only_where_it_has_switching_to_offer(
     assert "data-project-clear" in filtered.text
 
 
+def _big_tag_fake(tag: str) -> TaskFakeLithosClient:
+    """One tag spanning two projects, and nothing else — so the query the
+    board carries is exactly ``tag=<tag>`` and the byte arithmetic below is
+    the ceiling's own."""
+    fake = TaskFakeLithosClient()
+    fake.tasks = [
+        TaskRecord(
+            id="lens-ready",
+            title="Lens roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-lens", tag),
+        ),
+        TaskRecord(
+            id="loom-ready",
+            title="Loom roadmap item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos-loom", tag),
+        ),
+    ]
+    fake.ready_ids = {"lens-ready", "loom-ready"}
+    return fake
+
+
+def _tag_at(emitted_bytes: int) -> str:
+    """A literal tag whose ``tag=`` pair measures ``emitted_bytes``."""
+    return "t" * (emitted_bytes - len("tag="))
+
+
+def test_an_add_chip_at_the_filter_budget_is_followed_and_accepted(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (round-1 correctness f-001), the reachable side: the largest
+    board from which adding a project still fits must actually add it.
+
+    Every chip on the strip advertises one-click narrowing, so following one
+    has to work for any request the board itself accepted — the promise
+    ``test_chip_clear_link_from_a_near_budget_tag_query_still_works`` makes for
+    the tag chips. Asserting the href alone would not show it: only following
+    the link runs it back through the ceiling that would refuse it.
+    """
+    added = len("&") + len(urlencode([("project", "lithos-lens")]))
+    tag = _tag_at(MAX_FILTER_QUERY_BYTES - added)
+    fake = _big_tag_fake(tag)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?tag={tag}")
+        href = _project_chip_links(unescape(board.text))["lithos-lens"]
+        narrowed = client.get(href)
+
+    assert board.status_code == 200
+    # The link is exactly ON the ceiling — one byte of tag more and it would
+    # be over, which is what makes this the boundary rather than a headroom
+    # case that proves nothing.
+    assert len(urlsplit(href).query) == MAX_FILTER_QUERY_BYTES
+    assert narrowed.status_code == 200
+    assert "data-filter-rejected" not in narrowed.text
+    assert "Lens roadmap item" in narrowed.text
+    assert "Loom roadmap item" not in narrowed.text
+    # …and the tag scope came along, so the strip still offers the way back.
+    assert "data-project-clear" in narrowed.text
+
+
+def test_a_project_chip_is_never_offered_past_the_filter_budget(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other side of the same boundary (round-1 correctness f-001).
+
+    One byte of tag further and there is no room for ``&project=`` at all.
+    The bytes have to come from somewhere and every pair in the query is a
+    filter the board was asked for, so the chip is drawn WITHOUT a link
+    instead of with one the router refuses at 400: the strip still says which
+    projects are in the scope and how much open work each holds — its subject
+    — and it does not advertise a click that fails. The 400 is asserted on the
+    URL the chip WOULD have carried, so this pins a real dead end rather than
+    a hypothetical one.
+    """
+    added = len("&") + len(urlencode([("project", "lithos-lens")]))
+    tag = _tag_at(MAX_FILTER_QUERY_BYTES - added + 1)
+    fake = _big_tag_fake(tag)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?tag={tag}")
+        refused = client.get(f"/tasks?tag={tag}&project=lithos-lens")
+
+    assert board.status_code == 200
+    text = unescape(board.text)
+    # The link that is not offered is the link that would not work.
+    assert refused.status_code == 400
+    assert _project_chip_links(text) == {}
+    # The strip is still a strip: both projects, both counts, said as they are.
+    assert 'data-project-chip="lithos-lens" data-project-chip-unavailable' in " ".join(
+        text.split()
+    )
+    assert _project_chip_counts(text) == {"lithos-lens": 1, "lithos-loom": 1}
+    assert "cannot be added" in text
+
+
 @pytest.mark.parametrize(
     ("query", "reason"),
     [

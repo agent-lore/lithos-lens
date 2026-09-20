@@ -13,7 +13,7 @@ output is compared whole, so a key silently dropped from the allowlist fails.
 from __future__ import annotations
 
 from collections.abc import Callable
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 import pytest
 from fastapi import Request
@@ -23,6 +23,7 @@ from lithos_lens.request_filters import (
     project_clear_url,
     project_remove_url,
 )
+from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES
 
 # Every FILTER a live board can carry at once, plus the four kinds of
 # parameter that reach ``/tasks`` and must NOT ride a generated link. The
@@ -211,3 +212,75 @@ def test_a_board_without_the_toggle_does_not_grow_one() -> None:
     url = project_add_url(_request("tag=roadmap"), (), "lithos-lens")
 
     assert "all_agents" not in _query_of(url)
+
+
+def _tag_query_of(emitted_bytes: int) -> str:
+    """A one-tag query whose arrival measures exactly ``emitted_bytes``.
+
+    ``t`` so the value costs one byte per character, which makes the arithmetic
+    below the ceiling's own rather than an encoding's.
+    """
+    return "tag=" + "t" * (emitted_bytes - len("tag="))
+
+
+def test_an_add_link_the_board_would_refuse_is_not_offered() -> None:
+    """Regression (round-1 correctness f-001): an ADD link is the one link on
+    the strip that makes the query LONGER, so it is the one that can point
+    outside ``MAX_FILTER_QUERY_BYTES``.
+
+    A request whose filters sit exactly on the ceiling is accepted and draws
+    the strip; ``&project=lithos-lens`` is twenty bytes it does not have, and
+    following that chip reached ``filter_query_oversized`` and 400 instead of
+    the project it named. There is no shorter link to build — every other pair
+    is a filter the board was asked for — so the builder returns nothing and
+    the chip is drawn without one.
+    """
+    added = len("&") + len("project=lithos-lens")
+    # The largest board from which adding this slug still fits, and one byte
+    # of tag more: the two sides of the ceiling, computed from it.
+    fits = _tag_query_of(MAX_FILTER_QUERY_BYTES - added)
+    over = fits + "t"
+
+    assert project_add_url(_request(fits), (), "lithos-lens") == (
+        f"/tasks?{fits}&project=lithos-lens"
+    )
+    assert project_add_url(_request(over), (), "lithos-lens") == ""
+
+
+def test_the_budget_is_measured_over_what_the_link_will_re_emit() -> None:
+    """The ceiling is charged against the ALLOWLISTED keys only, so an
+    unrecognised key — which the link drops — must not spend budget the
+    operator could have used on a project.
+
+    The complement of ``test_project_links_carry_the_board_state_and_nothing_
+    else``: a key that rides nowhere costs nothing here either, which is what
+    keeps the two readings of the query one reading.
+    """
+    added = len("&") + len("project=lithos-lens")
+    fits = _tag_query_of(MAX_FILTER_QUERY_BYTES - added)
+    junk = "&unrecognised=" + "x" * 4000
+
+    assert project_add_url(_request(fits + junk), (), "lithos-lens") == (
+        f"/tasks?{fits}&project=lithos-lens"
+    )
+
+
+def test_removing_and_clearing_are_offered_at_the_very_ceiling() -> None:
+    """The other half of f-001: a link that only SHRINKS the query cannot
+    cross a ceiling the request it was built from already cleared, so the way
+    back out of a project filter stays reachable on any board that renders.
+    """
+    # A two-project board sitting exactly ON the ceiling. The selection is
+    # measured as the parse measures it — through ``urlencode``, which charges
+    # the separating comma three bytes — so this is the real edge, not one
+    # counted off the literal href.
+    selection = urlencode([("project", ",".join(_SELECTED))])
+    tag = _tag_query_of(MAX_FILTER_QUERY_BYTES - len("&") - len(selection))
+    request_query = f"{tag}&project={','.join(_SELECTED)}"
+
+    assert project_remove_url(_request(request_query), _SELECTED, "lithos-lens") == (
+        f"/tasks?{tag}&project=lithos-loom"
+    )
+    assert project_clear_url(_request(request_query)) == f"/tasks?{tag}"
+    # …and the chip that WOULD grow it is the one withheld.
+    assert project_add_url(_request(request_query), _SELECTED, "lithos-core") == ""
