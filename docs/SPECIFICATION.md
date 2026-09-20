@@ -290,7 +290,12 @@ The current dashboard supports these filters:
 - `claimed_state`
   `any`, `known_claimed`, or `known_unclaimed`.
 - `tag`
-  Free-text tag filter.
+  Free-text tag filter. One `tag` parameter is one LITERAL tag (a comma is tag
+  content, not a separator, and `""` is a real tag), so the active tags ride as
+  hidden inputs and are removed from the chip strip; the box that ADDS one is a
+  separate `add_tag` parameter, because a blank `tag` would otherwise be
+  indistinguishable from the empty-tag filter. The box autocompletes from the
+  `tags` datalist (below).
 - `project`
   Project scope, honoring the configured convention (metadata key, reserved
   tag, or both).
@@ -335,6 +340,24 @@ Filter behavior:
     `MAX_SINCE_LOOKBACK_DAYS`.
   - Both may be active together, and a terminal row must then pass each on its
     own date.
+- The **filter-bar datalists** — `projects`, `tags` and `agents` — all answer
+  "what can I narrow to from here?" over the rows THIS load fetched (the open
+  snapshot plus the windowed terminal rows, deduped by id) and BEFORE the
+  filters narrow anything, so selecting one value never collapses the list of
+  values you can switch to. None of them costs a Lithos read of its own.
+  - `projects` is the union of both conventions' slugs (§5B.1).
+  - `tags` is the sorted, deduped union of the loaded rows' tags, raw and
+    unnormalized — the box has to offer exactly what it would submit, and
+    upstream types a tag as a bare string, so whitespace and case are
+    significant and the empty tag is carried like any other (what the BOX does
+    with a blank value is the unchanged `tag`/`add_tag` split above). Because
+    the universe precedes the filters, a tag that spans projects
+    (`milestone:t2`, `needs-human`) is discoverable from a board scoped to a
+    project that does not carry it, and so is one carried only by a row in the
+    resolved window. A tag on a row the window did NOT return was never loaded
+    and is not offered; the vocabulary is snapshot-scoped, not corpus-wide.
+  - `agents` is the picker described next, which is ordered and windowed rather
+    than rendered verbatim.
 - The **Agent picker** (the `agents` datalist) is `lithos_agent_list` ordered
   and windowed, not verbatim. Lithos' agent list is a registration log — a row
   per probe, per session and per host, with no dedupe — so rendering it raw

@@ -70,6 +70,7 @@ source_modules = [
     "lithos_lens.tasks",
     "lithos_lens.task_filtering",
     "lithos_lens.agent_picker",
+    "lithos_lens.filter_options",
     "lithos_lens.task_detail",
     "lithos_lens.task_links",
     "lithos_lens.blocker_chain",

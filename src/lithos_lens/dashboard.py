@@ -109,6 +109,10 @@ class DashboardData:
     # conventions' slugs over the loaded snapshot (§5B.1), so no project is
     # invisible to its own view.
     projects: tuple[str, ...] = ()
+    # The tag universe for the filter datalist: every tag over the loaded
+    # snapshot (§5.4), so a tag only another project's rows carry is
+    # discoverable rather than having to be known already.
+    tags: tuple[str, ...] = ()
     # The Gates section (§5.2.3), human-first then oldest-first, one group per
     # gate type. Kept beside ``sections`` rather than inside it: a gate row
     # carries gate chrome (type badge, waiter count, countdown), not the

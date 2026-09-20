@@ -303,6 +303,11 @@ class _FrontierFake:
         self.completed_calls = 0
         self.cancelled_calls = 0
         self.list_calls: list[dict[str, Any]] = []
+        # The Lithos TOOL name of every call this fake answers, in the order it
+        # answered them — the whole read budget of a load, not the six
+        # per-tool logs above. A cost assertion that reads only the logs that
+        # happen to exist cannot see a read nobody thought to instrument.
+        self.calls: list[str] = []
 
     @staticmethod
     def _as_sequence(value: list[Any]) -> list[list[Any]]:
@@ -331,6 +336,7 @@ class _FrontierFake:
                 "with_claims": with_claims,
             }
         )
+        self.calls.append("lithos_task_list")
         if (status or "open") == "open":
             index = min(self.open_calls, len(self._open_seq) - 1)
             self.open_calls += 1
@@ -374,6 +380,7 @@ class _FrontierFake:
         tags: list[str] | None = None,
     ) -> list[TaskRecord]:
         self.ready_args.append({"limit": limit, "with_claims": with_claims})
+        self.calls.append("lithos_task_ready")
         if self._fail_ready:
             raise RuntimeError("ready frontier unavailable")
         if self._fail_ready_from is not None and self.ready_calls >= (
@@ -397,6 +404,7 @@ class _FrontierFake:
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
         self.blocked_args.append({"limit": limit})
+        self.calls.append("lithos_task_blocked")
         if self._blocked_error is not None:
             self.blocked_calls += 1
             raise self._blocked_error
@@ -419,6 +427,7 @@ class _FrontierFake:
                 "include_closed": include_closed,
             }
         )
+        self.calls.append("lithos_task_children")
         self._inflight += 1
         self.max_children_inflight = max(self.max_children_inflight, self._inflight)
         try:
@@ -456,6 +465,7 @@ class _FrontierFake:
         self.edge_list_calls.append(
             {"task_id": task_id, "direction": direction, "types": types}
         )
+        self.calls.append("lithos_task_edge_list")
         if self._fail_edges:
             raise RuntimeError(f"edges unavailable for {task_id}")
         edges = list(self._edges.get(task_id, []))
@@ -465,6 +475,7 @@ class _FrontierFake:
 
     async def task_get(self, task_id: str) -> TaskRecord:
         self.get_calls.append(task_id)
+        self.calls.append("lithos_task_get")
         if task_id in self._gets:
             return self._gets[task_id]
         if task_id not in self._missing_gets:
@@ -475,11 +486,13 @@ class _FrontierFake:
         raise RuntimeError(f"task '{task_id}' not found")
 
     async def stats(self) -> dict[str, Any]:
+        self.calls.append("lithos_stats")
         if self._fail_stats:
             raise RuntimeError("stats unavailable")
         return {"open_claims": 2, "agents": 3}
 
     async def list_agents(self) -> list[AgentRecord]:
+        self.calls.append("lithos_agent_list")
         return [AgentRecord(id="a"), AgentRecord(id="b")]
 
 
@@ -1522,6 +1535,199 @@ def test_project_universe_survives_an_active_project_filter() -> None:
 
     assert _section_ids(data.sections, "ready") == ["mine"]
     assert data.projects == ("cardinal", "ganglion", "influx")
+
+
+def test_tag_universe_offers_a_tag_only_another_project_carries() -> None:
+    """The Tag box's whole point is discovery: the scope of a view is often a
+    tag that spans projects, and the universe is built over the loaded rows
+    BEFORE the filters narrow — so narrowing to a project that does not carry
+    ``milestone:t2`` must not hide it, exactly as with ``projects``."""
+    mine = _task("mine", claims=(), tags=("project:influx", "area:docs"))
+    other = _task("other", claims=(), tags=("project:ganglion", "milestone:t2"))
+    fake = _FrontierFake(open_tasks=[mine, other], ready=[mine, other], blocked=[])
+
+    wide = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+    assert wide.tags == (
+        "area:docs",
+        "milestone:t2",
+        "project:ganglion",
+        "project:influx",
+    )
+
+    scoped = asyncio.run(
+        load_dashboard(
+            fake,
+            filters=replace(_FILTERS, projects=("influx",)),
+            frontier_limit=500,
+        )
+    )
+    # The board is narrowed to the row that has none of them…
+    assert _section_ids(scoped.sections, "ready") == ["mine"]
+    # …and the vocabulary you can switch to is not.
+    assert scoped.tags == wide.tags
+
+
+def test_tag_universe_spans_the_resolved_window_and_stops_at_its_edge() -> None:
+    """The universe is what this load FETCHED: the open snapshot plus the rows
+    the terminal windows returned. A tag carried only by a resolved row inside
+    the window is offered; one carried only by a row the window never returned
+    was never loaded, so it is not."""
+    open_row = _task("open-row", claims=(), tags=("area:docs",))
+    inside = replace(
+        _task("inside", status="completed", tags=("milestone:t2",)),
+        resolved_at="2026-05-10T10:00:00+00:00",
+    )
+    outside = replace(
+        _task("outside", status="completed", tags=("milestone:t1",)),
+        resolved_at="2026-04-01T10:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[open_row],
+        ready=[open_row],
+        blocked=[],
+        completed=[inside, outside],
+    )
+
+    data = asyncio.run(
+        load_dashboard(
+            fake,
+            filters=replace(_FILTERS, since="2026-05-01"),
+            frontier_limit=500,
+        )
+    )
+
+    assert data.tags == ("area:docs", "milestone:t2")
+
+
+def test_tag_universe_is_sorted_and_deduped_across_rows() -> None:
+    """One option per tag, in one order — rows sharing a tag must not offer it
+    twice, and the datalist renders this tuple verbatim."""
+    first = _task("first", claims=(), tags=("needs-human", "area:docs"))
+    second = _task("second", claims=(), tags=("area:docs", "needs-human"))
+    third = _task("third", claims=(), tags=("area:docs",))
+    fake = _FrontierFake(
+        open_tasks=[first, second, third],
+        ready=[first, second, third],
+        blocked=[],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.tags == ("area:docs", "needs-human")
+
+
+def test_tag_universe_offers_raw_tag_strings_and_folds_nothing() -> None:
+    """Upstream types a tag as a bare string with no pattern and no length, so
+    ``honored_tags`` treats whitespace, case and the empty string as ordinary
+    content. The box has to offer exactly what it would submit, which means the
+    universe folds NOTHING: these are four distinct tags, not one."""
+    row = _task("row", claims=(), tags=(" Tag ", "Tag", "tag", ""))
+    other = _task("other", claims=(), tags=("tag",))
+    fake = _FrontierFake(open_tasks=[row, other], ready=[row, other], blocked=[])
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    # Codepoint order: the empty tag first, then the leading space, then T < t.
+    # The empty tag IS a tag (``?tag=`` names it) and is carried like any
+    # other; what the BOX does with a blank value is the unchanged
+    # ``tag``/``add_tag`` split, not the universe's business.
+    assert data.tags == ("", " Tag ", "Tag", "tag")
+
+
+def test_tag_universe_reads_the_open_row_when_a_terminal_read_echoes_it() -> None:
+    """Read skew can return one id in BOTH the open snapshot and a terminal
+    window. ``loaded_task_rows`` makes the open snapshot the authority on such
+    a row, and the universe sees exactly the rows it returns — so a tag only
+    the stale terminal copy carries is not offered as though it were current.
+    A universe unioned straight off each response would offer it."""
+    fresh = _task("drifting", claims=(), tags=("area:docs",))
+    stale = replace(
+        _task("drifting", status="completed", tags=("area:retired",)),
+        resolved_at="2026-05-10T10:00:00+00:00",
+    )
+    other = _task("other", claims=(), tags=("needs-human",))
+    fake = _FrontierFake(
+        open_tasks=[fresh, other],
+        ready=[fresh, other],
+        blocked=[],
+        completed=[stale],
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.tags == ("area:docs", "needs-human")
+
+
+def test_tag_universe_survives_a_terminal_read_that_failed() -> None:
+    """A window that did not answer contributes no rows — it must not empty the
+    universe. The tags on the rows that DID load are still perfectly good
+    answers, and the failure is reported by the error banner instead; a filter
+    bar that goes blank because one read fell over is the worse board."""
+    open_row = _task("open-row", claims=(), tags=("area:docs",))
+    cancelled = replace(
+        _task("gone", status="cancelled", tags=("needs-human",)),
+        resolved_at="2026-05-10T10:00:00+00:00",
+    )
+    fake = _FrontierFake(
+        open_tasks=[open_row],
+        ready=[open_row],
+        blocked=[],
+        completed=[],
+        cancelled=[cancelled],
+        fail_completed_from=0,
+    )
+
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
+
+    assert data.errors
+    assert data.tags == ("area:docs", "needs-human")
+
+
+# The WHOLE read budget of an unfiltered board with no epics and no gates:
+# three ``lithos_task_list`` windows, both frontiers, the stats card and the
+# agent picker's one registration read. Asserted as a multiset over the fake's
+# own call log rather than per-tool, so a read nobody thought to instrument
+# still fails the test.
+_DASHBOARD_READ_BUDGET = sorted(
+    [
+        "lithos_task_list",
+        "lithos_task_list",
+        "lithos_task_list",
+        "lithos_task_ready",
+        "lithos_task_blocked",
+        "lithos_stats",
+        "lithos_agent_list",
+    ]
+)
+
+
+def test_tag_universe_costs_no_extra_lithos_read() -> None:
+    """It is folded out of rows the board already holds. The same snapshot with
+    and without tags therefore makes an identical call log — AND that log is
+    the fixed budget above, so a corpus-wide ``lithos_tags`` read or a per-tag
+    fan-out fails here even though it would leave the two logs equal."""
+
+    def _fake(tags: tuple[str, ...]) -> _FrontierFake:
+        rows = [_task("a", claims=(), tags=tags), _task("b", claims=(), tags=tags)]
+        done = _task("done", status="completed", tags=tags)
+        return _FrontierFake(open_tasks=rows, ready=rows, blocked=[], completed=[done])
+
+    tagged, bare = _fake(("milestone:t2", "needs-human")), _fake(())
+    with_tags = asyncio.run(
+        load_dashboard(tagged, filters=_FILTERS, frontier_limit=500)
+    )
+    without_tags = asyncio.run(
+        load_dashboard(bare, filters=_FILTERS, frontier_limit=500)
+    )
+
+    assert with_tags.tags == ("milestone:t2", "needs-human")
+    assert without_tags.tags == ()
+    assert sorted(tagged.calls) == sorted(bare.calls) == _DASHBOARD_READ_BUDGET
+    # The per-tool ARGUMENTS are identical too: nothing about a tag changed
+    # what any of those reads asked for either.
+    assert tagged.list_calls == bare.list_calls
+    assert tagged.ready_args == bare.ready_args
+    assert tagged.blocked_args == bare.blocked_args
 
 
 def test_disagreeing_project_conventions_warn_to_telemetry(

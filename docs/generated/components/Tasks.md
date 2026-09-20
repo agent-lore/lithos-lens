@@ -12,8 +12,9 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.agent_picker` | S | 1 | 2 |
+| `lithos_lens.filter_options` | S | 1 | 1 |
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_filtering` | M | 0 | 13 |
+| `lithos_lens.task_filtering` | M | 0 | 14 |
 | `lithos_lens.tasks` | L | 14 | 14 |
 
 ## Public API
@@ -22,6 +23,10 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `AgentOption` — One registration as the picker renders it: who, when, and whether to show.
 - def `show_all_agents` — Whether ``?all_agents=`` asks for the out-of-window registrations too.
 - def `agent_options` — Order every registration by last activity, newest first, and window it.
+
+### `lithos_lens.filter_options`
+- class `FilterOptions` — The filter bar's three option universes, built from one load's rows.
+- def `build_filter_options` — Build the option universes, and log this load's project data quality.
 
 ### `lithos_lens.normalizers`
 - def `normalize_task`
@@ -44,6 +49,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `board_visible_ids` — The ids a board RENDERS under its filters — ``None`` when unscoped.
 - def `loaded_task_rows` — Every task row this load fetched, deduped by id (open snapshot wins).
 - def `project_universe` — Every project slug present in the loaded rows, sorted (§5B.1).
+- def `tag_universe` — Every tag present in the loaded rows, sorted (§5.4).
 - def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).
 
 ### `lithos_lens.tasks`

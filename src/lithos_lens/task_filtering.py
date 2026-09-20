@@ -12,7 +12,8 @@ property read from either ``metadata.project`` or a ``project:<slug>`` tag
 depending on the configured convention, which is filtering input rather than
 a stored field — as do the two per-load reporting passes built on it
 (``project_universe`` for the filter dropdown, ``log_project_data_quality``
-for the convention-conflict warnings).
+for the convention-conflict warnings). ``tag_universe`` sits beside the first
+of them: a different vocabulary, built over the same loaded rows.
 """
 
 from __future__ import annotations
@@ -439,6 +440,27 @@ def project_universe(
             task_projects(task, convention="both", tag_key=filters.project_tag_key)
         )
     return tuple(sorted(slugs))
+
+
+def tag_universe(tasks: Sequence[TaskRecord]) -> tuple[str, ...]:
+    """Every tag present in the loaded rows, sorted (§5.4).
+
+    Built exactly like :func:`project_universe`, and for the same reason: the
+    scope of a view is often a tag that spans projects (``milestone:t2``,
+    ``needs-human``), and a Tag box that offers nothing can only be typed into
+    by someone who already knows the vocabulary. Over the LOADED rows and
+    before the filters narrow, so a tag carried only by another project's rows
+    — or only by a resolved-window row — is still discoverable from the board
+    that is hiding them.
+
+    Raw tag strings, deduped and sorted, with no normalisation: one ``tag``
+    parameter is one literal tag, so the box must offer exactly what it would
+    submit.
+    """
+    tags: set[str] = set()
+    for task in tasks:
+        tags.update(task.tags)
+    return tuple(sorted(tags))
 
 
 def log_project_data_quality(

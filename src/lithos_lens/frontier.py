@@ -41,7 +41,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
-from lithos_lens.agent_picker import DEFAULT_AGENT_INACTIVE_DAYS, agent_options
+from lithos_lens.agent_picker import DEFAULT_AGENT_INACTIVE_DAYS
 from lithos_lens.attention import AttentionPolicy, flag_attention
 from lithos_lens.dashboard import DashboardData, TaskSummary
 from lithos_lens.epic_strip import (
@@ -49,6 +49,7 @@ from lithos_lens.epic_strip import (
     epic_scope_ids,
     load_epic_rollups,
 )
+from lithos_lens.filter_options import build_filter_options
 from lithos_lens.frontier_fallback import (
     RETRY_FAILED_ERROR,
     flat_open_sections,
@@ -65,10 +66,7 @@ from lithos_lens.task_filtering import (
     board_visible_ids,
     filters_narrow_the_board,
     filters_narrow_the_open_side,
-    loaded_task_rows,
-    log_project_data_quality,
     matches_filters,
-    project_universe,
     unread_displayed_statuses,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -584,20 +582,19 @@ async def load_dashboard(
         # sections derive from the snapshot).
         closed[status] = [task for task in rows if task.id not in open_index]
 
-    # Both project surfaces below read every row this load fetched — open AND
-    # resolved — from the UNFILTERED reads, deduped by id: selecting one
-    # project must not collapse the list of projects you can switch to, and a
-    # convention conflict is a property of the task, not of its status.
-    loaded_tasks = loaded_task_rows(
+    # What the filter bar OFFERS (projects, tags, agents) — built from the
+    # UNFILTERED reads of this load, so selecting one value never collapses the
+    # list of values you can switch to. ``filter_options`` owns that rule, and
+    # the project data-quality pass over the same rows.
+    options = build_filter_options(
         open_snapshot,
-        [
-            cast("list[TaskRecord]", result)
-            for result in closed_results
-            if not isinstance(result, BaseException)
-        ],
+        closed_results,
+        agents_read,
+        filters,
+        errors,
+        agent_inactive_days=agent_inactive_days,
+        now=evaluated_at,
     )
-    log_project_data_quality(loaded_tasks, filters)
-    projects = project_universe(loaded_tasks, filters)
 
     sections: dict[SectionName, tuple[SectionRow, ...]] = {}
     for section in OPEN_SECTIONS:
@@ -614,10 +611,6 @@ async def load_dashboard(
         errors.append("Could not load Lithos stats.")
     else:
         stats = cast(dict[str, Any], stats_result)
-
-    agents = agent_options(
-        agents_read, loaded_tasks, errors, days=agent_inactive_days, now=evaluated_at
-    )
 
     # ``open_total`` counts the open WORKABLE tasks Lens classified. Promoted
     # rows still count (they only changed section), but a promoted human gate
@@ -676,7 +669,7 @@ async def load_dashboard(
         active_claims=sum(len(row.claims) for row in partition.get("in_progress", ())),
         recent_completed=len(closed["completed"]),
         recent_cancelled=len(closed["cancelled"]),
-        agents=int_stat(stats, "agents", default=len(agents)),
+        agents=int_stat(stats, "agents", default=len(options.agents)),
         # Only the counters fed by a side that actually truncated: the board is
         # not approximate, the capped side's sections are.
         approximate=approximate_counters(capped_frontiers if truncated else ()),
@@ -685,10 +678,11 @@ async def load_dashboard(
         filters=filters,
         summary=summary,
         sections=sections,
-        agents=agents,
+        agents=options.agents,
         frontier_limit=frontier_limit,
         open_total=open_total,
-        projects=projects,
+        projects=options.projects,
+        tags=options.tags,
         gate_groups=gate_section.groups,
         next_gate_ready_at=gate_section.next_ready_at,
         # Computed once above, per side, so the banner and the per-counter

@@ -211,6 +211,7 @@ classDiagram
     +frontier_limit int
     +open_total int
     +projects tuple[str, ...]
+    +tags tuple[str, ...]
     +next_gate_ready_at str
     +reconciliation_pending bool
     +truncated bool
@@ -589,6 +590,10 @@ classDiagram
     +descendant_ids frozenset[str]
     +selected bool
   }
+  class FilterOptions {
+    +projects tuple[str, ...]
+    +tags tuple[str, ...]
+  }
   class FindingRecord {
     +id str
     +task_id str
@@ -659,6 +664,7 @@ classDiagram
   }
   AgentOption "1" --> "1" AgentRecord : agent
   EpicRollup "1" --> "1" TaskRecord : task
+  FilterOptions "1" --> "0..*" AgentOption : agents
   SectionRow "1" --> "0..*" AttentionReason : attention
   SectionRow "1" --> "0..*" BlockerChip : blockers
   SectionRow "1" --> "0..*" ClaimRecord : claims

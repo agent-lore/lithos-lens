@@ -45,7 +45,7 @@ State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
-Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker"]
+Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
@@ -185,7 +185,28 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # task rather than smuggled in here. tasks.py now has the same standing as the
 # other two: the next change that grows it must discharge the exception by
 # that extraction rather than argue this up again.
-modules_over_800_lines = 3    # frontier.py (850), graph_layout.py (830), tasks.py (829)
+#
+# Revisited (task "Tag filter: autocomplete from the snapshot's tag union",
+# 2026-09-20): the Tag datalist needed two lines of wiring in frontier.py,
+# which at 850 had none — the case this file said must be answered by
+# extraction rather than by a fourth raise. It was. The seam is a real one and
+# it is NOT the one that was on offer before: the filter bar's three option
+# universes (Project, Tag, Agent) are the only thing in load_dashboard built
+# from the load's UNFILTERED rows, which is the exact inverse of the rest of
+# the function — sections, counters, strip and gates all derive from the
+# filtered set. That invariant ("what you can switch TO must not be collapsed
+# by what you have switched to") was already restated in three docstrings; it
+# now has one home, lithos_lens.filter_options, which owns the deduped loaded
+# row set, the project data-quality pass over it, and the composition of the
+# three builders (which stay with their vocabularies, in Tasks). frontier.py
+# makes one call and is 844.
+#
+# So the stop-loss is NOT raised. The exception is not discharged either —
+# 844 is still over the 800 threshold — and the standing is unchanged: the
+# next change that grows frontier.py must find the next real seam, because
+# there are six lines left and no argument for a fourth raise that this note
+# has not already spent.
+modules_over_800_lines = 3    # frontier.py (844), graph_layout.py (830), tasks.py (829)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
@@ -198,6 +219,7 @@ tests_private_imports     = 0  # tests use only the public surface; keep it that
 include_modules = [
     "lithos_lens.tasks",
     "lithos_lens.agent_picker",
+    "lithos_lens.filter_options",
     "lithos_lens.dashboard",
     "lithos_lens.gates",
     "lithos_lens.pr_reconciliation",
