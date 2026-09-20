@@ -718,10 +718,18 @@ def test_project_filter_matches_both_conventions(
 
 
 def _datalist_options(html: str, list_id: str) -> list[str]:
-    """The option VALUES of one datalist, in rendered order."""
+    """The option VALUES of one datalist, HTML-DECODED, in rendered order.
+
+    Decoded because a tag is an arbitrary string: ``R&D`` is markup-escaped on
+    the way out, and comparing the raw attribute text would let an assertion
+    pass on a value no browser would ever hand back.
+    """
     block = re.search(rf'<datalist id="{list_id}">(.*?)</datalist>', html, re.S)
     assert block is not None, f"the {list_id} datalist is missing"
-    return re.findall(r'<option value="([^"]*)">', block.group(1))
+    return [
+        unescape(value)
+        for value in re.findall(r'<option value="([^"]*)">', block.group(1))
+    ]
 
 
 def test_tag_box_offers_the_whole_snapshot_vocabulary(
@@ -772,6 +780,51 @@ def test_tag_box_offers_the_whole_snapshot_vocabulary(
         "project:ganglion",
         "project:influx",
     ]
+
+
+def test_tag_datalist_offers_the_literal_tag_the_box_would_submit(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A tag is a bare string upstream — an ampersand, a quote and significant
+    whitespace are all ordinary content — and the box's job is to offer exactly
+    what it would submit. So the offered value is asserted DECODED (the markup
+    really does carry entities), and then actually submitted: the round trip is
+    the claim, not the attribute text."""
+    awkward = 'R&D "spike"'
+    padded = " needs review "
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="awkward",
+            title="Awkwardly tagged task",
+            status="open",
+            created_by="planner",
+            created_at="2026-04-24T10:00:00+00:00",
+            tags=(awkward, padded),
+        )
+    )
+    fake.ready_ids.add("awkward")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        offered = client.get("/tasks?since=2026-04-01")
+        submitted = client.get(
+            "/tasks", params=[("since", "2026-04-01"), ("add_tag", awkward)]
+        )
+
+    assert offered.status_code == 200
+    assert _datalist_options(offered.text, "tags") == [
+        padded,
+        awkward,
+        "area:docs",
+        "project:influx",
+    ]
+    # The decode above is doing work: the attribute itself is escaped.
+    assert '<option value="R&amp;D &#34;spike&#34;">' in offered.text
+    # And the offered string, submitted verbatim, is a filter that matches the
+    # row it came from and nothing else.
+    assert submitted.status_code == 200
+    assert "Awkwardly tagged task" in submitted.text
+    assert "Claimed open task" not in submitted.text
 
 
 def test_project_filter_is_preserved_across_navigation(

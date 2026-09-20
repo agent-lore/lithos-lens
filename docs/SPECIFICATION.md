@@ -347,7 +347,10 @@ Filter behavior:
   values you can switch to. None of them costs a Lithos read of its own.
   - `projects` is the union of both conventions' slugs (§5B.1).
   - `tags` is the sorted, deduped union of the loaded rows' tags, raw and
-    unnormalized — the box has to offer exactly what it would submit. Because
+    unnormalized — the box has to offer exactly what it would submit, and
+    upstream types a tag as a bare string, so whitespace and case are
+    significant and the empty tag is carried like any other (what the BOX does
+    with a blank value is the unchanged `tag`/`add_tag` split above). Because
     the universe precedes the filters, a tag that spans projects
     (`milestone:t2`, `needs-human`) is discoverable from a board scoped to a
     project that does not carry it, and so is one carried only by a row in the
