@@ -5287,3 +5287,52 @@ def test_the_project_strip_is_drawn_only_where_it_has_switching_to_offer(
     # With the filter live the strip returns, and so does the way out of it.
     assert "data-project-strip" in filtered.text
     assert "data-project-clear" in filtered.text
+
+
+@pytest.mark.parametrize(
+    ("query", "reason"),
+    [
+        (
+            "tag=nothing-carries-this&project=lithos-loom&since=2026-04-01",
+            "the other filters leave no open row at all",
+        ),
+        (
+            "status=completed&project=lithos-loom&since=2026-04-01",
+            "the open side is switched off, so no open row is on the board",
+        ),
+    ],
+)
+def test_the_clear_survives_a_scope_with_no_projects_left_in_it(
+    lithos_lens_config_env: Path, query: str, reason: str
+) -> None:
+    """The state the "shown whenever ``project`` is set" rule exists for.
+
+    With a project filter live and NOTHING in the scope to draw a chip from,
+    the strip is the only control that can widen the board again — the chips
+    that would have removed the projects one at a time are exactly what is
+    missing. A strip keyed on "are there any chips" would vanish here and
+    strand the operator on an empty board with the filter that emptied it.
+    """
+    fake = _three_project_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        stuck = client.get(f"/tasks?{query}")
+        clear_href = unescape(
+            re.findall(r'href="([^"]+)"[^>]*data-project-clear', stuck.text)[0]
+        )
+        cleared = client.get(clear_href)
+
+    assert stuck.status_code == 200, reason
+    # The labelled strip is there, holding the clear and no chips.
+    assert (
+        '<section class="project-strip" aria-label="Projects" data-project-strip>'
+        in stuck.text
+    )
+    assert _project_chip_links(unescape(stuck.text)) == {}
+    # …and the clear drops ``project`` alone, leaving what emptied the board
+    # visible rather than silently widening it too.
+    assert parse_qs(urlsplit(clear_href).query) == {
+        key: value for key, value in parse_qs(query).items() if key != "project"
+    }
+    assert cleared.status_code == 200
+    assert "data-project-clear" not in cleared.text

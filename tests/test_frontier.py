@@ -25,6 +25,7 @@ from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.normalizers import normalize_task
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
+    OPEN_SECTIONS,
     TASK_STATUSES,
     AgentRecord,
     ClaimRecord,
@@ -3691,12 +3692,23 @@ def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
     ]
 
 
-def test_every_project_convention_is_enumerated_whatever_the_posture() -> None:
-    """§5B.1: the project UNIVERSE is the union of both conventions "so no
-    project is invisible to its own view", and this strip offers values for
-    that same filter. So the enumeration is ``convention="both"`` — the call
-    ``project_universe`` and the graph scope picker make — and a posture that
-    narrows MATCHING must not narrow what the operator can see is there."""
+def test_every_chip_leads_to_a_board_with_its_own_rows_on_it_whatever_the_posture() -> (
+    None
+):
+    """The no-dead-end rule, under each supported ``project_convention``.
+
+    The enumeration is §5B.1's universe (both conventions, the call the Project
+    datalist and the graph scope picker share), but a chip is an OFFER to add
+    ``?project=<slug>`` — so what the strip draws is the universe intersected
+    with what that link would match. Under ``"both"`` those coincide and a
+    metadata-only project counts exactly like a tagged one; under a
+    single-convention posture ``matches_projects`` honours only that
+    convention, so the slug the other one carries names an empty board and is
+    not offered. Every chip is FOLLOWED here, and its count checked against the
+    rows the board then holds: a strip that advertised a slug its own filter
+    cannot reach would fail on the empty board, and one that mis-stated the
+    count would fail on the number.
+    """
     mirrored = _task(
         "mirrored",
         claims=(),
@@ -3707,22 +3719,35 @@ def test_every_project_convention_is_enumerated_whatever_the_posture() -> None:
     fake = _FrontierFake(
         open_tasks=[mirrored, tagged], ready=[mirrored, tagged], blocked=[]
     )
+    expected = {
+        "both": [("lithos-lens", 1), ("lithos-loom", 1)],
+        "tag": [("lithos-lens", 1)],
+        "metadata": [("lithos-loom", 1)],
+    }
 
-    for convention in ("both", "tag", "metadata"):
-        data = asyncio.run(
-            load_dashboard(
-                fake,
-                filters=replace(
-                    _FILTERS, tags=("roadmap",), project_convention=convention
-                ),
-                frontier_limit=500,
-            )
+    for convention, chips in expected.items():
+        filters = replace(_FILTERS, tags=("roadmap",), project_convention=convention)
+        data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+
+        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == chips, (
+            convention
         )
 
-        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
-            ("lithos-lens", 1),
-            ("lithos-loom", 1),
-        ], convention
+        for chip in data.project_chips:
+            followed = asyncio.run(
+                load_dashboard(
+                    fake,
+                    filters=replace(filters, projects=(chip.slug,)),
+                    frontier_limit=500,
+                )
+            )
+            shown = [
+                row.task.id
+                for section in OPEN_SECTIONS
+                for row in followed.sections[section]
+            ]
+            assert shown, (convention, chip.slug)
+            assert len(shown) == chip.open_count, (convention, chip.slug)
 
 
 def test_the_strip_scope_honours_the_agent_and_created_windows() -> None:

@@ -7,8 +7,7 @@ of these is there work in, and where does clicking take me?* That shared
 subject is this module.
 
 Both obey one rule, which is why they are assembled together rather than in
-``frontier``: **a chip must lead to a non-empty board** (the project strip with
-one §5B.1 residual, named in ``build_project_strip``). A chip links to the
+``frontier``: **a chip must lead to a non-empty board**. A chip links to the
 ACTIVE filters plus its own term, so it can only be drawn when the rows it
 would leave are rows this board actually renders — the same filter predicate
 (``matches_filters``) and the same read generation the sections are built
@@ -155,21 +154,24 @@ def build_project_strip(
     Slugs come from :func:`~lithos_lens.task_filtering.task_projects` under
     ``convention="both"`` — the one enumeration, and the same call
     ``project_universe`` (the Project datalist) and ``graph_page.
-    observed_projects`` (the scope picker) make. §5B.1 is explicit that the
-    project UNIVERSE is the union of both conventions "so no project is
-    invisible to its own view", and this strip is a control offering values for
-    that same filter, so it obeys the same rule: a task carrying
-    ``metadata.project`` alone (loom's issue-mirrored work) counts exactly like
-    a tagged one, whatever ``project_convention`` is set to.
+    observed_projects`` (the scope picker) make. That is §5B.1's universe rule,
+    the union of both conventions "so no project is invisible to its own view":
+    a task carrying ``metadata.project`` alone (loom's issue-mirrored work)
+    counts exactly like a tagged one.
 
-    That leaves one residual under a NON-default posture, and it is §5B.1's own
-    rather than this strip's: matching honours the configured convention
-    (``matches_projects``), so under ``"tag"`` a metadata-only slug — offered
-    here, and in the datalist beside it, because the universe rule says it must
-    be — filters to nothing. The universe rule wins where the two collide: a
-    project invisible to its own view is the failure §5B.1 names, and the
-    no-dead-end-chip guarantee is stated against the default ``"both"`` posture,
-    where enumeration and matching are the same reading of a row.
+    A chip is not a listing, though — it is an OFFER to add ``?project=<slug>``
+    — so the universe is intersected with what that link would actually match
+    (``_offered_slugs``). Under the default ``"both"`` posture the two are the
+    same reading of a row and the intersection changes nothing. Under a
+    single-convention posture they are not: ``matches_projects`` honours the
+    configured convention (pinned by ``test_project_filter_under_metadata_
+    convention_ignores_the_tag``, and the graph page even issues its scoped
+    reads per posture), so a slug the posture cannot match names a board with no
+    rows on it. Offering it would break the rule both strips exist to keep and
+    would print a count of work the click cannot show. The datalist beside the
+    strip still offers the whole universe, which is the right answer for a box
+    the operator TYPES into: there the slug is a value, not a promise about a
+    board.
 
     Ordered by count descending, then slug — the strip reads as a summary of
     where the work is, and its order is stable while the operator clicks
@@ -185,10 +187,29 @@ def build_project_strip(
             continue
         if not matches_filters(task, filters=scope, status="open", scope_ids=scope_ids):
             continue
-        counts.update(
-            task_projects(task, convention="both", tag_key=scope.project_tag_key)
-        )
+        counts.update(_offered_slugs(task, scope))
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)
         for slug, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
+
+
+def _offered_slugs(task: TaskRecord, filters: TaskFilters) -> tuple[str, ...]:
+    """The slugs this row may put a chip on: the §5B.1 universe it can reach.
+
+    Two readings of one row, and the chip needs both to agree. The universe is
+    ``convention="both"`` — what the row claims membership of, the enumeration
+    every other project surface shares. The reachable set is what
+    ``matches_projects`` would honour for ``?project=<slug>``, which is the
+    configured posture. They differ only when the posture is single-convention,
+    and only for a slug the other convention carries; there the universe wins
+    the datalist (a typed value) and the reachable set wins the strip (a link
+    with a count on it).
+    """
+    universe = task_projects(task, convention="both", tag_key=filters.project_tag_key)
+    if filters.project_convention == "both":
+        return universe
+    reachable = task_projects(
+        task, convention=filters.project_convention, tag_key=filters.project_tag_key
+    )
+    return tuple(slug for slug in universe if slug in reachable)

@@ -282,8 +282,12 @@ The dashboard also renders:
   `convention="both"`, §5B.1's universe rule (the union of both conventions, so
   no project is invisible to its own view), which is the same call the Project
   datalist and the graph scope picker make, so a project carried only in
-  `metadata.project` counts like a tagged one whatever `project_convention` is
-  set to. Each
+  `metadata.project` counts like a tagged one. A chip is an offer to filter, so
+  that universe is intersected with what `?project=<slug>` would match: under
+  the default `project_convention = "both"` the two coincide, and under a
+  single-convention posture the slug only the other convention carries names an
+  empty board, so it stays in the datalist (a value to type) and off the strip
+  (a link with a count on it). Each
   chip carries the project's **open-row count** within that scope — the open
   sections plus Gates; terminal rows contribute nothing — and the chips order by
   count then slug. The scope is **every active filter except `project`**, so the
@@ -291,11 +295,15 @@ The dashboard also renders:
   as the operator clicks between them: clicking an unselected chip adds its slug
   to `?project=` (projects OR, the comma form), clicking a selected one removes
   just that slug, and a **Clear** affordance — shown whenever `project` is set —
-  removes the parameter alone, leaving every other filter where it was. Every
-  chip has open rows behind it, so none leads to an empty board (the same rule
-  §5.2.1 gives the epic strip, evaluated under the same generation). The strip
-  is hidden when the scope holds fewer than two projects and no project filter
-  is active
+  removes the parameter alone, leaving every other filter where it was — and
+  the strip with its Clear stays on a board whose scope holds no project at
+  all, because it is then the only way back. Every chip has open rows behind
+  it, so none leads to an empty board (the same rule §5.2.1 gives the epic
+  strip, evaluated under the same generation). The strip is hidden when the
+  scope holds fewer than two projects and no project filter is active.
+  Generated project links carry the board's filter state and nothing else (the
+  `request_filters` allowlist, plus `all_agents`): the panel selection, an
+  expansion `chain`, a retired filter and any unrecognised key stay behind
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 

@@ -24,11 +24,13 @@ from lithos_lens.request_filters import (
     project_remove_url,
 )
 
-# Every parameter a live board can carry at once, plus two it must NOT
-# re-emit: ``chain`` (measured against the byte budget but owned by one
-# blocker-expansion walk) and the retired ``claimed_state`` a legacy bookmark
-# still carries. Both are deliberately outside the allowlist, so "anything
-# else present" means anything the board itself would send back.
+# Every FILTER a live board can carry at once, plus the four kinds of
+# parameter that reach ``/tasks`` and must NOT ride a generated link. The
+# board's links are an allowlist by design (``_PRESERVED_FILTER_KEYS``), so
+# "anything else present" is anything the board itself would send back — not
+# any key an arbitrary URL happens to carry. Each exclusion has its own
+# reason, and :func:`test_project_links_carry_the_board_state_and_nothing_else`
+# states them.
 _FULL_QUERY = (
     "status=open&status=completed"
     "&tag=roadmap-2026-09&tag=needs-human"
@@ -38,8 +40,10 @@ _FULL_QUERY = (
     "&created_since=2026-01-01"
     "&all_agents=1"
     "&project=lithos-lens,lithos-loom"
+    "&selected=loom-worker"
     "&chain=some-task"
     "&claimed_state=any"
+    "&unrecognised=x"
 )
 
 # What every project link must carry forward, whichever way it moves the
@@ -113,18 +117,58 @@ def test_project_links_preserve_every_other_parameter(
     assert query == expected, name
 
 
-def test_project_links_drop_the_two_parameters_the_board_never_echoes() -> None:
-    """The allowlist's own rule, stated once: ``chain`` describes a single
-    blocker expansion and ``claimed_state`` was retired with the graph-native
-    dashboard, so neither may ride a navigation link — even though the request
-    that produced the strip carried both."""
+@pytest.mark.parametrize(
+    ("key", "why"),
+    [
+        (
+            "selected",
+            # web.py `_selected_panel`: "no generated link carries a selection "
+            # "into navigation it has nothing to do with" — it names one open
+            # panel, not a slice of the board, and the panel it names may not
+            # even be a row of the board the chip leads to.
+            "one open panel is not board state",
+        ),
+        (
+            "chain",
+            # One blocker-expansion walk. It is MEASURED against
+            # MAX_FILTER_QUERY_BYTES precisely because a fragment copies it per
+            # line; copying it per chip as well would carry a walk into
+            # navigation that has nothing to do with it.
+            "one expansion walk is not board state",
+        ),
+        (
+            "claimed_state",
+            # Retired with the graph-native dashboard. The allowlist exists so
+            # a legacy bookmark degrades on arrival instead of propagating.
+            "a retired filter must not be revived by a link",
+        ),
+        (
+            "unrecognised",
+            # The one with teeth: an unknown key is not in _MEASURED_QUERY_KEYS,
+            # so nothing bounds its size. Echoing it once per chip would let a
+            # crafted URL multiply its own bytes across the strip — the exact
+            # multiplication the byte budget was added to close.
+            "an unmeasured value must not be multiplied per chip",
+        ),
+    ],
+)
+def test_project_links_carry_the_board_state_and_nothing_else(
+    key: str, why: str
+) -> None:
+    """The allowlist's own rule, one case per reason it exists.
+
+    Every one of these arrives on a real request — the panel selection on every
+    click-opened board, ``chain`` from an expanded blocker, ``claimed_state``
+    from a pre-T1 bookmark — and none of them describes the slice of tasks a
+    project chip navigates to. A builder that preserved "everything present"
+    would carry all four.
+    """
     for url in (
         project_add_url(_request(), _SELECTED, "lithos-core"),
         project_remove_url(_request(), _SELECTED, "lithos-lens"),
         project_clear_url(_request()),
     ):
-        assert "chain" not in url
-        assert "claimed_state" not in url
+        assert key not in _query_of(url), why
 
 
 def test_adding_a_project_already_selected_does_not_duplicate_it() -> None:
