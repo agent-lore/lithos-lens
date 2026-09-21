@@ -836,18 +836,41 @@ def test_the_retired_posture_env_override_is_parsed_validated_and_noticed(
     assert "Unset LITHOS_LENS_TASKS_PROJECT_CONVENTION." in notices[0].getMessage()
 
 
+@pytest.mark.parametrize("written", ["neither", ""])
 def test_an_invalid_posture_env_override_is_rejected_like_the_toml_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    written: str,
 ) -> None:
     """Deprecating a knob retires what it SELECTS, not the operator's right to
-    be told they mistyped it — from either spelling."""
+    be told they mistyped it — from either spelling.
+
+    The EMPTY value is the boundary that matters. ``FOO=`` is how an operator
+    reaches for "turn this off", and it names no convention, so it is the same
+    config error ``neither`` is — not a quiet fall-through to the file value,
+    which would leave the effective config disagreeing with what was written.
+    The notice fires either way: it reports the knob being WRITTEN.
+    """
+    import lithos_lens.config_fields as config_fields
+
+    monkeypatch.setattr(config_fields, "_WARNED", set())
     config_path = tmp_path / "lithos-lens.toml"
     config_path.write_text('[lithos-lens]\nenvironment = "test"\n')
     monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
-    monkeypatch.setenv("LITHOS_LENS_TASKS_PROJECT_CONVENTION", "neither")
+    monkeypatch.setenv("LITHOS_LENS_TASKS_PROJECT_CONVENTION", written)
 
-    with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_PROJECT_CONVENTION"):
+    with (
+        caplog.at_level("WARNING", logger="lithos_lens.config_fields"),
+        pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_PROJECT_CONVENTION"),
+    ):
         load_config(config_path)
+
+    assert [
+        r
+        for r in caplog.records
+        if "LITHOS_LENS_TASKS_PROJECT_CONVENTION is deprecated" in r.getMessage()
+    ], written
 
 
 def test_a_config_without_the_retired_posture_warns_about_nothing(

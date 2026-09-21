@@ -30,12 +30,42 @@ def load_contract(tool: str) -> dict[str, Any]:
     return payload
 
 
+#: The env overrides read with NO default, so that absent and present-empty
+#: stay distinguishable: ``FOO=`` is a written value for both — the documented
+#: empty list for one, a value naming no convention (and so a config error) for
+#: the deprecated posture knob (§4.4). Every other override is truthiness-gated
+#: and is neutralised below by being set empty; these two cannot be.
+PRESENT_EMPTY_ENV_KNOBS = (
+    "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
+    "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_present_empty_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delete :data:`PRESENT_EMPTY_ENV_KNOBS` for the whole suite.
+
+    Autouse rather than folded into ``lithos_lens_config_env``, because the
+    exposure is not limited to tests that take that fixture: every test that
+    calls ``load_config`` on a config file of its own is equally at the mercy
+    of the invoking shell (or a developer ``.env``, which ``load_dotenv``
+    reads). Blanking these two would not isolate them — for these, blank IS a
+    value — so they are removed. A test that wants one sets it itself, and its
+    own ``setenv`` runs after this.
+    """
+    for name in PRESENT_EMPTY_ENV_KNOBS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Provide a minimal lithos-lens.toml and point ``LITHOS_LENS_CONFIG`` at it.
 
     Env-var overrides are cleared so a developer's local ``.env`` cannot
-    silently inject values via ``load_dotenv``.
+    silently inject values via ``load_dotenv``. They are neutralised by being
+    set EMPTY, which every truthiness-gated override reads as "unset"; the two
+    that read absent and present-empty apart are handled suite-wide by
+    :func:`_no_ambient_present_empty_env` instead.
     """
     data_dir = tmp_path / "data"
     config_path = tmp_path / "lithos-lens.toml"

@@ -575,9 +575,11 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
-    # Deprecated (§4.4) and read anyway: "ignored" says what consults the
-    # value, not that a value an operator set may be dropped on the floor.
-    project_convention_env = os.environ.get("LITHOS_LENS_TASKS_PROJECT_CONVENTION", "")
+    # Deprecated (§4.4) and read anyway: "ignored" says what CONSULTS the
+    # value, not that a value an operator set may be dropped. No "" default,
+    # like ``trigger_prefixes_env`` below: WRITING the knob is what the notice
+    # and the validation are about, and ``FOO=`` is writing it.
+    project_convention_env = os.environ.get("LITHOS_LENS_TASKS_PROJECT_CONVENTION")
     agent_inactive_env = os.environ.get("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
     unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     # No "" default, unlike every other read in this pass: an EMPTY value of
@@ -657,7 +659,10 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     }
     if tasks_env_overrides:
         new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
-    if project_convention_env:
+    if project_convention_env is not None:
+        # Notice first, then validation: it reports the knob being WRITTEN,
+        # true whatever the value says, and an operator correcting a typo
+        # should not boot twice to learn the knob is dead anyway.
         warn_deprecated_env(
             "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
             "lithos-lens.tasks.project_convention",
