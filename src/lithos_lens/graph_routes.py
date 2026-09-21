@@ -177,7 +177,6 @@ def register_graph_routes(
                         fetch_concurrency=state.config.graph.fetch_concurrency,
                     ),
                     frontier_limit=tasks_config.frontier_limit,
-                    convention=tasks_config.project_convention,
                     tag_key=tasks_config.project_tag_key,
                 )
             except Exception:
@@ -283,7 +282,6 @@ def register_graph_routes(
                         max_nodes=state.config.graph.mini_graph_max_nodes,
                         fetch_concurrency=state.config.graph.fetch_concurrency,
                     ),
-                    convention=tasks_config.project_convention,
                     tag_key=tasks_config.project_tag_key,
                 )
             except Exception:
@@ -369,7 +367,6 @@ async def _focused_panel(
         detail = await load_task_detail(
             state.lithos_client,
             params.focus,
-            convention=tasks_config.project_convention,
             tag_key=tasks_config.project_tag_key,
         )
     except Exception:
@@ -546,7 +543,6 @@ async def panel_impact(
                 fetch_concurrency=state.config.graph.fetch_concurrency,
             ),
             frontier_limit=tasks_config.frontier_limit,
-            convention=tasks_config.project_convention,
             tag_key=tasks_config.project_tag_key,
         )
     except Exception:

@@ -89,11 +89,9 @@ from lithos_lens.task_links import (
     PROVENANCE_EDGE_TYPE,
 )
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
     GRAPH_SELECTION_KEY,
     PANEL_SELECTION_KEY,
-    ProjectConvention,
     TaskRecord,
 )
 
@@ -130,7 +128,6 @@ async def load_graph_page(
     cache: GraphCache,
     limits: GraphScopeLimits | None = None,
     frontier_limit: int,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> GraphPageView:
     """Assemble one scope, read its cycle signal, and fold both into the page."""
@@ -152,7 +149,6 @@ async def load_graph_page(
             cache=cache,
             limits=limits,
             include_resolved=params.include_resolved,
-            convention=convention,
             tag_key=tag_key,
         )
     if scope.refused:
@@ -168,7 +164,7 @@ async def load_graph_page(
     # comes from task TAGS, so it is bounded here — BEFORE one call is queued —
     # and answered with a refusal rather than by quietly reading some of it.
     # The guard is ``max_tasks``: one project per task is §5B.1's shape.
-    coverage = coverage_projects(scope, convention=convention, tag_key=tag_key)
+    coverage = coverage_projects(scope, tag_key=tag_key)
     if len(coverage) > limits.max_tasks:
         return GraphPageView(
             params=params,
@@ -185,7 +181,6 @@ async def load_graph_page(
         lithos,
         scope,
         frontier_limit=frontier_limit,
-        convention=convention,
         tag_key=tag_key,
         fetch_concurrency=limits.fetch_concurrency,
     )

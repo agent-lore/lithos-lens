@@ -75,9 +75,7 @@ from lithos_lens.task_links import (
     PROVENANCE_EDGE_TYPE,
 )
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
-    ProjectConvention,
     TaskRecord,
 )
 
@@ -314,10 +312,13 @@ def project_scope_tasks(
     project: str,
     *,
     include_resolved: bool = False,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> tuple[TaskRecord, ...]:
     """The project's tasks per §5B.1 — open only unless ``include_resolved``.
+
+    Membership reads BOTH conventions, the same union the scope picker offers
+    from, so a slug the picker lists always leads to the rows it counted
+    (``project_convention`` is no longer a membership knob, §4.4).
 
     Pure over the master list the dashboard already loaded, which is also
     where the ``resolved_since`` window is applied: ``include_resolved``
@@ -326,7 +327,7 @@ def project_scope_tasks(
     rows = [
         task
         for task in master
-        if project in task_projects(task, convention=convention, tag_key=tag_key)
+        if project in task_projects(task, convention="both", tag_key=tag_key)
     ]
     if not include_resolved:
         rows = [task for task in rows if task.status == "open"]
@@ -390,7 +391,6 @@ async def load_project_scope(
     cache: GraphCache,
     limits: GraphScopeLimits | None = None,
     include_resolved: bool = False,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskGraphScope:
     """Assemble `/tasks/graph?project=<slug>` (open-only by default)."""
@@ -398,7 +398,6 @@ async def load_project_scope(
         master,
         project,
         include_resolved=include_resolved,
-        convention=convention,
         tag_key=tag_key,
     )
     return await assemble_scope(

@@ -27,6 +27,7 @@ from lithos_lens.config_fields import (
     optional_status_groups,
     optional_str,
     optional_str_list,
+    warn_deprecated_knobs,
 )
 from lithos_lens.config_schema import (
     DEFAULT_DATA_DIR,
@@ -85,9 +86,6 @@ from lithos_lens.tasks import (
 )
 
 logger = logging.getLogger(__name__)
-
-# One-time deprecation latch for [lithos-lens.tasks].visible_cap.
-_VISIBLE_CAP_WARNED = False
 
 # Re-export surface: `lithos_lens.config` stays the one import site for both
 # the loader and the schema it produces (see config_schema).
@@ -313,16 +311,7 @@ def _parse_lithos(data: Any, config_path: Path) -> LithosConfig:
 def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.tasks] must be a table")
-    global _VISIBLE_CAP_WARNED
-    if "visible_cap" in data and not _VISIBLE_CAP_WARNED:
-        _VISIBLE_CAP_WARNED = True
-        logger.warning(
-            "[lithos-lens.tasks].visible_cap is deprecated and unused since the "
-            "graph-native dashboard (T1) — the live scale dial is "
-            "frontier_limit (LITHOS_LENS_TASKS_FRONTIER_LIMIT). Remove "
-            "visible_cap from %s.",
-            config_path,
-        )
+    warn_deprecated_knobs(data, config_path, "lithos-lens.tasks")
 
     # Every [tasks] knob below is a positive integer parsed the same way, so
     # one local binding keeps the eight of them readable. Those whose value
@@ -386,6 +375,7 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
 
 
 def _project_convention(data: dict[str, Any], config_path: Path) -> ProjectConvention:
+    """Parse — and still validate — the deprecated posture knob (§4.4)."""
     value = optional_str(
         data,
         "project_convention",

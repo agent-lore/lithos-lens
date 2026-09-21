@@ -12,7 +12,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.config` | L | 0 | 2 |
-| `lithos_lens.config_fields` | S | 0 | 6 |
+| `lithos_lens.config_fields` | S | 0 | 7 |
 | `lithos_lens.config_schema` | S | 12 | 1 |
 
 ## Public API
@@ -22,6 +22,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 - def `load_config` — Load, validate, and return a ``LithosLensConfig``.
 
 ### `lithos_lens.config_fields`
+- def `warn_deprecated_knobs` — Log one notice, once, for every deprecated knob ``section`` writes.
 - def `optional_str`
 - def `optional_path`
 - def `optional_int`

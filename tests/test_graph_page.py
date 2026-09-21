@@ -859,23 +859,20 @@ def test_a_projectless_child_is_unknown_with_no_read_attempted_for_it(
     assert 'data-graph-banner="cycle-projectless"' in html
 
 
-@pytest.mark.parametrize(
-    ("posture", "child", "issued"),
-    [
-        # Only ``project=`` is issued, and it expresses the METADATA
-        # convention (§5B.1) — so a child that claims its project by TAG could
-        # never appear in the response, and an empty one is not coverage.
-        ("metadata", "tag", [("project", "other", LIMIT)]),
-        # The mirror image: only the tag read is issued, and a metadata-only
-        # child is invisible to it.
-        ("tag", "metadata", [("tags", "project:other", LIMIT)]),
-    ],
-)
-def test_a_single_convention_posture_never_reads_coverage_it_did_not_get(
-    lithos_lens_config_env: Path, posture: str, child: str, issued: list[Any]
+@pytest.mark.parametrize("posture", ["both", "metadata", "tag"])
+@pytest.mark.parametrize("child", ["tag", "metadata"])
+def test_both_halves_of_the_read_pair_are_issued_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str, child: str
 ) -> None:
     """An empty response from a filter that cannot match the task is not
-    coverage — it is silence, and D4 says silence is `cycle status unknown`."""
+    coverage — it is silence, and D4 says silence is `cycle status unknown`.
+
+    ``project_convention`` used to drop one half of the pair, so a child that
+    claimed its project under the other convention was in scope (membership is
+    §5B.1's union) with its cycle status resting on a read that could never
+    have named it. The knob is parsed and ignored (§4.4): both halves are
+    always issued, and the child is ANSWERED for however its slug is carried.
+    """
     lithos_lens_config_env.write_text(
         lithos_lens_config_env.read_text()
         + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
@@ -896,9 +893,12 @@ def test_a_single_convention_posture_never_reads_coverage_it_did_not_get(
 
     html = get(lithos_lens_config_env, fake, "/tasks/graph?epic=epic")
 
-    assert blocked_log(fake) == issued
-    assert "cycle-unknown" in markers(html, "child")
-    assert 'data-graph-banner="cycle-unknown-count"' in html
+    assert blocked_log(fake) == [
+        ("project", "other", LIMIT),
+        ("tags", "project:other", LIMIT),
+    ]
+    assert "cycle-unknown" not in markers(html, "child")
+    assert 'data-graph-banner="cycle-unknown-count"' not in html
 
 
 def test_the_tag_side_read_uses_the_configured_project_tag_key(
@@ -1941,6 +1941,37 @@ def test_the_unscoped_route_offers_projects_and_open_epics(
         "completed",
         "cancelled",
     ]
+
+
+@pytest.mark.parametrize("posture", ["both", "metadata", "tag"])
+def test_every_project_the_picker_offers_has_a_graph_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str
+) -> None:
+    """The picker's universe and a project scope's MEMBERSHIP are one reading.
+
+    Both are ``task_projects(…, convention="both", …)`` now, so a project the
+    picker lists always draws the rows it was listed for. Under the retired
+    ``project_convention`` posture (§4.4) membership honoured one convention
+    while the picker unioned both, so ``"tag"`` offered ``meta-only`` and then
+    rendered nothing to draw for it.
+    """
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    tasks = [
+        task("tagged", project="tag-only"),
+        metadata_task("c", project="meta-only"),
+    ]
+    fake = GraphFakeClient(dataset(tasks))
+
+    picker = get(lithos_lens_config_env, fake, "/tasks/graph")
+    offered = re.findall(r'data-picker-project="([^"]+)"', picker)
+
+    assert offered == ["meta-only", "tag-only"], posture
+    for slug, node in (("meta-only", "c"), ("tag-only", "tagged")):
+        html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={slug}")
+        assert f'data-graph-node="{node}"' in html, (posture, slug)
 
 
 def test_a_scope_one_task_over_the_guard_is_refused_with_its_count(

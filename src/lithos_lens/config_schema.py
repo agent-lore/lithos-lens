@@ -181,8 +181,11 @@ class TasksConfig:
         DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES
     )
     default_status_groups: tuple[TaskStatusName, ...] = TASK_STATUSES
-    # Which project convention the /tasks project filter honours (§5B.1):
-    # "metadata" (metadata.project), "tag" (project:<slug>), or "both" (union).
+    # DEPRECATED (§4.4): parsed and ignored. It once selected which §5B.1
+    # convention ?project= honoured, which let every control that OFFERS a
+    # project hand the operator a slug the filter refused; membership now
+    # reads both conventions unconditionally. Kept so the Settings view can
+    # list it as parsed-and-ignored.
     project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
     # Tag key reserved for the tag convention, per deployment (§5B.9).
     project_tag_key: str = DEFAULT_PROJECT_TAG_KEY

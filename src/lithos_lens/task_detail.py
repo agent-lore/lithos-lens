@@ -64,12 +64,10 @@ from lithos_lens.task_links import (
     outgoing_targets,
 )
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
     REOPENED_FINDING_PREFIX,
     FindingRecord,
     NoteRecord,
-    ProjectConvention,
     Reconciliation,
     SectionState,
     TaskRecord,
@@ -165,9 +163,10 @@ class TaskDetailData:
     children_state: SectionState = SectionState.OK
     not_found: bool = False
     errors: tuple[str, ...] = ()
-    #: Every project slug this task claims under the configured convention
-    #: (§5B.1), for the panel's project chip. Resolved here rather than in the
-    #: template so the convention has one reading.
+    #: Every project slug this task claims under EITHER §5B.1 convention, for
+    #: the panel's project chip — metadata first, so the chip that wins a
+    #: disagreement is the metadata one. Resolved here rather than in the
+    #: template so the conventions have one reading.
     projects: tuple[str, ...] = ()
     #: A ``pr`` gate's loom-written reconciliation state (§5.5.4 gate context),
     #: or None for every other task. Built by the same function the Gates
@@ -204,7 +203,6 @@ async def load_task_detail(
     lithos: TaskDetailClient,
     task_id: str,
     *,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
     now: datetime | None = None,
 ) -> TaskDetailData:
@@ -318,7 +316,7 @@ async def load_task_detail(
         relations_state=relations_state,
         children_state=children_state,
         errors=tuple(errors),
-        projects=task_projects(task, convention=convention, tag_key=tag_key),
+        projects=task_projects(task, convention="both", tag_key=tag_key),
         pr_reconciliation=reconciliation_of(
             task, gate_type=gate_type_of(task), now=evaluated_at
         ),

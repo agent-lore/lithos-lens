@@ -758,6 +758,9 @@ def test_graph_fan_out_knob_over_its_ceiling_fails_the_load(
 def test_project_convention_settings_are_read_from_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Both still PARSE. ``project_tag_key`` is live (it spells the tag
+    convention, §5B.9); ``project_convention`` is parsed and ignored (§4.4) and
+    stays on the config only so the Settings view can list it as such."""
     config_path = tmp_path / "lithos-lens.toml"
     config_path.write_text(
         '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
@@ -771,6 +774,64 @@ def test_project_convention_settings_are_read_from_config(
     assert config.tasks.project_tag_key == "proj"
 
 
+def test_project_convention_in_config_warns_deprecated_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``?project=`` matches under BOTH conventions now (§5B.1), so the posture
+    knob selects nothing. A configured value still parses — and is still
+    validated — but warns ONCE, naming the file, so operators remove it."""
+    import lithos_lens.config_fields as config_fields
+
+    monkeypatch.setattr(config_fields, "_WARNED", set())
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        'project_convention = "tag"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with caplog.at_level("WARNING", logger="lithos_lens.config"):
+        first = load_config(config_path)
+        load_config(config_path)
+
+    assert first.tasks.project_convention == "tag"
+    warnings = [
+        r
+        for r in caplog.records
+        if "project_convention is deprecated" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert str(config_path) in warnings[0].getMessage()
+
+
+def test_a_config_without_the_retired_posture_warns_about_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The notice is keyed on the knob being WRITTEN, not on its value: the
+    default posture is what every config now gets, and saying so unprompted
+    would train operators to ignore the line."""
+    import lithos_lens.config_fields as config_fields
+
+    monkeypatch.setattr(config_fields, "_WARNED", set())
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        'project_tag_key = "proj"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with caplog.at_level("WARNING", logger="lithos_lens.config"):
+        load_config(config_path)
+
+    assert not [
+        r
+        for r in caplog.records
+        if "project_convention is deprecated" in r.getMessage()
+    ]
+
+
 def test_visible_cap_in_config_warns_deprecated_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -779,9 +840,9 @@ def test_visible_cap_in_config_warns_deprecated_once(
     """visible_cap is superseded by frontier_limit (the graph-native dashboard
     has no per-row claim enrichment to cap); a configured value still parses
     but warns ONCE so operators migrate without breakage."""
-    import lithos_lens.config as config_module
+    import lithos_lens.config_fields as config_fields
 
-    monkeypatch.setattr(config_module, "_VISIBLE_CAP_WARNED", False)
+    monkeypatch.setattr(config_fields, "_WARNED", set())
     config_path = tmp_path / "lithos-lens.toml"
     config_path.write_text(
         '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\nvisible_cap = 10\n'

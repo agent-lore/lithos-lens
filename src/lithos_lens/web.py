@@ -586,19 +586,17 @@ async def _reject_oversized_filters(
 
 
 async def _load_detail(state: AppState, task_id: str) -> TaskDetailData:
-    """One task's detail data, under the deployment's project convention.
+    """One task's detail data, with its project chips already resolved.
 
-    The convention is config (§5B.1) and the panel's project chip is rendered
-    from it, so it is threaded in here — once — rather than re-read in a
-    template that would have to decide between `metadata.project` and the
-    `<tag_key>:<slug>` tag on its own.
+    The panel's project chip is rendered from §5B.1's two conventions, and the
+    tag half's KEY is config (§5B.9), so it is threaded in here — once —
+    rather than re-read in a template that would have to decide between
+    `metadata.project` and the `<tag_key>:<slug>` tag on its own.
     """
-    tasks_config = state.config.tasks
     return await load_task_detail(
         state.lithos_client,
         task_id,
-        convention=tasks_config.project_convention,
-        tag_key=tasks_config.project_tag_key,
+        tag_key=state.config.tasks.project_tag_key,
     )
 
 
@@ -647,7 +645,6 @@ async def _render_tasks(
             query_items,
             state.config.tasks.default_time_range_days,
             state.config.tasks.default_status_groups,
-            project_convention=state.config.tasks.project_convention,
             project_tag_key=state.config.tasks.project_tag_key,
         )
         logger.debug(

@@ -156,17 +156,14 @@ def test_parse_filters_folds_the_add_tag_box_into_the_tag_set() -> None:
     assert filters.tags == ("roadmap-2026-08", "loom-candidate")
 
 
-def test_parse_filters_carries_the_configured_convention() -> None:
-    filters = parse_filters(
-        [],
-        default_days=30,
-        project_convention="tag",
-        project_tag_key="proj",
-    )
+def test_parse_filters_carries_the_configured_tag_key() -> None:
+    """The tag KEY is the only project config a filter still carries: the
+    posture knob is retired (§4.4), so matching needs nothing else."""
+    filters = parse_filters([], default_days=30, project_tag_key="proj")
 
     assert filters.projects == ()
-    assert filters.project_convention == "tag"
     assert filters.project_tag_key == "proj"
+    assert not hasattr(filters, "project_convention")
 
 
 def test_task_projects_unions_both_conventions() -> None:
@@ -276,10 +273,16 @@ def test_multiple_projects_select_their_union() -> None:
     )
 
 
-def test_project_filter_under_metadata_convention_ignores_the_tag() -> None:
-    filters = _filters(projects=("influx",), project_convention="metadata")
+def test_project_filter_matches_a_row_under_either_convention() -> None:
+    """`?project=` honours EITHER convention (§5B.1), so a control that offers
+    a slug — the datalist, the scope picker, the quick-switch strip — can never
+    hand the operator a value the filter refuses. `project_convention` used to
+    select which one was honoured; it is parsed and ignored (§4.4), and a
+    filter cannot even express a posture any more, which is why this test can
+    state the rule without one."""
+    filters = _filters(projects=("influx",))
 
-    assert not matches_filters(
+    assert matches_filters(
         _task(tags=("project:influx",)), filters=filters, status="open"
     )
     assert matches_filters(

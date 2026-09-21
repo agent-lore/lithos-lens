@@ -119,8 +119,8 @@ def test_the_panel_names_the_task_project_and_type(
     lithos_lens_config_env: Path,
 ) -> None:
     """The header is the identity §5.5.1 asks for: type badge, status and the
-    project chip read under the configured convention (§5B.1), not guessed at
-    in the template."""
+    project chip read under §5B.1's conventions, not guessed at in the
+    template."""
     fake = _related_fixture()
 
     with _client(lithos_lens_config_env, fake) as client:

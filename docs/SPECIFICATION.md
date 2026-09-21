@@ -158,7 +158,7 @@ The current configuration model includes:
 - `tasks.frontier_limit`
 - `tasks.default_time_range_days`
 - `tasks.default_status_groups`
-- `tasks.project_convention`
+- `tasks.project_convention` *(deprecated: parsed and ignored, REQUIREMENTS §4.4)*
 - `tasks.project_tag_key`
 - `tasks.gate_waiting_attention_hours`
 - `tasks.claim_expiring_soon_minutes`
@@ -282,14 +282,13 @@ The dashboard also renders:
   `convention="both"`, §5B.1's universe rule (the union of both conventions, so
   no project is invisible to its own view), which is the same call the Project
   datalist and the graph scope picker make, so a project carried only in
-  `metadata.project` counts like a tagged one, whatever `project_convention` is
-  set to — the strip and the datalist beside it state the same universe, so the
-  two controls never disagree about which projects exist. (Under a
-  single-convention posture that universe can name a project the filter will
-  not match, because §5B.1 also says matching honours the configured
-  convention; the gap is the datalist's too, and closing it means making
-  `matches_projects` read the universe as well — Lithos task `f990395d`,
-  which retires `project_convention` as a membership knob.) Each
+  `metadata.project` counts like a tagged one — the strip and the datalist
+  beside it state the same universe, so the two controls never disagree about
+  which projects exist. (That universe is also what `?project=` MATCHES:
+  `matches_projects` reads both conventions whatever the config says, so no
+  offering control can name a project the filter refuses. It could, until
+  `project_convention` was retired as a membership knob — parsed and ignored,
+  REQUIREMENTS §4.4.) Each
   chip carries the project's **open-row count** within that scope — the open
   sections plus Gates; terminal rows contribute nothing — and the chips order by
   count then slug. The scope is **every active filter except `project`**, so the
@@ -301,8 +300,7 @@ The dashboard also renders:
   the strip with its Clear stays on a board whose scope holds no project at
   all, because it is then the only way back. Every chip has open rows behind
   it, so none leads to an empty board (the same rule §5.2.1 gives the epic
-  strip, evaluated under the same generation, and under the default
-  `project_convention`). The strip is hidden when the
+  strip, evaluated under the same generation). The strip is hidden when the
   scope holds fewer than two projects and no project filter is active.
   Generated project links carry the board's filter state and nothing else (the
   `request_filters` allowlist, plus `all_agents`): the panel selection, an
@@ -339,8 +337,11 @@ The current dashboard supports these filters:
   indistinguishable from the empty-tag filter. The box autocompletes from the
   `tags` datalist (below).
 - `project`
-  Project scope, honoring the configured convention (metadata key, reserved
-  tag, or both). Multi-select and OR: `?project=a,b` (or repeated `project`
+  Project scope. A row matches when it carries the slug under EITHER §5B.1
+  convention — `metadata.project` or the reserved `<project_tag_key>:<slug>`
+  tag — which is the same union the `projects` datalist, the quick-switch strip
+  and the graph scope picker are built from, so every offered value leads to
+  its own rows. Multi-select and OR: `?project=a,b` (or repeated `project`
   pairs) shows either project's rows. The quick-switch strip (§5.3) is the
   fast way to set it, and the Project box still accepts anything typed — the
   strip reflects whatever the filter holds, however it got there.
@@ -390,7 +391,8 @@ Filter behavior:
   snapshot plus the windowed terminal rows, deduped by id) and BEFORE the
   filters narrow anything, so selecting one value never collapses the list of
   values you can switch to. None of them costs a Lithos read of its own.
-  - `projects` is the union of both conventions' slugs (§5B.1).
+  - `projects` is the union of both conventions' slugs (§5B.1) — the same
+    reading `?project=` matches on, so nothing offered here is a dead end.
   - `tags` is the sorted, deduped union of the loaded rows' tags, raw and
     unnormalized — the box has to offer exactly what it would submit, and
     upstream types a tag as a bare string, so whitespace and case are
@@ -599,8 +601,8 @@ REQUIREMENTS), rendered from one template that extends no layout:
   hands down, because that is the one form that addresses every id: a task
   called `graph` fetched as `/tasks/graph` would return the graph PAGE.
 - The header carries the identity §5.5.1 asks for, and says so even when the
-  answer is empty: a task belonging to no project under the configured
-  convention renders an explicit `(no project)` chip rather than nothing, so
+  answer is empty: a task belonging to no project under either convention
+  renders an explicit `(no project)` chip rather than nothing, so
   projectless work is distinguishable from a field that failed to render.
 - **Every row on the board opens one**, the Gates section included: a gate is a
   task, and "what is this gate holding up?" is the Blocks list the panel
@@ -621,7 +623,7 @@ REQUIREMENTS), rendered from one template that extends no layout:
   its disclosure control keeps that behaviour.
 
 The panel states: the header (title, status, type badge with `gate_type`,
-project chip under the configured convention, creating agent), the parent
+project chip under §5B.1's conventions, metadata first, creating agent), the parent
 breadcrumb, the blockers with live status (level 1, no per-level expander —
 the walk lives on the full page), **Blocks** (the level-1 dependents), the
 **downstream impact** when it was given a scope (below), the
@@ -1038,7 +1040,8 @@ when its picture is from rather than imply freshness.
 A **scope** (`graph_scope.py`) is what one graph page would render, computed
 over the master task list plus that cache and fanning out only for misses:
 
-- **membership** — a project scope is the project's tasks per §5B.1, open only
+- **membership** — a project scope is the project's tasks per §5B.1 (either
+  convention; the picker one link back offers exactly this set), open only
   unless `include_resolved`; an epic scope is
   `lithos_task_children(recursive, include_closed)` plus the epic, with closed
   children included by default;
@@ -1200,8 +1203,9 @@ the line states the one it has rather than always blaming the predecessor).
 **Cycle authority is Lithos's** (§5.7). The page reads `lithos_task_blocked`
 **scoped**, one read pair per project in the coverage set — every §5B.1
 project among the in-scope tasks AND the downstream ghosts — where a pair is
-`project=<slug>` plus, under the `"both"` convention, `tags=["<project_tag_key>:<slug>"]`,
-each at `tasks.frontier_limit`, with `len == limit` treated as truncation. The
+`project=<slug>` plus `tags=["<project_tag_key>:<slug>"]` — both halves
+always, because membership is both conventions — each at
+`tasks.frontier_limit`, with `len == limit` treated as truncation. The
 pair is unioned **per task**: the two calls are independent reads rather than
 one snapshot, so a task's blockers are merged across every response that names
 it (a `kind="cycle"` blocker arriving on either side is Lithos's verdict), and
@@ -1215,10 +1219,11 @@ task is cycle-status *known* when it appears in any response, or when some read
 that **could have matched it** answered in full — and that is a question about
 the convention each read expresses (§5B.1): `project=<slug>` is the metadata
 convention, `tags=["<key>:<slug>"]` the tag one. An empty response from a
-filter the task cannot match is not coverage, which is what a single-convention
-posture makes load-bearing: under `"metadata"` only the `project=` half is
-issued, so a child carrying only `project:<slug>` is covered by nothing and is
-marked unknown rather than silently reported cycle-free.
+filter the task cannot match is not coverage — which is why both halves are
+always issued. `project_convention` used to drop one of them, leaving a child
+that carried its slug under the unissued convention in scope with its cycle
+status resting on a read that could never have named it; retiring the knob
+(REQUIREMENTS §4.4) closed that with the membership gap it came from.
 A scoped read answers about a **project**, not about this graph, so it returns
 rows for tasks the page never fetched and for ghosts whose own edges it never
 read: only rows naming an **in-scope, non-ghost** task are this graph's

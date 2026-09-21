@@ -1772,13 +1772,13 @@ def test_disagreeing_project_conventions_warn_to_telemetry(
         assert _section_ids(scoped_data.sections, "ready") == ["conflicted"]
 
 
-def test_single_convention_posture_still_warns_about_a_conflict(
+def test_a_conflicted_row_is_reported_once_and_matches_under_both_slugs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """§5B.1 makes the conflict warning a property of the DATA: a task carrying
-    two disagreeing conventions is reported whatever posture Lens matches
-    under. The posture narrows matching only — both values are read either
-    way."""
+    """§5B.1 makes the conflict warning a property of the DATA, and neither
+    value is dropped: the row is reachable from either project's board, and
+    the dropdown offers both. This is the telemetry the widened filter must
+    leave alone."""
     conflicted = _task(
         "conflicted",
         claims=(),
@@ -1786,16 +1786,9 @@ def test_single_convention_posture_still_warns_about_a_conflict(
         metadata={"project": "stamped"},
     )
     fake = _FrontierFake(open_tasks=[conflicted], ready=[conflicted], blocked=[])
-    filters = TaskFilters(
-        statuses=("open",),
-        tags=(),
-        agent="",
-        since="",
-        project_convention="metadata",
-    )
 
     with caplog.at_level("WARNING", logger="lithos_lens.frontier"):
-        data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+        data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
     (record,) = [
         r
@@ -1803,9 +1796,13 @@ def test_single_convention_posture_still_warns_about_a_conflict(
         if getattr(r, "lens_event", "") == "lens.tasks.project_convention_conflict"
     ]
     assert record.__dict__["conflicting_task_ids"] == ["conflicted"]
-    # The posture narrows MATCHING, not the universe: §5B.1 keeps the dropdown
-    # the union of both conventions' slugs so no project is invisible.
     assert data.projects == ("stamped", "tagged")
+    for slug in ("stamped", "tagged"):
+        scoped = replace(_FILTERS, projects=(slug,))
+        scoped_data = asyncio.run(
+            load_dashboard(fake, filters=scoped, frontier_limit=500)
+        )
+        assert _section_ids(scoped_data.sections, "ready") == ["conflicted"]
 
 
 def test_malformed_metadata_project_is_reported_and_never_fabricates_a_slug(
@@ -1841,30 +1838,26 @@ def test_malformed_metadata_project_is_reported_and_never_fabricates_a_slug(
     ]
 
 
-def test_project_universe_unions_both_conventions_under_a_single_posture() -> None:
-    """§5B.1: the universe is the union of both conventions' slugs whatever the
-    posture — a tag-only project must not vanish from the dropdown just because
-    matching honours ``metadata``."""
+def test_the_project_universe_offers_exactly_what_the_filter_matches() -> None:
+    """§5B.1: the universe is the union of both conventions' slugs — a tag-only
+    project must not vanish from the dropdown — and every value it offers now
+    leads to its own rows, because matching reads that same union."""
     stamped = _task("stamped", claims=(), metadata={"project": "influx"})
     tagged = _task("tagged", claims=(), tags=("project:ganglion",))
     fake = _FrontierFake(
         open_tasks=[stamped, tagged], ready=[stamped, tagged], blocked=[]
     )
-    filters = TaskFilters(
-        statuses=("open",),
-        tags=(),
-        agent="",
-        since="",
-        project_convention="metadata",
-    )
 
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
+    data = asyncio.run(load_dashboard(fake, filters=_FILTERS, frontier_limit=500))
 
     assert data.projects == ("ganglion", "influx")
-    # Matching still honours the posture: the tag-only row is out of scope.
-    filters = replace(filters, projects=("ganglion",))
-    scoped = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
-    assert _section_ids(scoped.sections, "ready") == []
+    # Every offered slug is a slug the filter honours — no dead ends.
+    for slug, expected in (("ganglion", ["tagged"]), ("influx", ["stamped"])):
+        scoped = replace(_FILTERS, projects=(slug,))
+        scoped_data = asyncio.run(
+            load_dashboard(fake, filters=scoped, frontier_limit=500)
+        )
+        assert _section_ids(scoped_data.sections, "ready") == expected
 
 
 def test_resolved_rows_are_fetched_with_claims_only_for_the_agent_match() -> None:
@@ -3665,10 +3658,17 @@ def test_a_second_project_ors_onto_the_first() -> None:
 
 
 def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
-    """§5B.1's both-conventions rule, which is the default posture: loom's
-    issue-mirrored tasks carry ``metadata.project`` and no project TAG, and a
-    strip that read only the tag convention would leave those projects — this
-    UX pass's own tasks among them — out of the scope they are inside."""
+    """§5B.1's universe rule: the strip lists the union of both conventions.
+
+    "The project universe (filter dropdowns, Planning View rows) is the union
+    of both conventions' slugs, so no project is invisible to its own view" —
+    the same ``task_projects(…, convention="both", …)`` call ``project_universe``
+    (the Project datalist), ``graph_page.observed_projects`` (the scope picker)
+    and, since the posture knob was retired, ``matches_projects`` itself make.
+    Loom's issue-mirrored tasks carry ``metadata.project`` and no project TAG,
+    and a strip that read only the tag convention would leave those projects —
+    this UX pass's own tasks among them — out of the scope they are inside.
+    """
     mirrored = _task(
         "mirrored",
         claims=(),
@@ -3692,52 +3692,16 @@ def test_a_metadata_only_project_is_counted_like_a_tagged_one() -> None:
     ]
 
 
-def test_every_project_convention_is_enumerated_whatever_the_posture() -> None:
-    """§5B.1's universe rule: the strip lists the union of both conventions.
-
-    "The project universe (filter dropdowns, Planning View rows) is the union
-    of both conventions' slugs, so no project is invisible to its own view" —
-    the same ``task_projects(…, convention="both", …)`` call ``project_universe``
-    (the Project datalist) and ``graph_page.observed_projects`` (the scope
-    picker) make. A posture that narrows MATCHING narrows none of the three:
-    loom's issue-mirrored rows carry ``metadata.project`` and no project tag,
-    and they are as much a project as any tagged one.
-    """
-    mirrored = _task(
-        "mirrored",
-        claims=(),
-        tags=("roadmap",),
-        metadata={"project": "lithos-loom"},
-    )
-    tagged = _in_project("tagged", "lithos-lens", "roadmap")
-    fake = _FrontierFake(
-        open_tasks=[mirrored, tagged], ready=[mirrored, tagged], blocked=[]
-    )
-
-    for convention in ("both", "tag", "metadata"):
-        data = asyncio.run(
-            load_dashboard(
-                fake,
-                filters=replace(
-                    _FILTERS, tags=("roadmap",), project_convention=convention
-                ),
-                frontier_limit=500,
-            )
-        )
-
-        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
-            ("lithos-lens", 1),
-            ("lithos-loom", 1),
-        ], convention
-
-
 def test_every_chip_leads_to_a_board_with_its_own_rows_on_it() -> None:
-    """The no-dead-end rule under the live posture, counts included.
+    """The no-dead-end rule, counts included.
 
     Every chip is FOLLOWED and its count checked against the rows the board
     then holds, over a scope mixing both conventions and a project the tag
     filter leaves out: a strip that advertised work the click cannot show — or
-    mis-stated how much — fails here.
+    mis-stated how much — fails here. It holds under every parsed value of the
+    retired ``project_convention`` too, which is a question about CONFIG rather
+    than about filters and is asked at the route
+    (``test_tasks_mvp.py::test_every_offered_project_leads_to_its_rows_whatever_the_posture``).
     """
     mirrored = _task(
         "mirrored",
@@ -3775,49 +3739,6 @@ def test_every_chip_leads_to_a_board_with_its_own_rows_on_it() -> None:
         ]
         assert shown, chip.slug
         assert len(shown) == chip.open_count, chip.slug
-
-
-def test_a_single_convention_posture_inherits_the_5b1_universe_gap() -> None:
-    """The residual, pinned where it can be found rather than left implicit.
-
-    §5B.1 says the universe unions both conventions AND that
-    ``project_convention`` selects the honoured one for matching, so under a
-    single-convention posture every control that offers the universe — the
-    Project datalist (pinned by
-    ``test_project_universe_unions_both_conventions_under_a_single_posture``)
-    and now this strip — can offer a value the filter will not match. The strip
-    states the same universe the datalist does rather than inventing a second,
-    narrower answer beside it.
-
-    Closing the gap means making ``matches_projects`` read the universe too —
-    a change to §5B.1's normative matching rule and to every filtering surface,
-    which is not this strip's to make. That change is Lithos task ``f990395d``
-    (assume ``both``, retire the knob); this test is the one to invert with it.
-    """
-    mirrored = _task(
-        "mirrored",
-        claims=(),
-        tags=("roadmap",),
-        metadata={"project": "lithos-loom"},
-    )
-    fake = _FrontierFake(open_tasks=[mirrored], ready=[mirrored], blocked=[])
-    filters = replace(_FILTERS, tags=("roadmap",), project_convention="tag")
-
-    data = asyncio.run(load_dashboard(fake, filters=filters, frontier_limit=500))
-
-    # Offered, because the universe rule says the project exists…
-    assert [chip.slug for chip in data.project_chips] == ["lithos-loom"]
-    assert data.projects == ("lithos-loom",)
-    # …and the datalist's own value behaves identically under this posture:
-    # the tag convention cannot see a metadata-only row.
-    followed = asyncio.run(
-        load_dashboard(
-            fake,
-            filters=replace(filters, projects=("lithos-loom",)),
-            frontier_limit=500,
-        )
-    )
-    assert not any(followed.sections.values())
 
 
 def test_the_strip_scope_honours_the_agent_and_created_windows() -> None:

@@ -25,6 +25,7 @@ from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
     MAX_SINCE_LOOKBACK_DAYS,
+    OPEN_SECTIONS,
     AgentRecord,
     ClaimRecord,
     FindingRecord,
@@ -5483,3 +5484,64 @@ def test_the_clear_survives_a_scope_with_no_projects_left_in_it(
     }
     assert cleared.status_code == 200
     assert "data-project-clear" not in cleared.text
+
+
+# --- the retired project_convention posture (§4.4) --------------------------
+
+
+def _open_row_ids(html: str) -> set[str]:
+    """Every OPEN-side task row the board rendered — the rows a chip counts.
+
+    The resolved sections are excluded the same way ``project_chips`` excludes
+    them: a completed row is not work to switch to, so it is not in a count.
+    """
+    return {
+        task_id
+        for section in OPEN_SECTIONS
+        if f'data-task-group="{section}"' in html
+        for task_id in re.findall(r'data-task-id="([^"]+)"', _group(html, section))
+    }
+
+
+@pytest.mark.parametrize("posture", ["both", "tag", "metadata"])
+def test_every_offered_project_leads_to_its_rows_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str
+) -> None:
+    """`?project=` matches under BOTH conventions whatever the config says.
+
+    ``[tasks].project_convention`` used to select which §5B.1 convention
+    matching honoured, while every control that OFFERS a project — the datalist
+    (``project_universe``), the graph scope picker, and the quick-switch strip —
+    unioned both. Under ``"tag"`` or ``"metadata"`` those controls could
+    therefore hand the operator a slug the filter refused: a dead-end datalist
+    value, a dead-end chip with a positive count. The knob is parsed and
+    ignored (§4.4), so this asserts the same board under all three values —
+    including ``lithos``, which is carried by ``metadata.project`` alone.
+    """
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    fake = _three_project_fake()
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
+        followed = {
+            slug: client.get(href).text
+            for slug, href in _project_chip_links(unescape(board.text)).items()
+        }
+        stamped = client.get("/tasks?project=lithos&since=2026-04-01")
+
+    text = unescape(board.text)
+    assert board.status_code == 200
+    counts = _project_chip_counts(text)
+    assert counts == {"lithos-lens": 2, "lithos": 1, "lithos-loom": 1}, posture
+    # Every offered slug is a slug the filter honours, and the count it states
+    # is the number of open rows the click actually lands on.
+    assert set(_datalist_options(board.text, "projects")) >= set(counts), posture
+    for slug, body in followed.items():
+        rows = _open_row_ids(unescape(body))
+        assert len(rows) == counts[slug], (posture, slug, rows)
+    # The acceptance case: a row carried by ``metadata.project`` alone is on
+    # its own project's board even under the ``tag`` posture.
+    assert "Core roadmap item" in stamped.text, posture

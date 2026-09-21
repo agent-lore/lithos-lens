@@ -640,7 +640,6 @@ classDiagram
     +created_since str
     +epic str
     +projects tuple[str, ...]
-    +project_convention ProjectConvention
     +project_tag_key str
   }
   class TaskRecord {
