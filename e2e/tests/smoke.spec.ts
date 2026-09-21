@@ -1991,3 +1991,77 @@ test("a row's short id renders as selectable, muted, non-wrapping monospace", as
   });
   expect(selected).toBe("influx-i");
 });
+
+/**
+ * The Children table at the narrowest captured width (round-3 correctness
+ * f-004).
+ *
+ * The short id gave the table a fourth column, and four columns do not fit
+ * 320px. The first answer was to scroll the table in its own box, which kept
+ * the page-level "never scrolls sideways" contract green — the capture suite
+ * asserts `documentElement.scrollWidth <= width` and it passed — while putting
+ * the STATUS column entirely off screen with no scrollbar rendered to say
+ * anything was there. The row read as complete and was not.
+ *
+ * So this asserts what that contract could not: every cell of every child row
+ * is INSIDE the viewport. Only a browser can state it — the cells are on
+ * screen or off it by computed layout, and no HTML-substring test in the
+ * pytest suite can see the difference.
+ */
+test("every fact in the Children table is on screen at 320px", async ({
+  page,
+}) => {
+  const width = 320;
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto("/tasks/influx-epic");
+
+  const rows = page.locator(".children-table tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const rowCount = await rows.count();
+  expect(rowCount).toBeGreaterThan(0);
+
+  for (let index = 0; index < rowCount; index += 1) {
+    const cells = rows.nth(index).locator("td");
+    // All four: the id that was added, and the three that were there before.
+    await expect(cells).toHaveCount(4);
+
+    for (let cell = 0; cell < 4; cell += 1) {
+      const target = cells.nth(cell);
+      await expect(target).toBeVisible();
+      const box = await target.boundingBox();
+      expect(box, `row ${index} cell ${cell} has no box`).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      // The right edge, which is the one the scrolling box pushed past it.
+      expect(
+        box!.x + box!.width,
+        `row ${index} cell ${cell} runs past the viewport`,
+      ).toBeLessThanOrEqual(width);
+    }
+  }
+
+  // The status badge specifically — the value that went missing — is readable
+  // text on screen and not a clipped crescent at the edge.
+  const status = rows.first().locator('td[data-label="Status"] .badge');
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText(/\S/);
+  const badge = await status.boundingBox();
+  expect(badge!.x + badge!.width).toBeLessThanOrEqual(width);
+
+  // …and the column each stacked value belongs to is still stated, now beside
+  // the value rather than above it.
+  expect(
+    await rows
+      .first()
+      .locator("td")
+      .evaluateAll((cells) =>
+        cells.map((cell) =>
+          getComputedStyle(cell, "::before").content.replace(/"/g, ""),
+        ),
+      ),
+  ).toEqual(["Id", "Task", "Type", "Status"]);
+
+  // The page itself still never scrolls sideways.
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(width);
+});

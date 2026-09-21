@@ -219,10 +219,13 @@
           {% else %}
             {# The table gained a fourth column with the short id, and four
                columns do not fit a 320px viewport (the e2e responsive contract
-               is that the PAGE never scrolls sideways). So the table scrolls in
-               its own box instead of pushing the document — the id column is
-               the one the operator reads first, and it is the one that stays
-               on screen. #}
+               is that the PAGE never scrolls sideways). The box below scrolls
+               so a table can never push the document sideways — but scrolling
+               was not enough on its own: at 320px it put the STATUS column off
+               screen with no scrollbar to say so, and a row that looks
+               complete and is not is worse than one that wraps (round-3
+               correctness f-004). So below 700px the rows STACK instead, each
+               cell labelled by `data-label`, and every fact is on screen. #}
             <div class="children-table-scroll">
             <table class="children-table">
               <thead>
@@ -233,11 +236,15 @@
               </thead>
               <tbody>
                 {% for child in detail.children %}
+                  {# `data-label` is the column each cell belongs to, stated on
+                     the cell itself. It is what the narrow layout reads: below
+                     700px a row stacks and there is no header row above it to
+                     line up under, so the label travels with the value. #}
                   <tr data-child-id="{{ child.id }}">
-                    <td>{% with task_id = child.id %}{% include "tasks/short_id.html" %}{% endwith %}</td>
-                    <td><a href="{{ task_detail_url(request, child.id) }}">{{ child.title }}</a></td>
-                    <td>{{ child.task_type }}</td>
-                    <td><span class="badge badge-{{ child.status }}">{{ child.status }}</span></td>
+                    <td data-label="Id">{% with task_id = child.id %}{% include "tasks/short_id.html" %}{% endwith %}</td>
+                    <td data-label="Task"><a href="{{ task_detail_url(request, child.id) }}">{{ child.title }}</a></td>
+                    <td data-label="Type">{{ child.task_type }}</td>
+                    <td data-label="Status"><span class="badge badge-{{ child.status }}">{{ child.status }}</span></td>
                   </tr>
                 {% endfor %}
               </tbody>

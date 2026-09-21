@@ -481,11 +481,15 @@ def test_the_children_table_carries_a_leading_id_column(
     headers = re.findall(r"<th scope=\"col\">([^<]+)</th>", table)
     assert headers == ["Id", "Task", "Type", "Status"]
     row = table.split('data-child-id="28105098bbbb"', 1)[1].split("</tr>")[0]
-    cells = re.findall(r"<td>(.*?)</td>", row, re.DOTALL)
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
     assert cells[0].strip() == (
         '<code class="task-short-id" title="28105098bbbb">28105098</code>'
     )
     assert "Write the docs" in cells[1]
+    # Each cell names its column on itself: below 700px the rows stack and the
+    # header row is gone, so the label travels with the value (the 320px
+    # artifact finding — every fact stays on screen, and stays labelled).
+    assert re.findall(r'<td data-label="([^"]+)">', row) == headers
 
 
 def test_every_blocker_blocks_and_provenance_line_states_its_id(

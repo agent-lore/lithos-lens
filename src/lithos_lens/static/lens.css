@@ -1528,6 +1528,58 @@ button,
   .filter-dates {
     grid-column: span 1;
   }
+
+  /* The Children table's four columns (id, task, type, status) cannot all be
+     read at 320px. Scrolling the table in its own box kept the PAGE from
+     scrolling sideways but moved status off screen with no visible scrollbar
+     to say anything was there — the row read as complete and was not (round-3
+     correctness f-004). So a row stacks here: every fact is on screen, the id
+     still leads it, and each value carries the column name it lined up under,
+     because the header row it lined up under is gone. */
+  .children-table-scroll {
+    overflow-x: visible;
+  }
+
+  .children-table,
+  .children-table tbody,
+  .children-table tr,
+  .children-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .children-table thead {
+    display: none;
+  }
+
+  .children-table tr {
+    border-bottom: 1px solid var(--line);
+    padding: 0.5rem 0;
+  }
+
+  .children-table td {
+    border-bottom: 0;
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+  }
+
+  /* The heading this value would have sat under, travelling with it. Fixed
+     width so the values line up down the stack the way they did down the
+     table, and `min-width: 0` on the value beside it so a long title wraps
+     inside the row instead of widening it. */
+  .children-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    flex: 0 0 3.25rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .children-table td > * {
+    min-width: 0;
+  }
 }
 
 @keyframes row-pulse {
