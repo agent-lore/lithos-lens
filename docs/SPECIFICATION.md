@@ -217,6 +217,44 @@ there, so an unsatisfiable task cannot be mistaken for one merely waiting):
 Completed and cancelled tasks render in their own lists over a resolved-at
 window.
 
+**Every task is named by its title and its short id.** The short id is the first
+8 characters — the prefix loom's gate and log lines, the findings, the ROADMAP
+and the PR bodies all type, and the one Lithos resolves back (any unambiguous
+prefix of 6 or more) — so a row can be related to `28105098` at a glance. The id
+is metadata, so it renders **first in the surface's metadata group**: the
+right-hand meta column of a row here and in Gates, the detail page's and the
+side panel's meta line (§5.6), a graph layer entry's badges (§5.12). Where a
+surface has no such group it sits with that surface's other facts about the task
+— a leading column in the children table, after the status on a blocker /
+Blocks / provenance line or on a gate's waiter, after the link in a breadcrumb
+trail or in the sentence a scoped-epic banner states. A row that names a SECOND
+task states that task's id too, and not only its own: a blocker chip carries the
+predecessor's id beside its title, and the `unsatisfiable`/`cycle` supporting
+fact states it in the same element, spliced into the sentence right after the
+name — `Blocker "Design schema" 28105098 was cancelled …`. The reason carries
+the predecessor as an ID, not as prose, so that one element is the same one
+every other surface renders and no sentence is marked safe HTML to get there. A
+name that already IS an id (the predecessor is not in the snapshot) adds
+nothing. It is selectable monospace
+text carrying the whole id in its tooltip, so select-and-copy yields exactly the
+prefix everything else uses, and the title itself is never rewritten.
+
+Two kinds of surface are deliberately exempt, and only these:
+
+- the **Epic rollup strip's** progress chips, which have no room for another
+  visible token: the chip's `title` carries the epic's id — the WHOLE id, since
+  a tooltip is the only identity fallback a chip with no visible id has;
+- the **Cytoscape canvas** (§5.12.1), whose node labels stay the title alone —
+  an extra token on every node crowds the picture, and a click opens the side
+  panel, which leads with the id.
+
+A **path expression** — the cycle callout's `A → B → A` walk, the longest
+blocking chain's node list (§5.12) — is not an exemption: every step of it
+names a task, so every step states that task's id. The chain sentence is
+rewritten client-side on every focus transition, so the client rebuilds it as
+markup rather than as text and the ids come back with it; a line that came back
+without them would contradict the markup the page shipped with.
+
 **Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
 can never become ready) and `cycle` (the blocking chain closes on itself) — and
@@ -500,7 +538,11 @@ The task detail page is built on the same graph reads as the dashboard, so the
 two cannot disagree about why a task is where it is. It shows:
 
 - task title and body/summary content, status metadata, creating agent, created
-  timestamp, tags, and claim state where known
+  timestamp, tags, and claim state where known. The meta line under the heading
+  **leads with the task's short id** (§5.3), as the side panel's does and as
+  every row on the board does; the parent breadcrumb above it states the id of
+  each ANCESTOR it names, and not of its own last entry — that is this task,
+  whose id is in the meta line two lines below
 - **why this task is here** — the Needs-attention reasons, when the board
   promoted it, with the same supporting facts the chips carry
 - **blockers**, each labelled: a satisfied predecessor (the edge survives
@@ -1128,6 +1170,14 @@ text**. That is the first-class baseline, not a fallback: the page is complete
 and reviewable with no JavaScript, and the Cytoscape rendering (§5.12.1) is
 enhancement drawn from the same embedded payload, so the picture and the text
 cannot disagree.
+
+Every task the text names — a layer entry, the predecessor on an edge line, a
+hierarchy row, a cycle callout's member, a step of its arrow walk, a task the
+longest-chain sentence names, a hit offered by the search box, an epic in the
+scope picker — carries its **short id** (§5.3), ahead of the status badge
+wherever the entry has one. Ghosts included: a ghost is one hop outside the
+scope and carries no status of its own, so the id is often all the operator
+has. One thing on this page does not carry it (§5.3's exemption): the canvas.
 
 **Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
 page renders a picker listing every project the snapshot observes under both

@@ -361,6 +361,49 @@ function clickEvent(map, label) {
   };
 }
 
+// The pending strip at the top of an unfiltered board, where a `task.created`
+// event's optimistic row lands (§5.5). Rows are kept as OBJECTS rather than
+// markup: the row's metadata group is filled with DOM calls, so what it leads
+// with is a property of the element, not a substring of a string.
+const pendingRows = [];
+const pendingList = { prepend(row) { pendingRows.unshift(row); } };
+
+// The smallest element `tasks.js` can really build against: `escapeHtml`
+// round-trips text through one, and the skeleton row writes markup into one
+// and then reaches into its `.task-row-meta` for the short id (§5.3).
+function makeElement(tag) {
+  const meta = {
+    className: "task-row-meta",
+    children: [],
+    prepend(child) { this.children.unshift(child); },
+  };
+  return {
+    tag,
+    dataset: {},
+    style: {},
+    meta,
+    _text: "",
+    _html: null,
+    get textContent() { return this._text; },
+    set textContent(value) {
+      this._text = String(value);
+      this._html = null;
+    },
+    get innerHTML() {
+      if (this._html !== null) return this._html;
+      return this._text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    },
+    set innerHTML(value) { this._html = value; },
+    querySelector(selector) {
+      return selector === ".task-row-meta" ? meta : null;
+    },
+    appendChild() {},
+  };
+}
+
 const document = {
   // What a DEFERRED script sees (the parser sets `"interactive"` before working
   // through the deferred list); `DOMContentLoaded` is fired below, once the
@@ -370,6 +413,7 @@ const document = {
     if (selector === "[data-panel-host]") return host;
     if (selector === '[data-refresh-fragment="panel"]') return host.panel;
     if (selector === '[data-refresh-fragment="dashboard-data"]') return boardNode;
+    if (selector === '[data-task-list="pending"]') return pendingList;
     // The PANEL contract — carried by every row on the board, gates included.
     const selected =
       /\\[data-panel-url\\]\\[data-task-id="([^"]+)"\\]/.exec(selector);
@@ -384,7 +428,7 @@ const document = {
     return null;
   },
   querySelectorAll() { return { length: 0, forEach() {} }; },
-  createElement() { return { dataset: {}, style: {}, appendChild() {} }; },
+  createElement(tag) { return makeElement(tag); },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
   // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
   // because that removal has no event of its own: the page's own listeners
@@ -506,6 +550,24 @@ function fire(type, event) {
   (listeners[type] || []).forEach((listener) => listener(event));
 }
 
+// One `task.created` event, the optimistic row's only trigger. It carries a
+// title and nothing else — no tags, no project, no creator — which is why the
+// row it builds can only be shown on an unfiltered board. The id is the
+// test's, because "the prefix the client cuts is the prefix the server cuts"
+// is a claim only an id with an interesting boundary can make.
+function created(taskId) {
+  eventSeq += 1;
+  (sse["task.created"] || []).forEach((listener) => listener({
+    lastEventId: "event-" + eventSeq,
+    data: JSON.stringify({
+      type: "task.created",
+      task_id: taskId,
+      payload: { title: "Freshly created task" },
+      requires_refresh: false,
+    }),
+  }));
+}
+
 // Every deferred script has run; the event stream opens here, not earlier.
 fire("DOMContentLoaded", {});
 
@@ -553,7 +615,11 @@ const ACTIONS = {
 (async () => {
   for (const action of actions) {
     const [name, argument] = action.split(":");
-    if (name === "click") {
+    if (name === "created") {
+      // Everything after the FIRST colon, so an id may contain one.
+      const rest = action.slice(name.length + 1);
+      created(rest || "28105098aa4c4d0fbb2f6b06d0e0b0aa");
+    } else if (name === "click") {
       fire("click", clickEvent(
         { [PANEL_ROW]: rows[argument], "a[href]": titleLink }, "row:" + argument,
       ));
@@ -598,6 +664,18 @@ const ACTIONS = {
     href: href(),
     panel: host.innerHTML,
     board,
+    // The optimistic rows, newest first, each as what it IS rather than what
+    // it is made of: its identity, its markup, and its metadata group in
+    // order — the order being the claim §5.3 makes about where the id sits.
+    pending: pendingRows.map((row) => ({
+      taskId: row.dataset.taskId,
+      html: row.innerHTML,
+      meta: row.meta.children.map((child) => ({
+        className: child.className,
+        text: child.textContent,
+        title: child.title,
+      })),
+    })),
     unhandled,
   }));
 })();
@@ -1225,6 +1303,52 @@ def test_a_failed_click_leaves_the_panel_and_the_url_exactly_as_they_were() -> N
     assert result["unhandled"] == []
 
 
+# ── the optimistic row's own metadata group (§5.3) ──────────────────────────
+
+
+def test_the_optimistic_row_leads_its_metadata_with_the_short_id() -> None:
+    """A `task.created` row is a dashboard row, so it states the id like one.
+
+    It is the one row no template renders, and the one that cannot be fixed by
+    re-reading the server: an unfiltered board keeps it until the ~800ms
+    reconcile replaces it, and a reconcile that fails or never arrives leaves
+    it standing with the id only in `data-task-id` and the href — exactly the
+    thing §5.3 changed every other row to stop doing.
+
+    Asserted on POSITION, not presence: the id leads the metadata group, ahead
+    of the status badge, because lining up as a column down the board is what
+    makes it readable at a glance.
+    """
+    row = _panel_run(["created"])["pending"][0]
+
+    assert row["taskId"] == "28105098aa4c4d0fbb2f6b06d0e0b0aa"
+    assert row["meta"][0] == {
+        "className": "task-short-id",
+        "text": "28105098",
+        "title": "28105098aa4c4d0fbb2f6b06d0e0b0aa",
+    }
+    # The badge the group used to open with is still there, now second.
+    assert "badge badge-open" in row["html"]
+    # And the title is untouched — the id is metadata, not part of the name.
+    assert ">Freshly created task</a>" in row["html"]
+
+
+def test_the_optimistic_rows_title_column_carries_no_id() -> None:
+    """The same rule the templates keep: the id sits with the metadata, and
+
+    nothing is written into the link that names the task. The markup is the
+    whole of the title column here, so a prefix appearing anywhere in it —
+    other than inside the href, which is the identity and always was — is the
+    id leaking into the name.
+    """
+    row = _panel_run(["created"])["pending"][0]
+    title_column = row["html"].split('class="task-row-meta"')[0]
+
+    assert "28105098" not in title_column.replace(
+        "/tasks/28105098aa4c4d0fbb2f6b06d0e0b0aa", ""
+    )
+
+
 def test_a_failed_click_does_not_leave_its_task_claimed_as_the_intent() -> None:
     """What the failed click must NOT leave behind. The intent is compared
     against on every history move, so a click that failed while claiming B
@@ -1318,6 +1442,11 @@ function element(extra) {
     attributes: {},
     hidden: false,
     textContent: "",
+    // The chain line is REBUILT rather than re-texted (§5.3: each name in it
+    // carries its short id, and an id is an element), so an element here has
+    // to hold children the way the browser's does.
+    children: [],
+    replaceChildren() { this.children = Array.prototype.slice.call(arguments); },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] || ""; },
     // `graph.js` asks its canvas which host it sits in (T2-A5): the graph
@@ -1427,6 +1556,10 @@ const document = {
       getContext() { return {}; },
     };
   },
+  // The real space between a title and its short id in a sentence (§5.3) —
+  // a text node in the browser, and one here too, so the probe below can tell
+  // the page's PUNCTUATION from the names it separates.
+  createTextNode(text) { return { textContent: text, isText: true }; },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
   // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
   // because that removal has no event of its own: the page's own listeners
@@ -1690,11 +1823,46 @@ function withClass(name) {
     .sort();
 }
 
+// What a rebuilt sentence SAYS, split the way §5.3 splits it. A short id is
+// its own element, and the single space between a title and its id is its own
+// text node — so the titles are every other part, and a whitespace-only part
+// is punctuation rather than a name.
+function titlesIn(node) {
+  if (!node.children.length) return node.textContent;
+  return node.children
+    .filter((child) => child.className !== "task-short-id")
+    .map((child) => child.textContent)
+    .filter((text) => text.trim() !== "")
+    .join("");
+}
+
+function idsIn(node) {
+  return node.children
+    .filter((child) => child.className === "task-short-id")
+    .map((child) => ({ text: child.textContent, title: child.title }));
+}
+
 function snapshot() {
   const drawn = graph.shown();
   return {
     href: href(),
     nodes: drawn.nodes,
+    // The TEXT on each drawn node. The short-id pass leaves canvas labels as
+    // the title alone (§5.12): an extra token on every node crowds the
+    // picture, and a click opens the panel, which states the id.
+    labels: drawn.nodes.reduce(function (into, id) {
+      into[id] = graph.node(id).data("label");
+      return into;
+    }, {}),
+    // What Cytoscape actually DRAWS, read off the resolved style rather than
+    // off the backing field. The two are the same only while the stylesheet
+    // says `label: "data(label)"`; a rule changed to `data(id)`, or to a
+    // function that appends the short id, would put a token on every node
+    // while the `labels` map above stayed exactly as it is.
+    styleLabels: drawn.nodes.reduce(function (into, id) {
+      into[id] = graph.node(id).style("label");
+      return into;
+    }, {}),
     edges: drawn.edges.map((edge) => edge.type),
     arrowless: drawn.edges
       .filter((edge) => !edge.arrow || edge.arrow === "none")
@@ -1718,13 +1886,32 @@ function snapshot() {
     unknownRelation: withClass("focus-unknown"),
     // What the search box is currently offering, in order.
     search: searchResults.children.map((item) => item.children[0].dataset.searchHit),
+    // What each hit SHOWS, as the elements it is built from: the `search` list
+    // above is the identity a hit CARRIES, and a hidden identity is exactly
+    // what §5.3 stopped accepting. A hit can be the only visible naming of a
+    // task on the page — the text layers below it collapse.
+    searchShown: searchResults.children.map((item) =>
+      item.children[0].children.map((child) => ({
+        className: child.className || "",
+        text: child.textContent,
+        title: child.title || "",
+      })),
+    ),
     // The chain the page CLAIMS, in both places it claims it: the sentence
     // above the layers, and the trace on the canvas.
     chainLine: {
       through: chainSection.dataset.chainThrough || "",
-      label: chainThroughLabel.textContent,
+      // The TITLES the sentence states, exactly as it used to read them: the
+      // short ids beside them are a separate claim below, so a test about the
+      // chain the page names stays a test about that and nothing else.
+      label: titlesIn(chainThroughLabel),
       length: chainLength.textContent,
-      nodes: chainNodes.textContent,
+      nodes: titlesIn(chainNodes),
+      // …and the ids, in the order the sentence names them (§5.3). This is
+      // the part a focus transition used to drop: the line is rewritten
+      // client-side on every one, and it must come back with its ids.
+      throughId: idsIn(chainThroughLabel),
+      nodeIds: idsIn(chainNodes),
     },
     traced: graph.cy
       .nodes()
@@ -2580,6 +2767,88 @@ def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -
     assert result["fetches"] == []
 
 
+#: Two nodes with the 32-character ids Lithos really issues, so "the label
+#: carries no id" is a claim a fixture of slugs could not make: the title and
+#: the id share no characters here.
+SHORT_ID_TASK = "28105098aa4c4d0fbb2f6b06d0e0b0aa"
+SHORT_ID_GHOST = "7f31c0d4ee194b6ca0c4d9b1f2a30c55"
+SHORT_ID_PAYLOAD: dict = _payload(
+    [
+        _node(SHORT_ID_TASK, title="Ship the harness"),
+        _node(
+            SHORT_ID_GHOST,
+            title="Design schema",
+            layer=1,
+            ghost="dependency",
+            projects=("lens",),
+        ),
+    ],
+    [_edge(SHORT_ID_TASK, SHORT_ID_GHOST)],
+)
+
+
+def test_a_canvas_node_is_labelled_with_the_title_alone() -> None:
+    """The short id shows on every TEXT surface and on none of the canvas.
+
+    An extra token on every node crowds the picture the canvas exists to give,
+    and a click already opens the side panel, which leads its metadata with the
+    id. So the label stays exactly what the server rendered — including the
+    ghost's, whose second line is its project and nothing else.
+    """
+    final = _graph_run([], payload=SHORT_ID_PAYLOAD)["final"]
+    # The RESOLVED style, which is the text Cytoscape paints. Asserting the
+    # `label` data field alone would stay green through a stylesheet changed to
+    # draw something else entirely.
+    labels = final["styleLabels"]
+
+    assert labels == final["labels"], "the drawn text is no longer the label field"
+    assert labels[SHORT_ID_TASK] == "Ship the harness"
+    assert labels[SHORT_ID_GHOST] == "Design schema\n\u00b7 lens"
+    for task_id, label in labels.items():
+        assert task_id[:8] not in label, f"{task_id} drew its id on the canvas"
+
+
+def test_a_search_hit_names_its_task_with_its_title_and_its_short_id() -> None:
+    """A hit is a place the page NAMES a task, so it states the id like one.
+
+    It is also the place where the id is most often all the operator has: the
+    box matches an id prefix as well as a title, the text layers under it are
+    collapsed behind "show as text", and a hit was the one naming of a task
+    whose id lived only in a `data-` attribute. So the title is followed by the
+    same `.task-short-id` element every other surface renders — a separate
+    element, so selecting it copies the prefix and nothing else.
+    """
+    shown = _graph_run(["search:harness"], payload=SHORT_ID_PAYLOAD)["final"]
+
+    assert shown["search"] == [SHORT_ID_TASK]
+    assert shown["searchShown"] == [
+        [
+            {"className": "", "text": "Ship the harness", "title": ""},
+            {
+                "className": "task-short-id",
+                "text": SHORT_ID_TASK[:8],
+                "title": SHORT_ID_TASK,
+            },
+        ]
+    ]
+
+
+def test_a_ghost_search_hit_states_its_id_too() -> None:
+    """A ghost is one hop outside the scope and carries no status of its own,
+
+    which is the case §5.3 calls out: the id is often the only fact about it
+    that can be matched against the line that sent the operator looking.
+    """
+    shown = _graph_run(["search:schema"], payload=SHORT_ID_PAYLOAD)["final"]
+
+    assert shown["search"] == [SHORT_ID_GHOST]
+    assert shown["searchShown"][0][-1] == {
+        "className": "task-short-id",
+        "text": SHORT_ID_GHOST[:8],
+        "title": SHORT_ID_GHOST,
+    }
+
+
 def test_shape_is_type_and_colour_is_status_as_the_library_resolves_them() -> None:
     """D8's vocabulary, read back off the real Cytoscape rather than off the
     stylesheet this file could have mistyped: shape = type, colour = status,
@@ -3288,6 +3557,15 @@ def test_focusing_a_cycle_member_names_THAT_task_and_traces_its_condensation() -
         "length": "3",
         # … and the walk over condensations, each named by its representative.
         "nodes": "Before → Ring-A → After",
+        # Each name states its id too (§5.3), rebuilt with the sentence. These
+        # fixture ids are their own prefix, so the claim here is that the id is
+        # PRESENT after a transition — `test_short_id.py` holds the cut itself.
+        "throughId": [{"text": "ring-b", "title": "ring-b"}],
+        "nodeIds": [
+            {"text": "before", "title": "before"},
+            {"text": "ring-a", "title": "ring-a"},
+            {"text": "after", "title": "after"},
+        ],
     }
     # The trace crosses the cycle in one move: both members are on it, the box
     # around them is accented, and the steps are the edges that actually enter
@@ -3315,6 +3593,11 @@ def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
         "label": " through Off-B",
         "length": "2",
         "nodes": "Off-A → Off-B",
+        "throughId": [{"text": "off-b", "title": "off-b"}],
+        "nodeIds": [
+            {"text": "off-a", "title": "off-a"},
+            {"text": "off-b", "title": "off-b"},
+        ],
     }
     assert focused["traced"] == ["off-a", "off-b"]
     assert focused["tracedEdges"] == ["off-a>off-b"]
@@ -3325,6 +3608,15 @@ def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
         "label": "",
         "length": "5",
         "nodes": "A → B → C → D → E",
+        # Nothing focused, so the clause names nobody and states no id.
+        "throughId": [],
+        "nodeIds": [
+            {"text": "a", "title": "a"},
+            {"text": "b", "title": "b"},
+            {"text": "c", "title": "c"},
+            {"text": "d", "title": "d"},
+            {"text": "e", "title": "e"},
+        ],
     }
     assert cleared["traced"] == ["a", "b", "c", "d", "e"]
     assert cleared["tracedEdges"] == ["a>b", "b>c", "c>d", "d>e"]
@@ -4266,6 +4558,13 @@ console.log(JSON.stringify({
         return into;
       }, {})
     : {},
+  // The drawn text, not the backing field — same reason as the graph page's.
+  styleLabels: mini
+    ? drawn.nodes.reduce((into, id) => {
+        into[id] = mini.node(id).style("label");
+        return into;
+      }, {})
+    : {},
   edgeTypes: drawn.edges.map((edge) => edge.type).sort(),
   arrowless: drawn.edges.filter((edge) => !edge.arrow || edge.arrow === "none").length,
   canvasHidden: container.hidden,
@@ -4505,6 +4804,21 @@ def test_the_parent_epic_is_drawn_with_the_label_the_server_gave_it() -> None:
     result = _mini_run()
 
     assert result["labels"]["epic"] == "Loom run harness"
+
+
+def test_a_mini_graph_node_is_labelled_with_the_title_alone() -> None:
+    """The same rule on the detail page's canvas, which shares `nodeLabel`.
+
+    The fragment above it is where the id is stated (the detail header's
+    metadata group); the picture stays the titles.
+    """
+    result = _mini_run()
+    labels = result["styleLabels"]
+    served = {node["id"]: node["label"] for node in MINI_PAYLOAD["nodes"]}
+
+    assert labels == result["labels"], "the drawn text is no longer the label field"
+    assert labels == {task_id: served[task_id] for task_id in labels}
+    assert labels["epic"] == "Loom run harness"
 
 
 def test_a_detail_page_publishes_no_graph_page_handle() -> None:

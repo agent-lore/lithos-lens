@@ -45,7 +45,7 @@ State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
-Tasks        = ["lithos_lens.tasks", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
+Tasks        = ["lithos_lens.tasks", "lithos_lens.template_vocabulary", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
@@ -240,7 +240,36 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # because one had to be found. 843 is still over the 800 threshold, so the
 # exception stands, and the next change that grows frontier.py asks the same
 # question with the same two legitimate answers.
-modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (829)
+#
+# Revisited (task "Show each task's short id beside its title", 2026-09-21):
+# tasks.py reached 846 — +17 for the `short_id` filter and the constant behind
+# it — leaving four lines of headroom, and the note recorded that the NEXT
+# change growing tasks.py would discharge the exception by the filter-
+# vocabulary extraction rather than arguing the ceiling up.
+#
+# That change is this one (round 2 of the same task): `BlockerChip` gained a
+# `titled` field, so a blocked row's chip can state the short id of the task it
+# names, and tasks.py crossed at 852. The pre-committed answer was taken, not
+# revisited: template_vocabulary.py now holds `short_id`/`SHORT_ID_CHARS`,
+# `format_display_date` and `format_tag` — the three filters `web.py` registers
+# — and tasks.py is back under the ceiling. That IS the seam the note named:
+# "how is a value spelled for a reader" is a different question from "what is a
+# task", and it was already answerable in one file. The alternative was raising
+# the stop-loss for a four-line dataclass field, which this file's own policy
+# calls the weaker of the two legitimate answers when a real seam exists.
+#
+# No budget moves. The count stays 3 — one module left the >800 set and none
+# joined it (template_vocabulary.py is ~55 lines) — and the stop-loss stays
+# 850, now with frontier.py (843) as the module nearest it.
+#
+# Round 3 of the same task: `AttentionReason` gained the two fields that carry
+# a named predecessor's identity to the template as an ID (+22 net), putting
+# tasks.py at 845. Still no budget moves, and no second extraction either — the
+# rationale for those fields was written out twice, here and in
+# `attention._blocker_name`, so the duplicate prose went instead. Splitting a
+# module again to absorb four lines of docstring is the answer this file's
+# policy names as the wrong one.
+modules_over_800_lines = 3    # tasks.py (845), frontier.py (843), graph_layout.py (830)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way

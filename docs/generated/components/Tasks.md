@@ -15,7 +15,8 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | `lithos_lens.filter_options` | S | 1 | 1 |
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 14 |
-| `lithos_lens.tasks` | L | 14 | 14 |
+| `lithos_lens.tasks` | L | 14 | 12 |
+| `lithos_lens.template_vocabulary` | XS | 0 | 3 |
 
 ## Public API
 
@@ -74,13 +75,16 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `lookback_date` — The date ``days`` ago, bounded by :data:`MAX_SINCE_LOOKBACK_DAYS`.
 - def `normalize_since_input` — Parse the ``?since=`` filter into a BOUNDED ISO date.
 - def `normalize_created_since_input` — Parse the ``?created_since=`` filter into an ISO date, or ``""``.
-- def `format_display_date`
-- def `format_tag`
 - def `parse_timestamp` — Parse an ISO timestamp into an aware UTC datetime, or ``None``.
 - def `humanize_age` — Coarse age text for a chip or a badge: ``12d`` / ``5h`` / ``9m``.
 - def `parse_date`
 - def `int_stat`
 - def `honored_tags` — The ``?tag=`` values the board filters by, in the order written.
+
+### `lithos_lens.template_vocabulary`
+- def `short_id` — The id prefix the rest of the ecosystem names this task by.
+- def `format_display_date`
+- def `format_tag`
 
 ## Dependencies
 

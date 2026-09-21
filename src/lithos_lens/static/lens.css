@@ -517,6 +517,21 @@ button,
   text-align: right;
 }
 
+/* The 8-character id the rest of the ecosystem names a task by, shown first in
+   every surface's metadata group (§5.3). Monospace and muted: it is a token to
+   be matched against a loom line or a PR body by eye, not a word to be read,
+   and it must not compete with the title beside it. `nowrap` because a broken
+   id is a wrong id at a glance — the column is 8 characters wide, so there is
+   nothing to gain by wrapping it. Selectable ordinary TEXT, so select-and-copy
+   yields exactly the prefix everything else types; the full id is in `title`. */
+.task-short-id {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .badge,
 .claim-chip,
 .finding-chip,
@@ -1329,6 +1344,14 @@ button,
   padding-left: 0.75rem;
 }
 
+/* Four columns (id, task, type, status) do not fit the narrowest captured
+   viewport, so the TABLE scrolls rather than the document — the page-level
+   "never scrolls sideways" contract is asserted at 320px by the e2e captures.
+   The leading id column is what stays on screen. */
+.children-table-scroll {
+  overflow-x: auto;
+}
+
 .children-table {
   border-collapse: collapse;
   margin-top: 0.5rem;
@@ -1504,6 +1527,58 @@ button,
 
   .filter-dates {
     grid-column: span 1;
+  }
+
+  /* The Children table's four columns (id, task, type, status) cannot all be
+     read at 320px. Scrolling the table in its own box kept the PAGE from
+     scrolling sideways but moved status off screen with no visible scrollbar
+     to say anything was there — the row read as complete and was not (round-3
+     correctness f-004). So a row stacks here: every fact is on screen, the id
+     still leads it, and each value carries the column name it lined up under,
+     because the header row it lined up under is gone. */
+  .children-table-scroll {
+    overflow-x: visible;
+  }
+
+  .children-table,
+  .children-table tbody,
+  .children-table tr,
+  .children-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .children-table thead {
+    display: none;
+  }
+
+  .children-table tr {
+    border-bottom: 1px solid var(--line);
+    padding: 0.5rem 0;
+  }
+
+  .children-table td {
+    border-bottom: 0;
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+  }
+
+  /* The heading this value would have sat under, travelling with it. Fixed
+     width so the values line up down the stack the way they did down the
+     table, and `min-width: 0` on the value beside it so a long title wraps
+     inside the row instead of widening it. */
+  .children-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    flex: 0 0 3.25rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .children-table td > * {
+    min-width: 0;
   }
 }
 
@@ -1999,6 +2074,13 @@ button,
 .graph-search-hit:hover,
 .graph-search-hit:focus-visible {
   border-color: var(--accent);
+}
+
+/* A hit names its task the way every other text surface does (§5.3) — title,
+   then the short id — so the id needs the gap the surrounding pill's padding
+   does not give it. */
+.graph-search-hit .task-short-id {
+  margin-left: 0.4rem;
 }
 
 /* Downstream impact (D10): the panel's one forward-looking line, and the

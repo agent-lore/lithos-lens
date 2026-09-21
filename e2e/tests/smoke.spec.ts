@@ -444,6 +444,19 @@ test("task.created event inserts a skeleton row on an unfiltered board", async (
   );
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toContainText("Freshly created task");
+
+  // It states its id the way every other row on the board does (§5.3): first
+  // in the metadata group, ahead of the status badge. This is the ONE row no
+  // template rendered, and the one that cannot be fixed by re-reading the
+  // server — this scenario holds reconciliation off deliberately, which is
+  // also the state an operator is left in when a reconcile fails.
+  const meta = skeleton.locator(".task-row-meta");
+  const shortId = meta.locator(".task-short-id");
+  await expect(shortId).toHaveText("e2e-just");
+  await expect(shortId).toHaveAttribute("title", "e2e-just-created");
+  expect(
+    await meta.evaluate((element) => element.firstElementChild?.className),
+  ).toBe("task-short-id");
   // The link carries the board's query string, the way every other detail
   // link on the page does.
   await expect(skeleton.locator("a.task-title")).toHaveAttribute(
@@ -1258,9 +1271,29 @@ test("focusing a node re-traces the chain and centres it in the canvas", async (
     "loom-blocked-forever",
   );
   await expect(page.locator("[data-chain-length]")).toHaveText("2");
-  await expect(page.locator("[data-chain-nodes]")).toHaveText(
-    "Port the legacy run bridge → Migrate the legacy run archive",
-  );
+  // Each name in the rewritten sentence carries its short id (§5.3), so this
+  // reads the TITLES out of it — the ids are `tests/test_short_id.py`'s claim,
+  // and they are asserted here too, one line down.
+  expect(
+    await page.locator("[data-chain-nodes]").evaluate((element) =>
+      Array.from(element.childNodes)
+        .filter(
+          (child) =>
+            !(child instanceof Element && child.classList.contains("task-short-id")),
+        )
+        .map((child) => child.textContent ?? "")
+        .join("")
+        .replace(/\s+/g, " ")
+        .trim(),
+    ),
+  ).toBe("Port the legacy run bridge → Migrate the legacy run archive");
+  // The ids survived the focus transition that rewrote the line.
+  await expect(
+    page.locator("[data-chain-nodes] .task-short-id"),
+  ).toHaveText(["loom-can", "loom-blo"]);
+  await expect(
+    page.locator("[data-chain-through-label] .task-short-id"),
+  ).toHaveText(["loom-blo"]);
   // … and the trace, which may not disagree with it.
   const traced = await page.evaluate(() => {
     const graph = (window as any).LithosLensGraph;
@@ -1879,4 +1912,156 @@ test("the partial-view notice follows the viewport, not just the fit", async ({
   );
   await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
   await expect(notice).toBeVisible();
+});
+
+/**
+ * The short id's PRESENTATION contract (§5.3), which only a browser can state.
+ *
+ * Every Python test asserts the element and where it sits; all of them stay
+ * green if the whole `.task-short-id` rule is deleted, or changed to wrap, or
+ * made unselectable. Those four properties are the decision itself — a token
+ * to be matched against a loom line by eye, muted so it does not compete with
+ * the title, on one line because a broken id is a wrong id at a glance, and
+ * SELECTABLE because select-and-copy is how the prefix gets into the next
+ * command. So they are read off the computed style of a real row.
+ */
+test("a row's short id renders as selectable, muted, non-wrapping monospace", async ({
+  page,
+}) => {
+  await page.goto("/tasks?since=2026-08-01");
+
+  const row = page.locator(
+    '[data-task-row][data-task-id="influx-ingest-cutover"]',
+  );
+  const chip = row.locator(".task-row-meta .task-short-id");
+  await expect(chip).toBeVisible();
+
+  // The text is the 8-character prefix, and the tooltip is the whole id it
+  // was cut from — the fallback when eight characters are not enough.
+  await expect(chip).toHaveText("influx-i");
+  await expect(chip).toHaveAttribute("title", "influx-ingest-cutover");
+
+  const style = await chip.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    const muted = getComputedStyle(
+      document.documentElement,
+    ).getPropertyValue("--muted");
+    return {
+      fontFamily: computed.fontFamily,
+      color: computed.color,
+      whiteSpace: computed.whiteSpace,
+      userSelect: computed.userSelect,
+      webkitUserSelect: (computed as any).webkitUserSelect || "",
+      muted: muted.trim(),
+    };
+  });
+
+  // The stylesheet's own stack, not just the UA's `<code>` default: asserting
+  // "monospace" alone would stay green with the whole rule deleted, since a
+  // `<code>` element is monospace to begin with.
+  expect(style.fontFamily.toLowerCase()).toContain("ui-monospace");
+  expect(style.fontFamily.toLowerCase()).toContain("monospace");
+  expect(style.whiteSpace).toBe("nowrap");
+  // Selectable: the rule must not opt the text out of selection, in either
+  // spelling. A chip you cannot copy is a chip you have to retype.
+  expect(style.userSelect).not.toBe("none");
+  expect(style.webkitUserSelect).not.toBe("none");
+
+  // Muted — the SAME grey the rest of the meta column uses, read off the
+  // custom property rather than hardcoded, so a palette change moves both.
+  const mutedRgb = await page.evaluate((hex) => {
+    const probe = document.createElement("span");
+    probe.style.color = hex;
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  }, style.muted);
+  expect(style.color).toBe(mutedRgb);
+
+  // And it really can be selected: selecting the element yields exactly the
+  // prefix the rest of the ecosystem types.
+  const selected = await chip.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return selection?.toString() ?? "";
+  });
+  expect(selected).toBe("influx-i");
+});
+
+/**
+ * The Children table at the narrowest captured width (round-3 correctness
+ * f-004).
+ *
+ * The short id gave the table a fourth column, and four columns do not fit
+ * 320px. The first answer was to scroll the table in its own box, which kept
+ * the page-level "never scrolls sideways" contract green — the capture suite
+ * asserts `documentElement.scrollWidth <= width` and it passed — while putting
+ * the STATUS column entirely off screen with no scrollbar rendered to say
+ * anything was there. The row read as complete and was not.
+ *
+ * So this asserts what that contract could not: every cell of every child row
+ * is INSIDE the viewport. Only a browser can state it — the cells are on
+ * screen or off it by computed layout, and no HTML-substring test in the
+ * pytest suite can see the difference.
+ */
+test("every fact in the Children table is on screen at 320px", async ({
+  page,
+}) => {
+  const width = 320;
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto("/tasks/influx-epic");
+
+  const rows = page.locator(".children-table tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const rowCount = await rows.count();
+  expect(rowCount).toBeGreaterThan(0);
+
+  for (let index = 0; index < rowCount; index += 1) {
+    const cells = rows.nth(index).locator("td");
+    // All four: the id that was added, and the three that were there before.
+    await expect(cells).toHaveCount(4);
+
+    for (let cell = 0; cell < 4; cell += 1) {
+      const target = cells.nth(cell);
+      await expect(target).toBeVisible();
+      const box = await target.boundingBox();
+      expect(box, `row ${index} cell ${cell} has no box`).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      // The right edge, which is the one the scrolling box pushed past it.
+      expect(
+        box!.x + box!.width,
+        `row ${index} cell ${cell} runs past the viewport`,
+      ).toBeLessThanOrEqual(width);
+    }
+  }
+
+  // The status badge specifically — the value that went missing — is readable
+  // text on screen and not a clipped crescent at the edge.
+  const status = rows.first().locator('td[data-label="Status"] .badge');
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText(/\S/);
+  const badge = await status.boundingBox();
+  expect(badge!.x + badge!.width).toBeLessThanOrEqual(width);
+
+  // …and the column each stacked value belongs to is still stated, now beside
+  // the value rather than above it.
+  expect(
+    await rows
+      .first()
+      .locator("td")
+      .evaluateAll((cells) =>
+        cells.map((cell) =>
+          getComputedStyle(cell, "::before").content.replace(/"/g, ""),
+        ),
+      ),
+  ).toEqual(["Id", "Task", "Type", "Status"]);
+
+  // The page itself still never scrolls sideways.
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(width);
 });
