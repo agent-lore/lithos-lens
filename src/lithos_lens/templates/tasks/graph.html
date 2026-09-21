@@ -251,7 +251,7 @@
           <ul data-cycle-list>
             {% for cycle in view.cycles %}
               <li data-cycle="{{ cycle.id }}">
-                <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                 {% if cycle.path %}
                   {# The walk already closes back on its first member, so the
                      template adds no return step of its own. #}
@@ -274,7 +274,7 @@
             <ul>
               {% for cycle in view.external_cycles %}
                 <li data-cycle="{{ cycle.id }}">
-                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                   <span data-cycle-message>{{ cycle.message }}</span>
                 </li>
               {% endfor %}
@@ -291,7 +291,7 @@
             <ul>
               {% for cycle in view.unshaped_cycles %}
                 <li data-cycle="{{ cycle.id }}">
-                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                   <span data-cycle-message>{{ cycle.message }}</span>
                 </li>
               {% endfor %}
@@ -424,6 +424,7 @@
           {% for row in view.hierarchy %}
             <li data-hierarchy-node="{{ row.node.id }}" data-depth="{{ row.depth }}" style="margin-left: {{ row.depth }}rem">
               <a href="{{ task_detail_url(request, row.node.id) }}">{{ row.node.label }}</a>
+              {% with task_id = row.node.id %}{% include "tasks/short_id.html" %}{% endwith %}
               <span class="badge badge-{{ row.node.status }}">{{ row.node.status }}</span>
               {% if row.node.ghost %}<span data-hierarchy-ghost>ghost</span>{% endif %}
             </li>

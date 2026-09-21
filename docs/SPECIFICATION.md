@@ -226,13 +226,25 @@ right-hand meta column of a row here and in Gates, the detail page's and the
 side panel's meta line (§5.6), a graph layer entry's badges (§5.12). Where a
 surface has no such group it sits with that surface's other facts about the task
 — a leading column in the children table, after the status on a blocker /
-Blocks / provenance line or on a gate's waiter. It is selectable monospace text
-carrying the whole id in its tooltip, so select-and-copy yields exactly the
-prefix everything else uses, and the title itself is never rewritten. Two
-surfaces are deliberately exempt: the Epic rollup strip's progress chips carry
-the id in their tooltip only (a progress chip has no room for another visible
-token), and the Cytoscape canvas keeps its node labels as the title alone
-(§5.12.1).
+Blocks / provenance line or on a gate's waiter, after the link in a breadcrumb
+trail or in the sentence a scoped-epic banner states. It is selectable monospace
+text carrying the whole id in its tooltip, so select-and-copy yields exactly the
+prefix everything else uses, and the title itself is never rewritten.
+
+Three kinds of surface are deliberately exempt, and only these:
+
+- the **Epic rollup strip's** progress chips, which have no room for another
+  visible token: the chip's `title` carries the epic's id — the WHOLE id, since
+  a tooltip is the only identity fallback a chip with no visible id has;
+- the **Cytoscape canvas** (§5.12.1), whose node labels stay the title alone —
+  an extra token on every node crowds the picture, and a click opens the side
+  panel, which leads with the id;
+- a **path expression** — the cycle callout's `A → B → A` walk and the longest
+  blocking chain's node list (§5.12) — which states a SHAPE rather than naming
+  a roster. The cycle's own member list beside it carries the ids, every task a
+  chain names is a layer entry with its id on the same page, and the chain line
+  is rewritten client-side on every focus transition, so a server-only id there
+  would make the page contradict itself after the first click.
 
 **Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
@@ -519,7 +531,9 @@ two cannot disagree about why a task is where it is. It shows:
 - task title and body/summary content, status metadata, creating agent, created
   timestamp, tags, and claim state where known. The meta line under the heading
   **leads with the task's short id** (§5.3), as the side panel's does and as
-  every row on the board does
+  every row on the board does; the parent breadcrumb above it states the id of
+  each ANCESTOR it names, and not of its own last entry — that is this task,
+  whose id is in the meta line two lines below
 - **why this task is here** — the Needs-attention reasons, when the board
   promoted it, with the same supporting facts the chips carry
 - **blockers**, each labelled: a satisfied predecessor (the edge survives
@@ -1148,12 +1162,14 @@ and reviewable with no JavaScript, and the Cytoscape rendering (§5.12.1) is
 enhancement drawn from the same embedded payload, so the picture and the text
 cannot disagree.
 
-Every task the text names — a layer entry, the predecessor on an edge line, an
-epic in the scope picker — carries its **short id** (§5.3), ahead of the status
-badge on a layer entry. Ghosts included: a ghost is one hop outside the scope
-and carries no status of its own, so the id is often all the operator has. The
-canvas is the exception (§5.12.1): an extra token on every node crowds the
-picture, and a click opens the side panel, which leads with the id.
+Every task the text names — a layer entry, the predecessor on an edge line, a
+hierarchy row, a cycle callout's member, an epic in the scope picker — carries
+its **short id** (§5.3), ahead of the status badge wherever the entry has one.
+Ghosts included: a ghost is one hop outside the scope and carries no status of
+its own, so the id is often all the operator has. Two things on this page do
+not carry it (§5.3's exemptions): the canvas, and the two **path expressions**
+— the cycle callout's arrow walk and the longest blocking chain's node list —
+which state a shape rather than naming a roster.
 
 **Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
 page renders a picker listing every project the snapshot observes under both

@@ -379,8 +379,11 @@
                {# A progress chip has no room for another visible token, so the
                   id rides in the tooltip alone (§5.3) — the one surface where
                   it is not shown beside the title. The bar and the fraction are
-                  what this chip is read for. #}
-               title="{{ epic.task.title }} ({{ epic.task.id | short_id }}) — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
+                  what this chip is read for. The WHOLE id, not the 8-character
+                  prefix: a tooltip is the fallback the visible chip does not
+                  give, and a truncated fallback gives back nothing the chip's
+                  own `data-epic-chip` did not already carry. #}
+               title="{{ epic.task.title }} ({{ epic.task.id }}) — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
               <span class="epic-chip-title">{{ epic.task.title }}</span>
               {# max=0 is invalid for <progress>; an epic with no (non-cancelled)
                  children shows its count alone. #}
@@ -474,7 +477,7 @@
            them can state — so state it here, with the way out. #}
         <section class="banner banner-warning" role="status" data-epic-scope-unmatched>
           <strong>No tasks under this epic match these filters.</strong>
-          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; has work in its subtree, but none of it survives the other filters on this board, so every section is empty. <a href="/tasks?epic={{ dashboard.epic_scope | urlencode }}">Show this epic without the other filters</a>.</span>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; {% with task_id = dashboard.scoped_epic.task.id %}{% include "tasks/short_id.html" %}{% endwith %} has work in its subtree, but none of it survives the other filters on this board, so every section is empty. <a href="/tasks?epic={{ dashboard.epic_scope | urlencode }}">Show this epic without the other filters</a>.</span>
         </section>
       {% endif %}
       {% if dashboard.epic_scope_rolled_up %}
@@ -485,7 +488,7 @@
            would not help. #}
         <section class="banner" role="status" data-epic-scope-rolled-up>
           <strong>Nothing under this epic renders as a row.</strong>
-          <span>The {{ dashboard.rolled_up_open }} matching {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} under &ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; roll up rather than rendering here — a sub-epic gets its own chip in the strip above, and only when it has work of its own on this board.</span>
+          <span>The {{ dashboard.rolled_up_open }} matching {{ "row" if dashboard.rolled_up_open == 1 else "rows" }} under &ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; {% with task_id = dashboard.scoped_epic.task.id %}{% include "tasks/short_id.html" %}{% endwith %} roll up rather than rendering here — a sub-epic gets its own chip in the strip above, and only when it has work of its own on this board.</span>
         </section>
       {% endif %}
       {% if dashboard.scoped_epic and not dashboard.scoped_epic.descendant_ids %}
@@ -494,7 +497,7 @@
            broken. Distinct from "scope not applied" (nothing was scoped). #}
         <section class="banner" role="status" data-epic-scope-empty>
           <strong>Nothing under this epic yet.</strong>
-          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; is open with no tasks in its subtree, so every section below is empty.</span>
+          <span>&ldquo;{{ dashboard.scoped_epic.task.title }}&rdquo; {% with task_id = dashboard.scoped_epic.task.id %}{% include "tasks/short_id.html" %}{% endwith %} is open with no tasks in its subtree, so every section below is empty.</span>
         </section>
       {% endif %}
       {% if dashboard.filters.epic and not dashboard.epic_scope %}

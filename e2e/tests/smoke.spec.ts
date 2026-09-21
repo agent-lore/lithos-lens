@@ -1880,3 +1880,81 @@ test("the partial-view notice follows the viewport, not just the fit", async ({
   await expect(canvas).toHaveAttribute("data-canvas-clipped", "true");
   await expect(notice).toBeVisible();
 });
+
+/**
+ * The short id's PRESENTATION contract (§5.3), which only a browser can state.
+ *
+ * Every Python test asserts the element and where it sits; all of them stay
+ * green if the whole `.task-short-id` rule is deleted, or changed to wrap, or
+ * made unselectable. Those four properties are the decision itself — a token
+ * to be matched against a loom line by eye, muted so it does not compete with
+ * the title, on one line because a broken id is a wrong id at a glance, and
+ * SELECTABLE because select-and-copy is how the prefix gets into the next
+ * command. So they are read off the computed style of a real row.
+ */
+test("a row's short id renders as selectable, muted, non-wrapping monospace", async ({
+  page,
+}) => {
+  await page.goto("/tasks?since=2026-08-01");
+
+  const row = page.locator(
+    '[data-task-row][data-task-id="influx-ingest-cutover"]',
+  );
+  const chip = row.locator(".task-row-meta .task-short-id");
+  await expect(chip).toBeVisible();
+
+  // The text is the 8-character prefix, and the tooltip is the whole id it
+  // was cut from — the fallback when eight characters are not enough.
+  await expect(chip).toHaveText("influx-i");
+  await expect(chip).toHaveAttribute("title", "influx-ingest-cutover");
+
+  const style = await chip.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    const muted = getComputedStyle(
+      document.documentElement,
+    ).getPropertyValue("--muted");
+    return {
+      fontFamily: computed.fontFamily,
+      color: computed.color,
+      whiteSpace: computed.whiteSpace,
+      userSelect: computed.userSelect,
+      webkitUserSelect: (computed as any).webkitUserSelect || "",
+      muted: muted.trim(),
+    };
+  });
+
+  // The stylesheet's own stack, not just the UA's `<code>` default: asserting
+  // "monospace" alone would stay green with the whole rule deleted, since a
+  // `<code>` element is monospace to begin with.
+  expect(style.fontFamily.toLowerCase()).toContain("ui-monospace");
+  expect(style.fontFamily.toLowerCase()).toContain("monospace");
+  expect(style.whiteSpace).toBe("nowrap");
+  // Selectable: the rule must not opt the text out of selection, in either
+  // spelling. A chip you cannot copy is a chip you have to retype.
+  expect(style.userSelect).not.toBe("none");
+  expect(style.webkitUserSelect).not.toBe("none");
+
+  // Muted — the SAME grey the rest of the meta column uses, read off the
+  // custom property rather than hardcoded, so a palette change moves both.
+  const mutedRgb = await page.evaluate((hex) => {
+    const probe = document.createElement("span");
+    probe.style.color = hex;
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  }, style.muted);
+  expect(style.color).toBe(mutedRgb);
+
+  // And it really can be selected: selecting the element yields exactly the
+  // prefix the rest of the ecosystem types.
+  const selected = await chip.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return selection?.toString() ?? "";
+  });
+  expect(selected).toBe("influx-i");
+});

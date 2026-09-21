@@ -27,7 +27,13 @@ from html import unescape
 from pathlib import Path
 
 from lithos_lens.tasks import SHORT_ID_CHARS, TaskRecord, short_id
-from tests.test_graph_page import GraphFakeClient, dataset, get, task
+from tests.test_graph_page import (
+    GraphFakeClient,
+    cycle_blocker,
+    dataset,
+    get,
+    task,
+)
 from tests.test_task_detail import _client, _link, _task
 from tests.test_tasks_mvp import TaskFakeLithosClient, _add_gate, _waits_on
 
@@ -274,6 +280,36 @@ def test_an_unresolved_neighbour_still_states_its_id(
     assert CHIP in line
 
 
+def test_a_lazily_expanded_blocker_level_states_its_ids(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The chain walks one level per fetch (T1-S8), and every level is the same
+    partial — so the id has to survive the HTMX fragment, not just the first
+    render. This asks the expansion endpoint directly, which is what the
+    expander button on the page below does."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("level-b", title="Design schema"),
+            _task(FULL_ID, title="Spike the parser"),
+        ]
+    )
+    _link(fake, "level-b", "open-unclaimed", "blocks")
+    _link(fake, FULL_ID, "level-b", "blocks")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(
+            "/tasks/level-b/blockers?chain=open-unclaimed&chain=level-b"
+        )
+
+    assert response.status_code == 200
+    html = unescape(response.text)
+    assert 'data-blocker-level="level-b"' in html
+    line = html.split(f'data-link-target="{FULL_ID}"', 1)[1].split("</li>")[0]
+    assert CHIP in line
+    assert line.index("badge-") < line.index(CHIP)
+
+
 # --- Graph page -------------------------------------------------------------
 
 
@@ -337,8 +373,155 @@ def test_the_graph_scope_picker_states_each_epics_id(
     html = get(lithos_lens_config_env, fake, "/tasks/graph")
 
     entry = html.split(f'data-picker-epic="{FULL_ID}"', 1)[1].split("</li>")[0]
-    assert "Ingest epic" in entry
-    assert CHIP in entry
+    assert ">Ingest epic</a>" in entry
+    # Position, not presence: the chip is the FIRST thing after the title, the
+    # same place it holds in a layer entry's badges.
+    assert _leads(entry.split("</a>", 1)[1], CHIP), entry
+
+
+def test_the_graph_hierarchy_rows_lead_their_badges_with_the_short_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The parent/child tree is a second list of task rows on the same page, and
+    it has the same metadata group: the id leads it, ahead of the status."""
+    child = FULL_ID.replace("28", "77")
+    fake = GraphFakeClient(
+        dataset(
+            [
+                task(FULL_ID, title="Ingest epic", task_type="epic"),
+                task(child, title="Ship the harness"),
+            ],
+            [(FULL_ID, child, "parent_child")],
+        )
+    )
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    for task_id in (FULL_ID, child):
+        row = html.split(f'data-hierarchy-node="{task_id}"', 1)[1].split("</li>")[0]
+        after_link = row.split("</a>", 1)[1]
+        chip = (
+            f'<code class="task-short-id" title="{task_id}">{short_id(task_id)}</code>'
+        )
+        assert _leads(after_link, chip), after_link
+        assert after_link.index(chip) < after_link.index("badge-")
+
+
+def test_a_cycle_callout_names_every_member_with_its_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The cycle roster is a list of tasks, so it states their ids.
+
+    The arrow PATH beside it stays labels — it is the walk's shape, and the
+    roster on the same line has already said which tasks those are.
+    """
+    other = FULL_ID.replace("28", "77")
+    fake = GraphFakeClient(
+        dataset(
+            [task(FULL_ID, title="Cyc A"), task(other, title="Cyc B")],
+            [(FULL_ID, other, "blocks"), (other, FULL_ID, "blocks")],
+            blocked={
+                FULL_ID: cycle_blocker(other, "Dependency cycle."),
+                other: cycle_blocker(FULL_ID, "Dependency cycle."),
+            },
+        )
+    )
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    members = html.split("data-cycle-members>", 1)[1].split("</span>")[0]
+    for task_id, title in ((FULL_ID, "Cyc A"), (other, "Cyc B")):
+        chip = (
+            f'<code class="task-short-id" title="{task_id}">{short_id(task_id)}</code>'
+        )
+        assert f"{title} {chip}" in members, members
+
+
+# --- Breadcrumbs ------------------------------------------------------------
+
+
+def _breadcrumb_fixture() -> TaskFakeLithosClient:
+    """A child under a parent epic, so both surfaces render a trail."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task("child-task", title="Ship the harness"),
+            _task(FULL_ID, title="Ingest epic", task_type="epic"),
+        ]
+    )
+    _link(fake, FULL_ID, "child-task", "parent_child")
+    return fake
+
+
+def test_the_detail_breadcrumb_states_each_ancestors_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The trail names OTHER tasks, and those are the names an operator relates
+    to a loom line. The trail's own last entry is this page's task, whose id
+    leads the metadata group directly below it."""
+    with _client(lithos_lens_config_env, _breadcrumb_fixture()) as client:
+        response = client.get("/tasks/child-task")
+
+    html = unescape(response.text)
+    trail = html.split("data-parent-breadcrumb", 1)[1].split("</nav>")[0]
+    assert ">Ingest epic</a>" in trail
+    assert _leads(trail.split("</a>", 1)[1], CHIP), trail
+
+
+def test_the_panel_breadcrumb_states_each_ancestors_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The panel renders the same trail from the same reads, so it says the
+    same thing."""
+    with _client(lithos_lens_config_env, _breadcrumb_fixture()) as client:
+        response = client.get("/tasks?selected=child-task&fragment=panel")
+
+    html = unescape(response.text)
+    trail = html.split("data-panel-parent", 1)[1].split("</nav>")[0]
+    assert ">Ingest epic</a>" in trail
+    assert _leads(trail.split("</a>", 1)[1], CHIP), trail
+
+
+# --- Scoped-epic banners ----------------------------------------------------
+
+
+def test_every_scoped_epic_banner_names_the_epic_with_its_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Three banners state, in prose, which epic the empty board is scoped to.
+
+    Each is the only place that epic is named on the page it appears on — the
+    strip's chip is gone in two of the three — so each states the id.
+    """
+    empty = TaskFakeLithosClient()
+    empty.tasks.append(_task(FULL_ID, title="Ingest epic", task_type="epic"))
+
+    rolled_up = TaskFakeLithosClient()
+    rolled_up.tasks.extend(
+        [
+            _task(FULL_ID, title="Ingest epic", task_type="epic"),
+            _task("sub-epic", title="Sub epic", task_type="epic"),
+        ]
+    )
+    rolled_up.children[FULL_ID] = ["sub-epic"]
+
+    unmatched = TaskFakeLithosClient()
+    unmatched.tasks.append(_task(FULL_ID, title="Ingest epic", task_type="epic"))
+    unmatched.children[FULL_ID] = ["open-unclaimed"]
+
+    scope = f"/tasks?epic={FULL_ID}"
+    cases = (
+        (empty, scope, "data-epic-scope-empty"),
+        (rolled_up, scope, "data-epic-scope-rolled-up"),
+        (unmatched, f"{scope}&tag=no-such-tag", "data-epic-scope-unmatched"),
+    )
+    for fake, url, hook in cases:
+        with _client(lithos_lens_config_env, fake) as client:
+            response = client.get(url)
+        html = unescape(response.text)
+        assert hook in html, hook
+        banner = html.split(hook, 1)[1].split("</section>")[0]
+        assert "Ingest epic" in banner
+        assert CHIP in banner, hook
+        assert banner.index("Ingest epic") < banner.index(CHIP)
 
 
 # --- Note page --------------------------------------------------------------
@@ -368,6 +551,27 @@ def test_the_produced_by_chip_states_the_tasks_id(
     assert produced.index("produced-by-chip") < produced.index(CHIP)
 
 
+def test_the_note_back_link_states_the_tasks_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """`/note/<id>?task=<id>` heads the page with a link back to the task.
+
+    It is the only place that task is named on the note page (a note need not
+    have been produced by the task it was opened from), so it states the id.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task(FULL_ID, title="Ship the harness"))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/note/note-1?task={FULL_ID}")
+
+    assert response.status_code == 200
+    html = unescape(response.text)
+    back = html.split(f'<a href="/tasks/{FULL_ID}">', 1)[1].split("</p>")[0]
+    assert "Back to Ship the harness" in back
+    assert _leads(back.split("</a>", 1)[1], CHIP), back
+
+
 # --- The one surface that shows it only on hover ---------------------------
 
 
@@ -384,13 +588,22 @@ def test_an_epic_chip_keeps_its_text_and_carries_the_id_in_its_tooltip(
         response = client.get("/tasks")
 
     html = unescape(response.text)
-    chip = html.split(f'data-epic-chip="{FULL_ID}"', 1)[0]
-    chip = chip[chip.rindex('<a class="epic-chip') :]
-    body = html.split(f'data-epic-chip="{FULL_ID}"', 1)[1].split("</a>")[0]
-    title = re.search(r'title="([^"]+)"', body)
+    # The WHOLE anchor, opening tag included, so a chip smuggled in ahead of
+    # `.epic-chip-title` could not slip past the assertions below.
+    start = html.rindex(
+        '<a class="epic-chip', 0, html.index(f'data-epic-chip="{FULL_ID}"')
+    )
+    anchor = html[start : html.index("</a>", start)]
+
+    # The tooltip is the chip's only identity fallback, so it carries the id
+    # WHOLE — a truncated one would say no more than `data-epic-chip` already does.
+    title = re.search(r'title="([^"]*)"', anchor)
     assert title is not None
-    assert title.group(1).startswith(f"Ingest epic ({PREFIX}) — ")
-    # Visible text unchanged: the title, the bar and the fraction, no id.
-    visible = body.split('<span class="epic-chip-title">', 1)[1]
-    assert PREFIX not in visible
-    assert "task-short-id" not in visible
+    assert title.group(1) == f"Ingest epic ({FULL_ID}) — 0 of 1 done"
+    assert FULL_ID in title.group(1)
+
+    # Visible text unchanged: the title, the bar and the fraction, no id — and
+    # the shared element appears nowhere inside the chip at all.
+    visible = re.sub(r"<[^>]*>", " ", anchor.split(">", 1)[1])
+    assert visible.split() == ["Ingest", "epic", "0/1"], visible
+    assert "task-short-id" not in anchor

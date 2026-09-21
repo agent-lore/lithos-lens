@@ -47,8 +47,13 @@
              implying its first entry is the root. #}
           <nav class="detail-breadcrumb" data-parent-breadcrumb aria-label="Parent tasks">
             {% if detail.breadcrumb.incomplete %}<span data-breadcrumb-incomplete title="The chain above could not be walked to a root">&hellip;</span>{% endif %}
+            {# Each ANCESTOR carries its id, like every other line that names
+               another task. The trail's last entry is this page's own task,
+               whose id is in the `.detail-meta` two lines below — stating it
+               twice within a header would be noise, not a column. #}
             {% for parent in detail.breadcrumb.ancestors %}
               <a href="{{ task_detail_url(request, parent.id) }}">{{ parent.title }}</a>
+              {% with task_id = parent.id %}{% include "tasks/short_id.html" %}{% endwith %}
             {% endfor %}
             <span aria-current="page">{{ detail.task.title }}</span>
           </nav>

@@ -54,7 +54,7 @@
 
 {% block content %}
   {% if task %}
-    <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a></p>
+    <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a> {% with task_id = task.id %}{% include "tasks/short_id.html" %}{% endwith %}</p>
   {% else %}
     <p><a href="/tasks">&larr; Back to tasks</a></p>
   {% endif %}

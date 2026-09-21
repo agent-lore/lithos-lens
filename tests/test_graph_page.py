@@ -453,8 +453,21 @@ def test_a_cycle_names_its_members_in_order_with_one_representative_path(
 
     callout = re.search(r"data-cycle-callout(.*?)</section>", html, re.DOTALL)
     assert callout
-    members = re.search(r"data-cycle-members>(.*?)</span>", callout.group(1), re.DOTALL)
-    assert members and members.group(1).strip() == "Cyc A, Cyc B"
+    # The roster names both members, in order. Each member carries its short id
+    # beside its title (tests/test_short_id.py pins that), so this reads the
+    # NAMES out of the markup rather than matching the whole line: what this
+    # test is about is which tasks are in the cycle and in what order.
+    members = re.search(
+        r"data-cycle-members>(.*?)</span>\s*<span", callout.group(1), re.DOTALL
+    )
+    assert members
+    assert re.sub(r"<[^>]+>[^<]*</[^>]+>", "", members.group(1)).split() == [
+        "Cyc",
+        "A",
+        ",",
+        "Cyc",
+        "B",
+    ]
     path = re.search(r"data-cycle-path>(.*?)</span>", callout.group(1), re.DOTALL)
     assert path
     assert path.group(1).split() == ["Cyc", "A", "→", "Cyc", "B", "→", "Cyc", "A"]
