@@ -130,9 +130,17 @@ def snapshot(html: str) -> str:
 
 
 def chain_line(html: str) -> str:
+    """The chain sentence as TEXT — the tasks it names and in what order.
+
+    The short id each name carries (§5.3) is dropped with its element, so this
+    stays a helper about the walk. That the ids are there, on the server's
+    first paint and after every client rewrite, is ``tests/test_short_id.py``'s
+    claim.
+    """
     match = re.search(r"data-longest-chain.*?</section>", unescape(html), re.DOTALL)
     assert match, "no chain section"
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", match.group(0))).strip()
+    named = re.sub(r'<code class="task-short-id".*?</code>', "", match.group(0))
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", named)).strip()
 
 
 # ── The chain through the focused task (D7/D8) ──────────────────────────

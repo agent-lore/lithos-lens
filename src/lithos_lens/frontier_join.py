@@ -82,7 +82,15 @@ def _blocker_chips(
         else:
             label = blocker.task_id or blocker.message or blocker.kind
         chips.append(
-            BlockerChip(label=label, kind=blocker.kind, target_id=blocker.task_id)
+            BlockerChip(
+                label=label,
+                kind=blocker.kind,
+                target_id=blocker.task_id,
+                # A resolved chip names a SECOND task on the row, by title —
+                # the row's own metadata id is about the blocked task, not
+                # this one — so it carries that task's short id (§5.3).
+                titled=predecessor is not None,
+            )
         )
     return tuple(chips)
 

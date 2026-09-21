@@ -573,11 +573,14 @@ classDiagram
   class AttentionReason {
     +rule str
     +detail str
+    +detail_task_id str
+    +detail_tail str
   }
   class BlockerChip {
     +label str
     +kind str
     +target_id str
+    +titled bool
   }
   class ClaimRecord {
     +agent str

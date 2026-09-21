@@ -79,6 +79,10 @@
       <p class="eyebrow">Task panel</p>
       <h2>{{ detail.task.title }}</h2>
       <div class="detail-meta">
+        {# First in the metadata group (§5.6.1), so the panel a canvas node or a
+           board row opens states the id the row itself shows — and states it
+           for the Cytoscape nodes, whose labels deliberately do not. #}
+        {% with task_id = detail.task.id %}{% include "tasks/short_id.html" %}{% endwith %}
         <span class="badge badge-{{ detail.task.status }}">{{ detail.task.status }}</span>
         <span class="badge badge-type" data-task-type="{{ detail.task.task_type }}">{{ detail.task.task_type }}</span>
         {% if detail.gate_type %}<span class="badge badge-type" data-gate-type="{{ detail.gate_type }}">{{ detail.gate_type }} gate</span>{% endif %}
@@ -123,8 +127,12 @@
     {% if detail.breadcrumb.ancestors or detail.breadcrumb.incomplete %}
       <nav class="detail-breadcrumb" data-panel-parent aria-label="Parent tasks">
         {% if detail.breadcrumb.incomplete %}<span data-breadcrumb-incomplete title="The chain above could not be walked to a root">&hellip;</span>{% endif %}
+        {# As on the full page: each ancestor states its id, and the trail's
+           last entry is this panel's own task, whose id leads the metadata
+           group in the header above. #}
         {% for parent in detail.breadcrumb.ancestors %}
           <a href="{{ task_detail_url(request, parent.id) }}">{{ parent.title }}</a>
+          {% with task_id = parent.id %}{% include "tasks/short_id.html" %}{% endwith %}
         {% endfor %}
         <span aria-current="page">{{ detail.task.title }}</span>
       </nav>

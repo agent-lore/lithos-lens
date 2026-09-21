@@ -54,7 +54,7 @@
 
 {% block content %}
   {% if task %}
-    <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a></p>
+    <p><a href="/tasks/{{ task.id }}">&larr; Back to {{ task.title }}</a> {% with task_id = task.id %}{% include "tasks/short_id.html" %}{% endwith %}</p>
   {% else %}
     <p><a href="/tasks">&larr; Back to tasks</a></p>
   {% endif %}
@@ -76,6 +76,10 @@
               {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
               {{ produced_by.title }}
             </a>
+            {# Beside the chip, not inside it: the chip's text is the sentence
+               ("Produced by task: <title>"), and the id is a fact about the
+               task that sentence names. #}
+            {% with task_id = produced_by.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
           </p>
         {% endif %}
         {% if note_meta and note_meta.has_chips %}

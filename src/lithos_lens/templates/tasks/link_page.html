@@ -39,6 +39,11 @@
           <span class="blocker-chip blocker-chip-satisfied" data-link-satisfied>satisfied</span>
         {% endif %}
       {% endif %}
+      {# After the status, where this line's other facts about the task are:
+         there is no metadata group to lead here. An unresolved neighbour keeps
+         it — the id is then the whole of what Lens knows about that task, and
+         the half worth showing. #}
+      {% with task_id = link.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
       {% if chain %}
         {# T1-S8. What hangs below this line is decided in Python
            (blocker_chain.blocker_expansion) rather than here, so the

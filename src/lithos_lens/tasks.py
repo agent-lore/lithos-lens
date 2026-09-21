@@ -329,11 +329,17 @@ class BlockerChip:
     :class:`~lithos_lens.task_graph.BlockerRecord` kind
     (``task``/``gate``/``blocker_unsatisfiable``/``cycle``); ``target_id`` is
     the blocking task/gate id, kept for the deep-links a later slice adds.
+
+    ``titled`` says whether ``label`` is the blocking task's TITLE — i.e. the
+    chip NAMES a second task, and so must state that task's short id beside it
+    (§5.3). When it is false the label already IS the id (or a raw message), and
+    a chip that repeated it would say the same thing twice.
     """
 
     label: str
     kind: str = "task"
     target_id: str = ""
+    titled: bool = False
 
 
 # Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug is the
@@ -373,13 +379,35 @@ class AttentionReason:
 
     ``rule`` is a slug from :data:`ATTENTION_RULES` — the chip's markup token,
     and its text too unless :data:`ATTENTION_RULE_LABELS` gives the rule
-    different wording (see :attr:`label`). ``detail`` is the one-line supporting
-    fact the chip carries (e.g. ``Blocker "Design schema" was cancelled``),
-    which the detail page's "Why this task is here" block reuses.
+    different wording (see :attr:`label`). The one-line supporting fact the chip
+    carries (e.g. ``Blocker "Design schema" was cancelled``) is ``detail`` plus
+    ``detail_tail``, which the detail page's "Why this task is here" block
+    reuses.
+
+    Two fields, because two of the six rules NAME another task and §5.3 says a
+    name the operator cannot relate to ``28105098`` is the defect. The identity
+    reaches the template as an ID, not as prose, so the row can render the one
+    shared short-id element between the halves (``attention._blocker_name``
+    argues the rest). A fact naming nobody is ``detail`` alone, unchanged.
     """
 
     rule: str
     detail: str = ""
+    #: The task ``detail`` has just named, if any. Empty when that name already
+    #: IS an id, as an unresolved blocker chip does not repeat its own.
+    detail_task_id: str = ""
+    #: The rest of the sentence, carrying its own leading space so it reads as
+    #: one whether or not a short id was rendered before it.
+    detail_tail: str = ""
+
+    @property
+    def fact(self) -> str:
+        """The supporting fact as plain TEXT — what the sentence SAYS.
+
+        The short id beside a task it names is MARKUP and belongs to the
+        template; a caller wanting the identity reads :attr:`detail_task_id`.
+        """
+        return f"{self.detail}{self.detail_tail}"
 
     @property
     def label(self) -> str:
@@ -709,18 +737,6 @@ def normalize_created_since_input(value: str) -> str:
         return ""
     parsed = parse_date(value)
     return parsed.isoformat() if parsed else ""
-
-
-def format_display_date(value: str) -> str:
-    parsed = parse_date(value)
-    return parsed.strftime("%d/%m/%Y") if parsed else value
-
-
-def format_tag(tag: str) -> str:
-    if ":" not in tag:
-        return tag
-    key, value = tag.split(":", 1)
-    return f"{key}: {value}"
 
 
 def parse_timestamp(value: str) -> datetime | None:

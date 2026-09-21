@@ -26,6 +26,12 @@
     {% if node.focused %}data-focused="true"{% endif %}
   >
     <a data-node-detail href="{{ task_detail_url(request, node.id) }}">{{ node.label }}</a>
+    {# First in this entry's trailing badges (§5.12), ahead of the status: on a
+       graph the id is often ALL the operator has — a ghost carries no status
+       of its own, and loom's lines name the endpoint by id — so it leads the
+       facts rather than hiding in the link. The CANVAS labels stay the title
+       alone; a click there opens the panel, which states the id. #}
+    {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}
     <span class="badge badge-{{ node.status }}" data-node-status>{{ node.status }}</span>
     <span class="badge badge-type" data-node-type>{{ node.task_type }}</span>
     {% for agent in node.claims %}<span class="badge badge-claim" data-node-claim>claimed by {{ agent }}</span>{% endfor %}
@@ -57,6 +63,7 @@
           >
             {{ "waits on gate" if edge.type == "waits_on_gate" else "blocked by" }}
             <a href="{{ task_detail_url(request, edge.from_id) }}">{{ edge.from_label }}</a>
+            {% with task_id = edge.from_id %}{% include "tasks/short_id.html" %}{% endwith %}
             {% if edge.inactive %}<span data-edge-label>inactive — {{ edge.reason | replace("_", " ") }}</span>{% endif %}
             {% if edge.unknown %}
               {# Two causes, one line each (D6): the edge is unknown because an
@@ -112,7 +119,7 @@
           {% if epics %}
             <ul>
               {% for epic in epics %}
-                <li><a data-picker-epic="{{ epic.id }}" href="{{ graph_url(epic=epic.id) }}">{{ epic.title or epic.id }}</a></li>
+                <li><a data-picker-epic="{{ epic.id }}" href="{{ graph_url(epic=epic.id) }}">{{ epic.title or epic.id }}</a> {% with task_id = epic.id %}{% include "tasks/short_id.html" %}{% endwith %}</li>
               {% endfor %}
             </ul>
           {% else %}
@@ -244,11 +251,14 @@
           <ul data-cycle-list>
             {% for cycle in view.cycles %}
               <li data-cycle="{{ cycle.id }}">
-                <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                 {% if cycle.path %}
                   {# The walk already closes back on its first member, so the
-                     template adds no return step of its own. #}
-                  <span data-cycle-path>{% for node in cycle.path %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+                     template adds no return step of its own. Each step names a
+                     task, so each step states its short id (§5.3) — the walk
+                     and the roster above it name the same tasks the same way,
+                     which is what lets one be read against the other. #}
+                  <span data-cycle-path>{% for node in cycle.path %}{{ node.label }} {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ " → " if not loop.last }}{% endfor %}</span>
                 {% endif %}
                 {% if cycle.message %}<span data-cycle-message>{{ cycle.message }}</span>{% endif %}
               </li>
@@ -267,7 +277,7 @@
             <ul>
               {% for cycle in view.external_cycles %}
                 <li data-cycle="{{ cycle.id }}">
-                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                   <span data-cycle-message>{{ cycle.message }}</span>
                 </li>
               {% endfor %}
@@ -284,7 +294,7 @@
             <ul>
               {% for cycle in view.unshaped_cycles %}
                 <li data-cycle="{{ cycle.id }}">
-                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }}{{ ", " if not loop.last }}{% endfor %}</span>
+                  <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                   <span data-cycle-message>{{ cycle.message }}</span>
                 </li>
               {% endfor %}
@@ -367,9 +377,9 @@
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
         <p>
-          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}</span>
+          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }} {% with task_id = view.chain.through.id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</span>
           ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
-          <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+          <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }} {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ " → " if not loop.last }}{% endfor %}</span>
         </p>
       {% else %}
         <p data-chain-empty>No active blocking chain in this graph.</p>
@@ -417,6 +427,7 @@
           {% for row in view.hierarchy %}
             <li data-hierarchy-node="{{ row.node.id }}" data-depth="{{ row.depth }}" style="margin-left: {{ row.depth }}rem">
               <a href="{{ task_detail_url(request, row.node.id) }}">{{ row.node.label }}</a>
+              {% with task_id = row.node.id %}{% include "tasks/short_id.html" %}{% endwith %}
               <span class="badge badge-{{ row.node.status }}">{{ row.node.status }}</span>
               {% if row.node.ghost %}<span data-hierarchy-ghost>ghost</span>{% endif %}
             </li>

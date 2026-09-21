@@ -21,6 +21,10 @@
     {% endif %}
   </div>
   <div class="task-row-meta">
+    {# First in the metadata group, ahead of the status badge (§5.3): the id is
+       metadata, so it lines up as a column down the board and the title column
+       stays clean. #}
+    {% with task_id = row.task.id %}{% include "tasks/short_id.html" %}{% endwith %}
     <span class="badge badge-{{ row.task.status }}">{{ row.task.status }}</span>
     {# A `pr` gate the severity model promoted out of the Gates section keeps
        its reconciliation badge (§5.2.3): single placement moves the row, it
@@ -72,13 +76,29 @@
         <span class="attention-chip attention-chip-{{ reason.rule }}" data-attention-rule="{{ reason.rule }}">{{ reason.label }}</span>
       {% endfor %}
     </div>
-    <p class="attention-detail" data-attention-detail>{{ row.attention | map(attribute="detail") | select | join(" ") }}</p>
+    {#- The supporting facts, one sentence per fired rule, joined by a space.
+        A rule that NAMES another task (a cancelled blocker, a cycle partner)
+        hands its identity over as an id rather than as prose, so the sentence
+        states it with the one shared short-id element (§5.3) — the same
+        monospace, hoverable, copyable token every other surface shows — and
+        nothing here has to be marked safe HTML to render it. -#}
+    <p class="attention-detail" data-attention-detail>
+      {%- for reason in row.attention if reason.fact -%}
+        {{ " " if not loop.first }}{{ reason.detail }}
+        {%- if reason.detail_task_id %} {% with task_id = reason.detail_task_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif -%}
+        {{ reason.detail_tail }}
+      {%- endfor -%}
+    </p>
   {% endif %}
   {% if row.blockers %}
     <div class="blocker-list" data-blocker-list aria-label="Blocked by">
       <span class="blocker-label">Blocked by</span>
       {% for blocker in row.blockers %}
-        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}</span>
+        {# A chip that resolved names ANOTHER task by title, so it states that
+           task's short id (§5.3) — the row's own id, in the meta column above,
+           is the blocked task's and says nothing about what it waits on. An
+           unresolved chip's label already IS the id (or a raw message). #}
+        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}{% if blocker.titled %} {% with task_id = blocker.target_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</span>
       {% endfor %}
     </div>
   {% endif %}

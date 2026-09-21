@@ -1184,12 +1184,36 @@ const initLensGraph = function () {
       // (round-2 correctness f-005). Only the chain's NODE LIST is condensed —
       // that list is a walk over condensations, and each is named by its
       // representative.
-      clause.textContent = focused ? " through " + labelOf(state.focus) : "";
+      //
+      // Rebuilt as ELEMENTS rather than assigned as text, because each name
+      // here carries its short id (§5.3) and the id is an element. The server
+      // renders exactly this shape for the first paint; a focus transition
+      // never reloads the page, so a client that wrote titles back as plain
+      // text would drop every id on the first click.
+      clause.replaceChildren.apply(clause, focused ? nameParts(state.focus, " through ") : []);
     }
     const length = section.querySelector("[data-chain-length]");
     if (length) length.textContent = String(chain.length);
     const nodes = section.querySelector("[data-chain-nodes]");
-    if (nodes) nodes.textContent = chain.map(labelOf).join(" → ");
+    if (nodes) {
+      const parts = [];
+      chain.forEach(function (taskId, index) {
+        nameParts(taskId, index ? " → " : "").forEach(function (part) {
+          parts.push(part);
+        });
+      });
+      nodes.replaceChildren.apply(nodes, parts);
+    }
+  }
+
+  // One task NAMED in a sentence: the lead-in and title as text, then the
+  // short id, separated by the same single space the server's markup has —
+  // the text layer is the page for a screen reader (§5.12), so the gap is a
+  // real space and not a margin.
+  function nameParts(taskId, lead) {
+    const label = document.createElement("span");
+    label.textContent = lead + labelOf(taskId);
+    return [label, document.createTextNode(" "), shortIdElement(taskId)];
   }
 
   function labelOf(taskId) {
@@ -1332,6 +1356,30 @@ const initLensGraph = function () {
       .slice(0, SEARCH_LIMIT);
   }
 
+  // How much of an id is shown, kept in step with `SHORT_ID_CHARS` in
+  // `tasks.py` — 8 is the prefix the rest of the ecosystem types and Lithos
+  // resolves (any unambiguous prefix of 6 or more).
+  const SHORT_ID_CHARS = 8;
+
+  // The one short-id element (§5.3). Built with DOM calls because an id is an
+  // arbitrary non-empty string (§5.1) and it goes into an ATTRIBUTE here; the
+  // shape is `templates/tasks/short_id.html`'s, so a search hit and the layer
+  // entry it scrolls to state the id identically.
+  function shortIdElement(taskId) {
+    const code = document.createElement("code");
+    code.className = "task-short-id";
+    code.title = taskId;
+    // CODE POINTS, not UTF-16 code units. `short_id` in `tasks.py` is
+    // `task_id[:8]` over a Python str, which counts code points, and an id is
+    // an arbitrary non-empty string (§5.1) — so `slice(0, 8)` would cut an
+    // astral character in half eight characters in and show half a surrogate
+    // pair where the server shows the whole one. The two prefixes have to be
+    // the SAME eight characters: a row that changes its id when the server's
+    // markup replaces it is worse than one that never showed it.
+    code.textContent = Array.from(String(taskId)).slice(0, SHORT_ID_CHARS).join("");
+    return code;
+  }
+
   function renderSearch(query) {
     if (!searchResults) return;
     const items = searchMatches(query).map(function (node) {
@@ -1339,8 +1387,17 @@ const initLensGraph = function () {
       const hit = document.createElement("button");
       hit.type = "button";
       hit.className = "graph-search-hit";
-      hit.textContent = node.label;
       hit.dataset.searchHit = node.id;
+      // Title AND short id (§5.3). A hit is a place the page NAMES a task, and
+      // often the only one on screen: the text layers below can be collapsed,
+      // the box matches an id prefix as well as a title, and the answer to
+      // "is this the 28105098 the gate line named?" has to be readable without
+      // clicking. The id is a separate element rather than part of the label
+      // so selecting it copies the prefix and nothing else.
+      const label = document.createElement("span");
+      label.textContent = node.label;
+      hit.appendChild(label);
+      hit.appendChild(shortIdElement(node.id));
       item.appendChild(hit);
       return item;
     });
