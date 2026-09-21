@@ -240,7 +240,19 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # because one had to be found. 843 is still over the 800 threshold, so the
 # exception stands, and the next change that grows frontier.py asks the same
 # question with the same two legitimate answers.
-modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (829)
+#
+# Revisited (task "Show each task's short id beside its title", 2026-09-21):
+# tasks.py is 846 — +17 for the `short_id` filter and the constant behind it.
+# No budget moves: the count stays at 3 and the stop-loss stays at 850, so
+# there is nothing here to argue. It is recorded because the HEADROOM is now
+# four lines, and the note above stands unchanged: the next change that grows
+# tasks.py discharges the exception by the filter-vocabulary extraction rather
+# than arguing the ceiling up. The filter itself belongs where it landed —
+# `format_tag` and `format_display_date` are the same thing (the template
+# vocabulary this module already defines), and a module holding one seven-line
+# function so a counter stays put is the extraction this file's policy names
+# as the wrong answer.
+modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (846)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way

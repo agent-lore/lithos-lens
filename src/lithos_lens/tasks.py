@@ -715,6 +715,23 @@ def format_display_date(value: str) -> str:
     return parsed.strftime("%d/%m/%Y") if parsed else value
 
 
+# How much of a task id Lens shows beside a title -- NOT a Lens choice: 8 is the
+# prefix loom's gate and log lines, findings, PR bodies and the ROADMAP already
+# type, and Lithos resolves any unambiguous prefix of 6 or more back to the
+# whole id. Showing the same 8 is what lets a row, a gate or a graph entry be
+# matched by eye to a line written somewhere else.
+SHORT_ID_CHARS = 8
+
+
+def short_id(task_id: str) -> str:
+    """The id prefix the rest of the ecosystem names this task by.
+
+    An id shorter than the prefix is returned WHOLE, not padded: it is already
+    its own prefix, and there is nothing to elide.
+    """
+    return task_id[:SHORT_ID_CHARS]
+
+
 def format_tag(tag: str) -> str:
     if ":" not in tag:
         return tag

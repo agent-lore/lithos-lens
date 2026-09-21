@@ -26,6 +26,12 @@
     {% if node.focused %}data-focused="true"{% endif %}
   >
     <a data-node-detail href="{{ task_detail_url(request, node.id) }}">{{ node.label }}</a>
+    {# First in this entry's trailing badges (§5.12), ahead of the status: on a
+       graph the id is often ALL the operator has — a ghost carries no status
+       of its own, and loom's lines name the endpoint by id — so it leads the
+       facts rather than hiding in the link. The CANVAS labels stay the title
+       alone; a click there opens the panel, which states the id. #}
+    {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}
     <span class="badge badge-{{ node.status }}" data-node-status>{{ node.status }}</span>
     <span class="badge badge-type" data-node-type>{{ node.task_type }}</span>
     {% for agent in node.claims %}<span class="badge badge-claim" data-node-claim>claimed by {{ agent }}</span>{% endfor %}
@@ -57,6 +63,7 @@
           >
             {{ "waits on gate" if edge.type == "waits_on_gate" else "blocked by" }}
             <a href="{{ task_detail_url(request, edge.from_id) }}">{{ edge.from_label }}</a>
+            {% with task_id = edge.from_id %}{% include "tasks/short_id.html" %}{% endwith %}
             {% if edge.inactive %}<span data-edge-label>inactive — {{ edge.reason | replace("_", " ") }}</span>{% endif %}
             {% if edge.unknown %}
               {# Two causes, one line each (D6): the edge is unknown because an
@@ -112,7 +119,7 @@
           {% if epics %}
             <ul>
               {% for epic in epics %}
-                <li><a data-picker-epic="{{ epic.id }}" href="{{ graph_url(epic=epic.id) }}">{{ epic.title or epic.id }}</a></li>
+                <li><a data-picker-epic="{{ epic.id }}" href="{{ graph_url(epic=epic.id) }}">{{ epic.title or epic.id }}</a> {% with task_id = epic.id %}{% include "tasks/short_id.html" %}{% endwith %}</li>
               {% endfor %}
             </ul>
           {% else %}

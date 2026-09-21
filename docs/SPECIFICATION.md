@@ -217,6 +217,23 @@ there, so an unsatisfiable task cannot be mistaken for one merely waiting):
 Completed and cancelled tasks render in their own lists over a resolved-at
 window.
 
+**Every task is named by its title and its short id.** The short id is the first
+8 characters — the prefix loom's gate and log lines, the findings, the ROADMAP
+and the PR bodies all type, and the one Lithos resolves back (any unambiguous
+prefix of 6 or more) — so a row can be related to `28105098` at a glance. The id
+is metadata, so it renders **first in the surface's metadata group**: the
+right-hand meta column of a row here and in Gates, the detail page's and the
+side panel's meta line (§5.6), a graph layer entry's badges (§5.12). Where a
+surface has no such group it sits with that surface's other facts about the task
+— a leading column in the children table, after the status on a blocker /
+Blocks / provenance line or on a gate's waiter. It is selectable monospace text
+carrying the whole id in its tooltip, so select-and-copy yields exactly the
+prefix everything else uses, and the title itself is never rewritten. Two
+surfaces are deliberately exempt: the Epic rollup strip's progress chips carry
+the id in their tooltip only (a progress chip has no room for another visible
+token), and the Cytoscape canvas keeps its node labels as the title alone
+(§5.12.1).
+
 **Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
 can never become ready) and `cycle` (the blocking chain closes on itself) — and
@@ -500,7 +517,9 @@ The task detail page is built on the same graph reads as the dashboard, so the
 two cannot disagree about why a task is where it is. It shows:
 
 - task title and body/summary content, status metadata, creating agent, created
-  timestamp, tags, and claim state where known
+  timestamp, tags, and claim state where known. The meta line under the heading
+  **leads with the task's short id** (§5.3), as the side panel's does and as
+  every row on the board does
 - **why this task is here** — the Needs-attention reasons, when the board
   promoted it, with the same supporting facts the chips carry
 - **blockers**, each labelled: a satisfied predecessor (the edge survives
@@ -1128,6 +1147,13 @@ text**. That is the first-class baseline, not a fallback: the page is complete
 and reviewable with no JavaScript, and the Cytoscape rendering (§5.12.1) is
 enhancement drawn from the same embedded payload, so the picture and the text
 cannot disagree.
+
+Every task the text names — a layer entry, the predecessor on an edge line, an
+epic in the scope picker — carries its **short id** (§5.3), ahead of the status
+badge on a layer entry. Ghosts included: a ghost is one hop outside the scope
+and carries no status of its own, so the id is often all the operator has. The
+canvas is the exception (§5.12.1): an extra token on every node crowds the
+picture, and a click opens the side panel, which leads with the id.
 
 **Scope and URL state.** `?project=<slug>` or `?epic=<id>`; with neither, the
 page renders a picker listing every project the snapshot observes under both

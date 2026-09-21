@@ -21,6 +21,10 @@
     {% endif %}
   </div>
   <div class="task-row-meta">
+    {# First in the metadata group, ahead of the status badge (§5.3): the id is
+       metadata, so it lines up as a column down the board and the title column
+       stays clean. #}
+    {% with task_id = row.task.id %}{% include "tasks/short_id.html" %}{% endwith %}
     <span class="badge badge-{{ row.task.status }}">{{ row.task.status }}</span>
     {# A `pr` gate the severity model promoted out of the Gates section keeps
        its reconciliation badge (§5.2.3): single placement moves the row, it

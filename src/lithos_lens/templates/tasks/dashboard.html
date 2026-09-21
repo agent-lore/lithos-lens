@@ -376,7 +376,11 @@
                href="{{ epic_scope_url(request, "" if epic.selected else epic.task.id) }}"
                data-epic-chip="{{ epic.task.id }}"
                {% if epic.selected %}aria-current="true"{% endif %}
-               title="{{ epic.task.title }} — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
+               {# A progress chip has no room for another visible token, so the
+                  id rides in the tooltip alone (§5.3) — the one surface where
+                  it is not shown beside the title. The bar and the fraction are
+                  what this chip is read for. #}
+               title="{{ epic.task.title }} ({{ epic.task.id | short_id }}) — {{ epic.done }} of {{ epic.total }} done{% if epic.cancelled %}, {{ epic.cancelled }} cancelled{% endif %}">
               <span class="epic-chip-title">{{ epic.task.title }}</span>
               {# max=0 is invalid for <progress>; an epic with no (non-cancelled)
                  children shows its count alone. #}

@@ -31,6 +31,10 @@
     {% endif %}
   </div>
   <div class="task-row-meta">
+    {# Leads the metadata group exactly as an ordinary row's does (§5.3): a
+       gate is the thing loom's `raised ... gate for story <id>` lines name, so
+       it is the row the short id is read off most. #}
+    {% with task_id = gate.task.id %}{% include "tasks/short_id.html" %}{% endwith %}
     <span class="badge badge-gate badge-gate-{{ gate.type_slug }}" data-gate-type-badge>{{ gate.type_label }}</span>
     {# A `pr` gate's reconciliation state leads the meta row: what loom is
        doing with this PR right now is the reason the gate is still open, so it
@@ -85,6 +89,7 @@
           <li>
             <a href="{{ task_detail_url(request, waiter.id) }}">{{ waiter.title }}</a>
             <span class="badge badge-{{ waiter.status }}">{{ waiter.status }}</span>
+            {% with task_id = waiter.id %}{% include "tasks/short_id.html" %}{% endwith %}
           </li>
         {% endfor %}
       </ul>

@@ -85,6 +85,7 @@ from lithos_lens.tasks import (
     format_display_date,
     format_tag,
     parse_filters,
+    short_id,
 )
 from lithos_lens.telemetry import instrument_app
 
@@ -195,6 +196,9 @@ def create_app(
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["format_tag"] = format_tag
     templates.env.filters["display_date"] = format_display_date
+    # The 8-character prefix every surface shows beside a task's title (§5.3):
+    # one definition, because it is the id the rest of the ecosystem types.
+    templates.env.filters["short_id"] = short_id
     templates.env.filters["render_markdown"] = render_markdown
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_tag_clear_url"] = task_tag_clear_url

@@ -76,6 +76,10 @@
               {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
               {{ produced_by.title }}
             </a>
+            {# Beside the chip, not inside it: the chip's text is the sentence
+               ("Produced by task: <title>"), and the id is a fact about the
+               task that sentence names. #}
+            {% with task_id = produced_by.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
           </p>
         {% endif %}
         {% if note_meta and note_meta.has_chips %}

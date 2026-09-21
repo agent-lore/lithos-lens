@@ -1,0 +1,18 @@
+{#
+  The one short-id element, included by every surface that names a task.
+  Context: `task_id`, the FULL id -- this partial does the truncating.
+
+  The id is METADATA, so it sits with the metadata: first in that surface's
+  metadata group (a row's `.task-row-meta`, a header's `.detail-meta`, a graph
+  entry's trailing badges), which puts it in the same place on every surface,
+  lines it up as a column down the board, and leaves the title column clean.
+  Where a surface has no such group it goes where that surface's other facts
+  about the task go -- a column in the children table, after the status on a
+  blocker / Blocks / provenance line.
+
+  Selectable TEXT, not a tooltip-only fact: select-and-copy yields exactly the
+  prefix loom's gate lines, the findings and the PR bodies type, so a row can
+  be pasted into any of them. The `title` carries the whole id for the rare
+  case the prefix is not enough. No JavaScript, on any surface.
+-#}
+<code class="task-short-id" title="{{ task_id }}">{{ task_id | short_id }}</code>

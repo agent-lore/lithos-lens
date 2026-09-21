@@ -1695,6 +1695,13 @@ function snapshot() {
   return {
     href: href(),
     nodes: drawn.nodes,
+    // The TEXT on each drawn node. The short-id pass leaves canvas labels as
+    // the title alone (§5.12): an extra token on every node crowds the
+    // picture, and a click opens the panel, which states the id.
+    labels: drawn.nodes.reduce(function (into, id) {
+      into[id] = graph.node(id).data("label");
+      return into;
+    }, {}),
     edges: drawn.edges.map((edge) => edge.type),
     arrowless: drawn.edges
       .filter((edge) => !edge.arrow || edge.arrow === "none")
@@ -2578,6 +2585,42 @@ def test_the_default_canvas_draws_dependency_edges_with_an_arrowhead_on_each() -
     assert "note" not in final["nodes"]
     # … and nothing was fetched to decide any of it.
     assert result["fetches"] == []
+
+
+#: Two nodes with the 32-character ids Lithos really issues, so "the label
+#: carries no id" is a claim a fixture of slugs could not make: the title and
+#: the id share no characters here.
+SHORT_ID_TASK = "28105098aa4c4d0fbb2f6b06d0e0b0aa"
+SHORT_ID_GHOST = "7f31c0d4ee194b6ca0c4d9b1f2a30c55"
+SHORT_ID_PAYLOAD: dict = _payload(
+    [
+        _node(SHORT_ID_TASK, title="Ship the harness"),
+        _node(
+            SHORT_ID_GHOST,
+            title="Design schema",
+            layer=1,
+            ghost="dependency",
+            projects=("lens",),
+        ),
+    ],
+    [_edge(SHORT_ID_TASK, SHORT_ID_GHOST)],
+)
+
+
+def test_a_canvas_node_is_labelled_with_the_title_alone() -> None:
+    """The short id shows on every TEXT surface and on none of the canvas.
+
+    An extra token on every node crowds the picture the canvas exists to give,
+    and a click already opens the side panel, which leads its metadata with the
+    id. So the label stays exactly what the server rendered — including the
+    ghost's, whose second line is its project and nothing else.
+    """
+    labels = _graph_run([], payload=SHORT_ID_PAYLOAD)["final"]["labels"]
+
+    assert labels[SHORT_ID_TASK] == "Ship the harness"
+    assert labels[SHORT_ID_GHOST] == "Design schema\n\u00b7 lens"
+    for task_id, label in labels.items():
+        assert task_id[:8] not in label, f"{task_id} drew its id on the canvas"
 
 
 def test_shape_is_type_and_colour_is_status_as_the_library_resolves_them() -> None:
@@ -4505,6 +4548,19 @@ def test_the_parent_epic_is_drawn_with_the_label_the_server_gave_it() -> None:
     result = _mini_run()
 
     assert result["labels"]["epic"] == "Loom run harness"
+
+
+def test_a_mini_graph_node_is_labelled_with_the_title_alone() -> None:
+    """The same rule on the detail page's canvas, which shares `nodeLabel`.
+
+    The fragment above it is where the id is stated (the detail header's
+    metadata group); the picture stays the titles.
+    """
+    labels = _mini_run()["labels"]
+    served = {node["id"]: node["label"] for node in MINI_PAYLOAD["nodes"]}
+
+    assert labels == {task_id: served[task_id] for task_id in labels}
+    assert labels["epic"] == "Loom run harness"
 
 
 def test_a_detail_page_publishes_no_graph_page_handle() -> None:
