@@ -8,9 +8,8 @@ filters lives here. The dependency runs one way — this module imports the
 records, ``tasks.py`` never imports back — so the pair stays acyclic.
 
 Project resolution (§5B.1) sits here too: a task's project is a *derived*
-property read from either ``metadata.project`` or a ``project:<slug>`` tag
-depending on the configured convention, which is filtering input rather than
-a stored field — as do the two per-load reporting passes built on it
+property read from ``metadata.project`` and/or a ``project:<slug>`` tag rather
+than a stored field — as do the two per-load reporting passes built on it
 (``project_universe`` for the filter dropdown, ``log_project_data_quality``
 for the convention-conflict warnings). ``tag_universe`` sits beside the first
 of them: a different vocabulary, built over the same loaded rows.
@@ -132,16 +131,19 @@ def matches_agent(task: TaskRecord, agent: str) -> bool:
 def matches_projects(task: TaskRecord, filters: TaskFilters) -> bool:
     """Multi-select project match: does the task belong to ANY selected project?
 
-    An empty selection matches everything; otherwise the task's slugs under the
-    active convention are intersected with the selection (§5.4.2).
+    An empty selection matches everything; otherwise the task's slugs under
+    BOTH conventions are intersected with the selection (§5.4.2). Membership
+    reads the same universe every control that OFFERS a project enumerates —
+    the Project datalist, the graph scope picker, the quick-switch strip — so
+    no control can hand the operator a slug this filter then refuses.
+    ``[tasks].project_convention`` used to select which convention was
+    honoured here; that made every offering control a source of dead-end
+    values under a single-convention posture, so the knob is parsed and
+    ignored (§4.4) and matching is unconditionally ``"both"``.
     """
     if not filters.projects:
         return True
-    slugs = task_projects(
-        task,
-        convention=filters.project_convention,
-        tag_key=filters.project_tag_key,
-    )
+    slugs = task_projects(task, convention="both", tag_key=filters.project_tag_key)
     return any(slug in filters.projects for slug in slugs)
 
 
@@ -429,10 +431,11 @@ def project_universe(
 ) -> tuple[str, ...]:
     """Every project slug present in the loaded rows, sorted (§5B.1).
 
-    The universe is the union of BOTH conventions' slugs regardless of the
-    active posture — §5B.1 is explicit that no project may be invisible to its
-    own view — even though matching under a single-convention posture honours
-    only that convention. Only the tag KEY follows configuration (§5B.9).
+    The universe is the union of BOTH conventions' slugs — §5B.1 is explicit
+    that no project may be invisible to its own view — and so, since
+    ``project_convention`` was retired as a membership knob, is
+    :func:`matches_projects`: what this offers is exactly what the filter
+    matches. Only the tag KEY follows configuration (§5B.9).
     """
     slugs: set[str] = set()
     for task in tasks:
@@ -472,10 +475,9 @@ def log_project_data_quality(
     Two independent signals over every loaded row — resolved rows carry their
     conventions too:
 
-    - the two conventions are present and DISAGREE. Reported in every posture:
-      §5B.1 makes the warning a property of the data, not of the matching
-      posture Lens happens to run (both values are read for the universe
-      regardless). Neither value is dropped — the task matches under both slugs.
+    - the two conventions are present and DISAGREE. §5B.1 makes the warning a
+      property of the DATA — the disagreement is real however Lens reads it —
+      and neither value is dropped: the task matches under both slugs.
     - ``metadata.project`` is present but is not a string. Lens cannot read a
       project out of it, so the task is invisible to its project view; the
       value is ignored rather than coerced into a fabricated slug.

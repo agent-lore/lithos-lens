@@ -1,12 +1,14 @@
 """Shared pytest fixtures and helpers."""
 
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
 import pytest
+from dotenv import load_dotenv as _real_load_dotenv
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -30,12 +32,76 @@ def load_contract(tool: str) -> dict[str, Any]:
     return payload
 
 
+#: The env overrides read with NO default, so that absent and present-empty
+#: stay distinguishable: ``FOO=`` is a written value for both — the documented
+#: empty list for one, a value naming no convention (and so a config error) for
+#: the deprecated posture knob (§4.4). Every other override is truthiness-gated
+#: and is neutralised below by being set empty; these two cannot be.
+PRESENT_EMPTY_ENV_KNOBS = (
+    "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
+    "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_present_empty_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delete :data:`PRESENT_EMPTY_ENV_KNOBS` for the whole suite.
+
+    Autouse rather than folded into ``lithos_lens_config_env``, because the
+    exposure is not limited to tests that take that fixture: every test that
+    calls ``load_config`` on a config file of its own is equally at the mercy
+    of the invoking shell. Blanking these two would not isolate them — for
+    these, blank IS a value — so they are removed. A test that wants one sets
+    it itself, and its own ``setenv`` runs after this. The other way a value
+    arrives uninvited — a developer ``.env``, read by ``load_dotenv`` on every
+    load, after this fixture — is closed by :func:`dotenv_file`.
+    """
+    for name in PRESENT_EMPTY_ENV_KNOBS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def dotenv_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Make dotenv an INPUT of the test: the loader reads this path, nothing else.
+
+    Clearing the environment above is not enough on its own. Every
+    ``load_config`` (and ``find_config_path``) calls ``load_dotenv``, which
+    with no argument searches UPWARDS from ``src/lithos_lens/config.py`` and so
+    finds a developer's ``/workspace/.env``. Anything written there lands in
+    ``os.environ`` AFTER this module's isolation has run, and an env override
+    beats the TOML the test just wrote — one stray local line would silently
+    retune the whole suite (a posture matrix exercising one value three times,
+    default-config assertions failing, an invalid local value breaking every
+    config test).
+
+    So the search is replaced by a per-test file. It does not exist by default
+    — ``load_dotenv`` on a missing path is a no-op — and a test that wants to
+    exercise the dotenv route writes it. ``load_dotenv`` mutates ``os.environ``
+    directly, behind ``monkeypatch``'s back, so the environment is snapshotted
+    and restored rather than left for the next test to inherit.
+    """
+    dotenv_path = tmp_path / "harness.env"
+
+    def _controlled_load_dotenv() -> bool:
+        """Stand in for ``dotenv.load_dotenv``, which the loader calls bare."""
+        return _real_load_dotenv(dotenv_path)
+
+    monkeypatch.setattr("lithos_lens.config.load_dotenv", _controlled_load_dotenv)
+    before = dict(os.environ)
+    yield dotenv_path
+    os.environ.clear()
+    os.environ.update(before)
+
+
 @pytest.fixture
 def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Provide a minimal lithos-lens.toml and point ``LITHOS_LENS_CONFIG`` at it.
 
-    Env-var overrides are cleared so a developer's local ``.env`` cannot
-    silently inject values via ``load_dotenv``.
+    Env-var overrides from the invoking shell are cleared. They are neutralised
+    by being set EMPTY, which every truthiness-gated override reads as
+    "unset"; the two that read absent and present-empty apart are handled
+    suite-wide by :func:`_no_ambient_present_empty_env`, and ``load_dotenv``'s
+    search for a developer ``.env`` by :func:`dotenv_file`.
     """
     data_dir = tmp_path / "data"
     config_path = tmp_path / "lithos-lens.toml"

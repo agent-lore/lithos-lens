@@ -12,8 +12,9 @@ coverage set is the point of this module:
 - every §5B.1 project among the in-scope tasks, *and* among the DOWNSTREAM
   ghosts — they appear in the impact count (D10), so their sole-blocker fact
   has to be readable from the same reads;
-- a read pair is ``project=<slug>`` plus, under the ``"both"`` convention,
-  ``tags=["<project_tag_key>:<slug>"]``, unioned (§5B.7's pattern), each at
+- a read pair is ``project=<slug>`` plus ``tags=["<project_tag_key>:<slug>"]``,
+  unioned (§5B.7's pattern) — both halves always, because membership is both
+  conventions (§4.4's retired ``project_convention``) — each at
   ``frontier_limit``, with ``len == limit`` treated as truncation — the
   dashboard's rule;
 - a task with **no project** under either convention is reachable by no scoped
@@ -54,7 +55,6 @@ from lithos_lens.task_filtering import task_projects
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord
 from lithos_lens.task_links import BLOCKER_EDGE_TYPES, LINK_READ_TIMEOUT_S
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
     ProjectConvention,
     TaskRecord,
@@ -65,6 +65,12 @@ from lithos_lens.tasks import (
 #: the same list.
 READ_BY_PROJECT = "project"
 READ_BY_TAG = "tags"
+
+#: Every plan issues BOTH halves (§5B.7). Membership honours both conventions,
+#: so scoping by only one would leave the tasks the other carries reachable by
+#: no read at all — the hazard the retired ``project_convention`` posture used
+#: to create (§4.4).
+READ_KINDS: tuple[str, ...] = (READ_BY_PROJECT, READ_BY_TAG)
 
 #: The deadline on the whole cycle-read phase — the same internal safety net
 #: :data:`~lithos_lens.graph_fanout.GHOST_RESOLUTION_BUDGET_S` is, not a dial an
@@ -175,7 +181,6 @@ class CycleSignalClient(Protocol):
 def coverage_projects(
     scope: TaskGraphScope,
     *,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> tuple[str, ...]:
     """Every project the page must read, sorted (D4).
@@ -185,9 +190,9 @@ def coverage_projects(
     claims anything about ITS blockers; a downstream one is counted in impact,
     so its project is read.
 
-    Slugs are read under **both** conventions whatever the matching posture, as
-    §5B.1 requires of any project enumeration: a project invisible to its own
-    coverage read would leave its tasks silently unknown.
+    Slugs are read under **both** conventions, as §5B.1 requires of any
+    project enumeration: a project invisible to its own coverage read would
+    leave its tasks silently unknown.
     """
     in_scope = {node.id for node in scope.nodes if not node.ghost}
     downstream = {
@@ -213,17 +218,18 @@ async def load_cycle_signal(
     scope: TaskGraphScope,
     *,
     frontier_limit: int,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
     fetch_concurrency: int = 16,
 ) -> CycleSignal:
     """Run one ``lithos_task_blocked`` read PLAN per project in the coverage set.
 
-    A plan is a pair of calls under the default ``"both"`` posture — one
-    ``project=`` (metadata) and one ``tags=`` (tag convention) — and a single
-    call under a single-convention posture, so the fan-out is two calls per
-    covered project by default, not one. ``_read_kinds`` decides which, and the
-    call log a test asserts on is exactly this plan.
+    A plan is a PAIR of calls — one ``project=`` (metadata) and one ``tags=``
+    (tag convention) — so the fan-out is two calls per covered project, never
+    one. Both halves are issued because membership honours both conventions
+    (§5B.1; the posture knob that once dropped a half is retired, §4.4), and a
+    task the unissued half alone could have matched would otherwise be in
+    scope with its cycle status resting on silence. The call log a test
+    asserts on is exactly this plan.
 
     The plan is the WHOLE coverage set — D4 admits no sampling, and a scope
     whose set is too large to read is refused by ``graph_page`` before this
@@ -237,9 +243,9 @@ async def load_cycle_signal(
     — that much is the same claim — but only one of them is a read Lithos ever
     saw, and the counter and the banner both say which.
     """
-    projects = coverage_projects(scope, convention=convention, tag_key=tag_key)
+    projects = coverage_projects(scope, tag_key=tag_key)
     limiter = asyncio.Semaphore(max(fetch_concurrency, 1))
-    plan = [(project, by) for project in projects for by in _read_kinds(convention)]
+    plan = [(project, by) for project in projects for by in READ_KINDS]
     deadline = asyncio.get_running_loop().time() + CYCLE_READ_BUDGET_S
 
     async def read(project: str, by: str) -> ProjectRead:
@@ -312,8 +318,7 @@ def _signal(
     is a question about the convention that read expresses (§5B.1):
     ``project=<slug>`` is the metadata convention, ``tags=["<key>:<slug>"]``
     the tag one. An empty response from a filter the task cannot match is not
-    coverage — under a single-convention posture that is the whole hazard,
-    because the other half of the pair is never issued at all.
+    coverage — which is why both halves of the pair are always issued.
     """
 
     rows: dict[str, TaskRecord] = {}
@@ -419,21 +424,6 @@ def blocked_coverage(signal: CycleSignal, task: TaskRecord, *, tag_key: str) -> 
     the coverage set.
     """
     return any(read_covers(read, task, tag_key=tag_key) for read in signal.reads)
-
-
-def _read_kinds(convention: ProjectConvention) -> tuple[str, ...]:
-    """The halves of a read pair this convention needs (§5B.7).
-
-    Under ``"both"`` the two reads are unioned; under a single-convention
-    posture only the matching one is issued, because the other would scope by a
-    convention this deployment does not honour.
-    """
-    kinds: list[str] = []
-    if convention in ("metadata", "both"):
-        kinds.append(READ_BY_PROJECT)
-    if convention in ("tag", "both"):
-        kinds.append(READ_BY_TAG)
-    return tuple(kinds)
 
 
 def _reason(exc: BaseException) -> str:

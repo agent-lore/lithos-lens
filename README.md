@@ -108,7 +108,7 @@ agent_id = "lithos-lens"
 | `visible_cap` | integer | No | `50` | **Deprecated** (unused since the graph-native dashboard); configuring it logs a one-time warning. |
 | `default_time_range_days` | integer | No | `30` | Resolved-at window for completed/cancelled task context. Bounded by a hard 365-day ceiling: a larger value is rejected at load, and a longer `?since=` request is clamped to it (those two reads have no row limit). |
 | `default_status_groups` | string array | No | `["open", "completed", "cancelled"]` | Status groups visible by default and their display order. |
-| `project_convention` | string | No | `both` | Which project convention the `?project=` filter honours: `metadata` (`metadata.project`), `tag` (`project:<slug>`), or `both` (a task matches under either). |
+| `project_convention` | string | No | `both` | **Deprecated** (parsed and ignored); `?project=` matches a task under either convention — `metadata.project` or `project:<slug>` — whatever this says. Configuring it logs a one-time warning; a value naming no convention is still rejected. |
 | `project_tag_key` | string | No | `project` | Tag key reserved for the tag convention; must not contain `:`. |
 
 #### `[lithos-lens.graph]`
@@ -173,6 +173,7 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES` | `lithos-lens.tasks.claim_expiring_soon_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 4. |
 | `LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS` | `lithos-lens.tasks.stale_open_age_days` | Integer 1-3650 (same bounds as the TOML key). Needs-attention rule 5. |
 | `LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES` | `lithos-lens.tasks.unclaimed_ready_age_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 6. |
+| `LITHOS_LENS_TASKS_PROJECT_CONVENTION` | `lithos-lens.tasks.project_convention` | Must be `metadata`, `tag` or `both` (same set as the TOML key). **Deprecated** with `project_convention`: parsed onto the effective config and reported, read by nothing. |
 | `LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS` | `lithos-lens.tasks.agent_inactive_days` | Integer 1-3650 (same bounds as the TOML key). How long an agent may be idle before the Agent picker stops offering it by default (`?all_agents=1` shows them all). |
 | `LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES` | `lithos-lens.tasks.dispatch_trigger_tag_prefixes` | Comma-separated tag prefixes, no blank entries. Scopes Needs-attention rule 6 to work a fleet dispatches on. Set it to the empty string for the empty list (the TOML `[]` opt-out: rule 6 judges every ready task). |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |

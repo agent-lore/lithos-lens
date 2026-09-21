@@ -180,9 +180,10 @@
           {% endfor %}
         </fieldset>
         {# Project matches either convention (metadata.project or the
-           project:<slug> tag) per [tasks].project_convention; the datalist is
-           the union of slugs present in the loaded snapshot. Comma-separated
-           values select several projects (OR). #}
+           project:<slug> tag), and the datalist is the union of both
+           conventions' slugs present in the loaded snapshot — the same
+           reading, so every value offered here is one the filter matches.
+           Comma-separated values select several projects (OR). #}
         <label>
           Project
           <input list="projects" name="project" value="{{ dashboard.filters.projects | join(',') }}" placeholder="Any project">

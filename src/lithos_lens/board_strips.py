@@ -159,22 +159,15 @@ def build_project_strip(
     a task carrying ``metadata.project`` alone (loom's issue-mirrored work)
     counts exactly like a tagged one.
 
-    The universe and what ``?project=<slug>`` MATCHES are the same reading of a
-    row under the default ``project_convention = "both"``, which is where the
-    no-dead-end rule at the top of this module is proved. They come apart under
-    a single-convention posture — ``matches_projects`` honours only the
-    configured one — and that gap is §5B.1's own, not this strip's: the Project
-    datalist beside it has offered unreachable values in exactly that case
-    since the universe rule was written (pinned by
-    ``test_project_universe_unions_both_conventions_under_a_single_posture``).
-    Closing it means making the FILTER read the universe too, which is a change
-    to §5B.1's normative matching rule and to every surface that filters — not
-    something a strip may decide on its own — it is Lithos task ``f990395d``,
-    which widens the filter to both conventions and retires the knob. Until
-    then this strip states the same universe the datalist does, so the two
-    controls never disagree about which projects exist, and
-    ``test_a_single_convention_posture_inherits_the_5b1_universe_gap`` keeps
-    the residual visible instead of silent.
+    The universe and what ``?project=<slug>`` MATCHES are now the same reading
+    of a row, whatever the config says, which is where the no-dead-end rule at
+    the top of this module is proved. They used to come apart under a
+    single-convention posture — ``matches_projects`` honoured only the
+    configured one, so this strip and the Project datalist beside it could both
+    offer a slug the filter refused — and closing that meant widening the
+    FILTER to the universe rather than narrowing the universe to the posture,
+    which would have hidden metadata-only work from a ``tag``-posture operator.
+    ``[tasks].project_convention`` is parsed and ignored (§4.4) as a result.
 
     Ordered by count descending, then slug — the strip reads as a summary of
     where the work is, and its order is stable while the operator clicks

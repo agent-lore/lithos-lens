@@ -214,7 +214,6 @@ LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES=10
 LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES=60
 LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES=trigger:   # comma-separated; scopes rule 6 (empty = every ready task)
 LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS=7
-LITHOS_LENS_TASKS_PROJECT_CONVENTION=both        # metadata | tag | both
 LITHOS_LENS_TASKS_METRICS_DEBOUNCE_MS=2000       # client-side reconcile debounce
 LITHOS_LENS_TASKS_RECENT_FINDINGS_DRAWER_SIZE=50
 LITHOS_LENS_TASKS_STALLED_NO_FINDINGS_HOURS=24
@@ -321,7 +320,6 @@ claim_expiring_soon_minutes = 10  # Needs-attention rule 4: claim expiring soon
 unclaimed_ready_age_minutes = 60  # Needs-attention rule 6: ready-but-unclaimed
 dispatch_trigger_tag_prefixes = ["trigger:"]  # rule 6 SCOPE: tags a fleet dispatches on; [] judges every ready task
 stale_open_age_days = 7           # Needs-attention rule 5: stale open
-project_convention = "both"       # metadata | tag | both — see §5B.1
 project_tag_key = "project"       # tag-key reserved for the tag convention
 metrics_debounce_ms = 2000        # client-side reconcile debounce on SSE bursts (server-side recompute: ROADMAP X1)
 recent_findings_drawer_size = 50  # ring-buffer size for drawer + latest-finding line (warmup covers in-progress tasks only; no window knob)
@@ -436,6 +434,7 @@ The following pre-graph knobs are **deprecated**. For one release Lens MUST pars
 | Deprecated | Replacement |
 |------------|-------------|
 | `[tasks].visible_cap` | Nothing — the per-row claim fan-out it capped is gone. Claims arrive inline via `with_claims=true`; there is no "Unknown claim state" tail. |
+| `[tasks].project_convention` (and `LITHOS_LENS_TASKS_PROJECT_CONVENTION`) | Nothing — `?project=` matches a row under **either** convention (§5B.1), so there is no posture to select. Both spellings are still **parsed onto the effective config** and still validated (a value naming no convention is a config error, from either spelling), each logging its own one-time notice; nothing reads the result, and §13 lists it as parsed-and-ignored. `[tasks].project_tag_key` is unaffected: it spells the tag convention, it is not a posture. |
 | `?claimed_state=` URL parameter (and its `[tasks].default_status_groups` interaction) | Nothing — section membership is structural (§5.3). Legacy URLs containing `claimed_state` are silently ignored so old bookmarks degrade gracefully. |
 
 ---
@@ -666,7 +665,7 @@ Filters appear in a sticky filter bar. All filters compose and reflect in the UR
 
 | Filter | Behaviour |
 |--------|-----------|
-| **Project** | Multi-select dropdown. A row matches when its project per §5B.1 (metadata **or** tag convention, per `project_convention`) matches. URL: `?project=lithos-loom&project=ganglion`. |
+| **Project** | Multi-select dropdown. A row matches when its project under **either** §5B.1 convention (`metadata.project` or the `project:<slug>` tag) matches — the same union the dropdown is built from, so every offered value leads to its own rows. URL: `?project=lithos-loom&project=ganglion`. |
 | **Tag** | Free-text with `key:value` parsing; excludes the reserved project and human-actionable keys. URL: `?tag=cli`. |
 | **Agent** | Dropdown sourced from `lithos_agent_list`; matches **creator OR claimer** by default (role-narrow toggle: `creator` / `claimer` / `poster` / `any`). URL: `?agent=agent-zero&agent_role=any`. |
 | **Since** | Created-at lower bound (`lithos_task_list(since=…)` semantics); open sections ignore it by default. |
@@ -742,7 +741,7 @@ For `task_type="gate"` tasks: the `gate_type` badge; for `pr` gates the **PR rec
 
 **No-JS baseline (required)**
 - **Topological text layers:** Kahn's algorithm over `blocks` + `waits_on_gate` edges of the fetched topology, with every strongly-connected component (Tarjan; size > 1 or a self-loop) **condensed to one node** so cycle members still receive a layer and their dependents are layered below them, marked "blocked via cycle". A cycle renders as a bracketed group inside its layer — members sorted by (`created_at`, `id`) plus one deterministic representative path — and in a "dependency cycle" callout at the top of the page.
-- **Cycle authority is Lithos, cycle shape is Lens:** the page also reads `lithos_task_blocked` **scoped**, one read pair per project in the **coverage set** — every distinct §5B.1 project among the in-scope tasks *and the downstream ghosts* (they appear in impact counts, so their sole-blocker fact must be readable; multi-project tasks are supported, §5B.8) — where a read pair is `project=<slug>` plus, under the `"both"` convention, `tags=["<project_tag_key>:<slug>"]` with the configured `[tasks].project_tag_key`, unioned; each at `frontier_limit`, with `len == limit` treated as truncation. A task with no project under either convention is reachable by no scoped read: it is marked `cycle status unknown` and excluded from impact's M with the count stated (Lens issues no unscoped read to cover it — that read is global, capped and corpus-size-dependent). Every in-scope task carrying a `kind="cycle"` blocker is marked *in a cycle* with Lithos's message regardless of what SCC finds. A truncated or failed read renders a banner and marks every in-scope task absent from the response (or belonging to a project whose read failed) `cycle status unknown` — never an implied "no cycle". Because ghost edges are never fetched, a cycle passing through two or more out-of-scope tasks is invisible to SCC; such tasks are still marked, listed in the callout under "through tasks outside this scope", condensed alone for layering, and never dropped. The text layers carry the acceptance criteria; Cytoscape below is enhancement over the same embedded JSON payload.
+- **Cycle authority is Lithos, cycle shape is Lens:** the page also reads `lithos_task_blocked` **scoped**, one read pair per project in the **coverage set** — every distinct §5B.1 project among the in-scope tasks *and the downstream ghosts* (they appear in impact counts, so their sole-blocker fact must be readable; multi-project tasks are supported, §5B.8) — where a read pair is `project=<slug>` plus `tags=["<project_tag_key>:<slug>"]` with the configured `[tasks].project_tag_key`, unioned — **both halves, always**, because membership honours both conventions (§5B.1) and the retired `project_convention` posture selects nothing (§4.4); scoping by one half alone would leave the tasks carrying the other reachable by no read at all; each at `frontier_limit`, with `len == limit` treated as truncation. A task with no project under either convention is reachable by no scoped read: it is marked `cycle status unknown` and excluded from impact's M with the count stated (Lens issues no unscoped read to cover it — that read is global, capped and corpus-size-dependent). Every in-scope task carrying a `kind="cycle"` blocker is marked *in a cycle* with Lithos's message regardless of what SCC finds. A truncated or failed read renders a banner and marks every in-scope task absent from the response (or belonging to a project whose read failed) `cycle status unknown` — never an implied "no cycle". Because ghost edges are never fetched, a cycle passing through two or more out-of-scope tasks is invisible to SCC; such tasks are still marked, listed in the callout under "through tasks outside this scope", condensed alone for layering, and never dropped. The text layers carry the acceptance criteria; Cytoscape below is enhancement over the same embedded JSON payload.
 - **Longest blocking chain:** longest path by node count through the **active** `blocks` + `waits_on_gate` projection over the condensed DAG (a cyclic condensation counts once; ghosts count), ties broken by smallest (`created_at`, `id`) at each step so it is deterministic; rendered as one line ("Longest blocking chain (n): A → B → …"), "≥ n, incomplete" when any edge read failed, and labelled *within this graph* — it is not a corpus-wide critical path and Lens does not claim one.
 - **Isolated tasks:** a task with no fetched `blocks`/`waits_on_gate` edge in the scope (active, inactive or unknown) is *isolated* — never a task whose edge read failed; rendered in an "N isolated tasks" disclosure — collapsed by default on a project scope, open by default on an epic scope (hiding an epic's edge-less children would misrepresent its progress) — with a toggle (`isolated=1|0`). Isolated tasks still count toward `max_tasks`.
 - **Legend:** a persistent plain-language legend, one line per visible edge type ("A ──▶ B means *A blocks B*") plus the ghost and cycle conventions — edge direction is easy to misread without it.
@@ -919,10 +918,10 @@ Two project conventions are in active use in the production corpus, **and their 
 2. **Tag convention:** a `project:<slug>` tag — the original Lens convention, still widespread.
 
 Requirements:
-- `[tasks].project_convention` selects the honoured convention: `"metadata"`, `"tag"`, or `"both"` (default `"both"`).
-- Under `"both"`, a task's **project** is `metadata.project` when present, else the `project:<slug>` tag value.
+- **Matching honours both.** A `?project=<slug>` value matches a task carrying that slug under EITHER convention, everywhere membership is decided: the Operator View filter, the graph page's project scope, and the graph's coverage reads (§5B.7, which issue both halves of every read pair). `[tasks].project_convention` used to select one convention here; because every control that OFFERS a project enumerates the union (the universe rule below), a single-convention posture made each of them a source of values the filter refused. The knob is deprecated — parsed and ignored (§4.4).
+- A task's **project**, where one value is needed (the row chip), is `metadata.project` when present, else the `project:<slug>` tag value.
 - When both are present **and disagree**, Lens uses the metadata value and emits a telemetry warning (`lens.tasks.project_convention_conflict`) — never silently drops either.
-- The project **universe** (filter dropdowns, Planning View rows) is the **union** of both conventions' slugs, so no project is invisible to its own view.
+- The project **universe** (filter dropdowns, the quick-switch strip, the graph scope picker, Planning View rows) is the **union** of both conventions' slugs, so no project is invisible to its own view — and it is the same union matching reads, so no control can offer a slug the filter will not honour.
 - Tasks created by Lens (§5C.2) MUST write **both** conventions until upstream unifies them (ROADMAP dependency ledger tracks the unification ask).
 
 ### 5B.2 Project documents
@@ -931,7 +930,7 @@ All project-related knowledge documents are stored under `projects/<project-slug
 
 ### 5B.3 Project tasks
 
-Tasks must carry their project at creation time — under the `"both"` posture, that means both the tag and the metadata key:
+Tasks must carry their project at creation time — both the tag and the metadata key, since both are read (§5B.1):
 
 ```
 lithos_task_create(
@@ -982,7 +981,7 @@ Speculative items not yet linked to a project live under `ideas/` with the tag `
 | All tasks for a project (tag convention) | `lithos_task_list(tags=["project:<slug>"])` |
 | All tasks for a project (metadata convention) | `lithos_task_list(metadata_match={"project": "<slug>"})` |
 | Ready tasks for a project | `lithos_task_ready(project="<slug>")` *(metadata shorthand)* |
-| Effective project set under `"both"` | Union of the two list queries, deduped by id — or client-side filtering over the dashboard snapshot (§5.3), which is what Lens does |
+| Effective project set | Union of the two list queries, deduped by id — both halves always, since membership honours both conventions (§5B.1) — or client-side filtering over the dashboard snapshot (§5.3), which is what Lens does |
 | All docs for a project | `lithos_list(path_prefix="projects/<slug>/")` |
 | Search within a project | `lithos_search(query="...", path_prefix="projects/<slug>/")` |
 | Project context docs | `lithos_list(path_prefix="projects/", tags=["project-context"])` |
@@ -993,7 +992,7 @@ A task carrying multiple `project:*` tags (or a tag conflicting with metadata) i
 
 ### 5B.9 Configurability
 
-`[tasks].project_tag_key` (default `"project"`) makes the tag-key configurable per deployment; `[tasks].project_convention` selects the reconciliation posture (§5B.1).
+`[tasks].project_tag_key` (default `"project"`) makes the tag-key configurable per deployment — it spells the tag convention rather than choosing between the two. There is no posture knob: `[tasks].project_convention` is parsed and ignored (§4.4).
 
 ---
 
@@ -1318,7 +1317,7 @@ Cross-cutting concerns and reference tables. Milestone sequencing lives in [`doc
 Read-only. Displays:
 
 - Lithos connection state: URL, MCP session status, SSE subscription state and last successful event time
-- Effective Tasks-view tuning (`frontier_limit`, attention thresholds, `project_convention`, debounce, drawer size) with deprecation notices for any parsed-and-ignored legacy knobs (§4.4)
+- Effective Tasks-view tuning (`frontier_limit`, attention thresholds, `project_tag_key`, debounce, drawer size) with deprecation notices for any parsed-and-ignored legacy knobs (§4.4) — `visible_cap` and `project_convention` among them, each shown with the value parsed and the note that nothing reads it
 - Graph page settings (`[graph]`) and Knowledge settings (`[knowledge]`)
 - **Writes posture:** whether `[writes]` is enabled, the current operator identity, and — when enabled — the explicit trusted-network security-boundary statement from §5C.1
 - LLM flags (enabled, provider, model, complexity default) — values only, never API keys

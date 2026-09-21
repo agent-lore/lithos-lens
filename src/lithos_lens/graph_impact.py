@@ -74,9 +74,7 @@ from lithos_lens.graph_view import (
     parse_flag,
 )
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
-    ProjectConvention,
     TaskRecord,
 )
 
@@ -548,7 +546,6 @@ async def load_impact(
     cache: GraphCache,
     limits: GraphScopeLimits | None = None,
     frontier_limit: int,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> DownstreamImpact | None:
     """Assemble ``scope`` and answer D10 for ``focus`` — the fragment route's path.
@@ -586,20 +583,16 @@ async def load_impact(
             cache=cache,
             limits=limits,
             include_resolved=scope.include_resolved,
-            convention=convention,
             tag_key=tag_key,
         )
     if assembled.refused or assembled.node(focus) is None:
         return None
-    if len(coverage_projects(assembled, convention=convention, tag_key=tag_key)) > (
-        limits.max_tasks
-    ):
+    if len(coverage_projects(assembled, tag_key=tag_key)) > limits.max_tasks:
         return None
     signal = await load_cycle_signal(
         lithos,
         assembled,
         frontier_limit=frontier_limit,
-        convention=convention,
         tag_key=tag_key,
         fetch_concurrency=limits.fetch_concurrency,
     )

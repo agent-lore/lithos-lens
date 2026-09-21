@@ -45,7 +45,9 @@ agent_inactive_days = 30
 # (the pre-2026-09 behaviour).
 dispatch_trigger_tag_prefixes = ["trigger:"]
 default_status_groups = ["open", "completed", "cancelled"]
-project_convention = "both"   # metadata | tag | both — which project convention ?project= honours
+# ?project= matches a row under EITHER convention — metadata.project or the
+# project:<slug> tag (REQUIREMENTS §5B.1) — so there is no posture to set. The
+# old project_convention knob is parsed and ignored (§4.4); remove it.
 project_tag_key = "project"   # tag key reserved for the tag convention
 
 [lithos-lens.graph]

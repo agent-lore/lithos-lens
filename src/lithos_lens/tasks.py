@@ -220,7 +220,10 @@ TAG_FILTER_KEYS = (TAG_FILTER_KEY, ADD_TAG_FILTER_KEY)
 # Project tracking conventions (REQUIREMENTS §5B.1). Two are live in the
 # production corpus and their counts disagree: ``metadata.project = "<slug>"``
 # (what Lithos itself understands) and a ``project:<slug>`` tag (the original
-# Lens convention). ``project_convention`` selects which are honoured.
+# Lens convention). Membership reads BOTH — ``[tasks].project_convention``
+# once selected which were honoured and is now parsed and ignored (§4.4) —
+# and this vocabulary survives for the per-convention reads that remain: the
+# conflict warning and the graph's two-halved coverage reads.
 ProjectConvention = Literal["metadata", "tag", "both"]
 PROJECT_CONVENTIONS: tuple[ProjectConvention, ...] = ("metadata", "tag", "both")
 DEFAULT_PROJECT_CONVENTION: ProjectConvention = "both"
@@ -575,15 +578,16 @@ class EpicRollup:
 class TaskFilters:
     """The live ``/tasks`` filter vocabulary, parsed from the query string.
 
-    ``projects`` is multi-valued and matches a task under ``project_convention``
-    (§5B.1) — a row matches when ANY selected slug is one of its project slugs.
-    ``tags`` compose with AND, ``agent`` matches creator OR claimer, and the two
-    date windows are DIFFERENT questions the filter bar labels apart (§5.4):
-    ``since`` windows only the resolved sections, by ``resolved_at``, and is the
-    one filter pushed upstream; ``created_since`` windows EVERY section, open
-    rows included, by ``created_at``, client-side and opt-in — empty means no
-    created window. The convention knobs travel on the filters so the pure
-    predicates below stay pure.
+    ``projects`` is multi-valued and matches a task under EITHER §5B.1
+    convention — a row matches when ANY selected slug is one of its project
+    slugs, which is the same union every control that offers a project
+    enumerates. ``tags`` compose with AND, ``agent`` matches creator OR
+    claimer, and the two date windows are DIFFERENT questions the filter bar
+    labels apart (§5.4): ``since`` windows only the resolved sections, by
+    ``resolved_at``, and is the one filter pushed upstream; ``created_since``
+    windows EVERY section, open rows included, by ``created_at``, client-side
+    and opt-in — empty means no created window. The project tag KEY travels on
+    the filters so the pure predicates below stay pure.
     """
 
     statuses: tuple[TaskStatusName, ...]
@@ -596,7 +600,6 @@ class TaskFilters:
     # no scope at all (``DashboardData.epic_scope``), not an empty board.
     epic: str = ""
     projects: tuple[str, ...] = ()
-    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION
     project_tag_key: str = DEFAULT_PROJECT_TAG_KEY
 
 
@@ -605,7 +608,6 @@ def parse_filters(
     default_days: int,
     default_statuses: tuple[TaskStatusName, ...] = TASK_STATUSES,
     *,
-    project_convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     project_tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> TaskFilters:
     values: dict[str, list[str]] = {}
@@ -655,7 +657,6 @@ def parse_filters(
         # Multi-select: ``?project=x&project=y`` (and the comma form) select
         # the union of those projects, not their intersection.
         projects=tuple(values.get("project", [])),
-        project_convention=project_convention,
         project_tag_key=project_tag_key,
     )
 

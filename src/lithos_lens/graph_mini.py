@@ -103,9 +103,7 @@ from lithos_lens.task_links import (
     PageTail,
 )
 from lithos_lens.tasks import (
-    DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
-    ProjectConvention,
     TaskRecord,
     parse_timestamp,
 )
@@ -199,7 +197,6 @@ async def load_mini_graph(
     master: Sequence[TaskRecord] = (),
     cache: GraphCache,
     limits: MiniGraphLimits | None = None,
-    convention: ProjectConvention = DEFAULT_PROJECT_CONVENTION,
     tag_key: str = DEFAULT_PROJECT_TAG_KEY,
 ) -> MiniGraphView:
     """Assemble the mini-graph for one task (D11).
@@ -224,7 +221,7 @@ async def load_mini_graph(
     unknown: set[str] = set()
     focal = known.get(task_id) or await lithos.task_get(task_id)
     records[focal.id] = focal
-    projects = task_projects(focal, convention=convention, tag_key=tag_key)
+    projects = task_projects(focal, convention="both", tag_key=tag_key)
     focus_url = (
         graph_url(GraphPageParams(kind=SCOPE_PROJECT, key=projects[0], focus=focal.id))
         if projects

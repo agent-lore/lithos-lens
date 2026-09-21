@@ -16,17 +16,21 @@ import os
 import tomllib
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from dotenv import load_dotenv
 
 from lithos_lens.config_fields import (
+    env_project_convention,
     optional_bool,
     optional_int,
     optional_path,
+    optional_project_convention,
     optional_status_groups,
     optional_str,
     optional_str_list,
+    warn_deprecated_env,
+    warn_deprecated_knobs,
 )
 from lithos_lens.config_schema import (
     DEFAULT_DATA_DIR,
@@ -79,15 +83,10 @@ from lithos_lens.errors import ConfigError
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
-    PROJECT_CONVENTIONS,
     TASK_STATUSES,
-    ProjectConvention,
 )
 
 logger = logging.getLogger(__name__)
-
-# One-time deprecation latch for [lithos-lens.tasks].visible_cap.
-_VISIBLE_CAP_WARNED = False
 
 # Re-export surface: `lithos_lens.config` stays the one import site for both
 # the loader and the schema it produces (see config_schema).
@@ -313,16 +312,7 @@ def _parse_lithos(data: Any, config_path: Path) -> LithosConfig:
 def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"{config_path}: [lithos-lens.tasks] must be a table")
-    global _VISIBLE_CAP_WARNED
-    if "visible_cap" in data and not _VISIBLE_CAP_WARNED:
-        _VISIBLE_CAP_WARNED = True
-        logger.warning(
-            "[lithos-lens.tasks].visible_cap is deprecated and unused since the "
-            "graph-native dashboard (T1) — the live scale dial is "
-            "frontier_limit (LITHOS_LENS_TASKS_FRONTIER_LIMIT). Remove "
-            "visible_cap from %s.",
-            config_path,
-        )
+    warn_deprecated_knobs(data, config_path, "lithos-lens.tasks")
 
     # Every [tasks] knob below is a positive integer parsed the same way, so
     # one local binding keeps the eight of them readable. Those whose value
@@ -380,25 +370,15 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
             "lithos-lens.tasks",
         ),
-        project_convention=_project_convention(data, config_path),
+        project_convention=optional_project_convention(
+            data,
+            "project_convention",
+            DEFAULT_PROJECT_CONVENTION,
+            config_path,
+            "lithos-lens.tasks",
+        ),
         project_tag_key=_project_tag_key(data, config_path),
     )
-
-
-def _project_convention(data: dict[str, Any], config_path: Path) -> ProjectConvention:
-    value = optional_str(
-        data,
-        "project_convention",
-        DEFAULT_PROJECT_CONVENTION,
-        config_path,
-        "lithos-lens.tasks",
-    )
-    if value not in PROJECT_CONVENTIONS:
-        raise ConfigError(
-            f"{config_path}: [lithos-lens.tasks].project_convention must be one "
-            f"of {sorted(PROJECT_CONVENTIONS)}"
-        )
-    return cast(ProjectConvention, value)
 
 
 def _project_tag_key(data: dict[str, Any], config_path: Path) -> str:
@@ -595,6 +575,11 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
+    # Deprecated (§4.4) and read anyway: "ignored" says what CONSULTS the
+    # value, not that a value an operator set may be dropped. No "" default,
+    # like ``trigger_prefixes_env`` below: WRITING the knob is what the notice
+    # and the validation are about, and ``FOO=`` is writing it.
+    project_convention_env = os.environ.get("LITHOS_LENS_TASKS_PROJECT_CONVENTION")
     agent_inactive_env = os.environ.get("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
     unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     # No "" default, unlike every other read in this pass: an EMPTY value of
@@ -674,6 +659,23 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     }
     if tasks_env_overrides:
         new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
+    if project_convention_env is not None:
+        # Notice first, then validation: it reports the knob being WRITTEN,
+        # true whatever the value says, and an operator correcting a typo
+        # should not boot twice to learn the knob is dead anyway.
+        warn_deprecated_env(
+            "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
+            "lithos-lens.tasks.project_convention",
+        )
+        new_cfg = replace(
+            new_cfg,
+            tasks=replace(
+                new_cfg.tasks,
+                project_convention=env_project_convention(
+                    "LITHOS_LENS_TASKS_PROJECT_CONVENTION", project_convention_env
+                ),
+            ),
+        )
     if trigger_prefixes_env is not None:
         # Comma-separated, unlike its integer neighbours, and gated on PRESENCE
         # rather than truthiness: setting it to the empty string is how an
