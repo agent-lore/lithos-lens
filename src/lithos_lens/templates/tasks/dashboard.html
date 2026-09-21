@@ -396,6 +396,73 @@
           {% endif %}
         </section>
       {% endif %}
+      {#
+        Project quick-switch strip (§5.3): the projects inside the CURRENT
+        scope — every active filter EXCEPT ?project= — each with how much open
+        work it holds on this board. A tag like roadmap-2026-09 spans a handful
+        of projects and moving between them is the most frequent navigation
+        there is; the set is already derivable from the snapshot, so it is
+        offered rather than retyped into the Project box.
+
+        Additive, and OR among themselves: a chip ADDS its slug to ?project=
+        (the comma form the filter already means), the selected chip removes
+        its own, and Clear drops the parameter while every other filter stays
+        exactly where it was. Because the strip is scoped WITHOUT the project
+        filter it never shrinks as the operator clicks between projects — the
+        others stay one click away — and every chip has open rows behind it, so
+        none of them leads to an empty board.
+
+        Hidden for a one-project scope with no filter active: there is nothing
+        to switch between. With a filter active it stays whatever the scope
+        holds, because the clear has to remain reachable.
+      #}
+      {% if dashboard.project_chips | length > 1 or dashboard.filters.projects %}
+        <section class="project-strip" aria-label="Projects" data-project-strip>
+          {% for chip in dashboard.project_chips %}
+            {# A chip is a link only when the board would honour the click.
+               Adding a project is the one move on this board that makes the
+               query LONGER, so on filters already filling the query budget
+               there is no link to give (round-1 correctness f-001); and a
+               slug the comma-joined filter cannot carry has no link in any
+               spelling. Such a chip still states its project and its count —
+               that is the strip's subject — as plain text wearing the reason,
+               rather than as a link the board would refuse. Removing and
+               clearing only shrink the query, so they are always offered. #}
+            {% set problem = "" if chip.selected else project_add_problem(request, dashboard.filters.projects, chip.slug) %}
+            {% set count_title = chip.open_count ~ " open " ~ ("row" if chip.open_count == 1 else "rows") ~ " in " ~ chip.slug ~ " on this board" %}
+            {% if problem %}
+              <span class="project-chip project-chip-unavailable"
+                    data-project-chip="{{ chip.slug }}" data-project-chip-unavailable
+                    title="{{ count_title }}. {{ chip.slug }} cannot be added: {{ problem }}">
+                <span class="project-chip-slug">{{ chip.slug }}</span>
+                <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
+              </span>
+            {% else %}
+              {# "Add", never "Show only": the chip is ADDITIVE — with one
+                 project already selected it links to BOTH, so "show only"
+                 would announce the opposite of where the link goes. #}
+              <a class="project-chip{{ " project-chip-selected" if chip.selected else "" }}"
+                 href="{{ project_remove_url(request, dashboard.filters.projects, chip.slug) if chip.selected else project_add_url(request, dashboard.filters.projects, chip.slug) }}"
+                 data-project-chip="{{ chip.slug }}"
+                 {% if chip.selected %}aria-current="true"{% endif %}
+                 aria-label="{{ "Remove" if chip.selected else "Add" }} {{ chip.slug }}"
+                 title="{{ count_title }}">
+                <span class="project-chip-slug">{{ chip.slug }}</span>
+                <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
+              </a>
+            {% endif %}
+          {% endfor %}
+          {% if dashboard.filters.projects %}
+            {# The only control that gets back to all projects once two are
+               selected — clicking the chips one at a time would do it, but
+               "show me everything again" is one intention, not N. #}
+            <a class="project-strip-clear"
+               href="{{ project_clear_url(request) }}"
+               data-project-clear
+               aria-label="Clear the project filter">Clear</a>
+          {% endif %}
+        </section>
+      {% endif %}
       {% if dashboard.epic_scope_unmatched %}
         {# The scoped chip is kept whatever the filters leave of it, and a
            shared ?epic= link arrives with whatever filters it was copied

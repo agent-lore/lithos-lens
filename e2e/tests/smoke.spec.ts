@@ -292,6 +292,96 @@ test("epic strip rolls the subtree up and scopes the board", async ({
   ).toHaveCount(0);
 });
 
+test("project strip switches between the projects in a tag scope", async ({
+  page,
+}) => {
+  // The §5.3 item, driven the way an operator drives it: the monthly roadmap
+  // tag spans three projects, and moving between them is clicking, not typing.
+  await page.goto("/tasks?tag=roadmap-2026-09&since=2026-08-01");
+
+  const strip = page.locator("[data-project-strip]");
+  await expect(strip).toBeVisible();
+  // Ordered by open count, then slug — the fixture's 3/2/1 split.
+  await expect(strip.locator("[data-project-chip]")).toHaveText([
+    /lithos-loom\s*3/,
+    /influx\s*2/,
+    /lithos-lens\s*1/,
+  ]);
+
+  await strip.locator('[data-project-chip="lithos-loom"]').click();
+  await expect(page).toHaveURL(/project=lithos-loom/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="loom-schema"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+  ).toHaveCount(0);
+  // The strip did not shrink to the selection: the other projects are still
+  // one click away, with the counts they had.
+  await expect(strip.locator("[data-project-chip]")).toHaveCount(3);
+  await expect(
+    strip.locator('[data-project-chip="lithos-loom"]'),
+  ).toHaveAttribute("aria-current", "true");
+
+  // A second project ORs onto the first…
+  await strip.locator('[data-project-chip="influx"]').click();
+  await expect(page).toHaveURL(/project=lithos-loom,influx/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="loom-schema"]'),
+  ).toBeVisible();
+
+  // …and one click gets back to every project, with the tag scope intact.
+  await page.locator("[data-project-clear]").click();
+  await expect(page).toHaveURL(/tag=roadmap-2026-09/);
+  await expect(page).not.toHaveURL(/project=/);
+  await expect(
+    page.locator('[data-task-row][data-task-id="lens-graph-page"]'),
+  ).toBeVisible();
+});
+
+test("typing a project into the filter box drives the strip too", async ({
+  page,
+}) => {
+  // The strip is an ALTERNATIVE to the Project box, never a replacement: the
+  // box still accepts a comma-separated selection, and the strip reflects
+  // whatever the filter holds however it got there. Driven through the real
+  // form — a control renamed, disabled, or moved outside it would pass every
+  // URL-constructed test in this file.
+  await page.goto("/tasks?tag=roadmap-2026-09&since=2026-08-01");
+
+  await page.fill('input[name="project"]', "lithos-loom,influx");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+
+  await expect(page).toHaveURL(/project=lithos-loom(%2C|,)influx/);
+  // Both typed projects are marked on the strip…
+  const strip = page.locator("[data-project-strip]");
+  await expect(strip.locator('[aria-current="true"]')).toHaveCount(2);
+  await expect(
+    strip.locator('[data-project-chip="lithos-loom"]'),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(strip.locator('[data-project-chip="influx"]')).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  // …the board shows both and nothing else…
+  await expect(
+    page.locator('[data-task-row][data-task-id="loom-schema"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-task-row][data-task-id="lens-graph-page"]'),
+  ).toHaveCount(0);
+  // …and the box itself still shows the selection, so the two controls agree.
+  await expect(page.locator('input[name="project"]')).toHaveValue(
+    "lithos-loom,influx",
+  );
+});
+
 test("blocked row renders styled blocker chips with a visible label", async ({
   page,
 }) => {

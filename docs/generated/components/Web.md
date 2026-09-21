@@ -13,7 +13,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 |---|---|---:|---:|
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
-| `lithos_lens.request_filters` | M | 0 | 16 |
+| `lithos_lens.request_filters` | M | 0 | 20 |
 | `lithos_lens.web` | L | 0 | 1 |
 
 ## Public API
@@ -31,6 +31,10 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `board_is_filtered` — True when this request narrows the board to a subset of tasks.
 - def `task_tag_url`
 - def `task_tag_clear_url` — Link an active-filter chip to the same board WITHOUT that one tag.
+- def `project_add_url` — Link a project chip to the same board WITH that project added (§5.3).
+- def `project_add_problem` — Why ``project`` cannot be ADDED from this board — ``""`` when it can.
+- def `project_remove_url` — Link a SELECTED project chip to the same board without that one project.
+- def `project_clear_url` — Link the strip's Clear affordance to the same board with NO project.
 - def `created_since_clear_url` — Link the ``created_since`` chip to the same board WITHOUT that window.
 - def `agent_show_all_url` — Link the Agent picker's show-all toggle, keeping every active filter.
 - def `task_detail_url` — Link a task id as ONE path segment, with every reserved character encoded.

@@ -275,6 +275,48 @@ The dashboard also renders:
   gate the severity model promoted
 - an **Epic rollup strip** summarizing epics by child progress, with a scope
   link that filters the board to one epic
+- a **Project quick-switch strip** below it, enumerating the projects inside the
+  board's current scope so switching between them does not mean retyping the
+  Project box. A tag like `roadmap-2026-09` spans a handful of projects, and the
+  set is already derivable from the snapshot — `task_projects` under
+  `convention="both"`, §5B.1's universe rule (the union of both conventions, so
+  no project is invisible to its own view), which is the same call the Project
+  datalist and the graph scope picker make, so a project carried only in
+  `metadata.project` counts like a tagged one, whatever `project_convention` is
+  set to — the strip and the datalist beside it state the same universe, so the
+  two controls never disagree about which projects exist. (Under a
+  single-convention posture that universe can name a project the filter will
+  not match, because §5B.1 also says matching honours the configured
+  convention; the gap is the datalist's too, and closing it means making
+  `matches_projects` read the universe as well — Lithos task `f990395d`,
+  which retires `project_convention` as a membership knob.) Each
+  chip carries the project's **open-row count** within that scope — the open
+  sections plus Gates; terminal rows contribute nothing — and the chips order by
+  count then slug. The scope is **every active filter except `project`**, so the
+  strip answers "which projects are in what I am looking at" and does not shrink
+  as the operator clicks between them: clicking an unselected chip adds its slug
+  to `?project=` (projects OR, the comma form), clicking a selected one removes
+  just that slug, and a **Clear** affordance — shown whenever `project` is set —
+  removes the parameter alone, leaving every other filter where it was — and
+  the strip with its Clear stays on a board whose scope holds no project at
+  all, because it is then the only way back. Every chip has open rows behind
+  it, so none leads to an empty board (the same rule §5.2.1 gives the epic
+  strip, evaluated under the same generation, and under the default
+  `project_convention`). The strip is hidden when the
+  scope holds fewer than two projects and no project filter is active.
+  Generated project links carry the board's filter state and nothing else (the
+  `request_filters` allowlist, plus `all_agents`): the panel selection, an
+  expansion `chain`, a retired filter and any unrecognised key stay behind.
+  Adding a project is the only one of the three that makes the query longer, so
+  it is the only one bounded by `MAX_FILTER_QUERY_BYTES` (§5.4): on a board
+  whose other filters already fill that budget the chip is drawn with its slug
+  and its count but **without a link**, rather than with one the router would
+  refuse — the bytes would have to come out of a filter the board was asked
+  for. Removing a project and clearing the filter only shrink the query, so
+  they are offered on any board that renders the strip. The same treatment —
+  slug and count, no link, the reason in the chip's title — goes to a slug the
+  filter cannot carry in any spelling: one containing a comma, which
+  `?project=` reads as its separator.
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 
@@ -298,7 +340,10 @@ The current dashboard supports these filters:
   `tags` datalist (below).
 - `project`
   Project scope, honoring the configured convention (metadata key, reserved
-  tag, or both).
+  tag, or both). Multi-select and OR: `?project=a,b` (or repeated `project`
+  pairs) shows either project's rows. The quick-switch strip (§5.3) is the
+  fast way to set it, and the Project box still accepts anything typed — the
+  strip reflects whatever the filter holds, however it got there.
 - `epic`
   Scopes the board to one epic's children, from the rollup strip.
 - `agent`

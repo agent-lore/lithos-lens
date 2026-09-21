@@ -32,9 +32,17 @@ from datetime import datetime, timedelta
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import TaskRecord
 
-__all__ = ["GraphFixtures", "edge_index", "graph_fixtures"]
+__all__ = ["ROADMAP_TAG", "GraphFixtures", "edge_index", "graph_fixtures"]
 
 LOOM_TAGS = ("project:lithos-loom",)
+
+# The monthly roadmap tag: a SCOPE that spans projects rather than describing
+# one (the convention the operator board is browsed under). It is what the
+# project quick-switch strip (§5.3) exists for, so the demo has to carry a tag
+# whose rows are not all one project's — three of loom's, one of lens's, and
+# two of influx's in ``fake_dataset``.
+ROADMAP_TAG = "roadmap-2026-09"
+ROADMAP_LOOM_TAGS = (*LOOM_TAGS, ROADMAP_TAG)
 
 
 @dataclass(frozen=True)
@@ -80,7 +88,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             # Younger than unclaimed_ready_age_minutes: the head of the chain
             # stays in Ready instead of being promoted into Needs attention.
             created_at=ago(minutes=25),
-            tags=LOOM_TAGS,
+            tags=ROADMAP_LOOM_TAGS,
         ),
         TaskRecord(
             id="loom-transport",
@@ -96,7 +104,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             status="open",
             created_by="planner",
             created_at=ago(days=2, hours=1),
-            tags=LOOM_TAGS,
+            tags=ROADMAP_LOOM_TAGS,
         ),
         TaskRecord(
             id="loom-ship",
@@ -104,7 +112,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             status="open",
             created_by="planner",
             created_at=ago(days=1),
-            tags=LOOM_TAGS,
+            tags=ROADMAP_LOOM_TAGS,
         ),
         TaskRecord(
             id="loom-announce",
@@ -123,7 +131,7 @@ def graph_fixtures(anchor: datetime) -> GraphFixtures:
             status="open",
             created_by="planner",
             created_at=ago(hours=18),
-            tags=("project:lithos-lens", "milestone:t2"),
+            tags=("project:lithos-lens", "milestone:t2", ROADMAP_TAG),
         ),
         # The two-node cycle. Lithos is the authority on cycle MEMBERSHIP
         # (D4), so both rows also carry a kind="cycle" blocker below.

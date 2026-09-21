@@ -166,6 +166,67 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The project quick-switch strip (§5.3) on the board it exists for: a
+    // monthly roadmap tag scoping three projects at once. The strip is what
+    // the visual review is asked to look at, so each clause it must SHOW is
+    // waited on here — this sandbox cannot read the PNG, and a capture that
+    // silently lost the counts would otherwise pass as proof it had them.
+    slug: "dashboard-projects",
+    url: "/tasks?tag=roadmap-2026-09&since=2026-08-01",
+    ready: async (page) => {
+      await expect(page.locator(".task-board")).toBeVisible();
+      const strip = page.locator("[data-project-strip]");
+      await expect(strip).toBeVisible();
+      // Every project in the scope, ordered by open count then slug, each
+      // stating its own count.
+      await expect(strip.locator("[data-project-chip]")).toHaveText([
+        /lithos-loom\s*3/,
+        /influx\s*2/,
+        /lithos-lens\s*1/,
+      ]);
+      // Nothing selected yet, so there is nothing to clear.
+      await expect(page.locator("[data-project-clear]")).toHaveCount(0);
+    },
+  },
+  {
+    // One project selected: the board narrows, the strip does not, and the
+    // live chip is marked. The counts beside the unselected chips are the
+    // point of the artifact — they are what makes the next move one click.
+    slug: "dashboard-projects-one",
+    url: "/tasks?tag=roadmap-2026-09&project=lithos-loom&since=2026-08-01",
+    ready: async (page) => {
+      await expect(page.locator(".task-board")).toBeVisible();
+      const strip = page.locator("[data-project-strip]");
+      await expect(strip.locator("[data-project-chip]")).toHaveCount(3);
+      await expect(
+        strip.locator('[data-project-chip="lithos-loom"]'),
+      ).toHaveAttribute("aria-current", "true");
+      await expect(page.locator("[data-project-clear]")).toBeVisible();
+      // The board really is scoped to it.
+      await expect(
+        page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+      ).toHaveCount(0);
+    },
+  },
+  {
+    // Two projects selected (``project=a,b``): projects OR, so both chips are
+    // live and both projects' rows are on the board.
+    slug: "dashboard-projects-two",
+    url: "/tasks?tag=roadmap-2026-09&project=lithos-loom,influx&since=2026-08-01",
+    ready: async (page) => {
+      await expect(page.locator(".task-board")).toBeVisible();
+      const strip = page.locator("[data-project-strip]");
+      await expect(strip.locator('[aria-current="true"]')).toHaveCount(2);
+      await expect(
+        page.locator('[data-task-row][data-task-id="influx-backfill"]'),
+      ).toBeVisible();
+      await expect(
+        page.locator('[data-task-row][data-task-id="loom-schema"]'),
+      ).toBeVisible();
+      await expect(page.locator("[data-project-clear]")).toBeVisible();
+    },
+  },
+  {
     // The truncation half of T1-S11, which no reviewer had ever seen rendered:
     // the Not-classified tail, the accuracy banner, and the PER-COUNTER
     // "at least this many" marking. Served by the second webServer, whose

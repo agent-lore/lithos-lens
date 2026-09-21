@@ -34,11 +34,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode
 
 from fastapi import Request
 
-from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY
+from lithos_lens.agent_picker import SHOW_ALL_AGENTS_KEY, show_all_agents
 from lithos_lens.tasks import (
     ADD_TAG_FILTER_KEY,
     MAX_FILTER_QUERY_BYTES,
@@ -263,6 +263,164 @@ def task_tag_clear_url(request: Request, tags: Sequence[str], tag: str) -> str:
     params = _preserved_filter_params(request, exclude="tag")
     params.extend(("tag", other) for other in tags if other != tag)
     return f"/tasks?{urlencode(params)}" if params else "/tasks"
+
+
+def project_add_url(request: Request, projects: Sequence[str], project: str) -> str:
+    """Link a project chip to the same board WITH that project added (§5.3).
+
+    Projects OR among themselves — ``?project=a,b`` is "either", which is what
+    ``task_filtering.matches_projects`` already means — so a chip ADDS its slug
+    to the live selection rather than replacing it. Every other filter (tag,
+    epic, status, agent, both date windows) rides along through the same
+    allowlist every generated tasks URL uses: the strip composes with the scope
+    the operator is browsing under instead of resetting it.
+
+    Empty when there is no link the board would honour — see
+    :func:`project_add_problem` for the two reasons. The template draws that
+    chip with its count and WITHOUT a link, saying why, rather than offering
+    one the board refuses.
+    """
+    if project_add_problem(request, projects, project):
+        return ""
+    if project in projects:
+        return _project_filter_url(request, projects)
+    return _project_filter_url(request, [*projects, project])
+
+
+def project_add_problem(request: Request, projects: Sequence[str], project: str) -> str:
+    """Why ``project`` cannot be ADDED from this board — ``""`` when it can.
+
+    Two reasons, and the chip is drawn without a link for either, wearing this
+    sentence as its label so the operator learns which:
+
+    - the slug contains a comma. ``?project=`` is comma-joined and the parse
+      splits every value on it (``tasks.parse_filters``), so ``a,b`` — a legal
+      ``project:a,b`` tag — can never be a filter value at all: the link would
+      filter for ``a`` OR ``b`` and land on a board with none of the rows the
+      chip counted. No spelling fixes that (the repeated form splits too), so
+      the rule at the top of ``board_strips`` — a chip must lead to a board
+      with rows on it — is kept by withholding the click;
+    - there is no room left in the query budget for the slug — see
+      :func:`_accepted_by_the_filter_budget`.
+
+    A slug already selected is never a problem: its chip links to REMOVING it.
+    """
+    if project in projects:
+        return ""
+    if "," in project:
+        return (
+            "its slug contains a comma, which the project filter reads as a "
+            "separator between projects"
+        )
+    if not _accepted_by_the_filter_budget(
+        _project_filter_url(request, [*projects, project])
+    ):
+        return "this board's filters already fill the query-size limit"
+    return ""
+
+
+def project_remove_url(request: Request, projects: Sequence[str], project: str) -> str:
+    """Link a SELECTED project chip to the same board without that one project.
+
+    The selected chip is the live filter, so clicking it removes its own slug
+    and keeps the others — the same shape :func:`task_tag_clear_url` gives a
+    tag, and the reason is the same: a two-project selection must be reducible
+    to either half without retyping it.
+    """
+    return _project_filter_url(
+        request, [other for other in projects if other != project]
+    )
+
+
+def project_clear_url(request: Request) -> str:
+    """Link the strip's Clear affordance to the same board with NO project.
+
+    "Back to all projects" is one click, and it is the only control that can
+    get there once two projects are selected. Only ``project`` is dropped:
+    every other active parameter is rebuilt from the request, so clearing the
+    project filter never widens the tag scope or the date windows with it.
+    """
+    return _project_filter_url(request, ())
+
+
+def _project_filter_url(request: Request, projects: Sequence[str]) -> str:
+    """The board URL carrying exactly ``projects``, every other filter intact.
+
+    ``projects`` is the HONOURED list (``TaskFilters.projects``), not the raw
+    query: the two spellings (repeated and comma-joined) both fold into it, so
+    rebuilding from the request would emit a slug twice or miss one it had
+    collapsed — and the link stays truthful, since removing a chip cannot
+    resurrect a project the board is not filtering by.
+
+    Emitted as ONE comma-joined ``project`` pair, the documented multi-select
+    spelling (``parse_filters`` splits it). Commas are left literal for this
+    pair alone — it is the filter's own separator, and percent-encoding it
+    would make the shared URL unreadable for no gain — while every other value
+    keeps the default encoding, where a comma can be content (a literal tag).
+    The comma form is also the shorter of the two spellings, which is what
+    keeps a strip of chips as small against ``MAX_FILTER_QUERY_BYTES`` as the
+    filter's own vocabulary allows — smaller, but never free: only
+    :func:`project_add_url` can make a query LONGER than the one that arrived,
+    and :func:`_accepted_by_the_filter_budget` is what keeps it inside the
+    ceiling.
+
+    ``all_agents`` rides along too, which is the one thing these builders do
+    that the rest do not. It is outside :data:`_PRESERVED_FILTER_KEYS` for a
+    good reason (it narrows no row, so it must not make
+    :func:`board_is_filtered` true) — but the strip is a NAVIGATION control
+    used while the picker is open, and collapsing the picker back to its
+    windowed list on every chip click undoes a choice the operator made about
+    a different surface. It is re-emitted as the canonical literal ``1`` the
+    toggle itself writes, never the value that arrived, so an oversized
+    ``?all_agents=<huge>`` is copied out nowhere however many chips the strip
+    draws — the property the constant's note relies on.
+    """
+    params = _preserved_filter_params(request, exclude="project")
+    if show_all_agents(request.query_params.get(SHOW_ALL_AGENTS_KEY, "")):
+        params.append((SHOW_ALL_AGENTS_KEY, "1"))
+    query = urlencode(params)
+    if projects:
+        selection = urlencode({"project": ",".join(projects)}, safe=",")
+        query = f"{query}&{selection}" if query else selection
+    return f"/tasks?{query}" if query else "/tasks"
+
+
+def _accepted_by_the_filter_budget(url: str) -> bool:
+    """True when following ``url`` will not be refused as oversized.
+
+    ADDING a project is the one thing any of these builders does that makes
+    the query LONGER than the one that arrived, so it is the one that can hand
+    the operator a link the router then refuses at 400 (round-1 correctness
+    f-001). A request whose allowlisted filters sit exactly on
+    ``MAX_FILTER_QUERY_BYTES`` — ``tag=`` plus a 1,020-byte literal tag — is
+    accepted and draws the strip, and ``&project=a`` is ten bytes it has no
+    room for. Removing and clearing only shrink the query, and the preserved
+    pairs are re-emitted in canonical form, which can only shrink it further,
+    so neither can cross a ceiling its own request already cleared.
+
+    There is no shorter link to build instead: the bytes have to come from
+    somewhere, and every other pair in the query is a filter the board was
+    asked for — dropping one to buy room would answer a different question
+    than the operator asked, silently. So the chip keeps its slug and its
+    count and loses its LINK, which is this module's standing preference
+    stated the other way round: "a chip that renders but 400s when clicked is
+    worse than no chip" (:func:`task_tag_clear_url`).
+
+    Measured over the arriving request's own reading of the string — the
+    ``_MEASURED_QUERY_KEYS`` pairs, re-encoded through ``urlencode`` — rather
+    than by counting the href's bytes, so this cannot drift from
+    :func:`_parse_preserved_filters`. That ``urlencode`` re-encodes the commas
+    of the ``project`` pair is not an approximation of the ceiling but the
+    ceiling itself: the parse measures every arriving query through the same
+    call, so it charges those commas three bytes too.
+    """
+    _, _, query = url.partition("?")
+    measured = [
+        (key, value)
+        for key, value in parse_qsl(query, keep_blank_values=True)
+        if key in _MEASURED_QUERY_KEYS
+    ]
+    return len(urlencode(measured)) <= MAX_FILTER_QUERY_BYTES
 
 
 def created_since_clear_url(request: Request) -> str:
