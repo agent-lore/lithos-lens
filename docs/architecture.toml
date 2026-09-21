@@ -63,6 +63,18 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # but must be an explicit, reviewed edit to this file; lower a budget after
 # improving the code to lock in the gain.
 #
+# What a budget is FOR (operator policy, Dave, 2026-09-20, restated because it
+# keeps being read the other way): a budget is a prompt for a decision, not a
+# limit. Crossing one asks "is this a second responsibility, or the same one
+# grown?" — and either answer is legitimate. A real seam gets an extraction; a
+# change that is the same responsibility grown gets a raise, with a note here
+# saying why. A sound architecture and good code are the priority, and an
+# extraction whose only purpose is a number — one concern split across two
+# modules so a counter stays put — is the wrong answer even when it makes the
+# metric look better. The notes below record raises AND extractions; neither
+# is the default, and no note here forbids the next raise. It only asks that
+# the next one be argued as well as these were.
+#
 # Most budgets below are tight ratchets pinned at today's value (any regression
 # fails CI). max_module_lines is the exception: it is a STOP-LOSS ceiling set a
 # little above today's largest module so a big module can't quietly balloon — it
@@ -201,32 +213,33 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # three builders (which stay with their vocabularies, in Tasks). frontier.py
 # makes one call and is 844.
 #
-# So the stop-loss is NOT raised. The exception is not discharged either —
-# 844 is still over the 800 threshold — and the standing is unchanged: the
-# next change that grows frontier.py must find the next real seam, because
-# there are six lines left and no argument for a fourth raise that this note
-# has not already spent.
+# So the stop-loss is NOT raised here, because a real seam existed. The
+# exception is not discharged either — 844 is still over the 800 threshold —
+# so the next change that grows frontier.py answers the same question again:
+# a real seam if there is one, a reasoned raise if there is not. Six lines of
+# headroom is a fact, not an instruction; see the policy at the top of this
+# section.
 #
 # Revisited (task ac1380c1, 2026-09-20): the project quick-switch strip needed
 # a builder and a Dashboard field in frontier.py, which at 844 had room for
-# neither. The seam was found rather than the ceiling argued, and it is the one
-# the epic-strip note (0976cf72) named without taking: that note's own defence
-# of building the strip in frontier.py — "it is derived from the same filter
-# predicate and the same generation as the sections" — applies WORD FOR WORD to
-# this second strip, and an argument that covers two strips identically is the
-# description of a responsibility, not of an assembly detail. lithos_lens.
-# board_strips now owns it: both strips of one generation, the epic scope the
-# first resolves and the second is counted under, and the rule they share (a
-# chip must lead to a board with rows on it). The generation discipline is not
-# weakened by the move — it is made explicit, since the reads are passed in at
-# the two points the assembly adopts a generation instead of being closed over
-# as locals the skew retry rebinds. frontier.py keeps the join, the sections,
-# the counters and the degraded-mode policy, and is 843.
+# neither. The question was answered on the code, and the answer was a seam —
+# the one the epic-strip note (0976cf72) named without taking: that note's own
+# defence of building the strip in frontier.py — "it is derived from the same
+# filter predicate and the same generation as the sections" — applies WORD FOR
+# WORD to this second strip, and an argument that covers two strips identically
+# is the description of a responsibility, not of an assembly detail.
+# lithos_lens.board_strips now owns it: both strips of one generation, the epic
+# scope the first resolves and the second is counted under, and the rule they
+# share (a chip must lead to a board with rows on it). The generation discipline
+# is not weakened by the move — it is made explicit, since the reads are passed
+# in at the two points the assembly adopts a generation instead of being closed
+# over as locals the skew retry rebinds. frontier.py keeps the join, the
+# sections, the counters and the degraded-mode policy, and is 843.
 #
-# So the stop-loss is again NOT raised, and the standing is unchanged for the
-# same reason as last time: 843 is still over the 800 threshold, so the
-# exception stands and the next change that grows frontier.py must find the
-# next seam.
+# So the stop-loss is again not raised, because again a real seam existed — not
+# because one had to be found. 843 is still over the 800 threshold, so the
+# exception stands, and the next change that grows frontier.py asks the same
+# question with the same two legitimate answers.
 modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (829)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
