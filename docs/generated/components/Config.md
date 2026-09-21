@@ -12,7 +12,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.config` | L | 0 | 2 |
-| `lithos_lens.config_fields` | S | 0 | 7 |
+| `lithos_lens.config_fields` | S | 0 | 10 |
 | `lithos_lens.config_schema` | S | 12 | 1 |
 
 ## Public API
@@ -23,6 +23,9 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 
 ### `lithos_lens.config_fields`
 - def `warn_deprecated_knobs` — Log one notice, once, for every deprecated knob ``section`` writes.
+- def `warn_deprecated_env` — The same notice for the ENV spelling of a deprecated knob (§4.4).
+- def `optional_project_convention` — The §5B.1 posture knob — still VALIDATED though nothing reads it (§4.4).
+- def `env_project_convention` — The env spelling of the same knob, validated against the same set.
 - def `optional_str`
 - def `optional_path`
 - def `optional_int`

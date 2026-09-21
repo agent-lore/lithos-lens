@@ -3,7 +3,7 @@
     "components": {
       "Config": {
         "functions_over_10": 1,
-        "max_complexity": 32,
+        "max_complexity": 33,
         "max_function": "lithos_lens.config._apply_env_overrides"
       },
       "Entrypoint": {
@@ -69,7 +69,7 @@
         "qualname": "lithos_lens.frontier.load_dashboard"
       },
       {
-        "complexity": 32,
+        "complexity": 33,
         "qualname": "lithos_lens.config._apply_env_overrides"
       },
       {
@@ -105,7 +105,7 @@
         "qualname": "lithos_lens.graph_page._node_views"
       }
     ],
-    "total_functions": 685
+    "total_functions": 687
   },
   "domain": {
     "associations": 87,
@@ -210,13 +210,13 @@
     "components": {
       "Config": {
         "classes": 12,
-        "functions": 30,
+        "functions": 32,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 787,
-        "lines": 1264,
+        "largest_module_lines": 794,
+        "lines": 1327,
         "modules": 3,
-        "public_symbols": 22,
-        "sloc": 1010
+        "public_symbols": 25,
+        "sloc": 1064
       },
       "Entrypoint": {
         "classes": 0,
@@ -336,13 +336,13 @@
       "lithos_lens.graph_layout",
       "lithos_lens.tasks"
     ],
-    "total_lines": 22081,
+    "total_lines": 22144,
     "total_modules": 53,
-    "total_sloc": 16855
+    "total_sloc": 16909
   },
   "tests": {
     "ratio": 1.99,
-    "src_lines": 22081,
-    "test_lines": 43964
+    "src_lines": 22144,
+    "test_lines": 44169
   }
 }

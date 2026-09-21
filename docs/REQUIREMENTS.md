@@ -434,7 +434,7 @@ The following pre-graph knobs are **deprecated**. For one release Lens MUST pars
 | Deprecated | Replacement |
 |------------|-------------|
 | `[tasks].visible_cap` | Nothing — the per-row claim fan-out it capped is gone. Claims arrive inline via `with_claims=true`; there is no "Unknown claim state" tail. |
-| `[tasks].project_convention` (and `LITHOS_LENS_TASKS_PROJECT_CONVENTION`) | Nothing — `?project=` matches a row under **either** convention (§5B.1), so there is no posture to select. It is still validated when written (a value that names no convention is still a config error) and still listed in the Settings view, but it selects nothing. `[tasks].project_tag_key` is unaffected: it spells the tag convention, it is not a posture. |
+| `[tasks].project_convention` (and `LITHOS_LENS_TASKS_PROJECT_CONVENTION`) | Nothing — `?project=` matches a row under **either** convention (§5B.1), so there is no posture to select. Both spellings are still **parsed onto the effective config** and still validated (a value naming no convention is a config error, from either spelling), each logging its own one-time notice; nothing reads the result, and §13 lists it as parsed-and-ignored. `[tasks].project_tag_key` is unaffected: it spells the tag convention, it is not a posture. |
 | `?claimed_state=` URL parameter (and its `[tasks].default_status_groups` interaction) | Nothing — section membership is structural (§5.3). Legacy URLs containing `claimed_state` are silently ignored so old bookmarks degrade gracefully. |
 
 ---

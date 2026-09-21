@@ -806,6 +806,50 @@ def test_project_convention_in_config_warns_deprecated_once(
     assert str(config_path) in warnings[0].getMessage()
 
 
+def test_the_retired_posture_env_override_is_parsed_validated_and_noticed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`LITHOS_LENS_TASKS_PROJECT_CONVENTION` is deprecated the same way the
+    TOML key is — parsed onto the effective config, reported once, read by
+    nothing. Dropping it instead would make the effective config disagree with
+    what the operator actually set, which is the one thing a parsed-and-ignored
+    knob must not do (§4.4)."""
+    import lithos_lens.config_fields as config_fields
+
+    monkeypatch.setattr(config_fields, "_WARNED", set())
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text('[lithos-lens]\nenvironment = "test"\n')
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+    monkeypatch.setenv("LITHOS_LENS_TASKS_PROJECT_CONVENTION", "tag")
+
+    with caplog.at_level("WARNING", logger="lithos_lens.config_fields"):
+        config = load_config(config_path)
+        load_config(config_path)
+
+    assert config.tasks.project_convention == "tag"
+    notices = [
+        r
+        for r in caplog.records
+        if "LITHOS_LENS_TASKS_PROJECT_CONVENTION is deprecated" in r.getMessage()
+    ]
+    assert len(notices) == 1
+    assert "Unset LITHOS_LENS_TASKS_PROJECT_CONVENTION." in notices[0].getMessage()
+
+
+def test_an_invalid_posture_env_override_is_rejected_like_the_toml_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deprecating a knob retires what it SELECTS, not the operator's right to
+    be told they mistyped it — from either spelling."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text('[lithos-lens]\nenvironment = "test"\n')
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+    monkeypatch.setenv("LITHOS_LENS_TASKS_PROJECT_CONVENTION", "neither")
+
+    with pytest.raises(ConfigError, match="LITHOS_LENS_TASKS_PROJECT_CONVENTION"):
+        load_config(config_path)
+
+
 def test_a_config_without_the_retired_posture_warns_about_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

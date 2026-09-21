@@ -52,6 +52,7 @@ from tests.test_graph_page import (
     client_for,
     dataset,
     get,
+    metadata_task,
     payload,
     task,
 )
@@ -898,6 +899,45 @@ def test_the_fragment_route_counts_the_impact_over_the_scope_it_is_given(
     assert "frees 3 in this graph, 1 immediately" in slot(scoped)
     assert slot(unscoped) == ""
     assert slot(nonsense) == ""
+
+
+@pytest.mark.parametrize("posture", ["both", "tag", "metadata"])
+async def test_the_fragment_route_scopes_a_metadata_only_project_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str
+) -> None:
+    """The panel fetched on its own ASSEMBLES the scope itself (``load_impact``
+    → ``load_project_scope``), so the retired ``project_convention`` (§4.4)
+    reached D10's count: under ``"tag"`` a ``project:`` scope whose tasks carry
+    ``metadata.project`` assembled empty, and the panel printed no number for a
+    graph the page beside it had just drawn in full."""
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    fake = GraphFakeClient(
+        dataset(
+            [metadata_task(name, project="meta-loom") for name in IMPACT_TASKS],
+            IMPACT_EDGES,
+            blocked={
+                "one": (blocker("root"),),
+                "two": (blocker("one"),),
+                "three": (blocker("one"),),
+            },
+        )
+    )
+
+    with client_for(lithos_lens_config_env, fake) as client:
+        scoped = client.get("/tasks/root?fragment=panel&scope=project:meta-loom").text
+        unscoped = client.get("/tasks/root?fragment=panel").text
+
+    # The graph half of D10, which is the half scope ASSEMBLY decides: under a
+    # tag-only reading the scope came back empty, `root` was not in it, and
+    # ``load_impact`` returned None — the same blank the unscoped panel shows.
+    # (The sole-blocker half is not pinned here: the demo fake scopes a
+    # ``project=`` read by the project TAG, so its blocked rows would answer a
+    # question about the fake rather than about this route.)
+    assert "frees 3 in this graph" in slot(scoped), posture
+    assert slot(unscoped) == "", posture
 
 
 def test_the_fragment_route_counts_an_epic_scope_the_way_its_page_drew_it(

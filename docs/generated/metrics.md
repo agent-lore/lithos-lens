@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 3 | 1264 | 1010 | 7 | 2 | 0.22 | 32 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 3 | 1327 | 1064 | 7 | 2 | 0.22 | 33 (`lithos_lens.config._apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
@@ -49,7 +49,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **53**, lines: **22081**, SLOC: **16855**
+- Modules: **53**, lines: **22144**, SLOC: **16909**
 - Largest module: `lithos_lens.frontier` (843 lines)
 - Modules over 800 lines: **3**
   - `lithos_lens.frontier`
@@ -58,14 +58,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **685**, cyclomatic > 10: **41**
+- Functions: **687**, cyclomatic > 10: **41**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
 | 40 | `lithos_lens.frontier.load_dashboard` |
-| 32 | `lithos_lens.config._apply_env_overrides` |
+| 33 | `lithos_lens.config._apply_env_overrides` |
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
@@ -86,4 +86,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **79** (87 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.99** (43964 test lines / 22081 source lines)
+- Test-to-source line ratio: **1.99** (44169 test lines / 22144 source lines)

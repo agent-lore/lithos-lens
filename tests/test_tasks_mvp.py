@@ -5503,6 +5503,17 @@ def _open_row_ids(html: str) -> set[str]:
     }
 
 
+#: Every project in ``_three_project_fake``'s snapshot, and the OPEN rows a
+#: click on it must land on. ``lithos`` is carried by ``metadata.project``
+#: alone — the case a single-convention posture used to strand.
+_PROJECT_DESTINATIONS = {
+    "lithos": {"core-ready"},
+    "lithos-atlas": {"atlas-ready"},
+    "lithos-lens": {"lens-ready", "lens-stale", "lens-stale-offscope"},
+    "lithos-loom": {"loom-ready", "loom-offscope"},
+}
+
+
 @pytest.mark.parametrize("posture", ["both", "tag", "metadata"])
 def test_every_offered_project_leads_to_its_rows_whatever_the_posture(
     lithos_lens_config_env: Path, posture: str
@@ -5515,8 +5526,9 @@ def test_every_offered_project_leads_to_its_rows_whatever_the_posture(
     unioned both. Under ``"tag"`` or ``"metadata"`` those controls could
     therefore hand the operator a slug the filter refused: a dead-end datalist
     value, a dead-end chip with a positive count. The knob is parsed and
-    ignored (§4.4), so this asserts the same board under all three values —
-    including ``lithos``, which is carried by ``metadata.project`` alone.
+    ignored (§4.4), so this follows EVERY offered value — datalist options as
+    well as strip chips — and asserts the exact rows behind each, not merely
+    how many.
     """
     lithos_lens_config_env.write_text(
         lithos_lens_config_env.read_text()
@@ -5526,22 +5538,38 @@ def test_every_offered_project_leads_to_its_rows_whatever_the_posture(
 
     with _client(lithos_lens_config_env, fake) as client:
         board = client.get("/tasks?tag=roadmap-2026-08&since=2026-04-01")
-        followed = {
-            slug: client.get(href).text
-            for slug, href in _project_chip_links(unescape(board.text)).items()
+        chips = _project_chip_links(unescape(board.text))
+        followed = {slug: client.get(href).text for slug, href in chips.items()}
+        # The datalist is the universe over the LOADED rows, before the filters
+        # narrow (§5.4), so its values are followed on an unscoped board —
+        # which is what typing one into the Project box does.
+        offered = {
+            slug: client.get(f"/tasks?project={slug}&since=2026-04-01").text
+            for slug in _datalist_options(board.text, "projects")
         }
-        stamped = client.get("/tasks?project=lithos&since=2026-04-01")
 
     text = unescape(board.text)
     assert board.status_code == 200
-    counts = _project_chip_counts(text)
-    assert counts == {"lithos-lens": 2, "lithos": 1, "lithos-loom": 1}, posture
-    # Every offered slug is a slug the filter honours, and the count it states
-    # is the number of open rows the click actually lands on.
-    assert set(_datalist_options(board.text, "projects")) >= set(counts), posture
+    # Every value the datalist offers lands on exactly that project's rows —
+    # including `lithos`, which only `metadata.project` names.
+    assert set(offered) == set(_PROJECT_DESTINATIONS), posture
+    for slug, body in offered.items():
+        assert _open_row_ids(unescape(body)) == _PROJECT_DESTINATIONS[slug], (
+            posture,
+            slug,
+        )
+    # The strip states the same universe within the tag scope, and each chip's
+    # count is the rows the click actually lands on — by IDENTITY, so a link
+    # showing the wrong rows in the right quantity fails here.
+    assert _project_chip_counts(text) == {
+        "lithos-lens": 2,
+        "lithos": 1,
+        "lithos-loom": 1,
+    }, posture
+    scoped = {
+        "lithos-lens": {"lens-ready", "lens-stale"},
+        "lithos": {"core-ready"},
+        "lithos-loom": {"loom-ready"},
+    }
     for slug, body in followed.items():
-        rows = _open_row_ids(unescape(body))
-        assert len(rows) == counts[slug], (posture, slug, rows)
-    # The acceptance case: a row carried by ``metadata.project`` alone is on
-    # its own project's board even under the ``tag`` posture.
-    assert "Core roadmap item" in stamped.text, posture
+        assert _open_row_ids(unescape(body)) == scoped[slug], (posture, slug)

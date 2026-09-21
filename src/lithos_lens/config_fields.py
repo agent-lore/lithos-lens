@@ -19,18 +19,26 @@ from pathlib import Path
 from typing import Any, cast
 
 from lithos_lens.errors import ConfigError
-from lithos_lens.tasks import TASK_STATUSES, TaskStatusName
+from lithos_lens.tasks import (
+    PROJECT_CONVENTIONS,
+    TASK_STATUSES,
+    ProjectConvention,
+    TaskStatusName,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEPRECATED_KNOBS",
+    "env_project_convention",
     "optional_bool",
     "optional_int",
     "optional_path",
+    "optional_project_convention",
     "optional_status_groups",
     "optional_str",
     "optional_str_list",
+    "warn_deprecated_env",
     "warn_deprecated_knobs",
 ]
 
@@ -74,6 +82,54 @@ def warn_deprecated_knobs(
             key,
             config_path,
         )
+
+
+def warn_deprecated_env(name: str, knob: str) -> None:
+    """The same notice for the ENV spelling of a deprecated knob (§4.4).
+
+    Latched separately from the TOML spelling: a deployment that writes both
+    has two places to clean up, and a notice naming only one of them sends the
+    operator to a file that is not the whole story.
+    """
+    if name in _WARNED:
+        return
+    _WARNED.add(name)
+    logger.warning("%s %s Unset %s.", name, DEPRECATED_KNOBS[knob], name)
+
+
+def optional_project_convention(
+    data: dict[str, Any],
+    key: str,
+    default: ProjectConvention,
+    config_path: Path,
+    section: str,
+) -> ProjectConvention:
+    """The §5B.1 posture knob — still VALIDATED though nothing reads it (§4.4).
+
+    Deprecating a knob retires what it selects, not the operator's right to be
+    told they mistyped it: a config naming a convention that never existed is
+    a config its author got wrong, and swallowing it would turn a typo into
+    silence.
+    """
+    value = optional_str(data, key, default, config_path, section)
+    if value not in PROJECT_CONVENTIONS:
+        raise ConfigError(
+            f"{config_path}: [{section}].{key} must be one of "
+            f"{sorted(PROJECT_CONVENTIONS)}"
+        )
+    return cast(ProjectConvention, value)
+
+
+def env_project_convention(name: str, raw: str) -> ProjectConvention:
+    """The env spelling of the same knob, validated against the same set.
+
+    Parsed rather than dropped so the value an operator set is the value the
+    effective config reports — "ignored" is a statement about what READS it,
+    not licence to forget it was written.
+    """
+    if raw not in PROJECT_CONVENTIONS:
+        raise ConfigError(f"{name} must be one of {sorted(PROJECT_CONVENTIONS)}")
+    return cast(ProjectConvention, raw)
 
 
 def optional_str(

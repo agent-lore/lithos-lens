@@ -135,6 +135,65 @@ def test_the_panel_names_the_task_project_and_type(
     assert "data-panel-close" in header
 
 
+def _panel_header(html: str) -> str:
+    return html.split("data-panel-task=", 1)[1].split("</header>", 1)[0]
+
+
+@pytest.mark.parametrize("posture", ["both", "tag", "metadata"])
+def test_the_panel_names_a_metadata_only_project_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str
+) -> None:
+    """The panel resolves its project chip itself (``TaskDetailData.projects``),
+    so the retired ``project_convention`` (§4.4) used to reach it: under
+    ``"tag"`` a task carrying ``metadata.project`` alone rendered
+    ``(no project)`` beside a board that filtered it into view. Both
+    conventions are read now, under every parsed value of the knob.
+    """
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    fake = _related_fixture()
+    fake.tasks.append(_task("mirrored", metadata={"project": "lithos-loom"}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=mirrored")
+
+    header = _panel_header(response.text)
+    assert 'data-panel-project="lithos-loom"' in header, posture
+    assert "data-panel-project-none" not in header, posture
+
+
+def test_a_conflicting_rows_first_project_chip_is_the_metadata_one(
+    lithos_lens_config_env: Path,
+) -> None:
+    """§5B.1's precedence, where a single value is needed: metadata WINS.
+
+    The row claims two projects at once, so §5B.8 renders one chip per
+    distinct project rather than silently dropping either — but the order is
+    the precedence, metadata first, and it is what every single-value consumer
+    reads (``projects[0]``: the mini-graph's focus link). A renderer that
+    picked the tag, or an ordering that let the tag drift to the front, would
+    state the wrong project for a row Lens has already warned about.
+    """
+    fake = _related_fixture()
+    fake.tasks.append(
+        replace(
+            _task("conflicted", metadata={"project": "stamped"}),
+            tags=("project:tagged",),
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks?selected=conflicted")
+
+    header = _panel_header(response.text)
+    assert re.findall(r'data-panel-project="([^"]+)"', header) == [
+        "stamped",
+        "tagged",
+    ]
+
+
 def test_a_task_with_no_project_says_so_rather_than_rendering_nothing(
     lithos_lens_config_env: Path,
 ) -> None:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -952,6 +953,33 @@ def test_the_focus_link_carries_the_project_slug_and_the_task_id(
     assert href.group(1).startswith("/tasks/graph?")
     assert f"project={PROJECT}" in href.group(1)
     assert "focus=task" in href.group(1)
+
+
+@pytest.mark.parametrize("posture", ["both", "tag", "metadata"])
+def test_the_focus_link_follows_a_metadata_only_project_whatever_the_posture(
+    lithos_lens_config_env: Path, posture: str
+) -> None:
+    """The focus link is a SINGLE-value consumer of §5B.1 (``projects[0]``), and
+    the retired ``project_convention`` (§4.4) used to decide what it saw: under
+    ``"tag"`` a focal task carrying ``metadata.project`` alone got no focus
+    link at all — "this task belongs to no project" — while its project's own
+    graph was one click away on the board."""
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_convention = "{posture}"\n'
+    )
+    focal = replace(
+        made("task", created_at="2026-09-01T00:00:00+00:00", project=None),
+        metadata={"project": "meta-loom"},
+    )
+    fake = GraphFakeClient(dataset([focal], []))
+
+    html = fragment(lithos_lens_config_env, fake, "task")
+
+    href = re.search(r'data-mini-graph-focus href="([^"]+)"', html)
+    assert href, (posture, "no focus link")
+    assert "project=meta-loom" in href.group(1), posture
+    assert "focus=task" in href.group(1), posture
 
 
 def test_a_projectless_task_gets_no_focus_link_and_says_why(

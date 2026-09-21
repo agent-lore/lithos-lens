@@ -16,17 +16,20 @@ import os
 import tomllib
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from dotenv import load_dotenv
 
 from lithos_lens.config_fields import (
+    env_project_convention,
     optional_bool,
     optional_int,
     optional_path,
+    optional_project_convention,
     optional_status_groups,
     optional_str,
     optional_str_list,
+    warn_deprecated_env,
     warn_deprecated_knobs,
 )
 from lithos_lens.config_schema import (
@@ -80,9 +83,7 @@ from lithos_lens.errors import ConfigError
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
-    PROJECT_CONVENTIONS,
     TASK_STATUSES,
-    ProjectConvention,
 )
 
 logger = logging.getLogger(__name__)
@@ -369,26 +370,15 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
             config_path,
             "lithos-lens.tasks",
         ),
-        project_convention=_project_convention(data, config_path),
+        project_convention=optional_project_convention(
+            data,
+            "project_convention",
+            DEFAULT_PROJECT_CONVENTION,
+            config_path,
+            "lithos-lens.tasks",
+        ),
         project_tag_key=_project_tag_key(data, config_path),
     )
-
-
-def _project_convention(data: dict[str, Any], config_path: Path) -> ProjectConvention:
-    """Parse — and still validate — the deprecated posture knob (§4.4)."""
-    value = optional_str(
-        data,
-        "project_convention",
-        DEFAULT_PROJECT_CONVENTION,
-        config_path,
-        "lithos-lens.tasks",
-    )
-    if value not in PROJECT_CONVENTIONS:
-        raise ConfigError(
-            f"{config_path}: [lithos-lens.tasks].project_convention must be one "
-            f"of {sorted(PROJECT_CONVENTIONS)}"
-        )
-    return cast(ProjectConvention, value)
 
 
 def _project_tag_key(data: dict[str, Any], config_path: Path) -> str:
@@ -585,6 +575,9 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
+    # Deprecated (§4.4) and read anyway: "ignored" says what consults the
+    # value, not that a value an operator set may be dropped on the floor.
+    project_convention_env = os.environ.get("LITHOS_LENS_TASKS_PROJECT_CONVENTION", "")
     agent_inactive_env = os.environ.get("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
     unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     # No "" default, unlike every other read in this pass: an EMPTY value of
@@ -664,6 +657,20 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     }
     if tasks_env_overrides:
         new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
+    if project_convention_env:
+        warn_deprecated_env(
+            "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
+            "lithos-lens.tasks.project_convention",
+        )
+        new_cfg = replace(
+            new_cfg,
+            tasks=replace(
+                new_cfg.tasks,
+                project_convention=env_project_convention(
+                    "LITHOS_LENS_TASKS_PROJECT_CONVENTION", project_convention_env
+                ),
+            ),
+        )
     if trigger_prefixes_env is not None:
         # Comma-separated, unlike its integer neighbours, and gated on PRESENCE
         # rather than truthiness: setting it to the empty string is how an

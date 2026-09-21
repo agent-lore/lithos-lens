@@ -1969,9 +1969,15 @@ def test_every_project_the_picker_offers_has_a_graph_whatever_the_posture(
     offered = re.findall(r'data-picker-project="([^"]+)"', picker)
 
     assert offered == ["meta-only", "tag-only"], posture
-    for slug, node in (("meta-only", "c"), ("tag-only", "tagged")):
+    # EXACTLY that project's tasks, not merely "its task is somewhere on the
+    # page": a scope that drew both would satisfy a membership check and still
+    # be the wrong graph.
+    for slug, nodes in (("meta-only", ["c"]), ("tag-only", ["tagged"])):
         html = get(lithos_lens_config_env, fake, f"/tasks/graph?project={slug}")
-        assert f'data-graph-node="{node}"' in html, (posture, slug)
+        assert re.findall(r'data-graph-node="([^"]+)"', html) == nodes, (
+            posture,
+            slug,
+        )
 
 
 def test_a_scope_one_task_over_the_guard_is_refused_with_its_count(
