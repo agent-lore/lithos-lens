@@ -578,6 +578,7 @@ classDiagram
     +label str
     +kind str
     +target_id str
+    +titled bool
   }
   class ClaimRecord {
     +agent str

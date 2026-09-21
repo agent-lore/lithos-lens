@@ -68,6 +68,7 @@ type = "forbidden"
 source_modules = [
     "lithos_lens.errors",
     "lithos_lens.tasks",
+    "lithos_lens.template_vocabulary",
     "lithos_lens.task_filtering",
     "lithos_lens.agent_picker",
     "lithos_lens.filter_options",

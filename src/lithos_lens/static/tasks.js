@@ -671,6 +671,11 @@
     list.prepend(row);
   }
 
+  // How much of an id is shown, kept in step with `SHORT_ID_CHARS` in
+  // `tasks.py` — 8 is the prefix the rest of the ecosystem types and Lithos
+  // resolves (any unambiguous prefix of 6 or more).
+  const SHORT_ID_CHARS = 8;
+
   // The one short-id element (§5.3), built for a row no template rendered.
   // DOM calls rather than markup: an id is an arbitrary non-empty string
   // (§5.1) and this one goes into an ATTRIBUTE, where `escapeHtml` -- a
@@ -682,7 +687,14 @@
     // the same shape `templates/tasks/short_id.html` renders, so a skeleton
     // row and the server's replacement for it read identically.
     code.title = taskId;
-    code.textContent = String(taskId).slice(0, 8);
+    // CODE POINTS, not UTF-16 code units. `short_id` in `tasks.py` is
+    // `task_id[:8]` over a Python str, which counts code points, and an id is
+    // an arbitrary non-empty string (§5.1) — so `slice(0, 8)` would cut an
+    // astral character in half eight characters in and show half a surrogate
+    // pair where the server shows the whole one. The two prefixes have to be
+    // the SAME eight characters: a row that changes its id when the server's
+    // markup replaces it is worse than one that never showed it.
+    code.textContent = Array.from(String(taskId)).slice(0, SHORT_ID_CHARS).join("");
     return code;
   }
 

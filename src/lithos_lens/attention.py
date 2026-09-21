@@ -68,6 +68,7 @@ from lithos_lens.tasks import (
     humanize_age,
     parse_timestamp,
 )
+from lithos_lens.template_vocabulary import short_id
 
 # Sections a row can be promoted OUT of into Needs attention under the FULL
 # rule set (the workable three) — see the module docstring for why the degraded
@@ -475,10 +476,18 @@ def _attention_sort_key(row: SectionRow) -> tuple[int, datetime, str]:
 
 
 def _blocker_name(blocker: BlockerRecord, index: Mapping[str, TaskRecord]) -> str:
-    """Quoted title of a blocking task, falling back to its id."""
+    """Quoted title of a blocking task WITH its short id, falling back to its id.
+
+    The reason's supporting fact is the one place a promoted row names the task
+    that stranded it, and a title alone cannot be related to the loom line that
+    raised the gate (§5.3). This detail is PROSE — one sentence in a ``<p>``,
+    not a metadata group — so the id joins it as text, which is §5.3's rule for
+    a surface with no group: the id goes where that surface's other facts about
+    the task go. The fallback arm already states the whole id and adds nothing.
+    """
     predecessor = index.get(blocker.task_id)
     if predecessor is not None:
-        return f'"{predecessor.title}"'
+        return f'"{predecessor.title}" ({short_id(predecessor.id)})'
     return f'"{blocker.task_id}"' if blocker.task_id else "(unknown)"
 
 

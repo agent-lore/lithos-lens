@@ -26,7 +26,9 @@ import re
 from html import unescape
 from pathlib import Path
 
-from lithos_lens.tasks import SHORT_ID_CHARS, TaskRecord, short_id
+from lithos_lens.task_graph import BlockerRecord
+from lithos_lens.tasks import TaskRecord
+from lithos_lens.template_vocabulary import SHORT_ID_CHARS, short_id
 from tests.test_graph_page import (
     GraphFakeClient,
     cycle_blocker,
@@ -35,6 +37,7 @@ from tests.test_graph_page import (
     task,
 )
 from tests.test_task_detail import _client, _link, _task
+from tests.test_tasks_js import _edge, _graph_run, _node, _panel_run, _payload
 from tests.test_tasks_mvp import TaskFakeLithosClient, _add_gate, _waits_on
 
 #: A real Lithos id, not a fixture slug: the prefix has to be a SLICE of
@@ -56,6 +59,51 @@ def _leads(group: str, chip: str) -> bool:
     return group.strip().startswith(chip)
 
 
+def _chip(task_id: str) -> str:
+    """The one short-id element, for an id other than the file's default."""
+    return f'<code class="task-short-id" title="{task_id}">{short_id(task_id)}</code>'
+
+
+# --- The two CLIENT copies of the rule, held to the filter ------------------
+#
+# Two surfaces are built by JavaScript and by nothing else: the optimistic row
+# a ``task.created`` event inserts (``tasks.js``) and a graph search hit
+# (``graph.js``). Neither has a server rendering to fall back on, so each
+# carries its own copy of "the first 8 characters" — and a copy that disagrees
+# with the filter shows one prefix until the row reconciles and a different one
+# after, from an element whose whole purpose is to be matched by eye against a
+# line written somewhere else.
+
+
+def test_the_optimistic_rows_prefix_is_the_filters_prefix() -> None:
+    """``tasks.js`` cuts the id the way ``short_id`` does, astral char and all."""
+    row = _panel_run([f"created:{ASTRAL_ID}"])["pending"][0]
+
+    assert row["meta"][0] == {
+        "className": "task-short-id",
+        "text": short_id(ASTRAL_ID),
+        "title": ASTRAL_ID,
+    }
+    # Stated absolutely as well as by parity: a lone surrogate is what a
+    # UTF-16 slice leaves here, and U+FFFD is how it renders and copies.
+    assert row["meta"][0]["text"] == ASTRAL_PREFIX
+    assert "\ufffd" not in row["meta"][0]["text"]
+
+
+def test_a_graph_search_hits_prefix_is_the_filters_prefix() -> None:
+    """``graph.js``'s copy of the same rule, on the same boundary value."""
+    payload = _payload([_node(ASTRAL_ID, title="Astral")], [])
+    shown = _graph_run(["search:astral"], payload=payload)["final"]
+
+    assert shown["search"] == [ASTRAL_ID]
+    assert shown["searchShown"][0][-1] == {
+        "className": "task-short-id",
+        "text": short_id(ASTRAL_ID),
+        "title": ASTRAL_ID,
+    }
+    assert shown["searchShown"][0][-1]["text"] == ASTRAL_PREFIX
+
+
 # --- The filter itself ------------------------------------------------------
 
 
@@ -68,6 +116,29 @@ def test_the_filter_returns_the_eight_character_prefix() -> None:
 def test_an_id_shorter_than_the_prefix_is_returned_whole() -> None:
     """Nothing to elide, and a padded or truncated id would not resolve."""
     assert short_id("abc") == "abc"
+
+
+#: An id whose 8th character is astral, so the prefix ENDS on a surrogate pair.
+#: A task id is an arbitrary non-empty string (§5.1), so this is an id Lens can
+#: really be handed — and it is the one value that tells Python's code-point
+#: slice apart from JavaScript's UTF-16 one. Every other fixture in this file
+#: is ASCII, where the two are indistinguishable.
+ASTRAL_ID = "abcdefg\U0001f600rest"
+ASTRAL_PREFIX = "abcdefg\U0001f600"
+
+
+def test_the_prefix_is_eight_characters_not_eight_code_units() -> None:
+    """The cut is on a CHARACTER boundary, so it never halves one.
+
+    Half a surrogate pair is not a prefix of anything: it renders as U+FFFD,
+    it copies as U+FFFD, and Lithos cannot resolve it back to the task. The
+    filter gets this for free — the two client copies of the same rule
+    (``tasks.js``/``graph.js``) are the ones the tests below hold to it.
+    """
+    assert short_id(ASTRAL_ID) == ASTRAL_PREFIX
+    assert len(ASTRAL_PREFIX) == SHORT_ID_CHARS
+    # Spelled out, so this test fails loudly if the fixture stops being astral.
+    assert len(ASTRAL_PREFIX.encode("utf-16-le")) // 2 == SHORT_ID_CHARS + 1
     assert short_id("") == ""
 
 
@@ -100,6 +171,111 @@ def test_a_dashboard_row_leads_its_metadata_with_the_short_id(
     meta = _group(row, '<div class="task-row-meta">')
     assert _leads(meta, CHIP), meta
     assert meta.index(CHIP) < meta.index("badge-open")
+
+
+#: The predecessor a blocked row names. A second 32-character id on the row, so
+#: "the row states an id" cannot pass for "the row states THIS task's id".
+PREDECESSOR_ID = FULL_ID.replace("28", "77")
+
+
+def _blocked_fixture(*, unsatisfiable: bool) -> TaskFakeLithosClient:
+    """A row blocked by a titled predecessor, waiting or stranded.
+
+    ``unsatisfiable`` is the promotion: the predecessor was CANCELLED, so the
+    row leaves Blocked for Needs attention and states the same predecessor in a
+    reason's supporting fact instead of in a blocker chip.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task(FULL_ID, title="Ship the harness"),
+            # Open in the snapshot either way: the index the chips and the
+            # reason resolve against is the OPEN task list, so a predecessor
+            # missing from it falls back to its raw id and says nothing about
+            # whether a resolved name carries its prefix. The cancellation is
+            # a fact of the BLOCKER record, which is where the frontier reports
+            # it (mirroring test_tasks_mvp's own unsatisfiable fixture).
+            _task(PREDECESSOR_ID, title="Design schema"),
+        ]
+    )
+    fake.blocked = {
+        FULL_ID: (
+            BlockerRecord(
+                kind="blocker_unsatisfiable" if unsatisfiable else "task",
+                task_id=PREDECESSOR_ID,
+                type="blocks",
+                status="cancelled" if unsatisfiable else "open",
+                message="Blocking predecessor was cancelled;" if unsatisfiable else "",
+            ),
+        )
+    }
+    return fake
+
+
+def test_a_blocker_chip_states_the_id_of_the_task_it_names(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A blocked row names a SECOND task, and that name needs its own id.
+
+    The row's metadata id is the blocked task's; the chip beside it says what
+    that task is waiting on. Relating "Design schema" to the `77105098` a loom
+    line named was exactly as hard as before until the chip said so itself.
+    """
+    with _client(lithos_lens_config_env, _blocked_fixture(unsatisfiable=False)) as c:
+        response = c.get("/tasks")
+
+    row = unescape(response.text).split(f'id="task-row-{FULL_ID}"', 1)[1]
+    chips = _group(row, '<div class="blocker-list" data-blocker-list')
+    assert f"Design schema {_chip(PREDECESSOR_ID)}" in chips, chips
+    # The blocked task's OWN id is in its meta column, and it is a different
+    # one: a chip echoing the row's id would satisfy a laxer assertion.
+    assert _leads(_group(row, '<div class="task-row-meta">'), CHIP)
+    assert _chip(PREDECESSOR_ID) != CHIP
+
+
+def test_an_unresolved_blocker_chip_does_not_repeat_its_own_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """When the predecessor is not in the snapshot the chip's label already IS
+    the id, and a chip stating it twice is noise, not identity."""
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task(FULL_ID, title="Ship the harness"))
+    fake.blocked = {
+        FULL_ID: (
+            BlockerRecord(
+                kind="task", task_id=PREDECESSOR_ID, type="blocks", status="open"
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    row = unescape(response.text).split(f'id="task-row-{FULL_ID}"', 1)[1]
+    chips = _group(row, '<div class="blocker-list" data-blocker-list')
+    assert PREDECESSOR_ID in chips
+    assert "task-short-id" not in chips, chips
+
+
+def test_a_promoted_rows_supporting_fact_states_the_predecessors_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The unsatisfiable reason names the task that stranded this one.
+
+    The detail is prose in a ``<p>``, not a metadata group, so the id joins the
+    sentence — §5.3's rule for a surface with no group. Without it the one fact
+    on the row that explains the promotion cannot be matched to the gate line
+    that reported it.
+    """
+    with _client(lithos_lens_config_env, _blocked_fixture(unsatisfiable=True)) as c:
+        response = c.get("/tasks")
+
+    text = unescape(response.text)
+    row = text.split(f'id="task-row-{FULL_ID}"', 1)[1]
+    detail = _group(row, '<p class="attention-detail" data-attention-detail>')
+    assert f'Blocker "Design schema" ({short_id(PREDECESSOR_ID)}) was cancelled' in (
+        detail
+    ), detail
 
 
 def test_a_gate_row_leads_its_metadata_with_the_short_id(
@@ -406,14 +582,8 @@ def test_the_graph_hierarchy_rows_lead_their_badges_with_the_short_id(
         assert after_link.index(chip) < after_link.index("badge-")
 
 
-def test_a_cycle_callout_names_every_member_with_its_id(
-    lithos_lens_config_env: Path,
-) -> None:
-    """The cycle roster is a list of tasks, so it states their ids.
-
-    The arrow PATH beside it stays labels — it is the walk's shape, and the
-    roster on the same line has already said which tasks those are.
-    """
+def _cycle_fixture() -> tuple[GraphFakeClient, str]:
+    """Two tasks that block each other, so the callout renders roster AND walk."""
     other = FULL_ID.replace("28", "77")
     fake = GraphFakeClient(
         dataset(
@@ -425,14 +595,115 @@ def test_a_cycle_callout_names_every_member_with_its_id(
             },
         )
     )
+    return fake, other
+
+
+def test_a_cycle_callout_names_every_member_with_its_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The cycle roster is a list of tasks, so it states their ids."""
+    fake, other = _cycle_fixture()
     html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
 
     members = html.split("data-cycle-members>", 1)[1].split("</span>")[0]
     for task_id, title in ((FULL_ID, "Cyc A"), (other, "Cyc B")):
-        chip = (
-            f'<code class="task-short-id" title="{task_id}">{short_id(task_id)}</code>'
+        assert f"{title} {_chip(task_id)}" in members, members
+
+
+def test_the_cycle_walk_states_the_id_of_every_step(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Every STEP of ``A → B → A`` names a task, so every step states its id.
+
+    The roster on the line above names the same tasks, but the walk is where
+    the operator reads the shape — and a name without its id there is a name
+    that has to be matched back through the roster to be placed at all.
+    """
+    fake, other = _cycle_fixture()
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    walk = html.split("data-cycle-path>", 1)[1].split("</span>")[0]
+    # Including the RETURN step, which names the first member a second time:
+    # the walk closes on it, and a closing step with no id reads as a third
+    # task the callout never named.
+    assert walk.count(_chip(FULL_ID)) == 2
+    assert walk.count(_chip(other)) == 1
+    assert f"Cyc A {_chip(FULL_ID)} → Cyc B {_chip(other)} →" in walk, walk
+
+
+def test_the_chain_line_states_the_id_of_every_task_it_names(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The longest-chain sentence names a walk of tasks; each states its id."""
+    other = FULL_ID.replace("28", "77")
+    fake = GraphFakeClient(
+        dataset(
+            [task(FULL_ID, title="Cyc A"), task(other, title="Cyc B")],
+            [(FULL_ID, other, "blocks")],
         )
-        assert f"{title} {chip}" in members, members
+    )
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    nodes = html.split("data-chain-nodes>", 1)[1].split("</span>")[0]
+    assert f"Cyc A {_chip(FULL_ID)} → Cyc B {_chip(other)}" in nodes, nodes
+
+
+def _chain_payload() -> dict:
+    """A two-task chain in the shape the graph page embeds for its canvas."""
+    tail = FULL_ID.replace("28", "77")
+    return _payload(
+        [
+            _node(FULL_ID, title="Cyc A"),
+            _node(tail, title="Cyc B", layer=1),
+        ],
+        [_edge(FULL_ID, tail)],
+        longest_chain={"nodes": [FULL_ID, tail], "length": 2, "bound": "exact"},
+        active_chain={
+            "of": {FULL_ID: FULL_ID, tail: tail},
+            "up": {tail: FULL_ID},
+            "down": {FULL_ID: tail},
+            "chain": [FULL_ID, tail],
+        },
+    )
+
+
+def test_the_chain_line_keeps_its_ids_through_a_focus_transition() -> None:
+    """The sentence is REWRITTEN client-side on every focus transition, from
+    the same projection the canvas is re-traced from — and the page is never
+    reloaded for one. So the ids the server rendered are not enough: a client
+    that wrote the titles back as plain text would drop every id on the first
+    click and leave the page contradicting the markup it shipped with.
+    """
+    tail = FULL_ID.replace("28", "77")
+    line = _graph_run([f"tap:{tail}"], payload=_chain_payload())["final"]["chainLine"]
+
+    # The titles the sentence states, unchanged …
+    assert line["nodes"] == "Cyc A → Cyc B"
+    assert line["label"] == " through Cyc B"
+    # … and an id beside each of them, cut the way the filter cuts it.
+    assert line["nodeIds"] == [
+        {"text": short_id(FULL_ID), "title": FULL_ID},
+        {"text": short_id(tail), "title": tail},
+    ]
+    assert line["throughId"] == [{"text": short_id(tail), "title": tail}]
+
+
+def test_the_chain_lines_through_clause_states_the_focused_tasks_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """In focus mode the sentence names ONE task — whose chain it is — and the
+    id is how that name is related to the line that sent the operator here."""
+    other = FULL_ID.replace("28", "77")
+    fake = GraphFakeClient(
+        dataset(
+            [task(FULL_ID, title="Cyc A"), task(other, title="Cyc B")],
+            [(FULL_ID, other, "blocks")],
+        )
+    )
+    html = get(lithos_lens_config_env, fake, f"/tasks/graph?project=loom&focus={other}")
+
+    clause = html.split("data-chain-through-label>", 1)[1].split("</span>")[0]
+    assert clause.strip() == f"through Cyc B {_chip(other)}"
 
 
 # --- Breadcrumbs ------------------------------------------------------------

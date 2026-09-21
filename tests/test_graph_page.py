@@ -392,9 +392,15 @@ def chain_line(html: str) -> str:
     Tags are dropped rather than replaced with a space: the sentence D3
     specifies is "Longest blocking chain (5): A → B", and a helper that spaced
     out every inline ``<span>`` would let "( 5 )" pass for it.
+
+    The short id each name carries (§5.3) is removed WITH its element, so this
+    stays a helper about the sentence: which tasks the chain names and in what
+    order. That the ids are there, and that they survive a focus transition, is
+    ``tests/test_short_id.py``'s claim.
     """
     paragraph = only_group(r"data-longest-chain[^>]*>.*?(<p>.*?</p>)", html)
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", paragraph)).strip()
+    named = re.sub(r"<code class=\"task-short-id\".*?</code>", "", paragraph)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", named)).strip()
 
 
 def rendered_layers(html: str) -> dict[str, int]:
@@ -468,9 +474,23 @@ def test_a_cycle_names_its_members_in_order_with_one_representative_path(
         "Cyc",
         "B",
     ]
-    path = re.search(r"data-cycle-path>(.*?)</span>", callout.group(1), re.DOTALL)
+    # The walk, read the same way and for the same reason: each step names a
+    # task and so states its id (§5.3), and this assertion is about the order
+    # the walk visits them in.
+    path = re.search(
+        r"data-cycle-path>(.*?)</span>\s*<span", callout.group(1), re.DOTALL
+    )
     assert path
-    assert path.group(1).split() == ["Cyc", "A", "→", "Cyc", "B", "→", "Cyc", "A"]
+    assert re.sub(r"<[^>]+>[^<]*</[^>]+>", "", path.group(1)).split() == [
+        "Cyc",
+        "A",
+        "→",
+        "Cyc",
+        "B",
+        "→",
+        "Cyc",
+        "A",
+    ]
     # The whole reason cycle members are condensed rather than dropped: the
     # work below a cycle keeps a layer, and is marked unreachable.
     assert "blocked-via-cycle" in markers(html, "downstream")
@@ -1256,9 +1276,9 @@ def test_the_chain_line_names_the_depth_five_chain(
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
 
     assert 'data-chain-bound="exact"' in html
-    chain = re.search(r"data-chain-nodes>(.*?)</span>", html, re.DOTALL)
+    chain = re.search(r"data-chain-nodes>(.*?)</span>\s*</p>", html, re.DOTALL)
     assert chain
-    assert chain.group(1).split() == [
+    assert re.sub(r"<[^>]+>[^<]*</[^>]+>", "", chain.group(1)).split() == [
         "One",
         "→",
         "Two",
@@ -1272,7 +1292,11 @@ def test_the_chain_line_names_the_depth_five_chain(
     # The literal line D3 asks for, numerals and all — and the label that keeps
     # it a claim about THIS graph rather than a corpus-wide critical path.
     assert "Longest blocking chain within this graph" in text
-    assert "Longest blocking chain ( 5 ): One → Two → Three → Four → Five" in text, text
+    # The literal sentence, read through the helper that drops the short id
+    # each name now carries (§5.3) — this assertion is about the WORDING.
+    assert chain_line(html) == (
+        "Longest blocking chain (5): One → Two → Three → Four → Five"
+    )
     assert "≥" not in text
 
 

@@ -254,8 +254,11 @@
                 <span data-cycle-members>{% for member in cycle.members %}{{ member.label }} {% with task_id = member.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ ", " if not loop.last }}{% endfor %}</span>
                 {% if cycle.path %}
                   {# The walk already closes back on its first member, so the
-                     template adds no return step of its own. #}
-                  <span data-cycle-path>{% for node in cycle.path %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+                     template adds no return step of its own. Each step names a
+                     task, so each step states its short id (§5.3) — the walk
+                     and the roster above it name the same tasks the same way,
+                     which is what lets one be read against the other. #}
+                  <span data-cycle-path>{% for node in cycle.path %}{{ node.label }} {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ " → " if not loop.last }}{% endfor %}</span>
                 {% endif %}
                 {% if cycle.message %}<span data-cycle-message>{{ cycle.message }}</span>{% endif %}
               </li>
@@ -374,9 +377,9 @@
       <h2>Longest blocking chain <small>within this graph</small></h2>
       {% if view.chain.length %}
         <p>
-          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }}{% endif %}</span>
+          Longest blocking chain<span data-chain-through-label>{% if view.chain.through %} through {{ view.chain.through.label }} {% with task_id = view.chain.through.id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</span>
           ({% if not view.chain.exact %}≥ {% endif %}<span data-chain-length>{{ view.chain.length }}</span>{% if not view.chain.exact %}, incomplete{% if view.chain.incomplete_note %}: {{ view.chain.incomplete_note }}{% endif %}{% endif %}):
-          <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }}{{ " → " if not loop.last }}{% endfor %}</span>
+          <span data-chain-nodes>{% for node in view.chain.nodes %}{{ node.label }} {% with task_id = node.id %}{% include "tasks/short_id.html" %}{% endwith %}{{ " → " if not loop.last }}{% endfor %}</span>
         </p>
       {% else %}
         <p data-chain-empty>No active blocking chain in this graph.</p>

@@ -326,11 +326,17 @@ class BlockerChip:
     :class:`~lithos_lens.task_graph.BlockerRecord` kind
     (``task``/``gate``/``blocker_unsatisfiable``/``cycle``); ``target_id`` is
     the blocking task/gate id, kept for the deep-links a later slice adds.
+
+    ``titled`` says whether ``label`` is the blocking task's TITLE — i.e. the
+    chip NAMES a second task, and so must state that task's short id beside it
+    (§5.3). When it is false the label already IS the id (or a raw message), and
+    a chip that repeated it would say the same thing twice.
     """
 
     label: str
     kind: str = "task"
     target_id: str = ""
+    titled: bool = False
 
 
 # Needs-attention rules in severity order (§5.2.2 rule 1 -> 6). The slug is the
@@ -708,35 +714,6 @@ def normalize_created_since_input(value: str) -> str:
         return ""
     parsed = parse_date(value)
     return parsed.isoformat() if parsed else ""
-
-
-def format_display_date(value: str) -> str:
-    parsed = parse_date(value)
-    return parsed.strftime("%d/%m/%Y") if parsed else value
-
-
-# How much of a task id Lens shows beside a title -- NOT a Lens choice: 8 is the
-# prefix loom's gate and log lines, findings, PR bodies and the ROADMAP already
-# type, and Lithos resolves any unambiguous prefix of 6 or more back to the
-# whole id. Showing the same 8 is what lets a row, a gate or a graph entry be
-# matched by eye to a line written somewhere else.
-SHORT_ID_CHARS = 8
-
-
-def short_id(task_id: str) -> str:
-    """The id prefix the rest of the ecosystem names this task by.
-
-    An id shorter than the prefix is returned WHOLE, not padded: it is already
-    its own prefix, and there is nothing to elide.
-    """
-    return task_id[:SHORT_ID_CHARS]
-
-
-def format_tag(tag: str) -> str:
-    if ":" not in tag:
-        return tag
-    key, value = tag.split(":", 1)
-    return f"{key}: {value}"
 
 
 def parse_timestamp(value: str) -> datetime | None:

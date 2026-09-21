@@ -1271,9 +1271,29 @@ test("focusing a node re-traces the chain and centres it in the canvas", async (
     "loom-blocked-forever",
   );
   await expect(page.locator("[data-chain-length]")).toHaveText("2");
-  await expect(page.locator("[data-chain-nodes]")).toHaveText(
-    "Port the legacy run bridge → Migrate the legacy run archive",
-  );
+  // Each name in the rewritten sentence carries its short id (§5.3), so this
+  // reads the TITLES out of it — the ids are `tests/test_short_id.py`'s claim,
+  // and they are asserted here too, one line down.
+  expect(
+    await page.locator("[data-chain-nodes]").evaluate((element) =>
+      Array.from(element.childNodes)
+        .filter(
+          (child) =>
+            !(child instanceof Element && child.classList.contains("task-short-id")),
+        )
+        .map((child) => child.textContent ?? "")
+        .join("")
+        .replace(/\s+/g, " ")
+        .trim(),
+    ),
+  ).toBe("Port the legacy run bridge → Migrate the legacy run archive");
+  // The ids survived the focus transition that rewrote the line.
+  await expect(
+    page.locator("[data-chain-nodes] .task-short-id"),
+  ).toHaveText(["loom-can", "loom-blo"]);
+  await expect(
+    page.locator("[data-chain-through-label] .task-short-id"),
+  ).toHaveText(["loom-blo"]);
   // … and the trace, which may not disagree with it.
   const traced = await page.evaluate(() => {
     const graph = (window as any).LithosLensGraph;

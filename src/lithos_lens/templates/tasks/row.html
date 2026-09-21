@@ -82,7 +82,11 @@
     <div class="blocker-list" data-blocker-list aria-label="Blocked by">
       <span class="blocker-label">Blocked by</span>
       {% for blocker in row.blockers %}
-        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}</span>
+        {# A chip that resolved names ANOTHER task by title, so it states that
+           task's short id (§5.3) — the row's own id, in the meta column above,
+           is the blocked task's and says nothing about what it waits on. An
+           unresolved chip's label already IS the id (or a raw message). #}
+        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}{% if blocker.titled %} {% with task_id = blocker.target_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</span>
       {% endfor %}
     </div>
   {% endif %}

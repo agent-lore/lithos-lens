@@ -9,12 +9,14 @@
   Where a surface has no such group it goes where that surface's other facts
   about the task go -- a column in the children table, after the status on a
   blocker / Blocks / provenance line or a gate's waiter, after the link in a
-  breadcrumb trail, inside the sentence a scoped-epic banner states.
+  breadcrumb trail, inside the sentence a scoped-epic banner states, after the
+  title in a dashboard row's blocker chip, after each step of a path
+  expression.
 
-  Three surfaces are exempt and §5.3 lists them: the epic strip's progress
-  chips (tooltip only, and the WHOLE id there), the Cytoscape canvas, and a
-  path expression -- `A -> B -> A` -- which states a shape rather than naming a
-  roster.
+  Two surfaces are exempt and §5.3 lists them: the epic strip's progress chips
+  (tooltip only, and the WHOLE id there) and the Cytoscape canvas. A path
+  expression -- `A -> B -> A`, the longest chain's node list -- is NOT one:
+  every step of it names a task, so every step states the id.
 
   Selectable TEXT, not a tooltip-only fact: select-and-copy yields exactly the
   prefix loom's gate lines, the findings and the PR bodies type, so a row can

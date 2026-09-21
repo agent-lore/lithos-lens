@@ -550,6 +550,24 @@ function fire(type, event) {
   (listeners[type] || []).forEach((listener) => listener(event));
 }
 
+// One `task.created` event, the optimistic row's only trigger. It carries a
+// title and nothing else — no tags, no project, no creator — which is why the
+// row it builds can only be shown on an unfiltered board. The id is the
+// test's, because "the prefix the client cuts is the prefix the server cuts"
+// is a claim only an id with an interesting boundary can make.
+function created(taskId) {
+  eventSeq += 1;
+  (sse["task.created"] || []).forEach((listener) => listener({
+    lastEventId: "event-" + eventSeq,
+    data: JSON.stringify({
+      type: "task.created",
+      task_id: taskId,
+      payload: { title: "Freshly created task" },
+      requires_refresh: false,
+    }),
+  }));
+}
+
 // Every deferred script has run; the event stream opens here, not earlier.
 fire("DOMContentLoaded", {});
 
@@ -584,21 +602,6 @@ const ACTIONS = {
       }),
     }));
   },
-  // One `task.created` event, the optimistic row's only trigger. It carries a
-  // title and nothing else — no tags, no project, no creator — which is why
-  // the row it builds can only be shown on an unfiltered board.
-  created: () => {
-    eventSeq += 1;
-    (sse["task.created"] || []).forEach((listener) => listener({
-      lastEventId: "event-" + eventSeq,
-      data: JSON.stringify({
-        type: "task.created",
-        task_id: "28105098aa4c4d0fbb2f6b06d0e0b0aa",
-        payload: { title: "Freshly created task" },
-        requires_refresh: false,
-      }),
-    }));
-  },
   // The board was replaced by a reconcile and this row is no longer on it —
   // the one way a task in this tab's history can have no server-built URL left.
   drop: () => {},
@@ -612,7 +615,11 @@ const ACTIONS = {
 (async () => {
   for (const action of actions) {
     const [name, argument] = action.split(":");
-    if (name === "click") {
+    if (name === "created") {
+      // Everything after the FIRST colon, so an id may contain one.
+      const rest = action.slice(name.length + 1);
+      created(rest || "28105098aa4c4d0fbb2f6b06d0e0b0aa");
+    } else if (name === "click") {
       fire("click", clickEvent(
         { [PANEL_ROW]: rows[argument], "a[href]": titleLink }, "row:" + argument,
       ));
@@ -1435,6 +1442,11 @@ function element(extra) {
     attributes: {},
     hidden: false,
     textContent: "",
+    // The chain line is REBUILT rather than re-texted (§5.3: each name in it
+    // carries its short id, and an id is an element), so an element here has
+    // to hold children the way the browser's does.
+    children: [],
+    replaceChildren() { this.children = Array.prototype.slice.call(arguments); },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] || ""; },
     // `graph.js` asks its canvas which host it sits in (T2-A5): the graph
@@ -1544,6 +1556,10 @@ const document = {
       getContext() { return {}; },
     };
   },
+  // The real space between a title and its short id in a sentence (§5.3) —
+  // a text node in the browser, and one here too, so the probe below can tell
+  // the page's PUNCTUATION from the names it separates.
+  createTextNode(text) { return { textContent: text, isText: true }; },
   addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
   // A fragment `tasks.js` replaced by hand announces itself here (T2-A5),
   // because that removal has no event of its own: the page's own listeners
@@ -1807,6 +1823,25 @@ function withClass(name) {
     .sort();
 }
 
+// What a rebuilt sentence SAYS, split the way §5.3 splits it. A short id is
+// its own element, and the single space between a title and its id is its own
+// text node — so the titles are every other part, and a whitespace-only part
+// is punctuation rather than a name.
+function titlesIn(node) {
+  if (!node.children.length) return node.textContent;
+  return node.children
+    .filter((child) => child.className !== "task-short-id")
+    .map((child) => child.textContent)
+    .filter((text) => text.trim() !== "")
+    .join("");
+}
+
+function idsIn(node) {
+  return node.children
+    .filter((child) => child.className === "task-short-id")
+    .map((child) => ({ text: child.textContent, title: child.title }));
+}
+
 function snapshot() {
   const drawn = graph.shown();
   return {
@@ -1817,6 +1852,15 @@ function snapshot() {
     // picture, and a click opens the panel, which states the id.
     labels: drawn.nodes.reduce(function (into, id) {
       into[id] = graph.node(id).data("label");
+      return into;
+    }, {}),
+    // What Cytoscape actually DRAWS, read off the resolved style rather than
+    // off the backing field. The two are the same only while the stylesheet
+    // says `label: "data(label)"`; a rule changed to `data(id)`, or to a
+    // function that appends the short id, would put a token on every node
+    // while the `labels` map above stayed exactly as it is.
+    styleLabels: drawn.nodes.reduce(function (into, id) {
+      into[id] = graph.node(id).style("label");
       return into;
     }, {}),
     edges: drawn.edges.map((edge) => edge.type),
@@ -1857,9 +1901,17 @@ function snapshot() {
     // above the layers, and the trace on the canvas.
     chainLine: {
       through: chainSection.dataset.chainThrough || "",
-      label: chainThroughLabel.textContent,
+      // The TITLES the sentence states, exactly as it used to read them: the
+      // short ids beside them are a separate claim below, so a test about the
+      // chain the page names stays a test about that and nothing else.
+      label: titlesIn(chainThroughLabel),
       length: chainLength.textContent,
-      nodes: chainNodes.textContent,
+      nodes: titlesIn(chainNodes),
+      // …and the ids, in the order the sentence names them (§5.3). This is
+      // the part a focus transition used to drop: the line is rewritten
+      // client-side on every one, and it must come back with its ids.
+      throughId: idsIn(chainThroughLabel),
+      nodeIds: idsIn(chainNodes),
     },
     traced: graph.cy
       .nodes()
@@ -2743,8 +2795,13 @@ def test_a_canvas_node_is_labelled_with_the_title_alone() -> None:
     id. So the label stays exactly what the server rendered — including the
     ghost's, whose second line is its project and nothing else.
     """
-    labels = _graph_run([], payload=SHORT_ID_PAYLOAD)["final"]["labels"]
+    final = _graph_run([], payload=SHORT_ID_PAYLOAD)["final"]
+    # The RESOLVED style, which is the text Cytoscape paints. Asserting the
+    # `label` data field alone would stay green through a stylesheet changed to
+    # draw something else entirely.
+    labels = final["styleLabels"]
 
+    assert labels == final["labels"], "the drawn text is no longer the label field"
     assert labels[SHORT_ID_TASK] == "Ship the harness"
     assert labels[SHORT_ID_GHOST] == "Design schema\n\u00b7 lens"
     for task_id, label in labels.items():
@@ -3500,6 +3557,15 @@ def test_focusing_a_cycle_member_names_THAT_task_and_traces_its_condensation() -
         "length": "3",
         # … and the walk over condensations, each named by its representative.
         "nodes": "Before → Ring-A → After",
+        # Each name states its id too (§5.3), rebuilt with the sentence. These
+        # fixture ids are their own prefix, so the claim here is that the id is
+        # PRESENT after a transition — `test_short_id.py` holds the cut itself.
+        "throughId": [{"text": "ring-b", "title": "ring-b"}],
+        "nodeIds": [
+            {"text": "before", "title": "before"},
+            {"text": "ring-a", "title": "ring-a"},
+            {"text": "after", "title": "after"},
+        ],
     }
     # The trace crosses the cycle in one move: both members are on it, the box
     # around them is accented, and the steps are the edges that actually enter
@@ -3527,6 +3593,11 @@ def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
         "label": " through Off-B",
         "length": "2",
         "nodes": "Off-A → Off-B",
+        "throughId": [{"text": "off-b", "title": "off-b"}],
+        "nodeIds": [
+            {"text": "off-a", "title": "off-a"},
+            {"text": "off-b", "title": "off-b"},
+        ],
     }
     assert focused["traced"] == ["off-a", "off-b"]
     assert focused["tracedEdges"] == ["off-a>off-b"]
@@ -3537,6 +3608,15 @@ def test_a_focus_transition_re_traces_the_chain_it_claims() -> None:
         "label": "",
         "length": "5",
         "nodes": "A → B → C → D → E",
+        # Nothing focused, so the clause names nobody and states no id.
+        "throughId": [],
+        "nodeIds": [
+            {"text": "a", "title": "a"},
+            {"text": "b", "title": "b"},
+            {"text": "c", "title": "c"},
+            {"text": "d", "title": "d"},
+            {"text": "e", "title": "e"},
+        ],
     }
     assert cleared["traced"] == ["a", "b", "c", "d", "e"]
     assert cleared["tracedEdges"] == ["a>b", "b>c", "c>d", "d>e"]
@@ -4478,6 +4558,13 @@ console.log(JSON.stringify({
         return into;
       }, {})
     : {},
+  // The drawn text, not the backing field — same reason as the graph page's.
+  styleLabels: mini
+    ? drawn.nodes.reduce((into, id) => {
+        into[id] = mini.node(id).style("label");
+        return into;
+      }, {})
+    : {},
   edgeTypes: drawn.edges.map((edge) => edge.type).sort(),
   arrowless: drawn.edges.filter((edge) => !edge.arrow || edge.arrow === "none").length,
   canvasHidden: container.hidden,
@@ -4725,9 +4812,11 @@ def test_a_mini_graph_node_is_labelled_with_the_title_alone() -> None:
     The fragment above it is where the id is stated (the detail header's
     metadata group); the picture stays the titles.
     """
-    labels = _mini_run()["labels"]
+    result = _mini_run()
+    labels = result["styleLabels"]
     served = {node["id"]: node["label"] for node in MINI_PAYLOAD["nodes"]}
 
+    assert labels == result["labels"], "the drawn text is no longer the label field"
     assert labels == {task_id: served[task_id] for task_id in labels}
     assert labels["epic"] == "Loom run harness"
 

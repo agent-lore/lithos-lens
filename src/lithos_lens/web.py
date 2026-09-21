@@ -82,12 +82,10 @@ from lithos_lens.tasks import (
     TASK_DETAIL_ALIAS_KEY,
     TASK_DETAIL_ALIAS_PATH,
     default_since,
-    format_display_date,
-    format_tag,
     parse_filters,
-    short_id,
 )
 from lithos_lens.telemetry import instrument_app
+from lithos_lens.template_vocabulary import format_display_date, format_tag, short_id
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
