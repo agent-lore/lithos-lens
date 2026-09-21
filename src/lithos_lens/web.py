@@ -60,6 +60,7 @@ from lithos_lens.request_filters import (
     mini_graph_url,
     note_url,
     panel_fragment_url,
+    project_add_problem,
     project_add_url,
     project_clear_url,
     project_remove_url,
@@ -203,6 +204,7 @@ def create_app(
     templates.env.globals["tasks_url"] = tasks_url
     templates.env.globals["epic_scope_url"] = epic_scope_url
     templates.env.globals["project_add_url"] = project_add_url
+    templates.env.globals["project_add_problem"] = project_add_problem
     templates.env.globals["project_remove_url"] = project_remove_url
     templates.env.globals["project_clear_url"] = project_clear_url
     templates.env.globals["task_card_url"] = task_card_url

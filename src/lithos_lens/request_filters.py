@@ -275,14 +275,48 @@ def project_add_url(request: Request, projects: Sequence[str], project: str) -> 
     allowlist every generated tasks URL uses: the strip composes with the scope
     the operator is browsing under instead of resetting it.
 
-    Empty when there is no room left in the query budget for the slug — see
-    :func:`_accepted_by_the_filter_budget`. The template draws that chip with
-    its count and WITHOUT a link, rather than offering one the board refuses.
+    Empty when there is no link the board would honour — see
+    :func:`project_add_problem` for the two reasons. The template draws that
+    chip with its count and WITHOUT a link, saying why, rather than offering
+    one the board refuses.
     """
+    if project_add_problem(request, projects, project):
+        return ""
     if project in projects:
         return _project_filter_url(request, projects)
-    url = _project_filter_url(request, [*projects, project])
-    return url if _accepted_by_the_filter_budget(url) else ""
+    return _project_filter_url(request, [*projects, project])
+
+
+def project_add_problem(request: Request, projects: Sequence[str], project: str) -> str:
+    """Why ``project`` cannot be ADDED from this board — ``""`` when it can.
+
+    Two reasons, and the chip is drawn without a link for either, wearing this
+    sentence as its label so the operator learns which:
+
+    - the slug contains a comma. ``?project=`` is comma-joined and the parse
+      splits every value on it (``tasks.parse_filters``), so ``a,b`` — a legal
+      ``project:a,b`` tag — can never be a filter value at all: the link would
+      filter for ``a`` OR ``b`` and land on a board with none of the rows the
+      chip counted. No spelling fixes that (the repeated form splits too), so
+      the rule at the top of ``board_strips`` — a chip must lead to a board
+      with rows on it — is kept by withholding the click;
+    - there is no room left in the query budget for the slug — see
+      :func:`_accepted_by_the_filter_budget`.
+
+    A slug already selected is never a problem: its chip links to REMOVING it.
+    """
+    if project in projects:
+        return ""
+    if "," in project:
+        return (
+            "its slug contains a comma, which the project filter reads as a "
+            "separator between projects"
+        )
+    if not _accepted_by_the_filter_budget(
+        _project_filter_url(request, [*projects, project])
+    ):
+        return "this board's filters already fill the query-size limit"
+    return ""
 
 
 def project_remove_url(request: Request, projects: Sequence[str], project: str) -> str:

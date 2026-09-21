@@ -169,10 +169,12 @@ def build_project_strip(
     ``test_project_universe_unions_both_conventions_under_a_single_posture``).
     Closing it means making the FILTER read the universe too, which is a change
     to §5B.1's normative matching rule and to every surface that filters — not
-    something a strip may decide on its own. Until then this strip states the
-    same universe the datalist does, so the two controls never disagree about
-    which projects exist, and ``test_a_single_convention_posture_inherits_the_
-    5b1_universe_gap`` keeps the residual visible instead of silent.
+    something a strip may decide on its own — it is Lithos task ``f990395d``,
+    which widens the filter to both conventions and retires the knob. Until
+    then this strip states the same universe the datalist does, so the two
+    controls never disagree about which projects exist, and
+    ``test_a_single_convention_posture_inherits_the_5b1_universe_gap`` keeps
+    the residual visible instead of silent.
 
     Ordered by count descending, then slug — the strip reads as a summary of
     where the work is, and its order is stable while the operator clicks

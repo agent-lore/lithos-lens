@@ -5390,6 +5390,52 @@ def test_a_project_chip_is_never_offered_past_the_filter_budget(
     assert "cannot be added" in text
 
 
+def test_a_project_chip_the_filter_cannot_carry_is_drawn_without_a_link(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The other dead end: ``?project=`` is comma-joined and split on the comma,
+    so a slug that contains one (``project:lithos,atlas`` is a legal tag) has no
+    filter spelling at all — its link would filter for ``lithos`` OR ``atlas``
+    and land on a board holding none of the rows the chip counted. The chip is
+    still drawn with its slug and count (the strip's subject), but as text
+    wearing the reason, never as that link. The dead end is asserted on the
+    URL the chip WOULD have carried, so this pins a real one."""
+    tag = "roadmap-2026-09"
+    fake = _big_tag_fake(tag)
+    fake.tasks.append(
+        TaskRecord(
+            id="odd-ready",
+            title="Oddly tagged item",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:lithos,atlas", tag),
+        )
+    )
+    fake.ready_ids.add("odd-ready")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get(f"/tasks?tag={tag}")
+        followed = client.get(f"/tasks?tag={tag}&project=lithos,atlas")
+
+    assert board.status_code == 200
+    text = unescape(board.text)
+    # The two carriable projects link; the comma one is drawn, counted, inert.
+    assert set(_project_chip_links(text)) == {"lithos-lens", "lithos-loom"}
+    assert _project_chip_counts(text) == {
+        "lithos-lens": 1,
+        "lithos-loom": 1,
+        "lithos,atlas": 1,
+    }
+    assert 'data-project-chip="lithos,atlas" data-project-chip-unavailable' in " ".join(
+        text.split()
+    )
+    assert "lithos,atlas cannot be added: its slug contains a comma" in text
+    # …because the link it would have carried is a board with none of its rows.
+    assert followed.status_code == 200
+    assert "Oddly tagged item" not in followed.text
+
+
 @pytest.mark.parametrize(
     ("query", "reason"),
     [

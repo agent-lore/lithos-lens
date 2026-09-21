@@ -3791,7 +3791,8 @@ def test_a_single_convention_posture_inherits_the_5b1_universe_gap() -> None:
 
     Closing the gap means making ``matches_projects`` read the universe too —
     a change to §5B.1's normative matching rule and to every filtering surface,
-    which is not this strip's to make. This test is the one to invert with it.
+    which is not this strip's to make. That change is Lithos task ``f990395d``
+    (assume ``both``, retire the knob); this test is the one to invert with it.
     """
     mirrored = _task(
         "mirrored",

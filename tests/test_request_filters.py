@@ -19,6 +19,7 @@ import pytest
 from fastapi import Request
 
 from lithos_lens.request_filters import (
+    project_add_problem,
     project_add_url,
     project_clear_url,
     project_remove_url,
@@ -284,3 +285,23 @@ def test_removing_and_clearing_are_offered_at_the_very_ceiling() -> None:
     assert project_clear_url(_request(request_query)) == f"/tasks?{tag}"
     # …and the chip that WOULD grow it is the one withheld.
     assert project_add_url(_request(request_query), _SELECTED, "lithos-core") == ""
+
+
+def test_a_slug_the_filter_cannot_carry_is_not_offered() -> None:
+    """The other way a chip can lead nowhere: ``?project=`` is comma-joined and
+    the parse splits every value on the comma, so a slug that CONTAINS one
+    (``project:a,b`` is a legal tag) can never be expressed as a filter value —
+    following its chip would filter for ``a`` OR ``b`` and show a board with no
+    rows of the project the chip named. Nothing about the budget saves it, so
+    the builder withholds the link and names the reason, which the template
+    shows in place of the budget wording.
+    """
+    assert project_add_url(_request("tag=roadmap"), (), "lithos,lens") == ""
+    problem = project_add_problem(_request("tag=roadmap"), (), "lithos,lens")
+    assert "comma" in problem
+    # A slug the filter CAN carry has no problem to report…
+    assert project_add_problem(_request("tag=roadmap"), (), "lithos-lens") == ""
+    # …and the budget refusal reports its own reason, distinct from the comma.
+    added = len("&") + len("project=lithos-lens")
+    over = _tag_query_of(MAX_FILTER_QUERY_BYTES - added) + "t"
+    assert "query-size limit" in project_add_problem(_request(over), (), "lithos-lens")

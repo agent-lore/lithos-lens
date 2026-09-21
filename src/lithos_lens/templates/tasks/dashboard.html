@@ -419,31 +419,38 @@
       {% if dashboard.project_chips | length > 1 or dashboard.filters.projects %}
         <section class="project-strip" aria-label="Projects" data-project-strip>
           {% for chip in dashboard.project_chips %}
-            {# Adding a project is the one move on this board that makes the
+            {# A chip is a link only when the board would honour the click.
+               Adding a project is the one move on this board that makes the
                query LONGER, so on filters already filling the query budget
-               project_add_url has no link to give (round-1 correctness
-               f-001). The chip still states its project and its count — that
-               is the strip's subject — and simply is not a link, rather than
-               being one the board would refuse at 400. Removing and clearing
-               only shrink the query, so they are always offered. #}
-            {% set href = project_remove_url(request, dashboard.filters.projects, chip.slug) if chip.selected else project_add_url(request, dashboard.filters.projects, chip.slug) %}
-            <a class="project-chip{{ " project-chip-selected" if chip.selected else "" }}{{ "" if href else " project-chip-unavailable" }}"
-               {% if href %}href="{{ href }}"{% endif %}
-               data-project-chip="{{ chip.slug }}"
-               {% if not href %}data-project-chip-unavailable{% endif %}
-               {% if chip.selected %}aria-current="true"{% endif %}
-               {# "Add", never "Show only": the chip is ADDITIVE — with one
-                  project already selected it links to BOTH, so "show only"
-                  would announce the opposite of where the link goes. #}
-               {% if href %}
-               aria-label="{{ "Remove" if chip.selected else "Add" }} {{ chip.slug }}"
-               {% else %}
-               aria-label="{{ chip.slug }} cannot be added: this board's filters already fill the query-size limit"
-               {% endif %}
-               title="{{ chip.open_count }} open {{ "row" if chip.open_count == 1 else "rows" }} in {{ chip.slug }} on this board">
-              <span class="project-chip-slug">{{ chip.slug }}</span>
-              <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
-            </a>
+               there is no link to give (round-1 correctness f-001); and a
+               slug the comma-joined filter cannot carry has no link in any
+               spelling. Such a chip still states its project and its count —
+               that is the strip's subject — as plain text wearing the reason,
+               rather than as a link the board would refuse. Removing and
+               clearing only shrink the query, so they are always offered. #}
+            {% set problem = "" if chip.selected else project_add_problem(request, dashboard.filters.projects, chip.slug) %}
+            {% set count_title = chip.open_count ~ " open " ~ ("row" if chip.open_count == 1 else "rows") ~ " in " ~ chip.slug ~ " on this board" %}
+            {% if problem %}
+              <span class="project-chip project-chip-unavailable"
+                    data-project-chip="{{ chip.slug }}" data-project-chip-unavailable
+                    title="{{ count_title }}. {{ chip.slug }} cannot be added: {{ problem }}">
+                <span class="project-chip-slug">{{ chip.slug }}</span>
+                <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
+              </span>
+            {% else %}
+              {# "Add", never "Show only": the chip is ADDITIVE — with one
+                 project already selected it links to BOTH, so "show only"
+                 would announce the opposite of where the link goes. #}
+              <a class="project-chip{{ " project-chip-selected" if chip.selected else "" }}"
+                 href="{{ project_remove_url(request, dashboard.filters.projects, chip.slug) if chip.selected else project_add_url(request, dashboard.filters.projects, chip.slug) }}"
+                 data-project-chip="{{ chip.slug }}"
+                 {% if chip.selected %}aria-current="true"{% endif %}
+                 aria-label="{{ "Remove" if chip.selected else "Add" }} {{ chip.slug }}"
+                 title="{{ count_title }}">
+                <span class="project-chip-slug">{{ chip.slug }}</span>
+                <span class="project-chip-count" data-project-open-count>{{ chip.open_count }}</span>
+              </a>
+            {% endif %}
           {% endfor %}
           {% if dashboard.filters.projects %}
             {# The only control that gets back to all projects once two are

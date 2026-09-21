@@ -288,7 +288,8 @@ The dashboard also renders:
   single-convention posture that universe can name a project the filter will
   not match, because §5B.1 also says matching honours the configured
   convention; the gap is the datalist's too, and closing it means making
-  `matches_projects` read the universe as well.) Each
+  `matches_projects` read the universe as well — Lithos task `f990395d`,
+  which retires `project_convention` as a membership knob.) Each
   chip carries the project's **open-row count** within that scope — the open
   sections plus Gates; terminal rows contribute nothing — and the chips order by
   count then slug. The scope is **every active filter except `project`**, so the
@@ -312,7 +313,10 @@ The dashboard also renders:
   and its count but **without a link**, rather than with one the router would
   refuse — the bytes would have to come out of a filter the board was asked
   for. Removing a project and clearing the filter only shrink the query, so
-  they are offered on any board that renders
+  they are offered on any board that renders the strip. The same treatment —
+  slug and count, no link, the reason in the chip's title — goes to a slug the
+  filter cannot carry in any spelling: one containing a comma, which
+  `?project=` reads as its separator.
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 
