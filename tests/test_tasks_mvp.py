@@ -5179,8 +5179,8 @@ def test_the_project_strip_is_a_labelled_section_below_the_epic_strip(
     text = board.text
 
     assert (
-        '<section class="project-strip" aria-label="Projects" data-project-strip>'
-        in text
+        '<section class="project-strip" aria-labelledby="project-strip-label"'
+        " data-project-strip>" in text
     )
     # Below the two strips it composes with, in that order.
     assert (
@@ -5188,6 +5188,55 @@ def test_the_project_strip_is_a_labelled_section_below_the_epic_strip(
         < text.index("data-epic-strip")
         < text.index("data-project-strip")
     )
+
+
+def _strip_markup(html: str, marker: str) -> str:
+    """The rendered ``<section … data-{marker}>`` element, opening tag to close."""
+    match = re.search(rf"<section [^>]*data-{marker}>.*?</section>", html, re.DOTALL)
+    assert match is not None, marker
+    return match.group(0)
+
+
+def test_each_strip_leads_with_its_name_so_project_chips_are_not_read_as_epics(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Repro (prod 2026-09-21): a board filtered to one project with no open
+    epic of its own renders the epic strip as nothing but its note — "30 epics
+    have no tasks on this board" — and the project strip, in the same pill
+    language and with no word of its own, directly underneath. Read top to
+    bottom that is a caption and its list: the twenty-odd project chips were
+    taken for epics that had leaked through the filter. Each strip now opens
+    with its name, and that visible word is the section's accessible name."""
+    fake = _three_project_fake()
+    # Every open epic sits outside the filtered project, so the epic strip has
+    # a note and no chips — the shape that produced the misreading.
+    fake.tasks.append(_epic_row("epic-loom", "Loom epic"))
+    fake.children["epic-loom"] = ["loom-ready"]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        board = client.get("/tasks?project=lithos-lens&since=2026-04-01")
+
+    assert board.status_code == 200
+    epics = _strip_markup(board.text, "epic-strip")
+    projects = _strip_markup(board.text, "project-strip")
+
+    # The epic strip is its note alone…
+    assert "data-epic-chip" not in epics
+    assert "1 epic has no tasks on this board" in unescape(epics)
+    # …and it still says what it is, before the note.
+    assert 'aria-labelledby="epic-strip-label"' in epics
+    assert epics.index('id="epic-strip-label">Epics<') < epics.index(
+        "data-epic-strip-hidden"
+    )
+
+    # The project strip names itself ahead of its first chip, and the name is
+    # the accessible one — a screen reader and a sighted operator get the same
+    # word, so the two cannot drift apart.
+    assert 'aria-labelledby="project-strip-label"' in projects
+    assert projects.index('id="project-strip-label">Projects<') < projects.index(
+        "data-project-chip="
+    )
+    assert "aria-label=" not in projects.split(">", 1)[0]
 
 
 def test_clearing_the_project_filter_keeps_every_other_parameter(
@@ -5472,8 +5521,8 @@ def test_the_clear_survives_a_scope_with_no_projects_left_in_it(
     assert stuck.status_code == 200, reason
     # The labelled strip is there, holding the clear and no chips.
     assert (
-        '<section class="project-strip" aria-label="Projects" data-project-strip>'
-        in stuck.text
+        '<section class="project-strip" aria-labelledby="project-strip-label"'
+        " data-project-strip>" in stuck.text
     )
     assert _project_chip_links(unescape(stuck.text)) == {}
     # …and the clear drops ``project`` alone, leaving what emptied the board
