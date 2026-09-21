@@ -833,7 +833,12 @@ button,
   margin-bottom: 1.5rem;
 }
 
-.active-filters-label {
+/* One voice for the word that opens each strip — "Scoped to", "Epics",
+   "Projects". The three strips stack with nothing else between them and their
+   chips wear the same pill, so the leading label is what tells a reader which
+   strip a chip belongs to. */
+.active-filters-label,
+.strip-label {
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 700;
@@ -879,6 +884,7 @@ button,
    board to that epic's descendants (?epic=). The selected chip is outlined and
    links back out, so it reads as a toggle. */
 .epic-strip {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;

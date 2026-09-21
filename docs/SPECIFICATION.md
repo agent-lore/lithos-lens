@@ -355,6 +355,16 @@ The dashboard also renders:
   slug and count, no link, the reason in the chip's title — goes to a slug the
   filter cannot carry in any spelling: one containing a comma, which
   `?project=` reads as its separator.
+
+  Each of the three strips — active filters, epics, projects — **opens with a
+  visible label** (`Scoped to`, `Epics`, `Projects`) that is also the section's
+  accessible name (`aria-labelledby`). They stack with nothing else between
+  them and their chips share one pill language, so the label is the only thing
+  that says which strip a chip belongs to; and the epic strip can render as
+  its "N epics have no tasks on this board" note alone (a project-filtered
+  board with no open epic of its own), which without the labels reads as a
+  caption for the project chips beneath it — every project in the corpus,
+  mistaken for epics that leaked through the filter.
 - **summary counters** for each section, marked as approximate when the
   frontier read they derive from was truncated
 
