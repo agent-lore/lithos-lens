@@ -85,9 +85,10 @@
         {# §5.5.4 gate context: a `pr` gate carries loom's reconciliation state,
            the same badge the board's Gates section shows (one template). #}
         {% if detail.pr_reconciliation %}{% with reconciliation = detail.pr_reconciliation %}{% include "tasks/reconciliation_badge.html" %}{% endwith %}{% endif %}
-        {# The project chip: read off `task_projects` under the configured
-           convention (§5B.1), so a task carrying both spellings shows both
-           rather than whichever this template happened to look at.
+        {# The project chip: read off `task_projects` under BOTH §5B.1
+           conventions — always, whatever the retired `project_convention`
+           posture is set to (§4.4) — so a task carrying both spellings shows
+           both rather than whichever this template happened to look at.
 
            No project is a real answer, not a missing one — a cross-project
            task, or one nobody stamped — and §5.5.1 asks the header for a

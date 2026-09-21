@@ -755,6 +755,62 @@ def test_graph_fan_out_knob_over_its_ceiling_fails_the_load(
         load_config(config_path)
 
 
+def test_config_loading_never_searches_for_an_ambient_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A developer's ``/workspace/.env`` is not an input to the test suite.
+
+    ``load_config`` calls ``load_dotenv``, which with no argument searches
+    upwards from ``src/lithos_lens/config.py`` — past ``src/`` to the repo
+    root. Whatever it finds is injected into ``os.environ`` after the
+    conftest isolation has already run, and an env override beats the TOML a
+    test wrote: a local ``LITHOS_LENS_TASKS_PROJECT_CONVENTION=`` line would
+    fail every config-loading test at once, for reasons visible in nobody
+    else's checkout. ``dotenv_file`` replaces the search with a file the test
+    owns, so the search itself must never happen.
+    """
+    import dotenv.main
+
+    searched: list[object] = []
+
+    def _tripwire(*args: object, **kwargs: object) -> str:
+        searched.append(args)
+        return ""
+
+    monkeypatch.setattr(dotenv.main, "find_dotenv", _tripwire)
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text('[lithos-lens]\nenvironment = "test"\n')
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    load_config(config_path)
+
+    assert searched == []
+
+
+def test_the_harness_dotenv_file_is_what_the_loader_reads(
+    dotenv_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Controlled, not disabled — and the control is the hazard, demonstrated.
+
+    A value reaching ``os.environ`` through dotenv overrides the file, which
+    is exactly why an ambient ``.env`` could not be left in play: the retired
+    posture knob is the case that would bite, since a written value of it is
+    validated and reported whatever the TOML says (§4.4). Here the dotenv
+    route is exercised deliberately, from a path the test owns.
+    """
+    dotenv_file.write_text("LITHOS_LENS_TASKS_PROJECT_CONVENTION=metadata\n")
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.tasks]\n'
+        'project_convention = "tag"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.tasks.project_convention == "metadata"
+
+
 def test_project_convention_settings_are_read_from_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
