@@ -76,7 +76,19 @@
         <span class="attention-chip attention-chip-{{ reason.rule }}" data-attention-rule="{{ reason.rule }}">{{ reason.label }}</span>
       {% endfor %}
     </div>
-    <p class="attention-detail" data-attention-detail>{{ row.attention | map(attribute="detail") | select | join(" ") }}</p>
+    {#- The supporting facts, one sentence per fired rule, joined by a space.
+        A rule that NAMES another task (a cancelled blocker, a cycle partner)
+        hands its identity over as an id rather than as prose, so the sentence
+        states it with the one shared short-id element (§5.3) — the same
+        monospace, hoverable, copyable token every other surface shows — and
+        nothing here has to be marked safe HTML to render it. -#}
+    <p class="attention-detail" data-attention-detail>
+      {%- for reason in row.attention if reason.fact -%}
+        {{ " " if not loop.first }}{{ reason.detail }}
+        {%- if reason.detail_task_id %} {% with task_id = reason.detail_task_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif -%}
+        {{ reason.detail_tail }}
+      {%- endfor -%}
+    </p>
   {% endif %}
   {% if row.blockers %}
     <div class="blocker-list" data-blocker-list aria-label="Blocked by">

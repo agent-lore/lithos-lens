@@ -230,9 +230,12 @@ Blocks / provenance line or on a gate's waiter, after the link in a breadcrumb
 trail or in the sentence a scoped-epic banner states. A row that names a SECOND
 task states that task's id too, and not only its own: a blocker chip carries the
 predecessor's id beside its title, and the `unsatisfiable`/`cycle` supporting
-fact names the predecessor as `"Design schema" (28105098)` — prose, because the
-fact is a sentence. A chip whose label is already the id (the predecessor is not
-in the snapshot) adds nothing. It is selectable monospace
+fact states it in the same element, spliced into the sentence right after the
+name — `Blocker "Design schema" 28105098 was cancelled …`. The reason carries
+the predecessor as an ID, not as prose, so that one element is the same one
+every other surface renders and no sentence is marked safe HTML to get there. A
+name that already IS an id (the predecessor is not in the snapshot) adds
+nothing. It is selectable monospace
 text carrying the whole id in its tooltip, so select-and-copy yields exactly the
 prefix everything else uses, and the title itself is never rewritten.
 

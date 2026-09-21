@@ -573,6 +573,8 @@ classDiagram
   class AttentionReason {
     +rule str
     +detail str
+    +detail_task_id str
+    +detail_tail str
   }
   class BlockerChip {
     +label str

@@ -758,7 +758,10 @@ def test_repeated_unsatisfiable_blockers_collapse_to_one_chip() -> None:
     )
     (row,) = sections["attention"]
     assert _rules(row) == ["unsatisfiable"]
-    assert "+1 more" in row.attention[0].detail
+    # `fact` is the whole sentence as text; `detail` is only the half before
+    # the blocker it names, because the short id of that blocker is rendered
+    # between the two halves as markup (§5.3).
+    assert "+1 more" in row.attention[0].fact
 
 
 def test_attention_sorts_by_severity_then_oldest_first() -> None:

@@ -261,7 +261,15 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # No budget moves. The count stays 3 — one module left the >800 set and none
 # joined it (template_vocabulary.py is ~55 lines) — and the stop-loss stays
 # 850, now with frontier.py (843) as the module nearest it.
-modules_over_800_lines = 3    # frontier.py (843), graph_layout.py (830), tasks.py (823)
+#
+# Round 3 of the same task: `AttentionReason` gained the two fields that carry
+# a named predecessor's identity to the template as an ID (+22 net), putting
+# tasks.py at 845. Still no budget moves, and no second extraction either — the
+# rationale for those fields was written out twice, here and in
+# `attention._blocker_name`, so the duplicate prose went instead. Splitting a
+# module again to absorb four lines of docstring is the answer this file's
+# policy names as the wrong one.
+modules_over_800_lines = 3    # tasks.py (845), frontier.py (843), graph_layout.py (830)
 max_module_lines       = 850  # stop-loss over that one exception, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way

@@ -68,7 +68,6 @@ from lithos_lens.tasks import (
     humanize_age,
     parse_timestamp,
 )
-from lithos_lens.template_vocabulary import short_id
 
 # Sections a row can be promoted OUT of into Needs attention under the FULL
 # rule set (the workable three) — see the module docstring for why the degraded
@@ -203,26 +202,35 @@ def _structural_reasons(
     reasons: list[AttentionReason] = []
     unsatisfiable = [b for b in blockers if b.kind == "blocker_unsatisfiable"]
     if unsatisfiable:
+        name, named_id = _blocker_name(unsatisfiable[0], index)
         reasons.append(
             AttentionReason(
                 rule="unsatisfiable",
-                detail=(
-                    f"Blocker {_blocker_name(unsatisfiable[0], index)} was "
-                    "cancelled — this task can never become ready without "
+                # Split where the fact NAMES the dead blocker, so the row can
+                # render that task's short id as the shared element (§5.3)
+                # rather than as prose nothing can hover or copy.
+                detail=f"Blocker {name}",
+                detail_task_id=named_id,
+                detail_tail=(
+                    " was cancelled — this task can never become ready without "
                     f"intervention.{_extra_blockers(len(unsatisfiable))}"
                 ),
             )
         )
     cycles = [b for b in blockers if b.kind == "cycle"]
     if cycles:
+        # The upstream message names the cycle members ("dependency cycle:
+        # t-1 -> pred-2 -> pred-2") BY ID already, which is the whole point of
+        # the chip; fall back to the predecessor when it is missing, and then
+        # state that predecessor's id the one shared way.
+        message = cycles[0].message
+        name, named_id = _blocker_name(cycles[0], index)
         reasons.append(
             AttentionReason(
                 rule="cycle",
-                # The upstream message names the cycle members ("dependency
-                # cycle: t-1 -> pred-2 -> pred-2"), which is the whole point of
-                # the chip; fall back to the predecessor when it is missing.
-                detail=cycles[0].message
-                or f"Dependency cycle through {_blocker_name(cycles[0], index)}.",
+                detail=message or f"Dependency cycle through {name}",
+                detail_task_id="" if message else named_id,
+                detail_tail="" if message else ".",
             )
         )
     return tuple(reasons)
@@ -475,20 +483,28 @@ def _attention_sort_key(row: SectionRow) -> tuple[int, datetime, str]:
     return (severity, created, row.task.id)
 
 
-def _blocker_name(blocker: BlockerRecord, index: Mapping[str, TaskRecord]) -> str:
-    """Quoted title of a blocking task WITH its short id, falling back to its id.
+def _blocker_name(
+    blocker: BlockerRecord, index: Mapping[str, TaskRecord]
+) -> tuple[str, str]:
+    """The quoted name of a blocking task, and its id when that name is a TITLE.
 
-    The reason's supporting fact is the one place a promoted row names the task
-    that stranded it, and a title alone cannot be related to the loom line that
-    raised the gate (§5.3). This detail is PROSE — one sentence in a ``<p>``,
-    not a metadata group — so the id joins it as text, which is §5.3's rule for
-    a surface with no group: the id goes where that surface's other facts about
-    the task go. The fallback arm already states the whole id and adds nothing.
+    Two values rather than one string: the supporting fact is the one place a
+    promoted row names the task that stranded it, and a title alone cannot be
+    related to the loom line that raised the gate (§5.3). Returning the id
+    beside the name lets :class:`~lithos_lens.tasks.AttentionReason` carry it to
+    the template AS AN ID, which renders the one shared short-id element — so
+    the identity is monospace, non-wrapping, copyable and carries the whole id
+    in its tooltip, none of which prose can be, and no sentence has to be marked
+    safe HTML to get there.
+
+    The fallback arm's name already IS the id (the predecessor is not in the
+    open snapshot), so it names no second thing to render — exactly as an
+    unresolved blocker chip does not repeat its own id.
     """
     predecessor = index.get(blocker.task_id)
     if predecessor is not None:
-        return f'"{predecessor.title}" ({short_id(predecessor.id)})'
-    return f'"{blocker.task_id}"' if blocker.task_id else "(unknown)"
+        return f'"{predecessor.title}"', predecessor.id
+    return (f'"{blocker.task_id}"' if blocker.task_id else "(unknown)"), ""
 
 
 def _extra_blockers(count: int) -> str:

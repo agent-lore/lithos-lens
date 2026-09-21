@@ -262,8 +262,10 @@ def test_a_promoted_rows_supporting_fact_states_the_predecessors_id(
 ) -> None:
     """The unsatisfiable reason names the task that stranded this one.
 
-    The detail is prose in a ``<p>``, not a metadata group, so the id joins the
-    sentence — §5.3's rule for a surface with no group. Without it the one fact
+    The ONE shared element, not a prefix in prose: the sentence has no metadata
+    group, but §5.3's markup contract holds wherever a short id is visible, so
+    the identity has to reach the template as an id and come back monospace,
+    hoverable and copyable like every other surface's. Without it the one fact
     on the row that explains the promotion cannot be matched to the gate line
     that reported it.
     """
@@ -273,8 +275,81 @@ def test_a_promoted_rows_supporting_fact_states_the_predecessors_id(
     text = unescape(response.text)
     row = text.split(f'id="task-row-{FULL_ID}"', 1)[1]
     detail = _group(row, '<p class="attention-detail" data-attention-detail>')
-    assert f'Blocker "Design schema" ({short_id(PREDECESSOR_ID)}) was cancelled' in (
+    # The element itself, spliced between the two halves of the sentence — so
+    # the id sits beside the name it identifies and not at the end of a
+    # paragraph that may state several facts.
+    assert f'Blocker "Design schema" {_chip(PREDECESSOR_ID)} was cancelled' in detail, (
         detail
+    )
+    # And the sentence still reads as one.
+    assert "can never become ready without intervention." in detail
+
+
+def test_a_promoted_rows_cycle_fact_states_the_partners_id(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The cycle rule's FALLBACK wording names a partner the same way.
+
+    Lithos's own message names the members by id already and is used verbatim
+    when it is there; this is the arm that has to say it itself.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.extend(
+        [
+            _task(FULL_ID, title="Ship the harness"),
+            _task(PREDECESSOR_ID, title="Design schema"),
+        ]
+    )
+    fake.blocked = {
+        FULL_ID: (
+            BlockerRecord(
+                kind="cycle", task_id=PREDECESSOR_ID, type="blocks", status="open"
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    row = unescape(response.text).split(f'id="task-row-{FULL_ID}"', 1)[1]
+    detail = _group(row, '<p class="attention-detail" data-attention-detail>')
+    assert (
+        f'Dependency cycle through "Design schema" {_chip(PREDECESSOR_ID)}.' in detail
+    ), detail
+
+
+def test_a_supporting_fact_that_names_no_task_is_unchanged(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Four of the six rules name nobody, and one names an id it was handed.
+
+    Nothing is rendered for them, so the sentence is exactly the text it always
+    was — the split that lets two rules state an id may not put a stray space
+    or an empty element into the other four.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(_task(FULL_ID, title="Ship the harness"))
+    fake.blocked = {
+        FULL_ID: (
+            BlockerRecord(
+                kind="blocker_unsatisfiable",
+                # Not in the open snapshot, so the sentence names it by ID and
+                # has no second thing to state.
+                task_id="gone-from-the-snapshot",
+                type="blocks",
+                status="cancelled",
+            ),
+        )
+    }
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    row = unescape(response.text).split(f'id="task-row-{FULL_ID}"', 1)[1]
+    detail = _group(row, '<p class="attention-detail" data-attention-detail>')
+    assert "task-short-id" not in detail, detail
+    assert detail.strip().startswith(
+        'Blocker "gone-from-the-snapshot" was cancelled —'
     ), detail
 
 
@@ -608,6 +683,69 @@ def test_a_cycle_callout_names_every_member_with_its_id(
     members = html.split("data-cycle-members>", 1)[1].split("</span>")[0]
     for task_id, title in ((FULL_ID, "Cyc A"), (other, "Cyc B")):
         assert f"{title} {_chip(task_id)}" in members, members
+
+
+def _members_in(html: str, branch: str) -> str:
+    """The rendered roster of the cycle callout branch opened by ``branch``."""
+    section = html.split(branch, 1)[1].split("</div>", 1)[0]
+    return section.split("data-cycle-members>", 1)[1].split("</span>", 1)[0]
+
+
+def test_an_external_cycle_callout_names_its_members_with_their_ids(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The callout has three branches, and each renders its OWN roster.
+
+    A loop that closes through ghosts has no component to draw, so this branch
+    is the only place the page names the task Lithos reported — and the id is
+    the whole point here: the partners are outside the scope and the operator
+    has nothing else on the page to match the loom line against.
+    """
+    ghost_b = FULL_ID.replace("28", "77")
+    ghost_c = FULL_ID.replace("28", "99")
+    fake = GraphFakeClient(
+        dataset(
+            # Only the first task is in this project, so the other two are
+            # one-hop ghosts and the edge closing the loop is never fetched.
+            [
+                task(FULL_ID, title="Ship the harness"),
+                task(ghost_b, title="Ghost B", project="other"),
+                task(ghost_c, title="Ghost C", project="other"),
+            ],
+            [(FULL_ID, ghost_b, "blocks"), (ghost_c, FULL_ID, "blocks")],
+            blocked={FULL_ID: cycle_blocker(ghost_c, "Dependency cycle.")},
+        )
+    )
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    members = _members_in(html, "data-cycle-external")
+    assert members.strip() == f"Ship the harness {CHIP}", members
+    # Every name in the roster carries one: a branch that rendered a member
+    # without its id would leave a title alone in this span.
+    assert members.count("task-short-id") == members.count("Ship the harness")
+
+
+def test_a_shape_unavailable_cycle_callout_names_its_members_with_their_ids(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The third branch, which is a separate copy of the same roster markup.
+
+    Lithos reports the cycle and this graph's edges do not show it, so the page
+    can say neither where the loop runs nor why the shape is missing — which
+    leaves the id as the one fact about the task it does state.
+    """
+    partner = FULL_ID.replace("28", "77")
+    fake = GraphFakeClient(
+        dataset(
+            [task(FULL_ID, title="Ship the harness"), task(partner, title="Partner")],
+            blocked={FULL_ID: cycle_blocker(partner, "Dependency cycle.")},
+        )
+    )
+    html = get(lithos_lens_config_env, fake, "/tasks/graph?project=loom")
+
+    members = _members_in(html, "data-cycle-shape-unavailable")
+    assert members.strip() == f"Ship the harness {CHIP}", members
+    assert members.count("task-short-id") == members.count("Ship the harness")
 
 
 def test_the_cycle_walk_states_the_id_of_every_step(
