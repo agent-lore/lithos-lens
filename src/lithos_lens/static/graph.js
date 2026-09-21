@@ -1332,6 +1332,18 @@ const initLensGraph = function () {
       .slice(0, SEARCH_LIMIT);
   }
 
+  // The one short-id element (§5.3). Built with DOM calls because an id is an
+  // arbitrary non-empty string (§5.1) and it goes into an ATTRIBUTE here; the
+  // shape is `templates/tasks/short_id.html`'s, so a search hit and the layer
+  // entry it scrolls to state the id identically.
+  function shortIdElement(taskId) {
+    const code = document.createElement("code");
+    code.className = "task-short-id";
+    code.title = taskId;
+    code.textContent = String(taskId).slice(0, 8);
+    return code;
+  }
+
   function renderSearch(query) {
     if (!searchResults) return;
     const items = searchMatches(query).map(function (node) {
@@ -1339,8 +1351,17 @@ const initLensGraph = function () {
       const hit = document.createElement("button");
       hit.type = "button";
       hit.className = "graph-search-hit";
-      hit.textContent = node.label;
       hit.dataset.searchHit = node.id;
+      // Title AND short id (§5.3). A hit is a place the page NAMES a task, and
+      // often the only one on screen: the text layers below can be collapsed,
+      // the box matches an id prefix as well as a title, and the answer to
+      // "is this the 28105098 the gate line named?" has to be readable without
+      // clicking. The id is a separate element rather than part of the label
+      // so selecting it copies the prefix and nothing else.
+      const label = document.createElement("span");
+      label.textContent = node.label;
+      hit.appendChild(label);
+      hit.appendChild(shortIdElement(node.id));
       item.appendChild(hit);
       return item;
     });

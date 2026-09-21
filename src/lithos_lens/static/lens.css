@@ -2024,6 +2024,13 @@ button,
   border-color: var(--accent);
 }
 
+/* A hit names its task the way every other text surface does (§5.3) — title,
+   then the short id — so the id needs the gap the surrounding pill's padding
+   does not give it. */
+.graph-search-hit .task-short-id {
+  margin-left: 0.4rem;
+}
+
 /* Downstream impact (D10): the panel's one forward-looking line, and the
    note beside it that says what the number is NOT — a withheld M, a relation
    Lens could not classify, a position on the longest chain. */

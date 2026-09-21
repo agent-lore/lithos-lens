@@ -444,6 +444,19 @@ test("task.created event inserts a skeleton row on an unfiltered board", async (
   );
   await expect(skeleton).toBeVisible();
   await expect(skeleton).toContainText("Freshly created task");
+
+  // It states its id the way every other row on the board does (§5.3): first
+  // in the metadata group, ahead of the status badge. This is the ONE row no
+  // template rendered, and the one that cannot be fixed by re-reading the
+  // server — this scenario holds reconciliation off deliberately, which is
+  // also the state an operator is left in when a reconcile fails.
+  const meta = skeleton.locator(".task-row-meta");
+  const shortId = meta.locator(".task-short-id");
+  await expect(shortId).toHaveText("e2e-just");
+  await expect(shortId).toHaveAttribute("title", "e2e-just-created");
+  expect(
+    await meta.evaluate((element) => element.firstElementChild?.className),
+  ).toBe("task-short-id");
   // The link carries the board's query string, the way every other detail
   // link on the page does.
   await expect(skeleton.locator("a.task-title")).toHaveAttribute(

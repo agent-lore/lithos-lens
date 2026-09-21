@@ -660,7 +660,30 @@
       <div class="task-row-meta"><span class="badge badge-open">open</span><span class="claim-chip claim-chip-unknown" data-claim-summary>claims unknown</span></div>
       <div class="claim-list" data-claim-list hidden></div>
     `;
+    // The short id leads the metadata group here exactly as it does on the
+    // rows `tasks/row.html` renders (§5.3). This is the ONE row no template
+    // built, and it is not transient: an unfiltered board keeps it until the
+    // reconcile replaces it, and a reconcile that fails leaves it standing. A
+    // row without the id is the very thing this surface was changed to stop
+    // showing, so the optimistic row states it too.
+    const meta = row.querySelector(".task-row-meta");
+    if (meta) meta.prepend(shortIdElement(taskId));
     list.prepend(row);
+  }
+
+  // The one short-id element (§5.3), built for a row no template rendered.
+  // DOM calls rather than markup: an id is an arbitrary non-empty string
+  // (§5.1) and this one goes into an ATTRIBUTE, where `escapeHtml` -- a
+  // textContent round-trip -- would leave a quote intact.
+  function shortIdElement(taskId) {
+    const code = document.createElement("code");
+    code.className = "task-short-id";
+    // The whole id in the tooltip, the 8-character prefix as selectable text:
+    // the same shape `templates/tasks/short_id.html` renders, so a skeleton
+    // row and the server's replacement for it read identically.
+    code.title = taskId;
+    code.textContent = String(taskId).slice(0, 8);
+    return code;
   }
 
   function updateClaim(message, claimed) {
