@@ -9,17 +9,23 @@
     {% if row.task.description %}
       <p>{{ row.task.description }}</p>
     {% endif %}
-    {#- The row's project (§5.4.1), resolved by `row_project_chips` — the one
-       §5B.1 reading the side panel's chip, the quick-switch strip and
-       `?project=` itself make. It leads the chip strip: a row carrying only
-       `metadata.project` (loom's issue-mirrored work) states the project the
-       filter matches instead of showing no chip at all, and a row whose two
+    {#- The row's project (§5.4.1), resolved by `row_project_chips` — the
+       §5B.1 value that WINS where a single one is needed, which is
+       `metadata.project`. It leads the strip: a row carrying only the
+       metadata convention (loom's issue-mirrored work) states the project
+       `?project=` matches instead of showing no chip at all, and one whose two
        conventions disagree leads with the metadata value rather than with the
-       tag value that lost. A project one of the tags below already spells out
-       is not repeated here — that tag chip IS the row's project chip, which is
-       why a tag-only row is unchanged. -#}
+       tag value that lost. The chip never yields its place to a tag — raw tag
+       order is upstream's, so a second project tag could otherwise stand in
+       front of the winner (§5B.8).
+
+       `row_tag_chips` is the rest of the strip: every tag except the one this
+       chip has already said, so each project is chipped exactly once. A
+       row with no `metadata.project` renders the strip it always has,
+       its own project tag chip included. -#}
     {% set project_chips = row_project_chips(row.task) %}
-    {% if project_chips or row.task.tags %}
+    {% set tag_chips = row_tag_chips(row.task) %}
+    {% if project_chips or tag_chips %}
       <div class="tag-list">
         {% for slug in project_chips %}
           {# Not a link: adding a project to the query is the strip's move, and
@@ -27,7 +33,7 @@
              is to say which project the row is in. #}
           <span class="tag-chip tag-chip-project" data-row-project="{{ slug }}" title="Project from metadata.project">project: {{ slug }}</span>
         {% endfor %}
-        {% for tag in row.task.tags %}
+        {% for tag in tag_chips %}
           {# "(empty tag)" for the same reason the active-filter chip names it:
              a task really can carry the empty tag, and a blank pill reads as a
              rendering bug rather than a filter you can click. #}

@@ -23,6 +23,7 @@ from lithos_lens.request_filters import (
     project_add_url,
     project_clear_url,
     project_remove_url,
+    tag_chip_class,
 )
 from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES
 
@@ -305,3 +306,19 @@ def test_a_slug_the_filter_cannot_carry_is_not_offered() -> None:
     added = len("&") + len("project=lithos-lens")
     over = _tag_query_of(MAX_FILTER_QUERY_BYTES - added) + "t"
     assert "query-size limit" in project_add_problem(_request(over), (), "lithos-lens")
+
+
+def test_a_tag_is_classed_a_project_by_the_configured_key() -> None:
+    """Regression (round-2 correctness/f-001): project STYLING reads the same
+    §5B.9 key as project resolution, because they answer the same question.
+
+    Hard-coding ``project:`` left a deployment keyed on ``proj`` with a row
+    whose only project chip was an unstyled tag — for a project ``?project=``
+    matches — while dressing an ordinary ``project:`` tag as a project it does
+    not belong to there.
+    """
+    assert tag_chip_class("project:influx") == "tag-chip tag-chip-project"
+    assert tag_chip_class("area:docs") == "tag-chip"
+
+    assert tag_chip_class("proj:influx", tag_key="proj") == "tag-chip tag-chip-project"
+    assert tag_chip_class("project:influx", tag_key="proj") == "tag-chip"

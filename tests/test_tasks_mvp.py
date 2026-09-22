@@ -613,10 +613,10 @@ def test_a_conflicting_rows_chip_leads_with_the_metadata_value(
 def test_a_tag_only_row_keeps_its_single_project_chip(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The tag convention was already chipped, so nothing about these rows may
-    change: ``project:influx`` renders as the project-styled tag chip it is,
-    linking to that tag's board, and the row adds no second chip repeating the
-    slug it already shows."""
+    """With no ``metadata.project`` there is nothing to lead with and nothing
+    to drop: ``project:influx`` renders as the project-styled tag chip it has
+    always been, linking to that tag's board, and the row adds no second chip
+    repeating the slug it already shows."""
     fake = TaskFakeLithosClient()
 
     with _client(lithos_lens_config_env, fake) as client:
@@ -627,6 +627,106 @@ def test_a_tag_only_row_keeps_its_single_project_chip(
     assert 'class="tag-chip tag-chip-project" href="/tasks?tag=project%3Ainflux"' in row
     # One project chip on the row, not the same slug said twice.
     assert row.count("tag-chip-project") == 1
+
+
+def test_the_metadata_chip_leads_a_multi_project_row(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (round-2 correctness/f-002): upstream tag ORDER is not §5B.1
+    precedence.
+
+    A task may belong to several projects at once (§5B.8). With ``primary``
+    stamped and ``project:secondary`` tagged ahead of ``project:primary``, a
+    chip that stood down because some tag spelled the metadata slug left the
+    row leading with ``secondary``. The winner leads, the other project keeps
+    its tag chip behind it, and neither project is chipped twice.
+    """
+    fake = TaskFakeLithosClient()
+    fake.tasks.append(
+        TaskRecord(
+            id="multi-project",
+            title="Multi-project task",
+            status="open",
+            created_by="planner",
+            created_at=_ago(minutes=20),
+            tags=("project:secondary", "project:primary"),
+            metadata={"project": "primary"},
+        )
+    )
+    fake.ready_ids.add("multi-project")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+
+    row = unescape(_board_row(response.text, "multi-project"))
+    assert 'data-row-project="primary"' in row
+    assert row.index("primary") < row.index("secondary")
+    # Each project once: the other one keeps its tag chip, the duplicate tag
+    # is gone, and two project chips is all the row has.
+    assert 'href="/tasks?tag=project%3Asecondary"' in row
+    assert "tag=project%3Aprimary" not in row
+    assert row.count("tag-chip-project") == 2
+
+
+def _use_project_tag_key(config_path: Path, tag_key: str) -> None:
+    """Point the deployment's tag convention at ``tag_key`` (§5B.9)."""
+    config_path.write_text(
+        config_path.read_text()
+        + f'\n[lithos-lens.tasks]\nproject_tag_key = "{tag_key}"\n'
+    )
+
+
+def test_a_configured_tag_key_is_chipped_as_the_project_it_spells(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (round-2 correctness/f-001): the whole row reads ONE §5B.9
+    key.
+
+    Under ``proj`` the styling still recognised only a literal ``project:``,
+    so a ``proj:influx`` row — which ``?project=influx`` matches — rendered
+    neither a metadata chip nor a project-styled tag chip: its project was on
+    the row, dressed as an ordinary tag. Both rows below state their project
+    exactly once, the tag-only one through its tag chip and the agreeing one
+    through the metadata chip that drops the duplicate.
+    """
+    _use_project_tag_key(lithos_lens_config_env, "proj")
+    fake = TaskFakeLithosClient()
+    for task_id, metadata in (("keyed-tag", {}), ("keyed-both", {"project": "influx"})):
+        fake.tasks.append(
+            TaskRecord(
+                id=task_id,
+                title=f"Task {task_id}",
+                status="open",
+                created_by="planner",
+                created_at=_ago(minutes=20),
+                tags=("proj:influx", "area:docs"),
+                metadata=metadata,
+            )
+        )
+        fake.ready_ids.add(task_id)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/tasks")
+        filtered = client.get("/tasks?project=influx")
+
+    tag_only = unescape(_board_row(response.text, "keyed-tag"))
+    assert (
+        'class="tag-chip tag-chip-project" href="/tasks?tag=proj%3Ainflux"' in tag_only
+    )
+    assert "data-row-project=" not in tag_only
+    assert tag_only.count("tag-chip-project") == 1
+
+    both = unescape(_board_row(response.text, "keyed-both"))
+    assert 'data-row-project="influx"' in both
+    # The duplicate tag is dropped under the configured key, so the project is
+    # stated once — and the ordinary tag beside it is untouched.
+    assert "tag=proj%3Ainflux" not in both
+    assert 'href="/tasks?tag=area%3Adocs"' in both
+    assert both.count("tag-chip-project") == 1
+
+    # Both rows are in the project they chip.
+    assert "Task keyed-tag" in filtered.text
+    assert "Task keyed-both" in filtered.text
 
 
 def test_a_gate_row_states_a_metadata_only_project_too(

@@ -74,7 +74,7 @@ from lithos_lens.request_filters import (
 )
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
-from lithos_lens.task_filtering import row_project_chips
+from lithos_lens.task_filtering import row_project_chips, row_tag_chips
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
@@ -212,15 +212,24 @@ def create_app(
     templates.env.globals["project_remove_url"] = project_remove_url
     templates.env.globals["project_clear_url"] = project_clear_url
     templates.env.globals["task_card_url"] = task_card_url
-    templates.env.globals["tag_chip_class"] = tag_chip_class
-    # A board row's project chip (§5.4.1): the §5B.1 reading of the task,
-    # metadata first, that the side panel's chip and the quick-switch strip
-    # already make. Bound to the configured tag key HERE — the tag half's key
-    # is config (§5B.9) and the row has no filters in hand — so the template
-    # renders a resolved project instead of deciding between the two
-    # conventions itself, which is how it came to render only the tag one.
+    # A board row's chips (§5.4.1), as one pair: the §5B.1 project the row
+    # states for itself — the metadata value, which wins where a single one is
+    # needed — and the tags that follow it, minus the one that would say that
+    # same project twice. Plus how a tag is CLASSED, which is the same question
+    # ("is this tag a project?") and so reads the same key.
+    #
+    # All three are bound to the configured tag key HERE — the key is config
+    # (§5B.9) and a row has no filters in hand — so no template decides between
+    # the two conventions, which is how the row came to render only the tag
+    # one, and no surface can class a tag by a key the resolution does not use.
+    templates.env.globals["tag_chip_class"] = partial(
+        tag_chip_class, tag_key=config.tasks.project_tag_key
+    )
     templates.env.globals["row_project_chips"] = partial(
         row_project_chips, tag_key=config.tasks.project_tag_key
+    )
+    templates.env.globals["row_tag_chips"] = partial(
+        row_tag_chips, tag_key=config.tasks.project_tag_key
     )
     # The side panel's fetch URL, built server-side per row (§5.5): the id
     # encoding and the preserved filters have one definition, in request_filters.
