@@ -14,7 +14,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | `lithos_lens.agent_picker` | S | 1 | 2 |
 | `lithos_lens.filter_options` | S | 1 | 1 |
 | `lithos_lens.normalizers` | S | 0 | 6 |
-| `lithos_lens.task_filtering` | M | 0 | 14 |
+| `lithos_lens.task_filtering` | M | 0 | 15 |
 | `lithos_lens.tasks` | L | 14 | 12 |
 | `lithos_lens.template_vocabulary` | XS | 0 | 3 |
 
@@ -40,6 +40,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 ### `lithos_lens.task_filtering`
 - def `invalid_project_metadata` — True when ``metadata.project`` is present but is not a string (§5B.1).
 - def `task_projects` — Every project slug a task claims under ``convention`` (§5B.1).
+- def `row_project_chips` — The projects a board ROW must chip for itself, in §5B.1 order (§5.4.1).
 - def `project_convention_conflict` — True when a task carries BOTH conventions and they disagree (§5B.1).
 - def `matches_agent` — Creator-OR-claimer agent match (§5.4.2).
 - def `matches_projects` — Multi-select project match: does the task belong to ANY selected project?

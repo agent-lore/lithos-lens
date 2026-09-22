@@ -255,6 +255,38 @@ rewritten client-side on every focus transition, so the client rebuilds it as
 markup rather than as text and the ids come back with it; a line that came back
 without them would contradict the markup the page shipped with.
 
+**Every row states its project**, and §5B.1 says which value that is where a
+single one is needed: `metadata.project` when present, else the
+`<project_tag_key>:<slug>` tag. A row's tag strip already renders the tag
+convention as the project-styled chip it is — a link to that tag's board — so
+the row LEADS that strip with a chip for every project no tag of its own
+spells out. In practice that is the metadata one, resolved by
+`row_project_chips` over `task_projects(convention="both")`: the same reading
+the side panel's chip, the quick-switch strip and `?project=` itself make, with
+the configured tag key bound once where the template environment is wired, so
+no template decides between the two conventions. Three consequences, each of
+which the tags-only row got wrong:
+
+- a row carrying only `metadata.project` — loom's issue-mirrored work, which
+  `?project=` has matched since `project_convention` was retired as a
+  membership knob — names the project it is filtered by, instead of rendering
+  no project chip at all;
+- a row whose two conventions DISAGREE leads with the metadata value rather
+  than stating only the tag value that lost, and keeps the tag chip beside it:
+  §5B.1 orders the two, it drops neither (the disagreement is separately
+  reported as `lens.tasks.project_convention_conflict`);
+- a row whose project is only tagged — or tagged and stamped alike — is chipped
+  exactly once, by the tag chip that was already there and still links to that
+  tag's board.
+
+The chip is not a link: ADDING a project to the query is the quick-switch
+strip's move and carries that strip's filter-budget rules with it, while this
+chip's job is to say which project the row is in. The Gates section's rows
+render the same strip and take the same chip. A row with no project under
+either convention renders none — REQUIREMENTS §5.4.1's `(no project)`
+placeholder is said out loud by the side panel (§5.6.1) and is not yet
+rendered on the board's rows.
+
 **Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
 can never become ready) and `cycle` (the blocking chain closes on itself) — and

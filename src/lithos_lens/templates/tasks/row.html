@@ -9,8 +9,24 @@
     {% if row.task.description %}
       <p>{{ row.task.description }}</p>
     {% endif %}
-    {% if row.task.tags %}
+    {#- The row's project (§5.4.1), resolved by `row_project_chips` — the one
+       §5B.1 reading the side panel's chip, the quick-switch strip and
+       `?project=` itself make. It leads the chip strip: a row carrying only
+       `metadata.project` (loom's issue-mirrored work) states the project the
+       filter matches instead of showing no chip at all, and a row whose two
+       conventions disagree leads with the metadata value rather than with the
+       tag value that lost. A project one of the tags below already spells out
+       is not repeated here — that tag chip IS the row's project chip, which is
+       why a tag-only row is unchanged. -#}
+    {% set project_chips = row_project_chips(row.task) %}
+    {% if project_chips or row.task.tags %}
       <div class="tag-list">
+        {% for slug in project_chips %}
+          {# Not a link: adding a project to the query is the strip's move, and
+             it carries the filter-budget rules (§5.4) with it. This chip's job
+             is to say which project the row is in. #}
+          <span class="tag-chip tag-chip-project" data-row-project="{{ slug }}" title="Project from metadata.project">project: {{ slug }}</span>
+        {% endfor %}
         {% for tag in row.task.tags %}
           {# "(empty tag)" for the same reason the active-filter chip names it:
              a task really can carry the empty tag, and a blank pill reads as a

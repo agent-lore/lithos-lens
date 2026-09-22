@@ -9,7 +9,8 @@ records, ``tasks.py`` never imports back — so the pair stays acyclic.
 
 Project resolution (§5B.1) sits here too: a task's project is a *derived*
 property read from ``metadata.project`` and/or a ``project:<slug>`` tag rather
-than a stored field — as do the two per-load reporting passes built on it
+than a stored field — as do the display reading a row's chip is drawn from
+(``row_project_chips``) and the two per-load reporting passes built on it
 (``project_universe`` for the filter dropdown, ``log_project_data_quality``
 for the convention-conflict warnings). ``tag_universe`` sits beside the first
 of them: a different vocabulary, built over the same loaded rows.
@@ -95,6 +96,45 @@ def task_projects(
             if tag_slug and tag_slug not in slugs:
                 slugs.append(tag_slug)
     return tuple(slugs)
+
+
+def row_project_chips(
+    task: TaskRecord,
+    *,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> tuple[str, ...]:
+    """The projects a board ROW must chip for itself, in §5B.1 order (§5.4.1).
+
+    A row states its project, and §5B.1 says which value that is where a single
+    one is needed: ``metadata.project`` when present, else the
+    ``<tag_key>:<slug>`` tag. A row's tag strip already names the tag half — a
+    ``project:<slug>`` tag renders as the project-styled chip it is, linking to
+    that tag's board — so what it cannot name, and what this returns, is every
+    slug the row claims that no tag of its own spells out.
+
+    In practice that is the metadata convention, and it is the whole of the
+    defect this closes: a row carrying ``metadata.project`` alone (loom's
+    issue-mirrored work, which ``?project=`` has matched since the membership
+    knob was retired) rendered NO project chip, and a row whose conventions
+    disagree rendered only the losing tag value. The slugs come back in
+    :func:`task_projects`' ``"both"`` order — metadata first — so the chip a
+    conflicting row leads with is the metadata one the rest of Lens resolves
+    to, with the tag chip still beside it: §5B.1 drops neither value, it
+    orders them.
+
+    A row whose conventions AGREE is chipped once, by its tag, rather than
+    twice with the same slug; a tag-only row is untouched. Read through
+    :func:`task_projects` rather than off ``metadata`` directly, so the row,
+    the side panel's chip, the quick-switch strip and what ``?project=``
+    matches are one reading of a task — a row cannot name a project the filter
+    would refuse, nor stay silent about one it would match.
+    """
+    tagged = task_projects(task, convention="tag", tag_key=tag_key)
+    return tuple(
+        slug
+        for slug in task_projects(task, convention="both", tag_key=tag_key)
+        if slug not in tagged
+    )
 
 
 def project_convention_conflict(

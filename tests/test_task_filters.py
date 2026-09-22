@@ -16,6 +16,7 @@ from lithos_lens.task_filtering import (
     matches_agent,
     matches_filters,
     project_convention_conflict,
+    row_project_chips,
     task_projects,
 )
 from lithos_lens.tasks import (
@@ -249,6 +250,61 @@ def test_invalid_project_metadata_flags_only_non_strings(
     metadata: dict[str, object], expected: bool
 ) -> None:
     assert invalid_project_metadata(_task(metadata=metadata)) is expected
+
+
+def test_a_row_chips_the_project_only_its_metadata_carries() -> None:
+    """§5B.1's row chip, and the case that had none: a task carrying
+    ``metadata.project`` alone (loom's issue-mirrored work) has no tag for the
+    row's tag strip to render, so the row must chip the project itself — the
+    same slug ``?project=`` has matched since the membership knob was
+    retired."""
+    assert row_project_chips(_task(metadata={"project": "lithos-loom"})) == (
+        "lithos-loom",
+    )
+
+
+def test_a_conflicting_rows_chip_is_the_metadata_value() -> None:
+    """When the two conventions disagree, §5B.1 says the single displayed value
+    is the metadata one. The tag chip keeps naming ``tagged`` beside it —
+    neither value is dropped — but the row leads with the winner rather than
+    stating only the loser."""
+    task = _task(tags=("project:tagged",), metadata={"project": "stamped"})
+
+    assert row_project_chips(task) == ("stamped",)
+
+
+def test_a_tag_only_row_is_chipped_by_its_tag_alone() -> None:
+    """The row's tag strip already renders ``project:<slug>`` as the
+    project-styled chip it is, so there is nothing for the row to add: the
+    resolved project and the tag are the same value, and chipping it twice
+    would be the only change a tag-only row saw."""
+    assert row_project_chips(_task(tags=("project:influx", "area:docs"))) == ()
+
+
+def test_agreeing_conventions_are_chipped_once() -> None:
+    """Tasks Lens creates write BOTH conventions (§5B.1), so the agreeing row
+    is the common one; its project is named once, by the tag chip."""
+    assert (
+        row_project_chips(
+            _task(tags=("project:influx",), metadata={"project": "influx"})
+        )
+        == ()
+    )
+
+
+def test_a_rows_chip_reads_the_configured_tag_key() -> None:
+    """The tag half's key is config (§5B.9). Under ``proj`` the
+    ``project:influx`` tag is an ordinary tag, so the metadata slug is still
+    the row's own chip — and ``proj:influx`` would name it instead."""
+    task = _task(tags=("project:influx",), metadata={"project": "influx"})
+
+    assert row_project_chips(task, tag_key="proj") == ("influx",)
+    assert row_project_chips(_task(tags=("proj:influx",)), tag_key="proj") == ()
+
+
+def test_a_projectless_row_chips_nothing() -> None:
+    assert row_project_chips(_task(tags=("area:docs",))) == ()
+    assert row_project_chips(_task(metadata={"project": ["influx"]})) == ()
 
 
 def test_project_filter_matches_either_convention() -> None:

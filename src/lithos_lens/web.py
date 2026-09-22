@@ -7,6 +7,7 @@ import logging
 from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -73,6 +74,7 @@ from lithos_lens.request_filters import (
 )
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
+from lithos_lens.task_filtering import row_project_chips
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
@@ -211,6 +213,15 @@ def create_app(
     templates.env.globals["project_clear_url"] = project_clear_url
     templates.env.globals["task_card_url"] = task_card_url
     templates.env.globals["tag_chip_class"] = tag_chip_class
+    # A board row's project chip (§5.4.1): the §5B.1 reading of the task,
+    # metadata first, that the side panel's chip and the quick-switch strip
+    # already make. Bound to the configured tag key HERE — the tag half's key
+    # is config (§5B.9) and the row has no filters in hand — so the template
+    # renders a resolved project instead of deciding between the two
+    # conventions itself, which is how it came to render only the tag one.
+    templates.env.globals["row_project_chips"] = partial(
+        row_project_chips, tag_key=config.tasks.project_tag_key
+    )
     # The side panel's fetch URL, built server-side per row (§5.5): the id
     # encoding and the preserved filters have one definition, in request_filters.
     templates.env.globals["panel_fragment_url"] = panel_fragment_url
