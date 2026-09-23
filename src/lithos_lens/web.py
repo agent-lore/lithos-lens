@@ -7,6 +7,7 @@ import logging
 from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -42,6 +43,7 @@ from lithos_lens.graph_routes import (
     register_graph_routes,
 )
 from lithos_lens.knowledge import (
+    KNOWLEDGE_PROJECT_TAG_KEY,
     render_markdown,
 )
 from lithos_lens.knowledge_routes import register_knowledge_routes
@@ -73,6 +75,7 @@ from lithos_lens.request_filters import (
 )
 from lithos_lens.state import AppState
 from lithos_lens.task_detail import TaskDetailData, load_task_detail
+from lithos_lens.task_filtering import row_project_chips, row_tag_chips
 from lithos_lens.tasks import (
     MAX_FILTER_QUERY_BYTES,
     MAX_FILTER_TAG_CHIPS,
@@ -210,7 +213,35 @@ def create_app(
     templates.env.globals["project_remove_url"] = project_remove_url
     templates.env.globals["project_clear_url"] = project_clear_url
     templates.env.globals["task_card_url"] = task_card_url
-    templates.env.globals["tag_chip_class"] = tag_chip_class
+    # A board row's chips (§5.4.1), as one pair: the §5B.1 project the row
+    # states for itself — the metadata value, which wins where a single one is
+    # needed — and the tags that follow it, minus the one that would say that
+    # same project twice. Plus how a TASK's tag is classed, which is the same
+    # question ("is this tag a project?") and so reads the same key.
+    #
+    # All three are bound to the configured tag key HERE — the key is config
+    # (§5B.9) and a row has no filters in hand — so no template decides between
+    # the two conventions, which is how the row came to render only the tag
+    # one, and no task surface can class a tag by a key the resolution does not
+    # use.
+    templates.env.globals["task_tag_chip_class"] = partial(
+        tag_chip_class, tag_key=config.tasks.project_tag_key
+    )
+    templates.env.globals["row_project_chips"] = partial(
+        row_project_chips, tag_key=config.tasks.project_tag_key
+    )
+    templates.env.globals["row_tag_chips"] = partial(
+        row_tag_chips, tag_key=config.tasks.project_tag_key
+    )
+    # Knowledge classes its tags by the LITERAL `project:` prefix, and gets its
+    # own global for it: `[tasks].project_tag_key` spells the TASK convention
+    # (§5B.9), while §5B.2 fixes the tag a project document carries. Sharing
+    # one classifier between the two made the task knob restyle note tags —
+    # under `project_tag_key = "proj"` a `project:influx` note lost its project
+    # styling and an unrelated `proj:other` gained it.
+    templates.env.globals["knowledge_tag_chip_class"] = partial(
+        tag_chip_class, tag_key=KNOWLEDGE_PROJECT_TAG_KEY
+    )
     # The side panel's fetch URL, built server-side per row (§5.5): the id
     # encoding and the preserved filters have one definition, in request_filters.
     templates.env.globals["panel_fragment_url"] = panel_fragment_url

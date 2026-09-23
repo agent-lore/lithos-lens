@@ -255,6 +255,44 @@ rewritten client-side on every focus transition, so the client rebuilds it as
 markup rather than as text and the ids come back with it; a line that came back
 without them would contradict the markup the page shipped with.
 
+**Every row states its project**, and §5B.1 says which value that is where a
+single one is needed: `metadata.project` when present, else the
+`<project_tag_key>:<slug>` tag. So the row's chip strip opens with
+`row_project_chips` — the metadata reading of the task, the value that WINS —
+and continues with `row_tag_chips`, every tag except the one that would say
+that same project a second time. Both are bound to the configured tag key
+where the template environment is wired, as is the CLASS a TASK tag chip wears
+(`task_tag_chip_class`, which answers the same question — is this tag a
+project? — and must not answer it from a different key). No template decides
+between the two conventions, and the row's reading is the one the side panel's
+chip, the quick-switch strip and `?project=` itself make. Four consequences,
+each of which the tags-only row got wrong:
+
+- a row carrying only `metadata.project` — loom's issue-mirrored work, which
+  `?project=` has matched since `project_convention` was retired as a
+  membership knob — names the project it is filtered by, instead of rendering
+  no project chip at all;
+- a row whose two conventions DISAGREE leads with the metadata value rather
+  than stating only the tag value that lost, and keeps the losing value's tag
+  chip behind it: §5B.1 orders the two, it drops neither (the disagreement is
+  separately reported as `lens.tasks.project_convention_conflict`);
+- a row belonging to SEVERAL projects (§5B.8) still leads with the metadata
+  one. The chip never stands down because some tag happens to spell the same
+  slug — upstream tag order is not precedence, and a second project tag would
+  otherwise stand in front of the winner. Only the duplicate tag is dropped,
+  matched on its parsed slug, so each project is chipped exactly once;
+- a row with no `metadata.project` renders exactly the strip it always had, its
+  own project tag chip — project-styled under the configured key, linking to
+  that tag's board — included.
+
+The metadata chip is not a link: ADDING a project to the query is the
+quick-switch strip's move and carries that strip's filter-budget rules with it,
+while this chip's job is to say which project the row is in. The Gates
+section's rows render the same strip and take the same chip. A row with no
+project under either convention renders none — REQUIREMENTS §5.4.1's
+`(no project)` placeholder is said out loud by the side panel (§5.6.1) and is
+not yet rendered on the board's rows.
+
 **Needs attention** applies seven ordered rules, most severe first. Two are
 intrinsic — `unsatisfiable` (a predecessor or gate was cancelled, so the task
 can never become ready) and `cycle` (the blocking chain closes on itself) — and
@@ -488,8 +526,16 @@ Filter behavior:
 - Existing `status`, `agent`, `since`, `created_since`, and `claimed_state`
   filters are preserved when clicking a tag, and carried across navigation into
   the detail and note views.
-- Tags with the `project:` prefix are rendered with distinct visual styling but
-  are otherwise filtered the same way as other tags.
+- TASK tags spelling a project under the configured `<project_tag_key>:`
+  prefix (§5B.9) are rendered with distinct visual styling but are otherwise
+  filtered the same way as other tags. The styling reads the CONFIGURED key,
+  not a hard-coded `project:`, so it marks the tags that actually decide
+  project membership in that deployment and no others. The Knowledge note
+  page's tag chips are classed separately, by the literal `project:` prefix
+  §5B.2 fixes for a project document: `[tasks].project_tag_key` spells the task
+  convention, so renaming it must not restyle a note's tags — the two surfaces
+  get two globals (`task_tag_chip_class`, `knowledge_tag_chip_class`) over the
+  one keyed helper.
 - A filter query beyond a fixed byte budget is **refused** with a banner
   offering an unfiltered link, rather than silently trimmed — a partially
   applied filter would render a board that misrepresents its own scope.

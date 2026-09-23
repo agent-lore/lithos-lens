@@ -9,10 +9,13 @@ records, ``tasks.py`` never imports back — so the pair stays acyclic.
 
 Project resolution (§5B.1) sits here too: a task's project is a *derived*
 property read from ``metadata.project`` and/or a ``project:<slug>`` tag rather
-than a stored field — as do the two per-load reporting passes built on it
-(``project_universe`` for the filter dropdown, ``log_project_data_quality``
-for the convention-conflict warnings). ``tag_universe`` sits beside the first
-of them: a different vocabulary, built over the same loaded rows.
+than a stored field — as do the display reading a row's chips are drawn from
+(``row_project_chips`` and ``row_tag_chips``, which between them chip each of a
+row's projects once, winner first) and the two per-load reporting passes built
+on it (``project_universe`` for the filter dropdown,
+``log_project_data_quality`` for the convention-conflict warnings).
+``tag_universe`` sits beside the first of them: a different vocabulary, built
+over the same loaded rows.
 """
 
 from __future__ import annotations
@@ -95,6 +98,66 @@ def task_projects(
             if tag_slug and tag_slug not in slugs:
                 slugs.append(tag_slug)
     return tuple(slugs)
+
+
+def row_project_chips(
+    task: TaskRecord,
+    *,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> tuple[str, ...]:
+    """The project a board ROW states for itself, leading its chips (§5.4.1).
+
+    §5B.1 settles which value a row shows where a single one is needed:
+    ``metadata.project`` when present, else the ``<tag_key>:<slug>`` tag. So
+    this is the METADATA reading of the task — the value that wins — and the
+    row leads with it whether the tags disagree (``stamped`` over a
+    ``project:tagged`` tag), agree, or name further projects of their own
+    (§5B.8). It is never suppressed on the strength of what the tags happen to
+    spell: raw tag order is upstream's, and letting the tags carry the chip is
+    what allowed ``secondary`` to stand in front of the winner.
+
+    The tags that follow are :func:`row_tag_chips`, which drops the tag this
+    chip has already said. Between the two, every project the row claims is
+    chipped exactly once and the metadata value is first.
+
+    A tuple rather than a string because the strip is a loop and a task states
+    at most one metadata project: no metadata is an empty position, not a chip
+    reading "".
+    """
+    return task_projects(task, convention="metadata", tag_key=tag_key)
+
+
+def row_tag_chips(
+    task: TaskRecord,
+    *,
+    tag_key: str = DEFAULT_PROJECT_TAG_KEY,
+) -> tuple[str, ...]:
+    """The tags a board row renders beside its project chip, in order (§5.4.1).
+
+    Every tag the task carries except one already said by
+    :func:`row_project_chips`: a ``<tag_key>:<slug>`` tag whose slug IS the
+    metadata project would chip that project a second time, and on a
+    multi-project task (§5B.8) the duplicate is what a reader would have to
+    scan past to find the winner. Every OTHER project tag stays — §5B.1 drops
+    neither convention's values — and follows the chip that won.
+
+    Matched on the PARSED slug, the way :func:`task_projects` reads a tag, so
+    padding inside the tag cannot hide the duplicate; and on the configured
+    key alone (§5B.9), so a deployment spelling its projects ``proj:`` does not
+    quietly drop a literal ``project:`` tag that is an ordinary tag there.
+
+    A row with no ``metadata.project`` renders exactly the strip it always
+    has, its own project tag chip included.
+    """
+    chipped = row_project_chips(task, tag_key=tag_key)
+    if not chipped:
+        return task.tags
+    prefix = f"{tag_key}:"
+    return tuple(
+        tag
+        for tag in task.tags
+        if not (tag.startswith(prefix) and tag[len(prefix) :].strip() in chipped)
+    )
 
 
 def project_convention_conflict(

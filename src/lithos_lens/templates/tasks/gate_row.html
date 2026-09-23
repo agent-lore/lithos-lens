@@ -22,10 +22,32 @@
     {% if gate.task.description %}
       <p>{{ gate.task.description }}</p>
     {% endif %}
-    {% if gate.task.tags %}
+    {#- The gate's project (§5.4.1), resolved by `row_project_chips` — the
+       §5B.1 value that WINS where a single one is needed, which is
+       `metadata.project`. It leads the strip: a gate carrying only the
+       metadata convention (loom's issue-mirrored work) states the project
+       `?project=` matches instead of showing no chip at all, and one whose two
+       conventions disagree leads with the metadata value rather than with the
+       tag value that lost. The chip never yields its place to a tag — raw tag
+       order is upstream's, so a second project tag could otherwise stand in
+       front of the winner (§5B.8).
+
+       `row_tag_chips` is the rest of the strip: every tag except the one this
+       chip has already said, so each project is chipped exactly once. A
+       gate with no `metadata.project` renders the strip it always has,
+       its own project tag chip included. -#}
+    {% set project_chips = row_project_chips(gate.task) %}
+    {% set tag_chips = row_tag_chips(gate.task) %}
+    {% if project_chips or tag_chips %}
       <div class="tag-list">
-        {% for tag in gate.task.tags %}
-          <a class="{{ tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag if tag else "(empty tag)" }}</a>
+        {% for slug in project_chips %}
+          {# Not a link: adding a project to the query is the strip's move, and
+             it carries the filter-budget rules (§5.4) with it. This chip's job
+             is to say which project the row is in. #}
+          <span class="tag-chip tag-chip-project" data-row-project="{{ slug }}" title="Project from metadata.project">project: {{ slug }}</span>
+        {% endfor %}
+        {% for tag in tag_chips %}
+          <a class="{{ task_tag_chip_class(tag) }}" href="{{ task_tag_url(request, tag) }}">{{ tag | format_tag if tag else "(empty tag)" }}</a>
         {% endfor %}
       </div>
     {% endif %}

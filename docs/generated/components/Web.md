@@ -46,7 +46,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `task_card_url` — Link a summary card to the board it actually counts.
 - def `tasks_url`
 - def `knowledge_tag_url` — Link a note-page tag chip to the ``/knowledge`` list filtered by it (§6.4).
-- def `tag_chip_class`
+- def `tag_chip_class` — The chip classes for a tag — project-styled when it spells a project.
 
 ### `lithos_lens.web`
 - def `create_app` — Create the Lithos Lens ASGI app.

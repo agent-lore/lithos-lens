@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = REPO_ROOT / "src/lithos_lens/templates"
 STYLESHEET = REPO_ROOT / "src/lithos_lens/static/lens.css"
 
-# A class token built by Jinja (`badge-{{ status }}`, `{{ tag_chip_class(t) }}`)
+# A class token built by Jinja (`badge-{{ status }}`, `{{ task_tag_chip_class(t) }}`)
 # is not a literal this scan can check, so it is skipped rather than guessed at.
 # Expressions are blanked to a sentinel BEFORE the attributes are found, for
 # two reasons. They contain spaces, so splitting first turns `badge-{{ x.y }}`
