@@ -412,6 +412,42 @@ def test_note_page_renders_metadata_chips_lede_and_tag_links(
     assert 'href="/knowledge?tag=kind%3Aplan"' in body
 
 
+def test_note_tag_styling_ignores_the_task_project_tag_key(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Regression (external f-001): the task knob does not restyle note tags.
+
+    ``[tasks].project_tag_key`` spells the TASK convention (§5B.9); a project
+    knowledge document carries the literal ``project:<slug>`` tag (§5B.2).
+    Classing both surfaces through ONE configured global crossed the two
+    contracts: under ``proj`` a ``project:influx`` note tag lost its project
+    styling and an unrelated ``proj:other`` gained it.
+    """
+    lithos_lens_config_env.write_text(
+        lithos_lens_config_env.read_text()
+        + '\n[lithos-lens.tasks]\nproject_tag_key = "proj"\n'
+    )
+    fake = TaskFakeLithosClient()
+    fake.notes["keyed-note"] = NoteRecord(
+        id="keyed-note",
+        title="Keyed Note",
+        content="Body.",
+        tags=("project:influx", "proj:other"),
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/keyed-note")
+
+    assert response.status_code == 200
+    body = response.text
+    assert (
+        'class="tag-chip tag-chip-project" href="/knowledge?tag=project%3Ainflux"'
+        in body
+    )
+    assert 'class="tag-chip" href="/knowledge?tag=proj%3Aother"' in body
+    assert body.count("tag-chip-project") == 1
+
+
 def test_note_page_omits_scope_chip_for_shared_notes(
     lithos_lens_config_env: Path,
 ) -> None:

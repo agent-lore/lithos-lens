@@ -640,13 +640,18 @@ def knowledge_tag_url(tag: str) -> str:
 def tag_chip_class(tag: str, *, tag_key: str = DEFAULT_PROJECT_TAG_KEY) -> str:
     """The chip classes for a tag — project-styled when it spells a project.
 
-    Keyed on the CONFIGURED tag convention (§5B.9), bound where the template
-    environment is wired, because the styling and the project reading beside
-    it have to agree about what a project tag is. They did not: this recognised
-    the literal ``project:`` alone, so a deployment spelling its projects
+    Keyed on the tag convention of the SURFACE asking, bound where the template
+    environment is wired, because the styling and the project reading beside it
+    have to agree about what a project tag is. They did not: this recognised
+    the literal ``project:`` alone, so a deployment spelling its task projects
     ``proj:`` left ``proj:influx`` as an unstyled tag — a row whose only chip
     for a project ``?project=`` matches did not look like one — while styling
     an ordinary ``project:influx`` tag as a project it is not.
+
+    Two bindings, not one: ``task_tag_chip_class`` takes the configured
+    ``[tasks].project_tag_key`` (§5B.9), and ``knowledge_tag_chip_class`` takes
+    the literal ``project:`` a project DOCUMENT carries (§5B.2). One shared
+    global made the task knob restyle note tags, which is a different contract.
     """
     classes = ["tag-chip"]
     if tag.startswith(f"{tag_key}:"):

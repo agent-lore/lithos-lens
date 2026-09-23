@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # bound is a page-size safety net, not an operator dial.
 RELATED_RENDER_CAP = 50
 
+# The tag a project knowledge document carries (REQUIREMENTS.md §5B.2), and so
+# the prefix the note page's tag chips are project-styled by. Fixed, NOT
+# ``[tasks].project_tag_key``: that knob spells the TASK convention (§5B.9), and
+# a deployment renaming it must not restyle the tags on its notes.
+KNOWLEDGE_PROJECT_TAG_KEY = "project"
+
 # Schemes an agent-authored link may use (REQUIREMENTS.md §6.2). Anything else —
 # including ``javascript:``, ``data:``, ``file:``, ``vbscript:``, ``ftp:`` — is
 # rejected; relative links (no scheme *and* no authority) are always allowed.

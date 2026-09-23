@@ -261,12 +261,12 @@ single one is needed: `metadata.project` when present, else the
 `row_project_chips` — the metadata reading of the task, the value that WINS —
 and continues with `row_tag_chips`, every tag except the one that would say
 that same project a second time. Both are bound to the configured tag key
-where the template environment is wired, as is the CLASS a tag chip wears
-(`tag_chip_class`, which answers the same question — is this tag a project? —
-and must not answer it from a different key). No template decides between the
-two conventions, and the row's reading is the one the side panel's chip, the
-quick-switch strip and `?project=` itself make. Four consequences, each of
-which the tags-only row got wrong:
+where the template environment is wired, as is the CLASS a TASK tag chip wears
+(`task_tag_chip_class`, which answers the same question — is this tag a
+project? — and must not answer it from a different key). No template decides
+between the two conventions, and the row's reading is the one the side panel's
+chip, the quick-switch strip and `?project=` itself make. Four consequences,
+each of which the tags-only row got wrong:
 
 - a row carrying only `metadata.project` — loom's issue-mirrored work, which
   `?project=` has matched since `project_convention` was retired as a
@@ -526,11 +526,16 @@ Filter behavior:
 - Existing `status`, `agent`, `since`, `created_since`, and `claimed_state`
   filters are preserved when clicking a tag, and carried across navigation into
   the detail and note views.
-- Tags spelling a project under the configured `<project_tag_key>:` prefix
-  (§5B.9) are rendered with distinct visual styling but are otherwise
+- TASK tags spelling a project under the configured `<project_tag_key>:`
+  prefix (§5B.9) are rendered with distinct visual styling but are otherwise
   filtered the same way as other tags. The styling reads the CONFIGURED key,
   not a hard-coded `project:`, so it marks the tags that actually decide
-  project membership in that deployment and no others.
+  project membership in that deployment and no others. The Knowledge note
+  page's tag chips are classed separately, by the literal `project:` prefix
+  §5B.2 fixes for a project document: `[tasks].project_tag_key` spells the task
+  convention, so renaming it must not restyle a note's tags — the two surfaces
+  get two globals (`task_tag_chip_class`, `knowledge_tag_chip_class`) over the
+  one keyed helper.
 - A filter query beyond a fixed byte budget is **refused** with a banner
   offering an unfiltered link, rather than silently trimmed — a partially
   applied filter would render a board that misrepresents its own scope.

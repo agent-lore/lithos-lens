@@ -118,8 +118,12 @@
       {% endif %}
       {% if note.tags %}
         <div class="tag-list">
+          {#- Knowledge's own classifier, not the task one: a project document
+             carries the literal `project:<slug>` tag (§5B.2), while
+             `[tasks].project_tag_key` spells the TASK convention (§5B.9). One
+             shared classifier let the task knob restyle these chips. -#}
           {% for tag in note.tags %}
-            <a class="{{ tag_chip_class(tag) }}" href="{{ knowledge_tag_url(tag) }}">{{ tag | format_tag }}</a>
+            <a class="{{ knowledge_tag_chip_class(tag) }}" href="{{ knowledge_tag_url(tag) }}">{{ tag | format_tag }}</a>
           {% endfor %}
         </div>
       {% endif %}
