@@ -6,8 +6,14 @@
 <article class="task-row" id="task-row-{{ row.task.id }}" data-task-row data-task-id="{{ row.task.id }}" data-task-status="{{ row.task.status }}" data-panel-url="{{ panel_fragment_url(request, row.task.id) }}" title="{{ row.task.title }}">
   <div>
     <a class="task-title" href="{{ task_detail_url(request, row.task.id) }}">{{ row.task.title }}</a>
+    {#- The description, as markdown and cut to `description_preview_chars`
+       (§5.3): the row shows whole leading blocks and links on to the detail
+       page for the rest. One partial, shared with the Gates row and the side
+       panel, so the three cannot truncate differently. -#}
     {% if row.task.description %}
-      <p>{{ row.task.description }}</p>
+      {% with description = row.task.description, description_more_url = task_detail_url(request, row.task.id) %}
+        {% include "tasks/description.html" %}
+      {% endwith %}
     {% endif %}
     {#- The row's project (§5.4.1), resolved by `row_project_chips` — the
        §5B.1 value that WINS where a single one is needed, which is

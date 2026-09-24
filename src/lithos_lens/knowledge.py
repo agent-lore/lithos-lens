@@ -9,6 +9,11 @@ provenance, typed edges) with link/edge endpoints shown by title rather than
 bare id. The frontmatter-driven metadata chips + lede (K1-S3) live in the
 sibling ``knowledge_metadata`` module to keep this one under the god-module
 ceiling; later slices add the search view models.
+
+It also owns the SAFE MARKDOWN itself, which is not only a note concern: a task
+description is agent-authored markdown too (§5.3), so the description renderer
+and the block-boundary cut a board row shows live here beside the note renderer
+they share their escaping and link-scheme rules with.
 """
 
 from __future__ import annotations
@@ -108,7 +113,154 @@ def render_markdown(text: str, from_id: str = "") -> str:
             "markdown render failed; falling back to escaped plaintext",
             exc_info=True,
         )
-        return f'<pre class="markdown-fallback">{escape(body)}</pre>'
+        return _escaped_plaintext(body)
+
+
+def _escaped_plaintext(body: str) -> str:
+    """The one fallback both renderers below degrade to, never raw passthrough."""
+    return f'<pre class="markdown-fallback">{escape(body)}</pre>'
+
+
+# ── Task descriptions (§5.3) ───────────────────────────────────────────
+#
+# A task description is agent-authored markdown as much as a note body is —
+# loom, and the operator's own Claude Code sessions, write a lead-in paragraph,
+# bold labels, numbered lists and fenced code into it — so it is rendered by
+# the SAME machinery, with the same raw-HTML escaping, the same §6.2 link
+# allow-list and the same escaped-plaintext fallback. It lives here beside them
+# for exactly that reason: a second parser configured "the same way" would be a
+# second security boundary, free to drift from this one.
+#
+# Two deliberate differences from a note body:
+#
+# - ``breaks`` is ON. A note is a document; a description is often hand-typed
+#   lines, and CommonMark's soft break would run those together into one
+#   paragraph — losing the shape the author actually wrote.
+# - NO ``[[wiki-link]]`` splicing. That is a note concept (§6.3): the resolver
+#   route cross-checks the SOURCE note's own outgoing links, and a task has
+#   none. ``[[…]]`` in a description is the literal text it is.
+DESCRIPTION_MARKDOWN = (
+    MarkdownIt("commonmark", {"html": False, "linkify": False, "breaks": True})
+    .enable("table")
+    .enable("strikethrough")
+)
+DESCRIPTION_MARKDOWN.validateLink = _validate_link
+
+
+def render_description(text: str) -> str:
+    """Render a task description's markdown to safe HTML (§5.3).
+
+    Same guarantees as :func:`render_markdown`: raw HTML is escaped, link
+    schemes outside the §6.2 allow-list are neutralized, and a parse that
+    raises degrades to HTML-escaped plaintext rather than to passthrough.
+    """
+    body = text or ""
+    try:
+        return DESCRIPTION_MARKDOWN.render(body)
+    except Exception:
+        logger.warning(
+            "description render failed; falling back to escaped plaintext",
+            exc_info=True,
+        )
+        return _escaped_plaintext(body)
+
+
+@dataclass(frozen=True)
+class DescriptionPreview:
+    """A task description as one surface shows it (§5.3).
+
+    ``text`` is the markdown SOURCE of what is shown — the whole description,
+    or the leading blocks that fit the budget — and ``source`` is the whole of
+    it, carried only when a cut was made so a row can hold the full body hidden
+    beside its preview. The two ``*_html`` properties are the only way a
+    template gets either: rendering is not something a caller can opt out of by
+    reaching for the source, which is what keeps every surface's description
+    inside the same escaping and link-scheme rules.
+    """
+
+    text: str
+    source: str = ""
+    truncated: bool = False
+
+    @property
+    def html(self) -> str:
+        """The rendered body the surface shows."""
+        return render_description(self.text)
+
+    @property
+    def full_html(self) -> str:
+        """The rendered WHOLE description; empty unless a cut was made."""
+        return render_description(self.source)
+
+
+def description_preview(
+    text: str, *, limit: int, truncate: bool = True
+) -> DescriptionPreview:
+    """Cut a description to ``limit`` characters at a BLOCK boundary (§5.3).
+
+    The cut is made on the markdown SOURCE, taking whole top-level blocks —
+    paragraphs, list blocks, fenced code, tables, headings — while the running
+    length stays inside the budget, so a preview never ends halfway through a
+    list, a fence or a table (the rendered halves of which are not even valid
+    markup on their own). The first block is always kept: a description whose
+    opening paragraph alone exceeds the budget is previewed by that paragraph,
+    not by nothing.
+
+    ``limit <= 0`` is the documented "never truncate" setting, and
+    ``truncate=False`` is a surface saying it shows the canonical full view —
+    the detail page, which is where "see more" leads. ``truncated`` says
+    whether a block was dropped — which is what puts "see more" on the row —
+    and is False whenever the whole description is returned, including when a
+    single oversized block is all there was to show.
+    """
+    body = text or ""
+    if not truncate or limit <= 0 or len(body) <= limit:
+        return DescriptionPreview(body)
+    blocks = _top_level_blocks(body)
+    if len(blocks) <= 1:
+        return DescriptionPreview(body)
+    kept: list[str] = []
+    length = 0
+    for block in blocks:
+        # The separator counts: the budget is on what the row shows, and the
+        # blank line between two blocks is part of it.
+        cost = len(block) + (2 if kept else 0)
+        if kept and length + cost > limit:
+            break
+        kept.append(block)
+        length += cost
+    if len(kept) == len(blocks):
+        return DescriptionPreview(body)
+    return DescriptionPreview("\n\n".join(kept), source=body, truncated=True)
+
+
+def _top_level_blocks(body: str) -> list[str]:
+    """The source text of each top-level block of ``body``, in order.
+
+    Taken from the parser's own line map rather than by splitting on blank
+    lines, because a fenced block, a list and a table all CONTAIN blank lines —
+    and a cut inside one of them is the thing the block boundary exists to
+    prevent. Nested tokens (a list's items, a paragraph's inline run) carry a
+    non-zero ``level`` and are skipped: the list is the block, not its items.
+
+    A parse that raises yields no blocks, which the caller reads as "show the
+    whole description" — the same direction every other failure here degrades.
+    """
+    try:
+        tokens = DESCRIPTION_MARKDOWN.parse(body, {})
+    except Exception:
+        logger.warning("description block scan failed; not truncating", exc_info=True)
+        return []
+    lines = body.splitlines()
+    blocks = []
+    for token in tokens:
+        if token.level or token.nesting < 0 or not token.map:
+            continue
+        start, end = token.map
+        block = "\n".join(lines[start:end]).strip("\n")
+        if block.strip():
+            blocks.append(block)
+    return blocks
 
 
 # ── Wiki-link tokenizer (K1-S2) ────────────────────────────────────────

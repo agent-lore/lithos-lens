@@ -9,8 +9,15 @@ must hold, or an operator's `LITHOS_LENS_*` override silently does nothing:
    documented-but-dead entries, no read-but-undocumented ones.
 
 Both are checked by static analysis (AST for the code, table parsing for the
-docs) so the test never imports the runtime package or depends on the ambient
-environment.
+docs) so those two tests never import the runtime package or depend on the
+ambient environment.
+
+A third test rounds the pair off, and this one does load config: a documented
+override that is read but does not BEAT the file value is as silent a no-op as
+one the code never reads at all. ``description_preview_chars`` (§5.3) is the
+case that exercises it, because it is the first ``[tasks]`` knob whose valid
+range reaches down to 0 — the documented "never truncate" setting — and an
+override pass that rejected 0 would fail only at that one value.
 """
 
 from __future__ import annotations
@@ -18,6 +25,11 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+
+import pytest
+
+from lithos_lens.config import load_config
+from lithos_lens.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PY = REPO_ROOT / "src" / "lithos_lens" / "config.py"
@@ -116,3 +128,45 @@ def test_readme_documents_exactly_config_env_vars() -> None:
     assert not dead, (
         f"README documents env vars that config.py never reads: {sorted(dead)}"
     )
+
+
+def test_env_override_beats_the_file_value_for_the_description_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of an override: the file says one thing, the environment wins."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n'
+        "[lithos-lens.tasks]\ndescription_preview_chars = 200\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS", "900")
+
+    assert load_config(config_path).tasks.description_preview_chars == 900
+
+
+def test_zero_survives_the_env_override_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0 is the documented opt-out (never truncate), not an unset value: the
+    shared ``>= 1`` floor every other [tasks] override carries must not reject
+    it, and the truthiness gate on the raw string must not drop it."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n'
+        "[lithos-lens.tasks]\ndescription_preview_chars = 600\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS", "0")
+
+    assert load_config(config_path).tasks.description_preview_chars == 0
+
+
+def test_a_negative_preview_budget_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor is 0, not "anything": a negative budget names no behaviour."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text('[lithos-lens]\nenvironment = "test"\n')
+    monkeypatch.setenv("LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS", "-1")
+
+    with pytest.raises(ConfigError, match="DESCRIPTION_PREVIEW_CHARS"):
+        load_config(config_path)

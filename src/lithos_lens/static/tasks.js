@@ -558,6 +558,33 @@
     desiredTaskId = selectedTaskId;
   }
 
+  // ── Description "see more" (§5.3) ───────────────────────────────────────
+  //
+  // Progressive enhancement over an ordinary link to the detail page. A row
+  // whose description was cut carries the FULL rendered body beside the
+  // preview, hidden, so expanding it costs no request and no navigation —
+  // which is the point: the operator reading a board wants the rest of one
+  // description, not a different page. Nothing here renders markdown; both
+  // bodies are the server's own markup, so the expanded row and the detail
+  // page cannot disagree.
+  //
+  // Returns whether it handled the click. A row whose markup does not carry
+  // both bodies is NOT swallowed: the anchor is a real link to the detail
+  // page, and letting it navigate is the same answer the no-JS path gives.
+  function toggleDescription(toggle) {
+    const group = toggle.closest("[data-description]");
+    if (!group) return false;
+    const preview = group.querySelector("[data-task-description]");
+    const full = group.querySelector("[data-task-description-full]");
+    if (!preview || !full) return false;
+    const expanded = !full.hidden;
+    full.hidden = expanded;
+    preview.hidden = !expanded;
+    toggle.textContent = expanded ? "\u2026 see more" : "\u2026 see less";
+    toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+    return true;
+  }
+
   function handlePanelClick(event) {
     // Modified and non-primary clicks keep their browser meaning: open in a
     // new tab has to stay open in a new tab, on a row as much as on a link.
@@ -569,6 +596,14 @@
     if (target.closest("[data-panel-close]")) {
       event.preventDefault();
       closePanel();
+      return;
+    }
+    // Before the panel's "every link is an ordinary link" rule below: the panel
+    // shows a truncated description too, and its "see more" expands in place
+    // exactly as a row's does rather than leaving the board.
+    const descriptionToggle = target.closest("[data-description-toggle]");
+    if (descriptionToggle && toggleDescription(descriptionToggle)) {
+      event.preventDefault();
       return;
     }
     // Inside the panel, every link is an ordinary link — Expand navigates to

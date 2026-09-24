@@ -44,6 +44,7 @@ from lithos_lens.graph_routes import (
 )
 from lithos_lens.knowledge import (
     KNOWLEDGE_PROJECT_TAG_KEY,
+    description_preview,
     render_markdown,
 )
 from lithos_lens.knowledge_routes import register_knowledge_routes
@@ -201,6 +202,12 @@ def create_app(
     # one definition, because it is the id the rest of the ecosystem types.
     templates.env.filters["short_id"] = short_id
     templates.env.filters["render_markdown"] = render_markdown
+    # A description is agent-authored markdown too (§5.3), and this ONE global
+    # answers both what a surface shows of one and how it is rendered — bound
+    # to the configured budget, so no template decides either for itself.
+    templates.env.globals["description_preview"] = partial(
+        description_preview, limit=config.tasks.description_preview_chars
+    )
     templates.env.globals["task_tag_url"] = task_tag_url
     templates.env.globals["task_tag_clear_url"] = task_tag_clear_url
     templates.env.globals["created_since_clear_url"] = created_since_clear_url

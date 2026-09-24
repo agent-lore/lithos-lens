@@ -54,6 +54,7 @@ from lithos_lens.config_schema import (
     DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S,
     DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES,
     DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS,
+    DEFAULT_TASKS_DESCRIPTION_PREVIEW_CHARS,
     DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES,
     DEFAULT_TASKS_FRONTIER_LIMIT,
     DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS,
@@ -64,6 +65,7 @@ from lithos_lens.config_schema import (
     MAX_KNOWLEDGE_LANDING_LIMIT,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
     MAX_TASKS_INT_KNOBS,
+    MIN_TASKS_INT_KNOBS,
     EventsConfig,
     GraphConfig,
     HealthConfig,
@@ -112,6 +114,7 @@ __all__ = [
     "DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S",
     "DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES",
     "DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS",
+    "DEFAULT_TASKS_DESCRIPTION_PREVIEW_CHARS",
     "DEFAULT_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
     "DEFAULT_TASKS_FRONTIER_LIMIT",
     "DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS",
@@ -122,6 +125,7 @@ __all__ = [
     "MAX_KNOWLEDGE_LANDING_LIMIT",
     "MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
     "MAX_TASKS_INT_KNOBS",
+    "MIN_TASKS_INT_KNOBS",
     "EventsConfig",
     "ConfigError",
     "GraphConfig",
@@ -314,46 +318,49 @@ def _parse_tasks(data: Any, config_path: Path) -> TasksConfig:
         raise ConfigError(f"{config_path}: [lithos-lens.tasks] must be a table")
     warn_deprecated_knobs(data, config_path, "lithos-lens.tasks")
 
-    # Every [tasks] knob below is a positive integer parsed the same way, so
-    # one local binding keeps the eight of them readable. Those whose value
+    # Every [tasks] knob below is a bounded integer parsed the same way, so
+    # one local binding keeps the nine of them readable. Those whose value
     # ends up in a ``timedelta`` also carry a ceiling (see MAX_TASKS_INT_KNOBS,
     # which is the list — do not infer it from the key names). The rest are
     # unbounded: auto_refresh_interval_s (a browser poll interval),
     # frontier_limit (a row cap pushed upstream) and the deprecated
-    # visible_cap.
-    def positive_int(key: str, default: int) -> int:
+    # visible_cap. The floor is 1 unless MIN_TASKS_INT_KNOBS names another.
+    def bounded_int(key: str, default: int) -> int:
         return optional_int(
             data,
             key,
             default,
             config_path,
             "lithos-lens.tasks",
-            minimum=1,
+            minimum=MIN_TASKS_INT_KNOBS.get(key, 1),
             maximum=MAX_TASKS_INT_KNOBS.get(key),
         )
 
     return TasksConfig(
-        auto_refresh_interval_s=positive_int(
+        auto_refresh_interval_s=bounded_int(
             "auto_refresh_interval_s", DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S
         ),
-        visible_cap=positive_int("visible_cap", DEFAULT_TASKS_VISIBLE_CAP),
-        frontier_limit=positive_int("frontier_limit", DEFAULT_TASKS_FRONTIER_LIMIT),
-        default_time_range_days=positive_int(
+        visible_cap=bounded_int("visible_cap", DEFAULT_TASKS_VISIBLE_CAP),
+        frontier_limit=bounded_int("frontier_limit", DEFAULT_TASKS_FRONTIER_LIMIT),
+        default_time_range_days=bounded_int(
             "default_time_range_days", DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
         ),
-        gate_waiting_attention_hours=positive_int(
+        description_preview_chars=bounded_int(
+            "description_preview_chars", DEFAULT_TASKS_DESCRIPTION_PREVIEW_CHARS
+        ),
+        gate_waiting_attention_hours=bounded_int(
             "gate_waiting_attention_hours", DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS
         ),
-        claim_expiring_soon_minutes=positive_int(
+        claim_expiring_soon_minutes=bounded_int(
             "claim_expiring_soon_minutes", DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES
         ),
-        stale_open_age_days=positive_int(
+        stale_open_age_days=bounded_int(
             "stale_open_age_days", DEFAULT_TASKS_STALE_OPEN_AGE_DAYS
         ),
-        unclaimed_ready_age_minutes=positive_int(
+        unclaimed_ready_age_minutes=bounded_int(
             "unclaimed_ready_age_minutes", DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES
         ),
-        agent_inactive_days=positive_int(
+        agent_inactive_days=bounded_int(
             "agent_inactive_days", DEFAULT_TASKS_AGENT_INACTIVE_DAYS
         ),
         dispatch_trigger_tag_prefixes=optional_str_list(
@@ -575,6 +582,9 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
     )
     stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
+    description_preview_env = os.environ.get(
+        "LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS", ""
+    )
     # Deprecated (§4.4) and read anyway: "ignored" says what CONSULTS the
     # value, not that a value an operator set may be dropped. No "" default,
     # like ``trigger_prefixes_env`` below: WRITING the knob is what the notice
@@ -644,6 +654,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         field: _parse_env_int(
             f"LITHOS_LENS_TASKS_{field.upper()}",
             raw,
+            minimum=MIN_TASKS_INT_KNOBS.get(field, 1),
             maximum=MAX_TASKS_INT_KNOBS.get(field),
         )
         for field, raw in (
@@ -652,6 +663,7 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             ("gate_waiting_attention_hours", gate_wait_env),
             ("claim_expiring_soon_minutes", claim_expiry_env),
             ("stale_open_age_days", stale_open_env),
+            ("description_preview_chars", description_preview_env),
             ("agent_inactive_days", agent_inactive_env),
             ("unclaimed_ready_age_minutes", unclaimed_env),
         )
@@ -767,13 +779,15 @@ def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     return new_cfg
 
 
-def _parse_env_int(name: str, value: str, *, maximum: int | None = None) -> int:
+def _parse_env_int(
+    name: str, value: str, *, minimum: int = 1, maximum: int | None = None
+) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
         raise ConfigError(f"{name} must be an integer") from exc
-    if parsed < 1:
-        raise ConfigError(f"{name} must be >= 1")
+    if parsed < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}")
     if maximum is not None and parsed > maximum:
         raise ConfigError(f"{name} must be <= {maximum}")
     return parsed

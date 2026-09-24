@@ -124,6 +124,16 @@
       </div>
     </header>
 
+    {#- The description (§5.3), as markdown and cut to the same budget the
+       board's rows use — this panel IS a row's answer without leaving the
+       board, so it shows what a row shows and its "see more" leads to the
+       same full page Expand does. -#}
+    {% if detail.task.description %}
+      {% with description = detail.task.description, description_more_url = task_detail_url(request, detail.task.id) %}
+        {% include "tasks/description.html" %}
+      {% endwith %}
+    {% endif %}
+
     {% if detail.breadcrumb.ancestors or detail.breadcrumb.incomplete %}
       <nav class="detail-breadcrumb" data-panel-parent aria-label="Parent tasks">
         {% if detail.breadcrumb.incomplete %}<span data-breadcrumb-incomplete title="The chain above could not be walked to a root">&hellip;</span>{% endif %}

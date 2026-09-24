@@ -19,8 +19,12 @@
 <article class="task-row gate-row" id="task-row-{{ gate.task.id }}" data-gate-row data-task-id="{{ gate.task.id }}" data-panel-url="{{ panel_fragment_url(request, gate.task.id) }}" data-gate-type="{{ gate.type_slug }}" title="{{ gate.task.title }}">
   <div>
     <a class="task-title" href="{{ task_detail_url(request, gate.task.id) }}">{{ gate.task.title }}</a>
+    {#- Markdown, cut to the same budget as an ordinary row's (§5.3): a gate is
+       a task, and it is the same partial. -#}
     {% if gate.task.description %}
-      <p>{{ gate.task.description }}</p>
+      {% with description = gate.task.description, description_more_url = task_detail_url(request, gate.task.id) %}
+        {% include "tasks/description.html" %}
+      {% endwith %}
     {% endif %}
     {#- The gate's project (§5.4.1), resolved by `row_project_chips` — the
        §5B.1 value that WINS where a single one is needed, which is

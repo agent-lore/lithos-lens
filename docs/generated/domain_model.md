@@ -28,6 +28,11 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class DescriptionPreview {
+    +text str
+    +source str
+    +truncated bool
+  }
   class NoteMetadata {
     +note_type str
     +status str
