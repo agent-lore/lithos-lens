@@ -291,6 +291,8 @@ def test_the_preview_of_an_untruncated_description_needs_no_link_context() -> No
         "\x0c",  # FORM FEED
         "\x85",  # NEXT LINE
         "\x1c",  # FILE SEPARATOR
+        "\x1d",  # GROUP SEPARATOR
+        "\x1e",  # RECORD SEPARATOR
     ],
 )
 def test_a_unicode_separator_inside_a_paragraph_is_not_a_block_boundary(
@@ -313,6 +315,39 @@ def test_a_unicode_separator_inside_a_paragraph_is_not_a_block_boundary(
     assert preview.truncated is True
 
 
+def test_an_indented_code_blocks_trailing_spaces_survive_the_cut() -> None:
+    """A block the cut decided to keep WHOLE must reach the row whole.
+
+    Trailing spaces on the last line are ignorable after a paragraph and are
+    CONTENT in an indented code block, so trimming them reflowed the very block
+    the boundary rule exists to protect. The proof is the rendering: the
+    ``<pre>`` on the row is the one the full body shows, character for
+    character.
+    """
+    first = "    code  "
+    body = f"{first}\n\n" + "T" * 400
+
+    preview = description_preview(body, limit=20)
+
+    assert preview.truncated is True
+    assert preview.text == first
+    assert "<pre><code>code  \n</code></pre>" in preview.html
+    assert "<pre><code>code  \n</code></pre>" in preview.full_html
+
+
+def test_a_blank_line_a_block_swallowed_is_still_a_separator() -> None:
+    """The other side of the same trim: a bullet list's map ends AFTER the
+    blank line that closed it, and that line is separator, not content. Leaving
+    it in would spend budget on a line the preview does not show and end the
+    preview source on a blank line."""
+    body = "- a\n- b\n\n" + "T" * 400
+
+    preview = description_preview(body, limit=20)
+
+    assert preview.text == "- a\n- b"
+    assert preview.truncated is True
+
+
 def test_a_paragraphs_own_trailing_whitespace_is_not_trimmed_away() -> None:
     """Only the inter-block SEPARATOR is trimmed — the newline and the blank
     lines after a block, blank meaning spaces and tabs. A non-breaking space is
@@ -326,15 +361,21 @@ def test_a_paragraphs_own_trailing_whitespace_is_not_trimmed_away() -> None:
     assert preview.truncated is True
 
 
-def test_a_crlf_description_cuts_at_the_same_block_boundary() -> None:
-    """``\r\n`` is ONE line boundary to the parser (``normalize`` rewrites it),
-    so a Windows-authored description must number its lines the same way while
-    the offsets stay those of the original text."""
-    body = "First para\r\n\r\nSecond para\r\n\r\n" + "T" * 400
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_every_real_line_ending_cuts_at_the_same_block_boundary(
+    newline: str,
+) -> None:
+    """The other half of the alphabet: these three ARE line endings, and each
+    is ONE of them — ``normalize`` rewrites ``\r\n`` and a lone ``\r`` to
+    ``\n`` before the parser counts lines. A description authored on Windows
+    (or by something emitting bare CR) must therefore number its lines exactly
+    as an LF one does, while the offsets stay those of the original text.
+    """
+    body = f"First para{newline}{newline}Second para{newline}{newline}" + "T" * 400
 
     preview = description_preview(body, limit=200)
 
-    assert preview.text == "First para\r\n\r\nSecond para"
+    assert preview.text == f"First para{newline}{newline}Second para"
     assert preview.truncated is True
     assert body.startswith(preview.text)
 

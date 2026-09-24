@@ -38,7 +38,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
-| Knowledge | 4 | 1323 | 987 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
+| Knowledge | 4 | 1331 | 997 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
 | LithosClient | 5 | 2698 | 2148 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 4 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 80 | 59 | 1 | 4 | 0.80 | 3 (`lithos_lens.state.AppState.__init__`) | 0 |
@@ -49,7 +49,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **54**, lines: **22643**, SLOC: **17243**
+- Modules: **54**, lines: **22651**, SLOC: **17253**
 - Largest module: `lithos_lens.tasks` (846 lines)
 - Modules over 800 lines: **4**
   - `lithos_lens.config`
@@ -59,7 +59,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **698**, cyclomatic > 10: **41**
+- Functions: **699**, cyclomatic > 10: **41**
 
 Top 10 most complex functions:
 
@@ -87,4 +87,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **80** (87 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.07** (46951 test lines / 22643 source lines)
+- Test-to-source line ratio: **2.07** (46992 test lines / 22651 source lines)

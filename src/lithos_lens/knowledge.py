@@ -123,13 +123,11 @@ def _escaped_plaintext(body: str) -> str:
 
 # ── Task descriptions (§5.3) ───────────────────────────────────────────
 #
-# A task description is agent-authored markdown as much as a note body is —
-# loom, and the operator's own Claude Code sessions, write a lead-in paragraph,
-# bold labels, numbered lists and fenced code into it — so it is rendered by
-# the SAME machinery, with the same raw-HTML escaping, the same §6.2 link
-# allow-list and the same escaped-plaintext fallback. It lives here beside them
-# for exactly that reason: a second parser configured "the same way" would be a
-# second security boundary, free to drift from this one.
+# A task description is agent-authored markdown as much as a note body is, so
+# it is rendered by the SAME machinery: the same raw-HTML escaping, the same
+# §6.2 link allow-list, the same escaped-plaintext fallback. It lives here
+# beside them for exactly that reason — a second parser configured "the same
+# way" would be a second security boundary, free to drift from this one.
 #
 # Two deliberate differences from a note body:
 #
@@ -137,8 +135,7 @@ def _escaped_plaintext(body: str) -> str:
 #   lines, and CommonMark's soft break would run those together into one
 #   paragraph — losing the shape the author actually wrote.
 # - NO ``[[wiki-link]]`` splicing. That is a note concept (§6.3): the resolver
-#   route cross-checks the SOURCE note's own outgoing links, and a task has
-#   none. ``[[…]]`` in a description is the literal text it is.
+#   cross-checks the SOURCE note's own outgoing links, and a task has none.
 DESCRIPTION_MARKDOWN = (
     MarkdownIt("commonmark", {"html": False, "linkify": False, "breaks": True})
     .enable("table")
@@ -150,17 +147,15 @@ DESCRIPTION_MARKDOWN.validateLink = _validate_link
 def render_description(text: str, *, link_context: str = "") -> str:
     """Render a task description's markdown to safe HTML (§5.3).
 
-    Same guarantees as :func:`render_markdown`: raw HTML is escaped, link
-    schemes outside the §6.2 allow-list are neutralized, and a parse that
-    raises degrades to HTML-escaped plaintext rather than to passthrough.
+    Same guarantees as :func:`render_markdown`: raw HTML escaped, the §6.2
+    link-scheme allow-list, escaped plaintext if the parse raises.
 
     ``link_context`` is the WHOLE description when ``text`` is a preview cut
-    out of it. A CommonMark reference definition (``[id]: https://…``) can sit
-    anywhere in a document, including after the paragraph that uses it — and a
-    preview that ends before it would render ``[link][id]`` as literal text
-    where the full body renders an anchor. So the definitions are collected
-    from the whole description and handed to the preview's own parse, which is
-    what keeps a cut from changing what the markdown MEANS.
+    out of it. A reference definition (``[id]: https://…``) may sit anywhere,
+    including after the paragraph using it, so a preview ending before it would
+    render ``[link][id]`` as literal text where the full body renders an
+    anchor. Its definitions are collected and handed to the preview's own
+    parse, which is what keeps a cut from changing what the markdown MEANS.
     """
     body = text or ""
     try:
@@ -184,10 +179,8 @@ class DescriptionPreview:
     ``text`` is the markdown SOURCE of what is shown — the whole description,
     or the leading blocks that fit the budget — and ``source`` is the whole of
     it, carried only when a cut was made so a row can hold the full body hidden
-    beside its preview. The two ``*_html`` properties are the only way a
-    template gets either: rendering is not something a caller can opt out of by
-    reaching for the source, which is what keeps every surface's description
-    inside the same escaping and link-scheme rules.
+    beside its preview. The ``*_html`` properties are the only way a template
+    gets either, so no surface can opt out of the escaping rules.
     """
 
     text: str
@@ -198,9 +191,8 @@ class DescriptionPreview:
     def html(self) -> str:
         """The rendered body the surface shows.
 
-        Rendered against the WHOLE description's reference definitions, so a
-        retained paragraph's ``[link][id]`` resolves to the anchor the full
-        body shows rather than to the literal text a fragment would produce.
+        Against the WHOLE description's reference definitions, so a retained
+        ``[link][id]`` resolves to the anchor the full body shows.
         """
         return render_description(self.text, link_context=self.source)
 
@@ -218,17 +210,15 @@ def description_preview(
     The cut is made on the markdown SOURCE, taking whole top-level blocks —
     paragraphs, list blocks, fenced code, tables, headings — while the running
     length stays inside the budget, so a preview never ends halfway through a
-    list, a fence or a table (the rendered halves of which are not even valid
-    markup on their own). The first block is always kept: a description whose
-    opening paragraph alone exceeds the budget is previewed by that paragraph,
-    not by nothing.
+    list, a fence or a table (whose rendered halves are not even valid markup).
+    The first block is always kept: a description whose opening paragraph alone
+    exceeds the budget is previewed by that paragraph, not by nothing.
 
     ``limit <= 0`` is the documented "never truncate" setting, and
     ``truncate=False`` is a surface saying it shows the canonical full view —
-    the detail page, which is where "see more" leads. ``truncated`` says
-    whether a block was dropped — which is what puts "see more" on the row —
-    and is False whenever the whole description is returned, including when a
-    single oversized block is all there was to show.
+    the detail page, where "see more" leads. ``truncated`` says whether a block
+    was DROPPED, which is what puts "see more" on the row: it is False whenever
+    the whole description is returned, a single oversized block included.
     """
     body = text or ""
     if not truncate or limit <= 0 or len(body) <= limit:
@@ -249,23 +239,21 @@ def description_preview(
 def _block_cuts(body: str) -> list[int]:
     """Every offset in ``body`` a preview may legally end at, in order.
 
-    One per top-level block: the length of the source PREFIX that ends with
-    that block, trailing whitespace removed. Offsets into the original text,
-    not reassembled block texts, and that distinction is the whole point —
+    One per top-level block: the length of the source PREFIX ending with that
+    block. Offsets into the ORIGINAL text, not reassembled block texts, and
+    that distinction is the whole point —
 
     - the budget then counts the separators the author actually wrote (two
       adjacent blocks with no blank line between them cost what they cost, not
       what a rebuilt ``\n\n`` join would have cost);
-    - and everything BETWEEN the blocks survives into the preview. A CommonMark
-      reference definition emits no token of its own, so a rebuilt preview
-      dropped it and rendered the retained ``[link][id]`` as literal text.
+    - and everything BETWEEN the blocks survives into the preview. A reference
+      definition emits no token of its own, so a rebuilt preview dropped it and
+      rendered the retained ``[link][id]`` as literal text.
 
-    Block boundaries come from the parser's own line map rather than from
-    splitting on blank lines, because a fenced block, a list and a table all
-    CONTAIN blank lines — and a cut inside one of them is the thing this
-    exists to prevent. Nested tokens (a list's items, a paragraph's inline run)
-    carry a non-zero ``level`` and are skipped: the list is the block, not its
-    items.
+    Boundaries come from the parser's line map, not from splitting on blank
+    lines: a fence, a list and a table all CONTAIN blank lines. Nested tokens
+    (a list's items, a paragraph's inline run) carry a non-zero ``level`` and
+    are skipped — the list is the block, not its items.
 
     A parse that raises yields no cuts, which the caller reads as "show the
     whole description" — the same direction every other failure here degrades.
@@ -280,37 +268,57 @@ def _block_cuts(body: str) -> list[int]:
     for token in tokens:
         if token.level or token.nesting < 0 or not token.map:
             continue
-        end = token.map[1]
-        offset = starts[end] if end < len(starts) else len(body)
-        # Only the inter-block separator is trimmed — the newline that ends the
-        # block and any blank lines after it, a blank line being spaces and
-        # tabs only. NOT ``rstrip()``, which strips every Unicode space and so
-        # ate a paragraph's own trailing NBSP; and what it can still take from
-        # the final content line — trailing spaces — is never syntax there,
-        # since a hard break needs a line after it to break onto.
-        cut = len(body[:offset].rstrip(" \t\r\n"))
+        cut = _content_end(body, starts, token.map[0], token.map[1])
         if cut and (not cuts or cut > cuts[-1]):
             cuts.append(cut)
     return cuts
 
 
+def _content_end(body: str, starts: list[int], first: int, past: int) -> int:
+    """Offset just past the last CONTENT character of lines ``[first, past)``.
+
+    Two things are dropped, and only these: the newline terminating the
+    block's last line, and any wholly blank line (spaces and tabs only) the
+    parser folded into the range — a bullet list's map ends AFTER the blank
+    line that closed it, and a separator the preview does not show must not
+    spend its budget.
+
+    What is NOT dropped is the last content line's own trailing spaces or tabs:
+    they are content in an indented code block (``"    code  "`` renders with
+    both spaces inside the ``<pre>``), and stripping them reflowed a block the
+    cut had just decided to take WHOLE.
+
+    A range with no content line answers 0 — "no cut here".
+    """
+    line = min(past, len(starts))
+    while line > first:
+        begin = starts[line - 1]
+        stop = starts[line] if line < len(starts) else len(body)
+        # The line without its terminator — and nothing else, so a Unicode
+        # separator inside it stays put.
+        content = body[begin:stop].rstrip("\r\n")
+        if content.strip(" \t"):
+            return begin + len(content)
+        line -= 1
+    return 0
+
+
 #: The line boundaries markdown-it recognizes, and only those: ``normalize``
-#: rewrites ``\r\n`` and a lone ``\r`` to ``\n`` and then splits on ``\n``.
-#: Python's ``str.splitlines`` additionally breaks on ``\v``, ``\f``, ``\x1c``
-#: -- ``\x1e``, ``\x85``, ``\u2028`` and ``\u2029``, none of which end a line
-#: for the parser — so using it to map a token's line numbers back onto the
-#: source put every offset after such a character out of step with the block it
-#: was meant to bound, and the cut landed INSIDE a paragraph.
+#: rewrites ``\r\n`` and a lone ``\r`` to ``\n``, then lines are split on
+#: ``\n``. Python's ``str.splitlines`` also breaks on ``\v``, ``\f``,
+#: ``\x1c``--``\x1e``, ``\x85``, ``\u2028`` and ``\u2029``, none of which end
+#: a line for the parser — so mapping token line numbers through it put every
+#: offset after such a character out of step with the block it bounded, and
+#: the cut landed INSIDE a paragraph.
 _LINE_BREAK_RE = re.compile(r"\r\n|\r|\n")
 
 
 def _line_starts(body: str) -> list[int]:
     """Offset in ``body`` where each of the PARSER's lines begins.
 
-    Indexed the way ``token.map`` is: entry ``i`` is the start of line ``i`` in
-    the text markdown-it parsed. A ``\r\n`` is one boundary, so a CRLF source
-    keeps the same line numbering as the normalized text the parser saw while
-    the offsets stay those of the original.
+    Indexed the way ``token.map`` is: entry ``i`` starts line ``i`` of the text
+    markdown-it parsed. ``\r\n`` is ONE boundary, so a CRLF source numbers its
+    lines as the normalized text does while the offsets stay the original's.
     """
     return [0] + [match.end() for match in _LINE_BREAK_RE.finditer(body)]
 
