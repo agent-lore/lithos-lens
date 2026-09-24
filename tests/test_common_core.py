@@ -582,6 +582,35 @@ def test_duration_knob_rejects_a_value_over_its_ceiling(
         load_config(config_path)
 
 
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [
+        # The knob whose domain reaches down to 0, where a boolean is not even
+        # obviously wrong: `true` loaded as a ONE-character preview budget,
+        # which renders every description as a "see more" link and nothing else.
+        ("tasks", "description_preview_chars"),
+        # The same hole on a knob with a >= 1 floor, because the fix belongs to
+        # `optional_int` and not to one section's parser.
+        ("tasks", "frontier_limit"),
+        ("graph", "max_tasks"),
+    ],
+)
+def test_an_integer_knob_rejects_a_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str, key: str
+) -> None:
+    """`bool` is a subclass of `int`, so a plain isinstance check took `true`
+    for the integer 1 and every bound then accepted it. A boolean names no
+    value an operator meant, so it fails at load with the key named."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        f'[lithos-lens]\nenvironment = "test"\n[lithos-lens.{section}]\n{key} = true\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError, match=key):
+        load_config(config_path)
+
+
 def test_config_rejects_a_time_range_wider_than_the_lookback_ceiling(
     tmp_path: Path,
 ) -> None:

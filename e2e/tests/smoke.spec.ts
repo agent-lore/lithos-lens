@@ -270,6 +270,49 @@ test("a page shorter than the viewport still fills it", async ({ page }) => {
   expect(body).toBeGreaterThanOrEqual(viewport);
 });
 
+test('a cut description expands in place on "see more"', async ({ page }) => {
+  // §5.3, in the only place the two halves of the progressive enhancement
+  // actually meet: the SERVER's markup and the REAL tasks.js. Every other
+  // test of this mocks one side — the Node harness fabricates the elements it
+  // toggles, and the Python tests read the markup — so a hook renamed on one
+  // side alone leaves them all green while the click navigates away.
+  await page.goto("/tasks?since=2026-08-01");
+
+  const row = page.locator('[data-task-row][data-task-id="lens-graph-view"]');
+  const preview = row.locator("[data-task-description]");
+  const full = row.locator("[data-task-description-full]");
+  const toggle = row.locator("[data-description-toggle]");
+
+  // The board's baseline: the preview is markup (its numbered list), the rest
+  // of the description is present but hidden, and the link is a real link to
+  // the detail page — which is the whole no-JavaScript path.
+  await expect(preview.getByRole("listitem").first()).toBeVisible();
+  await expect(full).toBeHidden();
+  await expect(toggle).toHaveAttribute("href", /\/tasks\/lens-graph-view/);
+  await expect(toggle).toContainText("see more");
+
+  const before = page.url();
+  await toggle.click();
+
+  // Expanded IN PLACE: the tail of the description is on screen, the board is
+  // still the page, and the control now offers the way back.
+  await expect(full).toBeVisible();
+  await expect(full).toContainText("a task appears in exactly one section");
+  await expect(preview).toBeHidden();
+  await expect(toggle).toContainText("see less");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(page.url()).toBe(before);
+  // …and the row's own click behaviour is untouched by it: expanding a
+  // description is not selecting the task.
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+
+  await toggle.click();
+
+  await expect(full).toBeHidden();
+  await expect(preview).toBeVisible();
+  await expect(toggle).toContainText("see more");
+});
+
 test("epic strip rolls the subtree up and scopes the board", async ({
   page,
 }) => {

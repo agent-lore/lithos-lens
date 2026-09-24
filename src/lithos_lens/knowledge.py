@@ -147,16 +147,28 @@ DESCRIPTION_MARKDOWN = (
 DESCRIPTION_MARKDOWN.validateLink = _validate_link
 
 
-def render_description(text: str) -> str:
+def render_description(text: str, *, link_context: str = "") -> str:
     """Render a task description's markdown to safe HTML (§5.3).
 
     Same guarantees as :func:`render_markdown`: raw HTML is escaped, link
     schemes outside the §6.2 allow-list are neutralized, and a parse that
     raises degrades to HTML-escaped plaintext rather than to passthrough.
+
+    ``link_context`` is the WHOLE description when ``text`` is a preview cut
+    out of it. A CommonMark reference definition (``[id]: https://…``) can sit
+    anywhere in a document, including after the paragraph that uses it — and a
+    preview that ends before it would render ``[link][id]`` as literal text
+    where the full body renders an anchor. So the definitions are collected
+    from the whole description and handed to the preview's own parse, which is
+    what keeps a cut from changing what the markdown MEANS.
     """
     body = text or ""
     try:
-        return DESCRIPTION_MARKDOWN.render(body)
+        env: dict[str, Any] = {}
+        if link_context and link_context != body:
+            DESCRIPTION_MARKDOWN.parse(link_context, env)
+            env = {"references": env.get("references", {})}
+        return DESCRIPTION_MARKDOWN.render(body, env)
     except Exception:
         logger.warning(
             "description render failed; falling back to escaped plaintext",
@@ -184,8 +196,13 @@ class DescriptionPreview:
 
     @property
     def html(self) -> str:
-        """The rendered body the surface shows."""
-        return render_description(self.text)
+        """The rendered body the surface shows.
+
+        Rendered against the WHOLE description's reference definitions, so a
+        retained paragraph's ``[link][id]`` resolves to the anchor the full
+        body shows rather than to the literal text a fragment would produce.
+        """
+        return render_description(self.text, link_context=self.source)
 
     @property
     def full_html(self) -> str:
@@ -216,34 +233,41 @@ def description_preview(
     body = text or ""
     if not truncate or limit <= 0 or len(body) <= limit:
         return DescriptionPreview(body)
-    blocks = _top_level_blocks(body)
-    if len(blocks) <= 1:
+    cuts = _block_cuts(body)
+    if len(cuts) <= 1:
         return DescriptionPreview(body)
-    kept: list[str] = []
-    length = 0
-    for block in blocks:
-        # The separator counts: the budget is on what the row shows, and the
-        # blank line between two blocks is part of it.
-        cost = len(block) + (2 if kept else 0)
-        if kept and length + cost > limit:
+    kept = cuts[0]
+    for cut in cuts[1:]:
+        if cut > limit:
             break
-        kept.append(block)
-        length += cost
-    if len(kept) == len(blocks):
+        kept = cut
+    if kept >= cuts[-1]:
         return DescriptionPreview(body)
-    return DescriptionPreview("\n\n".join(kept), source=body, truncated=True)
+    return DescriptionPreview(body[:kept], source=body, truncated=True)
 
 
-def _top_level_blocks(body: str) -> list[str]:
-    """The source text of each top-level block of ``body``, in order.
+def _block_cuts(body: str) -> list[int]:
+    """Every offset in ``body`` a preview may legally end at, in order.
 
-    Taken from the parser's own line map rather than by splitting on blank
-    lines, because a fenced block, a list and a table all CONTAIN blank lines —
-    and a cut inside one of them is the thing the block boundary exists to
-    prevent. Nested tokens (a list's items, a paragraph's inline run) carry a
-    non-zero ``level`` and are skipped: the list is the block, not its items.
+    One per top-level block: the length of the source PREFIX that ends with
+    that block, trailing whitespace removed. Offsets into the original text,
+    not reassembled block texts, and that distinction is the whole point —
 
-    A parse that raises yields no blocks, which the caller reads as "show the
+    - the budget then counts the separators the author actually wrote (two
+      adjacent blocks with no blank line between them cost what they cost, not
+      what a rebuilt ``\n\n`` join would have cost);
+    - and everything BETWEEN the blocks survives into the preview. A CommonMark
+      reference definition emits no token of its own, so a rebuilt preview
+      dropped it and rendered the retained ``[link][id]`` as literal text.
+
+    Block boundaries come from the parser's own line map rather than from
+    splitting on blank lines, because a fenced block, a list and a table all
+    CONTAIN blank lines — and a cut inside one of them is the thing this
+    exists to prevent. Nested tokens (a list's items, a paragraph's inline run)
+    carry a non-zero ``level`` and are skipped: the list is the block, not its
+    items.
+
+    A parse that raises yields no cuts, which the caller reads as "show the
     whole description" — the same direction every other failure here degrades.
     """
     try:
@@ -251,16 +275,20 @@ def _top_level_blocks(body: str) -> list[str]:
     except Exception:
         logger.warning("description block scan failed; not truncating", exc_info=True)
         return []
-    lines = body.splitlines()
-    blocks = []
+    # Offset each line starts at, plus the end of the text, so a block's
+    # exclusive end line maps straight onto a prefix length.
+    starts = [0]
+    for line in body.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    cuts: list[int] = []
     for token in tokens:
         if token.level or token.nesting < 0 or not token.map:
             continue
-        start, end = token.map
-        block = "\n".join(lines[start:end]).strip("\n")
-        if block.strip():
-            blocks.append(block)
-    return blocks
+        end = min(token.map[1], len(starts) - 1)
+        cut = len(body[: starts[end]].rstrip())
+        if cut and (not cuts or cut > cuts[-1]):
+            cuts.append(cut)
+    return cuts
 
 
 # ── Wiki-link tokenizer (K1-S2) ────────────────────────────────────────

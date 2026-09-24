@@ -31,7 +31,11 @@ import pytest
 
 from lithos_lens import knowledge
 from lithos_lens.config import load_config
-from lithos_lens.knowledge import description_preview, render_description
+from lithos_lens.knowledge import (
+    description_preview,
+    render_description,
+    render_markdown,
+)
 from tests.test_task_detail import _client
 from tests.test_tasks_mvp import TaskFakeLithosClient, _add_gate
 
@@ -54,6 +58,11 @@ MARKDOWN_DESCRIPTION = dedent(
     The closing paragraph.
     """
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATES = REPO_ROOT / "src" / "lithos_lens" / "templates"
+STATIC = REPO_ROOT / "src" / "lithos_lens" / "static"
 
 
 def _markdown_body(html: str, *, index: int = 0) -> str:
@@ -81,23 +90,86 @@ def test_description_renders_every_markdown_element() -> None:
     assert "<p>The closing paragraph.</p>" in html
 
 
-def test_description_escapes_raw_html_and_neutralises_hostile_links() -> None:
+def test_description_escapes_raw_html_as_visible_text() -> None:
     """Exactly what ``render_markdown`` does to a note body (§6.2): a
     description is agent-written too, and the board is not a place to discover
-    that the second renderer was configured more loosely than the first."""
+    that the second renderer was configured more loosely than the first.
+
+    ESCAPED, character for character — not merely absent. Dropping the tag
+    would satisfy "no live markup reached the browser" while losing text the
+    author wrote, and a reader could not tell which had happened."""
     html = render_description(
-        "<script>alert(1)</script>\n\n"
-        '<img src=x onerror="alert(1)">\n\n'
-        "[click](javascript:alert(1))"
+        '<script>alert(1)</script>\n\n<img src=x onerror="alert(1)">'
     )
 
-    assert "<script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
-    assert "onerror" not in html or "&lt;img" in html
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
+    assert "<script" not in html
     assert "<img" not in html
-    # The anchor is refused outright rather than emitted with a live scheme.
-    assert "javascript:" not in html.replace("javascript:alert(1)", "")
+
+
+# The §6.2 corpus, as the note renderer's own tests spell it: what may become
+# an anchor (the three allowed schemes, plus relative destinations) and what
+# may not (every other scheme, and the protocol-relative forms of issue #41).
+ALLOWED_DESTINATIONS = (
+    "https://example.com",
+    "http://x.com",
+    "mailto:a@b.com",
+    "/tasks/abc",
+    "docs/note.md",
+    "#section",
+    "./sibling.md",
+)
+REFUSED_DESTINATIONS = (
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "  javascript:alert(1)",
+    "ftp://example.com",
+    "vbscript:msgbox",
+    "file:///etc/passwd",
+    "tel:+15551234",
+    "data:text/html;base64,PHNjcmlwdD4=",
+    "//evil.example/x",
+    "///evil.example/x",
+    "  //evil.example/x",
+)
+
+
+@pytest.mark.parametrize("url", ALLOWED_DESTINATIONS + REFUSED_DESTINATIONS)
+def test_a_description_link_is_judged_exactly_as_a_note_link_is(url: str) -> None:
+    """The allow-list is SHARED, and this is what says so: both renderers are
+    asked the same question and must give the same answer, byte for byte.
+
+    A test that only tried ``javascript:`` would stay green with
+    ``validateLink`` unwired, because markdown-it's own default validator
+    rejects that one — and descriptions would quietly start emitting anchors
+    for ``ftp:``, ``data:`` and ``//evil.example/…``.
+    """
+    markup = f"[x]({url})"
+
+    assert render_description(markup) == render_markdown(markup)
+
+
+@pytest.mark.parametrize("url", ALLOWED_DESTINATIONS)
+def test_an_allow_listed_description_link_becomes_an_anchor(url: str) -> None:
+    """Guard against the differential above passing because NEITHER renderer
+    emits anchors any more."""
+    assert f'<a href="{url}">x</a>' in render_description(f"[x]({url})")
+
+
+@pytest.mark.parametrize("url", REFUSED_DESTINATIONS)
+def test_a_refused_description_link_emits_no_anchor(url: str) -> None:
+    html = render_description(f"[x]({url})")
+
     assert "<a " not in html
+    assert "href" not in html
+
+
+def test_a_description_image_may_not_point_off_site_either() -> None:
+    """The same hole on the image path — an off-site pixel leaks the reader's
+    IP, and a board row is a place an agent-written description is rendered
+    unattended."""
+    assert "<img" not in render_description("![x](//evil.example/pixel.png)")
 
 
 def test_description_falls_back_to_escaped_plaintext_when_the_parser_raises(
@@ -154,6 +226,70 @@ def test_preview_takes_whole_blocks_up_to_the_budget() -> None:
     assert preview.text == "\n\n".join(["A" * 60, "B" * 60, "C" * 60])
 
 
+def test_the_budget_counts_the_separators_the_author_actually_wrote() -> None:
+    """The cut is a PREFIX of the source, not a rebuilt join of block texts.
+
+    A heading and the paragraph under it need no blank line between them, so
+    the two occupy exactly 200 source characters and both fit a 200 budget. A
+    preview reassembled with a synthetic ``\n\n`` between every block charges
+    two characters nobody wrote and drops the paragraph.
+    """
+    body = "# H\n" + "P" * 196 + "\n\nTail"
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.text == "# H\n" + "P" * 196
+    assert preview.truncated is True
+
+
+def test_a_reference_definition_before_its_use_survives_the_cut() -> None:
+    """A ``[id]: …`` line emits no block token of its own. Rebuilding the
+    preview out of token texts dropped it, and the row then showed literal
+    ``[link][id]`` where the full body showed a link."""
+    body = "[id]: https://example.com\n\nUse [link][id].\n\n" + "T" * 400
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.truncated is True
+    assert preview.text == "[id]: https://example.com\n\nUse [link][id]."
+    assert '<a href="https://example.com">link</a>' in preview.html
+
+
+def test_a_reference_definition_after_its_use_still_renders_the_link() -> None:
+    """CommonMark lets the definition come last, so a cut before it leaves the
+    retained paragraph with no way to resolve its own link. The preview is
+    rendered against the WHOLE description's definitions, so the row shows the
+    anchor the detail page shows rather than markup the author did not write."""
+    body = "Use [link][id].\n\n" + "T" * 400 + "\n\n[id]: https://example.com"
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.truncated is True
+    assert preview.text == "Use [link][id]."
+    assert '<a href="https://example.com">link</a>' in preview.html
+    assert "[link][id]" not in preview.html
+
+
+def test_the_preview_of_an_untruncated_description_needs_no_link_context() -> None:
+    """``source`` is empty unless a cut was made, and an empty context must not
+    silently blank the body it renders."""
+    preview = description_preview("Use [link][id].\n\n[id]: https://x.test", limit=0)
+
+    assert preview.truncated is False
+    assert '<a href="https://x.test">link</a>' in preview.html
+
+
+@pytest.mark.parametrize("limit", [1, 20, 45, 60, 90, 120, 200])
+def test_a_preview_is_always_a_prefix_of_the_description(limit: int) -> None:
+    """The structural form of "the cut is made on the source": whatever the
+    budget, what the row shows is the description's own opening characters —
+    never a reassembly of them, which is where a changed separator or a
+    dropped reference definition can only come from."""
+    preview = description_preview(MARKDOWN_DESCRIPTION, limit=limit)
+
+    assert MARKDOWN_DESCRIPTION.startswith(preview.text)
+
+
 def test_preview_never_cuts_inside_a_list() -> None:
     """The headline edge: block two is a 500-character list under a 200 budget,
     so the row shows block one and the link — never half a list."""
@@ -168,18 +304,37 @@ def test_preview_never_cuts_inside_a_list() -> None:
     assert preview.text == lead
 
 
-def test_preview_never_cuts_inside_a_fenced_block_or_a_table() -> None:
+def test_preview_never_cuts_inside_a_fenced_block() -> None:
+    """A fence is one block however many blank lines it contains: half of one
+    is not even valid markup — the closing ``` would be missing."""
     fence = "```python\n" + "print('x')\n" * 30 + "```"
-    table = "| a | b |\n|---|---|\n" + "| 1 | 2 |\n" * 20
-    body = f"Lead-in.\n\n{fence}\n\n{table}"
+    body = f"Lead-in.\n\n{fence}\n\nTail paragraph."
 
     preview = description_preview(body, limit=200)
 
     assert preview.text == "Lead-in."
     assert preview.truncated is True
-    # Neither a dangling fence nor a headerless table row survives the cut.
     assert "```" not in preview.text
+
+
+def test_preview_never_cuts_inside_a_table() -> None:
+    """The table gets the second-block position of its own, not a place behind
+    an oversized fence: behind one, selection stops before the table is ever
+    considered and the test passes whether or not the parser knows what a table
+    is. A table cut mid-body renders as a headerless run of rows."""
+    table = "| a | b |\n|---|---|\n" + "| 1 | 2 |\n" * 25
+    assert len(table) > 200
+    body = f"Lead-in.\n\n{table}\nTail paragraph."
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.text == "Lead-in."
+    assert preview.truncated is True
     assert "|" not in preview.text
+    # …and the table this refused to split IS a table when it is rendered, so
+    # the block it was kept whole as is the block the reader gets.
+    assert "<table>" in preview.full_html
+    assert preview.full_html.count("<tr>") == 26
 
 
 def test_preview_always_shows_the_first_block_even_when_it_alone_is_too_long() -> None:
@@ -339,10 +494,46 @@ def test_a_row_truncates_at_a_block_boundary_and_offers_see_more(
     )
     assert anchor is not None, markup
     assert anchor.group(1) == f"/tasks/{task_id}"
-    # The full body rides along hidden, so the click expands without a request.
-    full = _markdown_body(markup, index=1)
-    assert "D" * 60 in full
-    assert "hidden" in markup
+    # The full body rides along HIDDEN, under the hook tasks.js swaps it in by,
+    # inside the group element it scopes that swap to. Spelled out rather than
+    # asserted as "a second markdown-body somewhere with the word hidden in the
+    # row": the exact attributes ARE the contract with the script, and a test
+    # that does not name them stays green while a renamed hook breaks the
+    # click (test-quality/f-002).
+    assert "<div data-description>" in markup
+    assert (
+        '<div class="task-description markdown-body" data-task-description>' in markup
+    )
+    full = re.search(
+        r'<div class="task-description markdown-body" data-task-description-full '
+        r"hidden>(.*?)</div>",
+        markup,
+        re.S,
+    )
+    assert full is not None, markup
+    assert "D" * 60 in full.group(1)
+
+
+def test_the_markup_carries_exactly_the_hooks_the_script_reaches_for() -> None:
+    """The two halves of the progressive enhancement, checked against each
+    other. Both sides of this contract are otherwise mocked — the Node harness
+    fabricates the elements, and the server test reads the markup — so a hook
+    renamed on ONE side leaves every test green and the real click navigating
+    away instead of expanding (test-quality/f-002)."""
+    template = (TEMPLATES / "tasks" / "description.html").read_text()
+    script = (STATIC / "tasks.js").read_text()
+
+    for hook in (
+        "data-description",
+        "data-task-description",
+        "data-task-description-full",
+        "data-description-toggle",
+    ):
+        # In the script as the selector it queries by…
+        assert f'"[{hook}]"' in script, hook
+        # …and in the template as an attribute of its own, not as the prefix
+        # of a longer one (`data-description` vs `data-description-toggle`).
+        assert re.search(rf"(?<![\w-]){hook}(?=[\s=>])", template), hook
 
 
 def test_the_side_panel_truncates_the_same_way(

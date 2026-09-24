@@ -275,7 +275,14 @@ made on the Markdown *source* at a **block boundary**: whole top-level blocks �
 paragraphs, list blocks, fenced code, tables, headings — are taken while the
 running length fits the budget, so a preview never ends inside a list, a fence
 or a table, and the first block is always shown even when it alone exceeds the
-budget. `tasks.js` upgrades the anchor into an in-place expander (the full
+budget. The preview is a genuine **prefix of the source**, not a rejoining of
+the blocks: the budget therefore counts the separators the author wrote, and
+what sits between blocks — a CommonMark reference definition (`[id]: …`) emits
+no block of its own — travels with them. A definition the cut leaves *behind*
+is carried too, as link context for the preview's own render, so truncating
+never turns a rendered link back into literal markup.
+
+`tasks.js` upgrades the anchor into an in-place expander (the full
 rendered body rides along in the row, hidden) offering `see less`. The Gates
 rows and the side panel render the same partial and so truncate identically;
 the detail page passes no budget, because it is the canonical full view that

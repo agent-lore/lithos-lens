@@ -22,7 +22,7 @@
         "max_function": "lithos_lens.events._iter_sse_lines"
       },
       "Knowledge": {
-        "functions_over_10": 3,
+        "functions_over_10": 2,
         "max_complexity": 13,
         "max_function": "lithos_lens.knowledge_resolver._gather_candidates"
       },
@@ -62,7 +62,7 @@
         "max_function": "lithos_lens.request_filters._parse_preserved_filters"
       }
     },
-    "functions_over_10": 42,
+    "functions_over_10": 41,
     "top_functions": [
       {
         "complexity": 40,
@@ -213,7 +213,7 @@
         "functions": 32,
         "largest_module": "lithos_lens.config",
         "largest_module_lines": 813,
-        "lines": 1362,
+        "lines": 1369,
         "modules": 3,
         "public_symbols": 25,
         "sloc": 1083
@@ -252,11 +252,11 @@
         "classes": 14,
         "functions": 56,
         "largest_module": "lithos_lens.knowledge",
-        "largest_module_lines": 739,
-        "lines": 1271,
+        "largest_module_lines": 767,
+        "lines": 1299,
         "modules": 4,
         "public_symbols": 24,
-        "sloc": 955
+        "sloc": 979
       },
       "LithosClient": {
         "classes": 9,
@@ -337,13 +337,13 @@
       "lithos_lens.graph_layout",
       "lithos_lens.tasks"
     ],
-    "total_lines": 22584,
+    "total_lines": 22619,
     "total_modules": 54,
-    "total_sloc": 17211
+    "total_sloc": 17235
   },
   "tests": {
     "ratio": 2.07,
-    "src_lines": 22584,
-    "test_lines": 46671
+    "src_lines": 22619,
+    "test_lines": 46891
   }
 }
