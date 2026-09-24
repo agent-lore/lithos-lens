@@ -335,12 +335,19 @@ def test_an_indented_code_blocks_trailing_spaces_survive_the_cut() -> None:
     assert "<pre><code>code  \n</code></pre>" in preview.full_html
 
 
-def test_a_blank_line_a_block_swallowed_is_still_a_separator() -> None:
+@pytest.mark.parametrize("blank", ["", "   ", "\t", " \t "])
+def test_a_blank_line_a_block_swallowed_is_still_a_separator(blank: str) -> None:
     """The other side of the same trim: a bullet list's map ends AFTER the
     blank line that closed it, and that line is separator, not content. Leaving
     it in would spend budget on a line the preview does not show and end the
-    preview source on a blank line."""
-    body = "- a\n- b\n\n" + "T" * 400
+    preview source on a blank line.
+
+    "Blank" is CommonMark's blank — spaces and tabs only, not just empty. The
+    parser folds a whitespace-only line into the list's range exactly as it
+    folds an empty one, so a trim that tested emptiness alone would pass the
+    empty case and leave every indented separator in.
+    """
+    body = f"- a\n- b\n{blank}\n" + "T" * 400
 
     preview = description_preview(body, limit=20)
 
