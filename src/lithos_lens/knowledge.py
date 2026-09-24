@@ -275,20 +275,44 @@ def _block_cuts(body: str) -> list[int]:
     except Exception:
         logger.warning("description block scan failed; not truncating", exc_info=True)
         return []
-    # Offset each line starts at, plus the end of the text, so a block's
-    # exclusive end line maps straight onto a prefix length.
-    starts = [0]
-    for line in body.splitlines(keepends=True):
-        starts.append(starts[-1] + len(line))
+    starts = _line_starts(body)
     cuts: list[int] = []
     for token in tokens:
         if token.level or token.nesting < 0 or not token.map:
             continue
-        end = min(token.map[1], len(starts) - 1)
-        cut = len(body[: starts[end]].rstrip())
+        end = token.map[1]
+        offset = starts[end] if end < len(starts) else len(body)
+        # Only the inter-block separator is trimmed — the newline that ends the
+        # block and any blank lines after it, a blank line being spaces and
+        # tabs only. NOT ``rstrip()``, which strips every Unicode space and so
+        # ate a paragraph's own trailing NBSP; and what it can still take from
+        # the final content line — trailing spaces — is never syntax there,
+        # since a hard break needs a line after it to break onto.
+        cut = len(body[:offset].rstrip(" \t\r\n"))
         if cut and (not cuts or cut > cuts[-1]):
             cuts.append(cut)
     return cuts
+
+
+#: The line boundaries markdown-it recognizes, and only those: ``normalize``
+#: rewrites ``\r\n`` and a lone ``\r`` to ``\n`` and then splits on ``\n``.
+#: Python's ``str.splitlines`` additionally breaks on ``\v``, ``\f``, ``\x1c``
+#: -- ``\x1e``, ``\x85``, ``\u2028`` and ``\u2029``, none of which end a line
+#: for the parser — so using it to map a token's line numbers back onto the
+#: source put every offset after such a character out of step with the block it
+#: was meant to bound, and the cut landed INSIDE a paragraph.
+_LINE_BREAK_RE = re.compile(r"\r\n|\r|\n")
+
+
+def _line_starts(body: str) -> list[int]:
+    """Offset in ``body`` where each of the PARSER's lines begins.
+
+    Indexed the way ``token.map`` is: entry ``i`` is the start of line ``i`` in
+    the text markdown-it parsed. A ``\r\n`` is one boundary, so a CRLF source
+    keeps the same line numbering as the normalized text the parser saw while
+    the offsets stay those of the original.
+    """
+    return [0] + [match.end() for match in _LINE_BREAK_RE.finditer(body)]
 
 
 # ── Wiki-link tokenizer (K1-S2) ────────────────────────────────────────

@@ -279,6 +279,66 @@ def test_the_preview_of_an_untruncated_description_needs_no_link_context() -> No
     assert '<a href="https://x.test">link</a>' in preview.html
 
 
+@pytest.mark.parametrize(
+    "separator",
+    [
+        # Everything `str.splitlines` breaks on and markdown-it does NOT: the
+        # parser's line boundaries are `\n`, `\r\n` and `\r`, full stop. Each of
+        # these is ordinary CONTENT inside a paragraph.
+        "\u2028",  # LINE SEPARATOR
+        "\u2029",  # PARAGRAPH SEPARATOR
+        "\x0b",  # VERTICAL TAB
+        "\x0c",  # FORM FEED
+        "\x85",  # NEXT LINE
+        "\x1c",  # FILE SEPARATOR
+    ],
+)
+def test_a_unicode_separator_inside_a_paragraph_is_not_a_block_boundary(
+    separator: str,
+) -> None:
+    """Mapping a token's line numbers back onto the source has to use the
+    PARSER's idea of a line.
+
+    `str.splitlines` breaks on seven characters markdown-it does not, so every
+    offset after one of them was out of step with the block it bounded — and
+    the cut landed inside the first paragraph, against the one guarantee the
+    budget never overrides: the first block is always shown whole.
+    """
+    first = f"A{separator}B"
+    body = f"{first}\n\nC\n\n" + "D" * 100
+
+    preview = description_preview(body, limit=1)
+
+    assert preview.text == first
+    assert preview.truncated is True
+
+
+def test_a_paragraphs_own_trailing_whitespace_is_not_trimmed_away() -> None:
+    """Only the inter-block SEPARATOR is trimmed — the newline and the blank
+    lines after a block, blank meaning spaces and tabs. A non-breaking space is
+    text the author wrote, and an unrestricted ``rstrip()`` ate it."""
+    first = "Para\u00a0"
+    body = f"{first}\n\n" + "T" * 400
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.text == first
+    assert preview.truncated is True
+
+
+def test_a_crlf_description_cuts_at_the_same_block_boundary() -> None:
+    """``\r\n`` is ONE line boundary to the parser (``normalize`` rewrites it),
+    so a Windows-authored description must number its lines the same way while
+    the offsets stay those of the original text."""
+    body = "First para\r\n\r\nSecond para\r\n\r\n" + "T" * 400
+
+    preview = description_preview(body, limit=200)
+
+    assert preview.text == "First para\r\n\r\nSecond para"
+    assert preview.truncated is True
+    assert body.startswith(preview.text)
+
+
 @pytest.mark.parametrize("limit", [1, 20, 45, 60, 90, 120, 200])
 def test_a_preview_is_always_a_prefix_of_the_description(limit: int) -> None:
     """The structural form of "the cut is made on the source": whatever the
