@@ -157,6 +157,7 @@ The current configuration model includes:
 - `tasks.visible_cap`
 - `tasks.frontier_limit`
 - `tasks.default_time_range_days`
+- `tasks.description_preview_chars`
 - `tasks.default_status_groups`
 - `tasks.project_convention` *(deprecated: parsed and ignored, REQUIREMENTS §4.4)*
 - `tasks.project_tag_key`
@@ -254,6 +255,38 @@ names a task, so every step states that task's id. The chain sentence is
 rewritten client-side on every focus transition, so the client rebuilds it as
 markup rather than as text and the ids come back with it; a line that came back
 without them would contradict the markup the page shipped with.
+
+**A task's description is Markdown, everywhere Lens shows one.** Agent-written
+descriptions (loom's, and the tasks the operator files through Claude Code) are
+Markdown — a lead-in paragraph, bold labels, numbered lists, code spans,
+acceptance bullets — so every surface that shows one renders it through the same
+safe renderer the note page uses (raw HTML escaped, the §6.2 link-scheme
+allow-list, escaped plaintext if the parse raises), inside a `.markdown-body`
+container. Two differences from a note body, both deliberate: single newlines
+are kept as line breaks, because a description is as often hand-typed lines as
+it is a document; and `[[wiki-link]]` stays literal text, because it is a note
+concept resolved against a source note's own outgoing links and a task has none.
+
+**A long description is truncated on the board, never on the detail page.** The
+row shows as much as `tasks.description_preview_chars` allows (default 600; `0`
+never truncates) and links on with `… see more` — an ordinary anchor to the
+task's detail page, so the no-JavaScript path is plain navigation. The cut is
+made on the Markdown *source* at a **block boundary**: whole top-level blocks —
+paragraphs, list blocks, fenced code, tables, headings — are taken while the
+running length fits the budget, so a preview never ends inside a list, a fence
+or a table, and the first block is always shown even when it alone exceeds the
+budget. The preview is a genuine **prefix of the source**, not a rejoining of
+the blocks: the budget therefore counts the separators the author wrote, and
+what sits between blocks — a CommonMark reference definition (`[id]: …`) emits
+no block of its own — travels with them. A definition the cut leaves *behind*
+is carried too, as link context for the preview's own render, so truncating
+never turns a rendered link back into literal markup.
+
+`tasks.js` upgrades the anchor into an in-place expander (the full
+rendered body rides along in the row, hidden) offering `see less`. The Gates
+rows and the side panel render the same partial and so truncate identically;
+the detail page passes no budget, because it is the canonical full view that
+`see more` leads to — the rule the note page already follows.
 
 **Every row states its project**, and §5B.1 says which value that is where a
 single one is needed: `metadata.project` when present, else the
@@ -553,6 +586,10 @@ silently.
   read comes back truncated, the sections derived from it mark their counts as
   approximate, per side rather than board-wide, so a complete count is not
   labelled as an estimate because the other side was cut.
+- **Description preview** — a board row shows at most
+  `tasks.description_preview_chars` of a description, cut at a Markdown block
+  boundary, and says so with a `see more` link to the full page. The detail
+  page, which that link leads to, applies no such bound.
 - **Link page size** — bounded neighbour lists on the detail page state the
   remainder they are not showing ("N more not shown"), because a "why can't
   this run?" list that quietly drops blockers is worse than a slow one.
@@ -595,7 +632,8 @@ This is a pragmatic operational dashboard model rather than a full audit UI.
 The task detail page is built on the same graph reads as the dashboard, so the
 two cannot disagree about why a task is where it is. It shows:
 
-- task title and body/summary content, status metadata, creating agent, created
+- task title and body/summary content — the description rendered as Markdown
+  and never truncated (§5.3) — status metadata, creating agent, created
   timestamp, tags, and claim state where known. The meta line under the heading
   **leads with the task's short id** (§5.3), as the side panel's does and as
   every row on the board does; the parent breadcrumb above it states the id of
@@ -644,6 +682,10 @@ REQUIREMENTS), rendered from one template that extends no layout:
   browser with scripting off all land on the same thing — and each host page
   has exactly ONE selection parameter: `selected` on the dashboard, `focus` on
   the graph page (§5.12); neither carries the other's.
+- The panel states the task's **description** the way a row does — the same
+  partial, the same Markdown rendering and the same preview budget (§5.3) — so
+  reading a relationship without leaving the board does not mean losing the
+  text that explains it.
 - `GET /tasks/{task_id}?fragment=panel` answers with the partial and nothing
   else. A row click fetches it — from the URL the SERVER wrote onto the row, so
   the id encoding and the board's preserved filters have one definition — swaps

@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Knowledge-note rendering and normalization (safe server-side markdown, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided).
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided.
 
 **Tier:** Foundation
 
@@ -11,7 +11,7 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | M | 7 | 5 |
+| `lithos_lens.knowledge` | L | 8 | 7 |
 | `lithos_lens.knowledge_metadata` | S | 1 | 1 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
@@ -20,6 +20,9 @@ Knowledge-note rendering and normalization (safe server-side markdown, the relat
 
 ### `lithos_lens.knowledge`
 - def `render_markdown` — Render a note's markdown body to safe HTML.
+- def `render_description` — Render a task description's markdown to safe HTML (§5.3).
+- class `DescriptionPreview` — A task description as one surface shows it (§5.3).
+- def `description_preview` — Cut a description to ``limit`` characters at a BLOCK boundary (§5.3).
 - def `wiki_link_href` — URL for a wiki-link's per-click resolver route (§6.3).
 - class `RelatedRef` — A raw neighbor reference from ``lithos_related``, before title lookup.
 - class `RelatedNeighborhood` — One ``lithos_related`` call's worth of a note's neighborhood (raw ids).

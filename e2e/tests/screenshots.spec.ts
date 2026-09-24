@@ -163,6 +163,22 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.locator('[data-attention-rule="pr-needs-decision"]'),
       ).toHaveText("PR needs a decision");
+      // §5.3: the board's ONE long, markdown-written description — the shape
+      // loom and Claude Code actually file. The capture must show it as
+      // MARKUP (the numbered list below its bold lead-in) and cut at a block
+      // boundary, with the "see more" link to the full page. Waited on rather
+      // than merely captured, for the reason every other clause here is: this
+      // sandbox cannot look at the PNG, so a row that silently went back to
+      // one run-on paragraph has to fail the run.
+      const described = page.locator(
+        '[data-task-row][data-task-id="lens-graph-view"]',
+      );
+      await expect(
+        described.locator("[data-task-description] ol li").first(),
+      ).toBeVisible();
+      await expect(
+        described.locator("[data-description-toggle]"),
+      ).toContainText("see more");
     },
   },
   {

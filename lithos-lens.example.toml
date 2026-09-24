@@ -26,6 +26,11 @@ agent_id = "lithos-lens"
 auto_refresh_interval_s = 120
 frontier_limit = 500   # cap pushed to the lithos ready/blocked frontier reads
 default_time_range_days = 30    # resolved-at window for the completed/cancelled sections (1-365)
+# How much of a task description a BOARD row shows (dashboard rows, gate rows
+# and the side panel). Descriptions render as markdown everywhere; a row takes
+# whole leading blocks up to this budget and links on with "see more". The
+# detail page that link leads to never truncates. 0 = never truncate anywhere.
+description_preview_chars = 600
 # Needs-attention thresholds (rules 3-6; unsatisfiable blockers and cycles are
 # intrinsic and always flagged).
 gate_waiting_attention_hours = 24   # human gate waiting on a person

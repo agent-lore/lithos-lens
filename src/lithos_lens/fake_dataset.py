@@ -313,7 +313,32 @@ def demo_dataset() -> FakeLithosDataset:
             TaskRecord(
                 id="lens-graph-view",
                 title="Ship graph-native operator view",
-                description="Rebuild the dashboard on the ready/blocked frontier.",
+                # The demo's ONE long, markdown-written description — the shape
+                # loom and Claude Code actually file (§5.3): a lead-in, a bold
+                # label, a numbered list, a code span and a fenced block, well
+                # past the default preview budget. It is what puts a truncated
+                # row with its "see more" link into the visual pass, and the
+                # detail page's untruncated rendering beside it.
+                description=(
+                    "Rebuild the dashboard on the ready/blocked frontier, so a "
+                    "row's section is Lithos's own verdict rather than a "
+                    "status string Lens re-derived.\n\n"
+                    "**Sections**, in board order:\n\n"
+                    "1. Needs attention — the severity model's promotions\n"
+                    "2. Gates — not workable, so never in Ready\n"
+                    "3. In progress — claimed\n"
+                    "4. Ready — on the ready frontier\n"
+                    "5. Blocked — with each blocker named\n\n"
+                    "The frontier reads are capped by `frontier_limit`, and a "
+                    "truncated read marks its side's counts approximate:\n\n"
+                    "```python\n"
+                    "ready = await lithos.task_ready(limit=config.frontier_limit)\n"
+                    "```\n\n"
+                    "Acceptance: a task appears in exactly one section, and no "
+                    "section asserts a reason Lithos did not give. A read that "
+                    "came back truncated says so on its own side's counts, "
+                    "rather than labelling the whole board an estimate."
+                ),
                 status="open",
                 created_by="planner",
                 created_at=_ago(minutes=20),

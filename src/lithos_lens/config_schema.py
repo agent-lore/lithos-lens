@@ -49,6 +49,13 @@ DEFAULT_TASKS_AUTO_REFRESH_INTERVAL_S = 120
 DEFAULT_TASKS_VISIBLE_CAP = 50
 DEFAULT_TASKS_FRONTIER_LIMIT = 500
 DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS = 30
+# How much of a task description a BOARD row shows (§5.3): the budget the
+# block-boundary cut in ``knowledge.description_preview`` spends, with a
+# "see more" link to the detail page for whatever it drops. 0 is the documented
+# opt-out — every description in full, on every row — which is why this knob's
+# minimum is 0 and not 1 (MIN_TASKS_INT_KNOBS). The detail page never truncates
+# whatever this says: it is the canonical full view.
+DEFAULT_TASKS_DESCRIPTION_PREVIEW_CHARS = 600
 # Needs-attention rule thresholds (REQUIREMENTS §5.2.2 rules 3-6). Rules 1
 # (unsatisfiable blocker) and 2 (cycle) are intrinsic and have no knob.
 DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS = 24
@@ -76,6 +83,13 @@ DEFAULT_TASKS_AGENT_INACTIVE_DAYS = DEFAULT_AGENT_INACTIVE_DAYS
 #
 # Membership is the timedelta reachability test, not a category: add a key here
 # the moment its value starts feeding a duration.
+# Floors for the [lithos-lens.tasks] knobs that are not positive integers.
+# Every knob not listed here has to be >= 1 (0 would disable the rule it
+# governs by accident); a knob listed here declares the floor it really has.
+MIN_TASKS_INT_KNOBS: dict[str, int] = {
+    # 0 = never truncate a description, the documented opt-out.
+    "description_preview_chars": 0,
+}
 MAX_TASKS_INT_KNOBS: dict[str, int] = {
     "gate_waiting_attention_hours": 8760,
     "claim_expiring_soon_minutes": 10080,
@@ -167,6 +181,8 @@ class TasksConfig:
     # Not-classified tail) but should be rare.
     frontier_limit: int = DEFAULT_TASKS_FRONTIER_LIMIT
     default_time_range_days: int = DEFAULT_TASKS_DEFAULT_TIME_RANGE_DAYS
+    # Board-row description budget (§5.3); 0 never truncates.
+    description_preview_chars: int = DEFAULT_TASKS_DESCRIPTION_PREVIEW_CHARS
     # Needs-attention thresholds; ``frontier.AttentionPolicy`` consumes them.
     gate_waiting_attention_hours: int = DEFAULT_TASKS_GATE_WAITING_ATTENTION_HOURS
     claim_expiring_soon_minutes: int = DEFAULT_TASKS_CLAIM_EXPIRING_SOON_MINUTES

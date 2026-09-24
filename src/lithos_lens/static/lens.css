@@ -1437,6 +1437,104 @@ button,
   white-space: pre-wrap;
 }
 
+/* A TASK DESCRIPTION (§5.3), rendered as markdown wherever it is shown. It
+   shares `.markdown-body` with the note page — one set of rules for rendered
+   markdown — and these are the ROW-DENSITY variant of it: no card chrome (a
+   bordered cream box per row would turn the board into a stack of panels), and
+   tighter block margins, so a row with a two-item list in it stays a row.
+   Whitespace is NOT preserved here either: soft breaks are `<br>` elements
+   (the description renderer has `breaks` on), and `pre-wrap` on the container
+   would additionally double every blank line. `pre` keeps it, from the shared
+   `.markdown-body pre` rule above — long code lines wrap instead of scrolling
+   the row sideways, which the responsive contract (no horizontal overflow at
+   320px) requires. */
+.task-description {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  padding: 0;
+}
+
+.task-description > :first-child {
+  margin-top: 0;
+}
+
+.task-description > :last-child {
+  margin-bottom: 0;
+}
+
+.task-description h1,
+.task-description h2,
+.task-description h3,
+.task-description h4,
+.task-description h5,
+.task-description h6 {
+  font-size: 1rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.task-description p,
+.task-description pre,
+.task-description table,
+.task-description blockquote {
+  margin: 0.35rem 0;
+}
+
+.task-description ul,
+.task-description ol {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+
+.task-description li {
+  margin: 0.1rem 0;
+}
+
+/* A fenced block is a block, so it reads as one: the same cream fill an inline
+   code span gets, with the row's own padding rather than the note page's. */
+.task-description pre {
+  background: rgba(255, 246, 227, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.task-description code {
+  background: rgba(255, 246, 227, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  font-size: 0.85em;
+  padding: 0 0.2rem;
+}
+
+.task-description pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.task-description th,
+.task-description td {
+  border: 1px solid var(--line);
+  padding: 0.2rem 0.4rem;
+  text-align: left;
+}
+
+/* The cut's own control: an ordinary anchor to the detail page, which tasks.js
+   upgrades into an in-place expander (and back to "see less"). Styled as the
+   link it is, so the no-JS path looks like what it does. */
+.task-description-more {
+  color: var(--muted);
+  display: inline-block;
+  font-size: 0.85rem;
+  margin-top: 0.35rem;
+}
+
+.task-description-more:hover {
+  color: var(--accent);
+}
+
 /* ── Knowledge landing (search + recently-updated) ─────────────────── */
 
 .knowledge-search {

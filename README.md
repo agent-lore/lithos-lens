@@ -172,6 +172,7 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS` | `lithos-lens.tasks.gate_waiting_attention_hours` | Integer 1-8760 (same bounds as the TOML key). Needs-attention rule 3. |
 | `LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES` | `lithos-lens.tasks.claim_expiring_soon_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 4. |
 | `LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS` | `lithos-lens.tasks.stale_open_age_days` | Integer 1-3650 (same bounds as the TOML key). Needs-attention rule 5. |
+| `LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS` | `lithos-lens.tasks.description_preview_chars` | Integer >= 0 (same bound as the TOML key). How much of a description a board row shows before `see more`; `0` never truncates. |
 | `LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES` | `lithos-lens.tasks.unclaimed_ready_age_minutes` | Integer 1-10080 (same bounds as the TOML key). Needs-attention rule 6. |
 | `LITHOS_LENS_TASKS_PROJECT_CONVENTION` | `lithos-lens.tasks.project_convention` | Must be `metadata`, `tag` or `both` (same set as the TOML key). **Deprecated** with `project_convention`: parsed onto the effective config and reported, read by nothing. |
 | `LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS` | `lithos-lens.tasks.agent_inactive_days` | Integer 1-3650 (same bounds as the TOML key). How long an agent may be idle before the Agent picker stops offering it by default (`?all_agents=1` shows them all). |

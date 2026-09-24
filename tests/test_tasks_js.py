@@ -343,6 +343,36 @@ const rows = {
   },
 };
 
+// A row whose description was CUT (§5.3): the preview, the full body carried
+// hidden beside it, and the anchor that swaps them. The anchor is a real link
+// to the detail page — the no-JS path — so the test can also see that the
+// click was swallowed rather than followed.
+const descriptionPreview = { hidden: false };
+const descriptionFull = { hidden: true };
+const descriptionGroup = {
+  querySelector(selector) {
+    if (selector === "[data-task-description]") return descriptionPreview;
+    if (selector === "[data-task-description-full]") return descriptionFull;
+    return null;
+  },
+};
+const descriptionToggle = {
+  textContent: "\u2026 see more",
+  attributes: {},
+  classList: { contains: () => false },
+  setAttribute(name, value) { this.attributes[name] = value; },
+  closest: (selector) =>
+    selector === "[data-description]" ? descriptionGroup : null,
+};
+// The same anchor on a row whose markup lost one of the two bodies: nothing to
+// swap, so the click must be left alone to navigate.
+const brokenToggle = {
+  textContent: "\u2026 see more",
+  classList: { contains: () => false },
+  setAttribute() {},
+  closest: () => null,
+};
+
 // The one selector tasks.js closest()s a click up to. Spelled once here for
 // the same reason it is spelled once there: a row that does not match it is a
 // row the panel cannot be opened from.
@@ -582,6 +612,24 @@ const ACTIONS = {
   tag: () => fire("click", clickEvent(
     { [PANEL_ROW]: rows.alpha, "a[href]": tagLink }, "tag",
   )),
+  // "see more" on a row whose description was cut — inside a row the panel
+  // handler otherwise claims, and inside the PANEL, which is the branch that
+  // would hand the click back to the browser as "an ordinary link".
+  "see-more": () => fire("click", clickEvent({
+    "[data-description-toggle]": descriptionToggle,
+    [PANEL_ROW]: rows.alpha,
+    "a[href]": descriptionToggle,
+  }, "see-more")),
+  "see-more-in-panel": () => fire("click", clickEvent({
+    "[data-description-toggle]": descriptionToggle,
+    "[data-task-panel]": {},
+    "a[href]": descriptionToggle,
+  }, "see-more-in-panel")),
+  "see-more-broken": () => fire("click", clickEvent({
+    "[data-description-toggle]": brokenToggle,
+    [PANEL_ROW]: rows.alpha,
+    "a[href]": brokenToggle,
+  }, "see-more-broken")),
   // The <summary> of a gate row's waiter list: the browser's own control for
   // the <details> it opens, inside a row the panel handler claims.
   waiters: () => fire("click", clickEvent(
@@ -664,6 +712,13 @@ const ACTIONS = {
     href: href(),
     panel: host.innerHTML,
     board,
+    // What the row's description shows now, and what its control offers.
+    description: {
+      previewHidden: descriptionPreview.hidden,
+      fullHidden: descriptionFull.hidden,
+      label: descriptionToggle.textContent,
+      expanded: descriptionToggle.attributes["aria-expanded"],
+    },
     // The optimistic rows, newest first, each as what it IS rather than what
     // it is made of: its identity, its markup, and its metadata group in
     // order — the order being the claim §5.3 makes about where the id sits.
@@ -1136,6 +1191,50 @@ def test_a_gate_rows_waiter_list_still_opens_natively() -> None:
     assert result["fetches"] == []
     assert result["pushed"] == []
     assert result["prevented"] == []
+
+
+def test_see_more_expands_the_description_in_place_and_then_offers_see_less() -> None:
+    """§5.3: the row already carries the full rendered body, hidden, so "see
+    more" swaps it in without navigating and without a request — and turns
+    into the control that puts it back. The row's own panel does not open: the
+    operator asked for the rest of this description, not for a panel."""
+    opened = _panel_run(["see-more"])
+
+    assert opened["prevented"] == ["see-more"]
+    assert opened["fetches"] == []
+    assert opened["pushed"] == []
+    assert opened["description"]["fullHidden"] is False
+    assert opened["description"]["previewHidden"] is True
+    assert opened["description"]["label"] == "\u2026 see less"
+    assert opened["description"]["expanded"] == "true"
+
+    closed = _panel_run(["see-more", "see-more"])
+
+    assert closed["description"]["fullHidden"] is True
+    assert closed["description"]["previewHidden"] is False
+    assert closed["description"]["label"] == "\u2026 see more"
+    assert closed["description"]["expanded"] == "false"
+
+
+def test_see_more_expands_inside_the_side_panel_too() -> None:
+    """The panel shows the same truncated description, and inside it every
+    link is otherwise an ordinary link — so the expander has to be recognised
+    BEFORE that rule, or the panel's "see more" would leave the board."""
+    result = _panel_run(["see-more-in-panel"])
+
+    assert result["prevented"] == ["see-more-in-panel"]
+    assert result["description"]["fullHidden"] is False
+
+
+def test_see_more_navigates_when_there_is_nothing_to_expand() -> None:
+    """The anchor's href is the detail page, which is the whole no-JavaScript
+    path: a row that does not carry both bodies keeps it rather than having its
+    click swallowed into nothing."""
+    result = _panel_run(["see-more-broken"])
+
+    assert result["prevented"] == []
+    assert result["fetches"] == []
+    assert result["pushed"] == []
 
 
 def test_escape_closes_a_server_rendered_panel_with_no_click_before_it() -> None:

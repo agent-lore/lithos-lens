@@ -104,10 +104,15 @@
         </div>
       {% endif %}
 
+      {#- The canonical full view: the same markdown the rows render, with NO
+         preview budget, because this is the page "see more" leads to. Passing
+         no `description_more_url` is what says so. -#}
       {% if detail.task.description %}
         <section>
           <h2>Description</h2>
-          <p>{{ detail.task.description }}</p>
+          {% with description = detail.task.description %}
+            {% include "tasks/description.html" %}
+          {% endwith %}
         </section>
       {% endif %}
 

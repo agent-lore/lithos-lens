@@ -1,0 +1,32 @@
+{#
+  A task's description, rendered as MARKDOWN (§5.3) — the one definition, used
+  by every surface that shows one: the board row, the Gates row, the side panel
+  and the detail page.
+
+  Agent-written descriptions are markdown (loom's, and the tasks the operator
+  files through Claude Code): a lead-in paragraph, bold labels, numbered lists,
+  code spans, acceptance bullets. Escaped into a single `<p>` they lost every
+  newline and showed their markup as literal `**` and `1.`, which is what made
+  a board with several long tasks on it unreadable.
+
+  Context:
+
+  - `description` — the raw markdown, as the task carries it;
+  - `description_more_url` — where "see more" goes, which is the task's DETAIL
+    page. Its presence is what asks for a preview: a surface that omits it (the
+    detail page, which is the canonical full view) renders the whole body with
+    no link, because there is nowhere further to send the reader.
+
+  The full body rides along hidden whenever a cut was made, so `tasks.js` can
+  expand the row in place without a request. With JavaScript off the anchor is
+  the ordinary navigation it looks like.
+#}
+{% set truncate = description_more_url is defined and description_more_url != "" %}
+{% set preview = description_preview(description, truncate=truncate) %}
+<div data-description>
+  <div class="task-description markdown-body" data-task-description>{{ preview.html | safe }}</div>
+  {% if preview.truncated %}
+    <div class="task-description markdown-body" data-task-description-full hidden>{{ preview.full_html | safe }}</div>
+    <a class="task-description-more" href="{{ description_more_url }}" data-description-toggle aria-expanded="false">&hellip; see more</a>
+  {% endif %}
+</div>

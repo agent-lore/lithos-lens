@@ -175,7 +175,14 @@ def optional_int(
     if key not in data:
         return default
     value = data[key]
-    if not isinstance(value, int):
+    # ``bool`` is a subclass of ``int``, so the plain isinstance check admitted
+    # ``key = true`` as the integer 1 — which every bound below then accepts.
+    # It was harmless while every knob's floor was 1 and a mistyped boolean was
+    # merely a very small cap; it stopped being harmless the moment a knob's
+    # domain reached down to 0 (``description_preview_chars``, where 1 is a
+    # one-character budget and 0 is "never truncate"). A boolean names no
+    # integer an operator meant, so it is refused here rather than per knob.
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{config_path}: [{section}].{key} must be an integer")
     if minimum is not None and value < minimum:
         raise ConfigError(f"{config_path}: [{section}].{key} must be >= {minimum}")
