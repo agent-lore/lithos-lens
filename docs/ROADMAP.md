@@ -91,7 +91,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
 | 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **shipped** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
 | 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
-| 4 | **T3** | Tasks | Curated write actions | planned | — | 0.5.0 |
+| 4 | **T3** | Tasks | Curated write actions | planned | [t3-curated-write-actions.md](./prd/t3-curated-write-actions.md) | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
@@ -212,20 +212,23 @@ a console to show it on. The rest of T2b is unsequenced.
 ### T3 — Curated Write Actions
 
 Held out of September at the W38 checkpoint (`bcaf9379`, 2026-09-16) because
-the loom intervention rate on T2 had not fallen; revisits in October, with
-`bd66d57c` (no task-edge delete) landing before or alongside the edge slice.
+the loom intervention rate on T2 had not fallen; October's milestone. The PRD
+(written 2026-10-01) sequences nine slices. The add-dependency slice is gated
+on `bd66d57c` (no task-edge delete) and is detachable: if upstream slips,
+0.5.0 ships the other actions and the edge slice follows.
 
-
-Lens's read-only contract relaxes to a small operator-console action set,
-gated behind `[writes] enabled` (default false): approve/complete human gates
-(surfacing `unblocked[]`), reopen (surfacing `reblocked[]`), cancel with
-consequence-aware confirmation ("will strand N dependents"), create
-task/epic/gate, and add dependency edges with cycle-rejection surfaced from
-the Lithos error envelope. Writes are attributed to a named human operator
-(cookie-backed, registered via `lithos_agent_register(type="human")`),
-audit-logged, Origin-checked, and always refresh-after-write — no optimistic
-mutations. No auth beyond the trusted-network boundary; see REQUIREMENTS
-Part B for the full contract.
+Lens's read-only contract ends. A small operator-console action set is part
+of the product, always on — the `[writes] enabled` flag earlier drafts
+specified was dropped on 2026-10-01 (REQUIREMENTS §5C.1): complete gates
+(human and external-task gates directly, timer / CI / PR gates behind a
+"proceed anyway" confirm step; surfacing `unblocked[]`), reopen (surfacing
+`reblocked[]`), cancel with consequence-aware confirmation ("strands N
+dependents"), create task/epic/gate, and add dependency edges with refusals
+mapped from the Lithos error envelope. Every write goes through one funnel:
+attributed to a named human operator (cookie-backed, registered via
+`lithos_agent_register(type="human")`), audit-logged, Origin-checked, and
+always refresh-after-write — no optimistic mutations. No auth beyond the
+trusted-network boundary; see REQUIREMENTS §5C for the full contract.
 
 ### K2 — Knowledge Graph View
 
@@ -278,7 +281,7 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 | # | Gap | Ask | Impact on Lens |
 |---|-----|-----|----------------|
 | 1 | `lithos_task_edge_upsert` emits no event | `task_edge.upserted` event (`from_task_id`, `to_task_id`, `type`, `agent`) | Other agents' dependency edits are invisible until the next task event. T3 covers its own writes with synthetic internal `lens.edge_upserted` events. |
-| 2 | No `lithos_task_edge_delete` | Edge delete (or tombstone) tool | Mistaken dependencies are permanent; re-parenting is impossible (`parent_exists` is a dead end). T3 UI must say so honestly. **Top ask.** |
+| 2 | No `lithos_task_edge_delete` | Edge delete (or tombstone) tool | Mistaken dependencies are permanent; re-parenting is impossible (`parent_exists` is a dead end). T3's add-dependency slice waits for it rather than ship an edge button on permanent edges, and offers removal of an edge it has just added. **Top ask.** |
 | 3 | No bulk graph fetch | `lithos_task_graph(project \| task_ids)` → `{tasks, edges}` | T2 assembles graphs via N per-task `edge_list` calls (semaphored, per-task cached, ~100 calls/project); T2b's corpus scope would be ~330. One indexed SQL join upstream collapses this to one call. |
 | 4 | Expired claims unobservable (lazy query-time filtering) | Expose recently-expired claims, or a `claim.expired` event | The old "expired claim" attention rule is impossible; T1 substitutes a pre-expiry warning. True abandoned-work detection stays blocked. |
 | 5 | Timer-gate resolution emits no event (query-time evaluation) | `gate.resolved` event | T1 self-schedules a dashboard refresh at `min(ready_at)` of visible timer gates. |
