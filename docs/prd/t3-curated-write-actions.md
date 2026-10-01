@@ -708,7 +708,9 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
    overrides; the write route group; the Origin check; reserved `new`;
    the operator page with the boundary statement; cookie and default
    resolution; the impersonation guard and register-once; the identity
-   partial in the page chrome. *Independent.*
+   partial in the page chrome; the compose pass-through for
+   `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` and its entry in the example env
+   file. *Independent.*
    Acceptance: the Posture and Identity cases in Testing Decisions, in
    full.
 2. **W2 Error mapper.** The pure mapper for every row of D6 and the
@@ -831,8 +833,13 @@ are independent of each other. W8 is last and detachable (D1).
 - **Rollout.** With no flag, each action reaches production with the
   deploy that carries its slice; W4 is the first deploy after which a
   browser on the network can change the task store. The one deployment
-  step is setting `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` in the gitignored
-  prod env file, so the operator is not prompted.
+  step is the default operator, so the single operator is not prompted.
+  The container does not inherit the env file: compose uses it for
+  substitution only and passes a fixed list of variables, which today has
+  no `[writes]` entry. So either set `default_operator` in the container's
+  own TOML (the mounted data directory — no plumbing needed), or set
+  `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` in the env file, which works only
+  because W1 adds the pass-through line to the compose file.
 - **Spec drift.** When T3 ships, `docs/SPECIFICATION.md`'s "every surface
   is read-only" statements and its no-authenticated-routes paragraph are
   rewritten, and the user manual regenerated.
