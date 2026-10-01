@@ -567,6 +567,15 @@ copy says the prior outcome is kept in that finding.
   first). If the relation is already there, Lens says so — "this relation
   already exists (added by *\<agent\>*, *\<date\>*); nothing was written"
   — makes **no** upsert call, and offers no removal.
+- **One write per relation at a time.** The read → upsert → read-back
+  sequence for a given `(from, to, type)` is serialised inside the one
+  Lens process. Without that, two submits of the same relation by the same
+  operator — a double-click, or two tabs — both read "absent", the second
+  upsert lands on the first one's edge, and both read back an edge the
+  operator created: two receipts, each offering removal, one of them for
+  an edge its own call did not insert. Serialised, the second waits, its
+  own read then finds the relation, and it takes the already-exists
+  outcome: no upsert, no removal offer.
 - **Removal is the receipt's follow-up, and only for an edge this call
   demonstrably created.** After a successful upsert Lens reads the edge
   back. The receipt offers "Remove this dependency" only when the relation
@@ -578,11 +587,20 @@ copy says the prior outcome is kept in that finding.
   exists and who created it, and offers nothing. The removal POST checks
   again that the edge still carries the `created_by` and `created_at` the
   receipt recorded before it deletes.
-- **Residual, stated.** In that race Lens's upsert has already replaced
-  the other writer's metadata on the edge. Lens cannot prevent it; the
-  window is one read-to-write gap, and closing it needs upstream (a
-  `created` flag on the upsert response and an upsert that leaves
-  metadata alone when none is supplied — Further Notes).
+- **Residuals, stated.** Both live in the one gap between Lens's read
+  and its write, and both involve a writer *outside* Lens — serialisation
+  covers Lens's own requests, not theirs:
+  - When another agent inserts the same relation in that gap, Lens's
+    upsert has replaced that edge's metadata. No removal is offered.
+  - When that outside writer uses **the operator's own agent id**, the
+    edge read back names the operator and Lens cannot tell it from its
+    own insert: it offers removal of an edge its call did not create.
+    `created_by` is evidence of who inserted, not proof that this call
+    did.
+
+  Lens cannot close either. A strict "just added" guarantee needs
+  upstream — a `created` flag on the upsert response, and an upsert that
+  leaves metadata alone when none is supplied (Further Notes).
 - With `bd66d57c` landed, a `parent_exists` refusal names the existing
   parent with the way to replace it. General edge management — removing
   arbitrary edges from the relations list — is not in T3. The delete
@@ -769,7 +787,10 @@ review gate is hermetic and headless.
   (JS test in the existing pattern). Existing relation: with the edge
   already present in Lithos but absent from Lens's cache, the confirm
   step and the POST both report "already exists", the call log shows no
-  upsert, and no remove form renders. Removal: after an insert the
+  upsert, and no remove form renders. Concurrent same-operator submits:
+  two simultaneous POSTs for one relation produce exactly one upsert
+  (call log); one receipt offers removal and the other reports "already
+  exists" with no remove form. Removal: after an insert the
   receipt's remove action removes the edge; when the fake inserts the
   same edge as another agent between Lens's read and its write, the
   receipt names that agent and renders no remove form; a remove POST for
@@ -837,7 +858,8 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
    *Needs W4.*
    Acceptance: the Create cases.
 8. **W8 Add a dependency.** Relation sentences, the two-step form with
-   its fresh edge reads, the already-exists outcome, the refusals, the
+   its fresh edge reads, per-relation serialisation of the write, the
+   already-exists outcome, the refusals, the
    synthetic event and cache eviction, and removal from the receipt —
    offered on evidence of insertion only — with the delete tool's
    contract. *Needs W4; blocked upstream by
