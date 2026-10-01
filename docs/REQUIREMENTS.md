@@ -10,7 +10,7 @@ tags: [lithos-lens, requirements, design, architecture]
 
 > [!abstract] Project Summary
 > **Lithos Lens** is a local web UI for observing and steering the Lithos coordination layer and for browsing and curating a Lithos knowledge base. It hosts two first-class views inside a single FastAPI app:
-> - **Tasks View** — a **graph-native** dashboard over the Lithos task graph (typed edges, epics, gates, computed ready/blocked frontiers), with a small set of **curated write actions** (approve gates, reopen, cancel, create, add dependencies) gated behind an explicit config flag.
+> - **Tasks View** — a **graph-native** dashboard over the Lithos task graph (typed edges, epics, gates, computed ready/blocked frontiers), with a small set of **curated write actions** (complete gates, reopen, cancel, create, add dependencies).
 > - **Knowledge Browser** — real note rendering with wiki-links, search, related/back-link panels, an interactive typed-edge graph (Cytoscape.js), cognitive search backed by `lithos_retrieve`, feedback via frontmatter patches, and conflict resolution.
 >
 > Lens is a pure Lithos MCP client by default — zero runtime dependency on the Influx ingestion container; all data is sourced from Lithos. Lens may optionally call an LLM directly **when explicitly enabled** (`LITHOS_LENS_LLM_ENABLED=true`) for findings curation and synthesis; with the flag off Lens remains a pure MCP client.
@@ -71,7 +71,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 - Two first-class roles — a **task dashboard** (observe the task graph, act on it through a curated write set) and a **knowledge browser** — sharing one FastAPI app, one MCP client, and one `base.html` shell with a top-nav view switcher
 - Operate purely as a Lithos MCP client when `LITHOS_LENS_LLM_ENABLED=false` — no dependency on the Influx runtime
 - Subscribe to the Lithos SSE event stream once (a shared events module) and let any view consume the events it cares about
-- **Curated writes, not CRUD**: Lens exposes a small, deliberate set of operator actions (§5C) behind `[writes] enabled` (default off). With writes disabled, Lens is strictly read-only and registers no mutating routes.
+- **Curated writes, not CRUD**: Lens exposes a small, deliberate set of operator actions (§5C) and nothing beyond it. The actions are always available — there is no read-only mode (§5C.1).
 - Scale posture: the production deployment Lens observes today runs **~330 open tasks (311 `task`, 21 `epic`) across ~20 projects and ~2,900 knowledge notes**. Lens MUST be designed for *hundreds of open tasks and thousands of notes* — not tens — and SHOULD remain usable into the low thousands of open tasks before requiring upstream bulk-fetch support (see the ROADMAP dependency ledger).
 - Optional LLM-backed features ("most significant findings" curation, answer synthesis, complexity slider) behind a single config flag, gracefully degrading when disabled (sequencing: ROADMAP X1)
 - Minimal stack: FastAPI + HTMX + Cytoscape.js + markdown-it-py; no heavy JS framework, no build step. Every graph surface has a **no-JS text baseline**; Cytoscape is progressive enhancement.
@@ -84,7 +84,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 - Gates — the part of the graph that is explicitly the operator's job — get a first-class section, with human gates surfaced above all other gate types.
 - Epics roll up (progress chips) instead of polluting open-task counts.
 - A dependency graph page (`/tasks/graph`) and a task-detail mini-graph make `blocks` chains, gates, and hierarchy visually legible.
-- Curated write actions (§5C): approve/complete human gates, reopen, cancel with consequence preview, create task/epic/gate, add dependency edges — attributed to a named human operator identity distinct from the Lens service agent.
+- Curated write actions (§5C): complete gates (human and external-task gates directly; timer, CI and PR gates behind a "proceed anyway" confirm step), reopen, cancel with consequence preview, create task/epic/gate, add dependency edges — attributed to a named human operator identity distinct from the Lens service agent.
 - Auto-update via the shared SSE event subscription, with `Last-Event-ID` replay on reconnect and a polling fallback.
 - Findings link to the Knowledge Browser via explicit `finding.knowledge_id` (no inference, no heuristics).
 
@@ -157,7 +157,7 @@ The common-core sections describe behaviour, infrastructure, and configuration s
 | Task/knowledge partitioning | Section membership and readiness come from Lithos (`task_ready`/`task_blocked`); Lens joins id-sets, never re-derives | Timer gates and NULL-safe gate handling are evaluated inside Lithos at query time; re-deriving readiness from edges in Lens is a correctness trap |
 | Graph rendering | Cytoscape.js as progressive enhancement over a text baseline | Handles typed edges and DAG layouts; the no-JS baseline keeps every graph surface usable without scripting |
 | Markdown rendering | Server-side `markdown-it-py`, safe by default (§6.2) | No client-side rendering of untrusted note content; no sanitizer dependency needed when raw HTML is never emitted |
-| Writes | Curated action set, route-gated by `[writes] enabled`, form-encoded POSTs, refresh-after-write | Small blast radius, no optimistic state, degrades to read-only cleanly |
+| Writes | Curated action set through one write funnel, form-encoded POSTs, refresh-after-write | Small blast radius, no optimistic state, one audited path to Lithos |
 | Frontend | FastAPI + HTMX + Cytoscape.js | No build step; minimal stack; HTMX SSE extension drives live updates |
 | Styling/assets | Vendored, pinned static assets (`static/`) with app CSS | Local-first/offline behaviour; no CDN supply-chain or runtime dependency |
 | Config format | TOML + env overrides | Consistent with Lithos conventions |
@@ -229,8 +229,7 @@ LITHOS_LENS_GRAPH_MAX_TASKS=300                  # page-scope size guard (ghosts
 LITHOS_LENS_GRAPH_CORPUS_MAX_TASKS=1000          # internal corpus-scope bound (planning metrics)
 LITHOS_LENS_GRAPH_FETCH_CONCURRENCY=16
 
-# Curated writes — disabled by default; POST routes are not registered when false
-LITHOS_LENS_WRITES_ENABLED=false
+# Curated writes (§5C)
 # LITHOS_LENS_WRITES_DEFAULT_OPERATOR=dave
 LITHOS_LENS_WRITES_CONFIRM_CANCEL=true
 
@@ -249,7 +248,7 @@ LITHOS_LENS_LLM_ENABLED=false
 # LITHOS_LENS_LLM_MAX_TOKENS=2048
 ```
 
-**`.env.prod`:** same keys with production values (`LITHOS_LENS_LITHOS_URL=http://lithos:8765`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Deployments that enable writes set `LITHOS_LENS_WRITES_ENABLED=true` explicitly and deliberately.
+**`.env.prod`:** same keys with production values (`LITHOS_LENS_LITHOS_URL=http://lithos:8765`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`). Production sets `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` so the single operator is not prompted for an identity (§5C.5).
 
 ### `docker-compose.yml`
 
@@ -341,7 +340,6 @@ mini_graph_max_nodes = 40         # detail mini-graph cap (§5.5.2)
 corpus_max_tasks = 1000           # internal corpus-scope bound feeding §5A metrics (lands with ROADMAP T2b); above it keystone is "not computed"
 
 [lithos-lens.writes]               # curated write actions (§5C)
-enabled = false                   # POST routes are NOT REGISTERED when false
 default_operator = ""             # operator identity fallback (§5C.5)
 confirm_cancel = true             # consequence-aware cancel confirmation
 
@@ -395,7 +393,7 @@ lithos_agent_register(
 
 6. Start the shared Lithos `/events` subscriber if event streaming is enabled, passing a server-side `types=` filter for the consumed event set (§16.1.1).
 7. Start cached health probes for Lithos, events, and LLM.
-8. Mount routers and serve HTTP. Write routes (§5C) are mounted **only** when `[writes] enabled = true`.
+8. Mount routers and serve HTTP.
 
 Boot must succeed even when Lithos is unreachable. In that case Lens starts in degraded mode, `/health` reports `lithos="unreachable"`, and UI routes render degraded panels rather than crashing.
 
@@ -573,7 +571,7 @@ All open `task_type="gate"` tasks, grouped by gate type with **human gates first
 | Waiter count | "blocks N tasks" — from outgoing `waits_on_gate` edges (or the blocked-set blocker entries); clicking expands the waiter list |
 | Timer countdown | For `timer` gates, a live countdown to `ready_at` |
 | Advisory metadata | Type-specific keys (`approval_required_from`, `provider`, `repo`, `pr_number`, `external_id`, `required_state`, …) summarised on the row, full table on the detail page. These are advisory — Lithos does not read them, and Lens renders them verbatim. |
-| Approve action *(writes enabled)* | Human gates carry the approve/complete action from §5C.2 |
+| Complete action | Human and external-task gates carry **Complete**; timer, CI and PR gates carry **Proceed anyway…** (§5C.2) |
 
 **PR reconciliation state (T2b).** lithos-loom writes four flat scalar metadata keys on every still-open `pr` gate, on every sweep: `reconciliation_state`, `reconciliation_detail` (one line, ≤200 chars — why), `reconciliation_since` (ISO time the state last *changed*) and `reconciliation_pr_url` (the PR the state describes). The state is *derived*, not tracked: it answers "what is this PR doing right now?", so findings remain the history. Contract source: lithos-loom `docs/SPECIFICATION.md` §2.2 "Reconciliation state (PRD S7)" — no new Lithos API, it is task metadata Lens already reads.
 
@@ -696,7 +694,7 @@ Data contract: `lithos_task_get(task_id)` + `lithos_task_status(task_id)` (claim
 | Active claims | `aspect / agent / expires_at / time remaining`; refreshed on SSE claim events. The list shows **active claims only** — expired claims are unobservable and Lens must not imply otherwise. |
 | Resolution | `resolved_at`, `outcome` (completed), cancellation timestamp. The cancel *reason* is event-only in Lithos — Lens MAY show it live from the event but MUST NOT promise it survives a reload. |
 | Findings | Full timeline (§5.6) |
-| Actions *(writes enabled)* | The applicable §5C actions for the task's state |
+| Actions | The applicable §5C actions for the task's state |
 
 #### 5.5.2 Blocker chain — text baseline + mini-graph
 
@@ -813,7 +811,7 @@ Normalized browser events preserve the Lithos event `id` for dedupe and carry `r
 | `GET /tasks/events` | SSE re-broadcast endpoint for browser tabs |
 | `POST /api/tasks/findings/curate` | LLM findings curation (only when `llm.enabled`; ROADMAP X1) |
 
-Write endpoints are specified in §5C.7 and exist only when `[writes] enabled = true`.
+Write endpoints are specified in §5C.7.
 
 ---
 
@@ -855,7 +853,7 @@ Three stacked sections answer three sub-questions, top to bottom:
 
 ### 5A.3 Human-actionable section
 
-- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("N tasks wait on it" — waiters may have other blockers, so it is not an unblock promise) and — when writes are enabled — the approve action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
+- **Human-gate queue (top):** every open `gate_type="human"` gate, oldest first, each showing its waiter count ("N tasks wait on it" — waiters may have other blockers, so it is not an unblock promise) and the Complete action (§5C.2). This queue is the single most operator-relevant list in the product; it MUST come first.
 - **Tagged tasks:** open tasks carrying `[tasks].human_actionable_tag` (default `human`), grouped by project, oldest first.
 - **Human-claimed tasks:** open tasks claimed by a **human agent** — one whose `lithos_agent_list` entry has `type="human"` (what T3 registers operators as) **or** whose id is in `[tasks].human_agents`; the union is the one definition of "human" across the Tasks views — so a human can resume their own work.
 - Empty state: `Nothing for you to do right now ✓`.
@@ -999,79 +997,99 @@ A task carrying multiple `project:*` tags (or a tag conflicting with metadata) i
 ## 5C. Curated Write Actions
 
 > [!important] This section replaces every previous "strictly read-only" statement
-> Lens is **read-only by default** and becomes an operator console for a **small curated action set** when `[writes] enabled = true`. This is deliberately neither read-only nor CRUD: the actions are the ones an operator needs while looking at the dashboard, and nothing more. Sequencing: ROADMAP T3.
+> Lens is an operator console for a **small curated action set**. This is deliberately neither read-only nor CRUD: the actions are the ones an operator needs while looking at the dashboard, and nothing more. Sequencing: ROADMAP T3; execution plan: [`docs/prd/t3-curated-write-actions.md`](./prd/t3-curated-write-actions.md).
 
 ### 5C.1 Posture and security boundary
 
-- **Default off.** With `[writes] enabled = false` (the default), no mutating route is registered — POSTs to write paths return **404**, not 403. Templates render no write affordances.
-- **In scope:** approve/complete human gates, reopen, cancel, create task/epic/gate, add dependency edges.
-- **Out of scope (permanently, absent new requirements):** claim/renew/release (agents manage their own claims), `lithos_task_update` (editing titles/descriptions/tags), deleting tasks (no such tool exists), deleting or re-typing task edges (**no `lithos_task_edge_delete` exists upstream** — see 5C.2), bulk operations.
-- **Security boundary — stated explicitly:** Lens has **no authentication or authorization**. It is designed for a single-operator, trusted local network. Anyone who can reach the Lens port can perform any enabled action. Deployments MUST NOT expose Lens beyond the trusted network, and the settings view MUST state this boundary whenever writes are enabled. The only request-level protections are the Origin/Referer check and operator attribution (5C.6), which are hygiene, not security.
+- **Always on — there is no read-only mode.** Write routes are registered like every other route group, and whether an affordance renders depends on the task's state and on whether an operator identity resolves (5C.5), never on configuration. *(Decided 2026-10-01. Earlier versions of this section specified a `[writes] enabled` flag, default off, with route gating. Lens is a single-operator console whose one deployer is its one operator; a second posture doubled the surface to specify and test in order to protect a deployment that does not exist.)*
+- **In scope:** complete gates (split by gate type, 5C.2), reopen, cancel, create task/epic/gate, add dependency edges, and remove an edge Lens has just added.
+- **Out of scope (permanently, absent new requirements):** completing ordinary tasks (agents finish their own work), claim/renew/release (agents manage their own claims), `lithos_task_update` (editing titles/descriptions/tags), deleting tasks (no such tool exists), general edge management (removing or re-typing arbitrary edges, re-parenting as one action), bulk operations.
+- **Security boundary — stated explicitly:** Lens has **no authentication or authorization**. It is designed for a single-operator, trusted local network. Anyone who can reach the Lens port can perform any action in this section. Deployments MUST NOT expose Lens beyond the trusted network, and the operator page (5C.5) MUST state this boundary; the settings view (§13) takes the statement over when it exists. The only request-level protections are the Origin/Referer check and operator attribution (5C.6), which are hygiene, not security.
 
 ### 5C.2 Actions
 
 | Action | Lithos tool | Surfaces |
 |--------|-------------|----------|
-| Approve / complete gate | `lithos_task_complete(task_id, agent=<operator>)` | Gates section rows, gate detail, Planning human-gate queue |
-| Reopen | `lithos_task_reopen(task_id, agent=<operator>)` | Detail page of completed/cancelled tasks |
+| Complete gate | `lithos_task_complete(task_id, agent=<operator>, outcome=…)` | Gates section rows (and wherever attention promotes them), side panel, gate detail, Planning human-gate queue |
+| Reopen | `lithos_task_reopen(task_id, agent=<operator>)` | Detail page of completed/cancelled tasks; the completion receipt |
 | Cancel | `lithos_task_cancel(task_id, agent=<operator>, reason=…)` | Detail page and row overflow menu of open tasks |
 | Create task / epic / gate | `lithos_task_create(title, agent=<operator>, description?, tags?, metadata?, task_type?, depends_on?, parent_task_id?)` | "New task" affordance on the dashboard; "add child" on epic detail |
-| Add dependency edge | `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent=<operator>)` | Task detail "add dependency" affordance |
+| Add dependency edge | `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent=<operator>)` | Task detail "add relation" affordance |
+| Remove an edge just added | the task-edge delete tool Lithos task `bd66d57c` adds (contract vendored from the Lithos source when it exists) | The add-edge receipt only, and only on evidence that this call inserted the edge |
 
 Per-action requirements:
 
-- **Approve / complete gate.** The primary write. On success, surface the returned **`unblocked[]`** as a toast — `Unblocked N tasks` with the first few titles — and offer **Undo**, implemented as `lithos_task_reopen` on the gate (which re-blocks the waiters; see reopen semantics below). Lens deliberately offers **no complete action for ordinary tasks** — agents finish their own work; the operator's completion surface is gates only.
-- **Reopen.** On success, surface the returned **`reblocked[]`** — `Re-blocked N dependents` — since reopening a *completed* blocker/gate takes previously-ready dependents back off the frontier. Reopening a *cancelled* blocker instead **un-strands** its dependents (`blocker_unsatisfiable` → waiting) and re-blocks nothing; the UI copy MUST distinguish the two, because reopen-the-cancelled-blocker is the standard remediation for Needs-attention rule 1.
-- **Cancel — consequence-aware.** When `[writes].confirm_cancel = true` (default), the confirm step computes the count of **open transitive dependents** via `blocks`/`waits_on_gate` (from the §5.7 graph machinery) and states the consequence plainly: `Cancelling will strand N dependent tasks (they become permanently blocked until re-routed)`, listing the first few. The confirmation MUST work without JavaScript (a server-rendered confirm page: `GET …/cancel` → confirm form → `POST`). The optional `reason` is sent, but Lithos persists it **only in the event payload** — the UI must not promise it survives a reload.
-- **Create.** A single form for `task_type` ∈ `task` / `epic` / `gate`, with `depends_on[]` (predecessor picker), `parent_task_id` (parent picker), tags, and project (written to **both** conventions per §5B.1). For gates, gate metadata is **validated client-side first** — `gate_type` must be one of `human`/`timer`/`ci`/`pr`/`external_task`; `ready_at` is required for `timer` and must parse as an ISO datetime — then revalidated server-side by Lithos (`invalid_input`). Advisory keys are passed through verbatim.
-- **Add dependency edge.** Edge types offered: `blocks`, `parent_child`, `discovered_from` (a `waits_on_gate` edge additionally requires the *from* task to be a gate and is offered only from gate detail pages). **There is no edge delete** — the UI MUST say so before the write ("dependency edges cannot be removed once created"), and a `parent_exists` rejection is a dead end (re-parenting requires an edge delete that doesn't exist). Both gaps are top asks in the ROADMAP dependency ledger; Lens documents them honestly rather than working around them.
+- **Complete gate.** The primary write. Lens deliberately offers **no complete action for ordinary tasks** — the operator's completion surface is gates only — and what it offers on a gate depends on who resolves that gate:
+
+  | Gate type | Resolved by | Lens offers |
+  |-----------|-------------|-------------|
+  | `human` | a person, by definition | **Complete** — one action |
+  | `external_task` | whoever learns the outside wait is over; nothing in Lithos resolves it | **Complete** — one action |
+  | `timer` | itself, at `ready_at` | **Proceed anyway…** — confirm page |
+  | `ci`, `pr` | whatever watches the check or the PR | **Proceed anyway…** — confirm page |
+  | any other value | unknown to Lens | **Proceed anyway…** — the cautious path |
+
+  The action is labelled **Complete**, never "Approve": completing a gate means what its author says it means (for a loom needs-human gate it is the retry gesture), so Lens states what it does and shows the gate's description beside the action. The **proceed-anyway confirm page** (`GET …/approve`) MUST work without JavaScript and states only what Lens can read: what would otherwise resolve the gate (a timer's `ready_at` — and, when that has passed, that the gate no longer blocks anything; a PR gate's PR link; otherwise the gate's description), the waiters completing it releases, and that whatever watches the gate will find it closed. It MUST NOT describe how the gate's author reacts. A POST for a machine-owned gate without the page's confirmation is redirected to the page, not performed. An optional operator note is sent as `outcome`; without one the outcome is `Completed via Lens by <operator>`, or for an override `Completed early via Lens by <operator> — proceed anyway; <gate type> gate had not resolved`, so the record never claims a wait ended that did not. On success, surface the returned **`unblocked[]`** — a list of task **ids**; Lens resolves the titles — as `Unblocked N tasks` with the first few titles, and offer **Reopen gate**, implemented as `lithos_task_reopen` on the gate. It is labelled a reopen, not an undo: it re-blocks the waiters but does not recall anything their agents started in between.
+- **Reopen.** On success, surface the returned **`reblocked[]`** (task ids) — `Re-blocked N dependents` — since reopening a *completed* blocker/gate takes previously-ready dependents back off the frontier. Reopening a *cancelled* blocker instead **un-strands** its dependents (`blocker_unsatisfiable` → waiting) and re-blocks nothing, so `reblocked[]` is empty by design; Lens states how many dependents are waiting on it again, from the task's active outgoing dependency edges. The UI copy MUST distinguish the two cases before and after the write, because reopen-the-cancelled-blocker is the standard remediation for Needs-attention rule 1. Lithos records the reopen as a finding and clears the outcome; the copy says the prior outcome is kept in that finding.
+- **Cancel — consequence-aware.** When `[writes].confirm_cancel = true` (default), the confirm step states the consequence plainly, from a bounded downstream walk over **active** `blocks`/`waits_on_gate` edges (§5.7's edge states and cache) that crosses project boundaries: how many open tasks the cancel **strands directly** (they become permanently blocked until re-routed) and how many more sit **behind them**, listing the first few; when the walk hits its budget or an edge read fails, both numbers are lower bounds and are rendered "≥ N" with the reason. It also states the active claims the cancel releases (by agent), that a task's open children are **not** cancelled with it, and — for a gate — that its waiters become unsatisfiable and completing it is how they proceed (§5.2.3). The confirmation MUST work without JavaScript (a server-rendered confirm page: `GET …/cancel` → confirm form → `POST`). With `confirm_cancel = false` the same facts appear on the receipt instead. The optional `reason` is sent, but Lithos persists it **only in the event payload** — the UI must not promise it survives a reload.
+- **Create.** A single form for `task_type` ∈ `task` / `epic` / `gate`, with `depends_on[]` and `parent_task_id` entered as full or short ids (a datalist of the board's open tasks as enhancement; Lithos resolves prefixes), tags, and project (written to **both** conventions per §5B.1). For gates, gate metadata is **validated by Lens first** — `gate_type` must be one of `human`/`timer`/`ci`/`pr`/`external_task`; `ready_at` is required for `timer` and must parse as an ISO datetime — then revalidated by Lithos (`invalid_input`), which re-renders the form with input kept. Advisory keys are passed through verbatim. **Create is de-duplicated on a request id — by Lens, best effort.** The form carries a random id that Lens writes as `metadata.lens_request_id`. Lithos enforces nothing about that key (create mints a new id and inserts), so a lookup alone is a race; Lens therefore (1) serialises submits carrying the same id — any that arrive while one is in flight wait and receive its outcome, never making a call of their own; (2) looks for a task already carrying the id before creating, and lands on it; and (3) **never retries an unknown outcome under the same id**: after a transport failure the original call may still be running, so a lookup that finds nothing proves nothing, and the page MUST say "not visible yet" — never "not created" — offering *Check again* (the lookup) and *Start again* (a new request id, the operator's explicit decision). A double-click or resubmit creates one task; a create whose outcome Lens never learned can still be duplicated if the operator starts again while it lands (closing that needs an upstream idempotency key).
+- **Add dependency edge.** Offered as **sentences** on the task's detail page, each mapping to one edge — "this task is blocked by ▁", "this task blocks ▁" (`blocks`); "this task's parent is ▁", "▁ is a child of this task" (`parent_child`); "this task was discovered from ▁" (`discovered_from`); and, on a gate's detail page only, "▁ waits on this gate" (`waits_on_gate`). A **confirm step** restates the relation with both titles and its readiness meaning before the write, because direction is the mistake this form exists to prevent. **An existing relation makes no write.** The upstream call is an upsert — on an existing `(from, to, type)` it returns the same success payload as an insert and replaces that edge's metadata — and other agents' edge writes emit no event, so Lens's cached edges can be stale. The confirm step and the POST MUST each re-read the task's edges from Lithos; when the relation already exists Lens says so ("already exists; nothing was written"), makes no upsert call and offers no removal. **This action ships only once Lithos can delete a task edge** (`bd66d57c`, ROADMAP ledger #2), and removal is offered **only for an edge the call demonstrably created**: the relation was absent in the read before the call *and* the edge read back afterwards carries the operator as `created_by` (an upsert leaves an existing edge's `created_by`/`created_at` untouched). When they name another writer, the receipt says who created the relation and offers nothing; the removal POST re-checks the same two fields before deleting. The read → upsert → read-back sequence MUST be **serialised per `(from, to, type)`** inside Lens, so that two concurrent submits of one relation by the same operator (a double-click, two tabs) produce one upsert and one removal offer — the second waits, finds the relation, and takes the already-exists outcome. A `parent_exists` refusal names the existing parent. Lens does not ship an edge-creation button on top of permanent edges. *Residuals, both from a writer outside Lens acting in the gap between Lens's read and its write:* another agent inserting the same edge has its metadata replaced by Lens's upsert (no removal is offered); and a writer using the operator's own agent id produces an edge Lens cannot tell from its own insert, so removal is offered for an edge the call did not create — `created_by` is evidence, not proof. A strict "just added" guarantee needs an upstream `created` signal on the upsert response.
 
 ### 5C.3 Write architecture
 
-- **Route gating:** POST routes are registered at startup only when `[writes] enabled = true` (§4.1 step 9).
+- **One write funnel.** Every action goes through a single path: resolve the operator, run the pre-check (5C.6), make the one Lithos call, classify the result (5C.4), write the audit line and span, publish any synthetic event, mint the receipt, answer. Route handlers only parse their form. No write reaches Lithos by another path.
 - **Form-encoded POSTs** (`application/x-www-form-urlencoded`); no JSON write API.
-- **Dual-mode responses:** an HTMX request receives an updated fragment; a plain form submission receives a **303 See Other** redirect (POST-redirect-GET) to the affected page. Every write path works without JavaScript.
-- **Refresh-after-write, never optimistic:** after any successful write, Lens re-fetches the affected data and renders from fresh reads. Write results (e.g. `unblocked[]`) inform toasts, not state.
-- **Cross-tab convergence:** other open tabs converge via the normal SSE pipeline — upstream events cover complete/cancel/reopen/create. **Edge writes emit no upstream event**, so after a successful `lithos_task_edge_upsert` Lens publishes a synthetic internal **`lens.edge_upserted`** event (carrying `from_task_id`, `to_task_id`, `type`) through its own hub so all tabs refresh. If a `task_edge.upserted` event ever lands upstream (ledger ask), the synthetic path retires.
+- **Dual-mode responses:** a plain form submission receives a **303 See Other** redirect (POST-redirect-GET) to a page rendered from fresh reads; an HTMX request (row-level actions only) receives the receipt fragment and triggers the existing reconcile. Every write path works without JavaScript.
+- **Receipts.** What a write returned (`unblocked[]`, `reblocked[]`, the created task) is shown once, as a banner on the page the redirect lands on (`?receipt=<id>`), held in a small bounded in-memory store. A receipt is feedback, not state: it makes no claim the page below it does not re-derive, and an unknown or expired id renders nothing.
+- **Refresh-after-write, never optimistic:** after any successful write, Lens re-fetches the affected data and renders from fresh reads. Write results inform receipts, not state.
+- **Cross-tab convergence:** other open tabs converge via the normal SSE pipeline — upstream events cover complete/cancel/reopen/create. **Edge writes emit no upstream event**, so after a successful edge write Lens publishes a synthetic internal **`lens.edge_upserted`** event (carrying `from_task_id`, `to_task_id`, `type`) through its own hub so all tabs refresh and both endpoints leave the edge cache. If a `task_edge.upserted` event ever lands upstream (ledger ask), the synthetic path retires.
 
 ### 5C.4 Error envelope mapping
 
-Lithos write failures return `{status: "error", code, message}`. Lens MUST map each code to operator-actionable copy — never surface a bare code, and never a 500:
+Lithos write failures return `{status: "error", code, message}`. Lens MUST map each code to operator-actionable copy — never surface a bare code, never a 500 — and a refused write MUST say that nothing was changed. The mapping reads the **whole envelope** (the client's tool error MUST preserve every envelope field, not only `code` and `message`), since fields such as `candidates` carry what the copy needs:
 
 | Code | Operator-facing copy (shape) |
 |------|------------------------------|
-| `cycle` | "This dependency would create a cycle: *\<message members\>*. Nothing was changed." |
-| `parent_exists` | "*\<Task\>* already has a parent. Re-parenting isn't possible — Lithos has no edge delete (see ROADMAP ledger)." |
+| `task_not_found` | Complete and cancel return this for "not found" **and** for "not open". Lens re-reads the task: if it exists, the conflict page ("this task is now *\<status\>*"); if not, "Task no longer exists (it may have been removed since you loaded the page)." |
+| `task_not_resolved` | (reopen) Conflict page: "this task is already open." |
+| `invalid_input` | Field-level re-render of the form with the upstream message (e.g. invalid gate metadata), input kept |
+| `ambiguous_id_prefix` | "‘\<prefix\>’ matches more than one task", with the envelope's `candidates` offered as choices |
+| `cycle` | "This dependency would create a cycle. Nothing was changed." followed by the upstream message verbatim (it names the members by id; ids are linked as presentation only — Lens does not parse the message) |
+| `parent_exists` | "*\<Task\>* already has a parent", naming it and the way to replace it (5C.2) |
 | `self_edge` | "A task can't depend on itself." |
 | `not_a_gate` | "*\<Task\>* isn't a gate — `waits_on_gate` edges must start from a gate task." |
-| `task_not_found` | "Task no longer exists (it may have been removed since you loaded the page)." |
-| `invalid_input` | Field-level re-render of the form with the upstream message (e.g. invalid gate metadata) |
+| `invalid_edge_type` | A Lens defect (the form offers only valid types): the unknown-code path, logged at error |
 | *(unknown code)* | Show code + message verbatim with a "report this" hint — forward-compatible with new upstream codes |
 
 ### 5C.5 Operator identity
 
 Writes are attributed to a **named human operator**, distinct from the Lens service agent:
 
-- Resolution order: **`lens_operator` cookie** → **`[writes].default_operator`** → an inline **"Acting as"** prompt that blocks the first write until an identity is supplied (then sets the cookie).
-- On first use of an identity, Lens registers it: `lithos_agent_register(id=<operator>, type="human")`.
+- Resolution order: **`lens_operator` cookie** → **`[writes].default_operator`** → none. The cookie is user input and is validated on every read.
+- **With no identity, no write affordance renders** — only a "choose an operator to act" link to the **operator page** (`GET`/`POST /operator`), which shows the current identity and its source, sets or switches it (then sets the cookie), and carries the security-boundary statement (5C.1). A POST that arrives without an identity is redirected to that page and is **not replayed** — the operator repeats the action.
+- **Registration precedes the first write.** Lithos auto-registers an unknown `agent` on any write, untyped; so on first use of an identity Lens registers it — `lithos_agent_register(id=<operator>, type="human")` — and refuses the write if that fails.
+- **Impersonation guard.** Re-registering an existing id with a type overwrites that agent's type and un-archives it. Lens MUST look the id up **exactly** (`lithos_agent_info`) — not in `lithos_agent_list`, which hides archived agents by default — and accept an identity only when the lookup finds nothing or finds an agent of type `human`. Its own service agent's id, and any id that exists with another type or with none, is refused; when the lookup fails, a new identity is not accepted.
 - Every write passes `agent=<operator>`. The service agent (`lithos-lens`, type `web-ui`) is used for reads and registration only — audit trails MUST be able to distinguish "Lens the process" from "the human driving it".
 - The current identity is displayed near every write affordance, with a "switch" affordance.
 
 ### 5C.6 Concurrency, integrity, and audit
 
-- **`expected_status` pre-check:** every write form carries the task status the operator saw. The handler re-fetches `lithos_task_get` and aborts with a conflict page ("this task is now *\<status\>* — reload") when the status differs. Lithos has no compare-and-set on tasks; this pre-check narrows (but cannot close) the race window, and the docs say so.
-- **Origin/Referer check:** all POSTs require a same-host `Origin` (or `Referer`) header; mismatches are rejected with 403. This is CSRF hygiene on a trusted network, not an auth mechanism.
-- **Audit log:** every write attempt emits one structured log line — operator, action, `task_id`, argument summary, and the full result envelope — plus an OTEL span `lens.writes.<action>` (§15).
+- **`expected_status` pre-check:** every write form carries the task status the operator saw. The handler re-fetches `lithos_task_get` and aborts with a conflict page ("this task is now *\<status\>* — reload") when the status differs. Lithos has no compare-and-set on tasks beyond applying complete and cancel only to an open task (and refusing to reopen an open one); this pre-check narrows (but cannot close) the race window, the upstream refusal is mapped to the same conflict page (5C.4), and the docs say so.
+- **Origin/Referer check:** all POSTs require a same-host `Origin` (or `Referer`) header; mismatches, and requests carrying neither, are rejected with 403 before any Lithos call. This is CSRF hygiene on a trusted network, not an auth mechanism.
+- **Audit log:** every write attempt — including each refusal — emits one structured log line — operator, action, `task_id`, argument summary, the status expected and observed, and the full result envelope — plus an OTEL span `lens.writes.<action>` (§15).
 
-### 5C.7 API (writes — registered only when enabled)
+### 5C.7 API (writes)
 
 | Endpoint | Action |
 |----------|--------|
-| `POST /tasks/{task_id}/approve` | Approve human gate — calls `lithos_task_complete` on the gate. The handler **rejects a non-gate task** (409); there is deliberately no generic task-complete route (§5C.2) |
+| `GET /operator` → `POST /operator` | Show, set or switch the operator identity; security-boundary statement |
+| `POST /tasks/{task_id}/approve` | Complete a gate — calls `lithos_task_complete`. The handler **rejects a non-gate task** (409); there is deliberately no generic task-complete route (§5C.2). The path name is historical; the action is "Complete" |
+| `GET /tasks/{task_id}/approve` | Proceed-anyway confirm page for timer / CI / PR / unknown gate types |
 | `POST /tasks/{task_id}/reopen` | Reopen |
 | `GET /tasks/{task_id}/cancel` → `POST /tasks/{task_id}/cancel` | Consequence-aware cancel (confirm page + submit) |
-| `GET /tasks/new` → `POST /tasks/new` | Create task / epic / gate |
-| `POST /tasks/{task_id}/edges` | Add dependency edge |
+| `GET /tasks/new` → `POST /tasks/new` | Create task / epic / gate (`new` is a reserved task-path segment) |
+| `GET /tasks/{task_id}/edges/new` → `POST /tasks/{task_id}/edges` | Relation confirm step; add dependency edge |
+| `POST /tasks/{task_id}/edges/remove` | Remove an edge Lens just added (with `bd66d57c`) |
 
 ---
 
@@ -1252,7 +1270,7 @@ Flow:
 3. `lithos_note_update(id, agent=<operator>, tags=<new list>, expected_version=<version>)`.
 4. On `{status: "version_conflict"}` — re-read and retry once; then surface the error.
 
-The `tags` argument replaces the full list (that is why step 1 exists); `metadata` patches, when used, are additive per-key merges. Feedback writes follow the §5C gating and operator-identity contract — they are writes, attributed to the human operator, registered only when writes are enabled.
+The `tags` argument replaces the full list (that is why step 1 exists); `metadata` patches, when used, are additive per-key merges. Feedback writes follow the §5C write-funnel and operator-identity contract — they are writes, attributed to the human operator.
 
 ### 10.3 Entry points and API
 
@@ -1272,7 +1290,7 @@ Response: `{"status": "ok"}` or `{"status": "error", "message": "..."}` — erro
 
 ## 11. Conflict Resolution UI
 
-*The first knowledge write (deferred pool — see ROADMAP); follows the §5C write gating and operator-identity contract.*
+*The first knowledge write (deferred pool — see ROADMAP); follows the §5C write-funnel and operator-identity contract.*
 
 When `contradicts` edges exist, Lens exposes a resolution panel on the relevant notes and on the edge in the graph view (§8.4):
 
@@ -1319,7 +1337,7 @@ Read-only. Displays:
 - Lithos connection state: URL, MCP session status, SSE subscription state and last successful event time
 - Effective Tasks-view tuning (`frontier_limit`, attention thresholds, `project_tag_key`, debounce, drawer size) with deprecation notices for any parsed-and-ignored legacy knobs (§4.4) — `visible_cap` and `project_convention` among them, each shown with the value parsed and the note that nothing reads it
 - Graph page settings (`[graph]`) and Knowledge settings (`[knowledge]`)
-- **Writes posture:** whether `[writes]` is enabled, the current operator identity, and — when enabled — the explicit trusted-network security-boundary statement from §5C.1
+- **Writes posture:** the current operator identity and the explicit trusted-network security-boundary statement from §5C.1 (until this view exists, the operator page carries it — §5C.5)
 - LLM flags (enabled, provider, model, complexity default) — values only, never API keys
 - Influx profile/threshold/model display parsed from `/etc/influx/config.toml` — **only when the optional mount exists** (§3); the section is hidden otherwise
 
@@ -1386,7 +1404,7 @@ Both log sinks are size-bounded. `MAX_LOGGED_VALUE_CHARS` is applied centrally i
 | `lens.tasks.metrics_recompute` | Debounced recompute (attribute `trigger=sse\|manual\|reconnect\|warmup`) |
 | `lens.tasks.plan` / `.projects` / `.throughput` | Planning View computations |
 | `lens.tasks.project_convention_conflict` | Metadata-vs-tag disagreement warning (§5B.1) |
-| `lens.writes.<action>` | One span per write attempt (`complete`, `reopen`, `cancel`, `create`, `edge_upsert`); attributes: operator, result code |
+| `lens.writes.<action>` | One span per write attempt (`complete`, `reopen`, `cancel`, `create`, `edge_upsert`, `edge_remove`); attributes: operator, result code, and for `complete` the gate type and whether it was an override |
 | `lens.events.connect` | SSE connection lifecycle |
 | `lens.knowledge.related` | Related-panel load inside a note render; attributes: fan-out, section state |
 | ~~`lens.knowledge.note` / `.resolve` / `.search`~~ | **Superseded.** These three are recorded as ATTRIBUTES on the request's own server span (`lens.outcome`, `lens.mode`, `lens.result_count`, `lens.has_tag`, `lens.candidate_count`) rather than as named spans — see the note below |
@@ -1453,6 +1471,7 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 | `lithos_finding_list(task_id, since?)` | — | Findings timeline; findings-buffer refetch on `finding.posted` and in-progress warmup (§5.8.4). Response order is not promised — Lens sorts by `created_at`. **Requires `task_id`** — no reverse (`knowledge_id`) lookup exists (§6.7) |
 | `lithos_stats()` | — | Health probe; summary signals |
 | `lithos_agent_list` | `type`, `active_since` | Agent filter dropdown |
+| `lithos_agent_info(id)` | — | Exact agent lookup for the operator-identity guard (§5C.5) — returns archived agents, which the list hides by default |
 | `lithos_tags(prefix?)` | — | **Not consumed.** The project universe is derived from the loaded snapshot under both conventions (§5A.6) |
 | `lithos_read` | `id` \| `path`, `max_length`, `agent_id` | Note pages; cheap title/metadata fetches (`max_length=1` still returns complete frontmatter metadata); wiki-link path probe. Response carries **no top-level `path`**; `links` entries are unresolved `{target, display}`. |
 | `lithos_search(query)` | `mode="hybrid"`, `limit`, `tags`, `path_prefix` | `/knowledge` search; retrieve fallback. **Snippets contain raw markdown — render escaped** (§7.1) |
@@ -1466,11 +1485,11 @@ The `lithos` status derives from a cached `lithos_stats()` probe refreshed every
 
 | Tool | Key args | Lens action |
 |------|----------|-------------|
-| `lithos_task_complete(task_id, agent)` | `outcome?` | Used by Lens **only to approve human gates** (the `/approve` route rejects non-gates, §5C.7); surfaces returned `unblocked[]` |
+| `lithos_task_complete(task_id, agent)` | `outcome?` | Used by Lens **only to complete gates** (the `/approve` route rejects non-gates, §5C.7; machine-owned gate types need the proceed-anyway confirmation, §5C.2); surfaces returned `unblocked[]` (task ids) |
 | `lithos_task_cancel(task_id, agent)` | `reason?` *(event-only, not persisted)* | Consequence-aware cancel |
-| `lithos_task_reopen(task_id, agent)` | — | Reopen; surfaces returned `reblocked[]` |
-| `lithos_task_create(title, agent)` | `description?`, `tags?`, `metadata?`, `task_type?`, `depends_on?`, `parent_task_id?` | Create task / epic / gate |
-| `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent)` | `metadata?` | Add dependency edge; **emits no upstream event**; **no delete counterpart exists** |
+| `lithos_task_reopen(task_id, agent)` | — | Reopen; surfaces returned `reblocked[]` (task ids) |
+| `lithos_task_create(title, agent)` | `description?`, `tags?`, `metadata?`, `task_type?`, `depends_on?`, `parent_task_id?` | Create task / epic / gate; Lens stamps `metadata.lens_request_id` for best-effort de-duplication (§5C.2) |
+| `lithos_task_edge_upsert(from_task_id, to_task_id, type, agent)` | `metadata?` | Add dependency edge; **emits no upstream event**; the delete counterpart is Lithos task `bd66d57c`, which Lens's edge action waits for (§5C.2) |
 | `lithos_agent_register(id)` | `name?`, `type?` | Service-agent registration at boot (`type="web-ui"`); operator registration on first write (`type="human"`) |
 
 **Later-milestone writes (Part C):**
@@ -1520,7 +1539,7 @@ Additional payload notes: task events carry empty `tags`, so upstream `?tags=` f
 | `GET /tasks/graph` | Task dependency graph page (`?project=` \| `?epic=`) |
 | `GET /tasks/plan` (+ `/projects`, `/throughput` fragments) | Planning View |
 | `GET /tasks/events` | SSE re-broadcast to browser tabs |
-| `POST /tasks/{task_id}/approve` (gate-only) \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `POST /tasks/{task_id}/edges` | Curated writes (§5C.7) — **registered only when `[writes] enabled = true`** |
+| `GET/POST /operator`, `POST /tasks/{task_id}/approve` (gate-only; + `GET …/approve` proceed-anyway confirm) \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `GET /tasks/{task_id}/edges/new`, `POST /tasks/{task_id}/edges` \| `/edges/remove` | Curated writes (§5C.7) |
 | `GET /note/{id}` | Note View (§6) |
 | `GET /knowledge` | Search / recently-updated landing (`?q=`, `?tag=`) |
 | `GET /knowledge/resolve` | Wiki-link resolver (`?target=`, `?from=`) |
