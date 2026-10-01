@@ -195,40 +195,45 @@ a 500.
     `ready_at` required for a timer before anything is sent, with the form
     re-rendered and my input kept when Lithos still refuses it, so that I
     never retype a form to fix one field.
-31. As an operator who double-submits or loses the connection mid-create, I
-    want Lens to tell me whether the task was created rather than create it
-    twice or leave me guessing.
+31. As an operator who double-submits, I want one task created, not two.
+32. As an operator who loses the connection mid-create, I want Lens to
+    tell me what it can confirm — "created", or "not visible yet, check
+    again" — and never to claim the task was not created when it cannot
+    know.
 
 ### Add a dependency
 
-32. As an operator, I want to add a relation from a task's detail page by
+33. As an operator, I want to add a relation from a task's detail page by
     completing a sentence — "this task is blocked by ▁", "this task blocks
     ▁", "this task's parent is ▁" — so that direction is chosen in words,
     not in `from`/`to`.
-33. As an operator, I want a confirm step that restates the relation with
+34. As an operator, I want a confirm step that restates the relation with
     both titles and what it means for readiness, so that a wrong-direction
     edge is caught before it is written.
-34. As an operator, I want a refused edge explained — a cycle with its
+35. As an operator, I want a refused edge explained — a cycle with its
     members, an existing parent, a self-edge, a non-gate — and told nothing
     changed, so that I can fix the request.
-35. As an operator, I want to remove the edge I just added, from its
+36. As an operator, I want to remove the edge I just added, from its
     receipt, so that a mistake in the one write that used to be permanent
     is correctable.
-36. As an operator with the graph open in another tab, I want that tab to
+37. As an operator adding a relation that already exists, I want to be
+    told so and nothing written, so that I am never offered removal of an
+    edge someone else drew and never overwrite what they recorded on it.
+38. As an operator with the graph open in another tab, I want that tab to
     learn of the new edge, so that the picture is not silently stale after
     my own action.
 
 ### Every write
 
-37. As an operator, I want a write on a task that changed since I loaded
+39. As an operator, I want a write on a task that changed since I loaded
     the page to be refused with its current status, so that I act on what
     is, not on what I saw.
-38. As an operator, I want a network failure mid-write reported as "may or
+40. As an operator, I want a network failure mid-write reported as "may or
     may not have applied" together with what Lens can see now, so that I
     neither assume success nor blindly retry.
-39. As an operator, I want every page after a write rendered from fresh
+41. As an operator, I want every page after a write rendered from fresh
     reads, so that what I see is Lithos's state and not Lens's guess.
-40. As an auditor, I want one structured log line and one span per attempt
+42. As an auditor, I want one structured log line and one span per attempt
     — operator, action, task, argument summary, result — so that "who did
     this, through Lens" has an answer.
 
@@ -300,11 +305,15 @@ follows as 0.5.x. Nothing else in the milestone waits on it.
   restart. If registration fails the write is refused — "could not register
   the operator identity; nothing was changed".
 - **Impersonation guard.** Re-registering an existing id with a type
-  overwrites that agent's type upstream. Before registering, Lens reads the
-  agent list: an id equal to the Lens service agent, or one that exists
-  with a type other than `human`, is refused on the operator page ("that id
-  belongs to an agent"). If the agent list cannot be read, a new identity
-  is not accepted; one already verified keeps working.
+  overwrites that agent's type upstream and un-archives it. Before
+  registering, Lens looks the id up **exactly**, with `lithos_agent_info`
+  — not in the agent list, which hides archived agents by default, so an
+  archived agent's id would look new and be re-typed. An identity is
+  accepted only when the lookup finds nothing or finds an agent whose type
+  is `human` (archived or not); the Lens service agent's id, and any id
+  that exists with another type or with none, is refused on the operator
+  page ("that id belongs to an agent"). If the lookup fails, a new
+  identity is not accepted; one already verified keeps working.
 - The identity is rendered near every affordance through one shared
   partial, with the switch link.
 
@@ -380,6 +389,11 @@ extended to the codes the source raises:
 
 No write error is a 500. A refused write always says that nothing was
 changed, because that is the fact the operator needs first.
+
+The mapper works on the **whole error envelope**, not on a code and a
+message. Lens's coded tool error carries only those two today and drops
+every other field, which would lose `candidates`; W3 changes it to carry
+the envelope (D12).
 
 ### D7. Complete a gate
 
@@ -505,11 +519,32 @@ copy says the prior outcome is kept in that finding.
   gate type in the five, `ready_at` present and parseable for a timer —
   and Lithos remains the authority: its `invalid_input` re-renders the form
   with input kept.
-- **Idempotent on a request id.** The form carries a random request id,
-  written to the task as `metadata.lens_request_id`. Before creating, and
-  after a transport failure, Lens looks for a task carrying it: a
-  double-submit lands on the task already created, and "may or may not
-  have applied" becomes "it was created" or "it was not".
+- **De-duplicated on a request id — by Lens, best effort.** The form
+  carries a random request id, written to the task as
+  `metadata.lens_request_id`. Lithos gives no help here: create mints a
+  new id and inserts, with nothing unique about that metadata key, so a
+  lookup alone is a race. The mechanism is therefore three rules, all
+  inside the one Lens process:
+  - **One create per request id at a time.** Submits carrying the same id
+    are serialised: the first makes the call, and any that arrive while it
+    is in flight wait and receive *its* outcome, whatever it is. They
+    never make a call of their own.
+  - **Lookup before create.** A submit that finds a task already carrying
+    the id (a resubmit after the first finished, or after a Lens restart)
+    lands on that task and creates nothing.
+  - **An unknown outcome is never retried under the same id.** After a
+    transport failure or timeout the original call may still be running
+    upstream, so a lookup that finds nothing proves nothing. The page says
+    "Lens could not confirm this task was created — it is not visible
+    yet", and offers **Check again** (the lookup, which can turn the
+    answer into "it was created") and **Start again** (the form with the
+    input kept and a *new* request id — the operator's explicit decision
+    to risk a duplicate). Lens does not say "it was not created".
+
+  The guarantee, stated as it is: a double-click or a resubmit creates one
+  task; a create whose outcome Lens never learned can still be duplicated
+  if the operator starts again while it lands. Closing that needs an
+  idempotency key on `lithos_task_create` (upstream ask, Further Notes).
 - **After success:** redirect to the new task's detail page with a receipt.
 
 ### D11. Add a dependency
@@ -523,12 +558,36 @@ copy says the prior outcome is kept in that finding.
   back with both titles and its readiness meaning ("*B* will not be ready
   until *A* completes"); the second writes. Direction is the mistake this
   form exists to prevent, so it is restated before the write, not after.
-- **Removal is the receipt's follow-up.** With `bd66d57c` landed, the
-  receipt offers "Remove this dependency", and a `parent_exists` refusal
-  names the existing parent with the way to replace it. General edge
-  management — removing arbitrary edges from the relations list — is not in
-  T3. The delete tool's contract is transcribed from the Lithos source when
-  it exists; this PRD does not describe its shape.
+- **An existing relation is its own outcome, and makes no write.** The
+  upstream call is an upsert: on an existing `(from, to, type)` it returns
+  the same success payload as an insert and **replaces that edge's
+  metadata**. Other agents' edge writes emit no event, so Lens's picture
+  of the edges can be stale. Both the confirm step and the POST therefore
+  re-read the focal task's edges from Lithos (evicting its cache entry
+  first). If the relation is already there, Lens says so — "this relation
+  already exists (added by *\<agent\>*, *\<date\>*); nothing was written"
+  — makes **no** upsert call, and offers no removal.
+- **Removal is the receipt's follow-up, and only for an edge this call
+  demonstrably created.** After a successful upsert Lens reads the edge
+  back. The receipt offers "Remove this dependency" only when the relation
+  was absent in the read before the call **and** the edge read back was
+  created by the operator — the upsert leaves an existing edge's
+  `created_by` and `created_at` untouched, so those fields say who
+  inserted it. When they name someone else, another writer got there
+  between Lens's read and its write: the receipt says the relation now
+  exists and who created it, and offers nothing. The removal POST checks
+  again that the edge still carries the `created_by` and `created_at` the
+  receipt recorded before it deletes.
+- **Residual, stated.** In that race Lens's upsert has already replaced
+  the other writer's metadata on the edge. Lens cannot prevent it; the
+  window is one read-to-write gap, and closing it needs upstream (a
+  `created` flag on the upsert response and an upsert that leaves
+  metadata alone when none is supplied — Further Notes).
+- With `bd66d57c` landed, a `parent_exists` refusal names the existing
+  parent with the way to replace it. General edge management — removing
+  arbitrary edges from the relations list — is not in T3. The delete
+  tool's contract is transcribed from the Lithos source when it exists;
+  this PRD does not describe its shape.
 - **Convergence.** Edge writes emit no upstream event. After a successful
   edge write the hub publishes the synthetic `lens.edge_upserted` event
   (both endpoint ids and the type), which evicts both endpoints from the
@@ -538,14 +597,18 @@ copy says the prior outcome is kept in that finding.
 
 ### D12. Client surface, contracts, and a fake that changes
 
-- **Client:** five write methods plus operator registration, each returning
-  a typed result record and raising the existing coded tool error. They
-  are called only by the funnel.
+- **Client:** five write methods, operator registration and the exact
+  agent lookup, each returning a typed result record. The coded tool
+  error is extended to **carry the full error envelope** — today it keeps
+  only `code` and `message` and drops the rest, so `candidates` on an
+  ambiguous prefix (and any field upstream adds later) would never reach
+  the mapper. Existing callers that read only the code are unaffected.
+  The write methods are called only by the funnel.
 - **Contracts:** one vendored contract per write tool
   (`lithos_task_complete`, `_reopen`, `_cancel`, `_create`,
-  `_edge_upsert`), transcribed from the Lithos source with citations, and a
-  human-registration request variant on the existing
-  `lithos_agent_register` contract. Every error envelope in D6 appears in
+  `_edge_upsert`) and one for `lithos_agent_info`, transcribed from the
+  Lithos source with citations, and a human-registration request variant
+  on the existing `lithos_agent_register` contract. Every error envelope in D6 appears in
   the contract that can raise it. `make contracts-verify` is run against a
   live server when they are added.
 - **The fake becomes mutable.** Its seed dataset stays frozen; each fake
@@ -601,10 +664,11 @@ Any read page accepts `?receipt=<id>`.
 ### MCP / SSE dependencies
 
 New client calls: `lithos_task_complete`, `lithos_task_reopen`,
-`lithos_task_cancel`, `lithos_task_create`, `lithos_task_edge_upsert`, and
-— in W8 — the edge-delete tool `bd66d57c` ships. Existing calls used by
-the funnel: `lithos_task_get`, `lithos_task_status`,
-`lithos_task_edge_list`, `lithos_agent_list`, `lithos_agent_register`,
+`lithos_task_cancel`, `lithos_task_create`, `lithos_task_edge_upsert`,
+`lithos_agent_info` (the identity guard), and — in W8 — the edge-delete
+tool `bd66d57c` ships. Existing calls used by the funnel:
+`lithos_task_get`, `lithos_task_status`, `lithos_task_edge_list` (the
+edge action's reads before and after the write), `lithos_agent_register`,
 `lithos_task_list` (create's request-id lookup, by `metadata_match`).
 Upstream events already cover complete, cancel, reopen and create; the hub
 gains one synthetic event (`lens.edge_upserted`).
@@ -636,9 +700,12 @@ review gate is hermetic and headless.
   absent; no identity renders the single "choose an operator" link and no
   forms; a POST without identity redirects to the operator page and makes
   no write; first write registers `type="human"` exactly once per process
-  (call log) and a second write does not; the service agent's id and an
-  id held by a non-human agent are refused; an unreadable agent list
-  refuses a new identity; `next` to another origin is ignored.
+  (call log) and a second write does not; the service agent's id, an id
+  held by a non-human agent, an id held by an **archived** non-human
+  agent, and an id registered with no type are each refused, with no
+  registration call (call log); an archived human id is accepted; a
+  failed lookup refuses a new identity; `next` to another origin is
+  ignored.
 - **Funnel:** stale `expected_status` → conflict page naming the current
   status, no write call; a transport failure → the "may or may not have
   applied" page with the re-read status; every attempt, including each
@@ -650,7 +717,9 @@ review gate is hermetic and headless.
   rendering its candidates, and an unknown code rendered verbatim.
 - **Contracts:** the five new files pass the existing contract suite —
   canonical requests equal the recorded outbound arguments, success
-  payloads round-trip, each error envelope surfaces as its coded error.
+  payloads round-trip, each error envelope surfaces as its coded error
+  **with every envelope field intact** — an `ambiguous_id_prefix` error
+  exposes its `candidates`.
 - **Fake:** completing a gate changes what the ready and blocked reads
   return and reports exactly the waiters that became ready; reopening it
   reports them re-blocked; cancelling a predecessor makes its dependent's
@@ -684,15 +753,28 @@ review gate is hermetic and headless.
 - **Create:** project lands under both conventions (call log); a timer
   gate without `ready_at` is refused before any call; an upstream
   `invalid_input` re-renders with input kept; an ambiguous parent prefix
-  renders candidates; a repeated request id creates one task; `?parent=`
-  and `?project=` pre-fill.
+  renders candidates; `?parent=` and `?project=` pre-fill. De-duplication:
+  two **concurrent** POSTs with one request id produce exactly one
+  `lithos_task_create` (call log) and both land on the same task; a
+  resubmit after the first finished creates nothing; a create that times
+  out while the fake is still to complete it renders "not visible yet",
+  never "not created", and a second POST under that id makes no create
+  call; **Check again** after the fake completes reports the task;
+  **Start again** issues a new request id.
 - **Edge:** each sentence produces the right `from`, `to` and `type` (call
   log); the confirm step renders both titles and the readiness sentence;
   each refusal renders its copy and says nothing changed; a successful
   write evicts both endpoints from the edge cache and publishes
   `lens.edge_upserted`; a graph tab showing either endpoint shows the pill
-  (JS test in the existing pattern); the receipt's remove action removes
-  the edge.
+  (JS test in the existing pattern). Existing relation: with the edge
+  already present in Lithos but absent from Lens's cache, the confirm
+  step and the POST both report "already exists", the call log shows no
+  upsert, and no remove form renders. Removal: after an insert the
+  receipt's remove action removes the edge; when the fake inserts the
+  same edge as another agent between Lens's read and its write, the
+  receipt names that agent and renders no remove form; a remove POST for
+  an edge whose `created_by` or `created_at` no longer matches the
+  receipt is refused and deletes nothing.
 - **Visual (e2e, through loom's artifact review):** a gate row with the
   action and identity; a completion receipt; the cancel confirm page; the
   proceed-anyway confirm page; the create form with the gate fieldset;
@@ -707,7 +789,8 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
 1. **W1 Posture and operator identity.** `[writes]` config and env
    overrides; the write route group; the Origin check; reserved `new`;
    the operator page with the boundary statement; cookie and default
-   resolution; the impersonation guard and register-once; the identity
+   resolution; the impersonation guard (the `lithos_agent_info` client
+   method and its contract) and register-once; the identity
    partial in the page chrome; the compose pass-through for
    `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` and its entry in the example env
    file. *Independent.*
@@ -718,7 +801,8 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
    Acceptance: the Error mapper cases; each rendered page states whether
    anything was changed.
 3. **W3 Lithos write surface.** The five client methods and their result
-   records; the five contracts and the registration variant; the mutable
+   records; the coded tool error carrying the full envelope; the five
+   contracts and the registration variant; the mutable
    fake with oracle-computed `unblocked` / `reblocked`, every D6 error, and
    event emission. *Independent.*
    Acceptance: the Contracts and Fake cases; `make contracts-verify`
@@ -748,12 +832,15 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
    Acceptance: the Cancel cases.
 7. **W7 Create.** The form model, the form with gate fieldset and
    pre-fill, both conventions, pickers, validation, request-id
-   idempotency, New task on the dashboard and Add child on epic detail.
+   de-duplication (serialised submits, lookup, the unknown-outcome page
+   with Check again / Start again), New task on the dashboard and Add child on epic detail.
    *Needs W4.*
    Acceptance: the Create cases.
-8. **W8 Add a dependency.** Relation sentences, the two-step form, the
-   refusals, the synthetic event and cache eviction, removal from the
-   receipt with the delete tool's contract. *Needs W4; blocked upstream by
+8. **W8 Add a dependency.** Relation sentences, the two-step form with
+   its fresh edge reads, the already-exists outcome, the refusals, the
+   synthetic event and cache eviction, and removal from the receipt —
+   offered on evidence of insertion only — with the delete tool's
+   contract. *Needs W4; blocked upstream by
    `bd66d57c`.*
    Acceptance: the Edge cases.
 
@@ -799,7 +886,12 @@ are independent of each other. W8 is last and detachable (D1).
   answer `invalid_edge_type`, and its `cycle` message names members by full
   id; cancelling does not cascade to children; every write auto-registers
   an unknown `agent` untyped; re-registering an id with a type overwrites
-  the stored type.
+  the stored type and un-archives the agent; the agent list hides
+  archived agents by default while the exact lookup returns them; create
+  mints a new id and inserts with no uniqueness on any metadata key;
+  edge-upsert on an existing `(from, to, type)` returns the same success
+  payload as an insert, replaces the edge's metadata and leaves its
+  `created_by` / `created_at` as they were.
 - **`6383a81b` (`lithos_task_blocked(task_id)`) is not a T3 dependency.**
   The September state review listed it as one. No slice reads it: Lithos
   returns `unblocked[]` / `reblocked[]` itself, and the cancel walk and
@@ -818,10 +910,13 @@ are independent of each other. W8 is last and detachable (D1).
   §13, §15 and §16. ROADMAP §3 (the T3 row and paragraph) and ledger #2
   changed with them. `docs/SPECIFICATION.md` describes shipped behaviour
   and changes slice by slice.
-- **Candidate upstream asks** surfaced while drafting: a distinct code for
-  "not open" on complete and cancel; structured members on the `cycle`
-  envelope; a registration that cannot silently re-type an existing agent.
-  None gates a slice.
+- **Candidate upstream asks** surfaced while drafting and in review: a
+  distinct code for "not open" on complete and cancel; structured members
+  on the `cycle` envelope; a registration that cannot silently re-type an
+  existing agent; an idempotency key on `lithos_task_create`; a `created`
+  flag on the edge-upsert response, and an upsert that leaves metadata
+  alone when none is supplied. None gates a slice — each has a Lens-side
+  rule above and a stated residual.
 - **Why the fake is a slice of its own.** Every action's acceptance is
   "the board afterwards says X". That needs a fake whose reads change when
   it is written to, and it needs it before the first action slice, or each
