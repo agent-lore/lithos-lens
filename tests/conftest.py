@@ -145,6 +145,8 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "")
+    monkeypatch.setenv("LITHOS_LENS_WRITES_DEFAULT_OPERATOR", "")
+    monkeypatch.setenv("LITHOS_LENS_WRITES_CONFIRM_CANCEL", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_ENABLED", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_MODEL", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_PROVIDER", "")

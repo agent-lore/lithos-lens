@@ -22,6 +22,7 @@ graph TD
     TaskGraph
     Tasks
     Telemetry
+    Writes
   end
   click Config "components/Config.md"
   click Entrypoint "components/Entrypoint.md"
@@ -35,8 +36,10 @@ graph TD
   click Tasks "components/Tasks.md"
   click Telemetry "components/Telemetry.md"
   click Web "components/Web.md"
+  click Writes "components/Writes.md"
   Config --> Errors
   Config --> Tasks
+  Config --> Writes
   Entrypoint --> Config
   Entrypoint --> Errors
   Entrypoint --> Logging
@@ -70,32 +73,37 @@ graph TD
   Web --> TaskGraph
   Web --> Tasks
   Web --> Telemetry
+  Web --> Writes
+  Writes --> Tasks
   linkStyle 0 stroke:#bbb
   linkStyle 1 stroke:#bbb
-  linkStyle 2 stroke:#999,stroke-dasharray:4
+  linkStyle 2 stroke:#bbb
   linkStyle 3 stroke:#999,stroke-dasharray:4
   linkStyle 4 stroke:#999,stroke-dasharray:4
   linkStyle 5 stroke:#999,stroke-dasharray:4
-  linkStyle 7 stroke:#bbb
+  linkStyle 6 stroke:#999,stroke-dasharray:4
   linkStyle 8 stroke:#bbb
   linkStyle 9 stroke:#bbb
   linkStyle 10 stroke:#bbb
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
-  linkStyle 14 stroke:#bbb
+  linkStyle 13 stroke:#bbb
   linkStyle 15 stroke:#bbb
   linkStyle 16 stroke:#bbb
   linkStyle 17 stroke:#bbb
   linkStyle 18 stroke:#bbb
   linkStyle 19 stroke:#bbb
-  linkStyle 22 stroke:#bbb
+  linkStyle 20 stroke:#bbb
   linkStyle 23 stroke:#bbb
   linkStyle 24 stroke:#bbb
   linkStyle 25 stroke:#bbb
-  linkStyle 26 stroke:#999,stroke-dasharray:4
+  linkStyle 26 stroke:#bbb
   linkStyle 27 stroke:#999,stroke-dasharray:4
-  linkStyle 29 stroke:#999,stroke-dasharray:4
-  linkStyle 32 stroke:#999,stroke-dasharray:4
+  linkStyle 28 stroke:#999,stroke-dasharray:4
+  linkStyle 30 stroke:#999,stroke-dasharray:4
   linkStyle 33 stroke:#999,stroke-dasharray:4
   linkStyle 34 stroke:#999,stroke-dasharray:4
+  linkStyle 35 stroke:#999,stroke-dasharray:4
+  linkStyle 36 stroke:#999,stroke-dasharray:4
+  linkStyle 37 stroke:#bbb
 ```

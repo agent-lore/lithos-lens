@@ -152,7 +152,16 @@ def test_contract_file_is_well_formed(tool: str) -> None:
     assert isinstance(responses["success"], dict)
     response_variants = responses.get("variants", {})
     assert isinstance(response_variants, dict)
-    assert all(isinstance(payload, dict) for payload in response_variants.values())
+    # A variant is an object — EXCEPT where the tool's documented answer is a
+    # bare JSON ``null``: ``lithos_agent_info`` returns None for an unknown id
+    # rather than an error envelope, and that wire shape is exactly what the
+    # client has to map (PRD clarification 2). Vendoring it as ``null`` is the
+    # point; wrapping it in an object would record a payload the server never
+    # sends.
+    assert all(
+        payload is None or isinstance(payload, dict)
+        for payload in response_variants.values()
+    )
     errors = responses.get("errors", [])
     assert isinstance(errors, list)
     for envelope in errors:
@@ -383,6 +392,15 @@ def _check_search_results(result: Any, success: dict[str, Any]) -> None:
     ]
 
 
+def _check_agent_info(result: Any, success: dict[str, Any]) -> None:
+    assert result == AgentRecord(
+        id=success["id"],
+        name=success["name"],
+        type=success["type"],
+        last_seen_at=success["last_seen_at"],
+    )
+
+
 def _check_register(result: Any, success: dict[str, Any]) -> None:
     assert result is True
 
@@ -445,6 +463,7 @@ TOOL_SPECS: dict[
     ),
     "lithos_stats": (lambda c: c.stats(), _check_stats),
     "lithos_agent_list": (lambda c: c.list_agents(), _check_agents),
+    "lithos_agent_info": (lambda c: c.agent_info("dave"), _check_agent_info),
     "lithos_read": (
         lambda c: c.read_note("11111111-1111-4111-8111-111111111111"),
         _check_note,
@@ -501,6 +520,110 @@ def test_list_tasks_resolved_window_sends_the_vendored_variant_request() -> None
         ("lithos_task_list", contract["request"]["variants"]["resolved_window"])
     ]
     _check_task_list(result, payload)
+
+
+def test_register_operator_sends_the_vendored_human_variant_request() -> None:
+    """The operator-identity registration (§5C.5) is ``lithos_agent_register``'s
+    second request shape, vendored as the ``human_operator`` variant: the id and
+    ``type="human"``, with no display name. A phantom argument — or a name
+    invented for the person — fails here."""
+    contract = load_contract("lithos_agent_register")
+    result, calls = _run(
+        contract["responses"]["success"],
+        lambda c: c.register_operator("dave"),
+    )
+    assert calls == [
+        ("lithos_agent_register", contract["request"]["variants"]["human_operator"])
+    ]
+    assert result is True
+
+
+def test_an_already_registered_operator_still_reports_success() -> None:
+    """Registering an id that exists is the ordinary case after a restart (the
+    in-memory ledger is gone, the upstream row is not): the vendored
+    ``already_registered`` response — ``created: false`` — must not read as a
+    failed registration, which would refuse the write behind it."""
+    contract = load_contract("lithos_agent_register")
+    result, _ = _run(
+        contract["responses"]["variants"]["already_registered"],
+        lambda c: c.register_operator("dave"),
+    )
+    assert result is True
+
+
+class _CannedResultClient(LithosClient):
+    """Client whose tool calls answer one canned MCP RESULT.
+
+    Substituted at the transport's oneshot seam, so the canned text goes
+    through the real gate, deadline and decoder — which is the whole point for
+    the test below: the null mapping has to be exercised on the wire shape, not
+    on a fake that returns whatever the client expects.
+    """
+
+    def __init__(self, text: str, *, is_error: bool = False) -> None:
+        super().__init__(LithosConfig(agent_id="lithos-lens"))
+        self._text = text
+        self._is_error = is_error
+
+    async def _call_tool_oneshot(  # type: ignore[override]
+        self, name: str, arguments: dict[str, Any]
+    ) -> Any:
+        text = self._text
+        is_error = self._is_error
+
+        class _Block:
+            def __init__(self) -> None:
+                self.text = text
+
+        class _Result:
+            def __init__(self) -> None:
+                self.content = [_Block()]
+                self.isError = is_error
+
+        return _Result()
+
+
+def _canned(text: str, *, is_error: bool = False) -> Any:
+    client = _CannedResultClient(text, is_error=is_error)
+
+    async def _driver() -> Any:
+        try:
+            return await client.agent_info("nobody")
+        finally:
+            await client.close()
+
+    return asyncio.run(_driver())
+
+
+def test_an_unknown_agent_reads_back_as_absent_through_the_real_decoder() -> None:
+    """``lithos_agent_info``'s absent answer is the bare ``null`` the contract
+    vendors — not an error envelope — and Lens's decoder rejects any result that
+    is not a JSON object. So the mapping is asserted through the REAL decoder on
+    the real wire text: if ``null`` were treated like an unparseable body, every
+    unknown id would look like a failed lookup and the impersonation guard would
+    refuse every new identity (PRD clarification 2)."""
+    contract = load_contract("lithos_agent_info")
+    assert contract["responses"]["variants"]["absent"] is None
+
+    assert _canned("null") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "is_error"),
+    [
+        ("not json at all", False),  # unparseable body
+        ("[1, 2]", False),  # parsed, but not an object
+        ("boom", True),  # MCP-level error result
+    ],
+)
+def test_a_genuine_agent_lookup_failure_stays_a_failure(
+    text: str, is_error: bool
+) -> None:
+    """The other half of that mapping: only ``null`` means absent. Anything else
+    the decoder refuses still raises, because the guard accepts an absent id and
+    must REFUSE an unreadable one."""
+    with pytest.raises(LithosToolError):
+        _canned(text, is_error=is_error)
 
 
 def test_read_note_by_path_sends_the_vendored_variant_request() -> None:

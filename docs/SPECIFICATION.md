@@ -71,8 +71,8 @@ The current application exposes these routes:
 - `GET /tasks/{task_id}` (and `GET /tasks/id?task_id=<id>`)
   Renders a task detail page. The alias carries the ids no path can address,
   — the ids that collide with a static page under `/tasks/`
-  (`tasks.RESERVED_TASK_PATH_SEGMENTS`: `graph`, `events`, and the alias's own
-  `id`). Starlette matches the static route first, so without it a task called
+  (`tasks.RESERVED_TASK_PATH_SEGMENTS`: `graph`, `events`, `new`, and the
+  alias's own `id`). Starlette matches the static route first, so without it a task called
   `graph` would have no reachable detail page while every link to it silently
   opened the graph. The alias is a single static segment carrying the id in the
   QUERY, deliberately: ASGI percent-decodes before routing, so a
@@ -110,6 +110,22 @@ The current application exposes these routes:
   `?epic=<id>` — and, with no scope, a picker of the projects and open epics
   the snapshot observes. Registered BEFORE `/tasks/{task_id}`, which would
   otherwise match `graph` as a task id.
+- `GET /operator`, `POST /operator`
+  Shows the operator identity writes are attributed to, where it came from
+  (the `lens_operator` cookie, or `[writes].default_operator`), and the
+  trusted-network boundary statement §5C.1 requires. The POST sets or switches
+  the identity — a cookie, one year, `HttpOnly`, `SameSite=Lax` and
+  deliberately **not** `Secure` (Lens serves plain HTTP, where a Secure cookie
+  would not be stored at all; the cookie is an attribution label, not a
+  credential). `?next=` returns the operator where they were and is honoured
+  only as a same-origin relative path. An id the impersonation guard refuses,
+  or one that is not a valid operator id, re-renders the form with the reason
+  and sets no cookie (HTTP 400).
+- `GET /tasks/new`
+  Reserved for the create form (a later T3 slice). Until it exists the path
+  answers 404 — never the detail page of a task whose id happens to be `new`,
+  which is reachable through `/tasks/id?task_id=new` like every other page
+  word.
 - `GET /knowledge`
   Renders the knowledge landing page: hybrid search, recently-updated notes,
   and tag browse.
@@ -124,11 +140,28 @@ One further route, `POST /tasks/events/publish`, is registered **only** when
 fake-Lithos app mode is enabled (`LITHOS_LENS_FAKE_LITHOS`). It is a harness
 seam for the browser suite and does not exist in a normal deployment.
 
-No authenticated routes currently exist. Lens takes unauthenticated requests
-across a trusted-network boundary; see `docs/REQUIREMENTS.md` §5C.1. Two
+No authenticated routes currently exist, and none are planned: Lens takes
+unauthenticated requests across a trusted-network boundary (`docs/REQUIREMENTS.md`
+§5C.1). **Anyone who can reach the Lens port can perform any action it offers**,
+and the operator page states that where the operator meets it. Two
 process-level bounds exist in place of authentication: a concurrent-render cap
 that answers 503 rather than queueing, and a ceiling on concurrent SSE
 subscribers.
+
+Two request-level checks ride alongside them on the write surface, and both are
+**hygiene, not security**:
+
+- **Origin check.** Every POST Lens registers under the curated write actions
+  requires an `Origin` header whose host *and port* match the request's `Host`
+  — falling back to `Referer` when `Origin` is absent, with each side's missing
+  port implied from its scheme, compared case-insensitively. A mismatch, an
+  `Origin: null`, a value that does not parse, or the absence of both headers
+  is answered 403 before any Lithos call. It stops a page open in another tab
+  driving Lens with the operator's browser; it stops nothing else.
+- **Operator attribution.** Writes name a human operator rather than the Lens
+  service agent (§5.13), so an audit trail can tell "Lens the process" from
+  "the person driving it". It is a label the browser supplies, not a proof of
+  who sent the request.
 
 ### 5.2 Configuration
 
@@ -171,6 +204,10 @@ The current configuration model includes:
 - `graph.max_tasks`
 - `graph.fetch_concurrency`
 - `graph.mini_graph_max_nodes`
+- `writes.default_operator` *(operator identity used when a browser has no
+  `lens_operator` cookie; validated at load against the same rule as the
+  cookie, so a value that is not a lowercase slug fails the load)*
+- `writes.confirm_cancel` *(parsed; read by the cancel action, a later slice)*
 - `knowledge.related_title_fanout_cap`
 - `knowledge.search_limit`
 - `knowledge.recent_limit`
@@ -191,8 +228,10 @@ The current configuration model includes:
 - `ui.default_view`
 - `health.refresh_interval_s`
 
-Defaults, ceilings, and the env-override names are defined in
-`src/lithos_lens/config_schema.py` and `src/lithos_lens/config.py`; the shipped
+Defaults and ceilings are defined in `src/lithos_lens/config_schema.py`, the
+TOML parsing in `src/lithos_lens/config.py`, and the env-override pass in
+`src/lithos_lens/config_env.py` (every override name is a string literal there,
+which the docs↔code guardrail scans by AST); the shipped
 values are documented inline in `lithos-lens.example.toml`. Every integer knob
 has a maximum as well as a minimum, so a mistyped value fails at load rather
 than at render.
@@ -1661,6 +1700,59 @@ PRD's finer row-vs-node split is the client's knowledge, not a fact on the
 request, and the task id is absent for the same cardinality reason as the
 graph's scope key.
 
+### 5.13 Operator Identity and Write Posture
+
+The first curated-write slice (T3-W1) ships the posture the write actions
+attach to, and no task write yet. Three facts describe it:
+
+**There is no read-only mode and no `[writes] enabled` flag.** The write route
+group is registered like the graph and knowledge groups; what decides whether
+an affordance renders is the task's state and whether an operator identity
+resolves — never configuration. The trusted-network boundary is therefore the
+only protection there is, which is why it is stated on `/operator` (§5.1).
+
+**Identity resolution** is `lens_operator` cookie → `[writes].default_operator`
+→ none. An operator id must match `^[a-z0-9][a-z0-9-]{0,62}$`; anything else is
+invalid, and invalid means *absent* when read from the cookie (the configured
+default then applies), a **load failure** for `default_operator`, and the form
+re-rendered with the reason on `POST /operator`. The cookie is validated on
+every read, not once when it was set. With no identity resolved, the page
+chrome renders a single "choose an operator to act" link in place of any write
+affordance.
+
+**The impersonation guard and register-once.** Lithos auto-registers an unknown
+`agent` on any write, untyped, so Lens registers an identity with
+`lithos_agent_register(id=<operator>, type="human")` before its first write in
+the process; the ids it has cleared and the ids it has registered are held in
+memory, so the cost is one upstream call per identity, not per write. A failed
+registration refuses the write — "could not register the operator identity;
+nothing was changed".
+
+Before accepting an identity, Lens looks the id up **exactly**, with
+`lithos_agent_info` — not `lithos_agent_list`, which hides archived agents by
+default, so an archived agent's id would read as unregistered and be re-typed
+by the registration that follows. The lookup's "not found" answer is a bare
+JSON `null` rather than an error envelope, and is mapped to "absent" by the
+client alone. An identity is accepted when the lookup finds nothing, or finds
+an agent already typed `human` (archived or not — the type is the whole
+question). Lens's own service agent's id is refused, and so is any id that
+exists with another type or with none ("that id belongs to an agent"). A lookup
+that **fails** refuses a *new* identity, because Lens cannot tell "absent" from
+"unreadable" and only one of those is safe to register; an identity already
+cleared in this process keeps working. The guard runs at the
+registration seam — so it covers a configured `default_operator`, which never
+passes through the operator page — and again up front on `POST /operator`, so a
+refusal is immediate.
+
+**Known limit, by decision (Dave, 2026-10-03).** `lithos_agent_register` has no
+conditional ("create only", or "only if still untyped") form, so the window
+between the lookup and the registration is open: an agent that registers the
+operator's chosen id in that instant has its type overwritten to `human` by
+Lens's call. Lens does not close this window and ships no protocol for it —
+narrowing it is the most a client-side pre-check can do, exactly as the
+`expected_status` pre-check narrows (and cannot close) the write race. Closing
+it needs an upstream conditional registration.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -1672,7 +1764,9 @@ provides:
   classified blockers, task types (`task`/`epic`/`gate`), typed task edges, and
   children — the Lithos 0.4 surface the whole graph-native dashboard rests on
 - note read, search, and neighborhood capability for the knowledge surface
-- agent registry/statistics endpoints used by the dashboard
+- agent registry/statistics endpoints used by the dashboard, including the
+  exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
+  reads and the typed registration it writes
 - an `/events` SSE stream carrying task-related events
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
@@ -1855,7 +1949,10 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **write actions of any kind** — every surface is read-only (T3)
+- **the curated write actions themselves** (T3) — complete a gate, reopen,
+  cancel, create and add a dependency. The posture and identity they attach to
+  ship now (§5.13): every *task* surface is still read-only, and `/operator` is
+  the one write route that exists.
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)
@@ -1880,7 +1977,10 @@ because they are described in `docs/REQUIREMENTS.md`.
 This specification describes the behavior of Lithos Lens `0.4.0` as currently
 implemented in this repository — the 0.1.0 foundation, the **T1** graph-native
 operator view and **K1** knowledge note view and search of 0.3.0, and the
-**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2).
+**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2), plus the first
+slice of **T3**'s curated write actions: the write posture, the operator
+identity and its guard (§5.13, §5.1), with the actions themselves still to
+come (§10).
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be

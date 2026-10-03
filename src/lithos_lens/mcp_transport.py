@@ -64,6 +64,20 @@ RECONNECT_BACKOFF_INITIAL_S = 1.0
 RECONNECT_BACKOFF_MAX_S = 30.0
 
 
+#: Code on the error raised when a tool answers a bare JSON ``null``. Its own
+#: code rather than ``invalid_response``, because for one tool a null IS the
+#: documented answer: ``lithos_agent_info`` returns ``None`` for an unknown id
+#: (unlike ``lithos_agent_archive``, which answers an ``agent_not_found``
+#: envelope), and over MCP that reads back as the text ``null``. Everything
+#: here still returns a dict, so the one caller that has a null to interpret
+#: catches this code and maps it; every other caller sees a failed call, which
+#: is what a null means for a tool that promised an object. Lumping it in with
+#: ``invalid_response`` would make an unknown agent indistinguishable from an
+#: unparseable body — and the impersonation guard refuses a new identity on a
+#: failed lookup, so every unknown id would be refused.
+NULL_RESULT_CODE = "null_result"
+
+
 class LithosToolError(RuntimeError):
     """Raised when Lithos returns an error envelope from a tool call.
 
@@ -349,7 +363,8 @@ def decode_tool_result(result: Any) -> dict[str, Any]:
     MCP-level error result (``isError``, plain text — e.g. the live server's
     FastMCP output-schema validation rejecting a tool's own error envelope);
     ``code="invalid_response"`` marks a success result whose body isn't a
-    JSON object.
+    JSON object, except for the bare ``null`` a tool documented as returning
+    ``None`` sends, which gets :data:`NULL_RESULT_CODE`.
 
     There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
     must not be added. The graph reads take no limit parameter, so a single
@@ -397,6 +412,14 @@ def decode_tool_result(result: Any) -> dict[str, Any]:
             f"Lithos returned a non-JSON tool result: {text[:200]}",
             code="invalid_response",
         ) from exc
+    if payload is None:
+        # A tool that answers `None` (see NULL_RESULT_CODE). Raised rather than
+        # returned so the signature stays "a payload dict", and coded so the
+        # one caller for which null is a documented answer can tell it apart
+        # from a body that failed to parse.
+        raise LithosToolError(
+            "Lithos returned a null tool result", code=NULL_RESULT_CODE
+        )
     if not isinstance(payload, dict):
         raise LithosToolError(
             "Lithos returned a non-object tool result", code="invalid_response"

@@ -1,0 +1,38 @@
+{
+  "tool": "lithos_agent_info",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62",
+  "source": [
+    "lithos:src/lithos/tools/agents.py::lithos_agent_info"
+  ],
+  "request": {
+    "canonical": {
+      "id": "dave"
+    },
+    "notes": "The EXACT agent lookup behind the operator-identity guard (REQUIREMENTS §5C.5). Takes `id` and nothing else (additionalProperties: false — see _tools_snapshot.json). Chosen over lithos_agent_list because the list filters archived registrations by default while this lookup answers for them: an archived agent's id must not read as unregistered, or the registration that follows would silently re-type that agent as a human."
+  },
+  "responses": {
+    "success": {
+      "id": "dave",
+      "name": "Dave",
+      "type": "human",
+      "last_seen_at": "2026-10-02T09:15:00+00:00"
+    },
+    "variants": {
+      "absent": null,
+      "untyped": {
+        "id": "scratch-runner",
+        "name": "scratch-runner",
+        "type": null,
+        "last_seen_at": "2026-09-30T11:00:00+00:00"
+      },
+      "other_type": {
+        "id": "agent-zero",
+        "name": "Agent Zero",
+        "type": "claude-code",
+        "last_seen_at": "2026-10-01T18:42:00+00:00"
+      }
+    },
+    "errors": []
+  },
+  "observed_divergences": "TWO gaps, both recorded rather than guessed at (tests/contracts/README.md's rule). (1) The ABSENT answer is a bare JSON `null`, not an error envelope: the tool is documented \"Agent info dict or None if not found\" (live tools/list description, vendored in _tools_snapshot.json), unlike lithos_agent_archive, which answers an `agent_not_found` envelope. That is why `variants.absent` is `null` — the only non-object response any vendored contract carries — and why `mcp_transport.decode_tool_result` gives it its own code (NULL_RESULT_CODE) for `LithosClient.agent_info` to map to None. A fake answering whatever the client expected would have hidden it (PRD clarification 2, Dave 2026-10-03). (2) The success payload's FULL field set was not confirmed against a live server in the build environment that added this contract (no Lithos reachable, and the Lithos source tree was not available to it): the four fields above are the agent-row shape the vendored lithos_agent_list contract carries, transcribed from the same registry, and Lens models exactly those (`normalize_agent` -> AgentRecord). The guard reads only `type`, so an unmodelled column (e.g. an archived marker) changes no Lens behaviour — but `make contracts-verify` against a live Lithos is the step that confirms the request shape and should be run before merge."
+}

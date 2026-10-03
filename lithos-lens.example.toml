@@ -64,6 +64,23 @@ max_tasks = 300             # page-scope size guard, ghosts counted (1-2000); ab
 fetch_concurrency = 16      # semaphore over the per-task edge_list fan-out (1-64)
 mini_graph_max_nodes = 40   # detail mini-graph cap, the focal task included
 
+[lithos-lens.writes]
+# Curated write actions (REQUIREMENTS §5C). There is NO `enabled` key and no
+# read-only mode: the actions are part of the product, and what decides whether
+# an affordance renders is the task's state and whether an operator identity
+# resolves. Lens has no authentication — the boundary is the trusted network,
+# and the operator page (/operator) states it.
+#
+# The identity a browser with no `lens_operator` cookie acts under. Empty means
+# "none", and every write affordance is then replaced by a "choose an operator
+# to act" link. Lowercase slug (^[a-z0-9][a-z0-9-]{0,62}$), validated at load
+# exactly like the cookie; set it on a single-operator install so nobody is
+# prompted. Writes are never attributed to the Lens service agent above.
+default_operator = ""
+# Keep the consequence-aware confirm page in front of a cancel; false puts the
+# same facts on the receipt instead.
+confirm_cancel = true
+
 [lithos-lens.knowledge]
 related_title_fanout_cap = 20   # cap on lithos_read title lookups per related panel (1-100)
 search_limit = 20               # /knowledge?q= hybrid-search result cards (1-200)

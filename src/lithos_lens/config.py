@@ -4,9 +4,10 @@ Lithos Lens is configured by a TOML file (``lithos-lens.toml``). This module
 finds it, validates it on load, and applies a small set of
 environment-variable overrides so that env beats file beats built-in default.
 The typed shape it produces — the dataclasses, their defaults, and their
-ceilings — lives in :mod:`lithos_lens.config_schema` and is re-exported here,
-so ``from lithos_lens.config import LithosLensConfig`` (and every other name)
-keeps working.
+ceilings — lives in :mod:`lithos_lens.config_schema`, and the environment pass
+applied over the parsed file in :mod:`lithos_lens.config_env`; both are
+re-exported here, so ``from lithos_lens.config import LithosLensConfig`` (and
+every other name) keeps working.
 """
 
 from __future__ import annotations
@@ -14,14 +15,13 @@ from __future__ import annotations
 import logging
 import os
 import tomllib
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
+from lithos_lens.config_env import apply_env_overrides
 from lithos_lens.config_fields import (
-    env_project_convention,
     optional_bool,
     optional_int,
     optional_path,
@@ -29,7 +29,6 @@ from lithos_lens.config_fields import (
     optional_status_groups,
     optional_str,
     optional_str_list,
-    warn_deprecated_env,
     warn_deprecated_knobs,
 )
 from lithos_lens.config_schema import (
@@ -61,6 +60,8 @@ from lithos_lens.config_schema import (
     DEFAULT_TASKS_STALE_OPEN_AGE_DAYS,
     DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES,
     DEFAULT_TASKS_VISIBLE_CAP,
+    DEFAULT_WRITES_CONFIRM_CANCEL,
+    DEFAULT_WRITES_DEFAULT_OPERATOR,
     MAX_GRAPH_INT_KNOBS,
     MAX_KNOWLEDGE_LANDING_LIMIT,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
@@ -79,9 +80,11 @@ from lithos_lens.config_schema import (
     TasksConfig,
     TelemetryConfig,
     UIConfig,
+    WritesConfig,
     parse_log_level,
 )
 from lithos_lens.errors import ConfigError
+from lithos_lens.operator import OPERATOR_ID_RULE, valid_operator_id
 from lithos_lens.tasks import (
     DEFAULT_PROJECT_CONVENTION,
     DEFAULT_PROJECT_TAG_KEY,
@@ -121,6 +124,8 @@ __all__ = [
     "DEFAULT_TASKS_STALE_OPEN_AGE_DAYS",
     "DEFAULT_TASKS_UNCLAIMED_READY_AGE_MINUTES",
     "DEFAULT_TASKS_VISIBLE_CAP",
+    "DEFAULT_WRITES_CONFIRM_CANCEL",
+    "DEFAULT_WRITES_DEFAULT_OPERATOR",
     "MAX_GRAPH_INT_KNOBS",
     "MAX_KNOWLEDGE_LANDING_LIMIT",
     "MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
@@ -140,6 +145,7 @@ __all__ = [
     "TelemetryConfig",
     "TasksConfig",
     "UIConfig",
+    "WritesConfig",
     "find_config_path",
     "load_config",
     "parse_log_level",
@@ -240,6 +246,7 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
     health = _parse_health(lithos_lens_section.get("health", {}), config_path)
     knowledge = _parse_knowledge(lithos_lens_section.get("knowledge", {}), config_path)
     graph = _parse_graph(lithos_lens_section.get("graph", {}), config_path)
+    writes = _parse_writes(lithos_lens_section.get("writes", {}), config_path)
 
     cfg = LithosLensConfig(
         environment=environment,
@@ -255,8 +262,9 @@ def load_config(path: Path | None = None) -> LithosLensConfig:
         health=health,
         knowledge=knowledge,
         graph=graph,
+        writes=writes,
     )
-    return _apply_env_overrides(cfg)
+    return apply_env_overrides(cfg)
 
 
 # ── Internal parsing helpers ───────────────────────────────────────────
@@ -565,249 +573,34 @@ def _parse_graph(data: Any, config_path: Path) -> GraphConfig:
     )
 
 
-def _apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
-    env_override = os.environ.get("LITHOS_LENS_ENVIRONMENT", "")
-    data_dir_override = os.environ.get("LITHOS_LENS_DATA_DIR", "")
-    log_level_override = os.environ.get("LITHOS_LENS_LOG_LEVEL", "")
-    lithos_url_override = os.environ.get("LITHOS_LENS_LITHOS_URL", "")
-    lithos_mcp_sse_path_override = os.environ.get("LITHOS_LENS_MCP_SSE_PATH", "")
-    lithos_events_path_override = os.environ.get("LITHOS_LENS_SSE_EVENTS_PATH", "")
-    agent_id_override = os.environ.get("LITHOS_LENS_AGENT_ID", "")
-    tasks_visible_cap_override = os.environ.get("LITHOS_LENS_TASKS_VISIBLE_CAP", "")
-    tasks_frontier_limit_override = os.environ.get(
-        "LITHOS_LENS_TASKS_FRONTIER_LIMIT", ""
+def _parse_writes(data: Any, config_path: Path) -> WritesConfig:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{config_path}: [lithos-lens.writes] must be a table")
+    default_operator = optional_str(
+        data,
+        "default_operator",
+        DEFAULT_WRITES_DEFAULT_OPERATOR,
+        config_path,
+        "lithos-lens.writes",
     )
-    gate_wait_env = os.environ.get("LITHOS_LENS_TASKS_GATE_WAITING_ATTENTION_HOURS", "")
-    claim_expiry_env = os.environ.get(
-        "LITHOS_LENS_TASKS_CLAIM_EXPIRING_SOON_MINUTES", ""
+    # Validated against the SAME rule as the cookie (§5C.5): this value is
+    # what writes are attributed to on a browser that never visited the
+    # operator page, so an id no surface can render has to fail the load
+    # rather than resolve to nothing at the first write. Empty is the
+    # documented "no default" and is not an id.
+    if default_operator and not valid_operator_id(default_operator):
+        raise ConfigError(
+            f"{config_path}: [lithos-lens.writes].default_operator must be "
+            f"{OPERATOR_ID_RULE} (got {default_operator!r}); leave it empty "
+            f"for no default"
+        )
+    return WritesConfig(
+        default_operator=default_operator,
+        confirm_cancel=optional_bool(
+            data,
+            "confirm_cancel",
+            DEFAULT_WRITES_CONFIRM_CANCEL,
+            config_path,
+            "lithos-lens.writes",
+        ),
     )
-    stale_open_env = os.environ.get("LITHOS_LENS_TASKS_STALE_OPEN_AGE_DAYS", "")
-    description_preview_env = os.environ.get(
-        "LITHOS_LENS_TASKS_DESCRIPTION_PREVIEW_CHARS", ""
-    )
-    # Deprecated (§4.4) and read anyway: "ignored" says what CONSULTS the
-    # value, not that a value an operator set may be dropped. No "" default,
-    # like ``trigger_prefixes_env`` below: WRITING the knob is what the notice
-    # and the validation are about, and ``FOO=`` is writing it.
-    project_convention_env = os.environ.get("LITHOS_LENS_TASKS_PROJECT_CONVENTION")
-    agent_inactive_env = os.environ.get("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
-    unclaimed_env = os.environ.get("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
-    # No "" default, unlike every other read in this pass: an EMPTY value of
-    # this knob is meaningful (it is the documented opt-out), so absent and
-    # blank have to stay distinguishable — hence ``None`` for absent.
-    trigger_prefixes_env = os.environ.get(
-        "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES"
-    )
-    knowledge_fanout_cap_override = os.environ.get(
-        "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
-    )
-    graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
-    graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
-    graph_concurrency_env = os.environ.get("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
-    graph_mini_nodes_env = os.environ.get("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "")
-    llm_enabled_override = os.environ.get("LITHOS_LENS_LLM_ENABLED", "")
-    llm_model_override = os.environ.get("LITHOS_LENS_LLM_MODEL", "")
-    llm_provider_override = os.environ.get("LITHOS_LENS_LLM_PROVIDER", "")
-    llm_api_key_override = os.environ.get("LITHOS_LENS_LLM_API_KEY", "")
-    llm_base_url_override = os.environ.get("LITHOS_LENS_LLM_BASE_URL", "")
-    llm_extra_headers_override = os.environ.get(
-        "LITHOS_LENS_LLM_EXTRA_HEADERS_JSON", ""
-    )
-    llm_max_tokens_override = os.environ.get("LITHOS_LENS_LLM_MAX_TOKENS", "")
-    telemetry_enabled_override = os.environ.get("LITHOS_LENS_OTEL_ENABLED", "")
-    telemetry_endpoint_override = os.environ.get("LITHOS_LENS_OTEL_ENDPOINT", "")
-
-    new_cfg = cfg
-    if env_override:
-        new_cfg = replace(new_cfg, environment=env_override)
-    if data_dir_override:
-        new_storage = replace(
-            new_cfg.storage, data_dir=Path(data_dir_override).expanduser()
-        )
-        new_cfg = replace(new_cfg, storage=new_storage)
-    if log_level_override:
-        new_logging = replace(
-            new_cfg.logging, level=parse_log_level(log_level_override)
-        )
-        new_cfg = replace(new_cfg, logging=new_logging)
-    if (
-        lithos_url_override
-        or lithos_mcp_sse_path_override
-        or lithos_events_path_override
-        or agent_id_override
-    ):
-        new_lithos = replace(
-            new_cfg.lithos,
-            url=lithos_url_override or new_cfg.lithos.url,
-            mcp_sse_path=lithos_mcp_sse_path_override or new_cfg.lithos.mcp_sse_path,
-            sse_events_path=lithos_events_path_override
-            or new_cfg.lithos.sse_events_path,
-            agent_id=agent_id_override or new_cfg.lithos.agent_id,
-        )
-        new_cfg = replace(new_cfg, lithos=new_lithos)
-    # Every [tasks] env override is an independent positive integer, collected
-    # in one pass and applied in a single replace(). The names follow the
-    # shipped convention (LITHOS_LENS_TASKS_<FIELD>), and the literal
-    # os.environ.get reads above are what the docs<->code env guardrail matches
-    # on — it reads them by AST, so each one has to appear verbatim.
-    tasks_env_overrides = {
-        field: _parse_env_int(
-            f"LITHOS_LENS_TASKS_{field.upper()}",
-            raw,
-            minimum=MIN_TASKS_INT_KNOBS.get(field, 1),
-            maximum=MAX_TASKS_INT_KNOBS.get(field),
-        )
-        for field, raw in (
-            ("visible_cap", tasks_visible_cap_override),
-            ("frontier_limit", tasks_frontier_limit_override),
-            ("gate_waiting_attention_hours", gate_wait_env),
-            ("claim_expiring_soon_minutes", claim_expiry_env),
-            ("stale_open_age_days", stale_open_env),
-            ("description_preview_chars", description_preview_env),
-            ("agent_inactive_days", agent_inactive_env),
-            ("unclaimed_ready_age_minutes", unclaimed_env),
-        )
-        if raw
-    }
-    if tasks_env_overrides:
-        new_cfg = replace(new_cfg, tasks=replace(new_cfg.tasks, **tasks_env_overrides))
-    if project_convention_env is not None:
-        # Notice first, then validation: it reports the knob being WRITTEN,
-        # true whatever the value says, and an operator correcting a typo
-        # should not boot twice to learn the knob is dead anyway.
-        warn_deprecated_env(
-            "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
-            "lithos-lens.tasks.project_convention",
-        )
-        new_cfg = replace(
-            new_cfg,
-            tasks=replace(
-                new_cfg.tasks,
-                project_convention=env_project_convention(
-                    "LITHOS_LENS_TASKS_PROJECT_CONVENTION", project_convention_env
-                ),
-            ),
-        )
-    if trigger_prefixes_env is not None:
-        # Comma-separated, unlike its integer neighbours, and gated on PRESENCE
-        # rather than truthiness: setting it to the empty string is how an
-        # operator writes the empty list (rule 6 back to every ready task), the
-        # same opt-out the TOML key spells ``[]``.
-        new_cfg = replace(
-            new_cfg,
-            tasks=replace(
-                new_cfg.tasks,
-                dispatch_trigger_tag_prefixes=_parse_env_str_list(
-                    "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
-                    trigger_prefixes_env,
-                ),
-            ),
-        )
-    # The [graph] overrides follow the same shipped convention as [tasks]
-    # (LITHOS_LENS_GRAPH_<FIELD>), collected in one pass and applied in a
-    # single replace(). The literal os.environ.get reads above are what the
-    # docs<->code env guardrail matches on by AST, so each appears verbatim.
-    graph_env_overrides = {
-        field: _parse_env_int(
-            f"LITHOS_LENS_GRAPH_{field.upper()}",
-            raw,
-            maximum=MAX_GRAPH_INT_KNOBS.get(field),
-        )
-        for field, raw in (
-            ("cache_ttl_s", graph_cache_ttl_env),
-            ("max_tasks", graph_max_tasks_env),
-            ("fetch_concurrency", graph_concurrency_env),
-            ("mini_graph_max_nodes", graph_mini_nodes_env),
-        )
-        if raw
-    }
-    if graph_env_overrides:
-        new_cfg = replace(new_cfg, graph=replace(new_cfg.graph, **graph_env_overrides))
-    if knowledge_fanout_cap_override:
-        new_knowledge = replace(
-            new_cfg.knowledge,
-            related_title_fanout_cap=_parse_env_int(
-                "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
-                knowledge_fanout_cap_override,
-                # Same bounds as the [lithos-lens.knowledge] TOML key: a
-                # misconfigured env can't amplify the per-request read fan-out.
-                maximum=MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
-            ),
-        )
-        new_cfg = replace(new_cfg, knowledge=new_knowledge)
-    if any(
-        [
-            llm_enabled_override,
-            llm_model_override,
-            llm_provider_override,
-            llm_api_key_override,
-            llm_base_url_override,
-            llm_extra_headers_override,
-            llm_max_tokens_override,
-        ]
-    ):
-        new_llm = replace(
-            new_cfg.llm,
-            enabled=_parse_env_bool("LITHOS_LENS_LLM_ENABLED", llm_enabled_override)
-            if llm_enabled_override
-            else new_cfg.llm.enabled,
-            provider=llm_provider_override or new_cfg.llm.provider,
-            model=llm_model_override or new_cfg.llm.model,
-            api_key=llm_api_key_override or new_cfg.llm.api_key,
-            base_url=llm_base_url_override or new_cfg.llm.base_url,
-            extra_headers_json=llm_extra_headers_override
-            or new_cfg.llm.extra_headers_json,
-            max_tokens=_parse_env_int(
-                "LITHOS_LENS_LLM_MAX_TOKENS", llm_max_tokens_override
-            )
-            if llm_max_tokens_override
-            else new_cfg.llm.max_tokens,
-        )
-        new_cfg = replace(new_cfg, llm=new_llm)
-    if telemetry_enabled_override or telemetry_endpoint_override:
-        new_telemetry = new_cfg.telemetry
-        if telemetry_enabled_override:
-            new_telemetry = replace(
-                new_telemetry,
-                enabled=_parse_env_bool(
-                    "LITHOS_LENS_OTEL_ENABLED", telemetry_enabled_override
-                ),
-            )
-        if telemetry_endpoint_override:
-            new_telemetry = replace(new_telemetry, endpoint=telemetry_endpoint_override)
-        new_cfg = replace(new_cfg, telemetry=new_telemetry)
-    return new_cfg
-
-
-def _parse_env_int(
-    name: str, value: str, *, minimum: int = 1, maximum: int | None = None
-) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ConfigError(f"{name} must be an integer") from exc
-    if parsed < minimum:
-        raise ConfigError(f"{name} must be >= {minimum}")
-    if maximum is not None and parsed > maximum:
-        raise ConfigError(f"{name} must be <= {maximum}")
-    return parsed
-
-
-def _parse_env_str_list(name: str, value: str) -> tuple[str, ...]:
-    """A comma-separated env list; blank VALUE is the empty list, blank ENTRY is
-    an error (the TOML twin draws the same line: ``[]`` yes, ``[""]`` no)."""
-    if not value.strip():
-        return ()
-    items = [item.strip() for item in value.split(",")]
-    if any(not item for item in items):
-        raise ConfigError(f"{name} must not contain an empty comma-separated entry")
-    return tuple(items)
-
-
-def _parse_env_bool(name: str, value: str) -> bool:
-    lowered = value.strip().lower()
-    if lowered in {"1", "true", "yes", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "off"}:
-        return False
-    raise ConfigError(f"{name} must be a boolean")

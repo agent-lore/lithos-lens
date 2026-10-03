@@ -133,7 +133,10 @@ MAX_FILTER_TAG_CHIPS = 12
 #: ``id`` is in the set for a different reason than the others: it is the
 #: alias route's OWN segment, so a task really called ``id`` has to be
 #: addressed through the alias too rather than through the path that serves it.
-RESERVED_TASK_PATH_SEGMENTS: frozenset[str] = frozenset({"graph", "events", "id"})
+#: ``new`` joins them for the create form (§5C.7), never "the task called new".
+RESERVED_TASK_PATH_SEGMENTS: frozenset[str] = frozenset(
+    {"graph", "events", "id", "new"}
+)
 
 #: The one route that can address ANY id, because the id rides in the QUERY.
 #: A path cannot: ASGI percent-decodes before routing, so ``%2F`` becomes a

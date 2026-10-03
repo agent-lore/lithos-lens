@@ -37,6 +37,13 @@ fixtures must reproduce the canonical payloads, not approximations of them.
 }
 ```
 
+A `responses.variants` entry is normally an object, with ONE exception: where
+a tool's documented answer is a bare JSON `null`, the variant is vendored as
+`null`. `lithos_agent_info`'s `absent` variant is the case — it returns `None`
+for an unknown id rather than an error envelope, and that wire shape is exactly
+what the client has to map (`mcp_transport.NULL_RESULT_CODE`). Wrapping it in
+an object would record a payload the server never sends.
+
 `observed_divergences` exists because the source and a running server can
 disagree (live example: `lithos_finding_list`'s `invalid_input` envelope is
 eaten by FastMCP output-schema validation — Lithos task `60b3e135`). Record
