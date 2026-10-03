@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{#
+  The task is not in the state the operator acted on -- it changed under them,
+  or it is gone (§5C.4, §5C.6). Answered with 409 and no write.
+  Context: `problem` -- a `write_errors.WriteProblem` of kind `conflict`.
+
+  Reached two ways, and it reads the same both times: Lens's own
+  `expected_status` pre-check saw a different status before calling Lithos, or
+  Lithos refused the write itself (`task_not_found`, `task_not_resolved`) in
+  the window the pre-check cannot close. The operator does not need to know
+  which of the two caught it -- the fact is that the board they acted from is
+  stale.
+
+  No "try again" affordance, deliberately. The page cannot know whether the
+  action is still the right one now that the status has changed, and a button
+  that replayed it would be the one thing D4 refuses ("never optimistic"). The
+  link goes to the task, which re-renders from fresh reads.
+-#}
+
+{% block title %}The task changed | Lithos Lens{% endblock %}
+
+{% block content %}
+  <section class="write-outcome write-outcome-conflict">
+    <header>
+      <p class="eyebrow">Write refused</p>
+      <h1>The task changed</h1>
+    </header>
+    {% if problem.subject.label %}
+      <p class="write-outcome-subject">
+        {{ problem.subject.label }}
+        {% with task_id = problem.subject.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+      </p>
+    {% endif %}
+    {% include "writes/notice.html" %}
+    <p class="write-outcome-actions">
+      {% if problem.subject.task_id %}
+        <a href="{{ task_detail_url(request, problem.subject.task_id) }}">Open the task</a>
+      {% else %}
+        <a href="/tasks">Back to the board</a>
+      {% endif %}
+    </p>
+  </section>
+{% endblock %}

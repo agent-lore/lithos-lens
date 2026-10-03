@@ -22,6 +22,7 @@ graph TD
     TaskGraph
     Tasks
     Telemetry
+    Writes
   end
   click Config "components/Config.md"
   click Entrypoint "components/Entrypoint.md"
@@ -35,6 +36,7 @@ graph TD
   click Tasks "components/Tasks.md"
   click Telemetry "components/Telemetry.md"
   click Web "components/Web.md"
+  click Writes "components/Writes.md"
   Config --> Errors
   Config --> Tasks
   Entrypoint --> Config

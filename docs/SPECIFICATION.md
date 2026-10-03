@@ -1661,6 +1661,57 @@ PRD's finer row-vs-node split is the client's knowledge, not a fact on the
 request, and the task id is absent for the same cardinality reason as the
 graph's scope key.
 
+### 5.13 Write Refusal Copy
+
+The first piece of **T3** (curated write actions) to ship, ahead of the actions
+themselves: the mapping from a Lithos write failure to what the operator reads
+(§5C.4). No route answers with it yet — there are still no write routes (§10) —
+so what ships is the pure mapper (`lithos_lens.write_errors`) and the two pages
+it feeds.
+
+A write to Lithos has three endings, and this covers the two that are not
+success:
+
+| Ending | Answer | Status |
+|--------|--------|--------|
+| Lithos refused it, and the task is not in the state the operator acted on | the **conflict page** (`writes/conflict.html`) | 409 |
+| Lithos refused the content of the request | a **notice on the form that was submitted** (`writes/notice.html`), with the operator's input kept | 422 |
+| Lithos never answered — transport failure or timeout | the **unknown-outcome page** (`writes/unknown_outcome.html`) | 200 |
+
+The mapper reads the **whole error envelope**, not a code and a message: fields
+such as `candidates` carry what the copy needs, and a field upstream adds later
+reaches the copy without a signature change. The codes mapped are the ones
+Lithos 0.5.0 raises on a write:
+
+| Code | Copy |
+|------|------|
+| `task_not_found` | Complete and cancel answer this both for "missing" and for "not open" — one code for two facts, which the envelope cannot separate. Lens re-reads the task and the copy splits on the result: it exists → "this task is now *\<status\>*"; it is gone → "this task no longer exists"; the re-read itself failed → neither is claimed. |
+| `task_not_resolved` | "This task is already open." (reopen) |
+| `invalid_input` | The upstream message, attached to the field the **envelope** names — Lens does not read a field name out of the message — for a form re-render with input kept |
+| `ambiguous_id_prefix` | "'\<prefix\>' matches more than one task", with the envelope's `candidates` rendered as choices, each naming its task by title and short id. The prefix is the envelope's when it carries one, else the value the form sent |
+| `cycle` | "This dependency would create a cycle." then the upstream message **verbatim**. Task ids inside it get the existing short-id link treatment; that is presentation only (`uuid.UUID` decides what is an id, and nothing Lens does reads the message) |
+| `parent_exists` | "*\<Task\>* already has a parent." |
+| `self_edge` | "A task can't depend on itself." |
+| `not_a_gate` | "*\<Task\>* isn't a gate — only a gate can be waited on." |
+| `invalid_edge_type` | A Lens defect (the relation form offers only valid types): the unknown-code path, logged at `error` |
+| *(unknown code)* | The code and message verbatim with a "report this" hint — forward-compatible with codes upstream adds |
+
+Three rules hold across every row:
+
+- **No write error is a 500.** A refusal is an answer, not a Lens failure. An
+  unmapped code is answered like any other refusal rather than raised, and the
+  conflict page is 409 rather than 404 even for a task that is gone: the URL
+  was right when the page was rendered, and a 404 reads as "no such page".
+- **A refused write says that nothing was changed**, first and before the
+  reason. One element (`.write-outcome-claim`) in one shared partial renders
+  that sentence, so every surface the copy reaches states it.
+- **The unknown-outcome case claims neither** that the write applied nor that
+  it did not. It says "the action may or may not have applied" and then what a
+  re-read shows now, with nothing joining the two — Lithos writes are not
+  idempotent (§14 of the requirements), so the page offers no retry. Its 200 is
+  the absence of a claim: a 4xx would blame a request that was fine and a 5xx
+  would say the action failed, which is the one thing it must not say.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -1855,7 +1906,9 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **write actions of any kind** — every surface is read-only (T3)
+- **write actions of any kind** — every surface is read-only, and there are
+  no write routes (T3). The refusal copy those actions will answer with
+  ships ahead of them (§5.13); nothing reaches it yet
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)
@@ -1880,7 +1933,9 @@ because they are described in `docs/REQUIREMENTS.md`.
 This specification describes the behavior of Lithos Lens `0.4.0` as currently
 implemented in this repository — the 0.1.0 foundation, the **T1** graph-native
 operator view and **K1** knowledge note view and search of 0.3.0, and the
-**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2).
+**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2), plus the
+first slice of **T3** — the write-refusal copy of §5.13, which no route
+yet reaches.
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be

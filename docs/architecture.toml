@@ -37,6 +37,7 @@ Knowledge    = "Safe server-side markdown and the knowledge-note surface built o
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
 Errors       = "Exception hierarchy rooted at LithosLensError."
+Writes       = "Curated write actions (§5C): the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, and the two pages it feeds."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
@@ -51,11 +52,12 @@ Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lith
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
 Errors       = ["lithos_lens.errors"]
+Writes       = ["lithos_lens.write_errors"]
 
 [tiers]
 Entrypoints = ["Entrypoint", "Web"]
 Core        = ["State", "Events", "LithosClient"]
-Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetry", "Errors"]
+Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetry", "Errors", "Writes"]
 
 # Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
 # against the metrics snapshot (docs/generated/metrics.md explains each one).
@@ -336,6 +338,7 @@ include_modules = [
     "lithos_lens.events",
     "lithos_lens.state",
     "lithos_lens.lithos_client",
+    "lithos_lens.write_errors",
 ]
 # fake_lithos holds fixture plumbing (FakeEventHub/FakeLithosClient) and
 # fake_dataset (with fake_graph_dataset, the demo's dependency-graph half) its

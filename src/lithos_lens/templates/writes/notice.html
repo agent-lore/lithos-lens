@@ -1,0 +1,54 @@
+{#
+  One Lithos write refusal, as the operator reads it (§5C.4).
+  Context: `problem` -- a `write_errors.WriteProblem`.
+
+  THE one definition of this copy's markup, included by the two pages that
+  answer a POST on their own (`writes/conflict.html`, `writes/unknown_outcome.html`)
+  and -- for a `refused` problem, which has no page of its own -- by the form
+  the operator submitted, so their input is kept beside the reason it was
+  refused.
+
+  The claim about the store leads, always, and is not conditional: "nothing was
+  changed" is the fact the operator needs before the reason, and the
+  unknown-outcome case says instead that the action may or may not have
+  applied. One element, one class, every surface -- so no caller can render a
+  refusal that forgets to say which it was.
+
+  The upstream message is rendered VERBATIM, segment by segment: `detail` is a
+  sequence of runs, and only a run the mapper marked as a task id becomes a
+  link. Lens does not reword it (a `cycle` message names the members, and
+  nothing here could say which loop) and does not read anything out of it --
+  the ids are the existing short-id element and the linking is presentation
+  only.
+-#}
+<div class="write-outcome-copy">
+  <p class="write-outcome-claim">{{ problem.change_statement }}</p>
+  {% if problem.headline %}
+    <p class="write-outcome-headline">{{ problem.headline }}</p>
+  {% endif %}
+  {% if problem.show_code and problem.code %}
+    <p class="write-outcome-code">Lithos refused it with <code>{{ problem.code }}</code>.</p>
+  {% endif %}
+  {% if problem.detail %}
+    <p class="write-outcome-detail">{% for segment in problem.detail %}{% if segment.task_id %}<a href="{{ task_detail_url(request, segment.task_id) }}">{% with task_id = segment.task_id %}{% include "tasks/short_id.html" %}{% endwith %}</a>{% else %}{{ segment.text }}{% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if problem.candidates %}
+    {#
+      The choices an ambiguous prefix leaves. Each names its task the way every
+      other surface does -- the title, then the short-id element carrying the
+      whole id in its tooltip (§5.3) -- and links to that task, so the operator
+      can look before they choose.
+    -#}
+    <ul class="write-outcome-candidates">
+      {% for candidate in problem.candidates %}
+        <li>
+          <a href="{{ task_detail_url(request, candidate.task_id) }}">{{ candidate.label }}</a>
+          {% with task_id = candidate.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  {% if problem.hint %}
+    <p class="write-outcome-hint">{{ problem.hint }}</p>
+  {% endif %}
+</div>
