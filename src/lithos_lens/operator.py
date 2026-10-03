@@ -24,6 +24,7 @@ sent the request.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -193,27 +194,47 @@ class OperatorLithosClient(Protocol):
 class OperatorRegistry:
     """Guards an identity, then registers it once per process (D3).
 
-    Two in-memory sets, both process-lifetime: the ids the guard has accepted
-    and the ids registered as ``type="human"``. They are what makes
-    "registration precedes the first write" cost one upstream call per
-    identity instead of one per write, and what makes a Lithos outage that
-    starts mid-session leave an already-verified operator working.
+    One in-memory set, process-lifetime: the ids REGISTERED as ``type="human"``
+    here. That set is what makes "registration precedes the first write" cost
+    one upstream call per identity instead of one per write, and what keeps an
+    operator already writing in this session working when Lithos goes away.
 
-    Losing them to a restart is harmless: the next write rebuilds both by
-    doing the lookup and the registration again, and both are idempotent in
-    the only way that matters here (re-registering an id ALREADY typed
-    ``human`` leaves it typed ``human``).
+    What it deliberately does NOT hold is a set of ids some earlier check
+    merely approved. The guard's whole value is that the lookup happens
+    immediately before the registration that could overwrite an agent's type,
+    and an acceptance cached when the operator page was visited would suppress
+    exactly that lookup minutes later — a far wider window than the
+    lookup-to-register one clarification 3 accepts, and one Lens can close by
+    simply not caching. So :meth:`check` is a probe with no memory, and
+    :meth:`ensure_registered` always does its own lookup before registering.
+
+    Losing the set to a restart is harmless: the next write rebuilds it by
+    doing the lookup and the registration again, and re-registering an id
+    ALREADY typed ``human`` leaves it typed ``human``.
     """
 
     def __init__(self, *, service_agent_id: str) -> None:
         self._service_agent_id = service_agent_id.strip().lower()
-        self._accepted: set[str] = set()
         self._registered: set[str] = set()
+        # Serialises the whole ensure-registered operation (lookup, register,
+        # record), so "exactly one registration per identity per process" holds
+        # for the concurrent first writes the operational model names — a
+        # double submit, or two tabs. Without it the check-then-act between the
+        # `_registered` test and its `add` lets both callers look up and both
+        # register.
+        #
+        # ONE lock for the registry rather than one per identity: a
+        # registration happens once per identity per process, so the
+        # contention it serialises is nil, and a per-id map would be a dict
+        # keyed by values that arrive in a request — unbounded for no gain.
+        # Created lazily because an OperatorRegistry is built by
+        # `register_write_routes`, which may run outside a running loop.
+        self._registration_lock: asyncio.Lock | None = None
 
     async def check(
         self, client: OperatorLithosClient, operator_id: str
     ) -> IdentityCheck:
-        """The impersonation guard: may Lens act as ``operator_id``?
+        """The impersonation guard: may Lens act as ``operator_id``, right now?
 
         ``lithos_agent_register`` has no "create only" form — re-registering an
         existing id with a type OVERWRITES that agent's stored type and
@@ -225,16 +246,18 @@ class OperatorRegistry:
         Accepted when the lookup finds nothing, or finds an agent already typed
         ``human`` (archived or not — the type is the whole question). Refused
         for Lens's own service agent, and for any id that exists with another
-        type or with none. A lookup that FAILS refuses a new identity: Lens
-        cannot tell "absent" from "unreadable", and the safe answer is the one
-        that changes nothing upstream.
+        type or with none. A lookup that FAILS refuses: Lens cannot tell
+        "absent" from "unreadable", and the safe answer is the one that changes
+        nothing upstream.
+
+        A PROBE, with no memory: it answers for the moment it runs and records
+        nothing, so a yes here never stands in for the lookup
+        :meth:`ensure_registered` does before it registers. ``POST /operator``
+        calls this so a refusal is immediate rather than discovered at the
+        first write; the answer that binds is the seam's.
         """
         if not valid_operator_id(operator_id):
             return IdentityCheck(False, "invalid_id", REFUSAL_INVALID_ID)
-        if operator_id in self._accepted:
-            # Verified earlier in this process: no second lookup, so an
-            # identity already in use keeps working through a Lithos outage.
-            return _ACCEPTED
         if operator_id == self._service_agent_id:
             return IdentityCheck(False, "service_agent", REFUSAL_SERVICE_AGENT)
         try:
@@ -246,7 +269,6 @@ class OperatorRegistry:
             return IdentityCheck(False, "lookup_failed", REFUSAL_LOOKUP_FAILED)
         if agent is not None and agent.type != HUMAN_AGENT_TYPE:
             return IdentityCheck(False, "belongs_to_agent", REFUSAL_BELONGS_TO_AGENT)
-        self._accepted.add(operator_id)
         return _ACCEPTED
 
     async def ensure_registered(
@@ -257,18 +279,22 @@ class OperatorRegistry:
         Every write goes through here, whatever the identity's source — so the
         guard covers the cookie, ``[writes].default_operator`` (which never
         passes through the operator page at all) and a cookie chosen before its
-        id became an agent's. ``POST /operator`` runs :meth:`check` up front so
-        a refusal is immediate, but this is where it BINDS.
+        id became an agent's. This is where the guard BINDS: the lookup is
+        this call's own, never one an earlier page visit did.
 
         Lithos auto-registers an unknown ``agent`` on any write, untyped, which
         is what this call exists to pre-empt: the agent pickers and the Planning
         View's definition of a human read the registry's type.
 
+        Already registered in this process → no call at all, which is both the
+        cost bound (one registration per identity, not one per write) and why
+        an operator mid-session survives a Lithos outage.
+
         KNOWN LIMIT, deliberately not closed (PRD clarification 3, Dave
-        2026-10-03): between the lookup in :meth:`check` and the registration
-        below, another writer could register the same id with a type, and this
-        call would then overwrite it to ``human``. ``lithos_agent_register`` has
-        no conditional form, so nothing Lens can do here closes that window —
+        2026-10-03): between the lookup below and the registration after it,
+        another writer could register the same id with a type, and this call
+        would then overwrite it to ``human``. ``lithos_agent_register`` has no
+        conditional form, so nothing Lens can do here closes that window —
         narrowing it is the most a pre-check can do, exactly as D4's
         ``expected_status`` pre-check narrows the write race. Recorded in
         docs/SPECIFICATION.md beside the guard; a finding asking Lens to close
@@ -276,19 +302,29 @@ class OperatorRegistry:
         """
         if operator_id in self._registered:
             return _ACCEPTED
-        checked = await self.check(client, operator_id)
-        if not checked.ok:
-            return checked
-        try:
-            registered = await client.register_operator(operator_id)
-        except Exception:
-            logger.warning(
-                "operator registration failed", extra={"operator": operator_id}
-            )
-            registered = False
-        if not registered:
-            return IdentityCheck(
-                False, "registration_failed", REFUSAL_REGISTRATION_FAILED
-            )
-        self._registered.add(operator_id)
-        return _ACCEPTED
+        if self._registration_lock is None:
+            self._registration_lock = asyncio.Lock()
+        async with self._registration_lock:
+            # Re-read inside the lock: the caller that held it may have been
+            # the first write for this very identity, in which case this one
+            # takes its result and makes no call of its own.
+            if operator_id in self._registered:
+                return _ACCEPTED
+            checked = await self.check(client, operator_id)
+            if not checked.ok:
+                return checked
+            try:
+                registered = await client.register_operator(operator_id)
+            except Exception:
+                logger.warning(
+                    "operator registration failed", extra={"operator": operator_id}
+                )
+                registered = False
+            if not registered:
+                # Not remembered, so the next write tries again rather than
+                # writing under an identity Lithos never typed.
+                return IdentityCheck(
+                    False, "registration_failed", REFUSAL_REGISTRATION_FAILED
+                )
+            self._registered.add(operator_id)
+            return _ACCEPTED

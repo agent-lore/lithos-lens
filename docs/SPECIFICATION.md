@@ -118,9 +118,13 @@ The current application exposes these routes:
   deliberately **not** `Secure` (Lens serves plain HTTP, where a Secure cookie
   would not be stored at all; the cookie is an attribution label, not a
   credential). `?next=` returns the operator where they were and is honoured
-  only as a same-origin relative path. An id the impersonation guard refuses,
-  or one that is not a valid operator id, re-renders the form with the reason
-  and sets no cookie (HTTP 400).
+  only as a same-origin relative path — on the redirect and on a refusal
+  re-render alike, so correcting a refused id still returns the operator where
+  they came from. An id the impersonation guard refuses, or one that is not a
+  valid operator id, re-renders the form with the reason and sets no cookie
+  (HTTP 400). The **submitted value itself** must match the id rule: it is not
+  trimmed first, because accepting `" dave "` would set an identity other than
+  the one typed.
 - `GET /tasks/new`
   Reserved for the create form (a later T3 slice). Until it exists the path
   answers 404 — never the detail page of a task whose id happens to be `new`,
@@ -1723,10 +1727,20 @@ affordance.
 **The impersonation guard and register-once.** Lithos auto-registers an unknown
 `agent` on any write, untyped, so Lens registers an identity with
 `lithos_agent_register(id=<operator>, type="human")` before its first write in
-the process; the ids it has cleared and the ids it has registered are held in
-memory, so the cost is one upstream call per identity, not per write. A failed
-registration refuses the write — "could not register the operator identity;
-nothing was changed".
+the process; the ids it has **registered** are held in memory, so the cost is
+one upstream call per identity, not per write, and the whole operation
+(lookup, register, record) is serialised per process — two first writes for one
+identity, a double submit or two tabs, produce exactly one registration. A
+failed registration refuses the write — "could not register the operator
+identity; nothing was changed" — and is not remembered, so the next write
+tries again.
+
+What is deliberately **not** remembered is an identity some earlier check
+merely approved. `POST /operator` runs the same guard up front so a refusal is
+immediate, but that answer is about the moment it ran: the registration seam
+always does its own lookup. Caching the page's acceptance would suppress
+exactly the lookup that protects an agent's registry entry, across a window as
+wide as the time between visiting the page and the first write.
 
 Before accepting an identity, Lens looks the id up **exactly**, with
 `lithos_agent_info` — not `lithos_agent_list`, which hides archived agents by
@@ -1738,15 +1752,15 @@ an agent already typed `human` (archived or not — the type is the whole
 question). Lens's own service agent's id is refused, and so is any id that
 exists with another type or with none ("that id belongs to an agent"). A lookup
 that **fails** refuses a *new* identity, because Lens cannot tell "absent" from
-"unreadable" and only one of those is safe to register; an identity already
-cleared in this process keeps working. The guard runs at the
-registration seam — so it covers a configured `default_operator`, which never
-passes through the operator page — and again up front on `POST /operator`, so a
-refusal is immediate.
+"unreadable" and only one of those is safe to register; an identity this
+process has already registered keeps working, because a write under it makes
+no call at all. The guard runs at the registration seam — so it covers a
+configured `default_operator`, which never passes through the operator page —
+and again up front on `POST /operator`, so a refusal is immediate.
 
 **Known limit, by decision (Dave, 2026-10-03).** `lithos_agent_register` has no
 conditional ("create only", or "only if still untyped") form, so the window
-between the lookup and the registration is open: an agent that registers the
+between the lookup and the registration **inside one seam call** is open: an agent that registers the
 operator's chosen id in that instant has its type overwritten to `human` by
 Lens's call. Lens does not close this window and ships no protocol for it —
 narrowing it is the most a client-side pre-check can do, exactly as the

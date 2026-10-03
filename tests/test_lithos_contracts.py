@@ -57,6 +57,13 @@ from tests.conftest import CONTRACTS_DIR, load_contract
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLIENT_PY = REPO_ROOT / "src" / "lithos_lens" / "lithos_client.py"
 
+#: The ONE ``(tool, response variant)`` whose vendored payload is a bare JSON
+#: ``null``: ``lithos_agent_info`` answers an unknown id with ``None`` instead
+#: of an error envelope (PRD clarification 2). Named as a pair so the
+#: exemption cannot spread to a contract that merely has a variant called
+#: "absent".
+NULL_RESPONSE_VARIANT = ("lithos_agent_info", "absent")
+
 
 def _call_tool_name_nodes() -> list[ast.expr | None]:
     """The name argument node of every ``self._call_tool(...)`` invocation."""
@@ -152,16 +159,24 @@ def test_contract_file_is_well_formed(tool: str) -> None:
     assert isinstance(responses["success"], dict)
     response_variants = responses.get("variants", {})
     assert isinstance(response_variants, dict)
-    # A variant is an object — EXCEPT where the tool's documented answer is a
-    # bare JSON ``null``: ``lithos_agent_info`` returns None for an unknown id
-    # rather than an error envelope, and that wire shape is exactly what the
-    # client has to map (PRD clarification 2). Vendoring it as ``null`` is the
-    # point; wrapping it in an object would record a payload the server never
-    # sends.
-    assert all(
-        payload is None or isinstance(payload, dict)
-        for payload in response_variants.values()
-    )
+    # A variant is an object, with ONE exemption, named by tool AND variant:
+    # ``lithos_agent_info``'s absent answer is a bare JSON ``null`` rather than
+    # an error envelope, and that wire shape is exactly what the client has to
+    # map (PRD clarification 2). Vendoring it as ``null`` is the point;
+    # wrapping it in an object would record a payload the server never sends.
+    # Scoped rather than global so a null that lands in any OTHER contract —
+    # where most variants are never round-tripped — is still caught here.
+    for name, payload in response_variants.items():
+        if (tool, name) == NULL_RESPONSE_VARIANT:
+            assert payload is None, (
+                f"{tool}.responses.variants.{name} is the vendored null wire "
+                f"shape; it must stay null"
+            )
+            continue
+        assert isinstance(payload, dict), (
+            f"{tool}.responses.variants.{name} must be an object "
+            f"(only {NULL_RESPONSE_VARIANT} may be null)"
+        )
     errors = responses.get("errors", [])
     assert isinstance(errors, list)
     for envelope in errors:
@@ -393,6 +408,19 @@ def _check_search_results(result: Any, success: dict[str, Any]) -> None:
 
 
 def _check_agent_info(result: Any, success: dict[str, Any]) -> None:
+    # Fed the WHOLE canonical payload (first_seen_at, archived_at and metadata
+    # included), and expected to normalize into the subset Lens models — the
+    # documented round-trip scope boundary (tests/contracts/README.md). The
+    # unmodelled fields must neither appear on the record nor break the parse.
+    assert set(success) == {
+        "id",
+        "name",
+        "type",
+        "first_seen_at",
+        "last_seen_at",
+        "archived_at",
+        "metadata",
+    }, "the vendored success payload must stay the tool's full response"
     assert result == AgentRecord(
         id=success["id"],
         name=success["name"],
@@ -624,6 +652,32 @@ def test_a_genuine_agent_lookup_failure_stays_a_failure(
     must REFUSE an unreadable one."""
     with pytest.raises(LithosToolError):
         _canned(text, is_error=is_error)
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected_type"),
+    [
+        ("untyped", ""),
+        ("other_type", "claude-code"),
+        ("archived_other_type", "claude-code"),
+        ("archived_human", "human"),
+    ],
+)
+def test_each_agent_info_variant_round_trips_into_its_type(
+    variant: str, expected_type: str
+) -> None:
+    """The guard's whole question is the agent's TYPE, so every vendored
+    variant is round-tripped for it — including ``type: null`` (an id Lithos
+    auto-registered untyped, which normalizes to ``""`` and is refused) and the
+    two archived rows this tool returns and ``lithos_agent_list`` hides."""
+    contract = load_contract("lithos_agent_info")
+    payload = contract["responses"]["variants"][variant]
+    result, calls = _run(payload, lambda c: c.agent_info(payload["id"]))
+
+    assert calls == [("lithos_agent_info", {"id": payload["id"]})]
+    assert result is not None
+    assert result.id == payload["id"]
+    assert result.type == expected_type
 
 
 def test_read_note_by_path_sends_the_vendored_variant_request() -> None:

@@ -45,12 +45,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 23 | 10804 | 8251 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 24 |
 | Tasks | 6 | 1946 | 1404 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1116 | 814 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 5 | 2533 | 1951 | 1 | 10 | 0.91 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
-| Writes | 2 | 414 | 295 | 2 | 1 | 0.33 | 7 (`lithos_lens.operator.OperatorRegistry.check`) | 0 |
+| Web | 5 | 2554 | 1955 | 1 | 10 | 0.91 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Writes | 2 | 466 | 320 | 2 | 1 | 0.33 | 7 (`lithos_lens.operator.OperatorRegistry.ensure_registered`) | 0 |
 
 ## Size
 
-- Modules: **58**, lines: **23622**, SLOC: **17968**
+- Modules: **58**, lines: **23695**, SLOC: **17997**
 - Largest module: `lithos_lens.tasks` (849 lines)
 - Modules over 800 lines: **4**
   - `lithos_lens.frontier`
@@ -88,4 +88,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **82** (87 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.03** (47906 test lines / 23622 source lines)
+- Test-to-source line ratio: **2.04** (48307 test lines / 23695 source lines)

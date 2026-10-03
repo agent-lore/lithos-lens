@@ -15,7 +15,10 @@
       "id": "dave",
       "name": "Dave",
       "type": "human",
-      "last_seen_at": "2026-10-02T09:15:00+00:00"
+      "first_seen_at": "2026-09-14T08:03:00+00:00",
+      "last_seen_at": "2026-10-02T09:15:00+00:00",
+      "archived_at": null,
+      "metadata": {}
     },
     "variants": {
       "absent": null,
@@ -23,16 +26,40 @@
         "id": "scratch-runner",
         "name": "scratch-runner",
         "type": null,
-        "last_seen_at": "2026-09-30T11:00:00+00:00"
+        "first_seen_at": "2026-09-30T10:58:00+00:00",
+        "last_seen_at": "2026-09-30T11:00:00+00:00",
+        "archived_at": null,
+        "metadata": {}
       },
       "other_type": {
         "id": "agent-zero",
         "name": "Agent Zero",
         "type": "claude-code",
-        "last_seen_at": "2026-10-01T18:42:00+00:00"
+        "first_seen_at": "2026-08-02T12:00:00+00:00",
+        "last_seen_at": "2026-10-01T18:42:00+00:00",
+        "archived_at": null,
+        "metadata": {"host": "workstation"}
+      },
+      "archived_other_type": {
+        "id": "old-worker",
+        "name": "Old Worker",
+        "type": "claude-code",
+        "first_seen_at": "2026-05-11T09:00:00+00:00",
+        "last_seen_at": "2026-07-20T16:30:00+00:00",
+        "archived_at": "2026-08-01T00:00:00+00:00",
+        "metadata": {}
+      },
+      "archived_human": {
+        "id": "retired-dave",
+        "name": "Retired Dave",
+        "type": "human",
+        "first_seen_at": "2026-03-01T09:00:00+00:00",
+        "last_seen_at": "2026-06-18T17:05:00+00:00",
+        "archived_at": "2026-07-01T00:00:00+00:00",
+        "metadata": {}
       }
     },
     "errors": []
   },
-  "observed_divergences": "TWO gaps, both recorded rather than guessed at (tests/contracts/README.md's rule). (1) The ABSENT answer is a bare JSON `null`, not an error envelope: the tool is documented \"Agent info dict or None if not found\" (live tools/list description, vendored in _tools_snapshot.json), unlike lithos_agent_archive, which answers an `agent_not_found` envelope. That is why `variants.absent` is `null` — the only non-object response any vendored contract carries — and why `mcp_transport.decode_tool_result` gives it its own code (NULL_RESULT_CODE) for `LithosClient.agent_info` to map to None. A fake answering whatever the client expected would have hidden it (PRD clarification 2, Dave 2026-10-03). (2) The success payload's FULL field set was not confirmed against a live server in the build environment that added this contract (no Lithos reachable, and the Lithos source tree was not available to it): the four fields above are the agent-row shape the vendored lithos_agent_list contract carries, transcribed from the same registry, and Lens models exactly those (`normalize_agent` -> AgentRecord). The guard reads only `type`, so an unmodelled column (e.g. an archived marker) changes no Lens behaviour — but `make contracts-verify` against a live Lithos is the step that confirms the request shape and should be run before merge."
+  "observed_divergences": "The ABSENT answer is a bare JSON `null`, not an error envelope: the tool is documented \"Agent info dict or None if not found\" (live tools/list description, vendored in _tools_snapshot.json), unlike lithos_agent_archive, which answers an `agent_not_found` envelope. That is why `variants.absent` is `null` — the one non-object response any vendored contract carries, and the only variant the well-formedness guard exempts — and why `mcp_transport.decode_tool_result` gives it its own code (NULL_RESULT_CODE) for `LithosClient.agent_info` to map to None. A fake answering whatever the client expected would have hidden it (PRD clarification 2, Dave 2026-10-03). SCOPE NOTE, not a divergence: the payload carries `first_seen_at`, `archived_at` and `metadata` as well as the three fields Lens reads; `normalize_agent`/`AgentRecord` model `id`, `name`, `type` and `last_seen_at` only, which is the documented round-trip scope boundary in README.md — the guard's whole question is the TYPE, and the archive state it does not model is precisely what this tool (unlike the list) still answers for. `make contracts-verify` against a live Lithos remains the step that checks the request shape on the wire; it has not been run from the build environment that added this contract, which could reach no Lithos."
 }

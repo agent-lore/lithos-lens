@@ -11,7 +11,7 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.operator` | S | 4 | 2 |
+| `lithos_lens.operator` | M | 4 | 2 |
 | `lithos_lens.write_guards` | S | 0 | 2 |
 
 ## Public API

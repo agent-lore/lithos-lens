@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import html
+import re
+from dataclasses import replace
 from pathlib import Path
 from textwrap import dedent
 
@@ -111,6 +113,14 @@ def _page_text(response) -> str:
         ("not a url", "", "lens.lan:8000", False),
         ("http://lens.lan:notaport", "", "lens.lan:8000", False),
         ("file:///tmp/x.html", "", "lens.lan:8000", False),
+        # An EXPLICIT port 0 is a port, not an absent one — on either side.
+        ("http://lens.lan:0", "", "lens.lan", False),
+        ("http://lens.lan", "", "lens.lan:0", False),
+        ("http://lens.lan:0", "", "lens.lan:0", True),
+        # Present but blank: still the browser's answer, so no Referer
+        # fallback — presence decides which header is read, validity only
+        # decides the verdict.
+        ("   ", "http://lens.lan:8000/tasks", "lens.lan:8000", False),
         # Neither header at all.
         ("", "", "lens.lan:8000", False),
         # No Host to compare against.
@@ -138,6 +148,17 @@ def test_same_origin_compares_host_and_port(
         ("", "/fallback"),
         (None, "/fallback"),
         ("/tasks\r\nSet-Cookie: x=1", "/fallback"),
+        # The WHOLE control category, not just C0 and DEL: the C1 range
+        # arrives percent-encoded through an ordinary request (%C2%85 is NEL,
+        # a line break to some parsers).
+        ("/tasks\x00x", "/fallback"),
+        ("/tasks\x7f", "/fallback"),
+        ("/tasks\x85x", "/fallback"),
+        ("/tasks\x80", "/fallback"),
+        ("/tasks\x9f", "/fallback"),
+        # …and the characters just OUTSIDE it stay ordinary path content.
+        ("/tasks\u00a0x", "/tasks\u00a0x"),
+        ("/tasks\u00e9", "/tasks\u00e9"),
     ],
 )
 def test_safe_next_accepts_only_a_relative_path(
@@ -246,6 +267,10 @@ def test_an_id_that_belongs_to_an_agent_is_refused_without_registering(
 
     assert not checked.ok
     assert checked.reason == reason
+    # The phrase §5C.5 names, as a literal: asserting only against the module
+    # constant would let the copy and the expectation drift together.
+    if operator != SERVICE_AGENT_ID:
+        assert "that id belongs to an agent" in checked.reason.lower()
     assert _registrations(fake) == []
 
 
@@ -276,15 +301,123 @@ def test_a_failed_lookup_refuses_a_new_identity() -> None:
     assert _registrations(fake) == []
 
 
-def test_an_identity_already_verified_survives_a_failed_lookup() -> None:
-    """The other half of that rule: an operator mid-session keeps working when
-    Lithos goes away, because the id was cleared and registered earlier in this
-    process."""
+def test_an_identity_already_registered_survives_a_failed_lookup() -> None:
+    """The other half of that rule: an operator mid-session keeps writing when
+    Lithos's lookup goes away, because this process already REGISTERED that id
+    — so the second write makes no call at all, the lookup included."""
     fake, registry = _fake(), _registry()
     assert _run(registry.ensure_registered(fake, "dave")).ok
+    calls_before = list(fake.tool_calls)
     fake.agent_info_error = LithosToolError("lithos is down", code="timeout")
 
     assert _run(registry.ensure_registered(fake, "dave")).ok
+    assert fake.tool_calls == calls_before
+
+
+def test_the_pages_check_does_not_stand_in_for_the_seams_lookup() -> None:
+    """The guard binds at the seam, and nowhere else.
+
+    ``POST /operator`` checks an id up front so a refusal is immediate — but
+    that answer is about the moment it ran. If an acceptance were remembered,
+    an id chosen on the page and claimed by an agent BEFORE the first write
+    would be registered as a human anyway, overwriting that agent: a
+    page-to-write window far wider than the lookup-to-register one
+    clarification 3 accepts, and one Lens closes by not caching. So the seam
+    looks the id up itself, every time, until the id is registered.
+    """
+    fake, registry = _fake(), _registry()
+    assert _run(registry.check(fake, "newcomer")).ok
+
+    # An agent takes the id between the page visit and the first write.
+    fake.dataset = replace(
+        GUARD_DATASET,
+        agents=(*GUARD_DATASET.agents, AgentRecord(id="newcomer", type="claude-code")),
+    )
+    fake.tool_calls.clear()
+
+    checked = _run(registry.ensure_registered(fake, "newcomer"))
+
+    assert not checked.ok
+    assert checked.reason == REFUSAL_BELONGS_TO_AGENT
+    # The seam did its OWN lookup, and registered nothing.
+    assert fake.tool_calls == [("lithos_agent_info", {"id": "newcomer"})]
+
+
+def test_a_failed_registration_leaves_no_acceptance_behind_either() -> None:
+    """Same rule on the retry path: a registration that failed has verified
+    nothing durable, so the next write re-reads the registry rather than
+    trusting the lookup that preceded the failure."""
+    fake, registry = _fake(), _registry()
+    fake.register_operator_fails = True
+    assert not _run(registry.ensure_registered(fake, "newcomer")).ok
+
+    fake.dataset = replace(
+        GUARD_DATASET,
+        agents=(*GUARD_DATASET.agents, AgentRecord(id="newcomer", type="claude-code")),
+    )
+    fake.register_operator_fails = False
+    fake.tool_calls.clear()
+
+    checked = _run(registry.ensure_registered(fake, "newcomer"))
+
+    assert not checked.ok
+    assert checked.reason == REFUSAL_BELONGS_TO_AGENT
+    assert _registrations(fake) == []
+
+
+class _BarrierClient(FakeLithosClient):
+    """A fake whose lookup blocks until ``waiters`` calls have reached it.
+
+    Deterministic, not timing-based: two ``ensure_registered`` calls are made
+    to overlap for real (a double submit, two tabs — both in the operational
+    model) by holding the first inside its Lithos call until the second has
+    started, which is exactly the interleaving a check-then-act ledger loses.
+    If the registry serialises properly the second never reaches the lookup,
+    so the barrier is released once the arrival count is reached OR the gather
+    completes — hence the release on the first arrival below.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(None, dataset=GUARD_DATASET)
+        self.started = asyncio.Event()
+        self.may_proceed = asyncio.Event()
+
+    async def agent_info(self, agent_id: str):
+        self.started.set()
+        await self.may_proceed.wait()
+        return await super().agent_info(agent_id)
+
+
+def test_two_concurrent_first_writes_register_the_identity_once() -> None:
+    """Register-once is a CONCURRENCY claim, not just a sequential one.
+
+    Two first writes for one identity — a double submit, or two tabs — must
+    produce exactly one ``lithos_agent_register``. Unserialised, both observe
+    an empty ledger, both look the id up and both register, which is the
+    check-then-act race this pins out.
+    """
+    fake, registry = _BarrierClient(), _registry()
+
+    async def _driver() -> list:
+        first = asyncio.create_task(registry.ensure_registered(fake, "newcomer"))
+        second = asyncio.create_task(registry.ensure_registered(fake, "newcomer"))
+        # Both tasks are started and the leader is parked inside its lookup
+        # before either is allowed to finish: no sleeps, no wall clock.
+        await fake.started.wait()
+        await asyncio.sleep(0)
+        fake.may_proceed.set()
+        return list(await asyncio.gather(first, second))
+
+    results = _run(_driver())
+
+    assert all(result.ok for result in results), "both writers must be cleared"
+    assert _registrations(fake) == [
+        ("lithos_agent_register", {"id": "newcomer", "type": "human"})
+    ]
+    assert fake.tool_calls == [
+        ("lithos_agent_info", {"id": "newcomer"}),
+        ("lithos_agent_register", {"id": "newcomer", "type": "human"}),
+    ]
 
 
 def test_a_failed_registration_refuses_the_write() -> None:
@@ -296,7 +429,11 @@ def test_a_failed_registration_refuses_the_write() -> None:
     assert not checked.ok
     assert checked.code == "registration_failed"
     assert checked.reason == REFUSAL_REGISTRATION_FAILED
-    assert "nothing was changed" in checked.reason
+    # §5C.5's own sentence, literal rather than by constant.
+    assert (
+        checked.reason.lower()
+        == "could not register the operator identity; nothing was changed."
+    )
     # And it is not remembered as registered: the next write tries again.
     fake.register_operator_fails = False
     assert _run(registry.ensure_registered(fake, "newcomer")).ok
@@ -551,8 +688,14 @@ def test_the_chrome_offers_one_choose_link_when_no_identity_resolves(
 
     body = response.text
     assert 'data-operator-resolved="no"' in body
-    assert body.count("choose an operator to act") == 1
     assert "Acting as" not in body
+    # ONE affordance, and it is an ANCHOR leading to the operator page with
+    # this page as its return trip — not merely the words somewhere on it.
+    links = re.findall(
+        r'<a class="operator-chip-choose" href="([^"]+)">choose an operator to act</a>',
+        body,
+    )
+    assert links == ["/operator?next=%2Ftasks"]
 
 
 def test_the_chrome_names_the_identity_and_offers_a_switch_back_here(
@@ -590,6 +733,155 @@ def test_an_over_budget_filter_query_is_not_reflected_into_the_switch_link(
     assert "/operator?next=%2Ftasks" in response.text
 
 
+@pytest.mark.parametrize(
+    "submitted", [" dave", "dave ", " dave ", "\tdave", "Dave Smith", "dave_smith"]
+)
+def test_a_submitted_id_that_is_not_the_exact_slug_is_refused(
+    lithos_lens_config_env: Path, submitted: str
+) -> None:
+    """Clarification 6: the submitted value ITSELF must match the id rule.
+
+    Trimming first would accept " dave " by quietly writing a different value
+    than the one submitted — the one case where being liberal in what is
+    accepted sets an identity the operator did not type.
+    """
+    client, fake = _client()
+    with client:
+        fake.tool_calls.clear()
+        response = client.post(
+            "/operator",
+            data={"operator": submitted},
+            headers={"Origin": "http://lens.test"},
+        )
+
+    assert response.status_code == 400
+    assert "lowercase letters, digits and dashes" in _page_text(response)
+    assert "set-cookie" not in response.headers
+    assert fake.tool_calls == []
+
+
+def test_a_refusal_keeps_the_return_trip_the_form_carried(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Correcting a refused id must still land the operator where they came
+    from: the destination rides in the FORM on a POST, so a refusal that
+    re-read only the query string would silently drop it."""
+    client, _ = _client()
+    with client:
+        refused = client.post(
+            "/operator",
+            data={"operator": "agent-zero", "next": "/tasks?project=lithos-loom"},
+            headers={"Origin": "http://lens.test"},
+        )
+        assert refused.status_code == 400
+        assert (
+            '<input type="hidden" name="next" value="/tasks?project=lithos-loom">'
+            in _page_text(refused)
+        )
+
+        corrected = client.post(
+            "/operator",
+            data={"operator": "dave", "next": "/tasks?project=lithos-loom"},
+            headers={"Origin": "http://lens.test"},
+            follow_redirects=False,
+        )
+
+    assert corrected.status_code == 303
+    assert corrected.headers["location"] == "/tasks?project=lithos-loom"
+
+
+def test_a_refusal_drops_a_return_trip_pointing_off_this_lens(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The form field is no more trusted on the refusal path than on the
+    redirect one: it goes through the same ``safe_next``."""
+    client, _ = _client()
+    with client:
+        refused = client.post(
+            "/operator",
+            data={"operator": "agent-zero", "next": "//evil.example/steal"},
+            headers={"Origin": "http://lens.test"},
+        )
+
+    assert refused.status_code == 400
+    assert "evil.example" not in refused.text
+
+
+def test_a_same_host_referer_is_accepted_when_no_origin_is_sent(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The documented fallback, exercised through the route rather than only
+    through the pure helper: a handler that stopped passing ``Referer`` on
+    would otherwise leave every test green."""
+    client, _ = _client()
+    with client:
+        response = client.post(
+            "/operator",
+            data={"operator": "dave"},
+            headers={"Referer": "http://lens.test/tasks?project=x"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "lens_operator=dave" in response.headers["set-cookie"]
+
+
+def test_a_foreign_referer_is_refused_with_no_lithos_call(
+    lithos_lens_config_env: Path,
+) -> None:
+    client, fake = _client()
+    with client:
+        fake.tool_calls.clear()
+        response = client.post(
+            "/operator",
+            data={"operator": "dave"},
+            headers={"Referer": "http://evil.example/page"},
+        )
+
+    assert response.status_code == 403
+    assert fake.tool_calls == []
+
+
+def test_the_write_surface_is_always_on_whatever_the_config_says(
+    lithos_lens_config_env: Path, tmp_path: Path
+) -> None:
+    """D2 / REQUIREMENTS §5C.1: there is no read-only mode and no `enabled`
+    key. A deployment that writes NO ``[writes]`` table at all — and one that
+    writes the flag the requirement dropped — gets the same surface: the
+    operator page is registered and the chrome offers the identity affordance.
+    What decides whether an affordance renders is the task's state and whether
+    an identity resolves, never configuration.
+    """
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        dedent(
+            f"""
+            [lithos-lens]
+            environment = "test"
+
+            [lithos-lens.lithos]
+            agent_id = "{SERVICE_AGENT_ID}"
+            """
+        )
+    )
+    no_table = load_config(config_path)
+    config_path.write_text(
+        config_path.read_text() + "\n[lithos-lens.writes]\nenabled = false\n"
+    )
+    with_dead_flag = load_config(config_path)
+
+    for config in (no_table, with_dead_flag):
+        # The knob does not exist, so nothing can read it off the config.
+        assert not hasattr(config.writes, "enabled")
+        assert config.writes.default_operator == ""
+        app = create_app(config, lithos_client_factory=lambda _: _fake())
+        with TestClient(app, base_url="http://lens.test") as client:
+            assert client.get("/operator").status_code == 200
+            board = client.get("/tasks")
+        assert "data-operator-chip" in board.text
+        assert "choose an operator to act" in board.text
+
+
 def test_tasks_new_is_never_routed_as_a_task_id(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -614,6 +906,47 @@ def test_tasks_new_is_never_routed_as_a_task_id(
     # The same id, reached the way every page word is reached.
     assert by_alias.status_code == 200
     assert "A task genuinely called new" in by_alias.text
+
+
+# ── the deployment surface (the example file and the container) ────────
+#
+# None of this is reachable from a request, so nothing else in the suite would
+# notice it going missing — and each piece is a documented part of this slice:
+# the shipped example states the knobs, and the container passes the default
+# operator through (compose uses the env file for SUBSTITUTION only and hands
+# the container a fixed list, so a missing line here is a knob that silently
+# does nothing in production).
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_the_shipped_example_config_states_the_writes_knobs() -> None:
+    import tomllib
+
+    example = REPO_ROOT / "lithos-lens.example.toml"
+    parsed = tomllib.loads(example.read_text(encoding="utf-8"))
+    writes = parsed["lithos-lens"]["writes"]
+
+    # Exactly the two knobs, at their shipped defaults — and NO `enabled`,
+    # which is the key REQUIREMENTS §5C.1 dropped (D2).
+    assert writes == {"default_operator": "", "confirm_cancel": True}
+    # …and the example's own values must load, not merely parse.
+    config_path = Path(example)
+    assert load_config(config_path).writes.default_operator == ""
+
+
+def test_the_container_passes_the_default_operator_through() -> None:
+    """The env file is substitution-only: a variable absent from compose's
+    `environment:` list never reaches the process."""
+    compose = (REPO_ROOT / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    env_example = (REPO_ROOT / "docker" / ".env.example").read_text(encoding="utf-8")
+
+    assert (
+        "- LITHOS_LENS_WRITES_DEFAULT_OPERATOR="
+        "${LITHOS_LENS_WRITES_DEFAULT_OPERATOR:-}" in compose
+    )
+    # The env-file template documents the variable compose substitutes from.
+    assert "LITHOS_LENS_WRITES_DEFAULT_OPERATOR" in env_example
 
 
 def _task_called_new():

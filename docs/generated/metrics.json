@@ -64,7 +64,7 @@
       "Writes": {
         "functions_over_10": 0,
         "max_complexity": 7,
-        "max_function": "lithos_lens.operator.OperatorRegistry.check"
+        "max_function": "lithos_lens.operator.OperatorRegistry.ensure_registered"
       }
     },
     "functions_over_10": 41,
@@ -334,20 +334,20 @@
         "functions": 70,
         "largest_module": "lithos_lens.web",
         "largest_module_lines": 830,
-        "lines": 2533,
+        "lines": 2554,
         "modules": 5,
         "public_symbols": 29,
-        "sloc": 1951
+        "sloc": 1955
       },
       "Writes": {
         "classes": 4,
         "functions": 14,
         "largest_module": "lithos_lens.operator",
-        "largest_module_lines": 294,
-        "lines": 414,
+        "largest_module_lines": 330,
+        "lines": 466,
         "modules": 2,
         "public_symbols": 8,
-        "sloc": 295
+        "sloc": 320
       }
     },
     "max_module": "lithos_lens.tasks",
@@ -358,13 +358,13 @@
       "lithos_lens.tasks",
       "lithos_lens.web"
     ],
-    "total_lines": 23622,
+    "total_lines": 23695,
     "total_modules": 58,
-    "total_sloc": 17968
+    "total_sloc": 17997
   },
   "tests": {
-    "ratio": 2.03,
-    "src_lines": 23622,
-    "test_lines": 47906
+    "ratio": 2.04,
+    "src_lines": 23695,
+    "test_lines": 48307
   }
 }

@@ -73,6 +73,20 @@ PROJECT = "loom"
 LIMIT = DEFAULT_TASKS_FRONTIER_LIMIT
 
 
+#: When a resolved fixture row was resolved. RELATIVE to the real clock, and
+#: it has to be: a graph built with ``include_resolved=1`` reads terminal rows
+#: through ``lithos_task_list(resolved_since=…)``, whose window is
+#: ``[tasks].default_time_range_days`` (30) wide and measured from NOW. A fixed
+#: stamp therefore ages OUT of the window — these fixtures were pinned at
+#: 2026-09-02 and silently stopped being loaded on 2026-10-02, taking `done`,
+#: `cyc-c` and `finished-last-week` out of every graph that asked for them and
+#: turning four tests in this module and two in test_graph_impact.py red on a
+#: date rather than on a change. Relative, like the shipped demo dataset's
+#: ``_ago``, so the window always contains them. ``created_at`` stays fixed:
+#: no read here windows it.
+RESOLVED_AT = (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0).isoformat()
+
+
 def task(
     task_id: str,
     *,
@@ -92,7 +106,7 @@ def task(
         created_by="planner",
         created_at=created_at or f"2026-09-01T00:00:{len(task_id):02d}+00:00",
         tags=((f"project:{project}",) if project else ()) + tuple(extra_tags),
-        resolved_at="2026-09-02T00:00:00+00:00" if status != "open" else "",
+        resolved_at=RESOLVED_AT if status != "open" else "",
     )
 
 

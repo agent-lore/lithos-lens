@@ -143,6 +143,7 @@ def register_write_routes(
         request: Request,
         identity: OperatorIdentity,
         *,
+        next_url: str,
         problem: str = "",
         typed: str = "",
         status_code: int = 200,
@@ -162,7 +163,12 @@ def register_write_routes(
                 # corrected rather than retyped.
                 "typed": typed,
                 "problem": problem,
-                "next_url": safe_next(request.query_params.get(NEXT_KEY), default=""),
+                # Already sanitised by the caller. It is passed IN rather than
+                # re-derived here because a refusal re-renders a POST, whose
+                # destination arrived in the FORM — re-reading the query there
+                # would silently drop it and send a corrected submission to
+                # /operator instead of back where the operator came from.
+                "next_url": next_url,
             },
             status_code=status_code,
         )
@@ -176,7 +182,9 @@ def register_write_routes(
         is exactly when an operator comes looking for it.
         """
         return render(
-            request, request_identity(request, default_operator=default_operator)
+            request,
+            request_identity(request, default_operator=default_operator),
+            next_url=safe_next(request.query_params.get(NEXT_KEY), default=""),
         )
 
     @app.post(OPERATOR_PATH)
@@ -193,7 +201,17 @@ def register_write_routes(
         if refusal is not None:
             return refusal
         form = await request.form()
-        typed = str(form.get("operator") or "").strip()
+        # NOT stripped: the rule is that the submitted value itself matches the
+        # id pattern (clarification 6). Trimming first would accept " dave " by
+        # silently turning it into a DIFFERENT value than the one submitted —
+        # the one case where "be liberal in what you accept" writes an identity
+        # the operator did not type.
+        typed = str(form.get("operator") or "")
+        # The return trip rides in the FORM, so it is read (and sanitised) ONCE
+        # here and carried by every exit below — the redirect and each refusal
+        # re-render alike. Empty means "nowhere in particular", which the
+        # redirect reads as this page and the form as no hidden field.
+        returning_to = safe_next(str(form.get(NEXT_KEY) or ""), default="")
         identity = request_identity(request, default_operator=default_operator)
         checked: IdentityCheck = await registry.check(state.lithos_client, typed)
         if not checked.ok:
@@ -204,12 +222,15 @@ def register_write_routes(
             return render(
                 request,
                 identity,
+                # The sanitised destination, kept across the refusal:
+                # correcting the id must still land the operator where they
+                # came from.
+                next_url=returning_to,
                 problem=checked.reason,
                 typed=typed,
                 status_code=400,
             )
-        destination = safe_next(str(form.get(NEXT_KEY) or ""), default=OPERATOR_PATH)
-        response = RedirectResponse(destination, status_code=303)
+        response = RedirectResponse(returning_to or OPERATOR_PATH, status_code=303)
         # No `secure`: Lens serves plain HTTP on the trusted network, so a
         # Secure cookie would never be stored at all. This is an attribution
         # label, not a credential (§5C.1) — HttpOnly keeps page scripts out of

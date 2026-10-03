@@ -19,6 +19,7 @@ round trip through the app.
 
 from __future__ import annotations
 
+import unicodedata
 from urllib.parse import urlsplit
 
 __all__ = [
@@ -58,7 +59,12 @@ def _authority(url: str) -> tuple[str, str] | None:
         return None
     if parsed.scheme not in _DEFAULT_PORTS or not host:
         return None
-    return host.lower(), str(port) if port else _DEFAULT_PORTS[parsed.scheme]
+    # ``port is not None``, never truthiness: ``http://lens.lan:0`` STATES a
+    # port, and port 0 is a different origin from the scheme's default. Reading
+    # it as "absent" would make that value match ``Host: lens.lan`` — an
+    # explicit different port the check is required to refuse.
+    stated = str(port) if port is not None else _DEFAULT_PORTS[parsed.scheme]
+    return host.lower(), stated
 
 
 def _host_authority(host_header: str, scheme: str) -> tuple[str, str] | None:
@@ -84,11 +90,14 @@ def same_origin(*, origin: str, referer: str, host: str, scheme: str = "http") -
     The scheme is deliberately not compared: Lens serves plain HTTP on the
     trusted network, and the rule the requirement states is host and port.
     """
-    # Present-but-unusable is NOT a reason to consult the Referer: an
-    # ``Origin: null`` or a malformed one is the browser telling Lens where the
-    # POST came from, and a fallback would let a sender pick the header that
-    # suits it.
-    claimed = _authority(origin) if origin.strip() else _authority(referer)
+    # PRESENCE decides which header is read; VALIDITY only decides the answer.
+    # Present-but-unusable is not a reason to consult the Referer — an
+    # ``Origin: null``, a blank one, or a malformed one is the browser telling
+    # Lens where the POST came from, and falling back would let a sender pick
+    # whichever header suits it. So the test is on the RAW value, not the
+    # stripped one: a whitespace-only Origin is present and unparseable, which
+    # is a mismatch, not an absence.
+    claimed = _authority(origin) if origin else _authority(referer)
     if claimed is None:
         return False
     served = _host_authority(host, scheme)
@@ -96,9 +105,16 @@ def same_origin(*, origin: str, referer: str, host: str, scheme: str = "http") -
 
 
 def _has_control_char(value: str) -> bool:
-    """Any C0 control character or DEL — a header-splitting hazard in a
-    ``Location``, and never part of a path an operator navigated to."""
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+    """Any character in Unicode's control category (``Cc``).
+
+    The whole category, not the C0 range: that is C0 and DEL *and* the C1
+    controls U+0080-U+009F, which reach this helper through a percent-encoded
+    ``next`` in an ordinary request (``%C2%85`` is U+0085, NEL — a line break
+    to some parsers). Every one of them is a header-splitting or display hazard
+    in a ``Location`` and none is part of a path an operator navigated to, so
+    the CATEGORY is the right unit rather than a hand-written range.
+    """
+    return any(unicodedata.category(ch) == "Cc" for ch in value)
 
 
 def safe_next(value: str | None, *, default: str) -> str:
