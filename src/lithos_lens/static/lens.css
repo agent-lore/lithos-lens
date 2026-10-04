@@ -238,6 +238,7 @@ h1 {
 .detail-panel,
 .related-panel,
 .resolve-panel,
+.write-outcome,
 .filter-bar,
 .task-group,
 .task-list-pending:not(:empty) {
@@ -2210,6 +2211,87 @@ button,
   font-size: 0.8rem;
   padding: 0.15rem 0.7rem;
   text-decoration: none;
+}
+
+/* --- Write outcomes: a refused write, and one Lens got no answer to -------
+   (§5C.4). Two standalone pages over one shared copy block, so the claim
+   about the store is styled once however it is reached -- including inside a
+   form that a `refused` problem re-renders. */
+
+.write-outcome {
+  margin-top: 1rem;
+  padding: 1.5rem;
+}
+
+/* A stale page is an ordinary race on a shared store; not hearing back from
+   Lithos is not. Only the second takes the warning tone, the same split the
+   wiki-link outcomes make. */
+.write-outcome-conflict {
+  border-color: var(--line);
+}
+
+.write-outcome-unknown {
+  border-color: var(--warning-border);
+}
+
+.write-outcome-subject {
+  color: var(--muted);
+  margin: 0.4rem 0 0;
+}
+
+.write-outcome-copy {
+  margin-top: 1rem;
+}
+
+/* "Nothing was changed." / "The action may or may not have applied." -- the
+   fact the operator needs before the reason, so it leads and it is the one
+   line of the block that is emphasized. */
+.write-outcome-claim {
+  font-weight: 700;
+  margin: 0;
+}
+
+.write-outcome-headline {
+  margin: 0.4rem 0 0;
+}
+
+/* Lithos's own words: its code on the unknown-code path, and its message
+   verbatim. Set apart from Lens's copy so it is clear which is which. */
+.write-outcome-code,
+.write-outcome-detail {
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  margin: 0.6rem 0 0;
+  padding-left: 0.7rem;
+}
+
+/* Verbatim includes whitespace: a message laid out over lines, or with runs
+   of spaces, is shown as Lithos sent it rather than folded onto one line.
+   Still wraps, and breaks a full id that would otherwise overflow. */
+.write-outcome-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.write-outcome-candidates {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+
+.write-outcome-candidates li {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0;
+}
+
+.write-outcome-hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.6rem 0 0;
+}
+
+.write-outcome-actions {
+  margin: 1rem 0 0;
 }
 
 /* ── Operator identity (§5C.5) ─────────────────────────────────────────

@@ -67,6 +67,7 @@ name = "Foundation must not import Core or Entrypoints"
 type = "forbidden"
 source_modules = [
     "lithos_lens.errors",
+    "lithos_lens.write_errors",
     "lithos_lens.tasks",
     "lithos_lens.template_vocabulary",
     "lithos_lens.task_filtering",
