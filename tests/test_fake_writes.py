@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1337,6 +1337,57 @@ async def test_stats_coordination_counters_follow_the_writes() -> None:
     assert await client.stats() == expected(
         active_tasks=12, open_claims=0, expired_claims=0
     )
+
+
+async def test_a_released_claim_stays_released_as_its_expiry_passes() -> None:
+    """The seed's counters are a snapshot, so a released claim comes off the
+    counter that snapshot put it in — and stays off it as the clock carries the
+    claim's ``expires_at`` past. Reclassifying it against the current clock
+    would hand ``open_claims`` back the claim it no longer has and drive
+    ``expired_claims`` negative the moment it expired."""
+    expiry = datetime(2030, 1, 1, 0, 0, 1, tzinfo=UTC)
+    now = [datetime(2030, 1, 1, tzinfo=UTC)]
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(
+            tasks=(_task("only"),),
+            ready_ids=frozenset({"only"}),
+            claims={
+                "only": (
+                    ClaimRecord(
+                        agent="a", aspect="impl", expires_at=expiry.isoformat()
+                    ),
+                )
+            },
+            stats={"active_tasks": 1, "open_claims": 1, "expired_claims": 0},
+        ),
+        clock=lambda: now[0],
+    )
+    released = {"active_tasks": 0, "open_claims": 0, "expired_claims": 0}
+
+    await client.task_complete("only", agent="dave")
+    assert await client.stats() == released
+    for later in (expiry, expiry + timedelta(days=1)):
+        now[0] = later
+        assert await client.stats() == released, later
+
+    await client.task_reopen("only", agent="dave")
+    assert await client.stats() == {**released, "active_tasks": 1}
+
+
+async def test_stats_never_reads_back_a_negative_counter() -> None:
+    """A hand-picked seed may state fewer claims than it lists; releasing them
+    all floors the counter at zero rather than reporting a count upstream's
+    ``COUNT(*)`` could never give."""
+    live = ClaimRecord(agent="a", aspect="impl", expires_at=LONG_AHEAD)
+    client = FakeLithosClient(
+        dataset=replace(
+            write_dataset(),
+            claims={"pred": (live, live)},
+            stats={"open_claims": 1},
+        )
+    )
+    await client.task_complete("pred", agent="dave")
+    assert await client.stats() == {"open_claims": 0}
 
 
 async def test_stats_leaves_a_counter_the_seed_omits_omitted() -> None:

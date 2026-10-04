@@ -175,6 +175,15 @@ class FakeStoreView:
         #: besides the store that moves a verdict. Injectable so a test can let
         #: time pass without a write.
         self.clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
+        #: Seed task id -> how many of its claims had expired when this store
+        #: was built: the instant the seed's ``stats`` snapshot describes. Fixed
+        #: here, so a released claim leaves the counter that snapshot put it in
+        #: however far the clock moves afterwards.
+        baseline = self.clock()
+        self._seed_expired_claims: dict[str, int] = {
+            task_id: sum(_claim_expired(claim, baseline) for claim in claims)
+            for task_id, claims in dataset.claims.items()
+        }
 
     # ── effective reads ────────────────────────────────────────────────
 
@@ -207,28 +216,28 @@ class FakeStoreView:
         Upstream counts ``active_tasks`` (open tasks) and ``open_claims`` /
         ``expired_claims`` (claims either side of now) afresh on every read
         (lithos ``coordination.py`` ``get_stats``). The seed's figures are
-        hand-picked, so each counter the seed states is shifted by exactly what
+        a snapshot, so each counter the seed states is shifted by exactly what
         the overlay changed — a resolve releases every claim on the task, live
-        or expired; a reopen restores none — and one it omits stays omitted.
+        or expired as of the snapshot (the store's construction, not the
+        current clock: a released claim never moves between the two
+        counters); a reopen restores none — and one it omits stays omitted.
         Every other statistic is the seed's.
         """
         stats = dict(self.dataset.stats)
-        now = self.clock()
-        released = [
-            claim
-            for task_id in self.overlay.released_claims
-            for claim in self.dataset.claims.get(task_id, ())
-        ]
-        expired = sum(1 for claim in released if _claim_expired(claim, now))
+        released_tasks = self.overlay.released_claims
+        released = sum(len(self.dataset.claims.get(t, ())) for t in released_tasks)
+        expired = sum(self._seed_expired_claims.get(t, 0) for t in released_tasks)
         deltas = {
             "active_tasks": sum(task.status == "open" for task in self.tasks())
             - sum(task.status == "open" for task in self.dataset.tasks),
-            "open_claims": expired - len(released),
+            "open_claims": expired - released,
             "expired_claims": -expired,
         }
         for key, delta in deltas.items():
             if isinstance(stats.get(key), int):
-                stats[key] += delta
+                # Floored: a hand-picked seed figure lower than the claims it
+                # lists must not read back as a count upstream cannot give.
+                stats[key] = max(0, stats[key] + delta)
         return stats
 
     def findings(self, task_id: str) -> tuple[FindingRecord, ...]:

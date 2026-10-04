@@ -263,10 +263,10 @@
         "functions": 148,
         "largest_module": "lithos_lens.fake_dataset",
         "largest_module_lines": 735,
-        "lines": 4311,
+        "lines": 4320,
         "modules": 8,
         "public_symbols": 22,
-        "sloc": 3475
+        "sloc": 3478
       },
       "Logging": {
         "classes": 2,
@@ -337,13 +337,13 @@
       "lithos_lens.graph_layout",
       "lithos_lens.tasks"
     ],
-    "total_lines": 24553,
+    "total_lines": 24562,
     "total_modules": 58,
-    "total_sloc": 18801
+    "total_sloc": 18804
   },
   "tests": {
     "ratio": 2.04,
-    "src_lines": 24553,
-    "test_lines": 50096
+    "src_lines": 24562,
+    "test_lines": 50147
   }
 }
