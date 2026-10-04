@@ -424,37 +424,37 @@ INVALID_INPUT_FIELDS: tuple[str, ...] = (
     "metadata.ready_at",
 )
 
-_FIELD_NAMES = "|".join(re.escape(name) for name in INVALID_INPUT_FIELDS)
+_FIELD = r"(" + "|".join(re.escape(name) for name in INVALID_INPUT_FIELDS) + r")"
 
-# Whole names only: not inside a longer identifier or dotted path, while a
-# sentence's closing full stop still ends one.
-_FIELD_NAMED = re.compile(r"(?<![\w.])(" + _FIELD_NAMES + r")(?!\w|\.\w)")
-
-# ``resolve_task_id``'s no-match diagnostic names the parameter LAST, after the
-# operator's input: "No task matches id prefix '<raw>' (<field>)." Anchored to
-# the end, so a parenthesised name inside the input cannot be taken for it.
-_FIELD_IN_TRAILING_PARENS = re.compile(r"\((" + _FIELD_NAMES + r")\)\.?\s*$")
-
-# The operator's input as Lithos quotes it — ``'<raw>'`` in ``resolve_task_id``,
-# a repr (either quote) in ``_validate_gate_metadata``.
-_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+# The only places Lithos 0.5.0 names a parameter, each anchored to Lithos's
+# own text at an end of the message so the operator's input (which can be any
+# string) cannot stand in for it: at the START, ``resolve_task_id``'s "<field>
+# '<raw>' is too short", ``create_task``'s "<field> references nonexistent …"
+# and ``_validate_gate_metadata``'s "a gate task requires <field> in …" / "a
+# 'timer' gate requires a parseable <field> (…"; at the END,
+# ``resolve_task_id``'s "No task matches id prefix '<raw>' (<field>)."
+_FIELD_POSITIONS = (
+    re.compile(
+        r"^(?:a gate task requires |a 'timer' gate requires a parseable )?"
+        + _FIELD
+        + r" "
+    ),
+    re.compile(r"^No task matches id prefix .*\(" + _FIELD + r"\)\.?\s*$", re.S),
+)
 
 
 def _field_named_in(message: str) -> str:
-    """The write parameter a refusal's message names as the parameter, or ``""``.
+    """The write parameter a refusal's message names, or ``""``.
 
-    By where Lithos puts it, not by the first matching word: the operator's
-    input is quoted inside the message and can be any string — another
-    parameter's name included — so the trailing ``(<field>).`` of the no-match
-    diagnostic wins, and otherwise the first name OUTSIDE the quoted input is
-    taken (the leading ``<field> '<raw>'`` of the too-short one, the gate
-    messages' ``requires metadata.<key>``).
+    Read from the positions above alone, so a parameter's name inside the
+    quoted input — another field typed into this one, or a repr with escaped
+    quotes — is never taken for the field. A message with none is form level.
     """
-    trailing = _FIELD_IN_TRAILING_PARENS.search(message)
-    if trailing:
-        return trailing.group(1)
-    match = _FIELD_NAMED.search(_QUOTED.sub("''", message))
-    return match.group(1) if match else ""
+    for position in _FIELD_POSITIONS:
+        match = position.search(message)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _is_task_id(token: str) -> bool:

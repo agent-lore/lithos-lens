@@ -707,6 +707,11 @@ def test_invalid_input_lands_on_the_field_its_message_names(
     assert visible_text(detail_html(render(NOTICE_PARTIAL, problem))) == message
 
 
+#: A full-length (≥ 36 characters) reference, which ``resolve_task_id`` passes
+#: through on a miss, mixing both quotes around another parameter's name.
+MIXED_QUOTES_ENDPOINT = "unresolved-task-reference-string-long ' depends_on \""
+
+
 @pytest.mark.parametrize(
     ("action", "code", "message", "field"),
     [
@@ -753,6 +758,46 @@ def test_invalid_input_lands_on_the_field_its_message_names(
             "prefix of at least 6 characters.",
             "to_task_id",
             id="edge: too-short target typed as 'from_task_id'",
+        ),
+        pytest.param(
+            "edge_upsert",
+            "task_not_found",
+            # ``upsert_task_edge``'s list repr of a full-length endpoint that
+            # mixes quotes: the repr escapes one, and the message names no
+            # parameter at all.
+            f"edge references nonexistent task(s): {[MIXED_QUOTES_ENDPOINT]}",
+            "",
+            id="edge: a missing endpoint whose value mixes quotes",
+        ),
+        pytest.param(
+            "create",
+            "task_not_found",
+            f"parent_task_id references nonexistent task: {MIXED_QUOTES_ENDPOINT}",
+            "parent_task_id",
+            id="create: a missing parent whose value names another parameter",
+        ),
+        pytest.param(
+            "create",
+            "invalid_input",
+            "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), "
+            f"got {'depends_on ' + chr(39) + ' x' + chr(34)!r}.",
+            "metadata.ready_at",
+            id="create: a gate value that names another parameter",
+        ),
+        pytest.param(
+            "create",
+            "task_not_found",
+            f"parent_task_id references nonexistent task: {MIXED_QUOTES_ENDPOINT} "
+            "(depends_on).",
+            "parent_task_id",
+            id="create: a missing parent whose value ends like a no-match message",
+        ),
+        pytest.param(
+            "create",
+            "task_not_found",
+            "No task matches id prefix 'requires depends_on ' (parent_task_id).",
+            "parent_task_id",
+            id="create: a no-match prefix that reads like a gate message",
         ),
     ],
 )

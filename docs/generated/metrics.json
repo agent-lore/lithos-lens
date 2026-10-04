@@ -347,7 +347,7 @@
         "lines": 1269,
         "modules": 3,
         "public_symbols": 14,
-        "sloc": 881
+        "sloc": 883
       }
     },
     "max_module": "lithos_lens.tasks",
@@ -360,11 +360,11 @@
     ],
     "total_lines": 24539,
     "total_modules": 59,
-    "total_sloc": 18588
+    "total_sloc": 18590
   },
   "tests": {
-    "ratio": 2.03,
+    "ratio": 2.04,
     "src_lines": 24539,
-    "test_lines": 49931
+    "test_lines": 49976
   }
 }
