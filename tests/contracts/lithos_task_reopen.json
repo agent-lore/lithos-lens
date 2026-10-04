@@ -1,10 +1,16 @@
 {
   "tool": "lithos_task_reopen",
-  "lithos_version": "lithos 0.5.0 @ a4d2d62; every error envelope below probed against a live Lithos (MCP serverInfo 3.2.0, 2026-10-04) except where observed_divergences says otherwise",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62 (source read 2026-10-04); every envelope below is the source's, and each was also probed against a newer live Lithos (MCP serverInfo 3.2.0) — differences are recorded in observed_divergences, never substituted",
   "source": [
     "lithos:src/lithos/tools/tasks.py::lithos_task_reopen",
-    "lithos:src/lithos/coordination.py::reopen_task",
-    "lithos:src/lithos/coordination.py::_resolve_task_id",
+    "lithos:src/lithos/coordination.py::CoordinationService.reopen_task",
+    "lithos:src/lithos/coordination.py::CoordinationService.newly_reblocked_by",
+    "lithos:src/lithos/coordination.py::CoordinationService.post_finding",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope",
     "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_reopen"
   ],
   "request": {
@@ -12,7 +18,7 @@
       "task_id": "influx-gate-human",
       "agent": "dave"
     },
-    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a `[Reopened]` finding (the only surviving evidence of the prior outcome — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. Every id goes through the SHARED resolver, whose whole domain is probed: a full id (>= 36 characters, a UUID) is handed straight to this tool's own lookup; anything shorter than SIX characters that is not an exact id is `invalid_input`; a 6-to-35-character value is searched as a PREFIX, and matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) while matching several is `ambiguous_id_prefix` with up to FIVE `{id, title}` candidate RECORDS — the message states the capped count. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
+    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a finding reading `[Reopened] task reopened (was <prior status>)`, plus `; prior outcome: <outcome>` when there was one (the only surviving evidence of it — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. Every id goes through the SHARED resolver (`resolve_task_id`): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own lookup; anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS, the message stating the capped count. Every envelope is `{status, code, message}` plus, for that one code, `candidates` — the coordination errors here carry no other key. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
   },
   "responses": {
     "success": {
@@ -72,5 +78,5 @@
       }
     ]
   },
-  "observed_divergences": "`reblocked` is a list of task IDS, not records, and is non-empty ONLY when a *completed* blocker or gate is reopened: reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and re-blocks nobody — the `cancelled_reopen` variant. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. The success payload is transcribed from the documented return (the quoted `{success, reblocked}` \"plus the resolved task_id + title and the new updated_at\") — it cannot be probed without reopening a real task. The `task_not_resolved` envelope IS probed (reopening an OPEN task is refused, so the probe writes nothing): an earlier pass of this slice had composed it as \"… is not resolved (status: open).\", which the server never says. Its code is what the mapper reads. Probed 2026-10-04 against the live Lithos this environment reaches (MCP serverInfo 3.2.0). That server is NEWER than a4d2d62 — it serves `lithos_task_edge_delete`, which lithos-core `bd66d57c` added after 0.5.0 — and the Lithos source itself could not be read from this build environment, so where a message below is marked probed it is the live server's text, with ids substituted; a reviewer holding the a4d2d62 source should record any wording that differs there as a divergence here rather than replace the probed text."
+  "observed_divergences": "None in shape. The success payload is the tool's return dict verbatim (`{success, reblocked, task_id, title, updated_at}`); `reblocked` is a list of task IDS, not records. `newly_reblocked_by` returns [] unless the task was COMPLETED — reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and re-blocks nobody, the `cancelled_reopen` variant — and otherwise each OPEN `blocks` / `waits_on_gate` dependent whose current blockers are this task alone. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. Both refusals are `reopen_task`'s own: \"Task '…' not found.\" for a full-length id with no row, and \"Task '…' is already open; nothing to reopen.\" — an earlier pass of this slice had composed the latter as \"… is not resolved (status: open).\", which the source never says. The success payload itself is not probed live: it would reopen a real task. Live check: the envelopes and order above were also probed (2026-10-04) against the Lithos this environment reaches, serverInfo 3.2.0 — NEWER than a4d2d62 (it serves `lithos_task_edge_delete`, added after 0.5.0) — with requests the server refuses, so nothing was written."
 }

@@ -196,6 +196,9 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
     "lithos_task_complete": {
         # One code for "missing" AND "not open" (T3 D6) …
         ("task_not_found", "not in an open state"),
+        # Raised only for a `receipt_id`, which Lens never sends — vendored
+        # because the tool can raise it.
+        ("receipt_not_found", "not found or does not belong to task"),
         # … and the three the shared id resolver owns.
         ("invalid_input", "is too short"),
         ("task_not_found", "No task matches id prefix"),
@@ -245,7 +248,13 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
         ("not_a_gate", "requires the from_task"),
         ("cycle", "would create a dependency cycle: "),
         ("cycle", "would create a hierarchy cycle: "),
-        ("parent_exists", "a task may have at most one parent"),
+        # The a4d2d62 wording, which names no removal tool — a newer server's
+        # does (`observed_divergences`), and must not replace it here.
+        (
+            "parent_exists",
+            "a task may have at most one parent. Remove the existing parent_child "
+            "edge before re-parenting.",
+        ),
     },
     # The read side, so its legs cannot quietly vanish either.
     "lithos_task_get": {("task_not_found", "")},

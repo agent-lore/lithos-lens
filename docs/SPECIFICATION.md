@@ -1854,15 +1854,18 @@ overlay of what the Lithos write tools changed (statuses, outcomes and resolved
 stamps, minted tasks, inserted edges and replaced edge metadata, released
 claims, posted findings). Reads answer from seed plus overlay — a task the fake
 minted included, which later writes complete, cancel and reopen like any seeded
-one — and the readiness oracle does too: a task no write touched keeps the
+one — and the readiness oracle does too: a task nothing touched keeps the
 fixture's verdict verbatim, while one whose own status or whose blockers'
 status moved is recomputed from the effective blocking edges — including the
 one blocker whose answer is the clock's rather than a status's, an **open**
-`timer` gate, which stops blocking once its `metadata.ready_at` has passed
-(cancel that gate and its waiter is stranded again: cancellation wins over the
-clock). So completing a gate changes what the ready and blocked reads return
-and reports exactly the waiters that became ready, reopening it reports them
-re-blocked, and cancelling a predecessor leaves its dependent's blocker
+`timer` gate, which stops blocking once its `metadata.ready_at` has passed,
+with or without a write (cancel that gate and its waiter is stranded again:
+cancellation wins over the clock). As upstream, only open `task`-typed rows
+reach either frontier — never a gate or an epic. So completing a gate changes
+what the ready and blocked reads return and reports exactly the waiters that
+are now ready, reopening it reports them re-blocked (upstream's rule: open
+dependents whose only blocker is now the reopened task, and nobody after a
+cancellation), and cancelling a predecessor leaves its dependent's blocker
 unsatisfiable.
 
 The refusals are upstream's too — the same envelopes, message text included,

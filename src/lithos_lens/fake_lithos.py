@@ -29,6 +29,7 @@ by the fake↔real matrix in ``tests/test_lithos_contract.py``.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -37,6 +38,7 @@ from lithos_lens import task_writes
 from lithos_lens.config import LithosConfig
 from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
+from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
 from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
@@ -183,11 +185,14 @@ class FakeLithosClient:
         *,
         dataset: FakeLithosDataset | None = None,
         events: EventHub | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
         self.dataset = dataset if dataset is not None else demo_dataset()
         self.events = events
-        self._writes = FakeWriteStore(self.dataset)
+        # `clock` is the timer-gate clock (see FakeStoreView.clock); the real
+        # one unless a test injects its own.
+        self._writes = FakeWriteStore(self.dataset, clock=clock)
         #: Every write ATTEMPTED on this fake, as ``(tool, arguments)`` in the
         #: shape the real client would have sent — refusals included, because a
         #: refused write is still a call the server received. The action slices
@@ -276,10 +281,14 @@ class FakeLithosClient:
         project: str | None = None,
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
+        # Upstream's blocked frontier holds the same rows its ready one does —
+        # open and WORKABLE — so a gate or an epic with an unsatisfied edge
+        # into it is never listed here.
         rows = [
             BlockedTaskRecord(task=task, blockers=blockers)
             for task in self._writes.tasks()
             if task.status == "open"
+            and task.task_type not in NON_WORKABLE_TASK_TYPES
             and (blockers := self._writes.blockers(task.id))
             and _in_scope(task, project, tags)
         ]

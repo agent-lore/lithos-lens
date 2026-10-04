@@ -3,7 +3,8 @@
   "lithos_version": "lithos 0.4.0 @ 917cb5d",
   "source": [
     "lithos:src/lithos/tools/tasks.py::lithos_task_blocked",
-    "lithos:src/lithos/coordination.py::_compute_blockers"
+    "lithos:src/lithos/coordination.py::_compute_blockers",
+    "lithos:src/lithos/coordination.py::CoordinationService._compute_blockers (a4d2d62: the cancelled-GATE wording, `blocker_unsatisfiable_gate`)"
   ],
   "request": {
     "canonical": {
@@ -77,6 +78,13 @@
           "status": "cancelled",
           "message": "Blocking predecessor old-spike was cancelled; this task can never become ready without intervention (complete/re-open the predecessor, re-route, or cancel this subtree)."
         },
+        "blocker_unsatisfiable_gate": {
+          "kind": "blocker_unsatisfiable",
+          "task_id": "gate-3",
+          "type": "waits_on_gate",
+          "status": "cancelled",
+          "message": "Gate gate-3 was cancelled; this task can never become ready without intervention (complete/re-open the gate, re-route, or cancel this subtree)."
+        },
         "cycle": {
           "kind": "cycle",
           "task_id": "pred-2",
@@ -94,5 +102,5 @@
       }
     ]
   },
-  "observed_divergences": ""
+  "observed_divergences": "`blocker_unsatisfiable_gate` was transcribed later, from lithos 0.5.0 @ a4d2d62 (T3-W3): `_compute_blockers` words a cancelled `waits_on_gate` blocker as \"Gate … was cancelled … (complete/re-open the gate, …)\" and a cancelled `blocks` one as \"Blocking predecessor … (complete/re-open the predecessor, …)\" — same kind, two texts."
 }

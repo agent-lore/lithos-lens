@@ -20,23 +20,27 @@ knows a write happened.
 The seed's ``ready_ids`` / ``blocked`` are a fixture oracle, not derived state —
 Lens never re-derives readiness, so the fixtures are free to state verdicts (a
 cycle, say) that no edge walk would reproduce. The rule here keeps that intact:
-a task **no write touched** keeps its seed verdict verbatim; a task whose own
+a task **nothing touched** keeps its seed verdict verbatim; a task whose own
 status changed, or one of whose blockers' did, or one that gained an edge, is
 recomputed from the effective blocking edges — preserving each seed blocker
 record whose blocker did not move, so the fixture's own kinds and messages
-survive. That is what makes ``unblocked`` / ``reblocked`` real: they are the
-difference this oracle reports across the write, not a list the fake was told
-to return.
+survive. Whatever the verdict, only an open ``task``-typed row is ever ready or
+listed blocked: upstream keeps gates and epics off both frontiers. That is
+what makes ``unblocked`` / ``reblocked`` real: the writes next door apply
+upstream's own rules to this oracle, rather than return a list the fake was
+told to.
 
 One blocker's answer is the clock's rather than a status's — an open ``timer``
 gate stops blocking once its ``ready_at`` has passed, exactly as upstream
-resolves one. Blocker-record text comes from the vendored
-``lithos_task_blocked`` contract's ``blocker_kinds`` variants, so a recomputed
-row reads like a real one.
+resolves one, and that passage alone counts as touching its waiters: upstream
+evaluates the timer on every read, so no write is needed to release them.
+Blocker-record text comes from the vendored ``lithos_task_blocked`` contract's
+``blocker_kinds`` variants, so a recomputed row reads like a real one.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -53,6 +57,7 @@ from lithos_lens.tasks import (
 __all__ = [
     "BLOCKING_EDGE_TYPES",
     "HIERARCHY_EDGE_TYPES",
+    "NON_WORKABLE_TASK_TYPES",
     "FakeStoreView",
     "FakeWriteOverlay",
 ]
@@ -74,6 +79,28 @@ _UNSATISFIABLE_MESSAGE = (
     "ready without intervention (complete/re-open the predecessor, re-route, "
     "or cancel this subtree)."
 )
+#: The same, for a cancelled GATE — upstream words the two differently
+#: (``blocker_unsatisfiable_gate`` in the same contract).
+_UNSATISFIABLE_GATE_MESSAGE = (
+    "Gate {task_id} was cancelled; this task can never become ready without "
+    "intervention (complete/re-open the gate, re-route, or cancel this subtree)."
+)
+
+#: Task types upstream keeps off BOTH frontiers: an ``epic`` is a roll-up
+#: container and a ``gate`` an external wait, so neither is ever "ready" nor
+#: listed "blocked", whatever its edges say (lithos ``coordination.py``
+#: ``NON_WORKABLE_TASK_TYPES``).
+NON_WORKABLE_TASK_TYPES = frozenset({"gate", "epic"})
+
+
+def _unsatisfiable_message(edge_type: str, task_id: str) -> str:
+    template = (
+        _UNSATISFIABLE_GATE_MESSAGE
+        if edge_type == "waits_on_gate"
+        else _UNSATISFIABLE_MESSAGE
+    )
+    return template.format(task_id=task_id)
+
 
 _EdgeKey = tuple[str, str, str]
 
@@ -117,9 +144,18 @@ class FakeStoreView:
     thing that puts anything INTO the overlay.
     """
 
-    def __init__(self, dataset: FakeLithosDataset) -> None:
+    def __init__(
+        self,
+        dataset: FakeLithosDataset,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.dataset = dataset
         self.overlay = FakeWriteOverlay()
+        #: What "now" is for a ``timer`` gate's ``ready_at`` — the one input
+        #: besides the store that moves a verdict. Injectable so a test can let
+        #: time pass without a write.
+        self.clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
 
     # ── effective reads ────────────────────────────────────────────────
 
@@ -214,7 +250,7 @@ class FakeStoreView:
                     record,
                     kind="blocker_unsatisfiable",
                     status="cancelled",
-                    message=_UNSATISFIABLE_MESSAGE.format(task_id=record.task_id),
+                    message=_unsatisfiable_message(record.type, record.task_id),
                 )
             records.append(record)
         return tuple(records)
@@ -222,9 +258,19 @@ class FakeStoreView:
     def is_ready(self, task_id: str) -> bool:
         """Whether the frontier reports ``task_id`` ready.
 
-        Untouched tasks answer from the seed's ``ready_ids`` verbatim; once a
-        write touches one, the oracle owns its verdict.
+        Only an OPEN, workable task can be: upstream's readiness predicate
+        excludes every other status and both non-workable types before it
+        looks at a single edge. Untouched tasks then answer from the seed's
+        ``ready_ids`` verbatim; once a write — or the clock — touches one, the
+        oracle owns its verdict.
         """
+        task = self.task(task_id)
+        if (
+            task is None
+            or task.status != "open"
+            or task.task_type in NON_WORKABLE_TASK_TYPES
+        ):
+            return False
         if not self._touched(task_id):
             return task_id in self.dataset.ready_ids
         return not self.blockers(task_id)
@@ -285,7 +331,13 @@ class FakeStoreView:
         ]
 
     def _touched(self, task_id: str) -> bool:
-        """Whether any write can have moved ``task_id``'s readiness verdict."""
+        """Whether anything can have moved ``task_id``'s readiness verdict.
+
+        A write, mostly — and the one thing that is not a write: the clock
+        passing an open ``timer`` gate's ``ready_at``. Upstream evaluates that
+        on every read, so a waiter on an elapsed timer is recomputed (and the
+        elapsed gate stops blocking it) even if no write ever came near it.
+        """
         if task_id in self.overlay.statuses:
             return True
         if any(task.id == task_id for task in self.overlay.created):
@@ -298,6 +350,8 @@ class FakeStoreView:
             if edge.from_task_id in self.overlay.statuses:
                 return True
             if (edge.from_task_id, edge.to_task_id, edge.type) in inserted:
+                return True
+            if self._gate_has_elapsed(edge, self.task(edge.from_task_id)):
                 return True
         return False
 
@@ -314,7 +368,7 @@ class FakeStoreView:
                 task_id=edge.from_task_id,
                 type=edge.type,
                 status="cancelled",
-                message=_UNSATISFIABLE_MESSAGE.format(task_id=edge.from_task_id),
+                message=_unsatisfiable_message(edge.type, edge.from_task_id),
             )
         if prior is not None and prior.kind != "blocker_unsatisfiable":
             # This blocker did not move, so the fixture's own verdict (which
@@ -346,19 +400,14 @@ class FakeStoreView:
             message=_PREDECESSOR_MESSAGE.format(task_id=edge.from_task_id),
         )
 
-    def _dependent_readiness(self, task_id: str) -> dict[str, bool]:
-        """Each OPEN dependent of ``task_id`` and whether it is ready now.
+    def _dependents(self, task_id: str) -> list[str]:
+        """Each task ``task_id`` blocks or gates, once, whatever its status.
 
-        Snapshotted before a write so the difference afterwards is what
-        ``unblocked`` / ``reblocked`` report.
+        Upstream's candidate set for both ``unblocked`` and ``reblocked``:
+        every ``to`` end of an outgoing ``blocks`` / ``waits_on_gate`` edge.
+        The tools filter it themselves.
         """
-        readiness: dict[str, bool] = {}
-        for edge in self._outgoing(task_id):
-            dependent = self.task(edge.to_task_id)
-            if dependent is None or dependent.status != "open":
-                continue
-            readiness[dependent.id] = self.is_ready(dependent.id)
-        return readiness
+        return list(dict.fromkeys(edge.to_task_id for edge in self._outgoing(task_id)))
 
     def _edge_path(
         self, start: str, goal: str, types: frozenset[str]
@@ -409,4 +458,4 @@ class FakeStoreView:
             return False
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
-        return parsed <= datetime.now(UTC)
+        return parsed <= self.clock()
