@@ -120,6 +120,9 @@ class FakeWriteOverlay:
     outcomes: dict[str, str] = field(default_factory=dict)
     #: Task id -> resolved_at; a reopen writes "" (upstream clears it).
     resolved_at: dict[str, str] = field(default_factory=dict)
+    #: Task id -> the ``updated_at`` its last write committed (also a minted
+    #: task's creation stamp). Survives a reopen, which clears ``resolved_at``.
+    updated_at: dict[str, str] = field(default_factory=dict)
     #: Tasks minted by ``lithos_task_create``, in creation order.
     created: list[TaskRecord] = field(default_factory=list)
     #: Edges inserted by a create or an upsert, canonical (``direction=""``).
@@ -221,7 +224,7 @@ class FakeStoreView:
             represented.add((edge.from_task_id, edge.type))
             source = self.task(edge.from_task_id)
             status = source.status if source is not None else "open"
-            if status == "completed" or self._gate_has_elapsed(edge, source):
+            if status == "completed" or self._gate_has_elapsed(edge.type, source):
                 continue
             prior = next(
                 (
@@ -240,6 +243,8 @@ class FakeStoreView:
                 continue
             source = self.task(record.task_id)
             if source is not None and source.status == "completed":
+                continue
+            if self._gate_has_elapsed(record.type, source):
                 continue
             if (
                 source is not None
@@ -346,14 +351,32 @@ class FakeStoreView:
             (edge.from_task_id, edge.to_task_id, edge.type)
             for edge in self.overlay.edges
         }
-        for edge in self._incoming_blocking(task_id):
-            if edge.from_task_id in self.overlay.statuses:
+        for source_id, edge_type in self._blocking_relations(task_id):
+            if source_id in self.overlay.statuses:
                 return True
-            if (edge.from_task_id, edge.to_task_id, edge.type) in inserted:
+            if (source_id, task_id, edge_type) in inserted:
                 return True
-            if self._gate_has_elapsed(edge, self.task(edge.from_task_id)):
+            if self._gate_has_elapsed(edge_type, self.task(source_id)):
                 return True
         return False
+
+    def _blocking_relations(self, task_id: str) -> list[tuple[str, str]]:
+        """Every ``(blocker id, edge type)`` that can hold ``task_id`` back.
+
+        The effective incoming blocking edges, plus each blocker the seed's
+        ``blocked`` oracle names WITHOUT an edge (a fixture may state one —
+        see the module doc). Both kinds have to be watched: a seed-only
+        blocker that completes, is cancelled or lapses moves the verdict just
+        as an edge's would.
+        """
+        relations = [
+            (edge.from_task_id, edge.type) for edge in self._incoming_blocking(task_id)
+        ]
+        for record in self.dataset.blocked.get(task_id, ()):
+            relation = (record.task_id, record.type)
+            if record.type in BLOCKING_EDGE_TYPES and relation not in relations:
+                relations.append(relation)
+        return relations
 
     def _blocker(
         self,
@@ -404,10 +427,24 @@ class FakeStoreView:
         """Each task ``task_id`` blocks or gates, once, whatever its status.
 
         Upstream's candidate set for both ``unblocked`` and ``reblocked``:
-        every ``to`` end of an outgoing ``blocks`` / ``waits_on_gate`` edge.
-        The tools filter it themselves.
+        every ``to`` end of an outgoing ``blocks`` / ``waits_on_gate`` edge —
+        plus, here, every task whose seed ``blocked`` record names ``task_id``
+        without an edge (see :meth:`_blocking_relations`). The tools filter it
+        themselves.
         """
-        return list(dict.fromkeys(edge.to_task_id for edge in self._outgoing(task_id)))
+        seed_only = [
+            dependent
+            for dependent, records in self.dataset.blocked.items()
+            if any(
+                record.task_id == task_id and record.type in BLOCKING_EDGE_TYPES
+                for record in records
+            )
+        ]
+        return list(
+            dict.fromkeys(
+                [edge.to_task_id for edge in self._outgoing(task_id)] + seed_only
+            )
+        )
 
     def _edge_path(
         self, start: str, goal: str, types: frozenset[str]
@@ -430,7 +467,7 @@ class FakeStoreView:
                 queue.append([*path, edge.to_task_id])
         return None
 
-    def _gate_has_elapsed(self, edge: EdgeRecord, source: TaskRecord | None) -> bool:
+    def _gate_has_elapsed(self, edge_type: str, source: TaskRecord | None) -> bool:
         """Whether an OPEN timer gate's wait is already over.
 
         Upstream resolves a `timer` gate by itself once `metadata.ready_at`
@@ -445,7 +482,7 @@ class FakeStoreView:
         cancel consequences (T3 D9). Reading the clock without the status would
         leave such a waiter ready and the strand invisible.
         """
-        if edge.type != "waits_on_gate" or source is None:
+        if edge_type != "waits_on_gate" or source is None:
             return False
         if source.status != "open":
             return False

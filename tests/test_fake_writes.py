@@ -295,14 +295,15 @@ async def test_reopening_a_completed_gate_re_blocks_the_same_waiters() -> None:
 
     reopen = await client.task_reopen("gate-review", agent="dave")
 
-    # A reopen CLEARS resolved_at, so the stamp it answers is the one it wrote
-    # on the `[Reopened]` finding — one stamp per write, not two clock reads.
-    (finding,) = await client.list_findings("gate-review")
+    # A reopen CLEARS resolved_at, and its finding is stamped by its own clock
+    # read upstream, so the stamp it answers is checked by what upstream
+    # guarantees about it: strictly after the completion's (`_advance_stamp`).
+    assert reopen.updated_at > completion.updated_at
     assert reopen == TaskReopenResult(
         success=True,
         task_id="gate-review",
         title="Gate review",
-        updated_at=finding.created_at,
+        updated_at=reopen.updated_at,
         reblocked=completion.unblocked,
     )
     assert reopen.updated_at
@@ -976,14 +977,12 @@ async def test_each_write_publishes_the_event_body_the_server_would() -> None:
             "updated_at": cancelled.updated_at,
         }
         # Not merely the same values the RESULTS carried: the stamps the store
-        # kept. One write, one stamp — on the row, on the finding it posted,
-        # and on the event alike.
+        # kept. One write, one stamp — on the row and on the event alike.
         assert (
             events[2].payload["updated_at"]
             == (await client.task_get("pred")).resolved_at
         )
-        (reopen_finding,) = await client.list_findings("gate-review")
-        assert events[1].payload["updated_at"] == reopen_finding.created_at
+        assert events[1].payload["updated_at"] > events[0].payload["updated_at"]
         assert events[3].payload == {
             "task_id": created.task_id,
             "title": "Fresh",
@@ -1954,3 +1953,130 @@ async def test_reblocked_is_upstreams_rule_not_a_readiness_difference() -> None:
     reopen = await client.task_reopen("solo", agent="dave")
 
     assert reopen.reblocked == (gate.task_id,)
+
+
+# ── a write never reuses the stamp it replaces ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    "clock_after_create",
+    [
+        # The wall clock repeats …
+        datetime(2030, 1, 1, tzinfo=UTC),
+        # … or runs backward.
+        datetime(2029, 6, 1, tzinfo=UTC),
+    ],
+    ids=["repeated-clock", "backward-clock"],
+)
+async def test_each_terminal_write_commits_a_strictly_later_stamp(
+    clock_after_create: datetime,
+) -> None:
+    """Upstream's ``_advance_stamp`` (lithos a4d2d62): complete, cancel and
+    reopen commit ``max(now, prior + 1µs)``, so a create -> complete -> reopen
+    -> cancel run never reuses a stamp, however the clock moves — and the
+    result, the event and the stored ``resolved_at`` of each write agree."""
+    now = [datetime(2030, 1, 1, tzinfo=UTC)]
+    hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
+    await hub.start()
+    client = FakeLithosClient(dataset=write_dataset(), events=hub, clock=lambda: now[0])
+    try:
+        queue = hub.subscribe()
+        created = await client.task_create(title="Minted", agent="dave")
+        now[0] = clock_after_create
+
+        completed = await client.task_complete(created.task_id, agent="dave")
+        assert (await client.task_get(created.task_id)).resolved_at == (
+            completed.updated_at
+        )
+        reopened = await client.task_reopen(created.task_id, agent="dave")
+        cancelled = await client.task_cancel(created.task_id, agent="dave")
+        assert (await client.task_get(created.task_id)).resolved_at == (
+            cancelled.updated_at
+        )
+        events = await _drain(queue, 4)
+    finally:
+        await client.close()
+        await hub.stop()
+
+    stamps = [
+        created.updated_at,
+        completed.updated_at,
+        reopened.updated_at,
+        cancelled.updated_at,
+    ]
+    assert stamps == [
+        "2030-01-01T00:00:00+00:00",
+        "2030-01-01T00:00:00.000001+00:00",
+        "2030-01-01T00:00:00.000002+00:00",
+        "2030-01-01T00:00:00.000003+00:00",
+    ]
+    assert [event.payload["updated_at"] for event in events] == stamps
+
+
+# ── a blocker the seed states without an edge ──────────────────────────
+
+
+def seed_only_dataset() -> FakeLithosDataset:
+    """Blockers the ``blocked`` oracle states with NO edge behind them — a
+    fixture may, and the oracle documents honouring them: a predecessor, and a
+    timer gate due 2030-01-02."""
+    return FakeLithosDataset(
+        tasks=(
+            _task("lone-pred"),
+            _task("lone-waiter"),
+            _gate("lone-timer", "timer", ready_at="2030-01-02T00:00:00+00:00"),
+            _task("timer-waiter"),
+        ),
+        ready_ids=frozenset({"lone-pred"}),
+        blocked={
+            "lone-waiter": (_task_blocker("lone-pred"),),
+            "timer-waiter": (
+                BlockerRecord(
+                    kind="gate",
+                    task_id="lone-timer",
+                    type="waits_on_gate",
+                    status="open",
+                    message=(
+                        "Waiting on timer gate lone-timer "
+                        "(ready_at=2030-01-02T00:00:00+00:00)."
+                    ),
+                ),
+            ),
+        },
+    )
+
+
+async def test_completing_a_seed_only_blocker_releases_its_waiter() -> None:
+    client = FakeLithosClient(dataset=seed_only_dataset())
+
+    completion = await client.task_complete("lone-pred", agent="dave")
+
+    assert completion.unblocked == ("lone-waiter",)
+    assert "lone-waiter" in await _ready_ids(client)
+    assert "lone-waiter" not in await _blocked(client)
+
+    reopen = await client.task_reopen("lone-pred", agent="dave")
+    assert reopen.reblocked == ("lone-waiter",)
+    assert [row.task_id for row in (await _blocked(client))["lone-waiter"]] == [
+        "lone-pred"
+    ]
+
+
+async def test_cancelling_a_seed_only_blocker_strands_its_waiter() -> None:
+    client = FakeLithosClient(dataset=seed_only_dataset())
+
+    await client.task_cancel("lone-pred", agent="dave")
+
+    (blocker,) = (await _blocked(client))["lone-waiter"]
+    assert (blocker.kind, blocker.status) == ("blocker_unsatisfiable", "cancelled")
+
+
+async def test_a_seed_only_timer_blocker_lapses_on_the_clock() -> None:
+    now = [datetime(2030, 1, 1, tzinfo=UTC)]
+    client = FakeLithosClient(dataset=seed_only_dataset(), clock=lambda: now[0])
+    assert "timer-waiter" in await _blocked(client)
+
+    now[0] = datetime(2030, 1, 3, tzinfo=UTC)
+
+    assert "timer-waiter" in await _ready_ids(client)
+    assert "timer-waiter" not in await _blocked(client)

@@ -1876,13 +1876,15 @@ handed to the calling tool's own lookup, a value shorter than six characters is
 nothing is the resolver's own `task_not_found`, matching several is
 `ambiguous_id_prefix` naming up to five `{id, title}` candidate records. What a
 write stores is upstream's as well: a `timer` gate's `ready_at` is kept
-rewritten to UTC at second precision, as upstream stores it. Writes publish the
-event the real server emits — the same body, field for field, including the
-pre-serialized fields upstream puts on a completion, and nothing at all for an
-edge write, which emits no event upstream — through the in-process hub, and
-each one, refusals included, is recorded in the instance's write log. Two
-instances never share an overlay, so one test's write cannot reach another's
-board.
+rewritten to UTC at second precision, as upstream stores it. Each complete,
+cancel and reopen commits an `updated_at` strictly after the task's previous
+one even when the clock repeats or runs backward, exactly as upstream advances
+it. Writes publish the event the real server emits — the same body, field for
+field, including the pre-serialized fields upstream puts on a completion, and
+nothing at all for an edge write, which emits no event upstream — through the
+in-process hub, and each one, refusals included, is recorded in the instance's
+write log. Two instances never share an overlay, so one test's write cannot
+reach another's board.
 
 The implemented tests exercise real behavior with lightweight fakes rather than
 shallow mock-only checks, and the working practice is to demonstrate a new

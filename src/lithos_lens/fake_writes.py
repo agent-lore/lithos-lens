@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from lithos_lens.fake_store import (
@@ -122,7 +122,7 @@ class FakeWriteStore(FakeStoreView):
         task = self._open_task(
             task_id, "Task '{task_id}' not found or not in an open state."
         )
-        stamp = _now()
+        stamp = self._commit_stamp(task)
         self.overlay.statuses[task.id] = "completed"
         self.overlay.outcomes[task.id] = outcome
         self.overlay.resolved_at[task.id] = stamp
@@ -169,7 +169,7 @@ class FakeWriteStore(FakeStoreView):
         """
         # Worded differently from complete's, and without quotes (lithos a4d2d62).
         task = self._open_task(task_id, "Task {task_id} not found or already closed")
-        stamp = _now()
+        stamp = self._commit_stamp(task)
         self.overlay.statuses[task.id] = "cancelled"
         self.overlay.resolved_at[task.id] = stamp
         self.overlay.released_claims.add(task.id)
@@ -204,7 +204,7 @@ class FakeWriteStore(FakeStoreView):
                 f"Task '{task.id}' is already open; nothing to reopen.",
             )
         prior_status, prior_outcome = task.status, task.outcome
-        stamp = _now()
+        stamp = self._commit_stamp(task)
         self.overlay.statuses[task.id] = "open"
         # Upstream clears both and records the reopen as a finding, which is
         # then the only surviving evidence of the prior outcome — so the event
@@ -219,7 +219,9 @@ class FakeWriteStore(FakeStoreView):
                 agent=agent,
                 summary=f"{REOPENED_FINDING_PREFIX} task reopened (was {prior_status})"
                 + (f"; prior outcome: {prior_outcome}" if prior_outcome else ""),
-                created_at=stamp,
+                # `post_finding` reads the clock for itself upstream, after
+                # the reopen committed — it is not the task's stamp.
+                created_at=self.clock().isoformat(),
             )
         )
         reblocked = (
@@ -320,7 +322,9 @@ class FakeWriteStore(FakeStoreView):
             )
         self.overlay.sequence += 1
         new_id = f"fake-created-{self.overlay.sequence}"
-        created_at = _now()
+        created_at = self.clock().isoformat()
+        # `create_task` writes one stamp to both created_at and updated_at.
+        self.overlay.updated_at[new_id] = created_at
         self.overlay.created.append(
             TaskRecord(
                 id=new_id,
@@ -454,7 +458,12 @@ class FakeWriteStore(FakeStoreView):
             self.overlay.edge_metadata[key] = dict(metadata or {})
         else:
             self._insert_edge(
-                source_id, target_id, edge_type, agent, dict(metadata or {}), _now()
+                source_id,
+                target_id,
+                edge_type,
+                agent,
+                dict(metadata or {}),
+                self.clock().isoformat(),
             )
         source = self.task(source_id)
         target = self.task(target_id)
@@ -481,7 +490,7 @@ class FakeWriteStore(FakeStoreView):
             "success": True,
             "task_id": task.id,
             "title": task.title,
-            "updated_at": self.overlay.resolved_at.get(task.id) or _now(),
+            "updated_at": self.overlay.updated_at[task.id],
         }
         payload.update(extra)
         return payload
@@ -579,6 +588,22 @@ class FakeWriteStore(FakeStoreView):
             )
         )
 
+    def _commit_stamp(self, task: TaskRecord) -> str:
+        """The ``updated_at`` a complete, cancel or reopen of ``task`` commits.
+
+        Upstream advances it strictly past the row's prior ``updated_at``
+        (``_advance_stamp``), so it is kept per task here — a reopen clears
+        ``resolved_at`` but not this. Lens's task record carries no
+        ``updated_at``, so a row no write has stamped yet falls back to the
+        latest stamp it does carry: ``resolved_at``, else ``created_at``.
+        """
+        prior = (
+            self.overlay.updated_at.get(task.id) or task.resolved_at or task.created_at
+        )
+        stamp = _advance_stamp(self.clock(), prior)
+        self.overlay.updated_at[task.id] = stamp
+        return stamp
+
     def _open_task(self, task_id: str, not_found: str) -> TaskRecord:
         """The task, if it is open — else ``task_not_found``, as upstream does.
 
@@ -630,6 +655,23 @@ class FakeWriteStore(FakeStoreView):
         return {**metadata, "ready_at": normalized}
 
 
-def _now() -> str:
-    """A write stamp at the second precision every fixture timestamp uses."""
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
+def _advance_stamp(now: datetime, prior_raw: str) -> str:
+    """Upstream's ``_advance_stamp``: the wall clock, but strictly after the
+    row's prior stamp — ``max(now, prior + 1µs)`` — so a write never reuses
+    the stamp it replaces when the clock repeats or runs backward. A prior that
+    does not parse is ignored; a naive one is read as UTC for the comparison.
+    """
+    try:
+        prior: datetime | None = datetime.fromisoformat(
+            prior_raw.replace("Z", "+00:00")
+        )
+    except ValueError:
+        prior = None
+    if prior is not None:
+        if prior.tzinfo is None:
+            prior = prior.replace(tzinfo=UTC)
+        now_cmp = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+        bumped = prior + timedelta(microseconds=1)
+        if bumped > now_cmp:
+            return bumped.isoformat()
+    return now.isoformat()
