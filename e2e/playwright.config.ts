@@ -35,6 +35,16 @@ import {
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
+  // A FIXED worker count, not Playwright's default of half the CPUs the OS
+  // reports. Inside a CPU-limited container (`--cpus`, a cgroup quota) the OS
+  // still reports every HOST core, so the default launched ~16 browsers
+  // against two CPUs' worth of time — alongside the four Lens instances and a
+  // Cytoscape layout per graph page — and the graph-page tests timed out
+  // inside `page.evaluate` (reproduced with `taskset -c 0-1`). Two workers
+  // finish the suite in the same wall time on a large machine, because the
+  // servers rather than the browsers are the bound. `LENS_E2E_WORKERS`
+  // overrides it for a run that wants more or fewer.
+  workers: Number(process.env.LENS_E2E_WORKERS ?? 2),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "list" : [["list"], ["html", { open: "never" }]],

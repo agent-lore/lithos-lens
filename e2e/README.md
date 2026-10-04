@@ -64,6 +64,13 @@ LITHOS_LENS_FAKE_LITHOS=1 LITHOS_LENS_CONFIG=lithos-lens.example.toml \
 
 so you do not need to start a server yourself.
 
+The suite runs a **fixed** two workers (`workers` in the config; override with
+`LENS_E2E_WORKERS`). Playwright's default sizes the pool from the CPUs the OS
+reports, and inside a CPU-limited container that is every *host* core: about
+16 browsers on two CPUs' worth of time timed the graph-page tests out. Two
+workers take the same wall time on a large machine, because the four Lens
+instances, not the browsers, are the bound.
+
 `LENS_HOST` is not decoration. Lens binds every interface by default — the
 accepted posture for the container it ships as — but fake mode registers
 `POST /tasks/events/publish`, an unauthenticated write seam, and the suite runs

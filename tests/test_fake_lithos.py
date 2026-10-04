@@ -504,6 +504,25 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
         )
 
 
+def test_the_e2e_harness_bounds_its_worker_count() -> None:
+    """``make e2e`` must not size its browser pool from the host's core count.
+
+    In a CPU-limited container the OS reports every host core, so Playwright's
+    default (half of them) put ~16 browsers on two CPUs and the graph-page
+    tests timed out in the clean-container gate. The bound is a decision in
+    the config file, so it is pinned there: a fixed default, overridable by
+    ``LENS_E2E_WORKERS``.
+    """
+    config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
+    pinned = re.search(
+        r"^\s*workers:\s*Number\(process\.env\.LENS_E2E_WORKERS \?\? (\d+)\)",
+        config.read_text(),
+        re.M,
+    )
+    assert pinned, "playwright.config.ts does not pin its worker count"
+    assert 1 <= int(pinned.group(1)) <= 4
+
+
 def test_the_scoped_stripe_board_still_has_an_empty_needs_attention_list(
     lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
