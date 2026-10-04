@@ -617,18 +617,104 @@ def test_an_unnamed_subject_is_not_given_an_id_for_a_name() -> None:
 # ── The unknown outcome ───────────────────────────────────────────────
 
 
-def test_the_unknown_outcome_states_the_re_read_without_claiming_either_way() -> None:
-    reread = TaskReread(outcome="exists", status="completed")
+@dataclass(frozen=True)
+class LostAnswer:
+    """One thing a re-read can show after Lithos never answered, and the copy
+    the operator must be given for it."""
 
-    problem = map_write_error("complete", None, reread=reread, subject=SUBJECT)
+    name: str
+    action: WriteAction
+    reread: TaskReread
+    headline: str
+    hint: str
+    subject: TaskRef = SUBJECT
 
+
+RELOAD_HINT = "Reload to see the task's current state before trying again."
+
+#: The no-envelope row, once per thing the re-read can find. The statuses are
+#: distinct on purpose: an attempted ``complete`` that did NOT apply leaves the
+#: task open, one an agent cancelled meanwhile reads cancelled, and one that
+#: may have applied reads completed — the page must report each as it is, so a
+#: mapper that said the same thing for all three cannot pass.
+LOST_ANSWERS: tuple[LostAnswer, ...] = (
+    LostAnswer(
+        name="re-read finds the task still open",
+        action="complete",
+        reread=TaskReread(outcome="exists", status="open"),
+        headline="This task is now open.",
+        hint=RELOAD_HINT,
+    ),
+    LostAnswer(
+        name="re-read finds the task cancelled",
+        action="complete",
+        reread=TaskReread(outcome="exists", status="cancelled"),
+        headline="This task is now cancelled.",
+        hint=RELOAD_HINT,
+    ),
+    LostAnswer(
+        name="re-read finds the task completed",
+        action="complete",
+        reread=TaskReread(outcome="exists", status="completed"),
+        headline="This task is now completed.",
+        hint=RELOAD_HINT,
+    ),
+    LostAnswer(
+        name="re-read finds no such task",
+        action="cancel",
+        reread=TASK_ABSENT,
+        headline="This task no longer exists.",
+        hint=RELOAD_HINT,
+    ),
+    LostAnswer(
+        name="re-read failed too",
+        action="cancel",
+        reread=REREAD_FAILED,
+        headline="Lens could not read the task's current state either.",
+        hint="Reload once Lithos is reachable to see what the task is now.",
+    ),
+    LostAnswer(
+        name="nothing to re-read (create)",
+        action="create",
+        reread=NOT_READ,
+        headline="",
+        hint=RELOAD_HINT,
+        subject=NO_SUBJECT,
+    ),
+)
+LOST_ANSWER_PARAMS = [pytest.param(case, id=case.name) for case in LOST_ANSWERS]
+
+#: Words that would settle what the page must leave open — that the write
+#: applied, or that it did not.
+VERDICT_WORDS = (
+    "failed",
+    "succeeded",
+    "success",
+    "did not apply",
+    "didn't apply",
+    "was applied",
+    "has been applied",
+    "was not applied",
+    "nothing was changed",
+    "no changes",
+)
+
+
+@pytest.mark.parametrize("case", LOST_ANSWER_PARAMS)
+def test_the_unknown_outcome_states_what_the_re_read_found_without_a_verdict(
+    case: LostAnswer,
+) -> None:
+    problem = map_write_error(
+        case.action, None, reread=case.reread, subject=case.subject
+    )
+
+    assert problem.page == UNKNOWN_OUTCOME_PAGE
+    assert problem.claim == "unknown"
     assert problem.change_statement == UNKNOWN_CLAIM
-    assert problem.headline == "This task is now completed."
-    # Neither verdict appears anywhere in the copy.
+    assert problem.headline == case.headline
+    assert problem.hint == case.hint
     copy = " ".join([problem.change_statement, problem.headline, problem.hint])
-    assert "was completed" not in copy
-    assert "failed" not in copy
-    assert "did not" not in copy
+    assert not [word for word in VERDICT_WORDS if word in copy.lower()]
 
 
 def test_the_unknown_outcome_with_no_re_read_says_only_what_it_knows() -> None:
@@ -638,13 +724,6 @@ def test_the_unknown_outcome_with_no_re_read_says_only_what_it_knows() -> None:
     assert problem.page == UNKNOWN_OUTCOME_PAGE
     assert problem.headline == ""
     assert problem.change_statement == UNKNOWN_CLAIM
-
-
-def test_a_lost_answer_and_an_unreadable_re_read_claim_nothing() -> None:
-    problem = map_write_error("cancel", None, reread=REREAD_FAILED, subject=SUBJECT)
-
-    assert problem.change_statement == UNKNOWN_CLAIM
-    assert problem.headline == "Lens could not read the task's current state either."
 
 
 # ── The two pages ─────────────────────────────────────────────────────
@@ -731,19 +810,51 @@ def test_the_conflict_page_for_a_task_that_is_gone_says_so() -> None:
     assert "removed since you loaded the page" in html
 
 
-def test_the_unknown_outcome_page_says_it_may_or_may_not_have_applied() -> None:
+def outcome_section_text(html: str) -> str:
+    """Everything the operator reads in a page's outcome section — its heading,
+    the subject, the copy and the way on — as one whitespace-normalized line."""
+    found = re.findall(
+        r'<section class="write-outcome[^"]*">(.*?)</section>', html, re.S
+    )
+    assert len(found) == 1
+    return " ".join(visible_text(found[0]).split())
+
+
+@pytest.mark.parametrize("case", LOST_ANSWER_PARAMS)
+def test_the_unknown_outcome_page_says_only_that_it_may_or_may_not_have_applied(
+    case: LostAnswer,
+) -> None:
+    """The WHOLE page, not the mapper's lines: the template's own heading and
+    links are operator copy too, and a heading that said "The action failed."
+    over a correct claim would still be the verdict this page must not give.
+    So the section's visible text is pinned word for word — the indeterminacy,
+    then what the re-read found, and nothing else."""
     problem = map_write_error(
-        "complete",
-        None,
-        reread=TaskReread(outcome="exists", status="completed"),
-        subject=SUBJECT,
+        case.action, None, reread=case.reread, subject=case.subject
     )
 
     html = render(problem.page, problem)
 
+    subject = (
+        [case.subject.title, short_id(case.subject.task_id)]
+        if case.subject.task_id
+        else []
+    )
+    way_on = "Open the task" if case.subject.task_id else "Back to the board"
+    expected = [
+        "Outcome unknown",
+        "Lens did not hear back",
+        *subject,
+        UNKNOWN_CLAIM,
+        *([case.headline] if case.headline else []),
+        case.hint,
+        way_on,
+    ]
+    assert outcome_section_text(html) == " ".join(expected)
+    assert "<title>Outcome unknown | Lithos Lens</title>" in html
     assert text_of(html, "write-outcome-claim") == [UNKNOWN_CLAIM]
-    assert text_of(html, "write-outcome-headline") == ["This task is now completed."]
-    assert REFUSED_CLAIM not in html
+    page_copy = outcome_section_text(html).lower()
+    assert not [word for word in VERDICT_WORDS if word in page_copy]
 
 
 def test_both_pages_state_whether_anything_was_changed() -> None:
