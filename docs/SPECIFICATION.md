@@ -1687,14 +1687,14 @@ Lithos 0.5.0 raises on a write:
 |------|------|
 | `task_not_found` | Complete and cancel answer this both for "missing" and for "not open" — one code for two facts, which the envelope cannot separate. Lens re-reads the task and the copy splits on the result: it exists → "this task is now *\<status\>*"; it is gone → "this task no longer exists"; the re-read itself failed → neither is claimed. |
 | `task_not_resolved` | "This task is already open." (reopen) |
-| `invalid_input` | The upstream message, attached to the field the **envelope** names — Lens does not read a field name out of the message — for a form re-render with input kept |
+| `invalid_input` | The upstream message, shown whole and attached to the `lithos_task_create` parameter it names, for a form re-render with input kept. Lithos sends no field key with this code, so the parameter is found in the message: `parent_task_id` and `depends_on` (a too-short id) or `metadata.gate_type` and `metadata.ready_at` (gate metadata). A message that names none of them renders at form level |
 | `ambiguous_id_prefix` | "'\<prefix\>' matches more than one task", with the envelope's `candidates` rendered as choices, each naming its task by title and short id. The prefix is the envelope's when it carries one, else the value the form sent |
 | `cycle` | "This dependency would create a cycle." then the upstream message **verbatim**. Task ids inside it get the existing short-id link treatment; that is presentation only (`uuid.UUID` decides what is an id, and nothing Lens does reads the message) |
-| `parent_exists` | "*\<Task\>* already has a parent." |
+| `parent_exists` | "*\<Task\>* already has a parent." then the upstream message, which names the existing parent by id (linked with the short-id treatment), and a hint saying how to replace it: remove the current parent relation first, then add the new one |
 | `self_edge` | "A task can't depend on itself." |
 | `not_a_gate` | "*\<Task\>* isn't a gate — only a gate can be waited on." |
 | `invalid_edge_type` | A Lens defect (the relation form offers only valid types): the unknown-code path, logged at `error` |
-| *(unknown code)* | The code and message verbatim with a "report this" hint — forward-compatible with codes upstream adds |
+| *(unknown code)* | The code and message verbatim with a "report this" hint — forward-compatible with codes upstream adds. The message is plain text: a full id in it stays full, because the short-id treatment would shorten the thing the report has to quote |
 
 Three rules hold across every row:
 

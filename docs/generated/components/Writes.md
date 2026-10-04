@@ -11,7 +11,7 @@ Curated write actions (§5C): the pure error mapper that turns a Lithos write re
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.write_errors` | M | 4 | 2 |
+| `lithos_lens.write_errors` | L | 4 | 2 |
 
 ## Public API
 

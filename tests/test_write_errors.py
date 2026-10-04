@@ -37,9 +37,7 @@ from lithos_lens.write_errors import (
     MAPPED_CODES,
     NO_SUBJECT,
     NOT_READ,
-    NOTHING_CHANGED,
     NOTICE_PARTIAL,
-    OUTCOME_UNKNOWN,
     REREAD_FAILED,
     TASK_ABSENT,
     UNKNOWN_OUTCOME_PAGE,
@@ -57,6 +55,14 @@ from lithos_lens.write_errors import (
 #: them is only meaningful if the id is longer than its prefix.
 HYPHENATED_ID = "44a943fc-6055-4603-b3d7-9aabdecd73e9"
 BARE_ID = "28105098aa4c4d0fbb2f6b06d0e0b0aa"
+THIRD_ID = "9f1c2b7e-3d4a-4e5f-8a6b-7c8d9e0f1a2b"
+
+#: What the operator is told about the store, spelled out HERE rather than
+#: imported: the sentences are the requirement (§5C.4), so a test that took
+#: them from the module under test would pass whatever the module said.
+REFUSED_CLAIM = "Nothing was changed."
+UNKNOWN_CLAIM = "The action may or may not have applied."
+CLAIM_SENTENCE = {"nothing": REFUSED_CLAIM, "unknown": UNKNOWN_CLAIM}
 
 SUBJECT = TaskRef(task_id=BARE_ID, title="Cut over Influx ingest path")
 
@@ -101,8 +107,28 @@ class Case:
     claim: str = "nothing"
 
 
+#: Lithos 0.5.0's own shape (``coordination.py`` ``upsert_task_edge``): the
+#: edge, then the loop it closes, every member by full id — three distinct
+#: members and prose between them, so a dropped, reordered or reworded run of
+#: the message cannot pass for the original.
 CYCLE_MESSAGE = (
-    f"Edge would create a cycle: {HYPHENATED_ID} -> {BARE_ID} -> {HYPHENATED_ID}"
+    f"blocks edge {HYPHENATED_ID} -> {BARE_ID} would create a dependency cycle: "
+    f"{BARE_ID} -> {THIRD_ID} -> {HYPHENATED_ID}"
+)
+CYCLE_MEMBERS = [HYPHENATED_ID, BARE_ID, BARE_ID, THIRD_ID, HYPHENATED_ID]
+
+#: Lithos 0.5.0's ``parent_exists`` message (``upsert_task_edge``): it names the
+#: existing parent by full id and says how to re-parent.
+PARENT_EXISTS_MESSAGE = (
+    f"task {BARE_ID} already has a parent ({THIRD_ID}); a task may have at most "
+    "one parent. Remove the existing parent_child edge before re-parenting."
+)
+
+#: Lithos 0.5.0's ``resolve_task_id`` message for a too-short id, which names
+#: the create parameter in the message and sends no other key.
+SHORT_PARENT_MESSAGE = (
+    "parent_task_id 'abc' is too short: pass the full task id or a prefix of at "
+    "least 6 characters."
 )
 
 CASES: tuple[Case, ...] = (
@@ -154,16 +180,12 @@ CASES: tuple[Case, ...] = (
     Case(
         name="invalid_input: the upstream message, on the field it names",
         action="create",
-        envelope=envelope(
-            "invalid_input",
-            "gate_type 'maybe' is not a known gate type.",
-            field="gate_type",
-        ),
+        envelope=envelope("invalid_input", SHORT_PARENT_MESSAGE),
         kind="refused",
         status_code=422,
         headline="Lithos would not accept this.",
-        detail_text="gate_type 'maybe' is not a known gate type.",
-        field="gate_type",
+        detail_text=SHORT_PARENT_MESSAGE,
+        field="parent_task_id",
     ),
     Case(
         name="ambiguous_id_prefix: the prefix, with the candidates as choices",
@@ -193,13 +215,15 @@ CASES: tuple[Case, ...] = (
         detail_text=CYCLE_MESSAGE,
     ),
     Case(
-        name="parent_exists: the task is named",
+        name="parent_exists: the task is named, then its parent and how to replace it",
         action="edge_upsert",
-        envelope=envelope("parent_exists", "Task already has a parent."),
+        envelope=envelope("parent_exists", PARENT_EXISTS_MESSAGE),
         subject=SUBJECT,
         kind="refused",
         status_code=422,
         headline="Cut over Influx ingest path already has a parent.",
+        detail_text=PARENT_EXISTS_MESSAGE,
+        hint_contains="remove its current parent relation first",
     ),
     Case(
         name="self_edge",
@@ -307,12 +331,9 @@ def test_a_refused_write_says_nothing_was_changed(case: Case) -> None:
     """
     problem = mapped(case)
 
-    if problem.kind == "unknown_outcome":
-        assert problem.change_statement == OUTCOME_UNKNOWN
-        assert not problem.nothing_changed
-    else:
-        assert problem.change_statement == NOTHING_CHANGED
-        assert problem.nothing_changed
+    assert case.claim == ("unknown" if case.kind == "unknown_outcome" else "nothing")
+    assert problem.change_statement == CLAIM_SENTENCE[case.claim]
+    assert problem.nothing_changed is (case.claim == "nothing")
 
 
 def test_copy_replaces_the_code_on_every_row_that_has_copy() -> None:
@@ -476,11 +497,7 @@ def test_task_ids_in_a_message_are_marked_for_the_short_id_treatment() -> None:
     """Both spellings of a Lithos id, and nothing else in the sentence."""
     segments = message_segments(CYCLE_MESSAGE)
 
-    assert [s.task_id for s in segments if s.task_id] == [
-        HYPHENATED_ID,
-        BARE_ID,
-        HYPHENATED_ID,
-    ]
+    assert [s.task_id for s in segments if s.task_id] == CYCLE_MEMBERS
     assert all(s.text == s.task_id for s in segments if s.task_id)
 
 
@@ -517,6 +534,59 @@ def test_a_message_with_no_ids_is_one_plain_segment() -> None:
     assert message_segments("") == ()
 
 
+# ── invalid_input: the field Lithos's message names ───────────────────
+
+
+@pytest.mark.parametrize(
+    ("message", "field"),
+    [
+        pytest.param(SHORT_PARENT_MESSAGE, "parent_task_id", id="parent_task_id"),
+        pytest.param(
+            "depends_on 'abc12' is too short: pass the full task id or a prefix "
+            "of at least 6 characters.",
+            "depends_on",
+            id="depends_on",
+        ),
+        pytest.param(
+            "a gate task requires metadata.gate_type in ['ci', 'external_task', "
+            "'human', 'pr', 'timer'], got 'maybe'.",
+            "metadata.gate_type",
+            id="metadata.gate_type",
+        ),
+        pytest.param(
+            "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), "
+            "got 'tomorrow'.",
+            "metadata.ready_at",
+            id="metadata.ready_at",
+        ),
+        pytest.param(
+            "Something no create field is named in.", "", id="no field: form level"
+        ),
+    ],
+)
+def test_invalid_input_lands_on_the_field_its_message_names(
+    message: str, field: str
+) -> None:
+    """The messages Lithos 0.5.0 sends from ``lithos_task_create``, as sent:
+    ``{status, code, message}`` and no other key. The parameter is named in
+    the message, so that is where the field is found — and the message is
+    still shown whole, on that field."""
+    problem = map_write_error("create", envelope("invalid_input", message))
+
+    assert problem.field == field
+    assert problem.detail_text == message
+    assert visible_text(detail_html(render(NOTICE_PARTIAL, problem))) == message
+
+
+def test_a_field_name_inside_a_longer_name_is_not_a_field() -> None:
+    problem = map_write_error(
+        "create",
+        envelope("invalid_input", "old_parent_task_id and depends_on_all are unknown."),
+    )
+
+    assert problem.field == ""
+
+
 # ── The envelope Lens could not read ──────────────────────────────────
 
 
@@ -549,7 +619,7 @@ def test_the_unknown_outcome_states_the_re_read_without_claiming_either_way() ->
 
     problem = map_write_error("complete", None, reread=reread, subject=SUBJECT)
 
-    assert problem.change_statement == OUTCOME_UNKNOWN
+    assert problem.change_statement == UNKNOWN_CLAIM
     assert problem.headline == "This task is now completed."
     # Neither verdict appears anywhere in the copy.
     copy = " ".join([problem.change_statement, problem.headline, problem.hint])
@@ -564,13 +634,13 @@ def test_the_unknown_outcome_with_no_re_read_says_only_what_it_knows() -> None:
 
     assert problem.page == UNKNOWN_OUTCOME_PAGE
     assert problem.headline == ""
-    assert problem.change_statement == OUTCOME_UNKNOWN
+    assert problem.change_statement == UNKNOWN_CLAIM
 
 
 def test_a_lost_answer_and_an_unreadable_re_read_claim_nothing() -> None:
     problem = map_write_error("cancel", None, reread=REREAD_FAILED, subject=SUBJECT)
 
-    assert problem.change_statement == OUTCOME_UNKNOWN
+    assert problem.change_statement == UNKNOWN_CLAIM
     assert problem.headline == "Lens could not read the task's current state either."
 
 
@@ -629,7 +699,7 @@ def test_the_conflict_page_states_that_nothing_changed_and_what_the_task_is_now(
 
     html = render(problem.page, problem)
 
-    assert text_of(html, "write-outcome-claim") == [NOTHING_CHANGED]
+    assert text_of(html, "write-outcome-claim") == [REFUSED_CLAIM]
     assert text_of(html, "write-outcome-headline") == ["This task is now completed."]
     # The task is named the way every other surface names one (§5.3).
     assert SUBJECT.title in html
@@ -647,7 +717,7 @@ def test_the_conflict_page_for_a_task_that_is_gone_says_so() -> None:
 
     html = render(problem.page, problem)
 
-    assert text_of(html, "write-outcome-claim") == [NOTHING_CHANGED]
+    assert text_of(html, "write-outcome-claim") == [REFUSED_CLAIM]
     assert text_of(html, "write-outcome-headline") == ["This task no longer exists."]
     assert "removed since you loaded the page" in html
 
@@ -662,22 +732,25 @@ def test_the_unknown_outcome_page_says_it_may_or_may_not_have_applied() -> None:
 
     html = render(problem.page, problem)
 
-    assert text_of(html, "write-outcome-claim") == [OUTCOME_UNKNOWN]
+    assert text_of(html, "write-outcome-claim") == [UNKNOWN_CLAIM]
     assert text_of(html, "write-outcome-headline") == ["This task is now completed."]
-    assert NOTHING_CHANGED not in html
+    assert REFUSED_CLAIM not in html
 
 
 def test_both_pages_state_whether_anything_was_changed() -> None:
     """The one line neither page may be rendered without."""
-    for problem in (
-        map_write_error(
-            "reopen", envelope("task_not_resolved", "Task is not resolved.")
+    for problem, claim in (
+        (
+            map_write_error(
+                "reopen", envelope("task_not_resolved", "Task is not resolved.")
+            ),
+            REFUSED_CLAIM,
         ),
-        map_write_error("complete", None),
+        (map_write_error("complete", None), UNKNOWN_CLAIM),
     ):
         html = render(problem.page, problem)
 
-        assert text_of(html, "write-outcome-claim") == [problem.change_statement]
+        assert text_of(html, "write-outcome-claim") == [claim]
 
 
 @pytest.mark.parametrize("case", CASE_PARAMS)
@@ -692,7 +765,7 @@ def test_every_row_renders_its_change_claim_and_its_copy(case: Case) -> None:
 
     html = render(problem.page or NOTICE_PARTIAL, problem)
 
-    assert text_of(html, "write-outcome-claim") == [problem.change_statement]
+    assert text_of(html, "write-outcome-claim") == [CLAIM_SENTENCE[case.claim]]
     if case.headline:
         assert text_of(html, "write-outcome-headline") == [case.headline]
     # Upstream text is quoted where the row quotes it (its id links are
@@ -716,7 +789,7 @@ def test_an_unknown_code_renders_its_code_and_message_with_the_report_hint() -> 
         "Task is frozen by policy 'audit'."
     ]
     assert "Report this" in text_of(html, "write-outcome-hint")[0]
-    assert text_of(html, "write-outcome-claim") == [NOTHING_CHANGED]
+    assert text_of(html, "write-outcome-claim") == [REFUSED_CLAIM]
 
 
 def test_each_candidate_renders_as_a_choice_naming_its_id_and_title() -> None:
@@ -741,7 +814,7 @@ def test_each_candidate_renders_as_a_choice_naming_its_id_and_title() -> None:
         assert candidate.title in choice
         assert f'title="{candidate.task_id}">{short_id(candidate.task_id)}' in choice
         assert f'href="/tasks/{candidate.task_id}"' in choice
-    assert text_of(html, "write-outcome-claim") == [NOTHING_CHANGED]
+    assert text_of(html, "write-outcome-claim") == [REFUSED_CLAIM]
 
 
 def test_a_cycle_message_links_its_ids_and_shows_the_rest_as_written() -> None:
@@ -750,15 +823,77 @@ def test_a_cycle_message_links_its_ids_and_shows_the_rest_as_written() -> None:
     problem = map_write_error("edge_upsert", envelope("cycle", CYCLE_MESSAGE))
 
     html = render(NOTICE_PARTIAL, problem)
-    detail = re.search(r'<p class="write-outcome-detail">(.*?)</p>', html, re.S)
-    assert detail is not None
+    detail = detail_html(html)
 
-    assert html.count(f'href="/tasks/{HYPHENATED_ID}"') == 2
-    assert f'href="/tasks/{BARE_ID}"' in html
-    assert "Edge would create a cycle:" in detail.group(1)
+    # The whole message, in order: every id shown as its short id and every
+    # run of prose exactly as Lithos wrote it.
+    assert visible_text(detail) == (
+        "blocks edge 44a943fc -> 28105098 would create a dependency cycle: "
+        "28105098 -> 9f1c2b7e -> 44a943fc"
+    )
+    # Each member linked to itself, in the order the message names them.
+    assert link_targets(detail) == [f"/tasks/{member}" for member in CYCLE_MEMBERS]
     assert text_of(html, "write-outcome-headline") == [
         "This dependency would create a cycle."
     ]
+
+
+def test_an_unknown_code_message_is_shown_whole_even_where_it_holds_an_id() -> None:
+    """The short-id treatment is the ``cycle`` row's presentation, not the
+    unknown-code path's: a message Lens has no copy for is a diagnostic to be
+    reported as sent, so a full id in it stays full and unlinked."""
+    message = f"Task {HYPHENATED_ID} cannot be changed."
+    problem = map_write_error("complete", envelope("task_frozen", message))
+
+    detail = detail_html(render(NOTICE_PARTIAL, problem))
+
+    assert visible_text(detail) == message
+    assert link_targets(detail) == []
+
+
+def test_parent_exists_names_the_parent_and_how_to_replace_it() -> None:
+    """§5C.4 and §5C.2: the refusal names the existing parent, and the way to
+    give the task a different one. The parent comes from Lithos's message —
+    the mapper makes no call to look it up — linked like any id Lens shows."""
+    problem = map_write_error(
+        "edge_upsert",
+        envelope("parent_exists", PARENT_EXISTS_MESSAGE),
+        subject=SUBJECT,
+    )
+
+    html = render(NOTICE_PARTIAL, problem)
+    detail = detail_html(html)
+
+    assert text_of(html, "write-outcome-headline") == [
+        "Cut over Influx ingest path already has a parent."
+    ]
+    assert visible_text(detail) == (
+        "task 28105098 already has a parent (9f1c2b7e); a task may have at most "
+        "one parent. Remove the existing parent_child edge before re-parenting."
+    )
+    assert link_targets(detail) == [f"/tasks/{BARE_ID}", f"/tasks/{THIRD_ID}"]
+    assert text_of(html, "write-outcome-hint") == [
+        "To give it a different parent, remove its current parent relation first, "
+        "then add the new one."
+    ]
+
+
+def detail_html(html: str) -> str:
+    """The inner HTML of the one upstream-message element on a page."""
+    found = re.findall(r'<p class="write-outcome-detail">(.*?)</p>', html, re.S)
+    assert len(found) == 1
+    return found[0]
+
+
+def visible_text(fragment: str) -> str:
+    """What the operator reads in a fragment: its text, tags removed, nothing
+    added between them."""
+    return unescape(re.sub(r"<[^>]+>", "", fragment))
+
+
+def link_targets(fragment: str) -> list[str]:
+    """Every link's target in a fragment, in document order."""
+    return re.findall(r'<a href="([^"]*)"', fragment)
 
 
 def test_a_message_is_escaped_rather_than_rendered() -> None:

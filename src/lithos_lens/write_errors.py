@@ -114,6 +114,13 @@ REPORT_THIS_HINT = (
     "Report this with the code and message above — Lens has no copy for it."
 )
 
+#: How a task gets a different parent. Lithos keeps one parent per task and
+#: refuses a second, so the current parent relation has to go first (§5C.2).
+PARENT_EXISTS_HINT = (
+    "To give it a different parent, remove its current parent relation first, "
+    "then add the new one."
+)
+
 #: The standalone page for a write refused because the world moved: the task
 #: is not in the state the operator acted on, or is not there at all.
 CONFLICT_PAGE = "writes/conflict.html"
@@ -241,10 +248,11 @@ class WriteProblem:
     #: rule about codes Lens HAS copy for; where it has none, the code is the
     #: only handle the operator and the bug report have.
     show_code: bool = False
-    #: The form field the envelope named, for a field-level re-render with the
-    #: operator's input kept. Empty when the envelope named none — the message
-    #: then renders at form level, because Lens does not read a field name out
-    #: of prose.
+    #: The ``lithos_task_create`` parameter an ``invalid_input`` message names
+    #: (``parent_task_id``, ``depends_on``, ``metadata.gate_type``,
+    #: ``metadata.ready_at``), for a field-level re-render with the operator's
+    #: input kept. The create form maps it to its own input. Empty when the
+    #: message names none of them — it then renders at form level.
     field: str = ""
     #: The id prefix that matched more than one task.
     prefix: str = ""
@@ -387,6 +395,38 @@ _ID_SHAPED = re.compile(
 )
 
 
+def _verbatim(message: str) -> tuple[MessageSegment, ...]:
+    """An upstream message as one plain segment: shown exactly as sent."""
+    return (MessageSegment(text=message),) if message else ()
+
+
+#: The ``lithos_task_create`` parameters Lithos 0.5.0 names in an
+#: ``invalid_input`` message: ``resolve_task_id(…, field=…)`` for the two id
+#: references, ``_validate_gate_metadata`` for a gate's metadata
+#: (lithos a4d2d62 ``tools/tasks.py`` ``lithos_task_create``,
+#: ``coordination.py`` ``resolve_task_id`` and ``_validate_gate_metadata``).
+INVALID_INPUT_FIELDS: tuple[str, ...] = (
+    "parent_task_id",
+    "depends_on",
+    "metadata.gate_type",
+    "metadata.ready_at",
+)
+
+# Whole names only: not inside a longer identifier or dotted path, while a
+# sentence's closing full stop still ends one.
+_FIELD_NAMED = re.compile(
+    r"(?<![\w.])("
+    + "|".join(re.escape(name) for name in INVALID_INPUT_FIELDS)
+    + r")(?!\w|\.\w)"
+)
+
+
+def _field_named_in(message: str) -> str:
+    """The first create parameter an ``invalid_input`` message names, or ``""``."""
+    match = _FIELD_NAMED.search(message)
+    return match.group(1) if match else ""
+
+
 def _is_task_id(token: str) -> bool:
     """Whether a token is a Lithos id, by the one test that can say so.
 
@@ -472,16 +512,19 @@ def _task_not_resolved(attempt: _Attempt) -> WriteProblem:
 def _invalid_input(attempt: _Attempt) -> WriteProblem:
     """Lithos rejected a value: the upstream message, on the field it names.
 
-    The field comes from the ENVELOPE when the envelope names one. Lens does
-    not read a field name out of the message — that is the parsing §5C.4
-    forbids — so a message with no field alongside it renders at form level,
-    which is a worse-placed answer and not a wrong one.
+    Lithos 0.5.0 sends no field key with ``invalid_input`` — its envelope is
+    ``{status, code, message}`` and the parameter is named in the MESSAGE
+    (``resolve_task_id``'s "parent_task_id 'abc' is too short…",
+    ``_validate_gate_metadata``'s "…requires metadata.gate_type in…"). So the
+    field is found there, by :func:`_field_named_in`. That is placement, which
+    is presentation: the message is still shown whole, and a message naming no
+    known field renders at form level — a worse-placed answer, not a wrong one.
     """
     return _refused(
         attempt,
         "Lithos would not accept this.",
-        detail=message_segments(attempt.message),
-        field=_text(attempt.envelope.get("field")),
+        detail=_verbatim(attempt.message),
+        field=_field_named_in(attempt.message),
     )
 
 
@@ -520,8 +563,22 @@ def _cycle(attempt: _Attempt) -> WriteProblem:
 
 
 def _parent_exists(attempt: _Attempt) -> WriteProblem:
-    """A second parent for a task that has one. Lithos keeps one parent."""
-    return _refused(attempt, f"{_subject_label(attempt)} already has a parent.")
+    """A second parent for a task that has one. Lithos keeps one parent.
+
+    §5C.4 has the copy name the existing parent and the way to replace it. The
+    mapper makes no Lithos call to find the parent, and the envelope carries
+    no field for it — but Lithos's message names it by full id ("task <child>
+    already has a parent (<parent>); … Remove the existing parent_child edge
+    before re-parenting."), so the message is quoted with the ``cycle`` row's
+    short-id link treatment, which links the parent; the hint says how to
+    replace it in the operator's terms.
+    """
+    return _refused(
+        attempt,
+        f"{_subject_label(attempt)} already has a parent.",
+        hint=PARENT_EXISTS_HINT,
+        detail=message_segments(attempt.message),
+    )
 
 
 def _self_edge(attempt: _Attempt) -> WriteProblem:
@@ -561,7 +618,10 @@ def _unmapped_code(
         attempt,
         "Lithos refused this with a code Lens does not recognise.",
         hint=REPORT_THIS_HINT,
-        detail=message_segments(attempt.message),
+        # Plain, not segmented: the message is a diagnostic to be reported
+        # character for character, and the short-id treatment would show a
+        # shortened id where Lithos sent a full one.
+        detail=_verbatim(attempt.message),
         show_code=True,
         log_level=log_level,
     )
