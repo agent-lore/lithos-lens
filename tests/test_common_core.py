@@ -852,6 +852,22 @@ def test_the_confirm_cancel_env_override_beats_the_file_value(
     assert load_config(config_path).writes.confirm_cancel is False
 
 
+@pytest.mark.parametrize("good", ["0", "0-person", "a", "d" * 63])
+def test_a_valid_default_operator_loads_including_a_leading_digit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, good: str
+) -> None:
+    """The load-time rule is the cookie's rule, ^[a-z0-9][a-z0-9-]{0,62}$ —
+    a digit may lead, and the 63-character bound is inclusive."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        f'default_operator = "{good}"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    assert load_config(config_path).writes.default_operator == good
+
+
 @pytest.mark.parametrize("bad", ["Dave", "dave smith", "-dave", "dave_smith", "d" * 64])
 def test_an_invalid_default_operator_fails_the_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str

@@ -180,7 +180,12 @@ def test_safe_next_accepts_only_a_relative_path(
     ("cookie", "default", "expected_id", "expected_source"),
     [
         ("dave", "configured", "dave", "cookie"),
+        # The rule's first character is [a-z0-9]: a digit-leading cookie is a
+        # valid identity, not junk to fall through.
+        ("0-person", "configured", "0-person", "cookie"),
+        ("7", "", "7", "cookie"),
         (None, "configured", "configured", "default"),
+        (None, "0-person", "0-person", "default"),
         ("", "configured", "configured", "default"),
         (None, "", "", "none"),
         # An invalid cookie is ABSENT, so the configured default still applies.
@@ -203,7 +208,19 @@ def test_cookie_beats_default_beats_none(
 
 
 @pytest.mark.parametrize(
-    "value", ["dave", "dave-smith", "d", "a1", "operator-2", "d" * 63]
+    "value",
+    [
+        "dave",
+        "dave-smith",
+        "d",
+        "a1",
+        "operator-2",
+        "d" * 63,
+        # Digit-leading is inside ^[a-z0-9][a-z0-9-]{0,62}$ (clarification 6).
+        "0",
+        "0-person",
+        "7" * 63,
+    ],
 )
 def test_the_id_rule_accepts_a_lowercase_slug(value: str) -> None:
     assert valid_operator_id(value)
@@ -884,6 +901,23 @@ def test_a_get_next_pointing_off_this_lens_never_reaches_the_form(
     assert page.status_code == 200
     assert _hidden_next(page.text) == []
     assert response.headers["location"] == "/operator"
+
+
+def test_a_digit_leading_id_is_accepted_on_the_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The form field obeys the same rule as the cookie: a digit may lead."""
+    client, _ = _client()
+    with client:
+        response = client.post(
+            "/operator",
+            data={"operator": "0-person"},
+            headers={"Origin": "http://lens.test"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert "lens_operator=0-person" in response.headers["set-cookie"]
 
 
 def test_a_refusal_keeps_the_return_trip_the_form_carried(
