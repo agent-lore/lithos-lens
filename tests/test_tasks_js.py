@@ -378,7 +378,45 @@ const brokenToggle = {
 // row the panel cannot be opened from.
 const PANEL_ROW = "[data-panel-url][data-task-id]";
 
-const boardNode = { replaceWith(next) { board = next.html; } };
+// A refreshed fragment, as `replaceFragment` handles one: its markup, and
+// the draft fields inside it (T3-W4) — the board's gate row carries one
+// Complete note, keyed by its task, as `writes/complete_action.html` renders
+// it. A fragment parsed out of a reconcile's response carries a FRESH field,
+// empty, exactly as the server renders it.
+let focusedField = null;
+function draftField() {
+  return {
+    dataset: { draftKey: "complete-note:gate" },
+    value: "",
+    selectionStart: null,
+    selectionEnd: null,
+    focus() { focusedField = this; },
+    setSelectionRange(start, end) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+    },
+  };
+}
+function fragmentNode(html) {
+  const fields = [draftField()];
+  return {
+    html,
+    fields,
+    querySelectorAll(selector) {
+      return selector === "[data-draft-key]" ? fields : [];
+    },
+  };
+}
+let boardFragment = fragmentNode("board:initial");
+const boardNode = {
+  get fields() { return boardFragment.fields; },
+  querySelectorAll(selector) { return boardFragment.querySelectorAll(selector); },
+  replaceWith(next) { board = next.html; boardFragment = next; },
+};
+// The page's receipt slot, and the row form a write posts from (T3-W4).
+const receiptSlot = { id: "write-receipt" };
+const writeForm = { isConnected: true };
+const writeXhr = {};
 const titleLink = { classList: { contains: (name) => name === "task-title" } };
 const tagLink = { classList: { contains: () => false } };
 
@@ -507,7 +545,7 @@ const sandbox = {
         querySelector(selector) {
           const match = /data-refresh-fragment="([^"]+)"/.exec(selector);
           if (!match || parsed[match[1]] === undefined) return null;
-          return { html: parsed[match[1]] };
+          return fragmentNode(parsed[match[1]]);
         },
       };
     }
@@ -646,6 +684,25 @@ const ACTIONS = {
   // What htmx fires on the form when a write answers `HX-Trigger:
   // lens:reconcile`; it bubbles to the document listener.
   "reconcile-trigger": () => fire("lens:reconcile", {}),
+  // The operator types into the board's gate-row note and leaves focus there.
+  "type-note": () => {
+    const field = boardNode.fields[0];
+    field.value = "Window confirmed with on-call";
+    field.selectionStart = 6;
+    field.selectionEnd = 6;
+    document.activeElement = field;
+  },
+  // A row's HTMX write, as htmx dispatches it: `htmx:beforeRequest` on the
+  // form while it is in the page, then — after the answer — `htmx:afterSwap`
+  // on the receipt slot it was swapped into.
+  "write-start": () => fire("htmx:beforeRequest", {
+    target: writeForm, detail: { xhr: writeXhr },
+  }),
+  // A reconcile replaced the row while the write was in flight.
+  "detach-form": () => { writeForm.isConnected = false; },
+  "write-swapped": () => fire("htmx:afterSwap", {
+    target: receiptSlot, detail: { xhr: writeXhr },
+  }),
   back: () => { if (cursor > 0) cursor -= 1; fire("popstate", {}); },
   forward: () => {
     if (cursor < entries.length - 1) cursor += 1;
@@ -700,6 +757,10 @@ const ACTIONS = {
       fetches[Number(argument)].reject();
     } else if (name === "reject-body") {
       fetches[Number(argument)].rejectBody();
+    } else if (name === "fire-event") {
+      // Everything after the FIRST colon is the event name, which may hold
+      // one itself (`lens:reconcile`).
+      fire(action.slice(name.length + 1), {});
     } else if (name === "drop") {
       delete rows[argument];
     } else {
@@ -723,6 +784,11 @@ const ACTIONS = {
     href: href(),
     panel: host.innerHTML,
     board,
+    // The board's gate-row note field as it stands now, and whether it holds
+    // the focus (T3-W4: an operator's draft survives a reconcile).
+    boardDraft: boardNode.fields[0].value,
+    boardDraftFocused: focusedField === boardNode.fields[0],
+    boardDraftCaret: boardNode.fields[0].selectionStart,
     // What the row's description shows now, and what its control offers.
     description: {
       previewHidden: descriptionPreview.hidden,
@@ -1222,6 +1288,70 @@ def test_the_reconcile_trigger_refreshes_the_board_at_once() -> None:
     reconcile, with no debounce timer between the operator's click and the
     row moving."""
     result = _panel_run(["reconcile-trigger", "settle:0"])
+
+    assert result["fetches"] == [BOARD_HREF]
+    assert result["board"] == "board:fresh"
+
+
+def test_a_note_typed_into_a_gate_row_survives_a_reconcile() -> None:
+    """correctness f-003: an agent's event re-renders the board while the
+    operator is typing a Complete note. The fresh row's field is empty as the
+    server renders it; the draft — and the caret, since the field had focus —
+    must carry across, or the write records the default outcome instead."""
+    result = _panel_run(["type-note", "event", "timers", "settle:0"])
+
+    assert result["board"] == "board:fresh"
+    assert result["boardDraft"] == "Window confirmed with on-call"
+    assert result["boardDraftFocused"] is True
+    assert result["boardDraftCaret"] == 6
+
+
+def test_a_write_whose_form_a_reconcile_detached_still_reconciles_at_once() -> None:
+    """correctness f-001: htmx fires the answer's HX-Trigger on the REQUESTING
+    form. A reconcile that lands while the write is in flight replaces the row
+    and detaches that form, so `lens:reconcile` never reaches the document —
+    the answer's swap into the (always connected) receipt slot must run the
+    immediate reconcile instead."""
+    result = _panel_run(["write-start", "detach-form", "write-swapped"])
+
+    assert result["fetches"] == [BOARD_HREF]
+
+
+def test_a_write_from_a_connected_form_is_reconciled_by_its_trigger_alone() -> None:
+    """The other half: while the form is in the page its trigger reaches the
+    document, so the swap adds no second render."""
+    result = _panel_run(["write-start", "write-swapped"])
+
+    assert result["fetches"] == []
+
+
+def test_the_trigger_a_real_write_answers_with_drives_the_reconcile(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-003: the event name is read off an ACTUAL HTMX write
+    response and fired at the real listener — so a server and a script that
+    disagree about the name fail here, which neither side's own test sees."""
+    from fastapi.testclient import TestClient
+
+    from lithos_lens.config import load_config
+    from lithos_lens.fake_lithos import FakeLithosClient
+    from lithos_lens.web import create_app
+
+    fake = FakeLithosClient(None)
+    app = create_app(
+        load_config(lithos_lens_config_env), lithos_client_factory=lambda _: fake
+    )
+    with TestClient(app, base_url="http://lens.test") as client:
+        client.cookies.set("lens_operator", "dave")
+        response = client.post(
+            "/tasks/influx-read-swap-approval/approve",
+            data={"expected_status": "open"},
+            headers={"Origin": "http://lens.test", "HX-Request": "true"},
+        )
+    assert response.status_code == 200
+    trigger = response.headers["hx-trigger"]
+
+    result = _panel_run([f"fire-event:{trigger}", "settle:0"])
 
     assert result["fetches"] == [BOARD_HREF]
     assert result["board"] == "board:fresh"

@@ -1877,7 +1877,9 @@ in order:
 8. **Record** — exactly one structured audit line (`lens_event:
    "lens.writes.audit"`: operator, action, task id, an argument summary of ids
    and lengths — never free text — the status expected and observed, the
-   result, its code and the upstream envelope), one span
+   result, its code and the result envelope — what Lithos answered, on success
+   (the completion's `task_id`, `title`, `updated_at`, `unblocked` ids) as on a
+   refusal), one span
    `lens.writes.<action>` (`lens.write.operator`, `.task_id`, `.result`,
    `.code`, and for complete `.gate_type` and `.override`), and one
    `lens_writes_total` increment — for **every** attempt, refusals included.
@@ -1888,7 +1890,12 @@ in order:
     — as a fragment, **always 200** (htmx swaps no 4xx/5xx body), with
     `HX-Trigger: lens:reconcile`. `tasks.js` listens for that event and runs its
     immediate, coalesced reconcile, so the board is re-rendered from fresh reads;
-    no row is ever assembled from a write's answer.
+    no row is ever assembled from a write's answer. htmx fires that event on the
+    form that posted, so when a reconcile replaced the row while the write was
+    in flight (detaching that form), the answer's swap into the receipt slot
+    runs the same immediate reconcile instead — exactly one of the two fires
+    per answer. An Origin refusal is answered this way too for an HTMX POST
+    (200, its notice and the trigger); a plain POST keeps the 403.
 
 Every way an attempt ends, for a plain POST:
 
@@ -1937,7 +1944,10 @@ row Needs attention promotes a gate into), the side panel and the detail page.
 It renders only when an operator identity resolves; with none, the chrome's
 single "choose an operator" link is the only prompt. A gate row posts through
 HTMX so the operator keeps their place on the board (its no-JS form returns to
-the same board); the panel and the detail page post plain forms. A click inside
+the same board); the panel and the detail page post plain forms. A note typed
+but not yet sent survives the live refresh: a reconcile that re-renders the
+row, panel or detail fragment carries the draft (and the caret, if the field
+had focus) into the fresh field for the same task. A click inside
 a row's form — the button or the note — never opens the side panel. The note,
 whitespace folded to one line and bounded at 500 characters, is sent as the
 completion's `outcome`; with no note the outcome is "Completed via Lens by

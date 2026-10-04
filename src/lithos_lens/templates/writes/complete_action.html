@@ -15,6 +15,10 @@
   chrome's single "choose an operator" link is the only prompt; nothing is
   added here.
 
+  The note carries `data-draft-key`, keyed by the task, so a reconcile that
+  re-renders this row while the operator is typing keeps what they typed
+  (`tasks.js` `replaceFragment`).
+
   The button says Complete, never "Approve": completing a gate means what its
   author says it means, so the line beside it points at the gate's own
   description rather than putting a verdict in the operator's mouth. The form
@@ -28,7 +32,7 @@
     <input type="hidden" name="next" value="{{ action_next }}">
     <label class="complete-action-note">
       <span>Note</span>
-      <input type="text" name="note" maxlength="{{ complete_note_max }}" autocomplete="off" placeholder="optional, stored as the outcome" data-complete-note>
+      <input type="text" name="note" maxlength="{{ complete_note_max }}" autocomplete="off" placeholder="optional, stored as the outcome" data-complete-note data-draft-key="complete-note:{{ action_task.id }}">
     </label>
     <button type="submit" class="complete-action-button" data-complete-button>Complete</button>
     <p class="complete-action-meaning">

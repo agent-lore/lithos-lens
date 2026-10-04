@@ -30,7 +30,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -45,7 +45,11 @@ from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.fake_writes import write_error
 from lithos_lens.gate_completion import completes_directly, default_outcome
 from lithos_lens.lithos_client import LithosToolError
-from lithos_lens.operator import OPERATOR_COOKIE_NAME, REFUSAL_REGISTRATION_FAILED
+from lithos_lens.operator import (
+    OPERATOR_COOKIE_NAME,
+    REFUSAL_BELONGS_TO_AGENT,
+    REFUSAL_REGISTRATION_FAILED,
+)
 from lithos_lens.receipts import (
     MAX_RECEIPTS,
     RECEIPT_TTL_S,
@@ -57,7 +61,7 @@ from lithos_lens.receipts import (
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import AgentRecord, TaskRecord
 from lithos_lens.web import create_app
-from lithos_lens.write_funnel import AUDIT_EVENT, RECONCILE_TRIGGER
+from lithos_lens.write_funnel import AUDIT_EVENT
 from tests.conftest import metric_value
 
 ORIGIN = "http://lens.test"
@@ -365,10 +369,52 @@ class RegistrationDown(LoggedFake):
         self.register_operator_fails = True
 
 
-#: (case, fake, task, form overrides, operator, headers, status, result, code)
+class LookupDown(LoggedFake):
+    """The identity guard's exact lookup fails, so a new identity is refused."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.agent_info_error = LithosToolError("Lithos MCP session is not available")
+
+
+class Attempt(NamedTuple):
+    """One way a completion attempt can end, in both answer modes.
+
+    ``copy`` is what the plain page and the HTMX fragment both say (``htmx_copy``
+    when the two differ); ``pre_write`` marks the endings decided before the
+    Lithos call, which must leave the fake's write log empty.
+    """
+
+    case: str
+    fake: type[LoggedFake]
+    task_id: str
+    form: dict[str, str]
+    operator: str
+    headers: dict[str, str]
+    status: int
+    result: str
+    code: str
+    copy: str
+    pre_write: bool
+    htmx_copy: str = ""
+
+
 ATTEMPTS = [
-    ("ok", LoggedFake, "gate-human", {}, OPERATOR, SAME_ORIGIN, 303, "ok", ""),
-    (
+    Attempt(
+        "ok",
+        LoggedFake,
+        "gate-human",
+        {},
+        OPERATOR,
+        SAME_ORIGIN,
+        303,
+        "ok",
+        "",
+        "",
+        False,
+        htmx_copy="Unblocked 2 tasks",
+    ),
+    Attempt(
         "stale",
         LoggedFake,
         "gate-human",
@@ -378,8 +424,10 @@ ATTEMPTS = [
         409,
         "conflict",
         "stale_status",
+        "This task is now open.",
+        True,
     ),
-    (
+    Attempt(
         "race-lost",
         RaceLost,
         "gate-human",
@@ -389,8 +437,10 @@ ATTEMPTS = [
         409,
         "conflict",
         "task_not_found",
+        "This task is now completed.",
+        False,
     ),
-    (
+    Attempt(
         "not-a-gate",
         LoggedFake,
         "plain",
@@ -400,8 +450,10 @@ ATTEMPTS = [
         409,
         "rejected",
         "not_a_gate",
+        "This task isn't a gate — only gates can be completed here.",
+        True,
     ),
-    (
+    Attempt(
         "machine-gate",
         LoggedFake,
         "gate-ci",
@@ -411,8 +463,10 @@ ATTEMPTS = [
         409,
         "rejected",
         "gate_type_unsupported",
+        "A ci gate is resolved by whatever watches it.",
+        True,
     ),
-    (
+    Attempt(
         "bad-form",
         LoggedFake,
         "gate-human",
@@ -422,8 +476,10 @@ ATTEMPTS = [
         400,
         "rejected",
         "bad_form",
+        "The form didn't say what status you saw — reload and try again.",
+        True,
     ),
-    (
+    Attempt(
         "precheck-failed",
         PrecheckDown,
         "gate-human",
@@ -433,8 +489,10 @@ ATTEMPTS = [
         503,
         "rejected",
         "precheck_failed",
+        "Lens couldn't read the task, so it didn't try the write.",
+        True,
     ),
-    (
+    Attempt(
         "identity-refused",
         LoggedFake,
         "gate-human",
@@ -444,8 +502,10 @@ ATTEMPTS = [
         403,
         "rejected",
         "identity_refused",
+        REFUSAL_BELONGS_TO_AGENT,
+        True,
     ),
-    (
+    Attempt(
         "registration-failed",
         RegistrationDown,
         "gate-human",
@@ -455,8 +515,23 @@ ATTEMPTS = [
         503,
         "rejected",
         "registration_failed",
+        REFUSAL_REGISTRATION_FAILED,
+        True,
     ),
-    (
+    Attempt(
+        "lookup-failed",
+        LookupDown,
+        "gate-human",
+        {},
+        OPERATOR,
+        SAME_ORIGIN,
+        503,
+        "rejected",
+        "registration_failed",
+        REFUSAL_REGISTRATION_FAILED,
+        True,
+    ),
+    Attempt(
         "upstream-refusal",
         InputRefused,
         "gate-human",
@@ -466,9 +541,23 @@ ATTEMPTS = [
         422,
         "rejected",
         "invalid_input",
+        "Lithos would not accept this.",
+        False,
     ),
-    ("unknown", NoAnswer, "gate-human", {}, OPERATOR, SAME_ORIGIN, 200, "unknown", ""),
-    (
+    Attempt(
+        "unknown",
+        NoAnswer,
+        "gate-human",
+        {},
+        OPERATOR,
+        SAME_ORIGIN,
+        200,
+        "unknown",
+        "",
+        "The action may or may not have applied.",
+        False,
+    ),
+    Attempt(
         "foreign-origin",
         LoggedFake,
         "gate-human",
@@ -478,8 +567,25 @@ ATTEMPTS = [
         403,
         "refused_origin",
         "",
+        "did not come from a page served by this Lens",
+        True,
+        htmx_copy="This request didn't come from a page this Lens served.",
     ),
-    (
+    Attempt(
+        "absent-origin",
+        LoggedFake,
+        "gate-human",
+        {},
+        OPERATOR,
+        {},
+        403,
+        "refused_origin",
+        "",
+        "did not come from a page served by this Lens",
+        True,
+        htmx_copy="This request didn't come from a page this Lens served.",
+    ),
+    Attempt(
         "no-operator",
         LoggedFake,
         "gate-human",
@@ -489,75 +595,132 @@ ATTEMPTS = [
         303,
         "no_operator",
         "",
+        "",
+        True,
     ),
 ]
 
+#: The header the funnel answers every HTMX write with, spelled LITERALLY: it
+#: is the contract with the listener in tasks.js, so a test must not read it
+#: back from the module that emits it.
+RECONCILE_EVENT = "lens:reconcile"
 
-@pytest.mark.parametrize(
-    (
-        "fake_class",
-        "task_id",
-        "form",
-        "operator",
-        "headers",
-        "status",
-        "result",
-        "code",
-    ),
-    [pytest.param(*case[1:], id=case[0]) for case in ATTEMPTS],
-)
-def test_every_attempt_leaves_one_audit_line_one_span_and_one_count(
+
+@pytest.mark.parametrize("mode", ["plain", "htmx"])
+@pytest.mark.parametrize("attempt", [pytest.param(a, id=a.case) for a in ATTEMPTS])
+def test_every_attempt_answers_and_is_recorded_once_in_either_mode(
     config,
     spans: InMemorySpanExporter,
     metric_reader,
     caplog: pytest.LogCaptureFixture,
-    fake_class: type[LoggedFake],
-    task_id: str,
-    form: dict[str, str],
-    operator: str,
-    headers: dict[str, str],
-    status: int,
-    result: str,
-    code: str,
+    attempt: Attempt,
+    mode: str,
 ) -> None:
     """§5C.6: refusals are attempts too — each ending is recorded exactly once,
-    with the result the span, the counter and the audit line agree on."""
-    fake = fake_class()
+    with the result the span, the counter and the audit line agree on.
+
+    And each is ANSWERED, in both modes (clarification 3): a plain POST with
+    its status and page, an HTMX POST with 200, its copy as a fragment and the
+    reconcile trigger — htmx swaps no 4xx/5xx body — except no identity, which
+    redirects. A refusal decided before the Lithos call leaves the write log
+    empty, and an Origin refusal reaches no client method at all.
+    """
+    fake = attempt.fake()
+    headers = dict(attempt.headers)
+    if mode == "htmx":
+        headers["HX-Request"] = "true"
     app = create_app(config, lithos_client_factory=lambda _: fake)
     with TestClient(app, base_url=ORIGIN) as client:
-        if operator:
-            client.cookies.set(OPERATOR_COOKIE_NAME, operator)
+        if attempt.operator:
+            client.cookies.set(OPERATOR_COOKIE_NAME, attempt.operator)
         caplog.set_level(logging.INFO, logger="lithos_lens.write_funnel")
         caplog.clear()
         spans.clear()
-        response = _complete(client, task_id, headers=headers, **form)
+        fake.method_calls.clear()
+        fake.write_calls.clear()
+        response = _complete(client, attempt.task_id, headers=headers, **attempt.form)
+        reached = [name for name, _ in fake.method_calls]
+        writes = list(fake.write_calls)
 
-    assert response.status_code == status
+    # ── the answer ──
+    text = _text(response)
+    if mode == "plain":
+        assert response.status_code == attempt.status
+        assert "hx-trigger" not in response.headers
+        expected_copy = attempt.copy
+    elif attempt.result == "no_operator":
+        assert response.status_code == 200
+        assert urlsplit(response.headers["hx-redirect"]).path == "/operator"
+        assert "hx-trigger" not in response.headers
+        expected_copy = ""
+    else:
+        assert response.status_code == 200
+        assert response.headers["hx-trigger"] == RECONCILE_EVENT
+        assert "<html" not in response.text
+        expected_copy = attempt.htmx_copy or attempt.copy
+    if expected_copy:
+        assert expected_copy in text
+    if attempt.result in {"conflict", "rejected", "refused_origin"}:
+        assert NOTHING_CHANGED in text
+    if attempt.result == "unknown":
+        assert NOTHING_CHANGED not in text
+
+    # ── no write, and for an Origin refusal no Lithos call at all ──
+    if attempt.pre_write:
+        assert writes == []
+    if attempt.result == "refused_origin":
+        assert reached == []
+
+    # ── the record ──
     lines = _audit_lines(caplog)
     assert len(lines) == 1
     line = lines[0]
-    assert line.result == result  # type: ignore[attr-defined]
-    assert line.code == code  # type: ignore[attr-defined]
+    assert line.result == attempt.result  # type: ignore[attr-defined]
+    assert line.code == attempt.code  # type: ignore[attr-defined]
     assert line.action == "complete"  # type: ignore[attr-defined]
-    assert line.task_id == task_id  # type: ignore[attr-defined]
-    assert line.operator == (operator if result != "refused_origin" else "")  # type: ignore[attr-defined]
+    assert line.task_id == attempt.task_id  # type: ignore[attr-defined]
+    assert line.operator == (  # type: ignore[attr-defined]
+        attempt.operator if attempt.result != "refused_origin" else ""
+    )
     # The argument summary is lengths, never free text.
-    assert line.arguments == {"task_id": task_id, "note_chars": 0}  # type: ignore[attr-defined]
+    assert line.arguments == {"task_id": attempt.task_id, "note_chars": 0}  # type: ignore[attr-defined]
     written = _write_spans(spans)
     assert len(written) == 1
     attributes = dict(written[0].attributes or {})
-    assert attributes["lens.write.result"] == result
-    assert attributes.get("lens.write.code", "") == code
+    assert attributes["lens.write.result"] == attempt.result
+    assert attributes.get("lens.write.code", "") == attempt.code
     assert (
         metric_value(
-            metric_reader, "lens_writes_total", action="complete", result=result
+            metric_reader,
+            "lens_writes_total",
+            action="complete",
+            result=attempt.result,
         ).value
         == 1
     )
-    if result == "ok":
+    if attempt.result == "ok":
         assert attributes["lens.write.gate_type"] == "human"
         assert attributes["lens.write.override"] is False
         assert attributes["lens.write.operator"] == OPERATOR
+
+
+def test_a_successful_attempt_records_lithoss_answer_as_its_envelope(
+    client: TestClient, fake: LoggedFake, caplog: pytest.LogCaptureFixture
+) -> None:
+    """D4: the audit line carries the result envelope — for a success too, it
+    is what Lithos answered, not an empty mapping."""
+    caplog.set_level(logging.INFO, logger="lithos_lens.write_funnel")
+    _complete(client, "gate-human")
+
+    (line,) = _audit_lines(caplog)
+    stored = asyncio.run(fake.task_get("gate-human"))
+    assert line.envelope == {  # type: ignore[attr-defined]
+        "success": True,
+        "task_id": "gate-human",
+        "title": "Decide: re-develop PR #431?",
+        "updated_at": stored.resolved_at,
+        "unblocked": ["waiter-a", "waiter-b"],
+    }
 
 
 def test_the_audit_line_records_the_status_expected_and_observed(
@@ -617,7 +780,7 @@ def test_an_htmx_post_answers_the_receipt_fragment_with_the_reconcile_trigger(
     response = _complete(client, "gate-human", headers=HTMX)
 
     assert response.status_code == 200
-    assert response.headers["hx-trigger"] == RECONCILE_TRIGGER
+    assert response.headers["hx-trigger"] == RECONCILE_EVENT
     assert response.text.lstrip().startswith('<section class="write-receipt"')
     assert "<html" not in response.text
     assert "Unblocked 2 tasks" in _text(response)
@@ -635,7 +798,7 @@ def test_an_htmx_refusal_answers_200_with_its_copy_and_the_trigger(
     response = _complete(client, "gate-human", headers=HTMX)
 
     assert response.status_code == 200
-    assert response.headers["hx-trigger"] == RECONCILE_TRIGGER
+    assert response.headers["hx-trigger"] == RECONCILE_EVENT
     text = _text(response)
     assert NOTHING_CHANGED in text
     assert "This task is now completed." in text

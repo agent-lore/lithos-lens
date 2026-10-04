@@ -130,6 +130,10 @@ WriteResult = Literal[
 #: The funnel's own refusals, each with the status a plain POST answers with.
 BAD_FORM_COPY = "The form didn't say what status you saw — reload and try again."
 PRECHECK_FAILED_COPY = "Lens couldn't read the task, so it didn't try the write."
+#: An HTMX attempt the Origin check refused. A plain POST keeps W1's 403 text;
+#: an HTMX one is answered with the same notice every other refusal carries,
+#: because htmx swaps no 4xx body and the operator would otherwise see nothing.
+ORIGIN_REFUSED_COPY = "This request didn't come from a page this Lens served."
 _BAD_REQUEST = 400
 _FORBIDDEN = 403
 _UNAVAILABLE = 503
@@ -190,12 +194,16 @@ class WriteDone:
     """What a write that applied reported: the receipt's raw material.
 
     ``released`` are task IDS, in upstream's order — the funnel resolves the
-    first few to titles when it mints the receipt.
+    first few to titles when it mints the receipt. ``answer`` is the canonical
+    success result as Lithos returned it, for the audit line's result
+    envelope (§5C.6): a success is recorded with what Lithos said, exactly
+    as a refusal is.
     """
 
     task: ReceiptTask
     outcome: str = ""
     released: tuple[str, ...] = ()
+    answer: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _applies(task: TaskRecord) -> tuple[str, str] | None:
@@ -295,6 +303,20 @@ class WriteFunnel:
         refused = origin_refusal(request)
         if refused is not None:
             ledger.result = "refused_origin"
+            if htmx:
+                # 200 and the notice, like every HTMX outcome (clarification
+                # 3) — the plain POST keeps its 403. Still no Lithos call.
+                return self._fragment(
+                    request,
+                    funnel_problem(
+                        write.action,
+                        REFUSED,
+                        ORIGIN_REFUSED_COPY,
+                        code="",
+                        status_code=_FORBIDDEN,
+                        subject=TaskRef(task_id=form.task_id),
+                    ),
+                )
             return refused
 
         identity = resolve_operator(
@@ -432,6 +454,7 @@ class WriteFunnel:
                 action, envelope or None, reread=reread, subject=subject
             )
 
+        ledger.envelope = done.answer
         # (W8's synthetic-event publish lands here: after the call, before the
         # receipt. W4 publishes nothing — upstream emits complete's event.)
         return await self._mint(action, done, operator, client)
@@ -448,15 +471,7 @@ class WriteFunnel:
             ledger.result = "rejected"
         ledger.code = problem.code
         if htmx:
-            # 200 whatever the outcome: htmx 2 swaps no 4xx/5xx body, and a
-            # refusal that showed the operator nothing would be the worst
-            # answer there is.
-            return self._templates.TemplateResponse(
-                request,
-                OUTCOME_FRAGMENT,
-                {"problem": problem},
-                headers={"HX-Trigger": RECONCILE_TRIGGER},
-            )
+            return self._fragment(request, problem)
         return self._templates.TemplateResponse(
             request,
             problem.page or REFUSED_PAGE,
@@ -466,6 +481,20 @@ class WriteFunnel:
                 "problem": problem,
             },
             status_code=problem.status_code,
+        )
+
+    def _fragment(self, request: Request, problem: WriteProblem) -> Response:
+        """An HTMX attempt that did not apply: its copy, as a 200 fragment.
+
+        200 whatever the outcome: htmx 2 swaps no 4xx/5xx body, and a refusal
+        that showed the operator nothing would be the worst answer there is.
+        The trigger rides along so the board re-reads either way.
+        """
+        return self._templates.TemplateResponse(
+            request,
+            OUTCOME_FRAGMENT,
+            {"problem": problem},
+            headers={"HX-Trigger": RECONCILE_TRIGGER},
         )
 
     async def _reread(self, task_id: str, *, needed: bool) -> TaskReread:

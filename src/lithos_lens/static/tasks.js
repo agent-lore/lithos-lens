@@ -216,7 +216,13 @@
     const current = document.querySelector(`[data-refresh-fragment="${name}"]`);
     const next = doc.querySelector(`[data-refresh-fragment="${name}"]`);
     if (!current || !next) return;
+    // The operator's unsent input rides across the swap (T3-W4): a gate's
+    // Complete note typed while an agent's event reconciles the board must
+    // still be there when they press Complete, or the write records the
+    // default outcome instead of what they wrote.
+    const drafts = draftsIn(current);
     current.replaceWith(next);
+    restoreDrafts(next, drafts);
     // htmx wires hx-* attributes on nodes IT swapped and on the initial page;
     // it does not watch the DOM. These nodes were parsed out of a fetched
     // document and inserted by hand, so without this every blocker expander in
@@ -231,6 +237,41 @@
     // offline, answer with an error, or never arrive — so the removal is
     // announced here rather than left for a successor to notice.
     document.dispatchEvent(new CustomEvent(FRAGMENT_REPLACED, { detail: { name } }));
+  }
+
+  // A draft is any field carrying `data-draft-key` (a gate's Complete note,
+  // keyed by its task): its value, and its caret when it had focus. Keyed
+  // rather than positional, because a fresh read can reorder the rows — and
+  // a key the fresh fragment no longer carries (the gate completed meanwhile)
+  // simply has nowhere to go.
+  function draftsIn(node) {
+    const drafts = new Map();
+    if (!node || !node.querySelectorAll) return drafts;
+    node.querySelectorAll("[data-draft-key]").forEach(function (input) {
+      const focused = document.activeElement === input;
+      if (!input.value && !focused) return;
+      drafts.set(input.dataset.draftKey, {
+        value: input.value,
+        focused: focused,
+        start: focused ? input.selectionStart : null,
+        end: focused ? input.selectionEnd : null,
+      });
+    });
+    return drafts;
+  }
+
+  function restoreDrafts(node, drafts) {
+    if (!drafts.size || !node.querySelectorAll) return;
+    node.querySelectorAll("[data-draft-key]").forEach(function (input) {
+      const draft = drafts.get(input.dataset.draftKey);
+      if (!draft) return;
+      input.value = draft.value;
+      if (!draft.focused) return;
+      input.focus();
+      if (draft.start !== null && input.setSelectionRange) {
+        input.setSelectionRange(draft.start, draft.end);
+      }
+    });
   }
 
   function handleEvent(event) {
@@ -1028,6 +1069,22 @@
   // business, never the row's. The immediate, coalesced render rather than
   // the debounced one: the operator just acted and is looking at the row.
   document.addEventListener("lens:reconcile", function () { refreshFragments(); });
+  // ...unless the form that posted is no longer in the document. htmx fires
+  // the HX-Trigger event on the REQUESTING element, and a reconcile that
+  // landed while the write was in flight replaced the row and detached that
+  // form — so the event above never bubbles here. The answer still swaps into
+  // the page's receipt slot, which is outside every refreshed fragment and so
+  // always connected; when the source that posted is gone, the reconcile runs
+  // from there instead. Exactly one of the two paths fires per answer.
+  const writeSources = new WeakMap();
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    if (event.detail && event.detail.xhr) writeSources.set(event.detail.xhr, event.target);
+  });
+  document.addEventListener("htmx:afterSwap", function (event) {
+    if (!event.target || event.target.id !== "write-receipt") return;
+    const source = event.detail && event.detail.xhr && writeSources.get(event.detail.xhr);
+    if (source && !source.isConnected) refreshFragments();
+  });
   window.addEventListener("popstate", handlePanelPopstate);
 
   // The stream opens once every DEFERRED SCRIPT on the page has run, not at the

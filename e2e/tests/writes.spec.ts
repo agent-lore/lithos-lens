@@ -78,9 +78,62 @@ test("a human gate is completed from its row and the receipt says so", async ({
   // Clicking INTO the row's form must not open the side panel (the row
   // handler exempts forms), and the note is sent as the outcome.
   await page.setViewportSize({ width: 1440, height: 800 });
+  const refreshes = () =>
+    page.waitForResponse(
+      (response) =>
+        response.request().headers()["x-lithos-lens-refresh"] === "tasks",
+    );
+  const reconcileNow = async () => {
+    const refreshed = refreshes();
+    await page.evaluate(() => document.dispatchEvent(new Event("lens:reconcile")));
+    await refreshed;
+  };
   await action.locator("[data-complete-note]").fill("Window confirmed with on-call");
   await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+
+  // An agent's event re-renders the board while the operator is mid-note:
+  // the fresh row's field must still hold what they typed.
+  await reconcileNow();
+  await expect(action.locator("[data-complete-note]")).toHaveValue(
+    "Window confirmed with on-call",
+  );
+
+  // And a reconcile that lands WHILE the write is in flight replaces the row,
+  // detaching the form that posted. htmx then fires the answer's HX-Trigger
+  // on that detached form, where nothing hears it — so the board must still
+  // be re-read at once, from the receipt slot the answer swaps into, and not
+  // wait for the 800ms debounce behind the SSE `task.completed`.
+  await page.evaluate(() => {
+    (window as any).__postingForm = document.querySelector(
+      `[data-gate-row] [data-complete-action]`,
+    );
+  });
+  let detachedBeforeAnswer = false;
+  await page.route("**/approve", async (route) => {
+    await reconcileNow();
+    detachedBeforeAnswer = await page.evaluate(
+      () => !(window as any).__postingForm.isConnected,
+    );
+    await route.continue();
+  });
+  // Both waits armed BEFORE the click, so a fast refresh cannot slip past:
+  // the first refresh REQUEST that starts once the answer is in.
+  let answeredAt = 0;
+  const answered = page
+    .waitForResponse((r) => r.url().endsWith("/approve"))
+    .then(() => {
+      answeredAt = Date.now();
+    });
+  const refreshAfterAnswer = page.waitForRequest(
+    (request) =>
+      answeredAt > 0 && request.headers()["x-lithos-lens-refresh"] === "tasks",
+  );
   await action.locator("[data-complete-button]").click();
+  await answered;
+  await refreshAfterAnswer;
+  const refreshDelayMs = Date.now() - answeredAt;
+  expect(detachedBeforeAnswer).toBe(true);
+  expect(refreshDelayMs).toBeLessThan(500);
 
   // The answer lands in the page's one receipt slot, outside the board...
   const receipt = page.locator("#write-receipt [data-write-receipt]");

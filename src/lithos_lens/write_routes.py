@@ -28,6 +28,7 @@ renders is the task's state and whether an identity resolves — never config.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from functools import partial
 from urllib.parse import quote
 
@@ -169,6 +170,8 @@ def _complete_gate(note: str) -> TaskWrite:
             ),
             outcome=outcome,
             released=result.unblocked,
+            # The canonical answer, whole, for the audit line's envelope.
+            answer={**asdict(result), "unblocked": list(result.unblocked)},
         )
 
     def admits(task: TaskRecord) -> tuple[str, str] | None:
