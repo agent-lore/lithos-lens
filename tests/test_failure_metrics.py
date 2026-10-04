@@ -274,13 +274,18 @@ async def test_a_cancelled_call_is_not_counted_as_a_success(
     dropping the most work.
     """
     gate = asyncio.Event()
+    entered = asyncio.Event()
 
     async def blocks(name: str, arguments: dict[str, Any]) -> Any:
+        entered.set()
         await gate.wait()
         return _Result()
 
     task = asyncio.create_task(_transport(blocks).call_tool("lithos_stats", {}))
-    await asyncio.sleep(0.02)
+    # A barrier, not an interval: cancel only once the call is inside the body.
+    # Cancelled before its first step, the call never starts and records
+    # nothing -- an empty outcome set, failing for a reason the test is not about.
+    await asyncio.wait_for(entered.wait(), timeout=5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
