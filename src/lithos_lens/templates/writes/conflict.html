@@ -21,24 +21,5 @@
 {% block title %}The task changed | Lithos Lens{% endblock %}
 
 {% block content %}
-  <section class="write-outcome write-outcome-conflict">
-    <header>
-      <p class="eyebrow">Write refused</p>
-      <h1>The task changed</h1>
-    </header>
-    {% if problem.subject.label %}
-      <p class="write-outcome-subject">
-        {{ problem.subject.label }}
-        {% with task_id = problem.subject.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
-      </p>
-    {% endif %}
-    {% include "writes/notice.html" %}
-    <p class="write-outcome-actions">
-      {% if problem.subject.task_id %}
-        <a href="{{ task_detail_url(request, problem.subject.task_id) }}">Open the task</a>
-      {% else %}
-        <a href="/tasks">Back to the board</a>
-      {% endif %}
-    </p>
-  </section>
+  {% include "writes/outcome.html" %}
 {% endblock %}

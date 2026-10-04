@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer).
 
 **Tier:** Entrypoints
 
@@ -15,7 +15,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 20 |
 | `lithos_lens.web` | L | 0 | 1 |
-| `lithos_lens.write_routes` | S | 0 | 4 |
+| `lithos_lens.write_funnel` | M | 4 | 1 |
+| `lithos_lens.write_routes` | M | 0 | 7 |
 
 ## Public API
 
@@ -52,10 +53,20 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 ### `lithos_lens.web`
 - def `create_app` — Create the Lithos Lens ASGI app.
 
-### `lithos_lens.write_routes`
+### `lithos_lens.write_funnel`
 - def `origin_refusal` — 403 for a cross-origin POST, or ``None`` to let the handler run.
+- class `WriteForm` — What a route parsed out of its form: the funnel's whole input from it.
+- class `WriteDone` — What a write that applied reported: the receipt's raw material.
+- class `TaskWrite` — One action on an existing task, as the funnel drives it.
+- class `WriteFunnel` — The one function every curated write goes through (D4).
+
+### `lithos_lens.write_routes`
 - def `request_identity` — The identity this request acts under: cookie → default → none (D3).
 - def `operator_page_url` — The operator page, carrying this request's page as its return trip.
+- def `operator_page_for` — The operator page, returning the operator to ``next_url`` afterwards.
+- def `write_return_path` — This page, as a write form's ``next``: where its 303 brings them back.
+- def `complete_gate_path` — The Complete action's POST target, the id as ONE encoded segment.
+- def `offers_complete` — Whether a surface showing ``task`` offers the direct Complete action.
 - def `register_write_routes` — Attach the write route group and its template globals.
 
 ## Dependencies

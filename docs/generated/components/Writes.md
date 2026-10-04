@@ -3,7 +3,7 @@
 
 # Writes
 
-Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the two pages it feeds.
+Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action, the refusal for the rest, the default outcome).
 
 **Tier:** Foundation
 
@@ -11,11 +11,18 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.gate_completion` | S | 0 | 3 |
 | `lithos_lens.operator` | M | 4 | 2 |
-| `lithos_lens.write_errors` | L | 4 | 2 |
+| `lithos_lens.receipts` | S | 3 | 1 |
+| `lithos_lens.write_errors` | L | 4 | 3 |
 | `lithos_lens.write_guards` | S | 0 | 2 |
 
 ## Public API
+
+### `lithos_lens.gate_completion`
+- def `completes_directly` — Whether a task carries the direct Complete action, right now.
+- def `refusal_for` — ``(code, sentence)`` for an open task Lens will not complete, or None.
+- def `default_outcome` — The outcome a completion records when the operator wrote no note.
 
 ### `lithos_lens.operator`
 - def `valid_operator_id` — Whether ``value`` is a legible operator id (:data:`OPERATOR_ID_RULE`).
@@ -25,12 +32,19 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 - class `OperatorLithosClient` — The two client calls the identity module makes.
 - class `OperatorRegistry` — Guards an identity, then registers it once per process (D3).
 
+### `lithos_lens.receipts`
+- class `ReceiptTask` — A task a receipt names: its id, and its title when one could be read.
+- class `WriteReceipt` — One write's outcome, as the banner states it.
+- class `ReceiptStore` — The process's receipts, bounded in count and age (T3 D5).
+- def `receipt_url` — ``next_url`` with ``?receipt=<receipt_id>`` merged into its query.
+
 ### `lithos_lens.write_errors`
 - class `TaskRef` — A task named in copy: the id, and the title if one was read.
 - class `TaskReread` — What a fresh ``lithos_task_get`` showed after the write was refused.
 - class `MessageSegment` — One run of an upstream message: plain text, or a task id to link.
 - class `WriteProblem` — One row of §5C.4's table, resolved against one attempt.
 - def `map_write_error` — Turn one refused or unanswered write into copy and an HTTP answer.
+- def `funnel_problem` — A refusal the write funnel decides itself, before Lithos sees a write.
 - def `message_segments` — Split an upstream message into text and the task ids inside it.
 
 ### `lithos_lens.write_guards`

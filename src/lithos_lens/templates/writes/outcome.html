@@ -1,0 +1,43 @@
+{#
+  One write that did not apply, as the operator reads it (§5C.4) — the section
+  every outcome page is built from, and the whole of the fragment an HTMX POST
+  is answered with (`write_funnel.OUTCOME_FRAGMENT`), so a row action and a
+  plain form say the same thing in the same words.
+  Context: `problem` -- a `write_errors.WriteProblem`.
+
+  The heading follows the problem's kind; everything the operator must read
+  first -- whether anything changed -- is in `writes/notice.html`, which every
+  kind includes. No "try again" affordance on any of them: the page cannot
+  know whether the action is still right, and Lithos writes are not
+  idempotent. The way on is the task, re-rendered from fresh reads.
+-#}
+{#- Literal class names, one per kind: the stylesheet keys on them, and the
+    stylesheet-coverage guard can only check a name it can read. -#}
+<section class="write-outcome {% if problem.kind == "unknown_outcome" %}write-outcome-unknown{% elif problem.kind == "conflict" %}write-outcome-conflict{% else %}write-outcome-refused{% endif %}">
+  <header>
+    {% if problem.kind == "unknown_outcome" %}
+      <p class="eyebrow">Outcome unknown</p>
+      <h1>Lens did not hear back</h1>
+    {% elif problem.kind == "conflict" %}
+      <p class="eyebrow">Write refused</p>
+      <h1>The task changed</h1>
+    {% else %}
+      <p class="eyebrow">Write refused</p>
+      <h1>Lens didn't make this change</h1>
+    {% endif %}
+  </header>
+  {% if problem.subject.label %}
+    <p class="write-outcome-subject">
+      {{ problem.subject.label }}
+      {% with task_id = problem.subject.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+  {% endif %}
+  {% include "writes/notice.html" %}
+  <p class="write-outcome-actions">
+    {% if problem.subject.task_id %}
+      <a href="{{ task_detail_url(request, problem.subject.task_id) }}">Open the task</a>
+    {% else %}
+      <a href="/tasks">Back to the board</a>
+    {% endif %}
+  </p>
+</section>

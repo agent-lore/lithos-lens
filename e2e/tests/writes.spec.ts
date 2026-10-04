@@ -1,0 +1,98 @@
+import { test, expect, type Page } from "@playwright/test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { WRITES_BASE_URL, WRITES_HUMAN_GATE } from "../servers";
+
+/**
+ * Curated writes, end to end (T3-W4): the Complete action on a human gate's
+ * row, and the receipt the write answers with.
+ *
+ * Runs against the WRITES instance only (servers.ts): the fake keeps a
+ * completed gate completed for the life of its process, so this spec must
+ * never touch the server the other specs and the captures share. Serial, in
+ * one test, because the order IS the subject — the row with its action is
+ * photographed before the write, the receipt after it — and a gate can be
+ * completed once.
+ *
+ * Captures follow the artifacts-dir contract (`<page>-<width>.png`, exact
+ * width, no horizontal overflow) that `screenshots.spec.ts` documents, for
+ * the two artifacts the PRD's visual review asks of this slice:
+ *   gate-complete-action-<w>.png  the gate row with Complete and the identity
+ *   complete-receipt-<w>.png      the receipt banner above the reconciled board
+ */
+//
+// No retry, deliberately: a retry would find the gate already completed by
+// the failed attempt and fail on that instead of on the real cause.
+test.describe.configure({ mode: "serial", retries: 0 });
+
+const ARTIFACTS_DIR = path.resolve(__dirname, "..", "artifacts");
+const WIDTHS = [320, 768, 1024, 1440] as const;
+const BOARD = `${WRITES_BASE_URL}/tasks?project=influx&since=2026-08-01`;
+
+async function capture(page: Page, slug: string, width: number) {
+  await page.setViewportSize({ width, height: 800 });
+  const scrollWidth = await page.evaluate(
+    () => document.documentElement.scrollWidth,
+  );
+  expect(scrollWidth).toBeLessThanOrEqual(width);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+  });
+  const file = path.join(ARTIFACTS_DIR, `${slug}-${width}.png`);
+  await page.screenshot({ path: file, fullPage: true });
+  const header = fs.readFileSync(file).subarray(0, 24);
+  expect(header.readUInt32BE(16)).toBe(width);
+}
+
+test("a human gate is completed from its row and the receipt says so", async ({
+  page,
+}) => {
+  await page.context().addCookies([
+    { name: "lens_operator", value: "dave", url: WRITES_BASE_URL },
+  ]);
+  await page.goto(BOARD);
+
+  const row = page.locator(
+    `[data-gate-row][data-task-id="${WRITES_HUMAN_GATE}"]`,
+  );
+  const action = row.locator("[data-complete-action]");
+  await expect(action).toHaveCount(1);
+  await expect(action.locator("[data-complete-button]")).toHaveText("Complete");
+  await expect(action.locator("[data-operator-id]")).toHaveText("dave");
+  // Machine-owned gates get no direct action in this slice.
+  await expect(
+    page.locator(
+      '[data-gate-row][data-gate-type="timer"] [data-complete-action]',
+    ),
+  ).toHaveCount(0);
+
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 800 });
+    await row.scrollIntoViewIfNeeded();
+    await capture(page, "gate-complete-action", width);
+  }
+
+  // Clicking INTO the row's form must not open the side panel (the row
+  // handler exempts forms), and the note is sent as the outcome.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await action.locator("[data-complete-note]").fill("Window confirmed with on-call");
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+  await action.locator("[data-complete-button]").click();
+
+  // The answer lands in the page's one receipt slot, outside the board...
+  const receipt = page.locator("#write-receipt [data-write-receipt]");
+  await expect(receipt).toBeVisible();
+  await expect(receipt).toContainText("Completed gate");
+  await expect(receipt).toContainText("Window confirmed with on-call");
+  await expect(receipt.locator("[data-receipt-released]")).toBeVisible();
+  // ...and the board reconciles from fresh reads: the gate leaves Gates.
+  await expect(row).toHaveCount(0);
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+
+  for (const width of WIDTHS) {
+    await capture(page, "complete-receipt", width);
+  }
+});

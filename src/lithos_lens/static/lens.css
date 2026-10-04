@@ -2294,6 +2294,89 @@ button,
   margin: 1rem 0 0;
 }
 
+/* A refusal answered as a page of its own (a lifecycle action has no form to
+   re-render): the same quiet tone as a conflict -- Lens said no, nothing
+   broke. */
+.write-outcome-refused {
+  border-color: var(--line);
+}
+
+/* --- Write receipts (T3 D5) and the Complete action (T3 D7) ---------------
+   The receipt slot sits in the chrome above every page's content and is empty
+   unless a write just landed, so it takes no space of its own. A receipt is
+   news, not a warning: the ok tone, one banner. */
+.write-receipt-slot:empty {
+  display: none;
+}
+
+.write-receipt {
+  background: var(--panel-strong);
+  border: 1px solid var(--ok);
+  border-radius: 1rem;
+  margin-bottom: 1.5rem;
+  padding: 0.9rem 1.25rem;
+}
+
+.write-receipt-headline {
+  font-weight: 700;
+  margin: 0;
+}
+
+.write-receipt-detail {
+  color: var(--muted);
+  margin: 0.4rem 0 0;
+}
+
+.write-receipt-tasks {
+  margin: 0.3rem 0 0;
+  padding-left: 1.2rem;
+}
+
+/* One line on a row: the note grows, the button keeps its label, and the
+   meaning line and the identity chip wrap beneath them. */
+.complete-action {
+  align-items: center;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+}
+
+.complete-action-note {
+  align-items: center;
+  display: flex;
+  flex: 1 1 14rem;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.complete-action-note span {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.complete-action-note input {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+}
+
+.complete-action-button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.complete-action-meaning {
+  color: var(--muted);
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 /* ── Operator identity (§5C.5) ─────────────────────────────────────────
    The chip sits in the page chrome on every page, so it is deliberately
    quiet: one line of text that either names who writes are recorded as or

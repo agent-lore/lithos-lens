@@ -492,9 +492,9 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
     config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
     entries = _web_server_entries(config.read_text())
 
-    assert len(entries) >= 3, (
-        "three instances: the healthy board, the truncated board, and the "
-        "graph page's degraded states"
+    assert len(entries) >= 4, (
+        "four instances: the healthy board, the truncated board, the graph "
+        "page's degraded states, and the one the curated writes mutate"
     )
     for index, entry in enumerate(entries):
         pinned = re.search(r'LENS_HOST:\s*"([^"]+)"', entry)

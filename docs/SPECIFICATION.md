@@ -125,6 +125,16 @@ The current application exposes these routes:
   (HTTP 400). The **submitted value itself** must match the id rule: it is not
   trimmed first, because accepting `" dave "` would set an identity other than
   the one typed.
+- `POST /tasks/{task_id}/approve`
+  Completes an open **gate** a person resolves — `human` or `external_task` —
+  through the write funnel (§5.15). The path keeps REQUIREMENTS §5C.7's name;
+  the action the operator sees says **Complete**, never "Approve". A task that
+  is not a gate is answered 409, and every other gate type (`timer`, `ci`, `pr`,
+  or one Lens does not know) is refused with no write until the proceed-anyway
+  confirm step ships. A plain form POST answers `303 See Other` to the form's
+  `next` when it is a same-origin relative path, else the task's detail page,
+  carrying `?receipt=<id>`; an HTMX POST (a board row's action) answers a
+  fragment, always 200. No GET is registered on the path yet.
 - `GET /tasks/new`
   Reserved for the create form (a later T3 slice). Until it exists the path
   answers 404 — never the detail page of a task whose id happens to be `new`,
@@ -140,14 +150,21 @@ The current application exposes these routes:
   Renders a note: server-side markdown, frontmatter metadata chips, the
   related panel, and provenance.
 
+Every page that extends the base layout — the board, task detail, the graph,
+knowledge, a note, the operator page — accepts `?receipt=<id>` and renders that
+write's receipt above its content, once (§5.15). An unknown, expired or
+already-shown id renders nothing and is not an error.
+
 One further route, `POST /tasks/events/publish`, is registered **only** when
 fake-Lithos app mode is enabled (`LITHOS_LENS_FAKE_LITHOS`). It is a harness
 seam for the browser suite and does not exist in a normal deployment.
 
 No authenticated routes currently exist, and none are planned: Lens takes
 unauthenticated requests across a trusted-network boundary (`docs/REQUIREMENTS.md`
-§5C.1). **Anyone who can reach the Lens port can perform any action it offers**,
-and the operator page states that where the operator meets it. Two
+§5C.1). **Anyone who can reach the Lens port can perform any action it offers**
+— which, since the first curated write (§5.15), includes changing Lithos: any
+such client can complete a human or external-task gate, under any operator name
+it chooses. The operator page states that where the operator meets it. Two
 process-level bounds exist in place of authentication: a concurrent-render cap
 that answers 503 rather than queueing, and a ceiling on concurrent SSE
 subscribers.
@@ -416,7 +433,9 @@ The dashboard also renders:
   written by loom as flat gate metadata (PRD S7) — as a coloured badge with the
   age of the state and loom's one-line reason, and PR gates order by that state's
   severity before age (the two in-flight states are one tier, ordered against
-  each other by age). The badge renders only when `reconciliation_pr_url` and
+  each other by age). An open `human` or `external_task` gate's row carries
+  the **Complete** action (§5.15) — in the Gates section and, through the same
+  partial, where Needs attention promoted it. The badge renders only when `reconciliation_pr_url` and
   the gate's `pr_url` are both present and equal, so a state about a replaced
   PR — or one Lens cannot tie to a PR at all — is withheld (its raw keys stay
   visible as advisory metadata), and only while the gate is **open**, since
@@ -712,7 +731,10 @@ Every bounded list on the page states its own remainder through one shared
 tail, so the page-size claim has a single definition. The dependents list is
 one of them: the outgoing edge count is agent-written like the incoming one.
 
-Detail rendering is read-only in the current implementation.
+The page has one write action: an open `human` or `external_task` gate carries
+**Complete** in its header (§5.15), beside the acting identity, when an
+operator identity resolves. It is the same partial the board's gate row and the
+side panel render; nothing else on the page writes.
 
 #### 5.6.1 Side panel
 
@@ -1707,8 +1729,8 @@ graph's scope key.
 
 ### 5.13 Operator Identity and Write Posture
 
-The first curated-write slice (T3-W1) ships the posture the write actions
-attach to, and no task write yet. Three facts describe it:
+T3-W1 shipped the posture the write actions attach to; the first task write
+that uses it, completing a gate, is §5.15. Three facts describe the posture:
 
 **There is no read-only mode and no `[writes] enabled` flag.** The write route
 group is registered like the graph and knowledge groups; what decides whether
@@ -1775,10 +1797,11 @@ the write race. Closing it needs an upstream conditional registration.
 
 The first piece of **T3** (curated write actions) to ship, ahead of the actions
 themselves: the mapping from a Lithos write failure to what the operator reads
-(§5C.4). No route answers with it yet — the one write route is `/operator`
-(§5.13), which makes no task write, and the actions that will are still to
-come (§10) — so what ships is the pure mapper (`lithos_lens.write_errors`) and
-the two pages it feeds.
+(§5C.4). The write funnel (§5.15) answers with it: the pure mapper
+(`lithos_lens.write_errors`) for what Lithos returns, a public builder there for
+the refusals the funnel makes itself before Lithos sees a write, and the pages
+both feed — the conflict and unknown-outcome pages, plus a refused page for a
+lifecycle action, which has no form of its own to re-render.
 
 A write to Lithos has three endings, and this covers the two that are not
 success:
@@ -1823,6 +1846,104 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
+### 5.15 Write Funnel, Receipts and Complete a Gate
+
+The first task write (T3-W4). Every curated write goes through **one function**
+(`lithos_lens.write_funnel.WriteFunnel.submit`); route handlers parse their form
+and describe their action, and never call a Lithos write themselves. The steps,
+in order:
+
+1. **Origin** — the Origin/Referer check (§5.1), first, so a refused attempt is
+   still recorded.
+2. **Operator** — cookie → `[writes].default_operator` → none (§5.13). With
+   none, a plain POST is redirected (303) to `/operator?next=<the form's next,
+   else the task's page>` and an HTMX POST answers `HX-Redirect` to it; the
+   write is **not replayed** — the operator repeats it once they have a name.
+3. **Form** — the form's `expected_status` (the status the operator saw) must be
+   a task status.
+4. **Registration** — the identity is guarded and registered once (§5.13).
+5. **Pre-check** — the task is re-read with `lithos_task_get`. A status other
+   than `expected_status` is the conflict page — "This task is now
+   *\<status\>*." — and **no write**. The conflict copy names the status only:
+   Lithos's task record carries no actor or update time, and Lens invents none.
+   The action then says whether it applies to the task as read.
+6. **The single Lithos call.**
+7. **Classification** — an error carrying a non-empty envelope is Lithos
+   refusing, mapped by §5.14 (a `task_not_found` re-reads the task first, so a
+   gate completed in the window after the pre-check is the same conflict page).
+   An error with an **empty** envelope — a timeout, no session, an `isError`
+   result, an unparseable answer (`invalid_response`) — or any other exception
+   is no answer at all: the unknown-outcome page, with what a re-read shows now.
+8. **Record** — exactly one structured audit line (`lens_event:
+   "lens.writes.audit"`: operator, action, task id, an argument summary of ids
+   and lengths — never free text — the status expected and observed, the
+   result, its code and the upstream envelope), one span
+   `lens.writes.<action>` (`lens.write.operator`, `.task_id`, `.result`,
+   `.code`, and for complete `.gate_type` and `.override`), and one
+   `lens_writes_total` increment — for **every** attempt, refusals included.
+9. **Receipt** — minted from what the write returned (see Receipts, below).
+10. **Answer** — a plain form POST gets `303 See Other` to a page rendered from
+    fresh reads with `?receipt=<id>` merged into its query (any earlier
+    `receipt=` replaced); an HTMX POST gets the receipt — or the refusal's copy
+    — as a fragment, **always 200** (htmx swaps no 4xx/5xx body), with
+    `HX-Trigger: lens:reconcile`. `tasks.js` listens for that event and runs its
+    immediate, coalesced reconcile, so the board is re-rendered from fresh reads;
+    no row is ever assembled from a write's answer.
+
+Every way an attempt ends, for a plain POST:
+
+| Case | Status | Copy | Result (code) |
+|---|---|---|---|
+| stale `expected_status` | 409 | conflict page: "This task is now *\<status\>*." | `conflict` |
+| the task is gone at the pre-check | 409 | conflict page: "This task no longer exists." | `conflict` |
+| upstream `task_not_found` on a task that exists and is not open | 409 | the same conflict page, via the re-read | `conflict` |
+| not a gate | 409 | "This task isn't a gate — only gates can be completed here." | `rejected` (`not_a_gate`) |
+| a gate type other than `human` / `external_task` | 409 | "A *\<type\>* gate is resolved by whatever watches it. Lens can't complete it yet." | `rejected` (`gate_type_unsupported`) |
+| `expected_status` missing or not a status | 400 | "The form didn't say what status you saw — reload and try again." | `rejected` (`bad_form`) |
+| the pre-check read fails | 503 | "Lens couldn't read the task, so it didn't try the write." | `rejected` (`precheck_failed`) |
+| an identity that belongs to an agent | 403 | the operator page's refusal copy | `rejected` (`identity_refused`) |
+| the identity lookup or registration fails | 503 | "Could not register the operator identity; nothing was changed." | `rejected` (`registration_failed`) |
+| upstream refusal with an envelope | 422 | §5.14 | `rejected` (the upstream code) |
+| no answer (empty envelope, transport failure) | 200 | the unknown-outcome page with the re-read | `unknown` |
+| foreign or absent Origin | 403 | — | `refused_origin` |
+| no identity | 303 | — | `no_operator` |
+
+Every refusal says "Nothing was changed." first; the unknown outcome says the
+action may or may not have applied. Each answers as the conflict page, the
+unknown-outcome page, or (for a refusal) a page carrying the same notice.
+
+**Receipts.** A redirect loses the response body, so the funnel files the
+write's outcome in an in-memory receipt store under a random id, and the page
+the redirect lands on renders it as a banner in the layout's one **receipt
+slot** — above the content, outside every refreshed fragment, so the reconcile
+neither wipes nor repeats it. An HTMX row action swaps its answer into the same
+slot. A receipt is **shown once** (consumed as it renders); the store holds at
+most 64 and drops one not shown within five minutes (module constants, not
+config). Receipts are feedback, not state: a restart loses them and nothing
+becomes wrong. A completion's receipt reads "Completed gate *\<title\>*", what
+was recorded as its outcome and under whose name, and "Unblocked *N* tasks"
+naming the first five by title — read with `lithos_task_get` when the receipt is
+minted, because the pages a receipt lands on hold no task index — with "and *N*
+more" for the rest; a task whose title cannot be read is named by its short id
+alone. The receipt's **Reopen gate** follow-up arrives with reopen.
+
+**Complete.** Offered as one action — a **Complete** button, an optional
+one-line note, a line pointing at the gate's own description (completing a gate
+means what its author says it means; for a loom needs-human gate it is the
+retry gesture), and the identity chip — on an **open** gate of type `human` or
+`external_task`, decided by one helper over (task type, status, gate type) and
+rendered by one partial on the gate row (the Gates section, and the ordinary
+row Needs attention promotes a gate into), the side panel and the detail page.
+It renders only when an operator identity resolves; with none, the chrome's
+single "choose an operator" link is the only prompt. A gate row posts through
+HTMX so the operator keeps their place on the board (its no-JS form returns to
+the same board); the panel and the detail page post plain forms. A click inside
+a row's form — the button or the note — never opens the side panel. The note,
+whitespace folded to one line and bounded at 500 characters, is sent as the
+completion's `outcome`; with no note the outcome is "Completed via Lens by
+*\<operator\>*". The re-read at the pre-check is what binds: a task that is not
+an open gate of those two types is refused there, whatever the page offered.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -1838,6 +1959,9 @@ provides:
   exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
   reads and the typed registration it writes
 - an `/events` SSE stream carrying task-related events
+- **one task write**, `lithos_task_complete` (attributed to the operator, with
+  an `outcome`), whose `unblocked` id list a completion's receipt names (§5.15);
+  the client carries the other four T3 writes, which no route calls yet
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
 ambiguous or partially missing, Lens treats parsing and enrichment as best
@@ -1910,6 +2034,10 @@ Lens's failure modes rather than its routes:
   `content_encoding_refused`, `subscriber_limit`); the current subscriber count
   against its ceiling; and `lens_event_stream_up`.
 - **Admission control** — metered requests by outcome (`admitted` | `refused`).
+- **Curated writes** — `lens_writes_total` by `action` and `result` (`ok` |
+  `conflict` | `rejected` | `unknown` | `refused_origin` | `no_operator`), one
+  per attempt (§5.15). The operator, the task and a rejection's code are span
+  attributes, never labels.
 - **Task graph** — page renders by scope kind and outcome (`rendered` |
   `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
   behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how
@@ -2060,11 +2188,12 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the curated write actions themselves** (T3) — complete a gate, reopen,
-  cancel, create and add a dependency. The posture and identity they attach to
-  ship now (§5.13), and so does the refusal copy they will answer with
-  (§5.14), which nothing reaches yet: every *task* surface is still read-only,
-  and `/operator` is the one write route that exists.
+- **the rest of the curated write actions** (T3) — proceed-anyway for
+  machine-owned gates (`timer`, `ci`, `pr`), reopen (and with it the receipt's
+  Reopen gate follow-up), cancel, create and add a dependency. The posture and
+  identity (§5.13), the refusal copy (§5.14), and the write funnel with its
+  receipts and the direct Complete action for human and external-task gates
+  (§5.15) ship now.
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)

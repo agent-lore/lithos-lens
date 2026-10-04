@@ -31,6 +31,7 @@ import pytest
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+from lithos_lens.receipts import ReceiptStore
 from lithos_lens.request_filters import task_detail_url
 from lithos_lens.template_vocabulary import short_id
 from lithos_lens.web import TEMPLATE_DIR
@@ -968,12 +969,12 @@ def test_the_unknown_outcome_with_no_re_read_says_only_what_it_knows() -> None:
 def render(template: str, problem: WriteProblem) -> str:
     """Render one write-outcome template through the shipped environment.
 
-    Not through the app: no route answers with these pages until the write
-    funnel lands (T3-W4), and a page nothing can reach is still a page whose
-    copy has to be right. So this builds the same ``Jinja2Templates`` over the
-    same template directory, with the ``short_id`` filter and the
-    ``task_detail_url`` global ``web.create_app`` registers, and the two
-    globals the chrome's identity chip reads, as ``register_write_routes``
+    Not through the app: the funnel (T3-W4) answers with these pages only for
+    the refusals its actions can produce, and every row's copy has to be right
+    whether or not an action reaches it yet. So this builds the same
+    ``Jinja2Templates`` over the same template directory, with the ``short_id``
+    filter and the ``task_detail_url`` global ``web.create_app`` registers, and
+    the two globals the chrome's identity chip reads, as ``register_write_routes``
     binds them (no configured default, no cookie) — the real ones, so the
     partials these pages include behave as they will in the app.
 
@@ -987,6 +988,9 @@ def render(template: str, problem: WriteProblem) -> str:
         request_identity, default_operator=""
     )
     templates.env.globals["operator_page_url"] = operator_page_url
+    # The chrome's receipt slot (T3-W4) takes `?receipt=`; these pages are
+    # rendered with none, so the slot is empty, as it is in the app.
+    templates.env.globals["take_receipt"] = ReceiptStore().take
     templates.env.globals["url_for"] = lambda name, path="": f"/{name}/{path}"
     request = Request(
         {

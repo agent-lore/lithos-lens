@@ -566,3 +566,26 @@ def tasks_panel_opens() -> Any:
             description="Task side-panel renders by request source.",
         ),
     )
+
+
+def writes() -> Any:
+    """Counter of curated-write ATTEMPTS by action and result (§5C, T3 D4).
+
+    Labels: ``action`` (``complete`` … — the write funnel's closed vocabulary)
+    and ``result`` in ``ok`` | ``conflict`` | ``rejected`` | ``unknown`` |
+    ``refused_origin`` | ``no_operator``. Every attempt counts once, refusals
+    included: a write refused before Lithos saw it is still an attempt the
+    operator made.
+
+    Deliberately NOT labelled: the operator (a person's name, and an unbounded
+    set — it is on the span), the task id, and a ``rejected`` attempt's code
+    (upstream's vocabulary grows without Lens's say, so it would be an
+    unbounded label too; it is on the span and in the audit line).
+    """
+    return _instrument(
+        "lens_writes_total",
+        lambda meter: meter.create_counter(
+            "lens_writes_total",
+            description="Curated write attempts by action and result.",
+        ),
+    )

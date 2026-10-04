@@ -125,4 +125,10 @@
       <p class="empty">{{ gate.waiters_empty_note }}</p>
     {% endif %}
   </details>
+  {#- Complete (T3 D7): the shared partial decides whether this gate offers it
+     (an open human or external-task gate, with an operator identity), and
+     posts through HTMX so the operator keeps their place on the board. -#}
+  {% with action_task = gate.task, action_htmx = true, action_next = write_return_path(request) %}
+    {% include "writes/complete_action.html" %}
+  {% endwith %}
 </article>

@@ -635,6 +635,17 @@ const ACTIONS = {
   waiters: () => fire("click", clickEvent(
     { [PANEL_ROW]: rows.gate, summary: {} }, "waiters",
   )),
+  // The Complete action on a gate row (T3 D7): its button and its note field
+  // sit inside a <form> inside a row the panel handler claims.
+  "complete-button": () => fire("click", clickEvent(
+    { [PANEL_ROW]: rows.gate, form: {}, button: {} }, "complete-button",
+  )),
+  "complete-note": () => fire("click", clickEvent(
+    { [PANEL_ROW]: rows.gate, form: {}, input: {} }, "complete-note",
+  )),
+  // What htmx fires on the form when a write answers `HX-Trigger:
+  // lens:reconcile`; it bubbles to the document listener.
+  "reconcile-trigger": () => fire("lens:reconcile", {}),
   back: () => { if (cursor > 0) cursor -= 1; fire("popstate", {}); },
   forward: () => {
     if (cursor < entries.length - 1) cursor += 1;
@@ -1191,6 +1202,29 @@ def test_a_gate_rows_waiter_list_still_opens_natively() -> None:
     assert result["fetches"] == []
     assert result["pushed"] == []
     assert result["prevented"] == []
+
+
+@pytest.mark.parametrize("control", ["complete-button", "complete-note"])
+def test_a_control_inside_a_rows_form_does_not_open_the_panel(control: str) -> None:
+    """A gate row carries the Complete action (T3 D7). The row handler used to
+    treat ANY click inside a row as "open the panel" and preventDefault() it,
+    so the button could never submit and the note field never take a click."""
+    result = _panel_run([control])
+
+    assert result["fetches"] == []
+    assert result["pushed"] == []
+    assert result["prevented"] == []
+
+
+def test_the_reconcile_trigger_refreshes_the_board_at_once() -> None:
+    """An HTMX write answers `HX-Trigger: lens:reconcile`. The board must
+    re-render from fresh reads straight away — the immediate, coalesced
+    reconcile, with no debounce timer between the operator's click and the
+    row moving."""
+    result = _panel_run(["reconcile-trigger", "settle:0"])
+
+    assert result["fetches"] == [BOARD_HREF]
+    assert result["board"] == "board:fresh"
 
 
 def test_see_more_expands_the_description_in_place_and_then_offers_see_less() -> None:

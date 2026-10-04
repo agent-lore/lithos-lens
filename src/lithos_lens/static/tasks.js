@@ -615,6 +615,10 @@
     // the list could never be expanded again — the same reason the tag chips
     // below keep their navigation.
     if (target.closest("summary")) return;
+    // A form inside a row is a control of its own — a gate's Complete action
+    // and its note field (T3 D7). Swallowing that click for a panel open would
+    // mean the button never submits and the field never takes focus.
+    if (target.closest("form")) return;
     const row = target.closest(PANEL_ROW);
     if (!row) return;
     const link = target.closest("a[href]");
@@ -1018,6 +1022,12 @@
   desiredTaskId = selectedTaskId;
   document.addEventListener("click", handlePanelClick);
   document.addEventListener("keydown", handlePanelKeydown);
+  // A row's HTMX write answers with `HX-Trigger: lens:reconcile` (T3 D4), and
+  // htmx fires that event on the form, from where it bubbles here. The board
+  // then re-renders from FRESH READS — the write's own answer is the receipt's
+  // business, never the row's. The immediate, coalesced render rather than
+  // the debounced one: the operator just acted and is looking at the row.
+  document.addEventListener("lens:reconcile", function () { refreshFragments(); });
   window.addEventListener("popstate", handlePanelPopstate);
 
   // The stream opens once every DEFERRED SCRIPT on the page has run, not at the
