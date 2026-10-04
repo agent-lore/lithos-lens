@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html import unescape
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -849,6 +850,43 @@ def test_an_unknown_code_message_is_shown_whole_even_where_it_holds_an_id() -> N
 
     assert visible_text(detail) == message
     assert link_targets(detail) == []
+
+
+def test_an_unknown_code_message_keeps_its_line_breaks_and_spacing() -> None:
+    """Verbatim includes whitespace: a diagnostic laid out over lines, or with
+    a run of spaces, reaches the operator laid out the same way.
+
+    Two halves, because the browser decides the second. The text node carries
+    the message exactly, with nothing the template added inside the element,
+    and the element's rule keeps whitespace as written (``pre-wrap``) instead
+    of collapsing it, while still wrapping a long line. A paragraph's default,
+    ``white-space: normal``, would show the message on one line with the runs
+    of spaces folded into one.
+    """
+    message = "Policy refused the task:\n  reason: queue  is paused.\n\tsee: ops"
+    problem = map_write_error("complete", envelope("new_upstream_code", message))
+
+    detail = detail_html(render(NOTICE_PARTIAL, problem))
+
+    assert unescape(detail) == message
+    assert css_declaration(".write-outcome-detail", "white-space") == "pre-wrap"
+
+
+def css_declaration(selector: str, prop: str) -> str:
+    """One declaration's value from the lens.css rule for exactly ``selector``,
+    or "" if that rule does not declare it. Same shape as the stylesheet
+    assertions in ``tests/test_blocker_chain.py``."""
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    rules = re.findall(r"([^{}]+)\{([^}]*)\}", css)
+    for selectors, body in rules:
+        if selector in (part.strip() for part in selectors.split(",")):
+            found = re.search(rf"(?:^|;)\s*{prop}\s*:\s*([^;]+)", body)
+            if found:
+                return found.group(1).strip()
+    return ""
 
 
 def test_parent_exists_names_the_parent_and_how_to_replace_it() -> None:

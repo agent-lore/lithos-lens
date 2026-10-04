@@ -2265,6 +2265,14 @@ button,
   padding-left: 0.7rem;
 }
 
+/* Verbatim includes whitespace: a message laid out over lines, or with runs
+   of spaces, is shown as Lithos sent it rather than folded onto one line.
+   Still wraps, and breaks a full id that would otherwise overflow. */
+.write-outcome-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .write-outcome-candidates {
   list-style: none;
   margin: 0.6rem 0 0;

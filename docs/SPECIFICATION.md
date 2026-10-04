@@ -1694,7 +1694,7 @@ Lithos 0.5.0 raises on a write:
 | `self_edge` | "A task can't depend on itself." |
 | `not_a_gate` | "*\<Task\>* isn't a gate — only a gate can be waited on." |
 | `invalid_edge_type` | A Lens defect (the relation form offers only valid types): the unknown-code path, logged at `error` |
-| *(unknown code)* | The code and message verbatim with a "report this" hint — forward-compatible with codes upstream adds. The message is plain text: a full id in it stays full, because the short-id treatment would shorten the thing the report has to quote |
+| *(unknown code)* | The code and message verbatim with a "report this" hint — forward-compatible with codes upstream adds. The message is plain text: a full id in it stays full, because the short-id treatment would shorten the thing the report has to quote, and its line breaks and runs of spaces are kept (`white-space: pre-wrap` on every quoted upstream message) |
 
 Three rules hold across every row:
 
