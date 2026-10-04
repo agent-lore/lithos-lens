@@ -1,0 +1,65 @@
+{
+  "tool": "lithos_agent_info",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62",
+  "source": [
+    "lithos:src/lithos/tools/agents.py::lithos_agent_info"
+  ],
+  "request": {
+    "canonical": {
+      "id": "dave"
+    },
+    "notes": "The EXACT agent lookup behind the operator-identity guard (REQUIREMENTS §5C.5). Takes `id` and nothing else (additionalProperties: false — see _tools_snapshot.json). Chosen over lithos_agent_list because the list filters archived registrations by default while this lookup answers for them: an archived agent's id must not read as unregistered, or the registration that follows would silently re-type that agent as a human."
+  },
+  "responses": {
+    "success": {
+      "id": "dave",
+      "name": "Dave",
+      "type": "human",
+      "first_seen_at": "2026-09-14T08:03:00+00:00",
+      "last_seen_at": "2026-10-02T09:15:00+00:00",
+      "archived_at": null,
+      "metadata": {}
+    },
+    "variants": {
+      "absent": null,
+      "untyped": {
+        "id": "scratch-runner",
+        "name": "scratch-runner",
+        "type": null,
+        "first_seen_at": "2026-09-30T10:58:00+00:00",
+        "last_seen_at": "2026-09-30T11:00:00+00:00",
+        "archived_at": null,
+        "metadata": {}
+      },
+      "other_type": {
+        "id": "agent-zero",
+        "name": "Agent Zero",
+        "type": "claude-code",
+        "first_seen_at": "2026-08-02T12:00:00+00:00",
+        "last_seen_at": "2026-10-01T18:42:00+00:00",
+        "archived_at": null,
+        "metadata": {"host": "workstation"}
+      },
+      "archived_other_type": {
+        "id": "old-worker",
+        "name": "Old Worker",
+        "type": "claude-code",
+        "first_seen_at": "2026-05-11T09:00:00+00:00",
+        "last_seen_at": "2026-07-20T16:30:00+00:00",
+        "archived_at": "2026-08-01T00:00:00+00:00",
+        "metadata": {}
+      },
+      "archived_human": {
+        "id": "retired-dave",
+        "name": "Retired Dave",
+        "type": "human",
+        "first_seen_at": "2026-03-01T09:00:00+00:00",
+        "last_seen_at": "2026-06-18T17:05:00+00:00",
+        "archived_at": "2026-07-01T00:00:00+00:00",
+        "metadata": {}
+      }
+    },
+    "errors": []
+  },
+  "observed_divergences": "The ABSENT answer is the tool returning `None`, not an error envelope: the tool is documented \"Agent info dict or None if not found\" (live tools/list description, vendored in _tools_snapshot.json), unlike lithos_agent_archive, which answers an `agent_not_found` envelope. That is why `variants.absent` is `null` — the tool's return value, the one non-object response any vendored contract carries, and the only variant the well-formedness guard exempts. Over MCP that `None` is NOT necessarily the text `null`: the pinned SDK's FastMCP (a `dict | None` return annotation) sends no content block and `structuredContent: {\"result\": null}`, and a server serialising the wrapper as text sends `{\"result\": null}`. `mcp_transport.decode_tool_result` gives every one of those spellings its own code (NULL_RESULT_CODE) for `LithosClient.agent_info` to map to None; an empty result carrying no null stays a failed lookup. A fake answering whatever the client expected would have hidden it (PRD clarification 2, Dave 2026-10-03). SCOPE NOTE, not a divergence: the payload carries `first_seen_at`, `archived_at` and `metadata` as well as the three fields Lens reads; `normalize_agent`/`AgentRecord` model `id`, `name`, `type` and `last_seen_at` only, which is the documented round-trip scope boundary in README.md — the guard's whole question is the TYPE, and the archive state it does not model is precisely what this tool (unlike the list) still answers for. `make contracts-verify` against a live Lithos remains the step that checks the request shape on the wire; it has not been run from the build environment that added this contract, which could reach no Lithos."
+}

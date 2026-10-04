@@ -681,3 +681,18 @@ classDiagram
   TaskRecord "1" --> "0..*" ClaimRecord : claims
   TaskStatusRecord "1" --> "0..*" ClaimRecord : claims
 ```
+
+## Writes
+
+```mermaid
+classDiagram
+  class IdentityCheck {
+    +ok bool
+    +code str
+    +reason str
+  }
+  class OperatorIdentity {
+    +id str
+    +source OperatorSource
+  }
+```

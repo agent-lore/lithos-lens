@@ -83,13 +83,16 @@ from lithos_lens.tasks import (
     PANEL_FRAGMENT_KEY,
     PANEL_FRAGMENT_VALUE,
     PANEL_SELECTION_KEY,
+    RESERVED_TASK_PATH_SEGMENTS,
     TASK_DETAIL_ALIAS_KEY,
     TASK_DETAIL_ALIAS_PATH,
     default_since,
     parse_filters,
+    task_detail_path,
 )
 from lithos_lens.telemetry import instrument_app
 from lithos_lens.template_vocabulary import format_display_date, format_tag, short_id
+from lithos_lens.write_routes import register_write_routes
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_ROOT / "templates"
@@ -416,6 +419,12 @@ def create_app(
     # id "graph".
     register_graph_routes(app, state, templates)
 
+    # The curated-write group (§5C.7), attached here for the same ordering
+    # reason: its paths are static segments the dynamic route below would
+    # claim as task ids. W1 registers the operator page; later slices add
+    # theirs to the same group.
+    register_write_routes(app, state, templates)
+
     # The id-in-the-query alias (`tasks.task_detail_path`), for the ids no path
     # can address: a page word like "graph" that the static route above claims,
     # and anything holding a "/" or a dot segment, which ASGI decodes back into
@@ -426,9 +435,30 @@ def create_app(
     @app.get(TASK_DETAIL_ALIAS_PATH, response_class=HTMLResponse)
     async def task_detail_by_id(request: Request) -> HTMLResponse:
         requested = request.query_params.get(TASK_DETAIL_ALIAS_KEY)
+        # Straight to the renderer: this route carries the ids no path can
+        # address, INCLUDING the reserved page words the dynamic route below
+        # refuses, so it must not go through that refusal.
         return await task_detail(request, requested if requested else "id")
 
     @app.get("/tasks/{task_id}", response_class=HTMLResponse)
+    async def task_detail_by_path(request: Request, task_id: str) -> Response:
+        """The detail page for an ordinary id — and a 404 for a page word.
+
+        Every page under ``/tasks/`` claims its segment above this route, so a
+        reserved word reaching here is one whose page this build does not serve
+        (``new``, the create form W7 adds). The 404 is what keeps the reserved
+        set's promise: ``/tasks/new`` is never "the task whose id is ``new``",
+        before or after that form exists. Such a task is reached through the
+        alias above, which does not pass through here.
+        """
+        if task_id in RESERVED_TASK_PATH_SEGMENTS:
+            return PlainTextResponse(
+                f"/tasks/{task_id} addresses a Lens page, not a task. A task "
+                f"whose id is {task_id!r} is at {task_detail_path(task_id)}.",
+                status_code=404,
+            )
+        return await task_detail(request, task_id)
+
     async def task_detail(request: Request, task_id: str) -> HTMLResponse:
         """The task's full page — or, with ``?fragment=panel``, its side panel.
 

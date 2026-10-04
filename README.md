@@ -182,6 +182,8 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_GRAPH_MAX_TASKS` | `lithos-lens.graph.max_tasks` | Integer 1-2000 (same bounds as the TOML key). Ghosts count toward it. |
 | `LITHOS_LENS_GRAPH_FETCH_CONCURRENCY` | `lithos-lens.graph.fetch_concurrency` | Integer 1-64 (same bounds as the TOML key). |
 | `LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES` | `lithos-lens.graph.mini_graph_max_nodes` | Must be a positive integer. |
+| `LITHOS_LENS_WRITES_DEFAULT_OPERATOR` | `lithos-lens.writes.default_operator` | Operator identity used when a browser has no `lens_operator` cookie (§5C.5). Lowercase slug, `^[a-z0-9][a-z0-9-]{0,62}$` — validated exactly like the cookie, so a typo fails the load. Unset it for no default. |
+| `LITHOS_LENS_WRITES_CONFIRM_CANCEL` | `lithos-lens.writes.confirm_cancel` | Boolean. Keeps the consequence confirm page in front of a cancel. |
 | `LITHOS_LENS_LLM_ENABLED` | `lithos-lens.llm.enabled` | Boolean. |
 | `LITHOS_LENS_LLM_MODEL` | `lithos-lens.llm.model` | LiteLLM model string. |
 | `LITHOS_LENS_LLM_PROVIDER` | `lithos-lens.llm.provider` | Optional provider label. |

@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge and task-graph route groups extracted from it.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it.
 
 **Tier:** Entrypoints
 
@@ -15,6 +15,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 20 |
 | `lithos_lens.web` | L | 0 | 1 |
+| `lithos_lens.write_routes` | S | 0 | 4 |
 
 ## Public API
 
@@ -51,9 +52,15 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 ### `lithos_lens.web`
 - def `create_app` — Create the Lithos Lens ASGI app.
 
+### `lithos_lens.write_routes`
+- def `origin_refusal` — 403 for a cross-origin POST, or ``None`` to let the handler run.
+- def `request_identity` — The identity this request acts under: cookie → default → none (D3).
+- def `operator_page_url` — The operator page, carrying this request's page as its return trip.
+- def `register_write_routes` — Attach the write route group and its template globals.
+
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Errors](Errors.md), [Events](Events.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [State](State.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md), [Telemetry](Telemetry.md)
+- Depends on: [Config](Config.md), [Errors](Errors.md), [Events](Events.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [State](State.md), [TaskGraph](TaskGraph.md), [Tasks](Tasks.md), [Telemetry](Telemetry.md), [Writes](Writes.md)
 - Used by: [Entrypoint](Entrypoint.md)
 
 [← all generated docs](../README.md)

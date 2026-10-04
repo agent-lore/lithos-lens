@@ -1,0 +1,21 @@
+{# The acting identity, in the page chrome on every page (§5C.5).
+
+   Self-sufficient on purpose: it resolves the identity itself through the
+   `operator_identity` global rather than taking it from the including
+   template's context, so adding a page never means remembering to thread an
+   identity through its handler.
+
+   With no identity there is ONE link and nothing else — the later slices
+   render their write affordances only when `identity.resolved` is true, so a
+   page with no identity offers the choice instead of a row of actions that
+   would be refused. #}
+{% set identity = operator_identity(request) %}
+<div class="operator-chip" data-operator-chip data-operator-resolved="{{ 'yes' if identity.resolved else 'no' }}">
+  {% if identity.resolved %}
+    <span class="operator-chip-name">Acting as <strong data-operator-id>{{ identity.id }}</strong></span>
+    <span class="operator-chip-sep">·</span>
+    <a class="operator-chip-switch" href="{{ operator_page_url(request) }}">switch</a>
+  {% else %}
+    <a class="operator-chip-choose" href="{{ operator_page_url(request) }}">choose an operator to act</a>
+  {% endif %}
+</div>

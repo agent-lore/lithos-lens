@@ -1,7 +1,8 @@
 """Docs↔config env-var prefix guardrail.
 
-``config.py`` reads a set of environment-variable overrides, and the README
-documents them in the "Environment variable overrides" table. Two invariants
+The config loader (``config.py`` and the override pass in ``config_env.py``)
+reads a set of environment-variable overrides, and the README documents them in
+the "Environment variable overrides" table. Two invariants
 must hold, or an operator's `LITHOS_LENS_*` override silently does nothing:
 
 1. Every env var the code reads uses the shared ``LITHOS_LENS_`` prefix.
@@ -32,7 +33,15 @@ from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PY = REPO_ROOT / "src" / "lithos_lens" / "config.py"
+# BOTH halves of the loader are scanned. The env-override pass lives in
+# config_env.py (extracted when the [writes] knobs took config.py past the
+# module ceiling), and that is where every override read is today — but
+# config.py is still scanned, because the next override someone adds there
+# must not become invisible to this guardrail by sitting in the "wrong" file.
+CONFIG_SOURCES = (
+    REPO_ROOT / "src" / "lithos_lens" / "config.py",
+    REPO_ROOT / "src" / "lithos_lens" / "config_env.py",
+)
 README = REPO_ROOT / "README.md"
 
 # Shared prefix for every env override (root package "lithos_lens", uppercased).
@@ -51,8 +60,15 @@ _README_ROW = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|")
 
 
 def _config_env_vars() -> set[str]:
-    """Env-var names read via ``os.environ.get(...)`` in config.py (by AST)."""
-    tree = ast.parse(CONFIG_PY.read_text(encoding="utf-8"))
+    """Env-var names read via ``os.environ.get(...)`` in the loader (by AST)."""
+    names: set[str] = set()
+    for source in CONFIG_SOURCES:
+        names |= _env_vars_in(source)
+    return names
+
+
+def _env_vars_in(source: Path) -> set[str]:
+    tree = ast.parse(source.read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -97,11 +113,11 @@ def _documented_env_vars() -> set[str]:
 def test_config_env_vars_use_expected_prefix() -> None:
     env_vars = _config_env_vars()
     # Guard against a silently broken extractor vacuously passing.
-    assert env_vars, "no os.environ.get() reads found in config.py"
+    assert env_vars, f"no os.environ.get() reads found in {CONFIG_SOURCES}"
     offenders = {name for name in env_vars if not name.startswith(EXPECTED_PREFIX)}
     assert not offenders, (
-        f"config.py reads env vars without the {EXPECTED_PREFIX!r} prefix: "
-        f"{sorted(offenders)}"
+        f"the config loader reads env vars without the {EXPECTED_PREFIX!r} "
+        f"prefix: {sorted(offenders)}"
     )
 
 
@@ -122,11 +138,11 @@ def test_readme_documents_exactly_config_env_vars() -> None:
     undocumented = code - docs
     dead = docs - code
     assert not undocumented, (
-        "config.py reads env vars missing from the README overrides table: "
-        f"{sorted(undocumented)}"
+        "the config loader reads env vars missing from the README overrides "
+        f"table: {sorted(undocumented)}"
     )
     assert not dead, (
-        f"README documents env vars that config.py never reads: {sorted(dead)}"
+        f"README documents env vars the config loader never reads: {sorted(dead)}"
     )
 
 
