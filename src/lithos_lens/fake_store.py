@@ -32,8 +32,9 @@ told to.
 
 One blocker's answer is the clock's rather than a status's — an open ``timer``
 gate stops blocking once its ``ready_at`` has passed, exactly as upstream
-resolves one, and that passage alone counts as touching its waiters: upstream
-evaluates the timer on every read, so no write is needed to release them.
+resolves one. Upstream evaluates that on every read, in whichever direction the
+clock has moved, so a waiter on an open timer is always recomputed rather than
+read from the seed: no write is needed to release it, or to block it again.
 Blocker-record text comes from the vendored ``lithos_task_blocked`` contract's
 ``blocker_kinds`` variants, so a recomputed row reads like a real one.
 """
@@ -246,16 +247,20 @@ class FakeStoreView:
                 continue
             if self._gate_has_elapsed(record.type, source):
                 continue
-            if (
-                source is not None
-                and source.status == "cancelled"
-                and record.kind != "blocker_unsatisfiable"
-            ):
-                record = replace(
-                    record,
-                    kind="blocker_unsatisfiable",
-                    status="cancelled",
-                    message=_unsatisfiable_message(record.type, record.task_id),
+            status = source.status if source is not None else record.status
+            if (status == "cancelled") != (record.kind == "blocker_unsatisfiable"):
+                # The blocker moved between cancelled and open (a cancel, or a
+                # reopen of a seed that was cancelled): redraw the record from
+                # its blocker's status now, as an edge's would be.
+                record = self._blocker(
+                    EdgeRecord(
+                        from_task_id=record.task_id,
+                        to_task_id=task_id,
+                        type=record.type,
+                    ),
+                    source,
+                    status,
+                    None,
                 )
             records.append(record)
         return tuple(records)
@@ -338,10 +343,10 @@ class FakeStoreView:
     def _touched(self, task_id: str) -> bool:
         """Whether anything can have moved ``task_id``'s readiness verdict.
 
-        A write, mostly — and the one thing that is not a write: the clock
-        passing an open ``timer`` gate's ``ready_at``. Upstream evaluates that
-        on every read, so a waiter on an elapsed timer is recomputed (and the
-        elapsed gate stops blocking it) even if no write ever came near it.
+        A write, mostly — and the one thing that is not a write: an open
+        ``timer`` gate, whose verdict is the clock's. Upstream evaluates it on
+        every read, so its waiters are always recomputed, released once
+        ``ready_at`` passes and blocked again if the clock is back before it.
         """
         if task_id in self.overlay.statuses:
             return True
@@ -356,7 +361,10 @@ class FakeStoreView:
                 return True
             if (source_id, task_id, edge_type) in inserted:
                 return True
-            if self._gate_has_elapsed(edge_type, self.task(source_id)):
+            # An open timer gate's verdict is the clock's, read on every call
+            # upstream — pending or lapsed, and in either direction the clock
+            # moves — so its waiters are always recomputed, never the seed's.
+            if self._open_timer_ready_at(edge_type, self.task(source_id)) is not None:
                 return True
         return False
 
@@ -482,17 +490,22 @@ class FakeStoreView:
         cancel consequences (T3 D9). Reading the clock without the status would
         leave such a waiter ready and the strand invisible.
         """
+        ready_at = self._open_timer_ready_at(edge_type, source)
+        return ready_at is not None and ready_at <= self.clock()
+
+    def _open_timer_ready_at(
+        self, edge_type: str, source: TaskRecord | None
+    ) -> datetime | None:
+        """The ``ready_at`` of an OPEN ``timer`` gate behind a ``waits_on_gate``
+        relation, or None for anything else (or an unparseable value)."""
         if edge_type != "waits_on_gate" or source is None:
-            return False
+            return None
         if source.status != "open":
-            return False
+            return None
         if source.task_type != "gate" or source.metadata.get("gate_type") != "timer":
-            return False
-        ready_at = str(source.metadata.get("ready_at") or "")
+            return None
         try:
-            parsed = datetime.fromisoformat(ready_at)
+            parsed = datetime.fromisoformat(str(source.metadata.get("ready_at") or ""))
         except ValueError:
-            return False
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed <= self.clock()
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)

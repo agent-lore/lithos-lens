@@ -2080,3 +2080,175 @@ async def test_a_seed_only_timer_blocker_lapses_on_the_clock() -> None:
 
     assert "timer-waiter" in await _ready_ids(client)
     assert "timer-waiter" not in await _blocked(client)
+
+
+# ── minted ids are new ids ──────────────────────────────────────────────
+
+
+async def test_create_never_mints_an_id_the_store_already_holds() -> None:
+    """Upstream mints a uuid4. The fake's per-instance sequence must therefore
+    skip any value a seed already holds — one created by an earlier fake, say —
+    rather than shadow that row."""
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(
+            tasks=(_task("fake-created-1", title="Seed"),),
+            ready_ids=frozenset({"fake-created-1"}),
+        )
+    )
+
+    minted = await client.task_create(title="Minted", agent="dave")
+
+    assert minted.task_id != "fake-created-1"
+    assert (await client.task_get("fake-created-1")).title == "Seed"
+    assert (await client.task_get(minted.task_id)).title == "Minted"
+    ids = [task.id for task in await client.list_tasks()]
+    assert sorted(ids) == sorted({"fake-created-1", minted.task_id})
+
+    await client.task_complete(minted.task_id, agent="dave")
+    assert (await client.task_get(minted.task_id)).status == "completed"
+    assert (await client.task_get("fake-created-1")).status == "open"
+
+
+# ── a seed-only blocker that was cancelled, reopened ───────────────────
+
+
+@pytest.mark.parametrize(
+    ("blocker", "edge_type", "waiting"),
+    [
+        (
+            _task("lone-pred", status="cancelled"),
+            "blocks",
+            BlockerRecord(
+                kind="task",
+                task_id="lone-pred",
+                type="blocks",
+                status="open",
+                message="Waiting on predecessor lone-pred to complete.",
+            ),
+        ),
+        (
+            replace(_gate("lone-gate", "human"), status="cancelled"),
+            "waits_on_gate",
+            BlockerRecord(
+                kind="gate",
+                task_id="lone-gate",
+                type="waits_on_gate",
+                status="open",
+                message="Waiting on human gate lone-gate.",
+            ),
+        ),
+    ],
+    ids=["predecessor", "gate"],
+)
+async def test_reopening_a_cancelled_seed_only_blocker_un_strands_its_waiter(
+    blocker: TaskRecord, edge_type: str, waiting: BlockerRecord
+) -> None:
+    """A seed that states a waiter stranded by a cancelled blocker — with no
+    edge behind it — must read as an ordinary wait once that blocker is
+    reopened, exactly as an edge-backed one does; and a cancelled reopen still
+    re-blocks nobody."""
+    stranded = BlockerRecord(
+        kind="blocker_unsatisfiable",
+        task_id=blocker.id,
+        type=edge_type,
+        status="cancelled",
+        message="stranded",
+    )
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(
+            tasks=(blocker, _task("lone-waiter")),
+            blocked={"lone-waiter": (stranded,)},
+        )
+    )
+    assert (await _blocked(client))["lone-waiter"] == (stranded,)
+
+    reopen = await client.task_reopen(blocker.id, agent="dave")
+
+    assert reopen.reblocked == ()
+    assert (await _blocked(client))["lone-waiter"] == (waiting,)
+
+
+# ── a timer read backward across its ready_at ──────────────────────────
+
+
+async def test_a_lapsed_timer_blocks_again_when_the_clock_goes_back() -> None:
+    """Upstream compares ``ready_at <= now`` on every read, in whichever
+    direction the clock has moved. A seed captured after the timer lapsed (its
+    waiter ready) must block that waiter again once the clock is before
+    ``ready_at`` — with no write in between."""
+    now = [datetime(2030, 1, 3, tzinfo=UTC)]
+    client = FakeLithosClient(
+        dataset=FakeLithosDataset(
+            tasks=(
+                _gate("timer-x", "timer", ready_at="2030-01-02T00:00:00+00:00"),
+                _task("waits-timer"),
+            ),
+            ready_ids=frozenset({"waits-timer"}),
+            edges=_edge_map(_edge("timer-x", "waits-timer", "waits_on_gate")),
+        ),
+        clock=lambda: now[0],
+    )
+    assert "waits-timer" in await _ready_ids(client)
+
+    now[0] = datetime(2030, 1, 1, tzinfo=UTC)
+
+    assert "waits-timer" not in await _ready_ids(client)
+    assert (await _blocked(client))["waits-timer"] == (
+        BlockerRecord(
+            kind="gate",
+            task_id="timer-x",
+            type="waits_on_gate",
+            status="open",
+            message=(
+                "Waiting on timer gate timer-x (ready_at=2030-01-02T00:00:00+00:00)."
+            ),
+        ),
+    )
+
+
+# ── a stamp under an ordinary, forward-moving clock ────────────────────
+
+
+async def test_a_terminal_write_under_a_later_clock_commits_the_clock() -> None:
+    """The other half of ``_advance_stamp``: when the clock is past the prior
+    stamp, the clock IS the stamp — so a seeded task created long ago is
+    resolved NOW, and a recent-work read finds it."""
+    now = [datetime(2030, 1, 1, tzinfo=UTC)]
+    hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
+    await hub.start()
+    client = FakeLithosClient(dataset=write_dataset(), events=hub, clock=lambda: now[0])
+    try:
+        queue = hub.subscribe()
+        completed = await client.task_complete("pred", agent="dave")
+        now[0] = datetime(2030, 1, 2, 12, 30, tzinfo=UTC)
+        cancelled = await client.task_cancel("solo", agent="dave")
+        now[0] = datetime(2030, 1, 3, tzinfo=UTC)
+        minted = await client.task_create(title="Minted", agent="dave")
+        now[0] = datetime(2030, 1, 4, tzinfo=UTC)
+        minted_done = await client.task_complete(minted.task_id, agent="dave")
+        events = await _drain(queue, 4)
+    finally:
+        await client.close()
+        await hub.stop()
+
+    assert completed.updated_at == "2030-01-01T00:00:00+00:00"
+    assert cancelled.updated_at == "2030-01-02T12:30:00+00:00"
+    assert minted.updated_at == "2030-01-03T00:00:00+00:00"
+    assert minted_done.updated_at == "2030-01-04T00:00:00+00:00"
+    assert [event.payload["updated_at"] for event in events] == [
+        "2030-01-01T00:00:00+00:00",
+        "2030-01-02T12:30:00+00:00",
+        "2030-01-03T00:00:00+00:00",
+        "2030-01-04T00:00:00+00:00",
+    ]
+    assert (await client.task_get("pred")).resolved_at == completed.updated_at
+    assert (await client.task_get("solo")).resolved_at == cancelled.updated_at
+    window = "2029-12-31T00:00:00+00:00"
+    assert "pred" in {
+        task.id
+        for task in await client.list_tasks(status="completed", resolved_since=window)
+    }
+    assert "solo" in {
+        task.id
+        for task in await client.list_tasks(status="cancelled", resolved_since=window)
+    }

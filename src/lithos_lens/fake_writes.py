@@ -320,7 +320,12 @@ class FakeWriteStore(FakeStoreView):
                 "task_not_found",
                 f"parent_task_id references nonexistent task: {resolved_parent}",
             )
+        # A NEW id, as upstream's uuid4 is: the sequence is per instance and a
+        # seed may already hold `fake-created-<n>` (from another fake, say), so
+        # an occupied value is skipped rather than shadowed.
         self.overlay.sequence += 1
+        while self.task(f"fake-created-{self.overlay.sequence}") is not None:
+            self.overlay.sequence += 1
         new_id = f"fake-created-{self.overlay.sequence}"
         created_at = self.clock().isoformat()
         # `create_task` writes one stamp to both created_at and updated_at.
