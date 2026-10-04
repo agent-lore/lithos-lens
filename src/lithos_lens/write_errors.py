@@ -424,18 +424,36 @@ INVALID_INPUT_FIELDS: tuple[str, ...] = (
     "metadata.ready_at",
 )
 
+_FIELD_NAMES = "|".join(re.escape(name) for name in INVALID_INPUT_FIELDS)
+
 # Whole names only: not inside a longer identifier or dotted path, while a
 # sentence's closing full stop still ends one.
-_FIELD_NAMED = re.compile(
-    r"(?<![\w.])("
-    + "|".join(re.escape(name) for name in INVALID_INPUT_FIELDS)
-    + r")(?!\w|\.\w)"
-)
+_FIELD_NAMED = re.compile(r"(?<![\w.])(" + _FIELD_NAMES + r")(?!\w|\.\w)")
+
+# ``resolve_task_id``'s no-match diagnostic names the parameter LAST, after the
+# operator's input: "No task matches id prefix '<raw>' (<field>)." Anchored to
+# the end, so a parenthesised name inside the input cannot be taken for it.
+_FIELD_IN_TRAILING_PARENS = re.compile(r"\((" + _FIELD_NAMES + r")\)\.?\s*$")
+
+# The operator's input as Lithos quotes it — ``'<raw>'`` in ``resolve_task_id``,
+# a repr (either quote) in ``_validate_gate_metadata``.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 
 def _field_named_in(message: str) -> str:
-    """The first write parameter a refusal's message names, or ``""``."""
-    match = _FIELD_NAMED.search(message)
+    """The write parameter a refusal's message names as the parameter, or ``""``.
+
+    By where Lithos puts it, not by the first matching word: the operator's
+    input is quoted inside the message and can be any string — another
+    parameter's name included — so the trailing ``(<field>).`` of the no-match
+    diagnostic wins, and otherwise the first name OUTSIDE the quoted input is
+    taken (the leading ``<field> '<raw>'`` of the too-short one, the gate
+    messages' ``requires metadata.<key>``).
+    """
+    trailing = _FIELD_IN_TRAILING_PARENS.search(message)
+    if trailing:
+        return trailing.group(1)
+    match = _FIELD_NAMED.search(_QUOTED.sub("''", message))
     return match.group(1) if match else ""
 
 
@@ -528,21 +546,13 @@ def _task_not_found(attempt: _Attempt) -> WriteProblem:
 def _missing_reference(attempt: _Attempt) -> WriteProblem:
     """Create or an edge named a task Lithos has no match for.
 
-    Lithos 0.5.0 raises ``task_not_found`` there for a prefix that matches
-    nothing ("No task matches id prefix 'bad123' (parent_task_id)."), for a
-    parent or predecessor that does not exist, and for an edge endpoint that
-    does not (``resolve_task_id``, ``create_task``, ``upsert_task_edge``). That
-    is a reference the operator typed or a page that went stale — not a task
-    that changed under them — so it is refused on the form, input kept, with
-    the message whole: it is the only thing that says WHICH reference and
-    what was sent. Plain rather than segmented, because an id in it names a
-    task that does not exist and a link to it would lead nowhere. The field is
-    found in the message as ``invalid_input``'s is, and the edge message that
-    names none renders at form level.
-
-    The one exception is a re-read showing the edge's own subject gone: then
-    the task the operator acted on no longer exists, which is the conflict
-    page's fact, not the form's.
+    Lithos 0.5.0 raises ``task_not_found`` for a prefix that matches nothing,
+    a parent or predecessor that does not exist, and an edge endpoint that does
+    not (``resolve_task_id``, ``create_task``, ``upsert_task_edge``): a mistyped
+    or stale reference, not a task that changed. So it is refused on the form,
+    input kept, with the message whole — the only thing that says WHICH
+    reference — and plain, since an id in it links nowhere. The exception is a
+    re-read showing the edge's own subject gone: that is the conflict page's.
     """
     if attempt.reread.outcome == "absent":
         return _conflict(

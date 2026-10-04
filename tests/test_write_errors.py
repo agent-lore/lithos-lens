@@ -477,6 +477,12 @@ def test_a_status_the_re_read_did_not_return_is_not_named() -> None:
             "to_task_id",
             id="edge_upsert",
         ),
+        pytest.param(
+            "edge_upsert",
+            "No task matches id prefix 'bad456' (from_task_id).",
+            "from_task_id",
+            id="edge_upsert: source endpoint",
+        ),
         pytest.param("edge_remove", MISSING_ENDPOINT_MESSAGE, "", id="edge_remove"),
     ],
 )
@@ -671,6 +677,18 @@ def test_a_message_with_no_ids_is_one_plain_segment() -> None:
             id="metadata.ready_at",
         ),
         pytest.param(
+            "from_task_id 'abc' is too short: pass the full task id or a prefix "
+            "of at least 6 characters.",
+            "from_task_id",
+            id="from_task_id",
+        ),
+        pytest.param(
+            "to_task_id 'abc' is too short: pass the full task id or a prefix "
+            "of at least 6 characters.",
+            "to_task_id",
+            id="to_task_id",
+        ),
+        pytest.param(
             "Something no create field is named in.", "", id="no field: form level"
         ),
     ],
@@ -687,6 +705,71 @@ def test_invalid_input_lands_on_the_field_its_message_names(
     assert problem.field == field
     assert problem.detail_text == message
     assert visible_text(detail_html(render(NOTICE_PARTIAL, problem))) == message
+
+
+@pytest.mark.parametrize(
+    ("action", "code", "message", "field"),
+    [
+        pytest.param(
+            "create",
+            "task_not_found",
+            "No task matches id prefix 'depends_on' (parent_task_id).",
+            "parent_task_id",
+            id="create: parent typed as 'depends_on'",
+        ),
+        pytest.param(
+            "create",
+            "task_not_found",
+            "No task matches id prefix 'parent_task_id' (depends_on).",
+            "depends_on",
+            id="create: predecessor typed as 'parent_task_id'",
+        ),
+        pytest.param(
+            "edge_upsert",
+            "task_not_found",
+            "No task matches id prefix 'depends_on' (to_task_id).",
+            "to_task_id",
+            id="edge: target typed as 'depends_on'",
+        ),
+        pytest.param(
+            "edge_upsert",
+            "task_not_found",
+            "No task matches id prefix 'x (to_task_id)' (from_task_id).",
+            "from_task_id",
+            id="edge: input that itself ends in a parenthesised field",
+        ),
+        pytest.param(
+            "create",
+            "invalid_input",
+            "depends_on 'parent_task_id' is too short: pass the full task id or a "
+            "prefix of at least 6 characters.",
+            "depends_on",
+            id="create: too-short predecessor typed as 'parent_task_id'",
+        ),
+        pytest.param(
+            "edge_upsert",
+            "invalid_input",
+            "to_task_id 'from_task_id' is too short: pass the full task id or a "
+            "prefix of at least 6 characters.",
+            "to_task_id",
+            id="edge: too-short target typed as 'from_task_id'",
+        ),
+    ],
+)
+def test_a_parameter_name_the_operator_typed_is_not_the_field(
+    action: WriteAction, code: str, message: str, field: str
+) -> None:
+    """The operator's input is quoted inside Lithos's message, and it can be
+    any string — including another parameter's name. The field is the one
+    Lithos names as the PARAMETER (``resolve_task_id``'s leading ``<field>
+    '<raw>'`` or trailing ``'<raw>' (<field>).``), never a word inside the
+    quoted input."""
+    problem = map_write_error(action, envelope(code, message))
+
+    assert problem.kind == "refused"
+    assert problem.status_code == 422
+    assert problem.field == field
+    assert problem.detail_text == message
 
 
 def test_a_field_name_inside_a_longer_name_is_not_a_field() -> None:
