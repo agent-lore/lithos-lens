@@ -3,7 +3,7 @@
 
 # Writes
 
-Curated write actions (§5C): the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, and the two pages it feeds.
+Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the two pages it feeds.
 
 **Tier:** Foundation
 
@@ -11,9 +11,19 @@ Curated write actions (§5C): the pure error mapper that turns a Lithos write re
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.operator` | M | 4 | 2 |
 | `lithos_lens.write_errors` | L | 4 | 2 |
+| `lithos_lens.write_guards` | S | 0 | 2 |
 
 ## Public API
+
+### `lithos_lens.operator`
+- def `valid_operator_id` — Whether ``value`` is a legible operator id (:data:`OPERATOR_ID_RULE`).
+- class `OperatorIdentity` — The identity a request acts under, and where it came from.
+- def `resolve_operator` — Resolve the acting identity: cookie → configured default → none (D3).
+- class `IdentityCheck` — The verdict on an identity: usable, or refused with a reason.
+- class `OperatorLithosClient` — The two client calls the identity module makes.
+- class `OperatorRegistry` — Guards an identity, then registers it once per process (D3).
 
 ### `lithos_lens.write_errors`
 - class `TaskRef` — A task named in copy: the id, and the title if one was read.
@@ -23,9 +33,13 @@ Curated write actions (§5C): the pure error mapper that turns a Lithos write re
 - def `map_write_error` — Turn one refused or unanswered write into copy and an HTTP answer.
 - def `message_segments` — Split an upstream message into text and the task ids inside it.
 
+### `lithos_lens.write_guards`
+- def `same_origin` — Whether this POST came from a page this Lens served (§5C.6, D2).
+- def `safe_next` — ``value`` if it is a same-origin relative path, else ``default``.
+
 ## Dependencies
 
-- Depends on: —
-- Used by: —
+- Depends on: [Tasks](Tasks.md)
+- Used by: [Config](Config.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

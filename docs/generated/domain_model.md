@@ -686,9 +686,18 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class IdentityCheck {
+    +ok bool
+    +code str
+    +reason str
+  }
   class MessageSegment {
     +text str
     +task_id str
+  }
+  class OperatorIdentity {
+    +id str
+    +source OperatorSource
   }
   class TaskRef {
     +task_id str

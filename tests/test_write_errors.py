@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import partial
 from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ from lithos_lens.write_errors import (
     map_write_error,
     message_segments,
 )
+from lithos_lens.write_routes import operator_page_url, request_identity
 
 #: A real Lithos id, in both spellings the corpus carries: the ``cycle``
 #: message names members by full id, and the short-id treatment the page gives
@@ -655,8 +657,10 @@ def render(template: str, problem: WriteProblem) -> str:
     funnel lands (T3-W4), and a page nothing can reach is still a page whose
     copy has to be right. So this builds the same ``Jinja2Templates`` over the
     same template directory, with the ``short_id`` filter and the
-    ``task_detail_url`` global ``web.create_app`` registers — the real ones, so
-    the partials these pages include behave as they will in the app.
+    ``task_detail_url`` global ``web.create_app`` registers, and the two
+    globals the chrome's identity chip reads, as ``register_write_routes``
+    binds them (no configured default, no cookie) — the real ones, so the
+    partials these pages include behave as they will in the app.
 
     ``url_for`` is the one stub: it is supplied by Starlette's own template
     response (the chrome's stylesheet and script URLs) rather than by Lens.
@@ -664,6 +668,10 @@ def render(template: str, problem: WriteProblem) -> str:
     templates = Jinja2Templates(directory=TEMPLATE_DIR)
     templates.env.filters["short_id"] = short_id
     templates.env.globals["task_detail_url"] = task_detail_url
+    templates.env.globals["operator_identity"] = partial(
+        request_identity, default_operator=""
+    )
+    templates.env.globals["operator_page_url"] = operator_page_url
     templates.env.globals["url_for"] = lambda name, path="": f"/{name}/{path}"
     request = Request(
         {

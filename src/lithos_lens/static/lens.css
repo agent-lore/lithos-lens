@@ -2293,3 +2293,88 @@ button,
 .write-outcome-actions {
   margin: 1rem 0 0;
 }
+
+/* ── Operator identity (§5C.5) ─────────────────────────────────────────
+   The chip sits in the page chrome on every page, so it is deliberately
+   quiet: one line of text that either names who writes are recorded as or
+   offers the single "choose an operator" link. The operator page below it is
+   the one surface that states the trusted-network boundary, and its boundary
+   block is styled as a notice rather than as body copy — it is the only
+   protection there is. */
+.operator-chip {
+  color: var(--muted);
+  display: flex;
+  font-size: 0.85rem;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.operator-chip-name strong {
+  color: var(--ink);
+}
+
+.operator-chip-sep {
+  color: var(--line);
+}
+
+.operator-chip-switch,
+.operator-chip-choose {
+  color: var(--accent);
+}
+
+.operator-page {
+  margin: 0 auto;
+  max-width: 44rem;
+}
+
+.operator-current {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.operator-problem {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 0.75rem 1rem;
+}
+
+.operator-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.operator-form input {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+
+.operator-hint {
+  color: var(--muted);
+  flex-basis: 100%;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.operator-boundary {
+  background: var(--panel-strong);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  padding: 0.5rem 1rem 1rem;
+}
+
+.operator-boundary h2 {
+  font-size: 1rem;
+}
+
+.operator-default-note {
+  color: var(--muted);
+  font-size: 0.9rem;
+}

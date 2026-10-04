@@ -694,6 +694,46 @@ const PAGES: ReadonlyArray<{
       await expect(page.getByText("Document not found.")).toBeVisible();
     },
   },
+  {
+    // The operator page (§5C.5) and the identity chip in the chrome, which is
+    // what the visual review is asked to look at. The fixture config sets no
+    // `default_operator`, so the identity is CHOSEN here: the cookie is set
+    // and the page reloaded, which is also the only way one capture can show
+    // both the page's "acting as / where it came from" line and the chip.
+    //
+    // Every clause the artifact must show is waited on, for the reason the
+    // other entries do it: this sandbox cannot read the PNG, so a page that
+    // silently lost the boundary statement has to fail the run rather than
+    // produce a healthy-looking image.
+    slug: "operator",
+    url: "/operator",
+    ready: async (page) => {
+      await page.context().addCookies([
+        {
+          name: "lens_operator",
+          value: "dave",
+          url: page.url(),
+        },
+      ]);
+      await page.reload();
+      // The chip in the chrome, naming the identity and offering the switch.
+      const chip = page.locator("[data-operator-chip]");
+      await expect(chip).toHaveAttribute("data-operator-resolved", "yes");
+      await expect(chip.locator("[data-operator-id]")).toHaveText("dave");
+      // The page itself: the identity, its SOURCE, and the form to switch.
+      await expect(
+        page.locator("[data-operator-current] [data-operator-source]"),
+      ).toHaveAttribute("data-operator-source", "cookie");
+      await expect(page.locator("#operator")).toHaveValue("dave");
+      // The boundary statement REQUIREMENTS §5C.1 requires to be here.
+      await expect(page.locator("[data-operator-boundary]")).toContainText(
+        "Anyone who can reach this port can perform these actions",
+      );
+      await expect(page.locator("[data-operator-boundary]")).toContainText(
+        "hygiene, not security",
+      );
+    },
+  },
 ];
 
 for (const { slug, url, ready } of PAGES) {

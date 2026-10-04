@@ -91,6 +91,6 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 ## Dependencies
 
 - Depends on: —
-- Used by: [Config](Config.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md), [Web](Web.md)
+- Used by: [Config](Config.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md), [Web](Web.md), [Writes](Writes.md)
 
 [← all generated docs](../README.md)

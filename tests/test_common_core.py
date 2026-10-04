@@ -34,6 +34,8 @@ class RecordingLithosClient:
         self.register_calls = 0
         self.startup_calls = 0
         self.closed = False
+        self.agent_info_calls: list[str] = []
+        self.operator_registrations: list[str] = []
 
     async def startup(self) -> None:
         self.startup_calls += 1
@@ -43,6 +45,14 @@ class RecordingLithosClient:
 
     async def register_agent(self) -> bool:
         self.register_calls += 1
+        return True
+
+    async def agent_info(self, agent_id: str) -> AgentRecord | None:
+        self.agent_info_calls.append(agent_id)
+        return None
+
+    async def register_operator(self, operator_id: str) -> bool:
+        self.operator_registrations.append(operator_id)
         return True
 
     async def list_tasks(
@@ -782,6 +792,113 @@ def test_graph_fan_out_knob_over_its_ceiling_fails_the_load(
 
     with pytest.raises(ConfigError, match="fetch_concurrency"):
         load_config(config_path)
+
+
+def test_writes_knobs_default_to_the_shipped_values(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The curated write actions must work with no [writes] table written at
+    all — there is no `enabled` key and no posture to set (§5C.1)."""
+    config = load_config(lithos_lens_config_env)
+
+    assert config.writes.default_operator == ""
+    assert config.writes.confirm_cancel is True
+
+
+def test_writes_knobs_are_read_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        'default_operator = "dave"\nconfirm_cancel = false\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    config = load_config(config_path)
+
+    assert config.writes.default_operator == "dave"
+    assert config.writes.confirm_cancel is False
+
+
+def test_the_default_operator_env_override_beats_the_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deployment knob (REQUIREMENTS §4: production sets it so the single
+    operator is not prompted) has to be settable from the environment the
+    container is given, over whatever the mounted TOML says."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        'default_operator = "from-file"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+    monkeypatch.setenv("LITHOS_LENS_WRITES_DEFAULT_OPERATOR", "from-env")
+
+    assert load_config(config_path).writes.default_operator == "from-env"
+
+
+def test_the_confirm_cancel_env_override_beats_the_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        "confirm_cancel = true\n"
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+    monkeypatch.setenv("LITHOS_LENS_WRITES_CONFIRM_CANCEL", "false")
+
+    assert load_config(config_path).writes.confirm_cancel is False
+
+
+@pytest.mark.parametrize("good", ["0", "0-person", "a", "d" * 63])
+def test_a_valid_default_operator_loads_including_a_leading_digit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, good: str
+) -> None:
+    """The load-time rule is the cookie's rule, ^[a-z0-9][a-z0-9-]{0,62}$ —
+    a digit may lead, and the 63-character bound is inclusive."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        f'default_operator = "{good}"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    assert load_config(config_path).writes.default_operator == good
+
+
+@pytest.mark.parametrize("bad", ["Dave", "dave smith", "-dave", "dave_smith", "d" * 64])
+def test_an_invalid_default_operator_fails_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """Validated at load exactly like the cookie (§5C.5) — and with a message
+    an operator can act on: the key, the rule, and the value it read."""
+    config_path = tmp_path / "lithos-lens.toml"
+    config_path.write_text(
+        '[lithos-lens]\nenvironment = "test"\n[lithos-lens.writes]\n'
+        f'default_operator = "{bad}"\n'
+    )
+    monkeypatch.setenv("LITHOS_LENS_CONFIG", str(config_path))
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(config_path)
+
+    message = str(excinfo.value)
+    assert "default_operator" in message
+    assert "lowercase letters, digits and dashes" in message
+    assert repr(bad) in message
+
+
+def test_an_invalid_default_operator_env_override_fails_the_load(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo in the container's environment must fail the boot it is set in,
+    not leave the deployment silently with no identity."""
+    monkeypatch.setenv("LITHOS_LENS_WRITES_DEFAULT_OPERATOR", "Dave Smith")
+
+    with pytest.raises(ConfigError, match="LITHOS_LENS_WRITES_DEFAULT_OPERATOR"):
+        load_config(lithos_lens_config_env)
 
 
 def test_config_loading_never_searches_for_an_ambient_dotenv(

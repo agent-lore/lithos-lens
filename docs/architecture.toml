@@ -26,38 +26,38 @@ src_layout   = "src"
 # for every component in [components].
 [component_docs]
 Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`)."
-Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge and task-graph route groups extracted from it."
+Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
 LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode."
-Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
+Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML loading over it, and the environment-override pass applied on top (env beats file beats default)."
+Writes       = "Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the two pages it feeds."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models)."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection."
 Knowledge    = "Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
 Errors       = "Exception hierarchy rooted at LithosLensError."
-Writes       = "Curated write actions (§5C): the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, and the two pages it feeds."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes"]
+Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
-Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
+Config       = ["lithos_lens.config", "lithos_lens.config_env", "lithos_lens.config_fields", "lithos_lens.config_schema"]
+Writes       = ["lithos_lens.operator", "lithos_lens.write_guards", "lithos_lens.write_errors"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.template_vocabulary", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
 Errors       = ["lithos_lens.errors"]
-Writes       = ["lithos_lens.write_errors"]
 
 [tiers]
 Entrypoints = ["Entrypoint", "Web"]
 Core        = ["State", "Events", "LithosClient"]
-Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetry", "Errors", "Writes"]
+Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Writes", "Logging", "Telemetry", "Errors"]
 
 # Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
 # against the metrics snapshot (docs/generated/metrics.md explains each one).
@@ -122,7 +122,33 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Logging", "Telemetr
 # only by its TTL. The alternative -- an untyped callback registry on the hub --
 # would dodge this counter while making the one invalidation path in the process
 # unfindable from either end. TaskGraph is Foundation, so both edges point down.
-cross_component_edges  = 35   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); direction: down
+# Raised 35 -> 38 for T3-W1's operator identity (REQUIREMENTS §5C.5). Three
+# edges, one per reader of the new Writes component, and each is the point of
+# the change rather than a side effect of it:
+#   Web -> Writes      the write route group resolves the identity, runs the
+#                      Origin check and renders the operator page; the chrome's
+#                      identity chip is one template global over the same call.
+#   Config -> Writes   `[writes].default_operator` is "validated at load
+#                      EXACTLY like the cookie" (§5C.5), so the loader asks the
+#                      module that owns the id rule. The alternative is a
+#                      second copy of that rule in Config, which is the defect
+#                      the requirement is written to prevent: the day the two
+#                      copies disagree, a configured default resolves to
+#                      nothing at the first write and no surface can say why.
+#   Writes -> Tasks    the impersonation guard reads an agent's TYPE, so it
+#                      consumes AgentRecord — the record `lithos_agent_list`
+#                      and `lithos_agent_info` already normalize into.
+# Directions: Web -> Writes is Entrypoints -> Foundation, like Web -> Tasks;
+# the other two are sideways INSIDE Foundation, like Telemetry -> Logging.
+#
+# A new component rather than modules bolted onto Tasks, which is "dashboard
+# data loading and normalization": an identity a write is attributed to, its
+# guard against re-typing an agent, and the Origin/`next` rules are a
+# different responsibility, read by three components that do not otherwise
+# share one. Folding them into Tasks would have cost one edge instead of three
+# and made the component's own description false — the cheaper metric, the
+# worse architecture, which this file's policy calls the wrong answer.
+cross_component_edges  = 38   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the
@@ -300,7 +326,33 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # rendered) instead of a filter/global pair — a smaller public surface, so the
 # ceiling bought something rather than being paid off with a raise. It is at
 # exactly 800.
-modules_over_800_lines = 4    # tasks.py (845), frontier.py (843), graph_layout.py (830), config.py (813)
+#
+# T3-W1 (2026-10-03) DISCHARGED config.py's exception, on the terms the note
+# above set. The `[lithos-lens.writes]` knobs — `default_operator` with the
+# id validation §5C.5 requires at load, and `confirm_cancel` — cost config.py
+# ~70 lines, and at 813 it had 37. The pre-committed answer was taken rather
+# than revisited: `config_env.py` now holds the environment-override pass
+# (`apply_env_overrides` and its three value parsers), and config.py is 606.
+#
+# That is the seam the note named, and it is a real one: config.py answers
+# "what does this FILE say", one function per [lithos-lens.*] table over a
+# parsed TOML dict; config_env.py answers "what does the ENVIRONMENT say over
+# it", one pass over an already-valid LithosLensConfig. It was also the
+# highest-complexity function in the repo and the one the docs<->code env
+# guardrail scans by AST — `tests/test_config_env_prefix.py` now scans BOTH
+# halves, so an override added to either file stays visible to it.
+#
+# web.py JOINED the >800 set in the same change, at 830 from exactly 800: the
+# write route group's registration (ordered before `/tasks/{task_id}`, which
+# is the whole point) and the reserved-segment refusal that keeps
+# `/tasks/new` from ever being routed as a task id. That is this module's one
+# responsibility grown — it is the app factory, and this is one more route
+# group plus one route's guard — not a second one appearing. No budget moves
+# for it: the count stays 4 because config.py left the set as web.py joined
+# it, and the stop-loss stays 850 with tasks.py (849) nearest it. web.py now
+# carries the same standing the others do: the next change that grows it
+# answers the question again, with a real seam if there is one.
+modules_over_800_lines = 4    # tasks.py (849), frontier.py (843), web.py (830), graph_layout.py (830)
 max_module_lines       = 850  # stop-loss over those exceptions, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
@@ -338,6 +390,11 @@ include_modules = [
     "lithos_lens.events",
     "lithos_lens.state",
     "lithos_lens.lithos_client",
+    # OperatorIdentity and IdentityCheck: who a write is attributed to and the
+    # verdict on that identity. Domain entities, not configuration — the
+    # configured default is one SOURCE of an identity, and it lives in
+    # WritesConfig, which is excluded below with the rest of config.
+    "lithos_lens.operator",
     "lithos_lens.write_errors",
 ]
 # fake_lithos holds fixture plumbing (FakeEventHub/FakeLithosClient) and
@@ -349,6 +406,7 @@ include_modules = [
 exclude_modules = [
     "lithos_lens.attention",
     "lithos_lens.config",
+    "lithos_lens.config_env",
     "lithos_lens.config_schema",
     "lithos_lens.errors",
     "lithos_lens.fake_lithos",
