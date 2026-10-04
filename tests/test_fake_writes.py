@@ -773,6 +773,43 @@ async def test_an_inserted_edge_blocks_its_target() -> None:
     assert inserted[0].direction == "incoming"
 
 
+async def test_an_edge_added_to_a_seed_blocked_waiter_accumulates() -> None:
+    """Seed plus overlay, on ONE row: ``waiter-one`` already waits on the gate
+    in the seed, and an upsert adds ``solo`` in front of it. The readiness
+    oracle must answer from both — so completing the gate leaves ``solo``
+    standing and releases only ``waiter-two``, and only completing ``solo``
+    as well readies ``waiter-one``. A recomputation that kept just the seed's
+    blockers would ready ``waiter-one`` at the gate and report it released."""
+    client = _client()
+
+    await client.task_edge_upsert(
+        from_task_id="solo", to_task_id="waiter-one", edge_type="blocks", agent="dave"
+    )
+
+    blocked = await _blocked(client)
+    assert [(row.kind, row.task_id) for row in blocked["waiter-one"]] == [
+        ("gate", "gate-review"),
+        ("task", "solo"),
+    ]
+
+    gate_done = await client.task_complete("gate-review", agent="dave")
+
+    assert gate_done.unblocked == ("waiter-two",)
+    ready = await _ready_ids(client)
+    assert "waiter-one" not in ready
+    assert "waiter-two" in ready
+    blocked = await _blocked(client)
+    assert [(row.kind, row.task_id) for row in blocked["waiter-one"]] == [
+        ("task", "solo")
+    ]
+
+    solo_done = await client.task_complete("solo", agent="dave")
+
+    assert solo_done.unblocked == ("waiter-one",)
+    assert "waiter-one" in await _ready_ids(client)
+    assert "waiter-one" not in await _blocked(client)
+
+
 @pytest.mark.parametrize(
     ("gate_id", "still_ready"),
     [("timer-elapsed", True), ("timer-pending", False)],
