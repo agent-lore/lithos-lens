@@ -21,8 +21,9 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from lithos_lens import metrics
@@ -70,11 +71,27 @@ class LithosToolError(RuntimeError):
     ``code`` carries the Lithos 0.4 error code (e.g. ``task_not_found``) when
     the envelope supplies one, so callers can distinguish a missing task from a
     missing tool without matching on message text.
+
+    ``envelope`` carries the WHOLE error payload, read-only, because some codes
+    say more than their message does: ``ambiguous_id_prefix`` names the
+    ``candidates`` the write funnel's error mapper offers the operator as
+    choices (T3 D6/D12). Keeping only the code and the message — which is what
+    this did until T3-W3 — silently dropped them, and would drop whatever field
+    upstream adds next. Callers that read only ``code`` are unaffected; it is
+    an empty mapping for an error Lens itself raises with no envelope behind
+    it (a malformed success payload, say).
     """
 
-    def __init__(self, message: str, *, code: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "",
+        envelope: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.envelope: Mapping[str, Any] = MappingProxyType(dict(envelope or {}))
 
 
 #: How a single tool call is placed when no session worker is running. Takes
@@ -410,4 +427,6 @@ def raise_for_error(payload: dict[str, Any]) -> None:
     if payload.get("status") == "error":
         code = str(payload.get("code") or "")
         message = str(payload.get("message") or code or "Lithos error")
-        raise LithosToolError(message, code=code)
+        # The whole envelope rides along, not just these two: see
+        # LithosToolError.
+        raise LithosToolError(message, code=code, envelope=payload)

@@ -43,6 +43,13 @@ from lithos_lens.config import LithosConfig
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef, SearchResult
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
+from lithos_lens.task_writes import (
+    TaskCancelResult,
+    TaskCompleteResult,
+    TaskCreateResult,
+    TaskEdgeUpsertResult,
+    TaskReopenResult,
+)
 from lithos_lens.tasks import (
     AgentRecord,
     ClaimRecord,
@@ -383,6 +390,60 @@ def _check_search_results(result: Any, success: dict[str, Any]) -> None:
     ]
 
 
+# ── write results ───────────────────────────────────────────────────────
+#
+# `unblocked` / `reblocked` / `depends_on` are lists of task IDS upstream, so
+# the expected records carry ids: a normalizer that invented records (or
+# dropped the list) fails here.
+
+
+def _check_complete(result: Any, success: dict[str, Any]) -> None:
+    assert result == TaskCompleteResult(
+        success=success["success"],
+        task_id=success["task_id"],
+        title=success["title"],
+        updated_at=success["updated_at"],
+        unblocked=tuple(success["unblocked"]),
+    )
+
+
+def _check_reopen(result: Any, success: dict[str, Any]) -> None:
+    assert result == TaskReopenResult(
+        success=success["success"],
+        task_id=success["task_id"],
+        title=success["title"],
+        updated_at=success["updated_at"],
+        reblocked=tuple(success["reblocked"]),
+    )
+
+
+def _check_cancel(result: Any, success: dict[str, Any]) -> None:
+    assert result == TaskCancelResult(
+        success=success["success"],
+        task_id=success["task_id"],
+        title=success["title"],
+        updated_at=success["updated_at"],
+    )
+
+
+def _check_create(result: Any, success: dict[str, Any]) -> None:
+    assert result == TaskCreateResult(
+        success=success["success"],
+        task_id=success["task_id"],
+        title=success["title"],
+        updated_at=success["updated_at"],
+        depends_on=tuple(success["depends_on"]),
+        parent_task_id=success["parent_task_id"],
+    )
+
+
+def _check_edge_upsert(result: Any, success: dict[str, Any]) -> None:
+    # `success` is the whole of what Lens models here: the payload's resolved
+    # endpoint ids and titles are outside the round-trip boundary, because the
+    # edge action reads the edge back instead of trusting the echo (T3 D11).
+    assert result == TaskEdgeUpsertResult(success=success["success"])
+
+
 def _check_register(result: Any, success: dict[str, Any]) -> None:
     assert result is True
 
@@ -442,6 +503,47 @@ TOOL_SPECS: dict[
             "influx-ingest-cutover", since="2026-08-01T00:00:00+00:00"
         ),
         _check_findings,
+    ),
+    "lithos_task_complete": (
+        lambda c: c.task_complete(
+            "influx-gate-human", agent="dave", outcome="Completed via Lens by dave"
+        ),
+        _check_complete,
+    ),
+    "lithos_task_reopen": (
+        lambda c: c.task_reopen("influx-gate-human", agent="dave"),
+        _check_reopen,
+    ),
+    "lithos_task_cancel": (
+        lambda c: c.task_cancel(
+            "influx-backfill",
+            agent="dave",
+            reason="superseded by the new ingest path",
+        ),
+        _check_cancel,
+    ),
+    "lithos_task_create": (
+        lambda c: c.task_create(
+            title="Swap reads onto the new store",
+            agent="dave",
+            description="Dual-write first, then swap.",
+            tags=["project:influx", "area:data"],
+            metadata={"project": "influx", "lens_request_id": "r-8f14e45f"},
+            task_type="task",
+            depends_on=["influx-ingest-cutover"],
+            parent_task_id="influx-epic",
+        ),
+        _check_create,
+    ),
+    "lithos_task_edge_upsert": (
+        lambda c: c.task_edge_upsert(
+            from_task_id="influx-ingest-cutover",
+            to_task_id="influx-backfill",
+            edge_type="blocks",
+            agent="dave",
+            metadata={"added_via": "lithos-lens"},
+        ),
+        _check_edge_upsert,
     ),
     "lithos_stats": (lambda c: c.stats(), _check_stats),
     "lithos_agent_list": (lambda c: c.list_agents(), _check_agents),
@@ -692,7 +794,48 @@ def _error_cases() -> list[tuple[str, dict[str, Any]]]:
 def test_error_envelopes_surface_as_coded_errors(
     tool: str, envelope: dict[str, Any]
 ) -> None:
+    """The code AND every other field the envelope carried.
+
+    The whole envelope, not just the code and the message: a code can say more
+    than its message does — ``ambiguous_id_prefix`` names its ``candidates``,
+    which the write funnel's error mapper offers the operator as choices — and
+    keeping only two fields silently dropped them (T3 D6/D12).
+    """
     call, _ = TOOL_SPECS[tool]
     with pytest.raises(LithosToolError) as excinfo:
         _run(envelope, lambda c: call(c))
     assert excinfo.value.code == envelope["code"]
+    assert str(excinfo.value) == envelope["message"]
+    assert dict(excinfo.value.envelope) == envelope
+
+
+def test_ambiguous_prefix_error_exposes_its_candidates() -> None:
+    """The named case the envelope-carrying error exists for.
+
+    Written out rather than left to the sweep above, because this is the field
+    an action slice reads by name: a mapper rendering "which of these did you
+    mean?" needs the list, and before T3-W3 it never arrived.
+    """
+    contract = load_contract("lithos_task_create")
+    envelope = next(
+        row
+        for row in contract["responses"]["errors"]
+        if row["code"] == "ambiguous_id_prefix"
+    )
+    call, _ = TOOL_SPECS["lithos_task_create"]
+    with pytest.raises(LithosToolError) as excinfo:
+        _run(envelope, lambda c: call(c))
+    assert excinfo.value.envelope["candidates"] == envelope["candidates"]
+
+
+def test_an_error_lens_raises_itself_has_an_empty_envelope() -> None:
+    """No envelope behind it, so nothing is invented: an empty mapping.
+
+    ``task_get`` raising ``invalid_response`` on a malformed success payload is
+    Lens's own verdict, not the server's, and a caller that reads
+    ``envelope`` must be able to tell the two apart.
+    """
+    with pytest.raises(LithosToolError) as excinfo:
+        _run({"task": {}}, lambda c: c.task_get("influx-ingest-cutover"))
+    assert excinfo.value.code == "invalid_response"
+    assert dict(excinfo.value.envelope) == {}

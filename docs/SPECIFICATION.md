@@ -1847,6 +1847,23 @@ Beyond ordinary unit and integration tests, three mechanisms carry weight:
 - **Browser suite** — a Playwright suite runs the real application in
   fake-Lithos mode and captures screenshot artifacts at four viewport widths.
 
+Fake-Lithos app mode (`LITHOS_LENS_FAKE_LITHOS`) is backed by an in-memory
+client that is **writable**, not just readable. Its fixture dataset stays
+frozen — it is the demo artifact — and each client instance holds its own
+overlay of what the Lithos write tools changed (statuses, outcomes and
+resolved stamps, minted tasks, inserted edges and replaced edge metadata,
+released claims, posted findings). Reads answer from seed plus overlay, and
+the readiness oracle does too: a task no write touched keeps the fixture's
+verdict verbatim, while one whose own status or whose blockers' status moved is
+recomputed from the effective blocking edges. So completing a gate changes what
+the ready and blocked reads return and reports the waiters it released,
+reopening it reports them re-blocked, and cancelling a predecessor leaves its
+dependent's blocker unsatisfiable. Writes publish the event the real server
+emits — and nothing for an edge write, which emits none upstream — through the
+in-process hub, and each one is recorded in the instance's write log. Two
+instances never share an overlay, so one test's write cannot reach another's
+board.
+
 The implemented tests exercise real behavior with lightweight fakes rather than
 shallow mock-only checks, and the working practice is to demonstrate a new
 guard fails when reverted rather than assuming it binds.

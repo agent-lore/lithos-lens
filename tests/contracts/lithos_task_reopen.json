@@ -1,0 +1,50 @@
+{
+  "tool": "lithos_task_reopen",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_reopen",
+    "lithos:src/lithos/coordination.py::reopen_task",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_reopen"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-gate-human",
+      "agent": "dave"
+    },
+    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a `[Reopened]` finding (the only surviving evidence of the prior outcome — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. `task_id` accepts a full id OR an unambiguous >= 6-character prefix; Lens always sends a full id (the funnel acts on a task it has just read), so the prefix path and its `ambiguous_id_prefix` refusal are not on any Lens request for this tool."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-gate-human",
+      "title": "Decide the cutover window",
+      "updated_at": "2026-10-04T09:35:00+00:00",
+      "reblocked": [
+        "influx-ingest-cutover",
+        "influx-backfill"
+      ]
+    },
+    "variants": {
+      "cancelled_reopen": {
+        "success": true,
+        "task_id": "influx-backfill",
+        "title": "Backfill historical Influx series",
+        "updated_at": "2026-10-04T09:35:00+00:00",
+        "reblocked": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-gate-human' not found."
+      },
+      {
+        "status": "error",
+        "code": "task_not_resolved",
+        "message": "Task 'influx-gate-human' is not resolved (status: open)."
+      }
+    ]
+  },
+  "observed_divergences": "`reblocked` is a list of task IDS, not records, and it is non-empty ONLY when a *completed* blocker or gate is reopened: reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and so re-blocks nobody — the `cancelled_reopen` variant above. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. The payload also carries the resolved `task_id`/`title` and the new `updated_at` beside the quoted `{\"success\", \"reblocked\"}`. The id resolves from a >= 6-char prefix, so a caller that sent one could see `ambiguous_id_prefix` — Lens never sends one, so it is not listed above."
+}

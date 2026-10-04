@@ -68,6 +68,7 @@ type = "forbidden"
 source_modules = [
     "lithos_lens.errors",
     "lithos_lens.tasks",
+    "lithos_lens.task_writes",
     "lithos_lens.template_vocabulary",
     "lithos_lens.task_filtering",
     "lithos_lens.agent_picker",
@@ -112,6 +113,7 @@ forbidden_modules = [
     "lithos_lens.lithos_client",
     "lithos_lens.mcp_transport",
     "lithos_lens.fake_lithos",
+    "lithos_lens.fake_writes",
     "lithos_lens.fake_dataset",
     "lithos_lens.fake_graph_dataset",
     "lithos_lens.state",
@@ -131,6 +133,7 @@ source_modules = [
     "lithos_lens.lithos_client",
     "lithos_lens.mcp_transport",
     "lithos_lens.fake_lithos",
+    "lithos_lens.fake_writes",
     "lithos_lens.fake_dataset",
     "lithos_lens.fake_graph_dataset",
     "lithos_lens.state",

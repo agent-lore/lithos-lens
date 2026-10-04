@@ -3,7 +3,7 @@
 
 # Tasks
 
-Tasks-dashboard data loading and normalization (task/claim/finding records + view models).
+Tasks-dashboard data loading and normalization (task/claim/finding records + view models), plus the task-write wire: one request builder and one result record per Lithos write tool.
 
 **Tier:** Foundation
 
@@ -15,6 +15,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 | `lithos_lens.filter_options` | S | 1 | 1 |
 | `lithos_lens.normalizers` | S | 0 | 6 |
 | `lithos_lens.task_filtering` | M | 0 | 16 |
+| `lithos_lens.task_writes` | S | 5 | 10 |
 | `lithos_lens.tasks` | L | 14 | 12 |
 | `lithos_lens.template_vocabulary` | XS | 0 | 3 |
 
@@ -54,6 +55,23 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - def `project_universe` — Every project slug present in the loaded rows, sorted (§5B.1).
 - def `tag_universe` — Every tag present in the loaded rows, sorted (§5.4).
 - def `log_project_data_quality` — Report this load's project data-quality signals, once each (§5B.1).
+
+### `lithos_lens.task_writes`
+- class `TaskCompleteResult` — ``lithos_task_complete``: the task closed, and who it released.
+- class `TaskReopenResult` — ``lithos_task_reopen``: the task back to open, and who it re-blocked.
+- class `TaskCancelResult` — ``lithos_task_cancel``: the task cancelled and every claim released.
+- class `TaskCreateResult` — ``lithos_task_create``: the minted id, plus the links it resolved.
+- class `TaskEdgeUpsertResult` — ``lithos_task_edge_upsert``: the relation exists.
+- def `complete_arguments` — Arguments for ``lithos_task_complete``.
+- def `reopen_arguments` — Arguments for ``lithos_task_reopen`` (the whole surface it takes).
+- def `cancel_arguments` — Arguments for ``lithos_task_cancel``; ``reason`` is optional upstream.
+- def `create_arguments` — Arguments for ``lithos_task_create``.
+- def `edge_upsert_arguments` — Arguments for ``lithos_task_edge_upsert``.
+- def `normalize_task_complete`
+- def `normalize_task_reopen`
+- def `normalize_task_cancel`
+- def `normalize_task_create`
+- def `normalize_task_edge_upsert`
 
 ### `lithos_lens.tasks`
 - def `task_detail_path` — The URL that addresses ``task_id``'s detail page, unambiguously.

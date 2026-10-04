@@ -131,6 +131,57 @@ async def test_list_findings_malformed_since_raises_a_coded_error(
     assert excinfo.value.code in {"invalid_input", "tool_error"}
 
 
+# ── refused writes (T3) ─────────────────────────────────────────────────
+#
+# Refusals only, and only for an id nothing should ever hold: the real leg
+# dials a LIVE server, so a leg that succeeded would change somebody's task
+# store. A refused write changes nothing by definition, which is what makes
+# these the only write contracts this matrix can state.
+
+
+async def test_completing_a_missing_task_is_task_not_found_on_both_legs(
+    client: LithosClientProtocol,
+) -> None:
+    """Complete applies only to an OPEN task and answers one code for both
+    "no such task" and "not open" — the fact the write funnel's re-read
+    exists to disambiguate."""
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_complete(MISSING_ID, agent="lithos-lens-contract-suite")
+    assert excinfo.value.code == "task_not_found"
+
+
+async def test_cancelling_a_missing_task_is_task_not_found_on_both_legs(
+    client: LithosClientProtocol,
+) -> None:
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_cancel(MISSING_ID, agent="lithos-lens-contract-suite")
+    assert excinfo.value.code == "task_not_found"
+
+
+async def test_reopening_a_missing_task_is_task_not_found_on_both_legs(
+    client: LithosClientProtocol,
+) -> None:
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_reopen(MISSING_ID, agent="lithos-lens-contract-suite")
+    assert excinfo.value.code == "task_not_found"
+
+
+async def test_an_edge_between_missing_tasks_is_task_not_found_on_both_legs(
+    client: LithosClientProtocol,
+) -> None:
+    """A VALID edge type between two ids that do not exist: the refusal is the
+    id resolution's, so both legs agree on it regardless of the order the rest
+    of the validation runs in."""
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_edge_upsert(
+            from_task_id=MISSING_ID,
+            to_task_id=f"{MISSING_ID}-other",
+            edge_type="blocks",
+            agent="lithos-lens-contract-suite",
+        )
+    assert excinfo.value.code == "task_not_found"
+
+
 # ── soft-missing reads (no envelope upstream) ───────────────────────────
 
 

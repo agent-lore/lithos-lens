@@ -1,0 +1,52 @@
+{
+  "tool": "lithos_task_complete",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_complete",
+    "lithos:src/lithos/coordination.py::complete_task",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_complete"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-gate-human",
+      "agent": "dave",
+      "outcome": "Completed via Lens by dave"
+    },
+    "variants": {
+      "no_outcome": {
+        "task_id": "influx-gate-human",
+        "agent": "dave"
+      }
+    },
+    "notes": "Applies ONLY to an `open` task: a missing task and a task that is not open are answered with the SAME `task_not_found` code (one code for two facts — the write funnel re-reads the task to tell them apart). Releases every claim on the task. `agent` is the OPERATOR's id, not Lens's: every write auto-registers an unknown agent untyped, which is why the identity guard runs before the funnel calls this. `outcome` is persisted on the task row and forwarded in the `task.completed` event payload; Lens sends it on every completion (the default text names the operator, T3 D7). `cited_nodes` / `misleading_nodes` / `receipt_id` are accepted upstream and never sent — Lens has no node-feedback surface on this path. `task_id` accepts a full id OR an unambiguous >= 6-character prefix; Lens always sends a full id (the funnel acts on a task it has just read), so the prefix path and its `ambiguous_id_prefix` refusal are not on any Lens request for this tool."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-gate-human",
+      "title": "Decide the cutover window",
+      "updated_at": "2026-10-04T09:30:00+00:00",
+      "unblocked": [
+        "influx-ingest-cutover",
+        "influx-backfill"
+      ]
+    },
+    "variants": {
+      "nothing_released": {
+        "success": true,
+        "task_id": "influx-gate-human",
+        "title": "Decide the cutover window",
+        "updated_at": "2026-10-04T09:30:00+00:00",
+        "unblocked": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-gate-human' not found or not open."
+      }
+    ]
+  },
+  "observed_divergences": "`unblocked` is a list of task IDS, not records — the payload names only the completed task, so a receipt naming the released tasks has to read them. The version pinned in `_tools_snapshot.json` BEFORE this slice described the return as \"Dict with success boolean\" and mentioned neither `unblocked` nor the resolved `task_id`/`title`/`updated_at`; the live surface (re-dumped in this slice) documents all four, which is what the payload above transcribes. The id also resolves from a >= 6-char prefix, so a caller that sent one could see `ambiguous_id_prefix` — Lens never sends one, so it is not listed above."
+}

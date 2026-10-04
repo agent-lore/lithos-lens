@@ -1,0 +1,78 @@
+{
+  "tool": "lithos_task_edge_upsert",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_edge_upsert",
+    "lithos:src/lithos/coordination.py::upsert_task_edge",
+    "lithos:src/lithos/coordination.py::_resolve_task_id",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_edge_upsert"
+  ],
+  "request": {
+    "canonical": {
+      "from_task_id": "influx-ingest-cutover",
+      "to_task_id": "influx-backfill",
+      "type": "blocks",
+      "agent": "dave",
+      "metadata": {
+        "added_via": "lithos-lens"
+      }
+    },
+    "variants": {
+      "no_metadata": {
+        "from_task_id": "influx-ingest-cutover",
+        "to_task_id": "influx-backfill",
+        "type": "blocks",
+        "agent": "dave"
+      }
+    },
+    "notes": "Accepted types: `blocks` (to_task is not ready until from_task completes), `parent_child` (from_task is the parent; structural, never blocks), `discovered_from` (non-blocking) and `waits_on_gate` (to_task waits on the gate from_task). Both ids are resolved from a full id OR an unambiguous >= 6-character prefix. On an EXISTING (from, to, type) the call returns the same success payload as an insert, REPLACES that edge's metadata, and leaves `created_by` / `created_at` as they were — so those two fields are evidence of who inserted an edge, which is what T3 D11's removal offer rests on. An edge write emits NO event, which is why Lens re-reads the focal task's edges around the call and publishes its own synthetic `lens.edge_upserted`."
+  },
+  "responses": {
+    "success": {
+      "success": true
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_edge_type",
+        "message": "Edge type 'duplicates' is not accepted; expected one of ['blocks', 'discovered_from', 'parent_child', 'waits_on_gate']."
+      },
+      {
+        "status": "error",
+        "code": "self_edge",
+        "message": "A task cannot be related to itself (influx-backfill)."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-backfill' not found."
+      },
+      {
+        "status": "error",
+        "code": "not_a_gate",
+        "message": "Task 'influx-ingest-cutover' is not a gate; only a gate can be waited on."
+      },
+      {
+        "status": "error",
+        "code": "cycle",
+        "message": "dependency cycle: influx-backfill -> influx-ingest-cutover -> influx-backfill"
+      },
+      {
+        "status": "error",
+        "code": "parent_exists",
+        "message": "Task 'influx-backfill' already has parent 'influx-epic'."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix 'influx' matches 3 tasks.",
+        "candidates": [
+          "influx-backfill",
+          "influx-epic",
+          "influx-ingest-cutover"
+        ]
+      }
+    ]
+  },
+  "observed_divergences": "The success payload is the same `{\"success\": true}` for an insert and for a metadata replacement, so NOTHING in it says which happened — the residual T3 D11 states, and the upstream ask (a `created` flag) it would close. The live tool describes that payload as carrying \"the resolved endpoint ids + titles\" beside `success` WITHOUT naming those keys, so they are deliberately not transcribed above and no Lens record carries them: the edge action re-reads the edge rather than trusting the write's echo (T3 D11). Filling them in is the one open item for the operator's `make contracts-verify` run. The `cycle` message names members by FULL id and is rendered verbatim; Lens never parses it for logic. `invalid_edge_type` is treated as a Lens defect (the form offers only valid types)."
+}

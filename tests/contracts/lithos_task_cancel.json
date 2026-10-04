@@ -1,0 +1,39 @@
+{
+  "tool": "lithos_task_cancel",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_cancel",
+    "lithos:src/lithos/coordination.py::cancel_task",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_cancel"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-backfill",
+      "agent": "dave",
+      "reason": "superseded by the new ingest path"
+    },
+    "variants": {
+      "no_reason": {
+        "task_id": "influx-backfill",
+        "agent": "dave"
+      }
+    },
+    "notes": "Applies ONLY to an `open` task and answers the SAME `task_not_found` code for a missing task and for a task that is not open, exactly as complete does. Releases every claim on the task. Does NOT cascade to children. `reason` is optional and reaches the log and the `task.cancelled` event payload ONLY — it is not stored on the task row (ROADMAP ledger #6), which is why the cancel form labels it that way. `task_id` accepts a full id OR an unambiguous >= 6-character prefix; Lens always sends a full id (the funnel acts on a task it has just read), so the prefix path and its `ambiguous_id_prefix` refusal are not on any Lens request for this tool."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-backfill",
+      "title": "Backfill historical Influx series",
+      "updated_at": "2026-10-04T09:40:00+00:00"
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-backfill' not found or not open."
+      }
+    ]
+  },
+  "observed_divergences": "The payload says nothing about consequences: the dependents a cancel strands (`blocker_unsatisfiable`), the claims it released and the gate waiters it makes unsatisfiable are all absent, so Lens states them from its own bounded downstream walk BEFORE the call (T3 D9). It carries the resolved `task_id`/`title` and the new `updated_at` beside `success`. The id resolves from a >= 6-char prefix, so a caller that sent one could see `ambiguous_id_prefix` — Lens never sends one, so it is not listed above."
+}

@@ -1,0 +1,90 @@
+{
+  "tool": "lithos_task_create",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_create",
+    "lithos:src/lithos/coordination.py::create_task",
+    "lithos:src/lithos/coordination.py::_resolve_task_id",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_create"
+  ],
+  "request": {
+    "canonical": {
+      "title": "Swap reads onto the new store",
+      "agent": "dave",
+      "task_type": "task",
+      "description": "Dual-write first, then swap.",
+      "tags": [
+        "project:influx",
+        "area:data"
+      ],
+      "metadata": {
+        "project": "influx",
+        "lens_request_id": "r-8f14e45f"
+      },
+      "depends_on": [
+        "influx-ingest-cutover"
+      ],
+      "parent_task_id": "influx-epic"
+    },
+    "variants": {
+      "minimal": {
+        "title": "Swap reads onto the new store",
+        "agent": "dave",
+        "task_type": "task"
+      },
+      "timer_gate": {
+        "title": "Wait for the embargo to lift",
+        "agent": "dave",
+        "task_type": "gate",
+        "metadata": {
+          "gate_type": "timer",
+          "ready_at": "2026-10-09T09:00:00+00:00"
+        }
+      }
+    },
+    "notes": "`task_type` is one of task/epic/gate and is ALWAYS sent even when it equals the upstream default, the same discipline the read side applies to `with_claims`. A `gate` requires `metadata.gate_type` in human/timer/ci/pr/external_task, and a `timer` gate additionally a parseable `metadata.ready_at`. `metadata` must NOT carry `depends_on`/`blocked_on` — dependencies are first-class edges, passed as `depends_on`, each of which creates a `blocks` edge from the predecessor; `parent_task_id` creates a `parent_child` edge parent -> new task. Both must already exist and are resolved from a full id OR an unambiguous >= 6-character prefix. Lens writes the project under BOTH conventions (metadata.project and the project tag, §5B.1) and carries `metadata.lens_request_id` for its own best-effort de-duplication: create mints a new id and inserts with NO uniqueness on any metadata key, so the key is a Lens-side lookup, never an upstream idempotency guarantee (T3 D10)."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "title": "Swap reads onto the new store",
+      "updated_at": "2026-10-04T09:45:00+00:00",
+      "depends_on": [
+        "influx-ingest-cutover"
+      ],
+      "parent_task_id": "influx-epic"
+    },
+    "variants": {
+      "no_links": {
+        "success": true,
+        "task_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "title": "Swap reads onto the new store",
+        "updated_at": "2026-10-04T09:45:00+00:00"
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "a gate requires metadata.gate_type in ['ci', 'external_task', 'human', 'pr', 'timer'], got ''."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-ingest-cutover' not found."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix 'influx' matches 3 tasks.",
+        "candidates": [
+          "influx-backfill",
+          "influx-epic",
+          "influx-ingest-cutover"
+        ]
+      }
+    ]
+  },
+  "observed_divergences": "`ambiguous_id_prefix` carries `candidates` BESIDE the message, which is the field Lens's coded tool error dropped until T3-W3 (it kept only `code` and `message`) and the reason it now carries the whole envelope. `depends_on` / `parent_task_id` come back as the RESOLVED full ids and are absent when the request supplied none (the `no_links` variant). The `candidates` SHAPE is the one element here not stated by the live tool surface — the input schemas and the return descriptions are, and were re-dumped into `_tools_snapshot.json` in this slice — so a list of full task ids is what the operator's `make contracts-verify` run should look at hardest."
+}

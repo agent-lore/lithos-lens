@@ -38,6 +38,7 @@ from lithos_lens.tasks import (
     normalize_since_input,
 )
 from lithos_lens.web import create_app
+from tests.conftest import ReadOnlyWriteSurface
 
 # The Needs-attention rules (T1-S3) compare fixture timestamps against the real
 # clock, so the OPEN fixtures below are anchored to "now" — a static open row
@@ -59,7 +60,7 @@ def _ahead(**delta: float) -> str:
     return (_NOW + timedelta(**delta)).isoformat()
 
 
-class TaskFakeLithosClient:
+class TaskFakeLithosClient(ReadOnlyWriteSurface):
     def __init__(
         self,
         *,
