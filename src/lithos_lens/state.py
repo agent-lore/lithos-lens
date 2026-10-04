@@ -9,6 +9,7 @@ from typing import Literal
 
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.events import EventHub, EventStatus
+from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.graph_cache import GraphCache
 from lithos_lens.lithos_client import LithosClientProtocol, LithosHealth
 
@@ -51,6 +52,13 @@ class AppState:
         # FakeEventHub) gets the same treatment as the real one.
         self.graph_cache = GraphCache(ttl_s=config.graph.cache_ttl_s)
         self.events.graph_cache = self.graph_cache
+        # Fake-Lithos app mode's writes announce themselves the way the real
+        # server does, so that mode exercises write -> event -> SSE -> board
+        # end to end. Wired HERE, with the graph cache, for the same reason:
+        # this is where the hub the process actually publishes through is
+        # settled, and the client was handed over before it existed.
+        if isinstance(self.lithos_client, FakeLithosClient):
+            self.lithos_client.events = self.events
         self.health = HealthSnapshot(llm="disabled" if not config.llm.enabled else "ok")
         self._last_health_probe_at = 0.0
 

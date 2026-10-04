@@ -1,0 +1,82 @@
+{
+  "tool": "lithos_task_reopen",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62 (source read 2026-10-04); every envelope below is the source's, and each was also probed against a newer live Lithos (MCP serverInfo 3.2.0) — differences are recorded in observed_divergences, never substituted",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_reopen",
+    "lithos:src/lithos/coordination.py::CoordinationService.reopen_task",
+    "lithos:src/lithos/coordination.py::CoordinationService.newly_reblocked_by",
+    "lithos:src/lithos/coordination.py::CoordinationService.post_finding",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_reopen"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-gate-human",
+      "agent": "dave"
+    },
+    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a finding reading `[Reopened] task reopened (was <prior status>)`, plus `; prior outcome: <outcome>` when there was one (the only surviving evidence of it — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. Every id goes through the SHARED resolver (`resolve_task_id`): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own lookup; anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS, the message stating the capped count. Every envelope is `{status, code, message}` plus, for that one code, `candidates` — the coordination errors here carry no other key. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-gate-human",
+      "title": "Decide the cutover window",
+      "updated_at": "2026-10-04T09:35:00+00:00",
+      "reblocked": [
+        "influx-ingest-cutover",
+        "influx-backfill"
+      ]
+    },
+    "variants": {
+      "cancelled_reopen": {
+        "success": true,
+        "task_id": "influx-backfill",
+        "title": "Backfill historical Influx series",
+        "updated_at": "2026-10-04T09:35:00+00:00",
+        "reblocked": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-gate-human' not found."
+      },
+      {
+        "status": "error",
+        "code": "task_not_resolved",
+        "message": "Task 'influx-gate-human' is already open; nothing to reopen."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (task_id)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (task_id) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
+      }
+    ]
+  },
+  "observed_divergences": "None in shape. The success payload is the tool's return dict verbatim (`{success, reblocked, task_id, title, updated_at}`); `reblocked` is a list of task IDS, not records. `newly_reblocked_by` returns [] unless the task was COMPLETED — reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and re-blocks nobody, the `cancelled_reopen` variant — and otherwise each OPEN `blocks` / `waits_on_gate` dependent whose current blockers are this task alone. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. Both refusals are `reopen_task`'s own: \"Task '…' not found.\" for a full-length id with no row, and \"Task '…' is already open; nothing to reopen.\" — an earlier pass of this slice had composed the latter as \"… is not resolved (status: open).\", which the source never says. The success payload itself is not probed live: it would reopen a real task. Live check: the envelopes and order above were also probed (2026-10-04) against the Lithos this environment reaches, serverInfo 3.2.0 — NEWER than a4d2d62 (it serves `lithos_task_edge_delete`, added after 0.5.0) — with requests the server refuses, so nothing was written."
+}

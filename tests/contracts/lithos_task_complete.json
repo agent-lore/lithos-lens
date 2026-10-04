@@ -1,0 +1,90 @@
+{
+  "tool": "lithos_task_complete",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62 (source read 2026-10-04); every envelope below is the source's, and each was also probed against a newer live Lithos (MCP serverInfo 3.2.0) — differences are recorded in observed_divergences, never substituted",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_complete",
+    "lithos:src/lithos/coordination.py::CoordinationService.complete_task",
+    "lithos:src/lithos/coordination.py::CoordinationService.newly_unblocked_by",
+    "lithos:src/lithos/coordination.py::CoordinationService._is_task_ready",
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.validate_task_feedback",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_complete"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-gate-human",
+      "agent": "dave",
+      "outcome": "Completed via Lens by dave"
+    },
+    "variants": {
+      "no_outcome": {
+        "task_id": "influx-gate-human",
+        "agent": "dave"
+      }
+    },
+    "notes": "Applies ONLY to an `open` task: a missing task and a task that is not open are answered with the SAME `task_not_found` code (one code for two facts — the write funnel re-reads the task to tell them apart). Releases every claim on the task. `agent` is the OPERATOR's id, not Lens's: every write auto-registers an unknown agent untyped, which is why the identity guard runs before the funnel calls this. `outcome` is persisted on the task row and forwarded in the `task.completed` event payload; Lens sends it on every completion (the default text names the operator, T3 D7). `cited_nodes` / `misleading_nodes` / `receipt_id` are accepted upstream and never sent — Lens has no node-feedback surface on this path. Every id goes through the SHARED resolver (`resolve_task_id`): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own lookup; anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS, the message stating the capped count. Every envelope is `{status, code, message}` plus, for that one code, `candidates` — the coordination errors here carry no other key. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-gate-human",
+      "title": "Decide the cutover window",
+      "updated_at": "2026-10-04T09:30:00+00:00",
+      "unblocked": [
+        "influx-ingest-cutover",
+        "influx-backfill"
+      ]
+    },
+    "variants": {
+      "nothing_released": {
+        "success": true,
+        "task_id": "influx-gate-human",
+        "title": "Decide the cutover window",
+        "updated_at": "2026-10-04T09:30:00+00:00",
+        "unblocked": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task 'influx-gate-human' not found or not in an open state."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (task_id)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (task_id) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
+      },
+      {
+        "status": "error",
+        "code": "receipt_not_found",
+        "message": "Receipt 'r-1' not found or does not belong to task 'influx-gate-human'."
+      }
+    ]
+  },
+  "observed_divergences": "None in shape. The success payload is the tool's return dict verbatim (`{success, unblocked, task_id, title, updated_at}`); `unblocked` is a list of task IDS, not records — `newly_unblocked_by` returns every `blocks` / `waits_on_gate` dependent that satisfies the readiness predicate NOW (open, not a gate or epic, no unsatisfied blocker). It is not a before/after difference: a waiter on a timer gate whose `ready_at` has already passed was ready before the completion and is reported anyway. The `task_not_found` text is complete's own (\"not found or not in an open state\") — `complete_task` answers None for both a missing and a not-open row. `receipt_not_found` is vendored because the tool can raise it, but only for a `receipt_id`, which Lens never sends (no node-feedback surface), so no Lens request reaches it. The success payload itself is not probed live: it would complete a real task. Live check: the envelopes and order above were also probed (2026-10-04) against the Lithos this environment reaches, serverInfo 3.2.0 — NEWER than a4d2d62 (it serves `lithos_task_edge_delete`, added after 0.5.0) — with requests the server refuses, so nothing was written."
+}

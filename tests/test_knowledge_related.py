@@ -36,10 +36,10 @@ from lithos_lens.tasks import (
     TaskStatusRecord,
 )
 from lithos_lens.web import create_app
-from tests.conftest import load_contract
+from tests.conftest import ReadOnlyWriteSurface, load_contract
 
 
-class KnowledgeFakeLithosClient:
+class KnowledgeFakeLithosClient(ReadOnlyWriteSurface):
     """Fake exercising only the note-view surface used by the related panel."""
 
     def __init__(

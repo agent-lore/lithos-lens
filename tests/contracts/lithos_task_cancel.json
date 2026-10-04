@@ -1,0 +1,69 @@
+{
+  "tool": "lithos_task_cancel",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62 (source read 2026-10-04); every envelope below is the source's, and each was also probed against a newer live Lithos (MCP serverInfo 3.2.0) — differences are recorded in observed_divergences, never substituted",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_cancel",
+    "lithos:src/lithos/coordination.py::CoordinationService.cancel_task",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_cancel"
+  ],
+  "request": {
+    "canonical": {
+      "task_id": "influx-backfill",
+      "agent": "dave",
+      "reason": "superseded by the new ingest path"
+    },
+    "variants": {
+      "no_reason": {
+        "task_id": "influx-backfill",
+        "agent": "dave"
+      }
+    },
+    "notes": "Applies ONLY to an `open` task and answers the SAME `task_not_found` code for a missing task and for a task that is not open, exactly as complete does. Releases every claim on the task. Does NOT cascade to children. `reason` is optional and reaches the log and the `task.cancelled` event payload ONLY — it is not stored on the task row (ROADMAP ledger #6), which is why the cancel form labels it that way. Every id goes through the SHARED resolver (`resolve_task_id`): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own lookup; anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS, the message stating the capped count. Every envelope is `{status, code, message}` plus, for that one code, `candidates` — the coordination errors here carry no other key. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
+  },
+  "responses": {
+    "success": {
+      "success": true,
+      "task_id": "influx-backfill",
+      "title": "Backfill historical Influx series",
+      "updated_at": "2026-10-04T09:40:00+00:00"
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "Task influx-backfill not found or already closed"
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (task_id)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (task_id) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
+      }
+    ]
+  },
+  "observed_divergences": "None in shape. The success payload is the tool's return dict verbatim (`{success, task_id, title, updated_at}`) and says nothing about consequences: the dependents a cancel strands (`blocker_unsatisfiable`), the claims it released and the gate waiters it makes unsatisfiable are all absent, so Lens states them from its own bounded downstream walk BEFORE the call (T3 D9). The `task_not_found` text is cancel's own and is worded differently from complete's (\"not found or already closed\", the id unquoted) — same code, two texts, which is why Lens matches on the code. `reason` reaches only the log line and the `task.cancelled` event: `cancel_task` writes status, resolved_at and updated_at and nothing else. The success payload itself is not probed live: it would cancel a real task. Live check: the envelopes and order above were also probed (2026-10-04) against the Lithos this environment reaches, serverInfo 3.2.0 — NEWER than a4d2d62 (it serves `lithos_task_edge_delete`, added after 0.5.0) — with requests the server refuses, so nothing was written."
+}

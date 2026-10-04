@@ -1,0 +1,140 @@
+{
+  "tool": "lithos_task_create",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62 (source read 2026-10-04); every envelope below is the source's, and each was also probed against a newer live Lithos (MCP serverInfo 3.2.0) — differences are recorded in observed_divergences, never substituted",
+  "source": [
+    "lithos:src/lithos/tools/tasks.py::lithos_task_create",
+    "lithos:src/lithos/coordination.py::CoordinationService.create_task",
+    "lithos:src/lithos/coordination.py::_reject_scheduling_metadata",
+    "lithos:src/lithos/coordination.py::_validate_gate_metadata",
+    "lithos:src/lithos/sqlite_datetime.py::parse_datetime",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope",
+    "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_create"
+  ],
+  "request": {
+    "canonical": {
+      "title": "Swap reads onto the new store",
+      "agent": "dave",
+      "task_type": "task",
+      "description": "Dual-write first, then swap.",
+      "tags": [
+        "project:influx",
+        "area:data"
+      ],
+      "metadata": {
+        "project": "influx",
+        "lens_request_id": "r-8f14e45f"
+      },
+      "depends_on": [
+        "influx-ingest-cutover"
+      ],
+      "parent_task_id": "influx-epic"
+    },
+    "variants": {
+      "minimal": {
+        "title": "Swap reads onto the new store",
+        "agent": "dave",
+        "task_type": "task"
+      },
+      "timer_gate": {
+        "title": "Wait for the embargo to lift",
+        "agent": "dave",
+        "task_type": "gate",
+        "metadata": {
+          "gate_type": "timer",
+          "ready_at": "2026-10-09T09:00:00+00:00"
+        }
+      }
+    },
+    "notes": "`task_type` is one of task/epic/gate and is ALWAYS sent even when it equals the upstream default, the same discipline the read side applies to `with_claims`; an unknown one is `invalid_task_type`, a code of its own. A `gate` requires `metadata.gate_type` in human/timer/ci/pr/external_task, and a `timer` gate additionally a parseable `metadata.ready_at` (a STRING `parse_datetime` reads; a trailing `Z` is UTC) — both `invalid_input`. A valid `ready_at` is STORED rewritten to UTC at second precision, a naive value read as UTC (`_validate_gate_metadata`), so a later read shows that, not the caller's spelling. `metadata` must NOT carry `depends_on`/`blocked_on`: that is `invalid_metadata_key`, again its own code, because dependencies are first-class edges now. There is NO title rule — an empty title is accepted and stored, so Lens's own form validation is the only thing that refuses one (T3 D10). `depends_on` creates a `blocks` edge from each predecessor and `parent_task_id` a `parent_child` edge parent -> new task; both must already exist, and a repeated predecessor is deduplicated before insertion while the response still echoes the resolved request list. Lens writes the project under BOTH conventions (metadata.project and the project tag, §5B.1) and carries `metadata.lens_request_id` for its own best-effort de-duplication: create mints a new id and inserts with NO uniqueness on any metadata key, so the key is a Lens-side lookup, never an upstream idempotency guarantee (T3 D10). Validation ORDER (the tool body, then `create_task`): the parent id is resolved first, then each `depends_on` entry, then the metadata keys, then `task_type`, then the gate rules, and only then existence — so a bad id outranks every other refusal, and a well-formed request naming a full-length id that does not exist is refused AFTER every shape check, predecessors (all the missing ones, deduplicated, in one message) before the parent. Every id goes through the SHARED resolver (`resolve_task_id`): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own existence check; anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS, the message stating the capped count. Every envelope is `{status, code, message}` plus, for that one code, `candidates` — the coordination errors here carry no other key. Lens DOES send prefixes here — the create form takes a full or short id for a predecessor or parent (T3 D10) — so every one of these refusals is on a Lens request."
+  },
+  "responses": {
+    "success": {
+      "task_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "title": "Swap reads onto the new store",
+      "updated_at": "2026-10-04T09:45:00+00:00",
+      "depends_on": [
+        "influx-ingest-cutover"
+      ],
+      "parent_task_id": "influx-epic"
+    },
+    "variants": {
+      "no_links": {
+        "task_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "title": "Swap reads onto the new store",
+        "updated_at": "2026-10-04T09:45:00+00:00"
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "invalid_task_type",
+        "message": "task_type 'milestone' is not accepted in this phase (accepted: ['epic', 'gate', 'task'])."
+      },
+      {
+        "status": "error",
+        "code": "invalid_metadata_key",
+        "message": "metadata key(s) ['depends_on'] are no longer accepted: task dependencies are first-class task edges. Use depends_on on lithos_task_create, or lithos_task_edge_upsert."
+      },
+      {
+        "status": "error",
+        "code": "invalid_metadata_key",
+        "message": "metadata key(s) ['blocked_on'] are no longer accepted: task dependencies are first-class task edges. Use depends_on on lithos_task_create, or lithos_task_edge_upsert."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "a gate task requires metadata.gate_type in ['ci', 'external_task', 'human', 'pr', 'timer'], got None."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got None."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got 'soon'."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "depends_on 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (depends_on)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (depends_on) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "depends_on references nonexistent task(s): ['3f2b8e1c-9d4a-4c6e-8b7f-2a1d5e9c0b44']"
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "parent_task_id references nonexistent task: 3f2b8e1c-9d4a-4c6e-8b7f-2a1d5e9c0b44"
+      }
+    ]
+  },
+  "observed_divergences": "**The success payload carries no `success` key.** It is the tool's return dict verbatim: `{task_id, title, updated_at}` plus `depends_on` / `parent_task_id` — the RESOLVED full ids — only when the request supplied them (`is not None`; Lens omits both when empty, hence `no_links`). The minted id IS the success signal, so `TaskCreateResult.success` is derived from it rather than read from a flag that is never sent. A repeated predecessor is deduplicated before the edge INSERT (`dict.fromkeys`), while the response echoes the resolved request list as sent. There is NO title rule in the source — an empty title is accepted and stored — so the fake has none either. The two codes of create's own, `invalid_task_type` and `invalid_metadata_key`, are NOT `invalid_input` (the first passes of this slice recorded both as `invalid_input`). The two existence refusals for a full-length id that does not exist are `create_task`'s own and are checked after every shape rule; an earlier pass vendored only the resolver's prefix miss. The success payload itself is not probed live: it would insert a task into the operator's store. Live check: the envelopes and order above were also probed (2026-10-04) against the Lithos this environment reaches, serverInfo 3.2.0 — NEWER than a4d2d62 (it serves `lithos_task_edge_delete`, added after 0.5.0) — with requests the server refuses, so nothing was written."
+}

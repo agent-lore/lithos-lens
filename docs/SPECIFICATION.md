@@ -2011,6 +2011,47 @@ Beyond ordinary unit and integration tests, three mechanisms carry weight:
 - **Browser suite** — a Playwright suite runs the real application in
   fake-Lithos mode and captures screenshot artifacts at four viewport widths.
 
+Fake-Lithos app mode (`LITHOS_LENS_FAKE_LITHOS`) is backed by an in-memory
+client that is **writable**, not just readable. Its fixture dataset stays
+frozen — it is the demo artifact — and each client instance holds its own
+overlay of what the Lithos write tools changed (statuses, outcomes and resolved
+stamps, minted tasks, inserted edges and replaced edge metadata, released
+claims, posted findings). Reads answer from seed plus overlay — a task the fake
+minted included, which later writes complete, cancel and reopen like any seeded
+one; `lithos_stats` keeps the fixture's figures but moves the coordination
+counters it states (`active_tasks`, `open_claims`, `expired_claims`) by what
+the writes changed — and the readiness oracle answers from seed plus overlay
+too: a task nothing touched keeps the fixture's verdict verbatim, while one whose own status or whose blockers'
+status moved is recomputed from the effective blocking edges — including the
+one blocker whose answer is the clock's rather than a status's, an **open**
+`timer` gate, which stops blocking once its `metadata.ready_at` has passed,
+with or without a write (cancel that gate and its waiter is stranded again:
+cancellation wins over the clock). As upstream, only open `task`-typed rows
+reach either frontier — never a gate or an epic. So completing a gate changes
+what the ready and blocked reads return and reports exactly the waiters that
+are now ready, reopening it reports them re-blocked (upstream's rule: open
+dependents whose only blocker is now the reopened task, and nobody after a
+cancellation), and cancelling a predecessor leaves its dependent's blocker
+unsatisfiable.
+
+The refusals are upstream's too — the same envelopes, message text included,
+raised in upstream's validation order — including its id domain: every id a
+write carries goes through one resolver, where a full id (36 characters) is
+handed to the calling tool's own lookup, a value shorter than six characters is
+`invalid_input`, and anything between is searched as a prefix — matching
+nothing is the resolver's own `task_not_found`, matching several is
+`ambiguous_id_prefix` naming up to five `{id, title}` candidate records. What a
+write stores is upstream's as well: a `timer` gate's `ready_at` is kept
+rewritten to UTC at second precision, as upstream stores it. Each complete,
+cancel and reopen commits an `updated_at` strictly after the task's previous
+one even when the clock repeats or runs backward, exactly as upstream advances
+it. Writes publish the event the real server emits — the same body, field for
+field, including the pre-serialized fields upstream puts on a completion, and
+nothing at all for an edge write, which emits no event upstream — through the
+in-process hub, and each one, refusals included, is recorded in the instance's
+write log. Two instances never share an overlay, so one test's write cannot
+reach another's board.
+
 The implemented tests exercise real behavior with lightweight fakes rather than
 shallow mock-only checks, and the working practice is to demonstrate a new
 guard fails when reverted rather than assuming it binds.

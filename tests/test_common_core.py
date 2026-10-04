@@ -26,9 +26,10 @@ from lithos_lens.tasks import (
     TaskStatusRecord,
 )
 from lithos_lens.web import create_app
+from tests.conftest import ReadOnlyWriteSurface
 
 
-class RecordingLithosClient:
+class RecordingLithosClient(ReadOnlyWriteSurface):
     def __init__(self, health: LithosHealth) -> None:
         self.health_value: LithosHealth = health
         self.register_calls = 0

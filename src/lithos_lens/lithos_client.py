@@ -7,6 +7,9 @@ reconnect, and the decode of a raw MCP result — belongs to
 :mod:`lithos_lens.mcp_transport`, which this module owns one instance of.
 ``health()`` is the exception that stays here: it probes the plain HTTP
 ``/health`` endpoint, not an MCP tool.
+
+The five write methods (T3) live in :mod:`lithos_lens.lithos_writes`, mixed in
+here and declared on the protocol through it.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from lithos_lens.knowledge import (
     normalize_related,
     normalize_search_result,
 )
+from lithos_lens.lithos_writes import LithosWriteMethods, LithosWriteProtocol
 from lithos_lens.mcp_transport import (
     CALL_TIMEOUT_S,
     MAX_CONCURRENT_TOOL_CALLS,
@@ -72,7 +76,7 @@ RECENT_NOTES_FETCH_PAGE = 500
 _RECENT_NOTES_MAX_PAGES = 40
 
 
-class LithosClientProtocol(Protocol):
+class LithosClientProtocol(LithosWriteProtocol, Protocol):
     """Subset of Lithos operations required by the common core."""
 
     async def startup(self) -> None: ...
@@ -181,7 +185,7 @@ class RegistrationResult:
     message: str = ""
 
 
-class LithosClient:
+class LithosClient(LithosWriteMethods):
     """Best-effort Lithos client used by the web app.
 
     Owns one :class:`~lithos_lens.mcp_transport.MCPTransport` — a single,

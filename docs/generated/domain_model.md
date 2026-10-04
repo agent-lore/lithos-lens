@@ -640,6 +640,34 @@ classDiagram
     +claims_unknown bool
     +reconciliation_pending bool
   }
+  class TaskCancelResult {
+    +success bool
+    +task_id str
+    +title str
+    +updated_at str
+  }
+  class TaskCompleteResult {
+    +success bool
+    +task_id str
+    +title str
+    +updated_at str
+    +unblocked tuple[str, ...]
+  }
+  class TaskCreateResult {
+    +success bool
+    +task_id str
+    +title str
+    +updated_at str
+    +depends_on tuple[str, ...]
+    +parent_task_id str
+  }
+  class TaskEdgeUpsertResult {
+    +success bool
+    +from_task_id str
+    +from_title str
+    +to_task_id str
+    +to_title str
+  }
   class TaskFilters {
     +statuses tuple[TaskStatusName, ...]
     +tags tuple[str, ...]
@@ -663,6 +691,13 @@ classDiagram
     +completed_at str
     +task_type str
     +resolved_at str
+  }
+  class TaskReopenResult {
+    +success bool
+    +task_id str
+    +title str
+    +updated_at str
+    +reblocked tuple[str, ...]
   }
   class TaskStatusRecord {
     +id str

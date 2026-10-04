@@ -29,13 +29,17 @@ by the fake↔real matrix in ``tests/test_lithos_contract.py``.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
+from lithos_lens import task_writes
 from lithos_lens.config import LithosConfig
-from lithos_lens.events import EventHub
+from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
+from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
+from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -155,14 +159,24 @@ class FakeEventHub(EventHub):
 
 
 class FakeLithosClient:
-    """A protocol-complete Lithos client backed by an in-memory dataset.
+    """A protocol-complete Lithos client over an in-memory store.
 
-    Every method is a pure lookup over ``dataset`` (the shipped
+    Reads answer from ``dataset`` (the shipped
     :func:`~lithos_lens.fake_dataset.demo_dataset` unless a test composes its
-    own); nothing touches the network. ``health()`` always reports ``"ok"`` so
-    the whole dashboard renders. The constructor accepts a
+    own) **plus** whatever this instance's writes changed: the seed stays
+    frozen and the deltas live in a per-instance
+    :class:`~lithos_lens.fake_writes.FakeWriteStore`, so two fakes never share
+    an overlay. Nothing touches the network. ``health()`` always reports
+    ``"ok"`` so the whole dashboard renders. The constructor accepts a
     :class:`LithosConfig` purely so it is drop-in swappable for
     :class:`LithosClient` in the app factory — the config is otherwise unused.
+
+    ``events`` is the fake-mode hub (:class:`FakeEventHub`), wired by the app
+    factory. With one, a write publishes the event the real server would have
+    emitted and the browser sees the board move through the normal SSE path;
+    without one (most unit tests) the writes still apply, they just announce
+    nothing. An edge write publishes nothing — upstream emits no event for one,
+    and only the hub mints the synthetic ``lens.edge_upserted`` (T3 D11).
     """
 
     def __init__(
@@ -170,9 +184,21 @@ class FakeLithosClient:
         config: LithosConfig | None = None,
         *,
         dataset: FakeLithosDataset | None = None,
+        events: EventHub | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
         self.dataset = dataset if dataset is not None else demo_dataset()
+        self.events = events
+        # `clock` is the timer-gate clock (see FakeStoreView.clock); the real
+        # one unless a test injects its own.
+        self._writes = FakeWriteStore(self.dataset, clock=clock)
+        #: Every write ATTEMPTED on this fake, as ``(tool, arguments)`` in the
+        #: shape the real client would have sent — refusals included, because a
+        #: refused write is still a call the server received. The action slices
+        #: assert on it.
+        self.write_calls: list[tuple[str, dict[str, Any]]] = []
+        self._event_sequence = 0
         self.closed = False
         #: Every Lithos tool call this fake served, as
         #: ``(tool name, arguments)`` in the real tools' spelling. The curated
@@ -226,7 +252,7 @@ class FakeLithosClient:
     ) -> list[TaskRecord]:
         rows = [
             task
-            for task in self.dataset.tasks
+            for task in self._writes.tasks()
             if status is None or task.status == status
         ]
         if agent:
@@ -262,9 +288,9 @@ class FakeLithosClient:
     ) -> list[TaskRecord]:
         rows = [
             task
-            for task in self.dataset.tasks
-            if task.id in self.dataset.ready_ids
-            and task.status == "open"
+            for task in self._writes.tasks()
+            if task.status == "open"
+            and self._writes.is_ready(task.id)
             and _in_scope(task, project, tags)
         ]
         if with_claims:
@@ -278,11 +304,15 @@ class FakeLithosClient:
         project: str | None = None,
         tags: list[str] | None = None,
     ) -> list[BlockedTaskRecord]:
+        # Upstream's blocked frontier holds the same rows its ready one does —
+        # open and WORKABLE — so a gate or an epic with an unsatisfied edge
+        # into it is never listed here.
         rows = [
-            BlockedTaskRecord(task=task, blockers=self.dataset.blocked[task.id])
-            for task in self.dataset.tasks
-            if task.id in self.dataset.blocked
-            and task.status == "open"
+            BlockedTaskRecord(task=task, blockers=blockers)
+            for task in self._writes.tasks()
+            if task.status == "open"
+            and task.task_type not in NON_WORKABLE_TASK_TYPES
+            and (blockers := self._writes.blockers(task.id))
             and _in_scope(task, project, tags)
         ]
         return rows[:limit] if limit is not None else rows
@@ -302,11 +332,11 @@ class FakeLithosClient:
         recursive: bool = False,
         include_closed: bool = False,
     ) -> list[TaskRecord]:
-        child_ids = list(self.dataset.children.get(task_id, ()))
+        child_ids = list(self._writes.children(task_id))
         if recursive:
             queue = list(child_ids)
             while queue:
-                for cid in self.dataset.children.get(queue.pop(), ()):
+                for cid in self._writes.children(queue.pop()):
                     if cid not in child_ids:
                         child_ids.append(cid)
                         queue.append(cid)
@@ -330,7 +360,7 @@ class FakeLithosClient:
                 f"got {direction!r}.",
                 code="invalid_input",
             )
-        rows = list(self.dataset.edges.get(task_id, ()))
+        rows = list(self._writes.edges(task_id))
         if direction != "both":
             rows = [edge for edge in rows if edge.direction == direction]
         if types:
@@ -348,17 +378,136 @@ class FakeLithosClient:
             claims=self._claims_for(task_id),
         )
 
+    # ── writes ─────────────────────────────────────────────────────────
+    #
+    # Each one logs the call in the shape the real client would have sent
+    # (built by the SAME ``task_writes`` builder, so the two cannot drift),
+    # applies it to the overlay — which raises the coded error upstream would
+    # — publishes the event the real server emits, and normalizes the
+    # canonical payload with the real client's normalizer.
+
+    async def task_complete(
+        self, task_id: str, *, agent: str, outcome: str = ""
+    ) -> task_writes.TaskCompleteResult:
+        self.write_calls.append(
+            (
+                "lithos_task_complete",
+                task_writes.complete_arguments(task_id, agent=agent, outcome=outcome),
+            )
+        )
+        written = self._writes.complete(task_id, agent=agent, outcome=outcome)
+        await self._publish(written)
+        return task_writes.normalize_task_complete(written.payload)
+
+    async def task_reopen(
+        self, task_id: str, *, agent: str
+    ) -> task_writes.TaskReopenResult:
+        self.write_calls.append(
+            ("lithos_task_reopen", task_writes.reopen_arguments(task_id, agent=agent))
+        )
+        written = self._writes.reopen(task_id, agent=agent)
+        await self._publish(written)
+        return task_writes.normalize_task_reopen(written.payload)
+
+    async def task_cancel(
+        self, task_id: str, *, agent: str, reason: str = ""
+    ) -> task_writes.TaskCancelResult:
+        self.write_calls.append(
+            (
+                "lithos_task_cancel",
+                task_writes.cancel_arguments(task_id, agent=agent, reason=reason),
+            )
+        )
+        # The reason reaches the event (and upstream's log) only — never the
+        # task row.
+        written = self._writes.cancel(task_id, agent=agent, reason=reason)
+        await self._publish(written)
+        return task_writes.normalize_task_cancel(written.payload)
+
+    async def task_create(
+        self,
+        *,
+        title: str,
+        agent: str,
+        description: str = "",
+        tags: tuple[str, ...] | list[str] = (),
+        metadata: dict[str, Any] | None = None,
+        task_type: str = "task",
+        depends_on: tuple[str, ...] | list[str] = (),
+        parent_task_id: str = "",
+    ) -> task_writes.TaskCreateResult:
+        self.write_calls.append(
+            (
+                "lithos_task_create",
+                task_writes.create_arguments(
+                    title=title,
+                    agent=agent,
+                    description=description,
+                    tags=tags,
+                    metadata=metadata,
+                    task_type=task_type,
+                    depends_on=depends_on,
+                    parent_task_id=parent_task_id,
+                ),
+            )
+        )
+        written = self._writes.create(
+            title=title,
+            agent=agent,
+            description=description,
+            tags=tags,
+            metadata=metadata,
+            task_type=task_type,
+            depends_on=depends_on,
+            parent_task_id=parent_task_id,
+        )
+        await self._publish(written)
+        return task_writes.normalize_task_create(written.payload)
+
+    async def task_edge_upsert(
+        self,
+        *,
+        from_task_id: str,
+        to_task_id: str,
+        edge_type: str,
+        agent: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> task_writes.TaskEdgeUpsertResult:
+        self.write_calls.append(
+            (
+                "lithos_task_edge_upsert",
+                task_writes.edge_upsert_arguments(
+                    from_task_id=from_task_id,
+                    to_task_id=to_task_id,
+                    edge_type=edge_type,
+                    agent=agent,
+                    metadata=metadata,
+                ),
+            )
+        )
+        written = self._writes.edge_upsert(
+            from_task_id=from_task_id,
+            to_task_id=to_task_id,
+            edge_type=edge_type,
+            agent=agent,
+            metadata=metadata,
+        )
+        # `_publish` is still called, and still says nothing: the outcome of an
+        # edge write names no event type, because upstream emits none.
+        await self._publish(written)
+        return task_writes.normalize_task_edge_upsert(written.payload)
+
     async def list_findings(
         self, task_id: str, *, since: str | None = None
     ) -> list[FindingRecord]:
-        rows = list(self.dataset.findings.get(task_id, ()))
+        rows = list(self._writes.findings(task_id))
         if since:
             since_utc = _parse_since(since)
             rows = [f for f in rows if _created_after(f.created_at, since_utc)]
         return rows
 
     async def stats(self) -> dict[str, Any]:
-        return dict(self.dataset.stats)
+        return self._writes.stats()
 
     async def list_agents(self) -> list[AgentRecord]:
         self._record("lithos_agent_list", {})
@@ -544,7 +693,33 @@ class FakeLithosClient:
     # ── helpers ────────────────────────────────────────────────────────
 
     def _by_id(self, task_id: str) -> TaskRecord | None:
-        return next((task for task in self.dataset.tasks if task.id == task_id), None)
+        return self._writes.task(task_id)
 
     def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
-        return self.dataset.claims.get(task_id, ())
+        return self._writes.claims(task_id)
+
+    async def _publish(self, written: FakeWriteOutcome) -> None:
+        """Emit the event the real server would have, through the fake hub.
+
+        The BODY is the store's, field for field (``task.reopened`` names the
+        prior status and outcome, ``task.created`` names no agent), so fake
+        mode is not merely emitting the right event NAMES. It is built with the
+        hub's own ``normalize_lithos_event`` rather than a hand-rolled
+        :class:`~lithos_lens.events.LensEvent`, so a fake-mode write travels
+        the same normalization (and the same graph-cache eviction) a real
+        upstream frame does.
+
+        Two silent cases, both deliberate: an outcome naming no event type (an
+        edge write — upstream emits none), and no hub wired (most unit tests),
+        where the write still applies and simply announces nothing.
+        """
+        if not written.event_type or self.events is None:
+            return
+        self._event_sequence += 1
+        event = normalize_lithos_event(
+            event_id=f"fake-{written.event_type}-{self._event_sequence}",
+            event_type=written.event_type,
+            payload=written.event,
+        )
+        if event is not None:
+            await self.events.publish(event)

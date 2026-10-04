@@ -14,10 +14,16 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
+from lithos_lens import task_writes
 from lithos_lens.config import load_config
 from lithos_lens.telemetry import setup_telemetry, shutdown_telemetry
 
 CONTRACTS_DIR = Path(__file__).resolve().parent / "contracts"
+
+#: Why a read-path double refuses a write; see :class:`ReadOnlyWriteSurface`.
+_READ_ONLY_DOUBLE = (
+    "this double serves read surfaces only — use FakeLithosClient for a write"
+)
 
 
 def load_contract(tool: str) -> dict[str, Any]:
@@ -363,3 +369,57 @@ def metric_value(reader: InMemoryMetricReader, name: str, **labels: str) -> Any:
         f"{[dict(p.attributes or {}) for p in metric_points(reader, name)]}"
     )
     return matching[0]
+
+
+class ReadOnlyWriteSurface:
+    """The protocol's five write methods, refused — for read-path doubles.
+
+    T3-W3 put the task writes on ``LithosClientProtocol``, so every double the
+    app factory accepts has to carry them. The doubles in this suite drive READ
+    surfaces, and a test that needs a write uses the shipped
+    :class:`~lithos_lens.fake_lithos.FakeLithosClient`, whose overlay genuinely
+    changes what later reads return. Mixed in once rather than restated per
+    double, so one signature change does not have to be chased through three
+    files — and raising is the honest answer: a read-path double has nowhere to
+    put a write.
+    """
+
+    async def task_complete(
+        self, task_id: str, *, agent: str, outcome: str = ""
+    ) -> task_writes.TaskCompleteResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)
+
+    async def task_reopen(
+        self, task_id: str, *, agent: str
+    ) -> task_writes.TaskReopenResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)
+
+    async def task_cancel(
+        self, task_id: str, *, agent: str, reason: str = ""
+    ) -> task_writes.TaskCancelResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)
+
+    async def task_create(
+        self,
+        *,
+        title: str,
+        agent: str,
+        description: str = "",
+        tags: tuple[str, ...] | list[str] = (),
+        metadata: dict[str, Any] | None = None,
+        task_type: str = "task",
+        depends_on: tuple[str, ...] | list[str] = (),
+        parent_task_id: str = "",
+    ) -> task_writes.TaskCreateResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)
+
+    async def task_edge_upsert(
+        self,
+        *,
+        from_task_id: str,
+        to_task_id: str,
+        edge_type: str,
+        agent: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> task_writes.TaskEdgeUpsertResult:
+        raise NotImplementedError(_READ_ONLY_DOUBLE)

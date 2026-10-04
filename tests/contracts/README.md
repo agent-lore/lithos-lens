@@ -1,7 +1,8 @@
 # Vendored Lithos tool contracts
 
 One JSON file per Lithos MCP tool that `src/lithos_lens/lithos_client.py`
-calls, named exactly after the tool. These are the **authoritative reference
+(with the writes it mixes in from `lithos_writes.py`) calls, named exactly
+after the tool. These are the **authoritative reference
 for every payload shape in this repo** (issue #31): three PRs in a row
 (#23/#26/#30) invented response shapes and passed green because the client,
 fake, and tests were authored against each other. The contracts break that
