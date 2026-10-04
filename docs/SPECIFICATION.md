@@ -1855,11 +1855,19 @@ resolved stamps, minted tasks, inserted edges and replaced edge metadata,
 released claims, posted findings). Reads answer from seed plus overlay, and
 the readiness oracle does too: a task no write touched keeps the fixture's
 verdict verbatim, while one whose own status or whose blockers' status moved is
-recomputed from the effective blocking edges. So completing a gate changes what
-the ready and blocked reads return and reports the waiters it released,
-reopening it reports them re-blocked, and cancelling a predecessor leaves its
-dependent's blocker unsatisfiable. Writes publish the event the real server
-emits — and nothing for an edge write, which emits none upstream — through the
+recomputed from the effective blocking edges — including the one blocker whose
+answer is the clock's rather than a status's, an open `timer` gate, which stops
+blocking once its `metadata.ready_at` has passed. So completing a gate changes
+what the ready and blocked reads return and reports exactly the waiters that
+became ready, reopening it reports them re-blocked, and cancelling a
+predecessor leaves its dependent's blocker unsatisfiable.
+
+The refusals are upstream's too, including its id domain: every id a write
+carries is resolved from a full id or an unambiguous prefix of at least six
+characters, a shorter one is `invalid_input`, and an ambiguous one answers
+`ambiguous_id_prefix` with `{id, title}` candidate records. Writes publish the
+event the real server emits — the same body, not merely the same type, and
+nothing at all for an edge write, which emits no event upstream — through the
 in-process hub, and each one is recorded in the instance's write log. Two
 instances never share an overlay, so one test's write cannot reach another's
 board.

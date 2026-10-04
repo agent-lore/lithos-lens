@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **35** (122 module-level)
+- Cross-component edges: **35** (124 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 10 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
@@ -39,17 +39,17 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
 | Knowledge | 4 | 1331 | 997 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
-| LithosClient | 6 | 3689 | 3009 | 2 | 6 | 0.75 | 20 (`lithos_lens.fake_lithos.FakeLithosClient.list_tasks`) | 7 |
+| LithosClient | 7 | 3946 | 3208 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 7 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 88 | 62 | 1 | 4 | 0.80 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 23 | 10804 | 8251 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 24 |
-| Tasks | 7 | 2206 | 1606 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
+| Tasks | 7 | 2224 | 1620 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1116 | 814 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 4 | 2277 | 1751 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
 
 ## Size
 
-- Modules: **56**, lines: **23913**, SLOC: **18321**
+- Modules: **57**, lines: **24188**, SLOC: **18534**
 - Largest module: `lithos_lens.tasks` (846 lines)
 - Modules over 800 lines: **4**
   - `lithos_lens.config`
@@ -59,7 +59,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **757**, cyclomatic > 10: **44**
+- Functions: **759**, cyclomatic > 10: **44**
 
 Top 10 most complex functions:
 
@@ -70,11 +70,11 @@ Top 10 most complex functions:
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
+| 21 | `lithos_lens.fake_writes.FakeWriteStore.edge_upsert` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 19 | `lithos_lens.task_filtering.matches_filters` |
 | 18 | `lithos_lens.graph_layout.build_topology` |
 | 17 | `lithos_lens.graph_page.build_graph_page` |
-| 16 | `lithos_lens.graph_page._node_views` |
 
 ## Seams
 
@@ -87,4 +87,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **85** (87 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.00** (47886 test lines / 23913 source lines)
+- Test-to-source line ratio: **2.00** (48435 test lines / 24188 source lines)

@@ -37,7 +37,7 @@ from lithos_lens import task_writes
 from lithos_lens.config import LithosConfig
 from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
-from lithos_lens.fake_writes import FakeWriteStore
+from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -363,12 +363,9 @@ class FakeLithosClient:
                 task_writes.complete_arguments(task_id, agent=agent, outcome=outcome),
             )
         )
-        payload = self._writes.complete(task_id, outcome=outcome)
-        await self._publish(
-            "task.completed",
-            {"task_id": task_id, "agent": agent, "outcome": outcome},
-        )
-        return task_writes.normalize_task_complete(payload)
+        written = self._writes.complete(task_id, agent=agent, outcome=outcome)
+        await self._publish(written)
+        return task_writes.normalize_task_complete(written.payload)
 
     async def task_reopen(
         self, task_id: str, *, agent: str
@@ -376,9 +373,9 @@ class FakeLithosClient:
         self.write_calls.append(
             ("lithos_task_reopen", task_writes.reopen_arguments(task_id, agent=agent))
         )
-        payload = self._writes.reopen(task_id, agent=agent)
-        await self._publish("task.reopened", {"task_id": task_id, "agent": agent})
-        return task_writes.normalize_task_reopen(payload)
+        written = self._writes.reopen(task_id, agent=agent)
+        await self._publish(written)
+        return task_writes.normalize_task_reopen(written.payload)
 
     async def task_cancel(
         self, task_id: str, *, agent: str, reason: str = ""
@@ -389,13 +386,11 @@ class FakeLithosClient:
                 task_writes.cancel_arguments(task_id, agent=agent, reason=reason),
             )
         )
-        payload = self._writes.cancel(task_id)
         # The reason reaches the event (and upstream's log) only — never the
         # task row.
-        await self._publish(
-            "task.cancelled", {"task_id": task_id, "agent": agent, "reason": reason}
-        )
-        return task_writes.normalize_task_cancel(payload)
+        written = self._writes.cancel(task_id, agent=agent, reason=reason)
+        await self._publish(written)
+        return task_writes.normalize_task_cancel(written.payload)
 
     async def task_create(
         self,
@@ -424,7 +419,7 @@ class FakeLithosClient:
                 ),
             )
         )
-        payload = self._writes.create(
+        written = self._writes.create(
             title=title,
             agent=agent,
             description=description,
@@ -434,11 +429,8 @@ class FakeLithosClient:
             depends_on=depends_on,
             parent_task_id=parent_task_id,
         )
-        await self._publish(
-            "task.created",
-            {"task_id": payload["task_id"], "agent": agent, "title": title},
-        )
-        return task_writes.normalize_task_create(payload)
+        await self._publish(written)
+        return task_writes.normalize_task_create(written.payload)
 
     async def task_edge_upsert(
         self,
@@ -461,15 +453,17 @@ class FakeLithosClient:
                 ),
             )
         )
-        payload = self._writes.edge_upsert(
+        written = self._writes.edge_upsert(
             from_task_id=from_task_id,
             to_task_id=to_task_id,
             edge_type=edge_type,
             agent=agent,
             metadata=metadata,
         )
-        # Deliberately silent: an edge write emits NO upstream event.
-        return task_writes.normalize_task_edge_upsert(payload)
+        # `_publish` is still called, and still says nothing: the outcome of an
+        # edge write names no event type, because upstream emits none.
+        await self._publish(written)
+        return task_writes.normalize_task_edge_upsert(written.payload)
 
     async def list_findings(
         self, task_id: str, *, since: str | None = None
@@ -637,21 +631,28 @@ class FakeLithosClient:
     def _claims_for(self, task_id: str) -> tuple[ClaimRecord, ...]:
         return self._writes.claims(task_id)
 
-    async def _publish(self, event_type: str, payload: dict[str, Any]) -> None:
+    async def _publish(self, written: FakeWriteOutcome) -> None:
         """Emit the event the real server would have, through the fake hub.
 
-        Built with the hub's own ``normalize_lithos_event`` rather than a
-        hand-rolled :class:`~lithos_lens.events.LensEvent`, so a fake-mode
-        write travels the same normalization (and the same graph-cache
-        eviction) a real upstream frame does. No hub wired: nothing to say.
+        The BODY is the store's, field for field (``task.reopened`` names the
+        prior status and outcome, ``task.created`` names no agent), so fake
+        mode is not merely emitting the right event NAMES. It is built with the
+        hub's own ``normalize_lithos_event`` rather than a hand-rolled
+        :class:`~lithos_lens.events.LensEvent`, so a fake-mode write travels
+        the same normalization (and the same graph-cache eviction) a real
+        upstream frame does.
+
+        Two silent cases, both deliberate: an outcome naming no event type (an
+        edge write — upstream emits none), and no hub wired (most unit tests),
+        where the write still applies and simply announces nothing.
         """
-        if self.events is None:
+        if not written.event_type or self.events is None:
             return
         self._event_sequence += 1
         event = normalize_lithos_event(
-            event_id=f"fake-{event_type}-{self._event_sequence}",
-            event_type=event_type,
-            payload=payload,
+            event_id=f"fake-{written.event_type}-{self._event_sequence}",
+            event_type=written.event_type,
+            payload=written.event,
         )
         if event is not None:
             await self.events.publish(event)

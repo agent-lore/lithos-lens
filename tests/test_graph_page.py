@@ -73,6 +73,21 @@ PROJECT = "loom"
 LIMIT = DEFAULT_TASKS_FRONTIER_LIMIT
 
 
+# A terminal fixture row's `resolved_at`, RELATIVE to the process clock.
+#
+# It has to be relative: these fixtures are read through the DEFAULT resolved
+# window (`default_time_range_days`, 30), which is computed from today, so a
+# fixed stamp silently ages out of it — and when it does, every completed row
+# disappears from the read rather than failing loudly. That is exactly what
+# happened: a `2026-09-02` stamp took the completed cycle member and the
+# resolved-window-only project out of these fixtures 30 days later, failing six
+# tests for a reason none of them is about. Open rows are already relative for
+# the same class of reason (`fake_dataset._ago`).
+RESOLVED_RECENTLY = (
+    (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0).isoformat()
+)
+
+
 def task(
     task_id: str,
     *,
@@ -92,7 +107,7 @@ def task(
         created_by="planner",
         created_at=created_at or f"2026-09-01T00:00:{len(task_id):02d}+00:00",
         tags=((f"project:{project}",) if project else ()) + tuple(extra_tags),
-        resolved_at="2026-09-02T00:00:00+00:00" if status != "open" else "",
+        resolved_at=RESOLVED_RECENTLY if status != "open" else "",
     )
 
 

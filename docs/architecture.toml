@@ -29,7 +29,7 @@ Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m
 Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge and task-graph route groups extracted from it."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
-LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle plus the mutable per-instance write overlay whose readiness oracle makes a write change what later reads return."
+LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary."
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models), plus the task-write wire: one request builder and one result record per Lithos write tool."
 TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection."
@@ -43,7 +43,7 @@ Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
 Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
-LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_writes", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
+LithosClient = ["lithos_lens.lithos_client", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_writes", "lithos_lens.fake_store", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_writes", "lithos_lens.template_vocabulary", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
 TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini"]
@@ -341,8 +341,9 @@ include_modules = [
 # fake_lithos holds fixture plumbing (FakeEventHub/FakeLithosClient) and
 # fake_dataset (with fake_graph_dataset, the demo's dependency-graph half) its
 # fixture bundle (FakeLithosDataset) — not domain entities. fake_writes is the
-# same kind of thing for the write half: FakeWriteOverlay/FakeWriteStore are the
-# fixture's mutable state, not a model of the domain.
+# same kind of thing for the write half, and fake_store for the effective store
+# under it: FakeWriteOverlay/FakeStoreView/FakeWriteStore are the fixture's
+# mutable state, not a model of the domain.
 # attention holds AttentionPolicy, which is threshold configuration (the same
 # reason config is excluded); its domain model, AttentionReason, lives in
 # lithos_lens.tasks and IS diagrammed.
@@ -353,6 +354,7 @@ exclude_modules = [
     "lithos_lens.errors",
     "lithos_lens.fake_lithos",
     "lithos_lens.fake_writes",
+    "lithos_lens.fake_store",
     "lithos_lens.fake_dataset",
     "lithos_lens.fake_graph_dataset",
 ]

@@ -1,9 +1,10 @@
 {
   "tool": "lithos_task_cancel",
-  "lithos_version": "lithos 0.5.0 @ a4d2d62; return shapes cross-checked against the live tools/list surface (MCP serverInfo 3.2.0, 2026-10-04)",
+  "lithos_version": "lithos 0.5.0 @ a4d2d62; every error envelope below probed against a live Lithos (MCP serverInfo 3.2.0, 2026-10-04) except where observed_divergences says otherwise",
   "source": [
     "lithos:src/lithos/tools/tasks.py::lithos_task_cancel",
     "lithos:src/lithos/coordination.py::cancel_task",
+    "lithos:src/lithos/coordination.py::_resolve_task_id",
     "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_cancel"
   ],
   "request": {
@@ -18,7 +19,7 @@
         "agent": "dave"
       }
     },
-    "notes": "Applies ONLY to an `open` task and answers the SAME `task_not_found` code for a missing task and for a task that is not open, exactly as complete does. Releases every claim on the task. Does NOT cascade to children. `reason` is optional and reaches the log and the `task.cancelled` event payload ONLY — it is not stored on the task row (ROADMAP ledger #6), which is why the cancel form labels it that way. `task_id` accepts a full id OR an unambiguous >= 6-character prefix; Lens always sends a full id (the funnel acts on a task it has just read), so the prefix path and its `ambiguous_id_prefix` refusal are not on any Lens request for this tool."
+    "notes": "Applies ONLY to an `open` task and answers the SAME `task_not_found` code for a missing task and for a task that is not open, exactly as complete does. Releases every claim on the task. Does NOT cascade to children. `reason` is optional and reaches the log and the `task.cancelled` event payload ONLY — it is not stored on the task row (ROADMAP ledger #6), which is why the cancel form labels it that way. The id is resolved from a full id OR an unambiguous prefix of at least SIX characters: a shorter one is `invalid_input` and a prefix matching more than one task is `ambiguous_id_prefix`, whose `candidates` are `{id, title}` RECORDS (capped upstream — the message says \"2 or more matches\" rather than a count), not id strings. Lens always sends a full id for this tool (the funnel acts on a task it has just read), so neither refusal is on a Lens request; both are vendored because the mapper must still answer them."
   },
   "responses": {
     "success": {
@@ -31,9 +32,29 @@
       {
         "status": "error",
         "code": "task_not_found",
-        "message": "Task 'influx-backfill' not found or not open."
+        "message": "Task influx-backfill not found or already closed"
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (task_id) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
       }
     ]
   },
-  "observed_divergences": "The payload says nothing about consequences: the dependents a cancel strands (`blocker_unsatisfiable`), the claims it released and the gate waiters it makes unsatisfiable are all absent, so Lens states them from its own bounded downstream walk BEFORE the call (T3 D9). It carries the resolved `task_id`/`title` and the new `updated_at` beside `success`. The id resolves from a >= 6-char prefix, so a caller that sent one could see `ambiguous_id_prefix` — Lens never sends one, so it is not listed above."
+  "observed_divergences": "The payload says nothing about consequences: the dependents a cancel strands (`blocker_unsatisfiable`), the claims it released and the gate waiters it makes unsatisfiable are all absent, so Lens states them from its own bounded downstream walk BEFORE the call (T3 D9). The `task_not_found` message is the probed one and is worded differently from complete's (\"not found or already closed\", and it does not quote the id) — same code, two texts, which is why Lens matches on the code and never on the text. The success payload is transcribed from the documented return (\"Dict with success, updated_at, and the resolved task_id + title\"): it cannot be probed without cancelling a real task."
 }

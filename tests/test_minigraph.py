@@ -40,7 +40,12 @@ from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.task_links import BLOCKER_EDGE_TYPES, PARENT_BREADCRUMB_MAX_DEPTH
 from lithos_lens.tasks import TaskRecord, TaskStatusName
 from tests.conftest import metric_value
-from tests.test_graph_page import GraphFakeClient, client_for, dataset
+from tests.test_graph_page import (
+    RESOLVED_RECENTLY,
+    GraphFakeClient,
+    client_for,
+    dataset,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -65,7 +70,7 @@ def made(
         created_by="planner",
         created_at=created_at,
         tags=(f"project:{project}",) if project else (),
-        resolved_at="2026-09-02T00:00:00+00:00" if status != "open" else "",
+        resolved_at=RESOLVED_RECENTLY if status != "open" else "",
     )
 
 

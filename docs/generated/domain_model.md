@@ -663,6 +663,10 @@ classDiagram
   }
   class TaskEdgeUpsertResult {
     +success bool
+    +from_task_id str
+    +from_title str
+    +to_task_id str
+    +to_title str
   }
   class TaskFilters {
     +statuses tuple[TaskStatusName, ...]

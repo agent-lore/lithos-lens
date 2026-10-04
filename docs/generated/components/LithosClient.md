@@ -3,7 +3,7 @@
 
 # LithosClient
 
-Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle plus the mutable per-instance write overlay whose readiness oracle makes a write change what later reads return.
+Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary.
 
 **Tier:** Core
 
@@ -14,6 +14,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 | `lithos_lens.fake_dataset` | L | 1 | 1 |
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
+| `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | L | 3 | 0 |
 | `lithos_lens.mcp_transport` | M | 2 | 2 |
@@ -34,10 +35,14 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 - class `FakeEventHub` — Hermetic in-process event hub for fake-Lithos app mode.
 - class `FakeLithosClient` — A protocol-complete Lithos client over an in-memory store.
 
+### `lithos_lens.fake_store`
+- class `FakeWriteOverlay` — Everything a fake's writes changed, keyed by what they changed it on.
+- class `FakeStoreView` — Seed plus overlay: the effective task store a fake's reads answer from.
+
 ### `lithos_lens.fake_writes`
 - def `write_error` — Build the coded error a Lithos write envelope would raise.
-- class `FakeWriteOverlay` — Everything a fake's writes changed, keyed by what they changed it on.
-- class `FakeWriteStore` — Seed plus overlay: the effective task store a fake's reads answer from.
+- class `FakeWriteOutcome` — What one write answers: the tool's payload AND the event it emits.
+- class `FakeWriteStore` — The five Lithos writes over the effective store.
 
 ### `lithos_lens.lithos_client`
 - class `LithosClientProtocol` — Subset of Lithos operations required by the common core.

@@ -49,6 +49,7 @@ from lithos_lens.task_writes import (
     TaskCreateResult,
     TaskEdgeUpsertResult,
     TaskReopenResult,
+    normalize_task_create,
 )
 from lithos_lens.tasks import (
     AgentRecord,
@@ -168,6 +169,155 @@ def test_contract_file_is_well_formed(tool: str) -> None:
         assert isinstance(envelope.get("message"), str) and envelope["message"]
 
     assert isinstance(contract["observed_divergences"], str)
+
+
+# ── the inventory: what each contract must CONTAIN, stated here ─────────
+#
+# `test_contract_file_is_well_formed` only checks the SHAPE of whatever a file
+# happens to carry, and `_error_cases()` sweeps exactly the envelopes present —
+# so deleting edge `cycle`, or create's `task_not_found`, would leave the suite
+# green. These tables are the independent expectation that closes that: the
+# required legs are written HERE, from the slice's acceptance criteria and the
+# live-probed envelopes, and a contract that loses one fails.
+#
+# Deliberately not exhaustive: a contract may document MORE than its row (an
+# extra variant, a second message for one code). The rows are the floor.
+REQUIRED_ERROR_CODES: dict[str, set[str]] = {
+    "lithos_task_complete": {
+        # One code for "missing" AND "not open" (T3 D6), plus the shared
+        # resolver's two.
+        "task_not_found",
+        "invalid_input",
+        "ambiguous_id_prefix",
+    },
+    "lithos_task_reopen": {
+        "task_not_found",
+        "task_not_resolved",
+        "invalid_input",
+        "ambiguous_id_prefix",
+    },
+    "lithos_task_cancel": {
+        "task_not_found",
+        "invalid_input",
+        "ambiguous_id_prefix",
+    },
+    "lithos_task_create": {
+        "invalid_input",
+        "task_not_found",
+        "ambiguous_id_prefix",
+    },
+    "lithos_task_edge_upsert": {
+        "invalid_edge_type",
+        "self_edge",
+        "task_not_found",
+        "not_a_gate",
+        "cycle",
+        "parent_exists",
+        "ambiguous_id_prefix",
+        "invalid_input",
+    },
+    # The read side, so its legs cannot quietly vanish either.
+    "lithos_task_get": {"task_not_found"},
+    "lithos_task_ready": {"invalid_input"},
+    "lithos_task_blocked": {"invalid_input"},
+    "lithos_task_edge_list": {"invalid_input"},
+    "lithos_read": {"doc_not_found"},
+    "lithos_related": {"doc_not_found"},
+    "lithos_finding_list": {"invalid_input"},
+}
+
+#: Response variants a contract must keep, by name — each one is a payload
+#: shape a slice reasons about (an empty release list, a cancelled reopen that
+#: re-blocks nobody, a create with no links).
+REQUIRED_RESPONSE_VARIANTS: dict[str, set[str]] = {
+    "lithos_task_complete": {"nothing_released"},
+    "lithos_task_reopen": {"cancelled_reopen"},
+    "lithos_task_create": {"no_links"},
+}
+
+#: Keys the canonical SUCCESS payload must carry. This is the leg that catches
+#: a mistranscribed body — the round-trip test builds its expected record from
+#: the same JSON, so it cannot. Stated from the tools' own documented returns.
+REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
+    "lithos_task_complete": {"success", "task_id", "title", "updated_at", "unblocked"},
+    "lithos_task_reopen": {"success", "task_id", "title", "updated_at", "reblocked"},
+    "lithos_task_cancel": {"success", "task_id", "title", "updated_at"},
+    # NO `success`: create does not send one (the minted id is the signal).
+    "lithos_task_create": {"task_id", "title", "updated_at"},
+    "lithos_task_edge_upsert": {
+        "success",
+        "from_task_id",
+        "from_title",
+        "to_task_id",
+        "to_title",
+    },
+}
+
+
+@pytest.mark.parametrize("tool", sorted(REQUIRED_ERROR_CODES))
+def test_contract_documents_every_required_error_code(tool: str) -> None:
+    documented = {
+        envelope["code"] for envelope in load_contract(tool)["responses"]["errors"]
+    }
+    missing = REQUIRED_ERROR_CODES[tool] - documented
+    assert not missing, (
+        f"{tool}.json no longer documents {sorted(missing)}. Every code the tool "
+        f"can raise must be vendored — the error mapper has a row for each, and "
+        f"a deleted envelope silently removes its coverage from the sweep below."
+    )
+
+
+@pytest.mark.parametrize("tool", sorted(REQUIRED_RESPONSE_VARIANTS))
+def test_contract_keeps_every_required_response_variant(tool: str) -> None:
+    documented = set(load_contract(tool)["responses"].get("variants", {}))
+    missing = REQUIRED_RESPONSE_VARIANTS[tool] - documented
+    assert not missing, f"{tool}.json lost response variant(s) {sorted(missing)}"
+
+
+@pytest.mark.parametrize("tool", sorted(REQUIRED_SUCCESS_KEYS))
+def test_contract_success_payload_carries_every_required_key(tool: str) -> None:
+    payload = load_contract(tool)["responses"]["success"]
+    missing = REQUIRED_SUCCESS_KEYS[tool] - set(payload)
+    assert not missing, (
+        f"{tool}.json's canonical success payload is missing {sorted(missing)}"
+    )
+
+
+def test_create_success_payload_carries_no_success_flag() -> None:
+    """Named on its own because it is a transcription bug this slice MADE.
+
+    `lithos_task_create` answers "Dict with task_id, title, updated_at, and the
+    resolved depends_on / parent_task_id when supplied" — no `success`. The
+    first pass vendored one anyway, and `bool(payload["success"])` then made
+    every successful create normalize to success=False.
+    """
+    payload = load_contract("lithos_task_create")["responses"]["success"]
+    assert "success" not in payload
+    result = normalize_task_create(payload)
+    assert result.success is True
+    assert result.task_id == payload["task_id"]
+
+
+@pytest.mark.parametrize(
+    "tool", ["lithos_task_create", "lithos_task_edge_upsert", "lithos_task_complete"]
+)
+def test_ambiguous_prefix_candidates_are_id_title_records(tool: str) -> None:
+    """The candidate SHAPE, stated here rather than taken from the file.
+
+    Upstream answers `{id, title}` records (probed live); a list of bare id
+    strings — what the first pass of this slice vendored — would render a
+    chooser with no titles in it.
+    """
+    envelope = next(
+        row
+        for row in load_contract(tool)["responses"]["errors"]
+        if row["code"] == "ambiguous_id_prefix"
+    )
+    assert envelope["candidates"], "an ambiguous prefix names its candidates"
+    for candidate in envelope["candidates"]:
+        assert isinstance(candidate, dict), "candidates are records, not id strings"
+        assert set(candidate) == {"id", "title"}
+        assert all(isinstance(value, str) and value for value in candidate.values())
 
 
 # ── round-trip: canonical requests out, canonical payloads back ─────────
@@ -428,7 +578,8 @@ def _check_cancel(result: Any, success: dict[str, Any]) -> None:
 
 def _check_create(result: Any, success: dict[str, Any]) -> None:
     assert result == TaskCreateResult(
-        success=success["success"],
+        # DERIVED, not read: create's payload carries no `success` key.
+        success=True,
         task_id=success["task_id"],
         title=success["title"],
         updated_at=success["updated_at"],
@@ -438,10 +589,13 @@ def _check_create(result: Any, success: dict[str, Any]) -> None:
 
 
 def _check_edge_upsert(result: Any, success: dict[str, Any]) -> None:
-    # `success` is the whole of what Lens models here: the payload's resolved
-    # endpoint ids and titles are outside the round-trip boundary, because the
-    # edge action reads the edge back instead of trusting the echo (T3 D11).
-    assert result == TaskEdgeUpsertResult(success=success["success"])
+    assert result == TaskEdgeUpsertResult(
+        success=success["success"],
+        from_task_id=success["from_task_id"],
+        from_title=success["from_title"],
+        to_task_id=success["to_task_id"],
+        to_title=success["to_title"],
+    )
 
 
 def _check_register(result: Any, success: dict[str, Any]) -> None:

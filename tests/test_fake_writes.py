@@ -3,33 +3,51 @@
 Every action slice's acceptance is "the board afterwards says X", so the fake
 has to answer its READS differently once it has been written to. These tests
 are that guarantee, stated on the fake alone — no routes exist yet — plus the
-refusals each action slice maps to operator copy, and the per-instance
-isolation that stops one test's write leaking into another's board.
+refusals each action slice maps to operator copy, the id domain upstream
+actually enforces, and the per-instance isolation that stops one test's write
+leaking into another's board.
 
-The fixture is deliberately small and hand-built rather than the demo set: the
-claims here are about one gate with two waiters and one predecessor with one
-dependent, and a fixture with exactly that in it makes a wrong answer obvious.
+The fixture is hand-built rather than the demo set, and it is built to make a
+wrong answer visible: one gate with three waiters, of which ONE also waits on a
+predecessor (so "released every direct dependent" is not the same answer as
+"released whoever became ready"), two timer gates astride their ``ready_at``,
+a predecessor carrying TWO claims, and an epic over a child (so a hierarchy
+cycle is reachable, not only a dependency one).
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from lithos_lens.config import EventsConfig, LithosConfig
+from lithos_lens.config import EventsConfig, LithosConfig, load_config
+from lithos_lens.events import LensEvent
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeEventHub, FakeLithosClient
 from lithos_lens.lithos_client import LithosToolError
+from lithos_lens.state import AppState
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
+from lithos_lens.task_writes import (
+    TaskCancelResult,
+    TaskCompleteResult,
+    TaskEdgeUpsertResult,
+    TaskReopenResult,
+)
 from lithos_lens.tasks import ClaimRecord, TaskRecord
+from lithos_lens.web import create_app
 
 pytestmark = pytest.mark.anyio
 
 STAMP = "2026-09-01T09:00:00+00:00"
 LATER = "2026-10-01T09:00:00+00:00"
+#: Astride a timer gate's wait, far enough either side that no clock drift
+#: during a test run can move a case across the boundary.
+LONG_PAST = "2000-01-01T00:00:00+00:00"
+LONG_AHEAD = "2099-01-01T00:00:00+00:00"
 
 
 def _task(task_id: str, **overrides: Any) -> TaskRecord:
@@ -42,6 +60,12 @@ def _task(task_id: str, **overrides: Any) -> TaskRecord:
     }
     defaults.update(overrides)
     return TaskRecord(id=task_id, **defaults)
+
+
+def _gate(task_id: str, gate_type: str, **metadata: Any) -> TaskRecord:
+    return _task(
+        task_id, task_type="gate", metadata={"gate_type": gate_type, **metadata}
+    )
 
 
 def _edge(
@@ -75,13 +99,13 @@ def _edge_map(*edges: EdgeRecord) -> dict[str, tuple[EdgeRecord, ...]]:
     return {task_id: tuple(rows) for task_id, rows in by_task.items()}
 
 
-def _gate_blocker() -> BlockerRecord:
+def _gate_blocker(gate_id: str = "gate-review") -> BlockerRecord:
     return BlockerRecord(
         kind="gate",
-        task_id="gate-review",
+        task_id=gate_id,
         type="waits_on_gate",
         status="open",
-        message="Waiting on human gate gate-review.",
+        message=f"Waiting on human gate {gate_id}.",
     )
 
 
@@ -96,43 +120,76 @@ def _task_blocker(task_id: str) -> BlockerRecord:
 
 
 def write_dataset() -> FakeLithosDataset:
-    """One gate with two waiters, one predecessor with one dependent, an epic.
+    """The fixture described in the module docstring.
 
     ``solo`` is ready from the start and is the control: no write below should
-    ever report it as released or re-blocked.
+    report it released or re-blocked unless that write targets it.
     """
     return FakeLithosDataset(
         tasks=(
-            _task("gate-review", task_type="gate", metadata={"gate_type": "human"}),
+            _gate("gate-review", "human"),
+            _gate("timer-elapsed", "timer", ready_at=LONG_PAST),
+            _gate("timer-pending", "timer", ready_at=LONG_AHEAD),
             _task("waiter-one"),
             _task("waiter-two"),
+            # Waits on the gate AND on `pred`: completing only the gate must
+            # neither ready it nor report it.
+            _task("waiter-both"),
             _task("pred"),
             _task("dep"),
             _task("solo"),
             _task("epic-one", task_type="epic"),
             _task("child-one"),
         ),
-        ready_ids=frozenset({"gate-review", "pred", "solo", "epic-one", "child-one"}),
+        ready_ids=frozenset(
+            {
+                "gate-review",
+                "timer-elapsed",
+                "timer-pending",
+                "pred",
+                "solo",
+                "epic-one",
+                "child-one",
+            }
+        ),
         blocked={
             "waiter-one": (_gate_blocker(),),
             "waiter-two": (_gate_blocker(),),
+            "waiter-both": (_gate_blocker(), _task_blocker("pred")),
             "dep": (_task_blocker("pred"),),
         },
         edges=_edge_map(
             _edge("gate-review", "waiter-one", "waits_on_gate"),
             _edge("gate-review", "waiter-two", "waits_on_gate"),
+            _edge("gate-review", "waiter-both", "waits_on_gate"),
+            _edge("pred", "waiter-both", "blocks"),
             _edge("pred", "dep", "blocks"),
             _edge("epic-one", "child-one", "parent_child", metadata={"note": "seed"}),
         ),
         children={"epic-one": ("child-one",)},
         claims={
+            # TWO claims, so "releases every claim" is distinguishable from
+            # "releases a claim".
             "pred": (
                 ClaimRecord(
                     agent="worker-a", aspect="implementation", expires_at=LATER
                 ),
+                ClaimRecord(agent="worker-b", aspect="review", expires_at=LATER),
             )
         },
     )
+
+
+SEED_READY = {
+    "gate-review",
+    "timer-elapsed",
+    "timer-pending",
+    "pred",
+    "solo",
+    "epic-one",
+    "child-one",
+}
+SEED_BLOCKED = {"waiter-one", "waiter-two", "waiter-both", "dep"}
 
 
 def _client() -> FakeLithosClient:
@@ -147,56 +204,77 @@ async def _blocked(client: FakeLithosClient) -> dict[str, tuple[BlockerRecord, .
     return {row.task.id: row.blockers for row in await client.task_blocked()}
 
 
+async def _all_edges(client: FakeLithosClient) -> dict[str, list[EdgeRecord]]:
+    """Every fixture task's edge list — the snapshot a refusal must not move."""
+    return {
+        task.id: list(await client.task_edge_list(task.id))
+        for task in write_dataset().tasks
+    }
+
+
 # ── complete ────────────────────────────────────────────────────────────
 
 
 async def test_completing_a_gate_moves_the_frontier_and_names_its_waiters() -> None:
     """The W4 acceptance, on the fake: the ready and blocked READS change.
 
-    ``unblocked`` is exactly the waiters that crossed — not every dependent
-    (``dep`` still waits on ``pred``) and not whatever was already ready
-    (``solo``).
+    ``unblocked`` is exactly the waiters that CROSSED — so ``waiter-both``,
+    which still waits on ``pred``, is neither reported nor readied, ``dep`` is
+    untouched, and ``solo`` (already ready) is not claimed as a release. An
+    implementation that returned every direct dependent would fail here.
     """
     client = _client()
-    assert await _ready_ids(client) == {
-        "gate-review",
-        "pred",
-        "solo",
-        "epic-one",
-        "child-one",
-    }
-    assert set(await _blocked(client)) == {"waiter-one", "waiter-two", "dep"}
+    assert await _ready_ids(client) == SEED_READY
+    assert set(await _blocked(client)) == SEED_BLOCKED
 
     result = await client.task_complete(
         "gate-review", agent="dave", outcome="Completed via Lens by dave"
     )
 
-    assert result.success is True
-    assert sorted(result.unblocked) == ["waiter-one", "waiter-two"]
-    # The payload names the task it resolved and the stamp it wrote, exactly as
-    # the vendored contract's canonical success payload does.
-    assert (result.task_id, result.title) == ("gate-review", "Gate review")
-    assert result.updated_at
+    assert result == TaskCompleteResult(
+        success=True,
+        task_id="gate-review",
+        title="Gate review",
+        updated_at=result.updated_at,
+        unblocked=("waiter-one", "waiter-two"),
+    )
+    assert result.updated_at, "the write stamps what it wrote"
     ready = await _ready_ids(client)
     assert {"waiter-one", "waiter-two"} <= ready
+    assert "waiter-both" not in ready
     # The gate itself leaves the frontier: it is no longer open.
     assert "gate-review" not in ready
-    assert set(await _blocked(client)) == {"dep"}
+    blocked = await _blocked(client)
+    assert set(blocked) == {"waiter-both", "dep"}
+    # Its remaining blocker is the predecessor, and the satisfied gate is gone.
+    assert [row.task_id for row in blocked["waiter-both"]] == ["pred"]
     gate = await client.task_get("gate-review")
     assert gate.status == "completed"
     assert gate.outcome == "Completed via Lens by dave"
     assert gate.resolved_at
 
 
-async def test_completing_releases_every_claim_on_the_task() -> None:
+@pytest.mark.parametrize("action", ["complete", "cancel"])
+async def test_resolving_a_task_releases_every_claim_on_it(action: str) -> None:
+    """Both tools release EVERY claim, not the first one.
+
+    ``pred`` carries two, so a fake that popped one would leave the other
+    behind and the board would keep calling the task in progress.
+    """
     client = _client()
     before = await client.task_status("pred")
-    assert before is not None and len(before.claims) == 1
+    assert before is not None and len(before.claims) == 2
 
-    await client.task_complete("pred", agent="dave")
+    if action == "complete":
+        await client.task_complete("pred", agent="dave")
+    else:
+        await client.task_cancel("pred", agent="dave")
 
     after = await client.task_status("pred")
     assert after is not None and after.claims == ()
+    # And the claims are gone from the master list's inline claims too.
+    rows = {task.id: task for task in await client.list_tasks(with_claims=True)}
+    assert rows["pred"].claims == ()
 
 
 async def test_completing_a_non_open_task_answers_task_not_found() -> None:
@@ -222,17 +300,23 @@ async def test_completing_a_non_open_task_answers_task_not_found() -> None:
 
 async def test_reopening_a_completed_gate_re_blocks_the_same_waiters() -> None:
     client = _client()
-    before = await _ready_ids(client)
     completion = await client.task_complete(
         "gate-review", agent="dave", outcome="opened by hand"
     )
 
     reopen = await client.task_reopen("gate-review", agent="dave")
 
-    assert sorted(reopen.reblocked) == sorted(completion.unblocked)
+    assert reopen == TaskReopenResult(
+        success=True,
+        task_id="gate-review",
+        title="Gate review",
+        updated_at=reopen.updated_at,
+        reblocked=completion.unblocked,
+    )
+    assert reopen.updated_at
     # The board is back where it started.
-    assert await _ready_ids(client) == before
-    assert set(await _blocked(client)) == {"waiter-one", "waiter-two", "dep"}
+    assert await _ready_ids(client) == SEED_READY
+    assert set(await _blocked(client)) == SEED_BLOCKED
 
 
 async def test_reopening_clears_the_outcome_and_posts_a_reopened_finding() -> None:
@@ -284,8 +368,15 @@ async def test_cancelling_a_predecessor_strands_its_dependent() -> None:
     """The Needs-attention rule-1 shape: the blocker becomes unsatisfiable."""
     client = _client()
 
-    await client.task_cancel("pred", agent="dave", reason="superseded")
+    result = await client.task_cancel("pred", agent="dave", reason="superseded")
 
+    assert result == TaskCancelResult(
+        success=True,
+        task_id="pred",
+        title="Pred",
+        updated_at=result.updated_at,
+    )
+    assert result.updated_at
     blocked = await _blocked(client)
     assert [row.kind for row in blocked["dep"]] == ["blocker_unsatisfiable"]
     assert blocked["dep"][0].status == "cancelled"
@@ -295,7 +386,8 @@ async def test_cancelling_a_predecessor_strands_its_dependent() -> None:
 
 async def test_a_cancel_reason_never_lands_on_the_task() -> None:
     """It reaches the log and the event only (ROADMAP ledger #6), so a fake
-    that stored it would let a test assert a fact the server does not keep."""
+    that stored it would let a test assert a fact the real server does not
+    keep."""
     client = _client()
 
     await client.task_cancel("pred", agent="dave", reason="superseded")
@@ -314,6 +406,116 @@ async def test_cancelling_a_non_open_task_answers_task_not_found() -> None:
     assert excinfo.value.code == "task_not_found"
 
 
+# ── the id domain every write shares ────────────────────────────────────
+
+
+async def test_an_id_prefix_must_be_a_full_id_or_at_least_six_characters() -> None:
+    """Upstream's id domain, which the fake may not be more generous than.
+
+    Probed live: ``task_id 'zqxj' is too short: pass the full task id or a
+    prefix of at least 6 characters.`` A fake that resolved ``pre`` to ``pred``
+    would let the create and edge slices pass requests the real server refuses
+    — and their tests would encode the wrong boundary.
+    """
+    client = _client()
+
+    # A full id always resolves, however short it is.
+    exact = await client.task_create(title="Full id", agent="dave", depends_on=["pred"])
+    assert exact.depends_on == ("pred",)
+
+    # Six characters, matching one task: resolved.
+    six = await client.task_create(title="Six", agent="dave", depends_on=["waiter-o"])
+    assert six.depends_on == ("waiter-one",)
+
+    # Five characters that are not a full id: refused BEFORE any lookup, even
+    # though "waite" would match.
+    with pytest.raises(LithosToolError) as short:
+        await client.task_create(title="Five", agent="dave", depends_on=["waite"])
+    assert short.value.code == "invalid_input"
+    assert "at least 6 characters" in str(short.value)
+    assert short.value.envelope["code"] == "invalid_input"
+
+
+async def test_an_ambiguous_prefix_names_its_candidates_as_records() -> None:
+    """``candidates`` are ``{id, title}`` RECORDS, not id strings.
+
+    The shape is the mapper's input: it renders "which of these did you mean?"
+    with the titles. Probed live — a list of bare ids would render a chooser
+    with nothing to read in it.
+    """
+    client = _client()
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_create(
+            title="Ambiguous", agent="dave", depends_on=["waiter-"]
+        )
+
+    assert excinfo.value.code == "ambiguous_id_prefix"
+    assert excinfo.value.envelope["candidates"] == [
+        {"id": "waiter-both", "title": "Waiter both"},
+        {"id": "waiter-one", "title": "Waiter one"},
+        {"id": "waiter-two", "title": "Waiter two"},
+    ]
+    assert "ambiguous" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("label", "arguments", "code"),
+    [
+        ("blank title", {"title": "   "}, "invalid_input"),
+        ("unknown type", {"title": "T", "task_type": "milestone"}, "invalid_input"),
+        ("gate with no type", {"title": "T", "task_type": "gate"}, "invalid_input"),
+        (
+            "timer with no ready_at",
+            {"title": "T", "task_type": "gate", "metadata": {"gate_type": "timer"}},
+            "invalid_input",
+        ),
+        (
+            "timer with unparseable ready_at",
+            {
+                "title": "T",
+                "task_type": "gate",
+                "metadata": {"gate_type": "timer", "ready_at": "soon"},
+            },
+            "invalid_input",
+        ),
+        (
+            "dependencies in metadata",
+            {"title": "T", "metadata": {"depends_on": ["pred"]}},
+            "invalid_input",
+        ),
+        (
+            "missing predecessor",
+            {"title": "T", "depends_on": ["nope-nope"]},
+            "task_not_found",
+        ),
+        (
+            "missing parent",
+            {"title": "T", "parent_task_id": "nope-nope"},
+            "task_not_found",
+        ),
+    ],
+)
+async def test_create_refuses_what_upstream_refuses(
+    label: str, arguments: dict[str, Any], code: str
+) -> None:
+    """Every documented create validation, and nothing minted by a refusal.
+
+    ``metadata.depends_on`` is the one worth naming: dependencies are
+    first-class edges now, so upstream refuses the old spelling rather than
+    ignoring it — a fake that ignored it would let the create form ship a
+    silently dependency-less task.
+    """
+    client = _client()
+    before = {task.id for task in await client.list_tasks()}
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_create(agent="dave", **arguments)
+
+    assert excinfo.value.code == code, label
+    assert {task.id for task in await client.list_tasks()} == before
+
+
 # ── create ──────────────────────────────────────────────────────────────
 
 
@@ -330,6 +532,7 @@ async def test_create_mints_a_task_and_resolves_its_links() -> None:
         parent_task_id="epic-one",
     )
 
+    # `success` is DERIVED here: create's payload carries no such flag.
     assert result.success is True
     assert result.task_id
     assert result.title == "Swap reads onto the new store"
@@ -340,65 +543,50 @@ async def test_create_mints_a_task_and_resolves_its_links() -> None:
     created = await client.task_get(result.task_id)
     assert created.created_by == "dave"
     assert created.tags == ("project:influx",)
+    assert created.metadata == {"project": "influx"}
     assert (await _blocked(client))[result.task_id][0].task_id == "pred"
     children = await client.task_children("epic-one")
     assert result.task_id in {child.id for child in children}
 
 
-async def test_create_resolves_an_id_prefix_and_refuses_an_ambiguous_one() -> None:
-    client = _client()
-    exact = await client.task_create(title="Prefixed", agent="dave", depends_on=["pre"])
-    assert exact.depends_on == ("pred",)
-
-    with pytest.raises(LithosToolError) as excinfo:
-        await client.task_create(title="Ambiguous", agent="dave", depends_on=["waiter"])
-
-    assert excinfo.value.code == "ambiguous_id_prefix"
-    # The field the whole envelope exists for: the mapper offers these as
-    # choices.
-    assert excinfo.value.envelope["candidates"] == ["waiter-one", "waiter-two"]
-
-
-async def test_create_refuses_an_unknown_predecessor_and_a_bad_gate() -> None:
-    client = _client()
-    with pytest.raises(LithosToolError) as missing:
-        await client.task_create(title="Orphan", agent="dave", depends_on=["nope"])
-    assert missing.value.code == "task_not_found"
-
-    with pytest.raises(LithosToolError) as untyped:
-        await client.task_create(title="Gate", agent="dave", task_type="gate")
-    assert untyped.value.code == "invalid_input"
-
-    with pytest.raises(LithosToolError) as timer:
-        await client.task_create(
-            title="Gate",
-            agent="dave",
-            task_type="gate",
-            metadata={"gate_type": "timer"},
-        )
-    assert timer.value.code == "invalid_input"
-
-    with pytest.raises(LithosToolError) as blank:
-        await client.task_create(title="   ", agent="dave")
-    assert blank.value.code == "invalid_input"
-
-
 # ── edges ───────────────────────────────────────────────────────────────
 
 
-async def test_an_edge_that_closes_a_cycle_is_refused_and_changes_nothing() -> None:
+@pytest.mark.parametrize(
+    ("label", "from_task_id", "to_task_id", "edge_type"),
+    [
+        # A dependency loop over `blocks` …
+        ("blocks", "dep", "pred", "blocks"),
+        # … one that closes through a `waits_on_gate` edge, so the walk has to
+        # span BOTH blocking types (gate-review already gates waiter-one) …
+        ("mixed blocking", "waiter-one", "gate-review", "blocks"),
+        # … and a hierarchy that would contain itself. The acceptance says "an
+        # edge that closes a cycle", not "a dependency edge": reversing the
+        # seeded epic-one -> child-one parentage is refused too.
+        ("parent_child", "child-one", "epic-one", "parent_child"),
+    ],
+)
+async def test_every_cycle_closing_edge_is_refused_and_changes_nothing(
+    label: str, from_task_id: str, to_task_id: str, edge_type: str
+) -> None:
     client = _client()
-    before = await client.task_edge_list("dep")
+    before = await _all_edges(client)
 
     with pytest.raises(LithosToolError) as excinfo:
         await client.task_edge_upsert(
-            from_task_id="dep", to_task_id="pred", edge_type="blocks", agent="dave"
+            from_task_id=from_task_id,
+            to_task_id=to_task_id,
+            edge_type=edge_type,
+            agent="dave",
         )
 
-    assert excinfo.value.code == "cycle"
+    assert excinfo.value.code == "cycle", label
     # The message names members by full id, and is rendered verbatim.
-    assert "pred" in str(excinfo.value) and "dep" in str(excinfo.value)
-    assert await client.task_edge_list("dep") == before
+    assert from_task_id in str(excinfo.value)
+    assert to_task_id in str(excinfo.value)
+    assert await _all_edges(client) == before
+    # A refused hierarchy edge must not have left a child behind either.
+    assert {child.id for child in await client.task_children("child-one")} == set()
 
 
 async def test_re_upserting_an_edge_replaces_metadata_and_keeps_created_by() -> None:
@@ -414,7 +602,14 @@ async def test_re_upserting_an_edge_replaces_metadata_and_keeps_created_by() -> 
         metadata={"added_via": "lithos-lens"},
     )
 
-    assert result.success is True
+    # The resolved endpoints and their titles come back, same as an insert.
+    assert result == TaskEdgeUpsertResult(
+        success=True,
+        from_task_id="epic-one",
+        from_title="Epic one",
+        to_task_id="child-one",
+        to_title="Child one",
+    )
     edges = [
         edge
         for edge in await client.task_edge_list("child-one")
@@ -427,15 +622,45 @@ async def test_re_upserting_an_edge_replaces_metadata_and_keeps_created_by() -> 
     assert edges[0].created_at == STAMP
 
 
-async def test_an_inserted_edge_blocks_its_target_and_is_read_back() -> None:
+async def test_an_insert_and_a_re_upsert_answer_the_same_payload() -> None:
+    """Nothing in the payload says which happened — the residual T3 D11 states.
+
+    Asserted as an equality so a fake that grew a "created" flag of its own
+    would fail here rather than quietly handing the edge slice a guarantee the
+    real server does not give.
+    """
+    client = _client()
+    arguments = {
+        "from_task_id": "pred",
+        "to_task_id": "solo",
+        "edge_type": "blocks",
+        "agent": "dave",
+    }
+
+    inserted = await client.task_edge_upsert(**arguments, metadata={"pass": "first"})
+    again = await client.task_edge_upsert(**arguments, metadata={"pass": "second"})
+
+    assert inserted == again
+    assert inserted == TaskEdgeUpsertResult(
+        success=True,
+        from_task_id="pred",
+        from_title="Pred",
+        to_task_id="solo",
+        to_title="Solo",
+    )
+    edges = [
+        edge for edge in await client.task_edge_list("solo") if edge.type == "blocks"
+    ]
+    assert len(edges) == 1
+    assert edges[0].metadata == {"pass": "second"}
+    assert edges[0].created_by == "dave"
+
+
+async def test_an_inserted_edge_blocks_its_target() -> None:
     client = _client()
 
     await client.task_edge_upsert(
-        from_task_id="pred",
-        to_task_id="solo",
-        edge_type="blocks",
-        agent="dave",
-        metadata={"added_via": "lithos-lens"},
+        from_task_id="pred", to_task_id="solo", edge_type="blocks", agent="dave"
     )
 
     assert "solo" not in await _ready_ids(client)
@@ -448,67 +673,196 @@ async def test_an_inserted_edge_blocks_its_target_and_is_read_back() -> None:
     assert inserted[0].direction == "incoming"
 
 
-async def test_every_other_edge_refusal_is_reachable() -> None:
-    """Every edge code the mapper has a row for, from one fixture.
+@pytest.mark.parametrize(
+    ("gate_id", "still_ready"),
+    [("timer-elapsed", True), ("timer-pending", False)],
+)
+async def test_a_timer_gate_blocks_only_until_its_ready_at_passes(
+    gate_id: str, still_ready: bool
+) -> None:
+    """The one blocker whose answer is the clock's, not a status's.
 
-    Each tuple is ``(code, from, to, type)``: the arguments that provoke the
-    refusal, so a code that stopped being reachable (or started answering a
-    different one) fails on the row that names it.
+    Upstream resolves a ``timer`` gate by itself once ``metadata.ready_at``
+    passes, so a waiter on an ELAPSED open timer gate is ready — treating every
+    open gate as unsatisfied would hand the proceed-anyway and edge slices the
+    opposite answer from the real server.
     """
     client = _client()
-    cases = [
+
+    await client.task_edge_upsert(
+        from_task_id=gate_id,
+        to_task_id="solo",
+        edge_type="waits_on_gate",
+        agent="dave",
+    )
+
+    assert ("solo" in await _ready_ids(client)) is still_ready
+    blocked = await _blocked(client)
+    if still_ready:
+        assert "solo" not in blocked
+    else:
+        assert [(row.kind, row.task_id) for row in blocked["solo"]] == [
+            ("gate", gate_id)
+        ]
+        assert "ready_at" in blocked["solo"][0].message
+
+
+@pytest.mark.parametrize(
+    ("code", "from_task_id", "to_task_id", "edge_type"),
+    [
         ("invalid_edge_type", "pred", "dep", "duplicates"),
         ("self_edge", "pred", "pred", "blocks"),
         ("task_not_found", "no-such-task", "dep", "blocks"),
         ("not_a_gate", "pred", "dep", "waits_on_gate"),
         ("parent_exists", "solo", "child-one", "parent_child"),
-        ("ambiguous_id_prefix", "waiter", "dep", "blocks"),
-    ]
-    for code, from_task_id, to_task_id, edge_type in cases:
-        with pytest.raises(LithosToolError) as excinfo:
-            await client.task_edge_upsert(
-                from_task_id=from_task_id,
-                to_task_id=to_task_id,
-                edge_type=edge_type,
-                agent="dave",
-            )
-        assert excinfo.value.code == code, (from_task_id, to_task_id, edge_type)
-        assert excinfo.value.envelope["code"] == code
-        # Every refusal says nothing was changed, so nothing may be.
-        assert client.write_calls[-1][0] == "lithos_task_edge_upsert"
-    # parent_exists names the parent the operator has to replace (T3 D11).
-    with pytest.raises(LithosToolError) as parented:
+        ("ambiguous_id_prefix", "waiter-", "dep", "blocks"),
+        ("invalid_input", "abc", "dep", "blocks"),
+    ],
+)
+async def test_every_other_edge_refusal_is_reachable_and_writes_nothing(
+    code: str, from_task_id: str, to_task_id: str, edge_type: str
+) -> None:
+    """Every edge code the mapper has a row for, from one fixture.
+
+    Each refusal is also checked to have changed NOTHING anywhere — every
+    fixture task's edge list, not just one endpoint's — because "nothing was
+    changed" is the first thing the operator copy promises.
+    """
+    client = _client()
+    before = await _all_edges(client)
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_edge_upsert(
+            from_task_id=from_task_id,
+            to_task_id=to_task_id,
+            edge_type=edge_type,
+            agent="dave",
+        )
+
+    assert excinfo.value.code == code
+    assert excinfo.value.envelope["code"] == code
+    assert client.write_calls[-1][0] == "lithos_task_edge_upsert"
+    assert await _all_edges(client) == before
+
+
+async def test_parent_exists_names_the_parent_to_replace() -> None:
+    """D11's copy needs the existing parent's id to offer the way to change it."""
+    client = _client()
+    with pytest.raises(LithosToolError) as excinfo:
         await client.task_edge_upsert(
             from_task_id="solo",
             to_task_id="child-one",
             edge_type="parent_child",
             agent="dave",
         )
-    assert "epic-one" in str(parented.value)
-    assert await client.task_edge_list("dep") == list(write_dataset().edges["dep"])
+    assert "epic-one" in str(excinfo.value)
 
 
 # ── events ──────────────────────────────────────────────────────────────
 
 
-async def test_a_completion_publishes_task_completed_and_an_edge_write_nothing() -> (
-    None
-):
-    """Writes announce themselves exactly as the real server does — and an edge
-    write does not, because upstream emits no event for one."""
+class _ObservingHub(FakeEventHub):
+    """A hub that reads the store back at the moment an event is published.
+
+    This is how "the write landed before it was announced" is testable: a
+    publish-then-mutate fake would record the OLD status here, and the board a
+    browser refetches on the event would still show the pre-write state.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.client: FakeLithosClient | None = None
+        self.observed: list[tuple[str, str]] = []
+
+    async def publish(self, event: LensEvent) -> None:
+        if self.client is not None and event.task_id:
+            task = await self.client.task_get(event.task_id)
+            self.observed.append((event.type, task.status))
+        await super().publish(event)
+
+
+async def _drain(queue: asyncio.Queue[LensEvent], count: int) -> list[LensEvent]:
+    return [await asyncio.wait_for(queue.get(), timeout=0.2) for _ in range(count)]
+
+
+async def test_each_write_publishes_the_event_body_the_server_would() -> None:
+    """Event NAMES are not enough: the bodies are asserted field for field.
+
+    Each one is the upstream payload for that tool — ``task.completed`` carries
+    the node-feedback arguments Lens never sends, ``task.cancelled`` is the one
+    place the reason survives, ``task.reopened`` names the prior status and
+    outcome its own return value just cleared, and ``task.created`` names no
+    agent. A consumer written against fake mode has to see the real contract.
+    """
+    hub = _ObservingHub(EventsConfig(enabled=True), LithosConfig())
+    await hub.start()
+    client = FakeLithosClient(dataset=write_dataset(), events=hub)
+    hub.client = client
+    try:
+        queue = hub.subscribe()
+
+        completed = await client.task_complete(
+            "gate-review", agent="dave", outcome="done"
+        )
+        reopened = await client.task_reopen("gate-review", agent="dave")
+        cancelled = await client.task_cancel("pred", agent="dave", reason="superseded")
+        created = await client.task_create(title="Fresh", agent="dave")
+        events = await _drain(queue, 4)
+
+        assert [event.type for event in events] == [
+            "task.completed",
+            "task.reopened",
+            "task.cancelled",
+            "task.created",
+        ]
+        assert events[0].payload == {
+            "task_id": "gate-review",
+            "agent": "dave",
+            "outcome": "done",
+            "updated_at": completed.updated_at,
+            "cited_nodes": None,
+            "misleading_nodes": None,
+            "receipt_id": None,
+        }
+        assert events[1].payload == {
+            "task_id": "gate-review",
+            "agent": "dave",
+            "prior_status": "completed",
+            "prior_outcome": "done",
+            "updated_at": reopened.updated_at,
+        }
+        assert events[2].payload == {
+            "task_id": "pred",
+            "agent": "dave",
+            "reason": "superseded",
+            "updated_at": cancelled.updated_at,
+        }
+        assert events[3].payload == {
+            "task_id": created.task_id,
+            "title": "Fresh",
+            "updated_at": created.updated_at,
+        }
+        # Every one of them is a board-moving event, and every one of them was
+        # announced only AFTER the store had changed.
+        assert all(event.requires_refresh for event in events)
+        assert hub.observed == [
+            ("task.completed", "completed"),
+            ("task.reopened", "open"),
+            ("task.cancelled", "cancelled"),
+            ("task.created", "open"),
+        ]
+    finally:
+        await hub.stop()
+
+
+async def test_an_edge_write_publishes_nothing() -> None:
+    """Upstream emits no event for an edge write; only the hub mints the
+    synthetic ``lens.edge_upserted`` (T3 D11), and that is W8's."""
     hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
     await hub.start()
     client = FakeLithosClient(dataset=write_dataset(), events=hub)
     try:
         queue = hub.subscribe()
-
-        await client.task_complete("gate-review", agent="dave", outcome="done")
-        event = await asyncio.wait_for(queue.get(), timeout=0.1)
-        assert event.type == "task.completed"
-        assert event.task_id == "gate-review"
-        assert event.payload["outcome"] == "done"
-        assert event.requires_refresh is True
-
         await client.task_edge_upsert(
             from_task_id="pred", to_task_id="solo", edge_type="blocks", agent="dave"
         )
@@ -518,21 +872,43 @@ async def test_a_completion_publishes_task_completed_and_an_edge_write_nothing()
         await hub.stop()
 
 
-async def test_each_write_publishes_the_event_the_server_would() -> None:
-    hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
-    await hub.start()
-    client = FakeLithosClient(dataset=write_dataset(), events=hub)
+async def test_app_state_wires_the_fake_to_the_hub_the_process_publishes_through(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The PRODUCTION wiring, not a hand-injected hub.
+
+    Every other event test here constructs the client with a hub, which would
+    stay green if the fake-mode wiring were deleted. This one takes the client
+    the way the app does — through AppState, which adopts the hub and hands it
+    to the fake beside the graph cache — and writes through it.
+    """
+    config = load_config(lithos_lens_config_env)
+    hub = FakeEventHub(config.events, config.lithos)
+    state = AppState(config, FakeLithosClient(dataset=write_dataset()), events=hub)
+    await state.events.start()
     try:
-        queue = hub.subscribe()
-        await client.task_cancel("pred", agent="dave", reason="superseded")
-        await client.task_reopen("pred", agent="dave")
-        await client.task_create(title="Fresh", agent="dave")
-        types = [
-            (await asyncio.wait_for(queue.get(), timeout=0.1)).type for _ in range(3)
-        ]
-        assert types == ["task.cancelled", "task.reopened", "task.created"]
+        client = state.lithos_client
+        assert isinstance(client, FakeLithosClient)
+        assert client.events is state.events, "AppState must wire the fake's hub"
+        queue = state.events.subscribe()
+
+        await client.task_complete("gate-review", agent="dave", outcome="done")
+
+        event = await asyncio.wait_for(queue.get(), timeout=0.2)
+        assert (event.type, event.task_id) == ("task.completed", "gate-review")
     finally:
-        await hub.stop()
+        await state.events.stop()
+
+
+def test_fake_mode_app_gives_its_fake_client_the_app_hub(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And the same wiring through the real entry point, in fake mode."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    state = app.state.lens
+    assert isinstance(state.lithos_client, FakeLithosClient)
+    assert state.lithos_client.events is state.events
 
 
 async def test_a_write_without_a_hub_still_applies() -> None:
@@ -614,18 +990,16 @@ async def test_two_fakes_over_one_seed_do_not_share_an_overlay() -> None:
 
     await one.task_complete("gate-review", agent="dave", outcome="done")
     await one.task_create(title="Only in one", agent="dave")
+    await one.task_edge_upsert(
+        from_task_id="pred", to_task_id="solo", edge_type="blocks", agent="dave"
+    )
 
     assert (await two.task_get("gate-review")).status == "open"
-    assert await _ready_ids(two) == {
-        "gate-review",
-        "pred",
-        "solo",
-        "epic-one",
-        "child-one",
-    }
+    assert await _ready_ids(two) == SEED_READY
     assert {task.id for task in await two.list_tasks()} == {
         task.id for task in seed.tasks
     }
+    assert await _all_edges(two) == await _all_edges(FakeLithosClient(dataset=seed))
     assert two.write_calls == []
     # And the seed itself was never touched.
     assert seed.tasks == write_dataset().tasks

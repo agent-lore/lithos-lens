@@ -95,6 +95,11 @@ class TaskCreateResult:
     ``depends_on`` and ``parent_task_id`` are the FULL ids upstream resolved
     the request's (possibly abbreviated) ones to, and are empty when the
     request supplied none.
+
+    ``success`` is DERIVED, not read: unlike the other four tools, create's
+    payload carries no `success` flag — the minted id is the success signal
+    (see the contract's ``observed_divergences``). Reading a flag that is never
+    sent would make every successful create normalize to ``success=False``.
     """
 
     success: bool
@@ -107,17 +112,20 @@ class TaskCreateResult:
 
 @dataclass(frozen=True)
 class TaskEdgeUpsertResult:
-    """``lithos_task_edge_upsert``: the relation exists.
+    """``lithos_task_edge_upsert``: the relation exists, and between whom.
 
-    Deliberately field-poor: an upsert answers an insert and a metadata
-    replacement with the same ``{"success": true}``, so nothing in the payload
-    says which happened. Whether Lens's own call inserted the edge is settled
-    by reading the edge back (T3 D11), not from here — which is also why the
-    resolved endpoint ids and titles the payload carries beside ``success``
-    are not modeled (see the contract's ``observed_divergences``).
+    The endpoints come back RESOLVED (the request may have carried prefixes)
+    with their titles, which is what the relation-confirm receipt names. What
+    the payload does NOT say is whether this call inserted the edge or
+    replaced an existing one's metadata — an upsert answers both the same way,
+    so that question is settled by reading the edge back (T3 D11).
     """
 
     success: bool
+    from_task_id: str = ""
+    from_title: str = ""
+    to_task_id: str = ""
+    to_title: str = ""
 
 
 # ── requests ────────────────────────────────────────────────────────────
@@ -242,9 +250,13 @@ def normalize_task_cancel(payload: dict[str, Any]) -> TaskCancelResult:
 
 
 def normalize_task_create(payload: dict[str, Any]) -> TaskCreateResult:
+    task_id = str(payload.get("task_id") or "")
     return TaskCreateResult(
-        success=bool(payload.get("success")),
-        task_id=str(payload.get("task_id") or ""),
+        # Derived: create sends no `success` flag (see TaskCreateResult). An
+        # error envelope has already been raised by this point, so a minted id
+        # is the whole of what "it worked" means here.
+        success=bool(task_id),
+        task_id=task_id,
         title=str(payload.get("title") or ""),
         updated_at=str(payload.get("updated_at") or ""),
         depends_on=_id_tuple(payload.get("depends_on")),
@@ -253,7 +265,13 @@ def normalize_task_create(payload: dict[str, Any]) -> TaskCreateResult:
 
 
 def normalize_task_edge_upsert(payload: dict[str, Any]) -> TaskEdgeUpsertResult:
-    return TaskEdgeUpsertResult(success=bool(payload.get("success")))
+    return TaskEdgeUpsertResult(
+        success=bool(payload.get("success")),
+        from_task_id=str(payload.get("from_task_id") or ""),
+        from_title=str(payload.get("from_title") or ""),
+        to_task_id=str(payload.get("to_task_id") or ""),
+        to_title=str(payload.get("to_title") or ""),
+    )
 
 
 def _id_tuple(raw: Any) -> tuple[str, ...]:

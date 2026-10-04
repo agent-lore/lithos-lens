@@ -72,14 +72,21 @@ class LithosToolError(RuntimeError):
     the envelope supplies one, so callers can distinguish a missing task from a
     missing tool without matching on message text.
 
-    ``envelope`` carries the WHOLE error payload, read-only, because some codes
-    say more than their message does: ``ambiguous_id_prefix`` names the
-    ``candidates`` the write funnel's error mapper offers the operator as
-    choices (T3 D6/D12). Keeping only the code and the message — which is what
-    this did until T3-W3 — silently dropped them, and would drop whatever field
-    upstream adds next. Callers that read only ``code`` are unaffected; it is
-    an empty mapping for an error Lens itself raises with no envelope behind
-    it (a malformed success payload, say).
+    ``envelope`` carries the WHOLE error payload, because some codes say more
+    than their message does: ``ambiguous_id_prefix`` names the ``candidates``
+    the write funnel's error mapper offers the operator as choices (T3 D6/D12).
+    Keeping only the code and the message — which is what this did until
+    T3-W3 — silently dropped them, and would drop whatever field upstream adds
+    next. Callers that read only ``code`` are unaffected; it is an empty
+    mapping for an error Lens itself raises with no envelope behind it (a
+    malformed success payload, say).
+
+    The MAPPING is read-only — no caller can add, replace or delete a field —
+    but the values inside it are the decoded payload's own objects, so a nested
+    list or dict (``candidates``) is as mutable as any decoded JSON. That is
+    the same guarantee the rest of the decode path gives, and deep-freezing
+    here would change ``candidates`` from the list the mapper renders into
+    something it would have to convert back.
     """
 
     def __init__(

@@ -61,7 +61,7 @@ Tasks-dashboard data loading and normalization (task/claim/finding records + vie
 - class `TaskReopenResult` — ``lithos_task_reopen``: the task back to open, and who it re-blocked.
 - class `TaskCancelResult` — ``lithos_task_cancel``: the task cancelled and every claim released.
 - class `TaskCreateResult` — ``lithos_task_create``: the minted id, plus the links it resolved.
-- class `TaskEdgeUpsertResult` — ``lithos_task_edge_upsert``: the relation exists.
+- class `TaskEdgeUpsertResult` — ``lithos_task_edge_upsert``: the relation exists, and between whom.
 - def `complete_arguments` — Arguments for ``lithos_task_complete``.
 - def `reopen_arguments` — Arguments for ``lithos_task_reopen`` (the whole surface it takes).
 - def `cancel_arguments` — Arguments for ``lithos_task_cancel``; ``reason`` is optional upstream.
