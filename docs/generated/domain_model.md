@@ -716,3 +716,46 @@ classDiagram
   TaskRecord "1" --> "0..*" ClaimRecord : claims
   TaskStatusRecord "1" --> "0..*" ClaimRecord : claims
 ```
+
+## Writes
+
+```mermaid
+classDiagram
+  class IdentityCheck {
+    +ok bool
+    +code str
+    +reason str
+  }
+  class MessageSegment {
+    +text str
+    +task_id str
+  }
+  class OperatorIdentity {
+    +id str
+    +source OperatorSource
+  }
+  class TaskRef {
+    +task_id str
+    +title str
+  }
+  class TaskReread {
+    +outcome RereadOutcome
+    +status str
+  }
+  class WriteProblem {
+    +action WriteAction
+    +kind ProblemKind
+    +claim ChangeClaim
+    +status_code int
+    +headline str
+    +hint str
+    +code str
+    +show_code bool
+    +field str
+    +prefix str
+    +log_level RefusalLogLevel
+  }
+  WriteProblem "1" --> "0..*" MessageSegment : detail
+  WriteProblem "1" --> "0..*" TaskRef : candidates
+  WriteProblem "1" --> "1" TaskRef : subject
+```

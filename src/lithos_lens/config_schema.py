@@ -139,6 +139,15 @@ MAX_GRAPH_INT_KNOBS: dict[str, int] = {
 }
 
 
+# ── [lithos-lens.writes] — curated write actions (§5C) ─────────────────
+# Two knobs and deliberately no third: there is NO `enabled` flag and no
+# read-only mode (REQUIREMENTS §5C.1, PRD D2). Write routes are registered like
+# every other route group, and what decides whether an affordance renders is
+# the task's state and whether an operator identity resolves — never config.
+DEFAULT_WRITES_DEFAULT_OPERATOR = ""
+DEFAULT_WRITES_CONFIRM_CANCEL = True
+
+
 def parse_log_level(value: str) -> LogLevel:
     """Validate and narrow a string to a ``LogLevel`` literal."""
     if value not in _VALID_LOG_LEVEL:
@@ -283,6 +292,28 @@ class GraphConfig:
 
 
 @dataclass(frozen=True)
+class WritesConfig:
+    """Curated write actions (§5C) — the identity fallback and the cancel step.
+
+    ``default_operator`` is the identity a browser with no ``lens_operator``
+    cookie acts under (§5C.5), so a single-operator install has no ceremony;
+    empty means "none", and every write affordance then resolves to the
+    "choose an operator to act" link instead. It is validated at load against
+    the SAME rule as the cookie (``operator.valid_operator_id``), because an
+    id no surface can render is a deployment mistake worth failing on rather
+    than a write attributed to junk.
+
+    ``confirm_cancel`` keeps the consequence-aware confirm page in front of a
+    cancel (REQUIREMENTS §5C.2); with it false the same facts appear on the
+    receipt instead. Read by W6 — the knob ships here so the config surface
+    is complete in one slice rather than growing per action.
+    """
+
+    default_operator: str = DEFAULT_WRITES_DEFAULT_OPERATOR
+    confirm_cancel: bool = DEFAULT_WRITES_CONFIRM_CANCEL
+
+
+@dataclass(frozen=True)
 class LithosLensConfig:
     environment: str
     greeting: str
@@ -297,3 +328,4 @@ class LithosLensConfig:
     health: HealthConfig
     knowledge: KnowledgeConfig
     graph: GraphConfig
+    writes: WritesConfig

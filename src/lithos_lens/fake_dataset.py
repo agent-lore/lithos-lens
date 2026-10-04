@@ -103,6 +103,14 @@ class FakeLithosDataset:
     findings: Mapping[str, tuple[FindingRecord, ...]] = field(default_factory=dict)
     claims: Mapping[str, tuple[ClaimRecord, ...]] = field(default_factory=dict)
     agents: tuple[AgentRecord, ...] = ()
+    # Agents ``lithos_agent_list`` hides and ``lithos_agent_info`` still
+    # returns: upstream's list filters archived registrations by default while
+    # the exact lookup answers for them. Kept as its own field precisely so the
+    # two reads DIVERGE in the fake the way they do upstream -- that divergence
+    # is the whole reason the operator-identity guard uses the lookup (§5C.5),
+    # and a fake that served archived agents from both would make the guard's
+    # archived cases pass against the wrong read.
+    archived_agents: tuple[AgentRecord, ...] = ()
     stats: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

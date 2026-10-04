@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Operator identity · Lithos Lens{% endblock %}
+
+{% block content %}
+<section class="operator-page">
+  <h1>Operator identity</h1>
+
+  <p class="operator-current" data-operator-current>
+    {% if identity.resolved %}
+      Acting as <strong data-operator-id>{{ identity.id }}</strong> —
+      <span data-operator-source="{{ identity.source }}">{{ identity.source_label }}</span>.
+    {% else %}
+      No operator identity is set, so no write action is offered
+      (<span data-operator-source="{{ identity.source }}">{{ identity.source_label }}</span>).
+      Choose a name below; it is the name your actions are recorded under.
+    {% endif %}
+  </p>
+
+  {% if problem %}
+    <p class="operator-problem" role="alert" data-operator-problem>{{ problem }}</p>
+  {% endif %}
+
+  <form class="operator-form" method="post" action="{{ operator_path }}">
+    <label for="operator">Act as</label>
+    <input
+      type="text"
+      id="operator"
+      name="operator"
+      value="{{ typed or identity.id }}"
+      autocomplete="off"
+      spellcheck="false"
+      maxlength="63"
+      required
+    >
+    {# The return trip, re-checked server-side by `write_guards.safe_next`
+       when it comes back: a value from another origin is ignored and the
+       operator lands back here instead. #}
+    {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+    <button type="submit">{{ "Switch identity" if identity.resolved else "Set identity" }}</button>
+    <p class="operator-hint">An operator id is {{ operator_id_rule }}.</p>
+  </form>
+
+  {# REQUIREMENTS §5C.1 requires this statement to be here: with no read-only
+     mode and no authentication, the trusted network is the only protection
+     there is, and the operator meets it on this page. #}
+  <section class="operator-boundary" data-operator-boundary>
+    <h2>What this identity is, and what it is not</h2>
+    <p>
+      <strong>Lens has no authentication or authorization. Anyone who can
+      reach this port can perform these actions.</strong> It is built for a
+      single operator on a trusted local network; do not expose it beyond one.
+    </p>
+    <p>
+      This identity is an <em>attribution label</em>: it names who a write is
+      recorded as in Lithos, and it proves nothing about who sent the request.
+      The same goes for the two request-level checks Lens does run — the
+      Origin/Referer check on every write POST, and registering this id as a
+      human before its first write. Both are hygiene, not security.
+    </p>
+    <p>
+      Writes are never attributed to Lens's own service agent
+      (<code>{{ config.lithos.agent_id }}</code>), and an id that already
+      belongs to an agent is refused rather than quietly re-typed as a human.
+    </p>
+    {% if default_operator %}
+      <p class="operator-default-note">
+        This deployment configures
+        <code>[writes].default_operator = "{{ default_operator }}"</code>, which
+        applies in any browser that has not chosen one.
+      </p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

@@ -31,6 +31,7 @@ from lithos_lens.lithos_writes import LithosWriteMethods, LithosWriteProtocol
 from lithos_lens.mcp_transport import (
     CALL_TIMEOUT_S,
     MAX_CONCURRENT_TOOL_CALLS,
+    NULL_RESULT_CODE,
     LithosToolError,
     MCPTransport,
     raise_for_error,
@@ -139,6 +140,10 @@ class LithosClientProtocol(LithosWriteProtocol, Protocol):
     async def stats(self) -> dict[str, Any]: ...
 
     async def list_agents(self) -> list[AgentRecord]: ...
+
+    async def agent_info(self, agent_id: str) -> AgentRecord | None: ...
+
+    async def register_operator(self, operator_id: str) -> bool: ...
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None
@@ -454,6 +459,78 @@ class LithosClient(LithosWriteMethods):
             for agent in payload.get("agents", [])
             if isinstance(agent, dict)
         ]
+
+    async def agent_info(self, agent_id: str) -> AgentRecord | None:
+        """Look one agent up EXACTLY via ``lithos_agent_info`` (§5C.5).
+
+        The operator-identity guard's read, and the reason it is this tool
+        rather than ``lithos_agent_list``: the list hides archived agents by
+        default, so an archived agent's id would read as unregistered and be
+        re-typed into a human by the registration that follows.
+
+        ``None`` means "no such agent", and that is a WIRE SHAPE, not an
+        envelope: the tool returns Python ``None`` for an unknown id. Through
+        the pinned MCP SDK that arrives as a result with NO content block and
+        ``structuredContent={"result": null}``; serialised as text it is
+        ``{"result": null}`` or a bare ``null``. The decoder gives every one of
+        those spellings the coded
+        :data:`~lithos_lens.mcp_transport.NULL_RESULT_CODE` error, mapped here
+        and only here. Every other failure — a transport error, an MCP-level
+        error, an unparseable or non-object body, an error envelope, an empty
+        result carrying no null at all — still raises, because the guard must
+        be able to tell "absent" from "unreadable" (it accepts the first and
+        refuses the second, which is the side that changes nothing upstream).
+        """
+        try:
+            payload = await self._call_tool("lithos_agent_info", {"id": agent_id})
+        except LithosToolError as exc:
+            if exc.code == NULL_RESULT_CODE:
+                return None
+            raise
+        raise_for_error(payload)
+        if not _is_nonempty_str(payload.get("id")):
+            raise LithosToolError(
+                f"lithos_agent_info returned no valid agent payload for '{agent_id}'",
+                code="invalid_response",
+            )
+        return normalize_agent(payload)
+
+    async def register_operator(self, operator_id: str) -> bool:
+        """Register a human operator identity before its first write (§5C.5).
+
+        The second request shape of ``lithos_agent_register``: ``type="human"``
+        and no display name, so the registry row says what the id is rather
+        than inventing a person's name for it. Lithos auto-registers an unknown
+        ``agent`` on any write UNTYPED, which is what this pre-empts — the agent
+        pickers and the Planning View's human definition read the type.
+
+        Returns whether the registration landed — and "landed" means Lithos
+        ACKNOWLEDGED it: the vendored response's ``success`` is ``true``
+        (``created`` is not read; ``false`` there is the ordinary
+        already-registered case after a restart). Unlike
+        :meth:`register_agent`'s best-effort startup call, anything short of
+        that acknowledgement is a failure — an error envelope, ``success:
+        false``, an empty or unrelated body — because the caller remembers the
+        identity as registered on ``True`` and never asks again, and a refused
+        registration must refuse the WRITE behind it
+        (``operator.REFUSAL_REGISTRATION_FAILED``).
+        """
+        try:
+            payload = await self._call_tool(
+                "lithos_agent_register",
+                {"id": operator_id, "type": "human"},
+            )
+            raise_for_error(payload)
+        except Exception:
+            logger.info("lithos operator registration failed", exc_info=True)
+            return False
+        if payload.get("success") is not True:
+            logger.info(
+                "lithos operator registration was not acknowledged",
+                extra={"operator": operator_id},
+            )
+            return False
+        return True
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None

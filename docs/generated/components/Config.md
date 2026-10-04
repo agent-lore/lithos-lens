@@ -3,7 +3,7 @@
 
 # Config
 
-Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading from lithos-lens.toml with env overrides.
+Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML loading over it, and the environment-override pass applied on top (env beats file beats default).
 
 **Tier:** Foundation
 
@@ -11,15 +11,19 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | L | 0 | 2 |
+| `lithos_lens.config` | M | 0 | 2 |
+| `lithos_lens.config_env` | M | 0 | 1 |
 | `lithos_lens.config_fields` | S | 0 | 10 |
-| `lithos_lens.config_schema` | S | 12 | 1 |
+| `lithos_lens.config_schema` | M | 13 | 1 |
 
 ## Public API
 
 ### `lithos_lens.config`
 - def `find_config_path` — Return the first existing ``lithos-lens.toml`` in the discovery order.
 - def `load_config` — Load, validate, and return a ``LithosLensConfig``.
+
+### `lithos_lens.config_env`
+- def `apply_env_overrides`
 
 ### `lithos_lens.config_fields`
 - def `warn_deprecated_knobs` — Log one notice, once, for every deprecated knob ``section`` writes.
@@ -46,11 +50,12 @@ Configuration: the typed schema (dataclasses, defaults, ceilings) plus loading f
 - class `HealthConfig`
 - class `KnowledgeConfig`
 - class `GraphConfig` — Task dependency graph pages (§5.7) — the four knobs T2 introduces.
+- class `WritesConfig` — Curated write actions (§5C) — the identity fallback and the cancel step.
 - class `LithosLensConfig`
 
 ## Dependencies
 
-- Depends on: [Errors](Errors.md), [Tasks](Tasks.md)
+- Depends on: [Errors](Errors.md), [Tasks](Tasks.md), [Writes](Writes.md)
 - Used by: [Entrypoint](Entrypoint.md), [Events](Events.md), [LithosClient](LithosClient.md), [Logging](Logging.md), [State](State.md), [Telemetry](Telemetry.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

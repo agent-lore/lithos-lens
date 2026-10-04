@@ -12,20 +12,20 @@ lower a budget after improving the code to lock in the gain.
 | Metric | Actual | Budget | Headroom |
 |---|---:|---:|---:|
 | `component_cycles` | 0 | 0 | 0 |
-| `cross_component_edges` | 35 | 35 | 0 |
+| `cross_component_edges` | 38 | 38 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 846 | 850 | 4 |
+| `max_module_lines` | 849 | 850 | 1 |
 | `module_cycles` | 0 | 0 | 0 |
 | `modules_over_800_lines` | 4 | 4 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **35** (124 module-level)
+- Cross-component edges: **38** (132 module-level)
 - Component cycles: none
 - Module cycles: none
-- Tier-skipping edges (Entrypoints → Foundation): 10 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry)
-- Longest component dependency chain: 8
+- Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
+- Longest component dependency chain: 9
 
 ## Components
 
@@ -34,39 +34,40 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 3 | 1369 | 1083 | 7 | 2 | 0.22 | 33 (`lithos_lens.config._apply_env_overrides`) | 1 |
+| Config | 4 | 1516 | 1200 | 7 | 3 | 0.30 | 38 (`lithos_lens.config_env.apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
 | Knowledge | 4 | 1331 | 997 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
-| LithosClient | 8 | 4320 | 3478 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
+| LithosClient | 8 | 4510 | 3609 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 88 | 62 | 1 | 4 | 0.80 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
 | TaskGraph | 23 | 10804 | 8251 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 24 |
-| Tasks | 7 | 2224 | 1620 | 5 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
+| Tasks | 7 | 2227 | 1622 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1116 | 814 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 4 | 2277 | 1751 | 1 | 9 | 0.90 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Web | 5 | 2556 | 1955 | 1 | 10 | 0.91 | 14 (`lithos_lens.request_filters._parse_preserved_filters`) | 2 |
+| Writes | 3 | 1269 | 883 | 2 | 1 | 0.33 | 8 (`lithos_lens.write_errors._candidates`) | 0 |
 
 ## Size
 
-- Modules: **58**, lines: **24562**, SLOC: **18804**
-- Largest module: `lithos_lens.tasks` (846 lines)
+- Modules: **63**, lines: **26450**, SLOC: **20141**
+- Largest module: `lithos_lens.tasks` (849 lines)
 - Modules over 800 lines: **4**
-  - `lithos_lens.config`
   - `lithos_lens.frontier`
   - `lithos_lens.graph_layout`
   - `lithos_lens.tasks`
+  - `lithos_lens.web`
 
 ## Complexity
 
-- Functions: **765**, cyclomatic > 10: **46**
+- Functions: **828**, cyclomatic > 10: **46**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
 | 40 | `lithos_lens.frontier.load_dashboard` |
-| 33 | `lithos_lens.config._apply_env_overrides` |
+| 38 | `lithos_lens.config_env.apply_env_overrides` |
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
@@ -86,5 +87,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **85** (87 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.04** (50147 test lines / 24562 source lines)
+- Domain models: **91** (90 associations, 16 without docstrings)
+- Test-to-source line ratio: **2.01** (53110 test lines / 26450 source lines)

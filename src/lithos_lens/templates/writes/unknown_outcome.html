@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{#
+  Lithos never answered -- a transport failure or a timeout -- so the write may
+  or may not have applied (§5C.4, §14). Answered with 200: see
+  `write_errors.UNKNOWN_OUTCOME_STATUS` for why neither a 4xx nor a 5xx can be
+  said here.
+  Context: `problem` -- a `write_errors.WriteProblem` of kind `unknown_outcome`.
+
+  The page states the indeterminacy first and then what a re-read shows NOW,
+  and it joins the two with nothing: a task that reads as completed may have
+  been completed by this action or by an agent a moment earlier, and the whole
+  point of the page is to not pick one. Lithos writes are not idempotent, so a
+  "retry" affordance here would be an invitation to apply an action twice.
+-#}
+
+{% block title %}Outcome unknown | Lithos Lens{% endblock %}
+
+{% block content %}
+  <section class="write-outcome write-outcome-unknown">
+    <header>
+      <p class="eyebrow">Outcome unknown</p>
+      <h1>Lens did not hear back</h1>
+    </header>
+    {% if problem.subject.label %}
+      <p class="write-outcome-subject">
+        {{ problem.subject.label }}
+        {% with task_id = problem.subject.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+      </p>
+    {% endif %}
+    {% include "writes/notice.html" %}
+    <p class="write-outcome-actions">
+      {% if problem.subject.task_id %}
+        <a href="{{ task_detail_url(request, problem.subject.task_id) }}">Open the task</a>
+      {% else %}
+        <a href="/tasks">Back to the board</a>
+      {% endif %}
+    </p>
+  </section>
+{% endblock %}

@@ -67,6 +67,7 @@ name = "Foundation must not import Core or Entrypoints"
 type = "forbidden"
 source_modules = [
     "lithos_lens.errors",
+    "lithos_lens.write_errors",
     "lithos_lens.tasks",
     "lithos_lens.task_writes",
     "lithos_lens.template_vocabulary",
@@ -102,8 +103,11 @@ source_modules = [
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",
     "lithos_lens.config",
+    "lithos_lens.config_env",
     "lithos_lens.config_fields",
     "lithos_lens.config_schema",
+    "lithos_lens.operator",
+    "lithos_lens.write_guards",
     "lithos_lens.logging",
     "lithos_lens.telemetry",
     "lithos_lens.metrics",
@@ -123,6 +127,7 @@ forbidden_modules = [
     "lithos_lens.request_filters",
     "lithos_lens.knowledge_routes",
     "lithos_lens.graph_routes",
+    "lithos_lens.write_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -147,6 +152,7 @@ forbidden_modules = [
     "lithos_lens.request_filters",
     "lithos_lens.knowledge_routes",
     "lithos_lens.graph_routes",
+    "lithos_lens.write_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

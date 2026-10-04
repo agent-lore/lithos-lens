@@ -66,6 +66,24 @@ def _no_ambient_present_empty_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+#: The curated-write knobs (§5C). Removed for the whole suite, like the two
+#: above, because tests that load a config file of their OWN — the [writes]
+#: file-value test, the shipped-example test, every operator route test — do
+#: not take ``lithos_lens_config_env``, and a deployment or developer shell
+#: exporting ``LITHOS_LENS_WRITES_DEFAULT_OPERATOR`` would otherwise beat the
+#: file value under test. A test that wants one sets it after this has run.
+WRITES_ENV_KNOBS = (
+    "LITHOS_LENS_WRITES_DEFAULT_OPERATOR",
+    "LITHOS_LENS_WRITES_CONFIRM_CANCEL",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_writes_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in WRITES_ENV_KNOBS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def dotenv_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Make dotenv an INPUT of the test: the loader reads this path, nothing else.
@@ -151,6 +169,8 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MINI_GRAPH_MAX_NODES", "")
+    monkeypatch.setenv("LITHOS_LENS_WRITES_DEFAULT_OPERATOR", "")
+    monkeypatch.setenv("LITHOS_LENS_WRITES_CONFIRM_CANCEL", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_ENABLED", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_MODEL", "")
     monkeypatch.setenv("LITHOS_LENS_LLM_PROVIDER", "")

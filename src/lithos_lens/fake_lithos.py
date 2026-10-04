@@ -200,6 +200,25 @@ class FakeLithosClient:
         self.write_calls: list[tuple[str, dict[str, Any]]] = []
         self._event_sequence = 0
         self.closed = False
+        #: Every Lithos tool call this fake served, as
+        #: ``(tool name, arguments)`` in the real tools' spelling. The curated
+        #: write actions (§5C) are acceptance-tested on what the call log
+        #: shows — "403 with NO Lithos call", "exactly one
+        #: lithos_agent_register", "no registration call on a refusal" — which
+        #: a return value cannot express. Recorded by the methods the write
+        #: path uses; W3 extends it to the write tools.
+        self.tool_calls: list[tuple[str, dict[str, Any]]] = []
+        #: Set to make the exact agent lookup FAIL rather than answer. A
+        #: failed lookup is a distinct guard case from an absent agent (the
+        #: first refuses a new identity, the second accepts it), and nothing
+        #: in the dataset can express "unreadable".
+        self.agent_info_error: Exception | None = None
+        #: Set to make operator registration fail, the case that must refuse
+        #: the write behind it.
+        self.register_operator_fails = False
+
+    def _record(self, tool: str, arguments: dict[str, Any]) -> None:
+        self.tool_calls.append((tool, arguments))
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -210,6 +229,10 @@ class FakeLithosClient:
         return "ok"
 
     async def register_agent(self) -> bool:
+        self._record(
+            "lithos_agent_register",
+            {"id": self._config.agent_id if self._config else "", "type": "web-ui"},
+        )
         return True
 
     async def close(self) -> None:
@@ -487,7 +510,42 @@ class FakeLithosClient:
         return self._writes.stats()
 
     async def list_agents(self) -> list[AgentRecord]:
+        self._record("lithos_agent_list", {})
         return list(self.dataset.agents)
+
+    async def agent_info(self, agent_id: str) -> AgentRecord | None:
+        """Exact agent lookup, archived registrations included (§5C.5).
+
+        Parity with the concrete client on the two answers the identity guard
+        reads apart: an agent record, or ``None`` for an unknown id — upstream
+        returns Python ``None`` there (not an error envelope), which the real
+        client maps from the ``null`` wire shape. ``agent_info_error`` is the
+        third answer, the failed lookup.
+        """
+        self._record("lithos_agent_info", {"id": agent_id})
+        if self.agent_info_error is not None:
+            raise self.agent_info_error
+        return next(
+            (
+                agent
+                for agent in (*self.dataset.agents, *self.dataset.archived_agents)
+                if agent.id == agent_id
+            ),
+            None,
+        )
+
+    async def register_operator(self, operator_id: str) -> bool:
+        """Register a human operator identity (the ``type="human"`` variant).
+
+        Mirrors the concrete client's contract, including that a refusal is a
+        ``False`` rather than a raise: the write funnel turns that into "could
+        not register the operator identity; nothing was changed". The fake does
+        NOT mutate ``dataset.agents`` — the dataset is frozen, and a registered
+        identity that then read back as an untyped agent would be a fiction
+        upstream never produces.
+        """
+        self._record("lithos_agent_register", {"id": operator_id, "type": "human"})
+        return not self.register_operator_fails
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None

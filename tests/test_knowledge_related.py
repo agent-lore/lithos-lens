@@ -184,6 +184,14 @@ class KnowledgeFakeLithosClient(ReadOnlyWriteSurface):
     async def list_agents(self) -> list[AgentRecord]:
         return []
 
+    async def agent_info(self, agent_id: str) -> AgentRecord | None:
+        # The operator-identity guard's exact lookup (§5C.5): this suite sets
+        # no identity, so every id reads as unregistered.
+        return None
+
+    async def register_operator(self, operator_id: str) -> bool:
+        return True
+
     async def close(self) -> None:
         self.closed = True
 

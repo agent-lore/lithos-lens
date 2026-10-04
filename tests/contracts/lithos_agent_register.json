@@ -10,7 +10,13 @@
       "name": "Lithos Lens",
       "type": "web-ui"
     },
-    "notes": "Lens registers once at startup; metadata is accepted upstream but never sent."
+    "notes": "Two request shapes. The canonical one is Lens's own SERVICE registration, once at startup (type web-ui); metadata is accepted upstream but never sent. The `human_operator` variant is the operator-identity registration that precedes an identity's first write (REQUIREMENTS \u00a75C.5): id + type=\"human\" and no name, so the row says what the id is rather than inventing a person's name for it. Re-registering an EXISTING id with a type overwrites that agent's stored type and un-archives it, which is why the variant is only ever sent for an id the impersonation guard has cleared through lithos_agent_info.",
+    "variants": {
+      "human_operator": {
+        "id": "dave",
+        "type": "human"
+      }
+    }
   },
   "responses": {
     "success": {
@@ -25,5 +31,5 @@
     },
     "errors": []
   },
-  "observed_divergences": ""
+  "observed_divergences": "The response carries no error envelope in the source, and Lens's two callers treat a failure as a boolean rather than a code: the startup registration is best-effort (register_agent -> False) and the operator registration refuses the write behind it (register_operator -> False, \"could not register the operator identity; nothing was changed\"). No conditional/create-only form exists, so the lookup -> register window the guard leaves open cannot be closed client-side; recorded as a known limit in docs/SPECIFICATION.md (PRD clarification 3, Dave 2026-10-03)."
 }

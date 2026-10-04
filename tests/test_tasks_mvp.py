@@ -73,6 +73,8 @@ class TaskFakeLithosClient(ReadOnlyWriteSurface):
         self.ignore_tags = ignore_tags
         self.closed = False
         self.register_calls = 0
+        self.agent_info_calls: list[str] = []
+        self.operator_registrations: list[str] = []
         self.status_calls: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
         # Task-graph oracle state (lithos 0.4). Lens never re-derives readiness,
@@ -353,6 +355,17 @@ class TaskFakeLithosClient(ReadOnlyWriteSurface):
             AgentRecord(id="planner", name="Planner"),
             AgentRecord(id="worker", name="Worker"),
         ]
+
+    async def agent_info(self, agent_id: str) -> AgentRecord | None:
+        # The exact lookup the operator-identity guard makes (§5C.5). These
+        # suites never set an identity, so every id reads as unregistered;
+        # the guard's own cases live in tests/test_operator_identity.py.
+        self.agent_info_calls.append(agent_id)
+        return None
+
+    async def register_operator(self, operator_id: str) -> bool:
+        self.operator_registrations.append(operator_id)
+        return True
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None

@@ -13,10 +13,10 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 |---|---|---:|---:|
 | `lithos_lens.fake_dataset` | L | 1 | 1 |
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
-| `lithos_lens.fake_lithos` | M | 2 | 1 |
+| `lithos_lens.fake_lithos` | L | 2 | 1 |
 | `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
-| `lithos_lens.lithos_client` | M | 3 | 0 |
+| `lithos_lens.lithos_client` | L | 3 | 0 |
 | `lithos_lens.lithos_writes` | S | 2 | 0 |
 | `lithos_lens.mcp_transport` | M | 2 | 2 |
 
