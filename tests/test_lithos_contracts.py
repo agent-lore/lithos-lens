@@ -69,14 +69,22 @@ from lithos_lens.tasks import (
 from tests.conftest import CONTRACTS_DIR, load_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLIENT_PY = REPO_ROOT / "src" / "lithos_lens" / "lithos_client.py"
+#: Every module whose ``self._call_tool(...)`` calls make up the client's tool
+#: surface: the typed methods, and the five writes mixed into them (T3).
+CLIENT_SOURCES = tuple(
+    REPO_ROOT / "src" / "lithos_lens" / name
+    for name in ("lithos_client.py", "lithos_writes.py")
+)
 
 
 def _call_tool_name_nodes() -> list[ast.expr | None]:
     """The name argument node of every ``self._call_tool(...)`` invocation."""
-    tree = ast.parse(CLIENT_PY.read_text(encoding="utf-8"))
     nodes: list[ast.expr | None] = []
-    for node in ast.walk(tree):
+    for node in (
+        node
+        for path in CLIENT_SOURCES
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+    ):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -128,7 +136,7 @@ def test_every_call_tool_name_is_a_string_literal() -> None:
 def test_every_client_tool_has_a_contract() -> None:
     missing = _client_tool_names() - _contract_tools()
     assert not missing, (
-        f"Lithos tools called by lithos_client.py without a vendored contract: "
+        f"Lithos tools called by the client without a vendored contract: "
         f"{sorted(missing)}. Add tests/contracts/<tool>.json (transcribed from "
         f"the Lithos source — see tests/contracts/README.md) in the same PR."
     )

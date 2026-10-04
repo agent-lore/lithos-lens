@@ -16,7 +16,8 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 | `lithos_lens.fake_lithos` | M | 2 | 1 |
 | `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
-| `lithos_lens.lithos_client` | L | 3 | 0 |
+| `lithos_lens.lithos_client` | M | 3 | 0 |
+| `lithos_lens.lithos_writes` | S | 2 | 0 |
 | `lithos_lens.mcp_transport` | M | 2 | 2 |
 
 ## Public API
@@ -48,6 +49,10 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 - class `LithosClientProtocol` — Subset of Lithos operations required by the common core.
 - class `RegistrationResult`
 - class `LithosClient` — Best-effort Lithos client used by the web app.
+
+### `lithos_lens.lithos_writes`
+- class `LithosWriteProtocol` — The writes (T3): called only by the write funnel, never by a read path.
+- class `LithosWriteMethods` — The five writes, placed through the host client's ``_call_tool``.
 
 ### `lithos_lens.mcp_transport`
 - class `LithosToolError` — Raised when Lithos returns an error envelope from a tool call.
