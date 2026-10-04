@@ -12,7 +12,7 @@
       "task_id": "influx-gate-human",
       "agent": "dave"
     },
-    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a `[Reopened]` finding (the only surviving evidence of the prior outcome — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. The id is resolved from a full id OR an unambiguous prefix of at least SIX characters: a shorter one is `invalid_input` and a prefix matching more than one task is `ambiguous_id_prefix`, whose `candidates` are `{id, title}` RECORDS (capped upstream — the message says \"2 or more matches\" rather than a count), not id strings. Lens always sends a full id for this tool (the funnel acts on a task it has just read), so neither refusal is on a Lens request; both are vendored because the mapper must still answer them."
+    "notes": "The whole request surface: a terminal (completed/cancelled) task back to `open`. Clears `resolved_at` and `outcome`, records the reopen as a `[Reopened]` finding (the only surviving evidence of the prior outcome — see tasks.REOPENED_FINDING_PREFIX) and emits `task.reopened`. An already-open task is `task_not_resolved`, a missing one `task_not_found`. Every id goes through the SHARED resolver, whose whole domain is probed: a full id (>= 36 characters, a UUID) is handed straight to this tool's own lookup; anything shorter than SIX characters that is not an exact id is `invalid_input`; a 6-to-35-character value is searched as a PREFIX, and matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) while matching several is `ambiguous_id_prefix` with up to FIVE `{id, title}` candidate RECORDS — the message states the capped count. Lens sends a full id for this tool (the funnel acts on a task it has just read), so none of the prefix refusals is on a Lens request; all are vendored because the mapper must still answer them."
   },
   "responses": {
     "success": {
@@ -49,6 +49,11 @@
         "status": "error",
         "code": "invalid_input",
         "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (task_id)."
       },
       {
         "status": "error",

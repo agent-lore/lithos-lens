@@ -25,7 +25,7 @@
         "agent": "dave"
       }
     },
-    "notes": "Accepted types: `blocks` (to_task is not ready until from_task completes), `parent_child` (from_task is the parent; structural, never blocks), `discovered_from` (non-blocking) and `waits_on_gate` (to_task waits on the gate from_task). Both ids go through the shared resolver — a full id or an unambiguous prefix of at least SIX characters, shorter being `invalid_input` and several matches `ambiguous_id_prefix` with `{id, title}` candidate records; the message names WHICH argument failed (`from_task_id` / `to_task_id`). Validation order, probed: the edge type first, then the self-edge check, then each id's resolution, then existence. On an EXISTING (from, to, type) the call returns the same success payload as an insert, REPLACES that edge's metadata, and leaves `created_by` / `created_at` as they were — so those two fields are evidence of who inserted an edge, which is what T3 D11's removal offer rests on. An edge write emits NO event, which is why Lens re-reads the focal task's edges around the call and publishes its own synthetic `lens.edge_upserted`."
+    "notes": "Accepted types: `blocks` (to_task is not ready until from_task completes), `parent_child` (from_task is the parent; structural, never blocks), `discovered_from` (non-blocking) and `waits_on_gate` (to_task waits on the gate from_task). Both ids go through the shared resolver, whose domain is probed: a full id (>= 36 characters) goes to the edge write's own existence check, under six characters is `invalid_input`, a 6-to-35-character value is searched as a prefix and matching nothing is the resolver's `task_not_found` (\"No task matches id prefix …\") while matching several is `ambiguous_id_prefix` with up to FIVE `{id, title}` candidate records whose capped count the message states. Every message names WHICH argument failed (`from_task_id` / `to_task_id`), and `from_task_id` is resolved first — a request with two bad ids is refused for the first one. Validation order, probed: the edge type first, then the self-edge check, then each id's resolution, then existence. On an EXISTING (from, to, type) the call returns the same success payload as an insert, REPLACES that edge's metadata, and leaves `created_by` / `created_at` as they were — so those two fields are evidence of who inserted an edge, which is what T3 D11's removal offer rests on. An edge write emits NO event, which is why Lens re-reads the focal task's edges around the call and publishes its own synthetic `lens.edge_upserted`."
   },
   "responses": {
     "success": {
@@ -55,6 +55,16 @@
         "status": "error",
         "code": "invalid_input",
         "message": "to_task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (from_task_id)."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (to_task_id)."
       },
       {
         "status": "error",
@@ -93,5 +103,5 @@
       }
     ]
   },
-  "observed_divergences": "The success payload is the same for an insert and for a metadata replacement, so NOTHING in it says which happened — the residual T3 D11 states, and the upstream ask (a `created` flag) it would close. Its four keys beside `success` are transcribed from the source (`upsert_task_edge`); the tool's own description only says \"with the resolved endpoint ids + titles\" without naming them, and the body cannot be probed without writing an edge into the operator's graph. `invalid_edge_type`, `self_edge`, both `invalid_input` too-short cases, `ambiguous_id_prefix` (candidates are `{id, title}` records) and `task_not_found` ARE probed live, as is the validation order and `not_a_gate`. `cycle` and `parent_exists` are not: provoking either needs two real tasks in the right relation, and a rule that failed to fire would leave a real edge behind — so their codes come from the source and their message text is composed. The `cycle` message names members by FULL id and is rendered verbatim; Lens never parses it for logic. `invalid_edge_type` is treated as a Lens defect (the form offers only valid types)."
+  "observed_divergences": "The success payload is the same for an insert and for a metadata replacement, so NOTHING in it says which happened — the residual T3 D11 states, and the upstream ask (a `created` flag) it would close. Its four keys beside `success` are transcribed from the source (`upsert_task_edge`); the tool's own description only says \"with the resolved endpoint ids + titles\" without naming them, and the body cannot be probed without writing an edge into the operator's graph. `invalid_edge_type`, `self_edge`, both too-short `invalid_input` cases, both resolver-level `task_not_found` cases, the edge write's own `task_not_found` (which names BOTH missing endpoints), `ambiguous_id_prefix` (candidates are `{id, title}` records) and `not_a_gate` ARE probed live, as is the validation order. The candidate CAP of five and the count the ambiguity message quotes come from the source: the live corpus has no six-character prefix shared by three tasks, so a capped list cannot be provoked there. `cycle` and `parent_exists` are not: provoking either needs two real tasks in the right relation, and a rule that failed to fire would leave a real edge behind — so their codes come from the source and their message text is composed. The `cycle` message names members by FULL id and is rendered verbatim; Lens never parses it for logic. `invalid_edge_type` is treated as a Lens defect (the form offers only valid types)."
 }

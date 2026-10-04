@@ -20,6 +20,7 @@ the event the real server emits with it, which are not the same fields.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -46,6 +47,18 @@ __all__ = ["FakeWriteOutcome", "FakeWriteStore", "write_error"]
 #: "task_id 'zqxj' is too short: pass the full task id or a prefix of at least
 #: 6 characters."
 MIN_ID_PREFIX_LENGTH = 6
+
+#: Length at or above which the resolver treats a value as a FULL id and stops
+#: searching, handing it to the calling tool's own lookup. Probed: a 35-char
+#: non-match answers the resolver's "No task matches id prefix …", a 36-char
+#: one answers complete's own "Task … not found or not in an open state". A
+#: Lithos task id is a UUID, hence 36.
+FULL_ID_LENGTH = 36
+
+#: How many candidates an ambiguous prefix names. Upstream caps the list, and
+#: its message says "<n> or more matches" from the CAPPED count rather than the
+#: true total — so the cap is part of the envelope, not a display detail.
+MAX_ID_CANDIDATES = 5
 
 #: Metadata keys ``lithos_task_create`` refuses: dependencies are first-class
 #: edges, so the old metadata spelling is an error rather than a no-op.
@@ -91,11 +104,12 @@ class FakeWriteStore(FakeStoreView):
 
     Every id a write carries goes through :meth:`resolve_id` — all five tools
     share one resolver upstream (probed: complete, cancel, reopen and both edge
-    endpoints answer the same too-short and ambiguous-prefix envelopes), so
-    they share one here. Note what the resolver does NOT do: an id it cannot
-    match comes back unchanged rather than refused, because upstream leaves "no
-    such task" to each tool's own lookup — which is how complete and cancel
-    answer ``task_not_found`` for "missing OR not open" with one code.
+    endpoints answer the same too-short, no-match and ambiguous-prefix
+    envelopes), so they share one here. Note where the refusal comes FROM: a
+    searched prefix that matches nothing is the resolver's own
+    ``task_not_found``, while a full-length id is handed through to the calling
+    tool's lookup — which is how complete and cancel answer "missing OR not
+    open" with that one code.
     """
 
     # ── writes ─────────────────────────────────────────────────────────
@@ -120,16 +134,21 @@ class FakeWriteStore(FakeStoreView):
             payload=self._resolved(task, unblocked=unblocked),
             event_type="task.completed",
             # The node-feedback arguments ride the event even when nothing
-            # sent them, which is the state Lens always leaves them in: it has
-            # no node-feedback surface on this path.
+            # sent them — which is the state Lens always leaves them in, having
+            # no node-feedback surface on this path — and they ride it
+            # PRE-SERIALIZED: upstream puts `json.dumps(value)` on the event, so
+            # an absent one arrives as the literal four-character string
+            # "null", not as a JSON null. `normalize_lithos_event` does not
+            # decode them, so a consumer sees the string. Reproduced rather
+            # than tidied: a fake that sent real nulls would hide it.
             event={
                 "task_id": task.id,
                 "agent": agent,
                 "outcome": outcome or None,
                 "updated_at": stamp,
-                "cited_nodes": None,
-                "misleading_nodes": None,
-                "receipt_id": None,
+                "cited_nodes": json.dumps(None),
+                "misleading_nodes": json.dumps(None),
+                "receipt_id": json.dumps(None),
             },
         )
 
@@ -194,7 +213,7 @@ class FakeWriteStore(FakeStoreView):
                     f"{REOPENED_FINDING_PREFIX} reopened from {task.status} by "
                     f"{agent} (prior outcome: {task.outcome or 'none'})"
                 ),
-                created_at=_now(),
+                created_at=stamp,
             )
         )
         reblocked = [
@@ -226,23 +245,32 @@ class FakeWriteStore(FakeStoreView):
         depends_on: tuple[str, ...] | list[str] = (),
         parent_task_id: str = "",
     ) -> FakeWriteOutcome:
-        """Mint a task, resolving its predecessor and parent id prefixes."""
-        if not title.strip():
-            raise write_error("invalid_input", "title must not be empty.")
+        """Mint a task, resolving its predecessor and parent id prefixes.
+
+        There is deliberately NO title rule: upstream accepts an empty title
+        and stores it. Lens's own form validation refuses one before the call
+        (T3 D10), but a fake that refused it here would be answering for a
+        rule the server does not have — and the create slice would then be
+        tested against a refusal it will never see.
+        """
         if task_type not in KNOWN_TASK_TYPES:
+            # Its OWN code, not `invalid_input` (probed).
             raise write_error(
-                "invalid_input",
-                f"task_type must be one of task/epic/gate, got {task_type!r}.",
+                "invalid_task_type",
+                f"task_type {task_type!r} is not accepted in this phase "
+                f"(accepted: {sorted(KNOWN_TASK_TYPES)}).",
             )
         task_metadata = dict(metadata or {})
         # Dependencies are first-class edges now, so upstream refuses the old
-        # metadata spelling outright rather than silently ignoring it.
+        # metadata spelling outright rather than silently ignoring it — again
+        # with a code of its own.
         forbidden = sorted(FORBIDDEN_CREATE_METADATA_KEYS & set(task_metadata))
         if forbidden:
             raise write_error(
-                "invalid_input",
-                f"metadata must not contain {'/'.join(forbidden)} — pass "
-                "depends_on instead.",
+                "invalid_metadata_key",
+                f"metadata key(s) {forbidden} are no longer accepted: task "
+                "dependencies are first-class task edges. Use depends_on on "
+                "lithos_task_create, or lithos_task_edge_upsert.",
             )
         if task_type == "gate":
             self._validate_gate(task_metadata)
@@ -271,7 +299,11 @@ class FakeWriteStore(FakeStoreView):
                 task_type=task_type,
             )
         )
-        for predecessor in resolved_depends_on:
+        # Deduplicated for the INSERT only: upstream's edge table is unique on
+        # (from, to, type) and it dedupes before inserting, while the response
+        # still echoes the resolved request list — so a form that submitted the
+        # same predecessor twice yields one edge and two echoed entries.
+        for predecessor in dict.fromkeys(resolved_depends_on):
             self._insert_edge(predecessor, new_id, "blocks", agent, {}, created_at)
         if resolved_parent:
             self._insert_edge(
@@ -419,6 +451,9 @@ class FakeWriteStore(FakeStoreView):
         tasks = self.tasks()
         exact = next((task for task in tasks if task.id == task_id), None)
         if exact is not None:
+            # Upstream ids are UUIDs, so an exact match there is always a full
+            # id; this fixture's ids are short, so the exact lookup runs first
+            # or no test could name a task at all.
             return exact.id
         if len(task_id) < MIN_ID_PREFIX_LENGTH:
             raise write_error(
@@ -426,27 +461,38 @@ class FakeWriteStore(FakeStoreView):
                 f"{field} '{task_id}' is too short: pass the full task id or a "
                 "prefix of at least 6 characters.",
             )
+        if len(task_id) >= FULL_ID_LENGTH:
+            # A full-length id is not a prefix to search: it goes to the
+            # calling tool's own lookup, which is what answers "no such task"
+            # (complete: "not found or not in an open state"; the edge write:
+            # "edge references nonexistent task(s)").
+            return task_id
         matches = sorted(
             (task for task in tasks if task.id.startswith(task_id)),
             key=lambda task: task.id,
         )
         if not matches:
-            # NOT this seam's refusal: upstream's resolver hands an unmatched
-            # value back and each tool's own lookup answers `task_not_found`
-            # (probed — complete says "not found or not in an open state", the
-            # edge write "edge references nonexistent task(s)").
-            return task_id
+            # A searched PREFIX that matched nothing is the resolver's own
+            # refusal, with its own message — distinct from the tool-level
+            # not-found above, though they share the code.
+            raise write_error(
+                "task_not_found",
+                f"No task matches id prefix '{task_id}' ({field}).",
+            )
         if len(matches) > 1:
-            # Records, not id strings — the error mapper offers the titles as
-            # choices. Upstream caps the list ("2 or more matches", never a
-            # count); no fixture here comes near any plausible cap, so the
-            # fake returns every match.
+            # Records, not id strings — the mapper offers the titles as
+            # choices — and capped, with the count in the message taken from
+            # the capped list exactly as upstream words it.
+            candidates = [
+                {"id": task.id, "title": task.title}
+                for task in matches[:MAX_ID_CANDIDATES]
+            ]
             raise write_error(
                 "ambiguous_id_prefix",
-                f"Task id prefix '{task_id}' ({field}) is ambiguous: 2 or more "
-                "matches. Retry with a longer prefix or a full id from "
-                "candidates.",
-                candidates=[{"id": task.id, "title": task.title} for task in matches],
+                f"Task id prefix '{task_id}' ({field}) is ambiguous: "
+                f"{len(candidates)} or more matches. Retry with a longer "
+                "prefix or a full id from candidates.",
+                candidates=candidates,
             )
         return matches[0].id
 
@@ -504,23 +550,26 @@ class FakeWriteStore(FakeStoreView):
         return task
 
     def _validate_gate(self, metadata: dict[str, Any]) -> None:
-        gate_type = str(metadata.get("gate_type") or "")
+        raw_gate_type = metadata.get("gate_type")
+        gate_type = str(raw_gate_type or "")
         if gate_type not in KNOWN_GATE_TYPES:
             raise write_error(
                 "invalid_input",
-                "a gate requires metadata.gate_type in "
-                f"{sorted(KNOWN_GATE_TYPES)}, got {gate_type!r}.",
+                "a gate task requires metadata.gate_type in "
+                f"{sorted(KNOWN_GATE_TYPES)}, got "
+                f"{raw_gate_type if raw_gate_type is None else repr(gate_type)}.",
             )
         if gate_type != "timer":
             return
-        ready_at = str(metadata.get("ready_at") or "")
+        raw_ready_at = metadata.get("ready_at")
         try:
-            datetime.fromisoformat(ready_at)
-        except ValueError:
+            datetime.fromisoformat(str(raw_ready_at))
+        except (TypeError, ValueError):
             raise write_error(
                 "invalid_input",
-                f"a timer gate requires a parseable metadata.ready_at, got "
-                f"{ready_at!r}.",
+                "a 'timer' gate requires a parseable metadata.ready_at (ISO "
+                f"datetime), got "
+                f"{raw_ready_at if raw_ready_at is None else repr(str(raw_ready_at))}.",
             ) from None
 
 

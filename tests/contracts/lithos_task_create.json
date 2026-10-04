@@ -4,6 +4,7 @@
   "source": [
     "lithos:src/lithos/tools/tasks.py::lithos_task_create",
     "lithos:src/lithos/coordination.py::create_task",
+    "lithos:src/lithos/coordination.py::_reject_scheduling_metadata",
     "lithos:src/lithos/coordination.py::_resolve_task_id",
     "lithos-lens:tests/contracts/_tools_snapshot.json::lithos_task_create"
   ],
@@ -42,7 +43,7 @@
         }
       }
     },
-    "notes": "`task_type` is one of task/epic/gate and is ALWAYS sent even when it equals the upstream default, the same discipline the read side applies to `with_claims`. A `gate` requires `metadata.gate_type` in human/timer/ci/pr/external_task, and a `timer` gate additionally a parseable `metadata.ready_at`. `metadata` must NOT carry `depends_on`/`blocked_on` — dependencies are first-class edges, passed as `depends_on`, each of which creates a `blocks` edge from the predecessor; `parent_task_id` creates a `parent_child` edge parent -> new task. Both must already exist and are resolved through the SHARED id resolver: a full id, or an unambiguous prefix of at least SIX characters — shorter is `invalid_input`, several matches is `ambiguous_id_prefix` with `{id, title}` candidate RECORDS. Lens writes the project under BOTH conventions (metadata.project and the project tag, §5B.1) and carries `metadata.lens_request_id` for its own best-effort de-duplication: create mints a new id and inserts with NO uniqueness on any metadata key, so the key is a Lens-side lookup, never an upstream idempotency guarantee (T3 D10)."
+    "notes": "`task_type` is one of task/epic/gate and is ALWAYS sent even when it equals the upstream default, the same discipline the read side applies to `with_claims`; an unknown one is `invalid_task_type`, a code of its own. A `gate` requires `metadata.gate_type` in human/timer/ci/pr/external_task, and a `timer` gate additionally a parseable `metadata.ready_at` — both `invalid_input`. `metadata` must NOT carry `depends_on`/`blocked_on`: that is `invalid_metadata_key`, again its own code, because dependencies are first-class edges now. There is NO title rule — an empty title is accepted and stored, so Lens's own form validation is the only thing that refuses one (T3 D10). `depends_on` creates a `blocks` edge from each predecessor and `parent_task_id` a `parent_child` edge parent -> new task; both must already exist, and a repeated predecessor is deduplicated before insertion while the response still echoes the resolved request list. Lens writes the project under BOTH conventions (metadata.project and the project tag, §5B.1) and carries `metadata.lens_request_id` for its own best-effort de-duplication: create mints a new id and inserts with NO uniqueness on any metadata key, so the key is a Lens-side lookup, never an upstream idempotency guarantee (T3 D10). Every id goes through the SHARED resolver, whose whole domain is probed: a full id (>= 36 characters, a UUID) is handed straight to this tool's own lookup; anything shorter than SIX characters that is not an exact id is `invalid_input`; a 6-to-35-character value is searched as a PREFIX, and matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", a different message from this tool's own not-found, same code) while matching several is `ambiguous_id_prefix` with up to FIVE `{id, title}` candidate RECORDS — the message states the capped count. Lens DOES send prefixes here — the create form takes a full or short id for a predecessor or parent (T3 D10) — so every one of these refusals is on a Lens request."
   },
   "responses": {
     "success": {
@@ -64,23 +65,33 @@
     "errors": [
       {
         "status": "error",
-        "code": "invalid_input",
-        "message": "a gate requires metadata.gate_type in ['ci', 'external_task', 'human', 'pr', 'timer'], got ''."
+        "code": "invalid_task_type",
+        "message": "task_type 'milestone' is not accepted in this phase (accepted: ['epic', 'gate', 'task'])."
+      },
+      {
+        "status": "error",
+        "code": "invalid_metadata_key",
+        "message": "metadata key(s) ['depends_on'] are no longer accepted: task dependencies are first-class task edges. Use depends_on on lithos_task_create, or lithos_task_edge_upsert."
+      },
+      {
+        "status": "error",
+        "code": "invalid_metadata_key",
+        "message": "metadata key(s) ['blocked_on'] are no longer accepted: task dependencies are first-class task edges. Use depends_on on lithos_task_create, or lithos_task_edge_upsert."
       },
       {
         "status": "error",
         "code": "invalid_input",
-        "message": "a timer gate requires a parseable metadata.ready_at, got 'soon'."
+        "message": "a gate task requires metadata.gate_type in ['ci', 'external_task', 'human', 'pr', 'timer'], got None."
       },
       {
         "status": "error",
         "code": "invalid_input",
-        "message": "task_type must be one of task/epic/gate, got 'milestone'."
+        "message": "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got None."
       },
       {
         "status": "error",
         "code": "invalid_input",
-        "message": "metadata must not contain depends_on/blocked_on — pass depends_on instead."
+        "message": "a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got 'soon'."
       },
       {
         "status": "error",
@@ -90,7 +101,7 @@
       {
         "status": "error",
         "code": "task_not_found",
-        "message": "Task 'influx-ingest-cutover' not found."
+        "message": "No task matches id prefix 'influx-nope' (depends_on)."
       },
       {
         "status": "error",
@@ -109,5 +120,5 @@
       }
     ]
   },
-  "observed_divergences": "**The success payload carries no `success` key.** Its documented return is \"Dict with task_id, title, updated_at, and the resolved depends_on / parent_task_id when supplied\" — the minted id IS the success signal, so `TaskCreateResult.success` is derived from it rather than read from a flag that is never sent (the first pass of this slice vendored a `success: true` that does not exist, which made every successful create normalize to success=False). `depends_on` / `parent_task_id` come back as the RESOLVED full ids and are absent when the request supplied none (`no_links`). NOT probed live, unlike the other four tools' envelopes: every create probe risks inserting a task into the operator's store, and there is no delete tool to undo it. So the three resolver envelopes here (`invalid_input` too short, `task_not_found`, `ambiguous_id_prefix` with `{id, title}` records) are transcribed from the SHARED resolver seam, probed through `lithos_task_edge_upsert` and the three task-state tools, with the field name in the message following that seam's pattern; the four validation envelopes carry the codes the source raises for rules the tool documents itself (gate_type, timer ready_at, task_type, forbidden metadata keys) with composed message text. Codes are what Lens matches on; text is never parsed."
+  "observed_divergences": "**The success payload carries no `success` key.** Its documented return is \"Dict with task_id, title, updated_at, and the resolved depends_on / parent_task_id when supplied\" — the minted id IS the success signal, so `TaskCreateResult.success` is derived from it rather than read from a flag that is never sent. `depends_on` / `parent_task_id` come back as the RESOLVED full ids and are absent when the request supplied none (`no_links`). Every error envelope above IS probed live, including the two codes of its own — `invalid_task_type` and `invalid_metadata_key`, which the first passes of this slice both recorded as `invalid_input` — because each of these arguments is refused by validation BEFORE anything is inserted, so the probe creates nothing (it also cancelled anything it might have created, and created nothing). What is NOT probed is the success payload and the empty-title behaviour: both would insert a task into the operator's store, and there is no delete tool to undo it. The empty title is therefore taken from the source — accepted and stored — and the fake has no title rule, because inventing one would have the create slice tested against a refusal upstream never sends."
 }

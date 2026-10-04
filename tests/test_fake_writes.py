@@ -18,6 +18,7 @@ cycle is reachable, not only a dependency one).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -231,14 +232,17 @@ async def test_completing_a_gate_moves_the_frontier_and_names_its_waiters() -> N
         "gate-review", agent="dave", outcome="Completed via Lens by dave"
     )
 
+    stored = await client.task_get("gate-review")
     assert result == TaskCompleteResult(
         success=True,
         task_id="gate-review",
         title="Gate review",
-        updated_at=result.updated_at,
+        # The stamp the write STORED, not merely a non-empty string: a result
+        # carrying some other timestamp would pass a truthiness check.
+        updated_at=stored.resolved_at,
         unblocked=("waiter-one", "waiter-two"),
     )
-    assert result.updated_at, "the write stamps what it wrote"
+    assert result.updated_at
     ready = await _ready_ids(client)
     assert {"waiter-one", "waiter-two"} <= ready
     assert "waiter-both" not in ready
@@ -248,10 +252,9 @@ async def test_completing_a_gate_moves_the_frontier_and_names_its_waiters() -> N
     assert set(blocked) == {"waiter-both", "dep"}
     # Its remaining blocker is the predecessor, and the satisfied gate is gone.
     assert [row.task_id for row in blocked["waiter-both"]] == ["pred"]
-    gate = await client.task_get("gate-review")
-    assert gate.status == "completed"
-    assert gate.outcome == "Completed via Lens by dave"
-    assert gate.resolved_at
+    assert stored.status == "completed"
+    assert stored.outcome == "Completed via Lens by dave"
+    assert stored.resolved_at
 
 
 @pytest.mark.parametrize("action", ["complete", "cancel"])
@@ -306,11 +309,14 @@ async def test_reopening_a_completed_gate_re_blocks_the_same_waiters() -> None:
 
     reopen = await client.task_reopen("gate-review", agent="dave")
 
+    # A reopen CLEARS resolved_at, so the stamp it answers is the one it wrote
+    # on the `[Reopened]` finding — one stamp per write, not two clock reads.
+    (finding,) = await client.list_findings("gate-review")
     assert reopen == TaskReopenResult(
         success=True,
         task_id="gate-review",
         title="Gate review",
-        updated_at=reopen.updated_at,
+        updated_at=finding.created_at,
         reblocked=completion.unblocked,
     )
     assert reopen.updated_at
@@ -370,11 +376,12 @@ async def test_cancelling_a_predecessor_strands_its_dependent() -> None:
 
     result = await client.task_cancel("pred", agent="dave", reason="superseded")
 
+    stored = await client.task_get("pred")
     assert result == TaskCancelResult(
         success=True,
         task_id="pred",
         title="Pred",
-        updated_at=result.updated_at,
+        updated_at=stored.resolved_at,
     )
     assert result.updated_at
     blocked = await _blocked(client)
@@ -435,6 +442,45 @@ async def test_an_id_prefix_must_be_a_full_id_or_at_least_six_characters() -> No
     assert "at least 6 characters" in str(short.value)
     assert short.value.envelope["code"] == "invalid_input"
 
+    # A searched prefix that matches nothing is the RESOLVER's refusal, with
+    # its own message — the same code the tool's own lookup uses, which is why
+    # the mapper reads the code and never the text.
+    with pytest.raises(LithosToolError) as nomatch:
+        await client.task_create(title="None", agent="dave", depends_on=["zqxjqw"])
+    assert nomatch.value.code == "task_not_found"
+    assert str(nomatch.value) == ("No task matches id prefix 'zqxjqw' (depends_on).")
+
+    # At or above a full id's length the resolver stops searching and the
+    # value goes to the tool's own lookup, which answers for itself.
+    full_length = "zqxjqw" + "0" * 30
+    assert len(full_length) == 36
+    with pytest.raises(LithosToolError) as passed_through:
+        await client.task_create(title="Full", agent="dave", depends_on=[full_length])
+    assert passed_through.value.code == "task_not_found"
+    assert str(passed_through.value) == f"Task '{full_length}' not found."
+
+
+async def test_an_ambiguous_prefix_names_at_most_five_candidates() -> None:
+    """Upstream caps the candidate list, and quotes the CAPPED count.
+
+    Minted tasks all share the `fake-created-` prefix, so six creates are
+    enough to exceed the cap. A fake that returned every match would hand the
+    mapper a chooser upstream would never send, and a message disagreeing with
+    the list beside it.
+    """
+    client = _client()
+    for index in range(6):
+        await client.task_create(title=f"Minted {index}", agent="dave")
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_create(title="Ambiguous", agent="dave", depends_on=["fake-c"])
+
+    candidates = excinfo.value.envelope["candidates"]
+    assert len(candidates) == 5
+    assert all(set(candidate) == {"id", "title"} for candidate in candidates)
+    # The count in the message is the capped one, not the true total of six.
+    assert "5 or more matches" in str(excinfo.value)
+
 
 async def test_an_ambiguous_prefix_names_its_candidates_as_records() -> None:
     """``candidates`` are ``{id, title}`` RECORDS, not id strings.
@@ -456,14 +502,31 @@ async def test_an_ambiguous_prefix_names_its_candidates_as_records() -> None:
         {"id": "waiter-one", "title": "Waiter one"},
         {"id": "waiter-two", "title": "Waiter two"},
     ]
-    assert "ambiguous" in str(excinfo.value)
+    # The count is the one it returned — a hard-coded "2 or more" would
+    # contradict the three candidates beside it.
+    assert str(excinfo.value) == (
+        "Task id prefix 'waiter-' (depends_on) is ambiguous: 3 or more matches. "
+        "Retry with a longer prefix or a full id from candidates."
+    )
 
 
 @pytest.mark.parametrize(
     ("label", "arguments", "code"),
     [
-        ("blank title", {"title": "   "}, "invalid_input"),
-        ("unknown type", {"title": "T", "task_type": "milestone"}, "invalid_input"),
+        # Two codes of their OWN, probed against a live Lithos — not
+        # `invalid_input`, which is what earlier passes of this slice recorded.
+        ("unknown type", {"title": "T", "task_type": "milestone"}, "invalid_task_type"),
+        (
+            "depends_on in metadata",
+            {"title": "T", "metadata": {"depends_on": ["pred"]}},
+            "invalid_metadata_key",
+        ),
+        (
+            "blocked_on in metadata",
+            {"title": "T", "metadata": {"blocked_on": ["pred"]}},
+            "invalid_metadata_key",
+        ),
+        # The gate rules really are `invalid_input`.
         ("gate with no type", {"title": "T", "task_type": "gate"}, "invalid_input"),
         (
             "timer with no ready_at",
@@ -477,11 +540,6 @@ async def test_an_ambiguous_prefix_names_its_candidates_as_records() -> None:
                 "task_type": "gate",
                 "metadata": {"gate_type": "timer", "ready_at": "soon"},
             },
-            "invalid_input",
-        ),
-        (
-            "dependencies in metadata",
-            {"title": "T", "metadata": {"depends_on": ["pred"]}},
             "invalid_input",
         ),
         (
@@ -499,12 +557,12 @@ async def test_an_ambiguous_prefix_names_its_candidates_as_records() -> None:
 async def test_create_refuses_what_upstream_refuses(
     label: str, arguments: dict[str, Any], code: str
 ) -> None:
-    """Every documented create validation, and nothing minted by a refusal.
+    """Every documented create validation, with the code upstream raises.
 
-    ``metadata.depends_on`` is the one worth naming: dependencies are
+    ``metadata.depends_on`` is the one worth naming twice: dependencies are
     first-class edges now, so upstream refuses the old spelling rather than
-    ignoring it — a fake that ignored it would let the create form ship a
-    silently dependency-less task.
+    ignoring it — and it refuses it with `invalid_metadata_key`, which the
+    mapper must tell apart from an ordinary `invalid_input` on a form field.
     """
     client = _client()
     before = {task.id for task in await client.list_tasks()}
@@ -513,7 +571,51 @@ async def test_create_refuses_what_upstream_refuses(
         await client.task_create(agent="dave", **arguments)
 
     assert excinfo.value.code == code, label
+    assert excinfo.value.envelope["code"] == code
     assert {task.id for task in await client.list_tasks()} == before
+
+
+async def test_create_has_no_title_rule_of_its_own() -> None:
+    """Upstream accepts an empty title and stores it, so the fake must too.
+
+    Lens refuses one in its own form validation (T3 D10), and that is the right
+    place for it: a fake that refused it here would have the create slice
+    tested against a refusal the server never sends — the wrong code, on the
+    wrong field, from the wrong layer.
+    """
+    client = _client()
+
+    result = await client.task_create(title="", agent="dave")
+
+    assert result.success is True
+    assert (await client.task_get(result.task_id)).title == ""
+
+
+async def test_create_inserts_one_edge_per_repeated_predecessor() -> None:
+    """A browser can submit the same predecessor twice.
+
+    Upstream's edge table is unique on (from, to, type) and it dedupes before
+    inserting, while the response still echoes the resolved request list — so
+    the echo repeats and the graph does not. A fake that inserted twice would
+    hand the graph and readiness slices a duplicate edge that cannot exist.
+    """
+    client = _client()
+
+    result = await client.task_create(
+        title="Twice", agent="dave", depends_on=["pred", "pred"]
+    )
+
+    # The echo keeps both entries …
+    assert result.depends_on == ("pred", "pred")
+    # … and exactly one edge was written.
+    incoming = [
+        edge
+        for edge in await client.task_edge_list(result.task_id)
+        if edge.type == "blocks"
+    ]
+    assert len(incoming) == 1
+    assert incoming[0].from_task_id == "pred"
+    assert [row.task_id for row in (await _blocked(client))[result.task_id]] == ["pred"]
 
 
 # ── create ──────────────────────────────────────────────────────────────
@@ -536,11 +638,11 @@ async def test_create_mints_a_task_and_resolves_its_links() -> None:
     assert result.success is True
     assert result.task_id
     assert result.title == "Swap reads onto the new store"
-    assert result.updated_at
     assert result.depends_on == ("pred",)
     assert result.parent_task_id == "epic-one"
     # Readable afterwards, blocked by its predecessor, and a child of the epic.
     created = await client.task_get(result.task_id)
+    assert result.updated_at == created.created_at
     assert created.created_by == "dave"
     assert created.tags == ("project:influx",)
     assert created.metadata == {"project": "influx"}
@@ -707,6 +809,36 @@ async def test_a_timer_gate_blocks_only_until_its_ready_at_passes(
         assert "ready_at" in blocked["solo"][0].message
 
 
+async def test_cancelling_an_elapsed_timer_gate_strands_its_waiter() -> None:
+    """Cancellation wins over the clock.
+
+    An elapsed OPEN timer gate stops blocking (the test above), but cancelling
+    it must strand its waiter as ``blocker_unsatisfiable`` — that is the
+    consequence the cancel confirm page states (T3 D9). Reading `ready_at`
+    without the gate's status leaves the waiter ready and the strand invisible.
+    """
+    client = _client()
+    await client.task_edge_upsert(
+        from_task_id="timer-elapsed",
+        to_task_id="solo",
+        edge_type="waits_on_gate",
+        agent="dave",
+    )
+    assert "solo" in await _ready_ids(client), "an elapsed timer gate blocks nobody"
+
+    await client.task_cancel("timer-elapsed", agent="dave")
+
+    assert "solo" not in await _ready_ids(client)
+    blockers = (await _blocked(client))["solo"]
+    assert [(row.kind, row.task_id, row.status) for row in blockers] == [
+        ("blocker_unsatisfiable", "timer-elapsed", "cancelled")
+    ]
+
+    # And reopening it hands the waiter back to the clock.
+    await client.task_reopen("timer-elapsed", agent="dave")
+    assert "solo" in await _ready_ids(client)
+
+
 @pytest.mark.parametrize(
     ("code", "from_task_id", "to_task_id", "edge_type"),
     [
@@ -820,10 +952,19 @@ async def test_each_write_publishes_the_event_body_the_server_would() -> None:
             "agent": "dave",
             "outcome": "done",
             "updated_at": completed.updated_at,
-            "cited_nodes": None,
-            "misleading_nodes": None,
-            "receipt_id": None,
+            # The literal four-character string, not a JSON null: upstream puts
+            # `json.dumps(value)` on the event and nothing decodes it again, so
+            # this is what a consumer actually receives for an argument Lens
+            # never sends. Asserted as the string so a fake that "tidied" it
+            # into None fails here.
+            "cited_nodes": "null",
+            "misleading_nodes": "null",
+            "receipt_id": "null",
         }
+        assert all(
+            isinstance(events[0].payload[key], str)
+            for key in ("cited_nodes", "misleading_nodes", "receipt_id")
+        )
         assert events[1].payload == {
             "task_id": "gate-review",
             "agent": "dave",
@@ -837,6 +978,15 @@ async def test_each_write_publishes_the_event_body_the_server_would() -> None:
             "reason": "superseded",
             "updated_at": cancelled.updated_at,
         }
+        # Not merely the same values the RESULTS carried: the stamps the store
+        # kept. One write, one stamp — on the row, on the finding it posted,
+        # and on the event alike.
+        assert (
+            events[2].payload["updated_at"]
+            == (await client.task_get("pred")).resolved_at
+        )
+        (reopen_finding,) = await client.list_findings("gate-review")
+        assert events[1].payload["updated_at"] == reopen_finding.created_at
         assert events[3].payload == {
             "task_id": created.task_id,
             "title": "Fresh",
@@ -978,6 +1128,72 @@ async def test_the_write_log_records_every_attempt_in_the_wire_shape() -> None:
             },
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (
+            lambda c: c.task_complete("nope-nope", agent="dave", outcome="done"),
+            (
+                "lithos_task_complete",
+                {"task_id": "nope-nope", "agent": "dave", "outcome": "done"},
+            ),
+        ),
+        (
+            lambda c: c.task_cancel("nope-nope", agent="dave", reason="why"),
+            (
+                "lithos_task_cancel",
+                {"task_id": "nope-nope", "agent": "dave", "reason": "why"},
+            ),
+        ),
+        (
+            lambda c: c.task_reopen("solo", agent="dave"),
+            ("lithos_task_reopen", {"task_id": "solo", "agent": "dave"}),
+        ),
+        (
+            lambda c: c.task_create(title="T", agent="dave", task_type="milestone"),
+            (
+                "lithos_task_create",
+                {"title": "T", "agent": "dave", "task_type": "milestone"},
+            ),
+        ),
+        (
+            lambda c: c.task_edge_upsert(
+                from_task_id="pred", to_task_id="pred", edge_type="blocks", agent="dave"
+            ),
+            (
+                "lithos_task_edge_upsert",
+                {
+                    "from_task_id": "pred",
+                    "to_task_id": "pred",
+                    "type": "blocks",
+                    "agent": "dave",
+                },
+            ),
+        ),
+    ],
+    ids=["complete", "cancel", "reopen", "create", "edge_upsert"],
+)
+async def test_a_refused_write_is_logged_by_every_tool(
+    call: Callable[[FakeLithosClient], Awaitable[Any]],
+    expected: tuple[str, dict[str, Any]],
+) -> None:
+    """A refused write is still a call the server received, for all five.
+
+    Each client method appends to the log independently, so this is
+    parameterised rather than written once: moving any single append after its
+    store call would drop that tool's refusals while every other assertion here
+    stayed green. Every case is refused on its FIRST attempt, so the log must
+    hold EXACTLY the refused call — a log that recorded successes only would be
+    empty here, not merely short.
+    """
+    client = _client()
+
+    with pytest.raises(LithosToolError):
+        await call(client)
+
+    assert client.write_calls == [expected]
 
 
 async def test_two_fakes_over_one_seed_do_not_share_an_overlay() -> None:

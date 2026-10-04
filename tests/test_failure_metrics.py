@@ -8,6 +8,7 @@ reader, so these cover the recording path rather than the call site's intent.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -149,6 +150,23 @@ async def test_a_transport_failure_is_counted_separately(
     )
 
 
+async def _drain_ready_queue() -> None:
+    """Yield until every already-scheduled step has run.
+
+    A call does NOT reach the gate in one hop: ``call_tool`` wraps ``_invoke``
+    in ``asyncio.wait_for``, which schedules it as its own task, so the
+    ``queued_at`` stamp is taken on a LATER loop pass than ``create_task``.
+    ``sleep(0)`` puts this coroutine at the BACK of the ready queue, so each
+    one lets every pending step ahead of it run — which is ordering, not
+    timing, and so holds however slow the machine is. Sleeping a wall-clock
+    interval instead is what made the two tests below flaky: under a loaded
+    runner the inner task's first step could land after the interval had
+    elapsed, and the wait the test then asserted on had not happened yet.
+    """
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
 async def test_time_queued_at_the_call_gate_is_measured(
     metric_reader: InMemoryMetricReader,
 ) -> None:
@@ -160,23 +178,33 @@ async def test_time_queued_at_the_call_gate_is_measured(
     time spent queued, not merely as time spent calling.
     """
     release = asyncio.Event()
+    holding = asyncio.Event()
 
     async def slow(name: str, arguments: dict[str, Any]) -> Any:
+        holding.set()
         await release.wait()
         return _Result()
 
     transport = _transport(slow, max_concurrent_calls=1)
     first = asyncio.create_task(transport.call_tool("lithos_read", {}))
-    await asyncio.sleep(0.05)
+    # The gate is HELD, as a fact rather than after an interval: the body only
+    # runs on the far side of the acquire.
+    await asyncio.wait_for(holding.wait(), timeout=5)
     second = asyncio.create_task(transport.call_tool("lithos_read", {}))
+    await _drain_ready_queue()
+    # Only now is the second call parked on the gate, so this interval is one
+    # it really spends waiting — measured on the same clock the transport uses.
+    waiting_since = time.monotonic()
     await asyncio.sleep(0.05)
+    waited = time.monotonic() - waiting_since
     release.set()
     await asyncio.gather(first, second)
 
     (queued,) = metric_points(metric_reader, "lens_lithos_call_queue_wait_seconds")
     assert queued.count == 2
-    # One call walked straight through, the other waited behind it.
-    assert queued.max > 0.01
+    # One call walked straight through, the other waited behind it — for at
+    # least the interval this test watched it wait.
+    assert queued.max >= waited
 
 
 async def test_a_call_shed_while_still_queued_is_measured(
@@ -198,28 +226,38 @@ async def test_a_call_shed_while_still_queued_is_measured(
     ``except BaseException`` path around the acquire, deterministically.
     """
     hold = asyncio.Event()
+    holding = asyncio.Event()
 
     async def slow(name: str, arguments: dict[str, Any]) -> Any:
+        holding.set()
         await hold.wait()
         return _Result()
 
     transport = _transport(slow, max_concurrent_calls=1, call_timeout_s=30)
     holder = asyncio.create_task(transport.call_tool("lithos_read", {}))
-    await asyncio.sleep(0.02)
+    # Barriers, not intervals: the body proves the gate is held, and draining
+    # the ready queue proves the second call has reached the acquire.
+    await asyncio.wait_for(holding.wait(), timeout=5)
 
     queued = asyncio.create_task(transport.call_tool("lithos_read", {}))
+    await _drain_ready_queue()
+    waiting_since = time.monotonic()
     await asyncio.sleep(0.05)
+    waited = time.monotonic() - waiting_since
     queued.cancel()
     with pytest.raises(asyncio.CancelledError):
         await queued
 
-    shed = [
+    # Exactly ONE shed point, unpacked rather than indexed: a stray earlier
+    # point under the same label would otherwise be read as this call's.
+    (shed,) = [
         point
         for point in metric_points(metric_reader, "lens_lithos_call_queue_wait_seconds")
         if dict(point.attributes or {}) == {"acquired": "false"}
     ]
-    assert shed and shed[0].count == 1, "the shed call recorded no queue wait"
-    assert shed[0].sum > 0.01, "the recorded wait is not the wait that happened"
+    assert shed.count == 1, "the shed call recorded no queue wait"
+    # Recording after the acquire instead of before it would report ~0 here.
+    assert shed.sum >= waited, "the recorded wait is not the wait that happened"
 
     hold.set()
     await holder

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -40,8 +41,13 @@ from typing import Any
 import pytest
 
 from lithos_lens.config import LithosConfig
+from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef, SearchResult
-from lithos_lens.lithos_client import LithosClient, LithosToolError
+from lithos_lens.lithos_client import (
+    LithosClient,
+    LithosClientProtocol,
+    LithosToolError,
+)
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord
 from lithos_lens.task_writes import (
     TaskCancelResult,
@@ -182,68 +188,95 @@ def test_contract_file_is_well_formed(tool: str) -> None:
 #
 # Deliberately not exhaustive: a contract may document MORE than its row (an
 # extra variant, a second message for one code). The rows are the floor.
-REQUIRED_ERROR_CODES: dict[str, set[str]] = {
+REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
+    # Each entry is (code, a phrase from that envelope's message) — one entry
+    # per distinct SCENARIO, because several scenarios share a code. Checking
+    # codes alone let four of create's five `invalid_input` legs be deleted
+    # with the table still satisfied.
     "lithos_task_complete": {
-        # One code for "missing" AND "not open" (T3 D6), plus the shared
-        # resolver's two.
-        "task_not_found",
-        "invalid_input",
-        "ambiguous_id_prefix",
+        # One code for "missing" AND "not open" (T3 D6) …
+        ("task_not_found", "not in an open state"),
+        # … and the three the shared id resolver owns.
+        ("invalid_input", "is too short"),
+        ("task_not_found", "No task matches id prefix"),
+        ("ambiguous_id_prefix", "is ambiguous"),
     },
     "lithos_task_reopen": {
-        "task_not_found",
-        "task_not_resolved",
-        "invalid_input",
-        "ambiguous_id_prefix",
+        ("task_not_found", "not found."),
+        ("task_not_resolved", "is not resolved"),
+        ("invalid_input", "is too short"),
+        ("task_not_found", "No task matches id prefix"),
+        ("ambiguous_id_prefix", "is ambiguous"),
     },
     "lithos_task_cancel": {
-        "task_not_found",
-        "invalid_input",
-        "ambiguous_id_prefix",
+        ("task_not_found", "already closed"),
+        ("invalid_input", "is too short"),
+        ("task_not_found", "No task matches id prefix"),
+        ("ambiguous_id_prefix", "is ambiguous"),
     },
     "lithos_task_create": {
-        "invalid_input",
-        "task_not_found",
-        "ambiguous_id_prefix",
+        # Two codes of their own, which earlier passes of this slice both
+        # mis-recorded as `invalid_input`.
+        ("invalid_task_type", "is not accepted in this phase"),
+        ("invalid_metadata_key", "['depends_on']"),
+        ("invalid_metadata_key", "['blocked_on']"),
+        # The gate rules, which really are `invalid_input`.
+        ("invalid_input", "requires metadata.gate_type"),
+        ("invalid_input", "metadata.ready_at (ISO datetime), got None"),
+        ("invalid_input", "metadata.ready_at (ISO datetime), got 'soon'"),
+        ("invalid_input", "is too short"),
+        ("task_not_found", "No task matches id prefix"),
+        ("ambiguous_id_prefix", "is ambiguous"),
     },
     "lithos_task_edge_upsert": {
-        "invalid_edge_type",
-        "self_edge",
-        "task_not_found",
-        "not_a_gate",
-        "cycle",
-        "parent_exists",
-        "ambiguous_id_prefix",
-        "invalid_input",
+        ("invalid_edge_type", "is not accepted in this phase"),
+        ("self_edge", "cannot connect a task to itself"),
+        # One per endpoint, both ways a resolver can refuse one.
+        ("invalid_input", "from_task_id"),
+        ("invalid_input", "to_task_id"),
+        ("task_not_found", "No task matches id prefix 'influx-nope' (from_task_id)"),
+        ("task_not_found", "No task matches id prefix 'influx-nope' (to_task_id)"),
+        ("task_not_found", "edge references nonexistent task(s)"),
+        ("ambiguous_id_prefix", "is ambiguous"),
+        ("not_a_gate", "requires the from_task"),
+        ("cycle", "cycle:"),
+        ("parent_exists", "already has parent"),
     },
     # The read side, so its legs cannot quietly vanish either.
-    "lithos_task_get": {"task_not_found"},
-    "lithos_task_ready": {"invalid_input"},
-    "lithos_task_blocked": {"invalid_input"},
-    "lithos_task_edge_list": {"invalid_input"},
-    "lithos_read": {"doc_not_found"},
-    "lithos_related": {"doc_not_found"},
-    "lithos_finding_list": {"invalid_input"},
+    "lithos_task_get": {("task_not_found", "")},
+    "lithos_task_ready": {("invalid_input", "")},
+    "lithos_task_blocked": {("invalid_input", "")},
+    "lithos_task_edge_list": {("invalid_input", "")},
+    "lithos_read": {("doc_not_found", "")},
+    "lithos_related": {("doc_not_found", "")},
+    "lithos_finding_list": {("invalid_input", "")},
 }
 
 #: Response variants a contract must keep, by name — each one is a payload
 #: shape a slice reasons about (an empty release list, a cancelled reopen that
-#: re-blocks nobody, a create with no links).
+#: re-blocks nobody, a create with no links). Each is ROUND-TRIPPED below, not
+#: merely present.
 REQUIRED_RESPONSE_VARIANTS: dict[str, set[str]] = {
     "lithos_task_complete": {"nothing_released"},
     "lithos_task_reopen": {"cancelled_reopen"},
     "lithos_task_create": {"no_links"},
 }
 
-#: Keys the canonical SUCCESS payload must carry. This is the leg that catches
-#: a mistranscribed body — the round-trip test builds its expected record from
-#: the same JSON, so it cannot. Stated from the tools' own documented returns.
+#: The EXACT key set of each canonical success payload. Exact rather than a
+#: subset, so an invented field fails here too — the round-trip below cannot
+#: catch one, because it builds its expectation from this same JSON.
 REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
     "lithos_task_complete": {"success", "task_id", "title", "updated_at", "unblocked"},
     "lithos_task_reopen": {"success", "task_id", "title", "updated_at", "reblocked"},
     "lithos_task_cancel": {"success", "task_id", "title", "updated_at"},
     # NO `success`: create does not send one (the minted id is the signal).
-    "lithos_task_create": {"task_id", "title", "updated_at"},
+    "lithos_task_create": {
+        "task_id",
+        "title",
+        "updated_at",
+        "depends_on",
+        "parent_task_id",
+    },
     "lithos_task_edge_upsert": {
         "success",
         "from_task_id",
@@ -254,16 +287,24 @@ REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
 }
 
 
-@pytest.mark.parametrize("tool", sorted(REQUIRED_ERROR_CODES))
-def test_contract_documents_every_required_error_code(tool: str) -> None:
-    documented = {
-        envelope["code"] for envelope in load_contract(tool)["responses"]["errors"]
-    }
-    missing = REQUIRED_ERROR_CODES[tool] - documented
+@pytest.mark.parametrize("tool", sorted(REQUIRED_ENVELOPES))
+def test_contract_documents_every_required_error_envelope(tool: str) -> None:
+    documented = [
+        (envelope["code"], envelope["message"])
+        for envelope in load_contract(tool)["responses"]["errors"]
+    ]
+    missing = [
+        required
+        for required in sorted(REQUIRED_ENVELOPES[tool])
+        if not any(
+            code == required[0] and required[1] in message
+            for code, message in documented
+        )
+    ]
     assert not missing, (
-        f"{tool}.json no longer documents {sorted(missing)}. Every code the tool "
-        f"can raise must be vendored — the error mapper has a row for each, and "
-        f"a deleted envelope silently removes its coverage from the sweep below."
+        f"{tool}.json no longer documents {missing}. Every scenario the tool can "
+        f"refuse must be vendored — the error mapper has a row for each, and a "
+        f"deleted envelope silently removes its leg from the sweep below."
     )
 
 
@@ -275,12 +316,9 @@ def test_contract_keeps_every_required_response_variant(tool: str) -> None:
 
 
 @pytest.mark.parametrize("tool", sorted(REQUIRED_SUCCESS_KEYS))
-def test_contract_success_payload_carries_every_required_key(tool: str) -> None:
+def test_contract_success_payload_has_exactly_the_expected_keys(tool: str) -> None:
     payload = load_contract(tool)["responses"]["success"]
-    missing = REQUIRED_SUCCESS_KEYS[tool] - set(payload)
-    assert not missing, (
-        f"{tool}.json's canonical success payload is missing {sorted(missing)}"
-    )
+    assert set(payload) == REQUIRED_SUCCESS_KEYS[tool]
 
 
 def test_create_success_payload_carries_no_success_flag() -> None:
@@ -298,22 +336,44 @@ def test_create_success_payload_carries_no_success_flag() -> None:
     assert result.task_id == payload["task_id"]
 
 
+def _ambiguous_envelopes() -> list[tuple[str, dict[str, Any]]]:
+    """Every vendored `ambiguous_id_prefix` envelope, whichever tool raises it."""
+    return [
+        (tool, envelope)
+        for tool in sorted(_contract_tools())
+        for envelope in load_contract(tool)["responses"].get("errors", [])
+        if envelope["code"] == "ambiguous_id_prefix"
+    ]
+
+
+def test_every_tool_that_resolves_an_id_vendors_an_ambiguous_envelope() -> None:
+    """All five writes share the resolver, so all five document its refusal."""
+    assert {tool for tool, _ in _ambiguous_envelopes()} == {
+        "lithos_task_complete",
+        "lithos_task_reopen",
+        "lithos_task_cancel",
+        "lithos_task_create",
+        "lithos_task_edge_upsert",
+    }
+
+
 @pytest.mark.parametrize(
-    "tool", ["lithos_task_create", "lithos_task_edge_upsert", "lithos_task_complete"]
+    ("tool", "envelope"),
+    _ambiguous_envelopes(),
+    ids=[tool for tool, _ in _ambiguous_envelopes()],
 )
-def test_ambiguous_prefix_candidates_are_id_title_records(tool: str) -> None:
+def test_ambiguous_prefix_candidates_are_id_title_records(
+    tool: str, envelope: dict[str, Any]
+) -> None:
     """The candidate SHAPE, stated here rather than taken from the file.
 
     Upstream answers `{id, title}` records (probed live); a list of bare id
     strings — what the first pass of this slice vendored — would render a
-    chooser with no titles in it.
+    chooser with no titles in it. Swept over EVERY tool that documents the
+    code, so removing `candidates` from any one of them fails.
     """
-    envelope = next(
-        row
-        for row in load_contract(tool)["responses"]["errors"]
-        if row["code"] == "ambiguous_id_prefix"
-    )
     assert envelope["candidates"], "an ambiguous prefix names its candidates"
+    assert len(envelope["candidates"]) <= 5, "upstream caps the candidate list at 5"
     for candidate in envelope["candidates"]:
         assert isinstance(candidate, dict), "candidates are records, not id strings"
         assert set(candidate) == {"id", "title"}
@@ -736,6 +796,133 @@ def test_canonical_request_and_payload_round_trip(tool: str) -> None:
     assert calls == [(tool, contract["request"]["canonical"])]
     # Inbound: the canonical payload normalized into the full expected records.
     check(result, contract["responses"]["success"])
+
+
+#: Each required response variant, and the record its payload must normalize
+#: into. Presence in the file is not enough: these are the EMPTY shapes a slice
+#: reasons about ("released nobody", "re-blocked nobody", "no links"), and a
+#: normalizer that fabricated a value for an absent key would pass every
+#: happy-path assertion above.
+RESPONSE_VARIANT_SPECS: dict[
+    tuple[str, str],
+    tuple[
+        Callable[[LithosClient], Awaitable[Any]],
+        Callable[[Any, dict[str, Any]], None],
+    ],
+] = {
+    ("lithos_task_complete", "nothing_released"): (
+        lambda c: c.task_complete("influx-gate-human", agent="dave", outcome="done"),
+        lambda result, payload: _assert_equal(
+            result,
+            TaskCompleteResult(
+                success=True,
+                task_id=payload["task_id"],
+                title=payload["title"],
+                updated_at=payload["updated_at"],
+                unblocked=(),
+            ),
+        ),
+    ),
+    ("lithos_task_reopen", "cancelled_reopen"): (
+        lambda c: c.task_reopen("influx-backfill", agent="dave"),
+        lambda result, payload: _assert_equal(
+            result,
+            TaskReopenResult(
+                success=True,
+                task_id=payload["task_id"],
+                title=payload["title"],
+                updated_at=payload["updated_at"],
+                reblocked=(),
+            ),
+        ),
+    ),
+    ("lithos_task_create", "no_links"): (
+        lambda c: c.task_create(title="Swap reads onto the new store", agent="dave"),
+        lambda result, payload: _assert_equal(
+            result,
+            TaskCreateResult(
+                success=True,
+                task_id=payload["task_id"],
+                title=payload["title"],
+                updated_at=payload["updated_at"],
+                depends_on=(),
+                parent_task_id="",
+            ),
+        ),
+    ),
+}
+
+
+def _assert_equal(result: Any, expected: Any) -> None:
+    assert result == expected
+
+
+def test_variant_round_trip_table_covers_every_required_variant() -> None:
+    assert set(RESPONSE_VARIANT_SPECS) == {
+        (tool, variant)
+        for tool, variants in REQUIRED_RESPONSE_VARIANTS.items()
+        for variant in variants
+    }, "every required response variant needs a round-trip spec"
+
+
+@pytest.mark.parametrize(
+    ("tool", "variant"),
+    sorted(RESPONSE_VARIANT_SPECS),
+    ids=[f"{tool}-{variant}" for tool, variant in sorted(RESPONSE_VARIANT_SPECS)],
+)
+def test_response_variants_round_trip_into_their_records(
+    tool: str, variant: str
+) -> None:
+    """The empty shapes, through the real client.
+
+    `nothing_released` must give `unblocked=()`, `cancelled_reopen`
+    `reblocked=()`, and `no_links` an empty `depends_on` with no parent — each
+    with every OTHER field still carried.
+    """
+    call, check = RESPONSE_VARIANT_SPECS[(tool, variant)]
+    payload = load_contract(tool)["responses"]["variants"][variant]
+    result, calls = _run(payload, lambda c: call(c))
+    assert [name for name, _ in calls] == [tool]
+    check(result, payload)
+
+
+# ── the protocol surface AC-1 names ─────────────────────────────────────
+
+WRITE_METHODS = (
+    "task_complete",
+    "task_reopen",
+    "task_cancel",
+    "task_create",
+    "task_edge_upsert",
+)
+
+
+def test_the_client_protocol_declares_every_write_method() -> None:
+    """AC-1 puts the five writes on the PROTOCOL, so the protocol is asserted.
+
+    Nothing else here would notice their removal: the round-trip lambdas are
+    typed against the concrete client, and the live matrix cannot call
+    `task_create` at all (it would mutate a real store). Signatures are
+    compared, not just names, so a protocol entry that drifts from the client's
+    — a renamed keyword, a changed default, a different result record — fails
+    too.
+    """
+    for name in WRITE_METHODS:
+        declared = getattr(LithosClientProtocol, name, None)
+        assert declared is not None, f"LithosClientProtocol is missing {name}"
+        assert inspect.signature(declared) == inspect.signature(
+            getattr(LithosClient, name)
+        ), f"{name} on the protocol does not match the client's signature"
+
+
+def test_the_fake_satisfies_the_protocol_it_claims() -> None:
+    """The in-memory fake is a `LithosClientProtocol` too — checked statically
+    by pyright through this annotation, and at runtime for the five writes."""
+    client: LithosClientProtocol = FakeLithosClient()
+    for name in WRITE_METHODS:
+        assert inspect.signature(getattr(type(client), name)) == inspect.signature(
+            getattr(LithosClient, name)
+        ), f"the fake's {name} does not match the client's signature"
 
 
 def test_list_tasks_resolved_window_sends_the_vendored_variant_request() -> None:

@@ -1856,21 +1856,25 @@ released claims, posted findings). Reads answer from seed plus overlay, and
 the readiness oracle does too: a task no write touched keeps the fixture's
 verdict verbatim, while one whose own status or whose blockers' status moved is
 recomputed from the effective blocking edges — including the one blocker whose
-answer is the clock's rather than a status's, an open `timer` gate, which stops
-blocking once its `metadata.ready_at` has passed. So completing a gate changes
-what the ready and blocked reads return and reports exactly the waiters that
-became ready, reopening it reports them re-blocked, and cancelling a
-predecessor leaves its dependent's blocker unsatisfiable.
+answer is the clock's rather than a status's, an **open** `timer` gate, which
+stops blocking once its `metadata.ready_at` has passed (cancel that gate and
+its waiter is stranded again: cancellation wins over the clock). So completing
+a gate changes what the ready and blocked reads return and reports exactly the
+waiters that became ready, reopening it reports them re-blocked, and cancelling
+a predecessor leaves its dependent's blocker unsatisfiable.
 
 The refusals are upstream's too, including its id domain: every id a write
-carries is resolved from a full id or an unambiguous prefix of at least six
-characters, a shorter one is `invalid_input`, and an ambiguous one answers
-`ambiguous_id_prefix` with `{id, title}` candidate records. Writes publish the
-event the real server emits — the same body, not merely the same type, and
-nothing at all for an edge write, which emits no event upstream — through the
-in-process hub, and each one is recorded in the instance's write log. Two
-instances never share an overlay, so one test's write cannot reach another's
-board.
+carries goes through one resolver, where a full id (36 characters) is handed to
+the calling tool's own lookup, a value shorter than six characters is
+`invalid_input`, and anything between is searched as a prefix — matching
+nothing is the resolver's own `task_not_found`, matching several is
+`ambiguous_id_prefix` naming up to five `{id, title}` candidate records. Writes
+publish the event the real server emits — the same body, field for field,
+including the pre-serialized fields upstream puts on a completion, and nothing
+at all for an edge write, which emits no event upstream — through the
+in-process hub, and each one, refusals included, is recorded in the instance's
+write log. Two instances never share an overlay, so one test's write cannot
+reach another's board.
 
 The implemented tests exercise real behavior with lightweight fakes rather than
 shallow mock-only checks, and the working practice is to demonstrate a new

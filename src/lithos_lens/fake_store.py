@@ -384,8 +384,16 @@ class FakeStoreView:
         completed — the one blocker whose answer depends on the clock rather
         than on a status. Any other gate type, an unparseable `ready_at`, or a
         time still ahead leaves the waiter blocked.
+
+        The gate must still be OPEN. A CANCELLED timer gate whose `ready_at`
+        has passed does not satisfy its waiter: cancellation wins, and the
+        waiter is `blocker_unsatisfiable` — which is the whole point of the
+        cancel consequences (T3 D9). Reading the clock without the status would
+        leave such a waiter ready and the strand invisible.
         """
         if edge.type != "waits_on_gate" or source is None:
+            return False
+        if source.status != "open":
             return False
         if source.task_type != "gate" or source.metadata.get("gate_type") != "timer":
             return False
