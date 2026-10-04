@@ -1760,12 +1760,12 @@ and again up front on `POST /operator`, so a refusal is immediate.
 
 **Known limit, by decision (Dave, 2026-10-03).** `lithos_agent_register` has no
 conditional ("create only", or "only if still untyped") form, so the window
-between the lookup and the registration **inside one seam call** is open: an agent that registers the
-operator's chosen id in that instant has its type overwritten to `human` by
-Lens's call. Lens does not close this window and ships no protocol for it —
-narrowing it is the most a client-side pre-check can do, exactly as the
-`expected_status` pre-check narrows (and cannot close) the write race. Closing
-it needs an upstream conditional registration.
+between the lookup and the registration **inside one seam call** is open: an
+agent that registers the operator's chosen id in that instant has its type
+overwritten to `human` by Lens's call. Lens does not close this window and
+ships no protocol for it — narrowing it is the most a client-side pre-check
+can do, exactly as the `expected_status` pre-check narrows (and cannot close)
+the write race. Closing it needs an upstream conditional registration.
 
 ## 6. Current Lithos Dependencies
 
