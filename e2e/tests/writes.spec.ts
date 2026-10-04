@@ -78,16 +78,25 @@ test("a human gate is completed from its row and the receipt says so", async ({
   // Clicking INTO the row's form must not open the side panel (the row
   // handler exempts forms), and the note is sent as the outcome.
   await page.setViewportSize({ width: 1440, height: 800 });
-  const refreshes = () =>
-    page.waitForResponse(
-      (response) =>
-        response.request().headers()["x-lithos-lens-refresh"] === "tasks",
+  // Run a reconcile and wait for the board fragment to have been SWAPPED —
+  // not merely for the refresh's response headers, which arrive before
+  // tasks.js has read the body, parsed it and replaced the fragment. The
+  // completion signal is the page's own: `replaceFragment` dispatches
+  // `lens:fragment-replaced` (detail.name) after the swap and after the
+  // operator's drafts are restored, so every check below sees the new DOM.
+  const reconcileNow = () =>
+    page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const swapped = (event: Event) => {
+            if ((event as CustomEvent).detail?.name !== "dashboard-data") return;
+            document.removeEventListener("lens:fragment-replaced", swapped);
+            resolve();
+          };
+          document.addEventListener("lens:fragment-replaced", swapped);
+          document.dispatchEvent(new Event("lens:reconcile"));
+        }),
     );
-  const reconcileNow = async () => {
-    const refreshed = refreshes();
-    await page.evaluate(() => document.dispatchEvent(new Event("lens:reconcile")));
-    await refreshed;
-  };
   await action.locator("[data-complete-note]").fill("Window confirmed with on-call");
   await expect(page.locator("[data-task-panel]")).toHaveCount(0);
 
@@ -111,6 +120,8 @@ test("a human gate is completed from its row and the receipt says so", async ({
   let detachedBeforeAnswer = false;
   await page.route("**/approve", async (route) => {
     await reconcileNow();
+    // Sampled after the swap event, so it is the swap's result, not a race
+    // with the refresh body still in flight.
     detachedBeforeAnswer = await page.evaluate(
       () => !(window as any).__postingForm.isConnected,
     );
