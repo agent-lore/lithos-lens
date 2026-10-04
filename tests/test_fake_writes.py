@@ -28,7 +28,7 @@ import pytest
 
 from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.events import LensEvent
-from lithos_lens.fake_dataset import FakeLithosDataset
+from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_lithos import FakeEventHub, FakeLithosClient
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.state import AppState
@@ -2252,3 +2252,20 @@ async def test_a_terminal_write_under_a_later_clock_commits_the_clock() -> None:
         task.id
         for task in await client.list_tasks(status="cancelled", resolved_since=window)
     }
+
+
+# ── a recomputed row keeps the seed's blocker order ────────────────────
+
+
+async def test_a_recomputed_blocked_row_keeps_the_seeds_blocker_order() -> None:
+    """A row is recomputed whenever anything — a write, or an open timer gate
+    — can move it, and recomputation must not reshuffle what the seed states:
+    the demo's ``influx-backfill`` waits on a pending timer, so it is always
+    recomputed, yet its chips must read in the fixture's order (the board's
+    first chip is the cutover predecessor). Nothing has moved, so the row is
+    the seed's, record for record."""
+    client = FakeLithosClient()
+
+    (row,) = [r for r in await client.task_blocked() if r.task.id == "influx-backfill"]
+
+    assert row.blockers == demo_dataset().blocked["influx-backfill"]

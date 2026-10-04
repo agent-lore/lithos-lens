@@ -263,7 +263,21 @@ class FakeStoreView:
                     None,
                 )
             records.append(record)
-        return tuple(records)
+        # In the SEED's order: the fixture states its rows' blocker order (the
+        # board renders the chips in it), and a recomputation must not reshuffle
+        # it merely because the effective edges iterate differently. A blocker
+        # the seed does not list keeps its place after the ones it does.
+        position = {
+            (record.task_id, record.type): index for index, record in enumerate(seed)
+        }
+        return tuple(
+            sorted(
+                records,
+                key=lambda record: position.get(
+                    (record.task_id, record.type), len(seed)
+                ),
+            )
+        )
 
     def is_ready(self, task_id: str) -> bool:
         """Whether the frontier reports ``task_id`` ready.
