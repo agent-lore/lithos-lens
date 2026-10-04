@@ -680,6 +680,27 @@ def test_both_pages_state_whether_anything_was_changed() -> None:
         assert text_of(html, "write-outcome-claim") == [problem.change_statement]
 
 
+@pytest.mark.parametrize("case", CASE_PARAMS)
+def test_every_row_renders_its_change_claim_and_its_copy(case: Case) -> None:
+    """Every row of the table, rendered where it lands: its page, or — for a
+    refused row, which has none — the notice inside the submitted form.
+
+    The rendered surface states whether anything was changed, carries the row's
+    sentence, and shows a code only on the unknown-code path.
+    """
+    problem = mapped(case)
+
+    html = render(problem.page or NOTICE_PARTIAL, problem)
+
+    assert text_of(html, "write-outcome-claim") == [problem.change_statement]
+    if case.headline:
+        assert text_of(html, "write-outcome-headline") == [case.headline]
+    # Upstream text is quoted where the row quotes it (its id links are
+    # checked by the cycle test below) and nowhere else.
+    assert bool(text_of(html, "write-outcome-detail")) is bool(case.detail_text)
+    assert bool(text_of(html, "write-outcome-code")) is case.show_code
+
+
 def test_an_unknown_code_renders_its_code_and_message_with_the_report_hint() -> None:
     """Rendered through the notice partial: a refused write has no page of its
     own, because its copy belongs on the form the operator submitted with their
