@@ -1854,8 +1854,10 @@ overlay of what the Lithos write tools changed (statuses, outcomes and resolved
 stamps, minted tasks, inserted edges and replaced edge metadata, released
 claims, posted findings). Reads answer from seed plus overlay — a task the fake
 minted included, which later writes complete, cancel and reopen like any seeded
-one — and the readiness oracle does too: a task nothing touched keeps the
-fixture's verdict verbatim, while one whose own status or whose blockers'
+one; `lithos_stats` keeps the fixture's figures but moves the coordination
+counters it states (`active_tasks`, `open_claims`, `expired_claims`) by what
+the writes changed — and the readiness oracle answers from seed plus overlay
+too: a task nothing touched keeps the fixture's verdict verbatim, while one whose own status or whose blockers'
 status moved is recomputed from the effective blocking edges — including the
 one blocker whose answer is the clock's rather than a status's, an **open**
 `timer` gate, which stops blocking once its `metadata.ready_at` has passed,

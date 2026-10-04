@@ -722,6 +722,41 @@ async def test_re_upserting_an_edge_replaces_metadata_and_keeps_created_by() -> 
     assert edges[0].created_at == STAMP
 
 
+@pytest.mark.parametrize(
+    "metadata_argument",
+    [pytest.param({}, id="omitted"), pytest.param({"metadata": {}}, id="empty")],
+)
+async def test_re_upserting_without_metadata_clears_the_edges_metadata(
+    metadata_argument: dict[str, Any],
+) -> None:
+    """Replacement means replacement for an empty value too: upstream binds an
+    absent ``metadata`` as NULL in ``ON CONFLICT ... DO UPDATE SET metadata =
+    excluded.metadata`` and reads NULL back as ``{}`` (lithos
+    ``coordination.py`` ``upsert_edge`` / ``_decode_metadata``). A fake that
+    kept the old metadata on an empty re-upsert would tell later slices an
+    edge still carries what the server dropped."""
+    client = _client()
+
+    await client.task_edge_upsert(
+        from_task_id="epic-one",
+        to_task_id="child-one",
+        edge_type="parent_child",
+        agent="dave",
+        **metadata_argument,
+    )
+
+    for endpoint in ("epic-one", "child-one"):
+        edges = [
+            edge
+            for edge in await client.task_edge_list(endpoint)
+            if edge.type == "parent_child"
+        ]
+        assert len(edges) == 1, endpoint
+        assert edges[0].metadata == {}, endpoint
+        assert edges[0].created_by == "planner", endpoint
+        assert edges[0].created_at == STAMP, endpoint
+
+
 async def test_an_insert_and_a_re_upsert_answer_the_same_payload() -> None:
     """Nothing in the payload says which happened — the residual T3 D11 states.
 
@@ -1252,6 +1287,72 @@ async def test_two_fakes_over_one_seed_do_not_share_an_overlay() -> None:
     assert two.write_calls == []
     # And the seed itself was never touched.
     assert seed.tasks == write_dataset().tasks
+
+
+async def test_stats_coordination_counters_follow_the_writes() -> None:
+    """``lithos_stats`` counts open tasks and live/expired claims afresh on
+    every read upstream (``CoordinationService.get_stats``), so the fake's
+    counters move with its writes: a resolve drops ``active_tasks`` and every
+    claim it released (live or expired), a reopen or a create adds an open
+    task, a reopen restores no claim — and the fixture's other statistics are
+    left exactly as seeded."""
+    seed_stats = {
+        "active_tasks": 11,
+        "open_claims": 1,
+        "expired_claims": 1,
+        "agents": 3,
+        "documents": 128,
+    }
+    client = FakeLithosClient(
+        dataset=replace(
+            write_dataset(),
+            claims={
+                "pred": (
+                    ClaimRecord(agent="a", aspect="impl", expires_at=LONG_AHEAD),
+                    ClaimRecord(agent="b", aspect="review", expires_at=LONG_PAST),
+                )
+            },
+            stats=seed_stats,
+        )
+    )
+    assert await client.stats() == seed_stats
+
+    def expected(**moved: int) -> dict[str, Any]:
+        return {**seed_stats, **moved}
+
+    await client.task_complete("pred", agent="dave")
+    assert await client.stats() == expected(
+        active_tasks=10, open_claims=0, expired_claims=0
+    )
+    await client.task_cancel("solo", agent="dave")
+    assert await client.stats() == expected(
+        active_tasks=9, open_claims=0, expired_claims=0
+    )
+    await client.task_reopen("pred", agent="dave")
+    assert await client.stats() == expected(
+        active_tasks=10, open_claims=0, expired_claims=0
+    )
+    await client.task_create(title="One", agent="dave")
+    await client.task_create(title="Two", agent="dave")
+    assert await client.stats() == expected(
+        active_tasks=12, open_claims=0, expired_claims=0
+    )
+
+
+async def test_stats_leaves_a_counter_the_seed_omits_omitted() -> None:
+    """A fixture that states no ``active_tasks`` gets none back after a write —
+    the fake moves the counters a seed vouched for, it does not invent one."""
+    live = ClaimRecord(agent="a", aspect="impl", expires_at=LONG_AHEAD)
+    client = FakeLithosClient(
+        dataset=replace(
+            write_dataset(),
+            claims={"pred": (live, live)},
+            stats={"open_claims": 2, "agents": 3},
+        )
+    )
+    await client.task_complete("gate-review", agent="dave")
+    await client.task_complete("pred", agent="dave")
+    assert await client.stats() == {"open_claims": 0, "agents": 3}
 
 
 # ── minted tasks are tasks like any other ─────────────────────────────

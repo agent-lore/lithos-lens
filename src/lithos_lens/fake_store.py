@@ -94,6 +94,21 @@ _UNSATISFIABLE_GATE_MESSAGE = (
 NON_WORKABLE_TASK_TYPES = frozenset({"gate", "epic"})
 
 
+def _claim_expired(claim: ClaimRecord, now: datetime) -> bool:
+    """Whether upstream would count ``claim`` expired (``expires_at <= now``).
+
+    A claim with no parseable ``expires_at`` counts as live: a fixture that
+    left it out stated no expiry.
+    """
+    try:
+        expires = datetime.fromisoformat(claim.expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return expires <= now
+
+
 def _unsatisfiable_message(edge_type: str, task_id: str) -> str:
     template = (
         _UNSATISFIABLE_GATE_MESSAGE
@@ -184,6 +199,37 @@ class FakeStoreView:
             return ()
         claims: tuple[ClaimRecord, ...] = self.dataset.claims.get(task_id, ())
         return claims
+
+    def stats(self) -> dict[str, Any]:
+        """The seed's ``lithos_stats``, its coordination counters moved by the
+        writes.
+
+        Upstream counts ``active_tasks`` (open tasks) and ``open_claims`` /
+        ``expired_claims`` (claims either side of now) afresh on every read
+        (lithos ``coordination.py`` ``get_stats``). The seed's figures are
+        hand-picked, so each counter the seed states is shifted by exactly what
+        the overlay changed — a resolve releases every claim on the task, live
+        or expired; a reopen restores none — and one it omits stays omitted.
+        Every other statistic is the seed's.
+        """
+        stats = dict(self.dataset.stats)
+        now = self.clock()
+        released = [
+            claim
+            for task_id in self.overlay.released_claims
+            for claim in self.dataset.claims.get(task_id, ())
+        ]
+        expired = sum(1 for claim in released if _claim_expired(claim, now))
+        deltas = {
+            "active_tasks": sum(task.status == "open" for task in self.tasks())
+            - sum(task.status == "open" for task in self.dataset.tasks),
+            "open_claims": expired - len(released),
+            "expired_claims": -expired,
+        }
+        for key, delta in deltas.items():
+            if isinstance(stats.get(key), int):
+                stats[key] += delta
+        return stats
 
     def findings(self, task_id: str) -> tuple[FindingRecord, ...]:
         return tuple(self.dataset.findings.get(task_id, ())) + tuple(

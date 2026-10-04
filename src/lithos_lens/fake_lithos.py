@@ -484,7 +484,7 @@ class FakeLithosClient:
         return rows
 
     async def stats(self) -> dict[str, Any]:
-        return dict(self.dataset.stats)
+        return self._writes.stats()
 
     async def list_agents(self) -> list[AgentRecord]:
         return list(self.dataset.agents)
