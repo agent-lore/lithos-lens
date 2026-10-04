@@ -17,7 +17,9 @@ test rather than a browser session.
 from __future__ import annotations
 
 import asyncio
+import functools
 import html
+import inspect
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -94,41 +96,45 @@ def _page_text(response) -> str:
     ("origin", "referer", "host", "expected"),
     [
         # Same host and port, however each side spells the port.
-        ("http://lens.lan:8000", "", "lens.lan:8000", True),
-        ("http://lens.lan", "", "lens.lan:80", True),
-        ("http://lens.lan:80", "", "lens.lan", True),
-        ("http://LENS.LAN:8000", "", "lens.lan:8000", True),
-        ("https://lens.lan", "", "lens.lan:443", True),
+        ("http://lens.lan:8000", None, "lens.lan:8000", True),
+        ("http://lens.lan", None, "lens.lan:80", True),
+        ("http://lens.lan:80", None, "lens.lan", True),
+        ("http://LENS.LAN:8000", None, "lens.lan:8000", True),
+        ("https://lens.lan", None, "lens.lan:443", True),
         # A DIFFERENT PORT on the same hostname is a different origin.
-        ("http://lens.lan:8001", "", "lens.lan:8000", False),
-        ("http://lens.lan", "", "lens.lan:8000", False),
+        ("http://lens.lan:8001", None, "lens.lan:8000", False),
+        ("http://lens.lan", None, "lens.lan:8000", False),
         # A different host.
-        ("http://evil.example", "", "lens.lan:8000", False),
+        ("http://evil.example", None, "lens.lan:8000", False),
         # Referer is the fallback only when Origin is ABSENT.
-        ("", "http://lens.lan:8000/tasks?project=x", "lens.lan:8000", True),
-        ("", "http://evil.example/page", "lens.lan:8000", False),
+        (None, "http://lens.lan:8000/tasks?project=x", "lens.lan:8000", True),
+        (None, "http://evil.example/page", "lens.lan:8000", False),
         # Present but unusable: no benefit of the doubt, and no fallback to a
         # Referer that would then be the sender's choice of evidence.
         ("null", "http://lens.lan:8000/tasks", "lens.lan:8000", False),
-        ("not a url", "", "lens.lan:8000", False),
-        ("http://lens.lan:notaport", "", "lens.lan:8000", False),
-        ("file:///tmp/x.html", "", "lens.lan:8000", False),
+        ("not a url", None, "lens.lan:8000", False),
+        ("http://lens.lan:notaport", None, "lens.lan:8000", False),
+        ("file:///tmp/x.html", None, "lens.lan:8000", False),
         # An EXPLICIT port 0 is a port, not an absent one — on either side.
-        ("http://lens.lan:0", "", "lens.lan", False),
-        ("http://lens.lan", "", "lens.lan:0", False),
-        ("http://lens.lan:0", "", "lens.lan:0", True),
+        ("http://lens.lan:0", None, "lens.lan", False),
+        ("http://lens.lan", None, "lens.lan:0", False),
+        ("http://lens.lan:0", None, "lens.lan:0", True),
         # Present but blank: still the browser's answer, so no Referer
         # fallback — presence decides which header is read, validity only
         # decides the verdict.
         ("   ", "http://lens.lan:8000/tasks", "lens.lan:8000", False),
+        # Present but EMPTY — `Origin:` with no value. Not an absence: the
+        # Referer must not be consulted (Starlette hands the route "" here and
+        # None for a header never sent, and the route passes both through).
+        ("", "http://lens.lan:8000/tasks", "lens.lan:8000", False),
         # Neither header at all.
-        ("", "", "lens.lan:8000", False),
+        (None, None, "lens.lan:8000", False),
         # No Host to compare against.
-        ("http://lens.lan:8000", "", "", False),
+        ("http://lens.lan:8000", None, "", False),
     ],
 )
 def test_same_origin_compares_host_and_port(
-    origin: str, referer: str, host: str, expected: bool
+    origin: str | None, referer: str | None, host: str, expected: bool
 ) -> None:
     assert same_origin(origin=origin, referer=referer, host=host) is expected
 
@@ -493,60 +499,120 @@ def _config_with_writes(*, default_operator: str = "", tmp_path: Path | None = N
     return load_config(config_path)
 
 
+class _EveryCallLogged(FakeLithosClient):
+    """The guard fake, logging EVERY client method a request reaches.
+
+    ``tool_calls`` records only the tools the identity path uses, so a handler
+    that read ``stats`` or ``list_tasks`` before refusing would leave it empty.
+    "403 before ANY Lithos call" needs the whole client surface watched: every
+    public coroutine method is logged by name as it is called, whichever it is
+    and whether or not the fake records it as a tool call.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(None, dataset=GUARD_DATASET)
+        self.method_calls: list[str] = []
+
+    def __getattribute__(self, name: str):
+        attr = super().__getattribute__(name)
+        if name.startswith("_") or not inspect.iscoroutinefunction(attr):
+            return attr
+        log = super().__getattribute__("method_calls")
+
+        @functools.wraps(attr)
+        async def logged(*args, **kwargs):
+            log.append(name)
+            return await attr(*args, **kwargs)
+
+        return logged
+
+
 def _client(
     *, default_operator: str = "", fake: FakeLithosClient | None = None
 ) -> tuple[TestClient, FakeLithosClient]:
-    lithos = fake if fake is not None else _fake()
+    lithos = fake if fake is not None else _EveryCallLogged()
     config = _config_with_writes(default_operator=default_operator)
     app = create_app(config, lithos_client_factory=lambda _: lithos)
     return TestClient(app, base_url="http://lens.test"), lithos
 
 
-def test_a_post_from_a_foreign_origin_is_refused_with_no_lithos_call(
-    lithos_lens_config_env: Path,
-) -> None:
+def _refused_post(headers: dict[str, str]):
+    """POST a valid identity under ``headers``; return the response and every
+    client method the request reached (startup's own calls cleared first, and
+    the log read before shutdown's ``close`` lands in it)."""
     client, fake = _client()
+    assert isinstance(fake, _EveryCallLogged)
     with client:
         fake.tool_calls.clear()
+        fake.method_calls.clear()
         response = client.post(
             "/operator",
-            data={"operator": "dave"},
-            headers={"Origin": "http://evil.example"},
+            data={"operator": "newcomer"},
+            headers=headers,
+            follow_redirects=False,
         )
+        reached = list(fake.method_calls)
+        tools = list(fake.tool_calls)
+    return response, reached, tools
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({"Origin": "http://evil.example"}, id="foreign-origin"),
+        # Clarification 4's acceptance addition: same hostname, other port.
+        pytest.param({"Origin": "http://lens.test:8001"}, id="same-host-other-port"),
+        # TestClient sends no Origin and no Referer of its own: "no evidence".
+        pytest.param({}, id="neither-header"),
+        pytest.param({"Referer": "http://evil.example/page"}, id="foreign-referer"),
+        # Present but EMPTY, beside a same-host Referer: the Referer is the
+        # fallback for an ABSENT Origin only, so this is a mismatch.
+        pytest.param(
+            {"Origin": "", "Referer": "http://lens.test/tasks"},
+            id="empty-origin-with-same-host-referer",
+        ),
+        pytest.param({"Origin": "null"}, id="opaque-origin"),
+    ],
+)
+def test_a_cross_origin_post_is_refused_before_any_lithos_call(
+    lithos_lens_config_env: Path, headers: dict[str, str]
+) -> None:
+    response, reached, tools = _refused_post(headers)
 
     assert response.status_code == 403
     assert "Nothing was changed" in response.text
+    assert "set-cookie" not in response.headers
+    # The WHOLE client surface, not only the tools the fake records.
+    assert reached == []
+    assert tools == []
+
+
+def test_the_refusal_recorder_would_see_a_read_before_the_check() -> None:
+    """The recorder above is what makes "no Lithos call" mean ANY call: a read
+    the fake does not log as a tool call still lands in ``method_calls``."""
+    fake = _EveryCallLogged()
+    _run(fake.stats())
+    assert fake.method_calls == ["stats"]
     assert fake.tool_calls == []
 
 
-def test_a_post_with_the_same_host_on_another_port_is_refused(
+def test_an_empty_origin_is_not_an_absent_one(
     lithos_lens_config_env: Path,
 ) -> None:
-    client, fake = _client()
-    with client:
-        fake.tool_calls.clear()
-        response = client.post(
-            "/operator",
-            data={"operator": "dave"},
-            headers={"Origin": "http://lens.test:8001"},
-        )
+    """The same Referer that is accepted when Origin is ABSENT is refused when
+    an Origin header is PRESENT and empty — presence decides which header is
+    read (clarification 4: a value that does not parse is a mismatch)."""
+    absent, absent_reached, _ = _refused_post({"Referer": "http://lens.test/tasks"})
+    empty, empty_reached, _ = _refused_post(
+        {"Origin": "", "Referer": "http://lens.test/tasks"}
+    )
 
-    assert response.status_code == 403
-    assert fake.tool_calls == []
-
-
-def test_a_post_with_neither_origin_nor_referer_is_refused(
-    lithos_lens_config_env: Path,
-) -> None:
-    client, fake = _client()
-    with client:
-        fake.tool_calls.clear()
-        # TestClient sends no Origin of its own; blanking Referer keeps both
-        # headers out, which is the "no evidence" case.
-        response = client.post("/operator", data={"operator": "dave"})
-
-    assert response.status_code == 403
-    assert fake.tool_calls == []
+    assert absent.status_code == 303
+    assert "lens_operator=newcomer" in absent.headers["set-cookie"]
+    assert absent_reached == ["agent_info"]
+    assert empty.status_code == 403
+    assert "set-cookie" not in empty.headers
+    assert empty_reached == []
 
 
 def test_the_operator_page_states_the_identity_its_source_and_the_boundary(
@@ -600,7 +666,10 @@ def test_setting_an_identity_sets_an_attribution_cookie_and_returns_the_operator
     assert "lens_operator=dave" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=lax" in cookie.replace("Samesite", "SameSite")
-    assert f"Max-Age={OPERATOR_COOKIE_MAX_AGE_S}" in cookie
+    # One year, stated independently of the constant the handler reads, so a
+    # changed constant cannot carry the expectation along with it.
+    assert "Max-Age=31536000" in cookie
+    assert OPERATOR_COOKIE_MAX_AGE_S == 31536000
     # Deliberately NOT Secure: Lens serves plain HTTP, so a Secure cookie
     # would never be stored (PRD clarification 5).
     assert "Secure" not in cookie
@@ -760,6 +829,63 @@ def test_a_submitted_id_that_is_not_the_exact_slug_is_refused(
     assert fake.tool_calls == []
 
 
+def _hidden_next(page_html: str) -> list[str]:
+    return re.findall(r'<input type="hidden" name="next" value="([^"]*)">', page_html)
+
+
+def test_the_chip_link_carries_the_return_trip_through_the_form_and_back(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The whole choose journey as a browser takes it: the chrome's link, the
+    form that link renders, and the POST that form makes. Each hop reads the
+    previous one's OUTPUT, so a GET that dropped ``next`` breaks the chain
+    rather than being bypassed by a hand-built POST."""
+    client, _ = _client()
+    with client:
+        board = client.get("/tasks?project=lithos-loom")
+        (link,) = re.findall(
+            r'<a class="operator-chip-choose" href="([^"]+)">', board.text
+        )
+        page = client.get(html.unescape(link))
+        hidden = [html.unescape(v) for v in _hidden_next(page.text)]
+        assert hidden == ["/tasks?project=lithos-loom"]
+
+        response = client.post(
+            "/operator",
+            data={"operator": "dave", "next": hidden[0]},
+            headers={"Origin": "http://lens.test"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/tasks?project=lithos-loom"
+
+
+@pytest.mark.parametrize(
+    "rejected", ["//evil.example/steal", "http://evil.example/", "/\\evil.example"]
+)
+def test_a_get_next_pointing_off_this_lens_never_reaches_the_form(
+    lithos_lens_config_env: Path, rejected: str
+) -> None:
+    client, _ = _client()
+    with client:
+        page = client.get("/operator", params={"next": rejected})
+        # Exactly what the rendered form submits: its hidden `next`, if any.
+        form = {"operator": "dave"}
+        for value in _hidden_next(page.text):
+            form["next"] = html.unescape(value)
+        response = client.post(
+            "/operator",
+            data=form,
+            headers={"Origin": "http://lens.test"},
+            follow_redirects=False,
+        )
+
+    assert page.status_code == 200
+    assert _hidden_next(page.text) == []
+    assert response.headers["location"] == "/operator"
+
+
 def test_a_refusal_keeps_the_return_trip_the_form_carried(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -824,22 +950,6 @@ def test_a_same_host_referer_is_accepted_when_no_origin_is_sent(
 
     assert response.status_code == 303
     assert "lens_operator=dave" in response.headers["set-cookie"]
-
-
-def test_a_foreign_referer_is_refused_with_no_lithos_call(
-    lithos_lens_config_env: Path,
-) -> None:
-    client, fake = _client()
-    with client:
-        fake.tool_calls.clear()
-        response = client.post(
-            "/operator",
-            data={"operator": "dave"},
-            headers={"Referer": "http://evil.example/page"},
-        )
-
-    assert response.status_code == 403
-    assert fake.tool_calls == []
 
 
 def test_the_write_surface_is_always_on_whatever_the_config_says(

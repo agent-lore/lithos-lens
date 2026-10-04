@@ -64,11 +64,15 @@ RECONNECT_BACKOFF_INITIAL_S = 1.0
 RECONNECT_BACKOFF_MAX_S = 30.0
 
 
-#: Code on the error raised when a tool answers a bare JSON ``null``. Its own
-#: code rather than ``invalid_response``, because for one tool a null IS the
-#: documented answer: ``lithos_agent_info`` returns ``None`` for an unknown id
-#: (unlike ``lithos_agent_archive``, which answers an ``agent_not_found``
-#: envelope), and over MCP that reads back as the text ``null``. Everything
+#: Code on the error raised when a tool answers ``None``. Its own code rather
+#: than ``invalid_response``, because for one tool a null IS the documented
+#: answer: ``lithos_agent_info`` returns ``None`` for an unknown id (unlike
+#: ``lithos_agent_archive``, which answers an ``agent_not_found`` envelope).
+#: Over MCP that ``None`` has more than one spelling, and all of them carry
+#: this code: the pinned SDK's FastMCP (``dict | None`` annotation) sends NO
+#: content block and ``structuredContent={"result": null}``; a server that
+#: serialises the wrapped value as text sends ``{"result": null}``; one that
+#: serialises the bare value sends ``null``. Everything
 #: here still returns a dict, so the one caller that has a null to interpret
 #: catches this code and maps it; every other caller sees a failed call, which
 #: is what a null means for a tool that promised an object. Lumping it in with
@@ -363,8 +367,9 @@ def decode_tool_result(result: Any) -> dict[str, Any]:
     MCP-level error result (``isError``, plain text — e.g. the live server's
     FastMCP output-schema validation rejecting a tool's own error envelope);
     ``code="invalid_response"`` marks a success result whose body isn't a
-    JSON object, except for the bare ``null`` a tool documented as returning
-    ``None`` sends, which gets :data:`NULL_RESULT_CODE`.
+    JSON object, except for the ``None`` a tool documented as returning it
+    sends (bare ``null``, or the SDK's wrapped ``{"result": null}`` as text or
+    as structured content with no text), which gets :data:`NULL_RESULT_CODE`.
 
     There is deliberately NO size ceiling here (T1-S7 review, round 5), and one
     must not be added. The graph reads take no limit parameter, so a single
@@ -404,6 +409,11 @@ def decode_tool_result(result: Any) -> dict[str, Any]:
     if getattr(result, "isError", False):
         raise LithosToolError(text or "Lithos tool call failed", code="tool_error")
     if not text:
+        # The SDK's own spelling of a tool that returned `None` under a
+        # `dict | None` annotation is NO content block at all, with the
+        # structured result wrapped as `{"result": null}` (measured on the
+        # pinned mcp 1.27.0 FastMCP; see NULL_RESULT_CODE).
+        _raise_if_null(getattr(result, "structuredContent", None), bare=False)
         return {}
     try:
         payload = json.loads(text)
@@ -412,19 +422,33 @@ def decode_tool_result(result: Any) -> dict[str, Any]:
             f"Lithos returned a non-JSON tool result: {text[:200]}",
             code="invalid_response",
         ) from exc
-    if payload is None:
-        # A tool that answers `None` (see NULL_RESULT_CODE). Raised rather than
-        # returned so the signature stays "a payload dict", and coded so the
-        # one caller for which null is a documented answer can tell it apart
-        # from a body that failed to parse.
-        raise LithosToolError(
-            "Lithos returned a null tool result", code=NULL_RESULT_CODE
-        )
+    # A tool that answers `None` (see NULL_RESULT_CODE), as bare `null` text or
+    # as the wrapped `{"result": null}`.
+    _raise_if_null(payload, bare=True)
     if not isinstance(payload, dict):
         raise LithosToolError(
             "Lithos returned a non-object tool result", code="invalid_response"
         )
     return payload
+
+
+def _raise_if_null(value: Any, *, bare: bool) -> None:
+    """Raise the :data:`NULL_RESULT_CODE` error if ``value`` spells ``None``.
+
+    Two spellings: the MCP SDK's wrapped ``{"result": null}`` — a tool whose
+    return annotation is not an object schema (``dict | None``) has its
+    structured output wrapped under ``"result"``; exactly that one key holding
+    exactly ``null``, since a payload with any other key is a real answer — and,
+    when ``bare``, a plain ``null``. ``bare`` is off for ``structuredContent``,
+    where ``None`` means "no structured result was sent", not "the tool
+    returned None". Raised rather than returned so the decoder's signature
+    stays "a payload dict", and coded so the one caller for which null is a
+    documented answer can tell it apart from a body that failed to parse.
+    """
+    if value == {"result": None} or (bare and value is None):
+        raise LithosToolError(
+            "Lithos returned a null tool result", code=NULL_RESULT_CODE
+        )
 
 
 def raise_for_error(payload: dict[str, Any]) -> None:

@@ -70,8 +70,10 @@ def origin_refusal(request: Request) -> PlainTextResponse | None:
     tab driving Lens with the operator's browser and nothing else.
     """
     if same_origin(
-        origin=request.headers.get("origin", ""),
-        referer=request.headers.get("referer", ""),
+        # No default: ``None`` is how the guard tells an ABSENT header (Referer
+        # fallback allowed) from a present empty one (a mismatch).
+        origin=request.headers.get("origin"),
+        referer=request.headers.get("referer"),
         host=request.headers.get("host", ""),
         scheme=request.url.scheme,
     ):

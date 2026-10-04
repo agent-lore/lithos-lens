@@ -579,79 +579,265 @@ def test_an_already_registered_operator_still_reports_success() -> None:
     assert result is True
 
 
-class _CannedResultClient(LithosClient):
-    """Client whose tool calls answer one canned MCP RESULT.
+def _mcp_result(
+    text: str | None = None,
+    *,
+    is_error: bool = False,
+    structured: dict[str, Any] | None = None,
+) -> Any:
+    """An MCP ``CallToolResult`` of the pinned SDK's own type. ``text=None``
+    means NO content block at all — the SDK's spelling of a ``None`` return."""
+    from mcp.types import CallToolResult, ContentBlock, TextContent
 
-    Substituted at the transport's oneshot seam, so the canned text goes
-    through the real gate, deadline and decoder — which is the whole point for
-    the test below: the null mapping has to be exercised on the wire shape, not
-    on a fake that returns whatever the client expects.
+    content: list[ContentBlock] = (
+        [] if text is None else [TextContent(type="text", text=text)]
+    )
+    return CallToolResult(
+        content=content, isError=is_error, structuredContent=structured
+    )
+
+
+class _ScriptedClient(LithosClient):
+    """Client whose tool calls answer a scripted MCP RESULT per tool.
+
+    Substituted at the transport's oneshot seam, so every answer goes through
+    the real gate, deadline and decoder, and then the real client method —
+    which is the point: the absent mapping and the registration
+    acknowledgement have to be decided by the concrete client on the wire
+    shape, not by a fake that returns whatever the caller expects. A script
+    entry that is an exception is raised at the seam (a transport failure).
     """
 
-    def __init__(self, text: str, *, is_error: bool = False) -> None:
+    def __init__(self, script: dict[str, Any]) -> None:
         super().__init__(LithosConfig(agent_id="lithos-lens"))
-        self._text = text
-        self._is_error = is_error
+        self.script = script
+        self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def _call_tool_oneshot(  # type: ignore[override]
         self, name: str, arguments: dict[str, Any]
     ) -> Any:
-        text = self._text
-        is_error = self._is_error
-
-        class _Block:
-            def __init__(self) -> None:
-                self.text = text
-
-        class _Result:
-            def __init__(self) -> None:
-                self.content = [_Block()]
-                self.isError = is_error
-
-        return _Result()
+        self.calls.append((name, dict(arguments)))
+        answer = self.script[name]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
 
 
-def _canned(text: str, *, is_error: bool = False) -> Any:
-    client = _CannedResultClient(text, is_error=is_error)
-
+def _drive(client: LithosClient, call: Callable[[LithosClient], Awaitable[Any]]):
     async def _driver() -> Any:
         try:
-            return await client.agent_info("nobody")
+            return await call(client)
         finally:
             await client.close()
 
     return asyncio.run(_driver())
 
 
-def test_an_unknown_agent_reads_back_as_absent_through_the_real_decoder() -> None:
-    """``lithos_agent_info``'s absent answer is the bare ``null`` the contract
-    vendors — not an error envelope — and Lens's decoder rejects any result that
-    is not a JSON object. So the mapping is asserted through the REAL decoder on
-    the real wire text: if ``null`` were treated like an unparseable body, every
-    unknown id would look like a failed lookup and the impersonation guard would
-    refuse every new identity (PRD clarification 2)."""
-    contract = load_contract("lithos_agent_info")
-    assert contract["responses"]["variants"]["absent"] is None
-
-    assert _canned("null") is None
+def _lookup(result: Any) -> Any:
+    client = _ScriptedClient({"lithos_agent_info": result})
+    return _drive(client, lambda c: c.agent_info("nobody"))
 
 
 @pytest.mark.parametrize(
-    ("text", "is_error"),
+    "result",
     [
-        ("not json at all", False),  # unparseable body
-        ("[1, 2]", False),  # parsed, but not an object
-        ("boom", True),  # MCP-level error result
+        # The pinned SDK's FastMCP, `-> dict | None` returning None: no
+        # content, the wrapped null as structured content (measured; and
+        # generated for real in the next test).
+        pytest.param(_mcp_result(structured={"result": None}), id="sdk-structured"),
+        # The same wrapper serialised as text.
+        pytest.param(_mcp_result('{"result": null}'), id="wrapped-text"),
+        # The bare value serialised as text.
+        pytest.param(_mcp_result("null"), id="bare-text"),
     ],
 )
-def test_a_genuine_agent_lookup_failure_stays_a_failure(
-    text: str, is_error: bool
+def test_every_spelling_of_an_unknown_agent_reads_back_as_absent(result: Any) -> None:
+    """``lithos_agent_info``'s absent answer is the tool returning ``None`` —
+    the ``null`` the contract vendors — not an error envelope, and Lens's
+    decoder rejects any result that is not a JSON object. So the mapping is
+    asserted through the REAL decoder on each wire spelling of that ``None``:
+    if any were treated like an unparseable body, every unknown id would look
+    like a failed lookup and the impersonation guard would refuse every new
+    identity (PRD clarification 2)."""
+    contract = load_contract("lithos_agent_info")
+    assert contract["responses"]["variants"]["absent"] is None
+
+    assert _lookup(result) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(_mcp_result("not json at all"), id="unparseable"),
+        pytest.param(_mcp_result("[1, 2]"), id="non-object"),
+        pytest.param(_mcp_result("boom", is_error=True), id="mcp-error"),
+        # The isError flag wins even over a structured null.
+        pytest.param(
+            _mcp_result("boom", is_error=True, structured={"result": None}),
+            id="mcp-error-with-structured-null",
+        ),
+        # Empty, with no null anywhere: nothing says "absent", so it is not.
+        pytest.param(_mcp_result(), id="empty-no-structured"),
+        pytest.param(_mcp_result(structured={}), id="empty-structured-object"),
+        # An object that is not an agent.
+        pytest.param(_mcp_result("{}"), id="empty-object"),
+        pytest.param(
+            _mcp_result('{"status": "error", "code": "boom", "message": "no"}'),
+            id="error-envelope",
+        ),
+        pytest.param(ConnectionError("lithos unreachable"), id="transport"),
+    ],
+)
+def test_a_genuine_agent_lookup_failure_stays_a_failure(result: Any) -> None:
+    """The other half of that mapping: only a null means absent. Anything else
+    the decoder or client refuses still raises, because the guard accepts an
+    absent id and must REFUSE an unreadable one."""
+    with pytest.raises((LithosToolError, ConnectionError)):
+        _lookup(result)
+
+
+def _sdk_results() -> dict[str, Any]:
+    """Real MCP results from the PINNED SDK, generated in memory.
+
+    A FastMCP server whose ``lithos_agent_info`` is annotated as upstream
+    documents it ("Agent info dict or None if not found") and answers the
+    contract's own payloads, called through the SDK's real ``ClientSession``.
+    Nothing about the result's shape is written by hand here: whatever the
+    SDK serialises a ``None`` return as is what the Lens client receives.
+    """
+    from mcp.server.fastmcp import FastMCP
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    info = load_contract("lithos_agent_info")
+    register = load_contract("lithos_agent_register")
+    known = info["responses"]["success"]
+    server = FastMCP("lithos-contract-double")
+
+    @server.tool(name="lithos_agent_info")
+    async def _agent_info(id: str) -> dict[str, Any] | None:  # noqa: A002
+        return dict(known) if id == known["id"] else None
+
+    @server.tool(name="lithos_agent_register")
+    async def _agent_register(id: str, type: str) -> dict[str, Any]:  # noqa: A002
+        return dict(register["responses"]["success"])
+
+    async def _collect() -> dict[str, Any]:
+        async with create_connected_server_and_client_session(
+            server._mcp_server
+        ) as session:
+            return {
+                "absent": await session.call_tool(
+                    "lithos_agent_info", {"id": "nobody"}
+                ),
+                "known": await session.call_tool(
+                    "lithos_agent_info", {"id": known["id"]}
+                ),
+                "register": await session.call_tool(
+                    "lithos_agent_register", {"id": "nobody", "type": "human"}
+                ),
+            }
+
+    return asyncio.run(_collect())
+
+
+def test_an_unknown_operator_is_accepted_on_the_sdks_own_absent_result() -> None:
+    """The end-to-end form of clarification 2, with no hand-built wire shape:
+    the SDK's own result for a ``None`` return goes through the real decoder
+    and the real client into the identity seam W4 calls, and an unknown id is
+    ACCEPTED and registered — while the SDK's result for a known agent still
+    reads back as that agent."""
+    from lithos_lens.operator import OperatorRegistry
+
+    results = _sdk_results()
+    # What the pinned SDK actually sends for "not found" — the shape the decoder
+    # must recognise. Asserted so an SDK upgrade that changes it is noticed here.
+    assert results["absent"].content == []
+    assert results["absent"].structuredContent == {"result": None}
+    assert results["absent"].isError is False
+
+    client = _ScriptedClient(
+        {
+            "lithos_agent_info": results["absent"],
+            "lithos_agent_register": results["register"],
+        }
+    )
+    registry = OperatorRegistry(service_agent_id="lithos-lens")
+    checked = _drive(client, lambda c: registry.ensure_registered(c, "nobody"))
+
+    assert checked.ok, checked
+    assert client.calls == [
+        ("lithos_agent_info", {"id": "nobody"}),
+        ("lithos_agent_register", {"id": "nobody", "type": "human"}),
+    ]
+
+    known = _ScriptedClient({"lithos_agent_info": results["known"]})
+    record = _drive(known, lambda c: c.agent_info("dave"))
+    assert record is not None
+    assert (record.id, record.type) == ("dave", "human")
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(ConnectionError("lithos unreachable"), id="transport"),
+        pytest.param(_mcp_result("boom", is_error=True), id="mcp-error"),
+        pytest.param(_mcp_result("not json"), id="unparseable"),
+        pytest.param(
+            _mcp_result('{"status": "error", "code": "boom", "message": "no"}'),
+            id="error-envelope",
+        ),
+        # Answered, but not acknowledged: the vendored ack is `success: true`.
+        pytest.param(
+            _mcp_result('{"success": false, "created": false}'), id="success-false"
+        ),
+        pytest.param(_mcp_result("{}"), id="empty-object"),
+        pytest.param(_mcp_result(), id="no-content"),
+        pytest.param(_mcp_result('{"created": true}'), id="no-success-field"),
+    ],
+)
+def test_an_unacknowledged_registration_refuses_and_is_not_remembered(
+    answer: Any,
 ) -> None:
-    """The other half of that mapping: only ``null`` means absent. Anything else
-    the decoder refuses still raises, because the guard accepts an absent id and
-    must REFUSE an unreadable one."""
-    with pytest.raises(LithosToolError):
-        _canned(text, is_error=is_error)
+    """The CONCRETE client decides whether a registration landed — not the
+    fake. Each answer short of the vendored acknowledgement goes through the
+    real decoder and ``register_operator`` into the seam W4 calls, which must
+    refuse with §5C.5's sentence and remember nothing: the retry after Lithos
+    acknowledges looks up and registers again rather than riding a cached
+    success."""
+    from lithos_lens.operator import OperatorRegistry
+
+    # The lookup answers "absent" in its simplest spelling, so this test is
+    # about the registration answer alone.
+    absent = _mcp_result("null")
+    client = _ScriptedClient(
+        {"lithos_agent_info": absent, "lithos_agent_register": answer}
+    )
+    registry = OperatorRegistry(service_agent_id="lithos-lens")
+
+    async def _twice(c: LithosClient) -> tuple[Any, Any]:
+        first = await registry.ensure_registered(c, "newcomer")
+        c.script["lithos_agent_register"] = _mcp_result(  # type: ignore[attr-defined]
+            '{"success": true, "created": false}'
+        )
+        second = await registry.ensure_registered(c, "newcomer")
+        return first, second
+
+    first, second = _drive(client, _twice)
+
+    assert not first.ok
+    assert first.code == "registration_failed"
+    assert (
+        first.reason.lower()
+        == "could not register the operator identity; nothing was changed."
+    )
+    assert second.ok
+    # The retry made its own lookup AND its own registration.
+    assert [name for name, _ in client.calls] == [
+        "lithos_agent_info",
+        "lithos_agent_register",
+        "lithos_agent_info",
+        "lithos_agent_register",
+    ]
 
 
 @pytest.mark.parametrize(

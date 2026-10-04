@@ -164,7 +164,7 @@ async def test_agent_info_missing_returns_none(
     client: LithosClientProtocol,
 ) -> None:
     """Upstream ``lithos_agent_info`` answers an unknown id with ``None`` — a
-    bare ``null`` on the wire, not an error envelope (unlike
+    null result over MCP, not an error envelope (unlike
     ``lithos_agent_archive``'s ``agent_not_found``). Both legs must surface it
     as ``None``: the operator-identity guard ACCEPTS an absent id and REFUSES
     an unreadable one, so a client that read this as a failure would refuse

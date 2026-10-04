@@ -78,7 +78,9 @@ def _host_authority(host_header: str, scheme: str) -> tuple[str, str] | None:
     return _authority(f"{scheme}://{host_header}") if host_header else None
 
 
-def same_origin(*, origin: str, referer: str, host: str, scheme: str = "http") -> bool:
+def same_origin(
+    *, origin: str | None, referer: str | None, host: str, scheme: str = "http"
+) -> bool:
     """Whether this POST came from a page this Lens served (§5C.6, D2).
 
     The ``Origin`` header's host AND port must match the request's ``Host``,
@@ -92,12 +94,18 @@ def same_origin(*, origin: str, referer: str, host: str, scheme: str = "http") -
     """
     # PRESENCE decides which header is read; VALIDITY only decides the answer.
     # Present-but-unusable is not a reason to consult the Referer — an
-    # ``Origin: null``, a blank one, or a malformed one is the browser telling
-    # Lens where the POST came from, and falling back would let a sender pick
-    # whichever header suits it. So the test is on the RAW value, not the
-    # stripped one: a whitespace-only Origin is present and unparseable, which
-    # is a mismatch, not an absence.
-    claimed = _authority(origin) if origin else _authority(referer)
+    # ``Origin: null``, an EMPTY one, a blank one, or a malformed one is the
+    # browser telling Lens where the POST came from, and falling back would let
+    # a sender pick whichever header suits it. So absence is ``None`` (the
+    # caller passes the header lookup through unchanged) and the test is
+    # ``is not None``, never truthiness: ``Origin:`` with no value is present
+    # and unparseable, which is a mismatch, not an absence.
+    if origin is not None:
+        claimed = _authority(origin)
+    elif referer is not None:
+        claimed = _authority(referer)
+    else:
+        return False
     if claimed is None:
         return False
     served = _host_authority(host, scheme)

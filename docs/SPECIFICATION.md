@@ -157,9 +157,10 @@ Two request-level checks ride alongside them on the write surface, and both are
 
 - **Origin check.** Every POST Lens registers under the curated write actions
   requires an `Origin` header whose host *and port* match the request's `Host`
-  — falling back to `Referer` when `Origin` is absent, with each side's missing
-  port implied from its scheme, compared case-insensitively. A mismatch, an
-  `Origin: null`, a value that does not parse, or the absence of both headers
+  — falling back to `Referer` only when no `Origin` header is sent at all, with
+  each side's missing port implied from its scheme, compared
+  case-insensitively. A mismatch, an `Origin: null`, a present but empty or
+  otherwise unparseable value, or the absence of both headers
   is answered 403 before any Lithos call. It stops a page open in another tab
   driving Lens with the operator's browser; it stops nothing else.
 - **Operator attribution.** Writes name a human operator rather than the Lens
@@ -1745,9 +1746,12 @@ wide as the time between visiting the page and the first write.
 Before accepting an identity, Lens looks the id up **exactly**, with
 `lithos_agent_info` — not `lithos_agent_list`, which hides archived agents by
 default, so an archived agent's id would read as unregistered and be re-typed
-by the registration that follows. The lookup's "not found" answer is a bare
-JSON `null` rather than an error envelope, and is mapped to "absent" by the
-client alone. An identity is accepted when the lookup finds nothing, or finds
+by the registration that follows. The lookup's "not found" answer is the tool
+returning `None` rather than an error envelope — over MCP, a result with no
+content and `structuredContent` `{"result": null}` (or that wrapper, or a bare
+`null`, as text) — and is mapped to "absent" by the client alone. An empty
+result carrying no null, like any unparseable or error result, is a failed
+lookup. An identity is accepted when the lookup finds nothing, or finds
 an agent already typed `human` (archived or not — the type is the whole
 question). Lens's own service agent's id is refused, and so is any id that
 exists with another type or with none ("that id belongs to an agent"). A lookup
