@@ -182,6 +182,23 @@ async def test_an_edge_between_missing_tasks_is_task_not_found_on_both_legs(
     assert excinfo.value.code == "task_not_found"
 
 
+async def test_an_edge_write_resolves_both_ids_before_checking_the_edge(
+    client: LithosClientProtocol,
+) -> None:
+    """A too-short self edge is the resolver's `invalid_input`, not `self_edge`:
+    upstream resolves both endpoints before its type and self-edge checks, and
+    the fake must refuse it the same way."""
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_edge_upsert(
+            from_task_id="x",
+            to_task_id="x",
+            edge_type="blocks",
+            agent="lithos-lens-contract-suite",
+        )
+    assert excinfo.value.code == "invalid_input"
+    assert "from_task_id 'x' is too short" in str(excinfo.value)
+
+
 # ── soft-missing reads (no envelope upstream) ───────────────────────────
 
 

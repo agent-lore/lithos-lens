@@ -124,10 +124,15 @@ class FakeStoreView:
     # ── effective reads ────────────────────────────────────────────────
 
     def tasks(self) -> tuple[TaskRecord, ...]:
-        """Every task, seed rows overlaid, then the ones writes minted."""
+        """Every task, seed rows then the ones writes minted, all overlaid.
+
+        A minted task is overlaid exactly like a seed row: it is stored as it
+        was created (open), and a later complete, cancel or reopen of it lands
+        in the same status / outcome / resolved-at maps as any other task's.
+        """
         return tuple(
-            [self._overlaid(task) for task in self.dataset.tasks]
-            + list(self.overlay.created)
+            self._overlaid(task)
+            for task in (*self.dataset.tasks, *self.overlay.created)
         )
 
     def task(self, task_id: str) -> TaskRecord | None:

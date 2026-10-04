@@ -43,7 +43,7 @@
       {
         "status": "error",
         "code": "task_not_resolved",
-        "message": "Task 'influx-gate-human' is not resolved (status: open)."
+        "message": "Task 'influx-gate-human' is already open; nothing to reopen."
       },
       {
         "status": "error",
@@ -72,5 +72,5 @@
       }
     ]
   },
-  "observed_divergences": "`reblocked` is a list of task IDS, not records, and is non-empty ONLY when a *completed* blocker or gate is reopened: reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and re-blocks nobody — the `cancelled_reopen` variant. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. The success payload is transcribed from the documented return (the quoted `{success, reblocked}` \"plus the resolved task_id + title and the new updated_at\") — it cannot be probed without reopening a real task. The `task_not_resolved` MESSAGE is likewise composed rather than probed, for the same reason; its code is what the mapper reads."
+  "observed_divergences": "`reblocked` is a list of task IDS, not records, and is non-empty ONLY when a *completed* blocker or gate is reopened: reopening a CANCELLED task un-strands its dependents (they were `blocker_unsatisfiable`, not ready) and re-blocks nobody — the `cancelled_reopen` variant. That is why T3 D8 counts the cancelled case from the task's own active outgoing dependency edges instead. The success payload is transcribed from the documented return (the quoted `{success, reblocked}` \"plus the resolved task_id + title and the new updated_at\") — it cannot be probed without reopening a real task. The `task_not_resolved` envelope IS probed (reopening an OPEN task is refused, so the probe writes nothing): an earlier pass of this slice had composed it as \"… is not resolved (status: open).\", which the server never says. Its code is what the mapper reads. Probed 2026-10-04 against the live Lithos this environment reaches (MCP serverInfo 3.2.0). That server is NEWER than a4d2d62 — it serves `lithos_task_edge_delete`, which lithos-core `bd66d57c` added after 0.5.0 — and the Lithos source itself could not be read from this build environment, so where a message below is marked probed it is the live server's text, with ids substituted; a reviewer holding the a4d2d62 source should record any wording that differs there as a divergence here rather than replace the probed text."
 }

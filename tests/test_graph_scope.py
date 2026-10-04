@@ -48,7 +48,6 @@ from lithos_lens.graph_scope import (
     load_project_scope,
 )
 from lithos_lens.tasks import TaskRecord, TaskStatusName
-from tests.test_graph_page import RESOLVED_RECENTLY
 
 pytestmark = pytest.mark.anyio
 
@@ -84,7 +83,7 @@ def task(
         created_by="planner",
         created_at=created_at or f"2026-09-01T00:00:{len(task_id):02d}+00:00",
         tags=(f"project:{project}",) if project else (),
-        resolved_at=RESOLVED_RECENTLY if status != "open" else "",
+        resolved_at="2026-09-02T00:00:00+00:00" if status != "open" else "",
     )
 
 

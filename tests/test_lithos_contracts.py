@@ -203,7 +203,7 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
     },
     "lithos_task_reopen": {
         ("task_not_found", "not found."),
-        ("task_not_resolved", "is not resolved"),
+        ("task_not_resolved", "is already open; nothing to reopen"),
         ("invalid_input", "is too short"),
         ("task_not_found", "No task matches id prefix"),
         ("ambiguous_id_prefix", "is ambiguous"),
@@ -227,6 +227,10 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
         ("invalid_input", "is too short"),
         ("task_not_found", "No task matches id prefix"),
         ("ambiguous_id_prefix", "is ambiguous"),
+        # A FULL id the resolver hands through reaches create's own existence
+        # check, which words it per argument.
+        ("task_not_found", "depends_on references nonexistent task(s): ["),
+        ("task_not_found", "parent_task_id references nonexistent task: "),
     },
     "lithos_task_edge_upsert": {
         ("invalid_edge_type", "is not accepted in this phase"),
@@ -239,8 +243,9 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
         ("task_not_found", "edge references nonexistent task(s)"),
         ("ambiguous_id_prefix", "is ambiguous"),
         ("not_a_gate", "requires the from_task"),
-        ("cycle", "cycle:"),
-        ("parent_exists", "already has parent"),
+        ("cycle", "would create a dependency cycle: "),
+        ("cycle", "would create a hierarchy cycle: "),
+        ("parent_exists", "a task may have at most one parent"),
     },
     # The read side, so its legs cannot quietly vanish either.
     "lithos_task_get": {("task_not_found", "")},

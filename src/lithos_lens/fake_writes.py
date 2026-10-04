@@ -118,7 +118,9 @@ class FakeWriteStore(FakeStoreView):
         self, task_id: str, *, agent: str, outcome: str = ""
     ) -> FakeWriteOutcome:
         """Complete an OPEN task, releasing its claims; answers ``unblocked``."""
-        task = self._open_task(task_id)
+        task = self._open_task(
+            task_id, "Task '{task_id}' not found or not in an open state."
+        )
         before = self._dependent_readiness(task.id)
         stamp = _now()
         self.overlay.statuses[task.id] = "completed"
@@ -160,7 +162,8 @@ class FakeWriteStore(FakeStoreView):
         (ROADMAP ledger #6), so a fake that stored it would let a test assert
         a fact the real server does not keep.
         """
-        task = self._open_task(task_id)
+        # Worded differently from complete's, and without quotes (probed).
+        task = self._open_task(task_id, "Task {task_id} not found or already closed")
         stamp = _now()
         self.overlay.statuses[task.id] = "cancelled"
         self.overlay.resolved_at[task.id] = stamp
@@ -192,7 +195,7 @@ class FakeWriteStore(FakeStoreView):
         if task.status == "open":
             raise write_error(
                 "task_not_resolved",
-                f"Task '{task.id}' is not resolved (status: open).",
+                f"Task '{task.id}' is already open; nothing to reopen.",
             )
         before = self._dependent_readiness(task.id)
         prior_status, prior_outcome = task.status, task.outcome
@@ -252,18 +255,24 @@ class FakeWriteStore(FakeStoreView):
         (T3 D10), but a fake that refused it here would be answering for a
         rule the server does not have — and the create slice would then be
         tested against a refusal it will never see.
+
+        Upstream's order, probed: the tool resolves the parent and then each
+        predecessor BEFORE anything else, so a bad id outranks every other
+        refusal; then the metadata keys, the task type and the gate rules; and
+        only then does existence come in — a full-length id the resolver
+        handed through, predecessors (all missing ones in one message) before
+        the parent.
         """
-        if task_type not in KNOWN_TASK_TYPES:
-            # Its OWN code, not `invalid_input` (probed).
-            raise write_error(
-                "invalid_task_type",
-                f"task_type {task_type!r} is not accepted in this phase "
-                f"(accepted: {sorted(KNOWN_TASK_TYPES)}).",
-            )
+        resolved_parent = (
+            self.resolve_id(parent_task_id, "parent_task_id") if parent_task_id else ""
+        )
+        resolved_depends_on = [
+            self.resolve_id(entry, "depends_on") for entry in depends_on
+        ]
         task_metadata = dict(metadata or {})
         # Dependencies are first-class edges now, so upstream refuses the old
-        # metadata spelling outright rather than silently ignoring it — again
-        # with a code of its own.
+        # metadata spelling outright rather than silently ignoring it — with a
+        # code of its own.
         forbidden = sorted(FORBIDDEN_CREATE_METADATA_KEYS & set(task_metadata))
         if forbidden:
             raise write_error(
@@ -272,17 +281,30 @@ class FakeWriteStore(FakeStoreView):
                 "dependencies are first-class task edges. Use depends_on on "
                 "lithos_task_create, or lithos_task_edge_upsert.",
             )
+        if task_type not in KNOWN_TASK_TYPES:
+            # Its OWN code too, not `invalid_input` (probed).
+            raise write_error(
+                "invalid_task_type",
+                f"task_type {task_type!r} is not accepted in this phase "
+                f"(accepted: {sorted(KNOWN_TASK_TYPES)}).",
+            )
         if task_type == "gate":
-            self._validate_gate(task_metadata)
-        resolved_depends_on = [
-            self._require_task(self.resolve_id(entry, "depends_on"))
-            for entry in depends_on
+            task_metadata = self._validate_gate(task_metadata)
+        missing = [
+            entry
+            for entry in dict.fromkeys(resolved_depends_on)
+            if self.task(entry) is None
         ]
-        resolved_parent = (
-            self._require_task(self.resolve_id(parent_task_id, "parent_task_id"))
-            if parent_task_id
-            else ""
-        )
+        if missing:
+            raise write_error(
+                "task_not_found",
+                f"depends_on references nonexistent task(s): {missing}",
+            )
+        if resolved_parent and self.task(resolved_parent) is None:
+            raise write_error(
+                "task_not_found",
+                f"parent_task_id references nonexistent task: {resolved_parent}",
+            )
         self.overlay.sequence += 1
         new_id = f"fake-created-{self.overlay.sequence}"
         created_at = _now()
@@ -343,19 +365,20 @@ class FakeWriteStore(FakeStoreView):
         insert and keeps its ``created_by`` / ``created_at`` — which is why
         those fields are evidence of who inserted an edge (T3 D11) and this
         method is careful not to touch them.
+
+        Upstream's order, probed: BOTH endpoints are resolved first (from, then
+        to) — so ``("x", "x", "blocks")`` is the resolver's ``invalid_input``,
+        not ``self_edge`` — then the edge type, then the self-edge check on the
+        RESOLVED ids, then existence, then the type-specific rules.
         """
+        source_id = self.resolve_id(from_task_id, "from_task_id")
+        target_id = self.resolve_id(to_task_id, "to_task_id")
         if edge_type not in KNOWN_EDGE_TYPES:
             raise write_error(
                 "invalid_edge_type",
                 f"edge type {edge_type!r} is not accepted in this phase "
                 f"(accepted: {sorted(KNOWN_EDGE_TYPES)}).",
             )
-        # Checked on the raw arguments first: a self-edge needs no lookup, so
-        # it is refused before either id is resolved.
-        if from_task_id == to_task_id:
-            raise write_error("self_edge", "An edge cannot connect a task to itself.")
-        source_id = self.resolve_id(from_task_id, "from_task_id")
-        target_id = self.resolve_id(to_task_id, "to_task_id")
         if source_id == target_id:
             raise write_error("self_edge", "An edge cannot connect a task to itself.")
         missing = [
@@ -381,11 +404,19 @@ class FakeWriteStore(FakeStoreView):
             if existing:
                 raise write_error(
                     "parent_exists",
-                    f"Task '{target_id}' already has parent '{existing}'.",
+                    f"task {target_id} already has a parent ({existing}); a task "
+                    "may have at most one parent. Remove the existing "
+                    "parent_child edge (lithos_task_edge_delete) before "
+                    "re-parenting.",
                 )
         # A cycle is refused whichever graph it closes: a dependency loop over
         # the blocking edges, or a hierarchy that contains itself over
         # parent_child. Only `discovered_from` (provenance) forms neither.
+        # `path` runs target -> … -> source along existing edges; upstream
+        # renders the two kinds from different ends (both probed): a
+        # dependency cycle from the new edge's source, walking what each
+        # member depends on, and a hierarchy cycle from its target, walking
+        # parent -> child.
         for types, label in (
             (BLOCKING_EDGE_TYPES, "dependency"),
             (HIERARCHY_EDGE_TYPES, "hierarchy"),
@@ -394,8 +425,16 @@ class FakeWriteStore(FakeStoreView):
                 continue
             path = self._edge_path(target_id, source_id, types)
             if path is not None:
-                members = " -> ".join([*path, target_id])
-                raise write_error("cycle", f"{label} cycle: {members}")
+                members = (
+                    [*reversed(path), source_id]
+                    if label == "dependency"
+                    else [*path, target_id]
+                )
+                raise write_error(
+                    "cycle",
+                    f"{edge_type} edge {source_id} -> {target_id} would create a "
+                    f"{label} cycle: {' -> '.join(members)}",
+                )
         key = (source_id, target_id, edge_type)
         if key in self._edge_set():
             # The metadata is replaced wholesale; nothing else about the edge
@@ -528,28 +567,29 @@ class FakeWriteStore(FakeStoreView):
             )
         )
 
-    def _require_task(self, task_id: str) -> str:
-        """``task_id`` back, or ``task_not_found`` — the caller's own lookup."""
-        if self.task(task_id) is None:
-            raise write_error("task_not_found", f"Task '{task_id}' not found.")
-        return task_id
-
-    def _open_task(self, task_id: str) -> TaskRecord:
+    def _open_task(self, task_id: str, not_found: str) -> TaskRecord:
         """The task, if it is open — else ``task_not_found``, as upstream does.
 
         Complete and cancel apply only to an ``open`` task and answer the SAME
         code for "no such task" and "not open": one code for two facts, which
         is why the write funnel re-reads the task to tell them apart (T3 D6).
+        The message is each tool's own (``not_found``, formatted with the
+        resolved id) — the two are worded differently upstream.
         """
         resolved = self.resolve_id(task_id)
         task = self.task(resolved)
         if task is None or task.status != "open":
-            raise write_error(
-                "task_not_found", f"Task '{resolved}' not found or not open."
-            )
+            raise write_error("task_not_found", not_found.format(task_id=resolved))
         return task
 
-    def _validate_gate(self, metadata: dict[str, Any]) -> None:
+    def _validate_gate(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """The gate's metadata as upstream stores it, or ``invalid_input``.
+
+        Validation is also normalization for a ``timer`` gate: upstream parses
+        ``ready_at`` and stores it rewritten to UTC at second precision (a
+        naive value read as UTC), so a later read shows the rewritten value,
+        never the caller's spelling of it.
+        """
         raw_gate_type = metadata.get("gate_type")
         gate_type = str(raw_gate_type or "")
         if gate_type not in KNOWN_GATE_TYPES:
@@ -560,10 +600,10 @@ class FakeWriteStore(FakeStoreView):
                 f"{raw_gate_type if raw_gate_type is None else repr(gate_type)}.",
             )
         if gate_type != "timer":
-            return
+            return metadata
         raw_ready_at = metadata.get("ready_at")
         try:
-            datetime.fromisoformat(str(raw_ready_at))
+            ready_at = datetime.fromisoformat(str(raw_ready_at))
         except (TypeError, ValueError):
             raise write_error(
                 "invalid_input",
@@ -571,6 +611,10 @@ class FakeWriteStore(FakeStoreView):
                 f"datetime), got "
                 f"{raw_ready_at if raw_ready_at is None else repr(str(raw_ready_at))}.",
             ) from None
+        if ready_at.tzinfo is None:
+            ready_at = ready_at.replace(tzinfo=UTC)
+        normalized = ready_at.astimezone(UTC).replace(microsecond=0).isoformat()
+        return {**metadata, "ready_at": normalized}
 
 
 def _now() -> str:

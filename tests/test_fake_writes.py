@@ -40,6 +40,7 @@ from lithos_lens.task_writes import (
 )
 from lithos_lens.tasks import ClaimRecord, TaskRecord
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 
 pytestmark = pytest.mark.anyio
 
@@ -457,7 +458,9 @@ async def test_an_id_prefix_must_be_a_full_id_or_at_least_six_characters() -> No
     with pytest.raises(LithosToolError) as passed_through:
         await client.task_create(title="Full", agent="dave", depends_on=[full_length])
     assert passed_through.value.code == "task_not_found"
-    assert str(passed_through.value) == f"Task '{full_length}' not found."
+    assert str(passed_through.value) == (
+        f"depends_on references nonexistent task(s): ['{full_length}']"
+    )
 
 
 async def test_an_ambiguous_prefix_names_at_most_five_candidates() -> None:
@@ -1219,3 +1222,464 @@ async def test_two_fakes_over_one_seed_do_not_share_an_overlay() -> None:
     assert two.write_calls == []
     # And the seed itself was never touched.
     assert seed.tasks == write_dataset().tasks
+
+
+# ── minted tasks are tasks like any other ─────────────────────────────
+
+
+async def test_a_minted_task_takes_every_later_write_like_a_seed_row() -> None:
+    """A task this fake minted must answer later writes and reads like one it
+    was seeded with: completed once it is completed, refused a second
+    completion or a cancel, reopenable, and cancellable once reopened.
+
+    Minted rows used to be appended to the effective store RAW, so a write to
+    one landed in the overlay and no read ever applied it: the minted task
+    read `open` forever, a reopen answered `task_not_resolved`, and a second
+    completion succeeded.
+    """
+    client = _client()
+    minted = await client.task_create(title="Minted", agent="dave")
+
+    completion = await client.task_complete(
+        minted.task_id, agent="dave", outcome="shipped"
+    )
+
+    done = await client.task_get(minted.task_id)
+    assert done.status == "completed"
+    assert done.outcome == "shipped"
+    assert done.resolved_at == completion.updated_at
+    assert minted.task_id not in await _ready_ids(client)
+    for again in (client.task_complete, client.task_cancel):
+        with pytest.raises(LithosToolError) as excinfo:
+            await again(minted.task_id, agent="dave")
+        assert excinfo.value.code == "task_not_found"
+
+    await client.task_reopen(minted.task_id, agent="dave")
+    reopened = await client.task_get(minted.task_id)
+    assert (reopened.status, reopened.outcome, reopened.resolved_at) == (
+        "open",
+        "",
+        "",
+    )
+    assert minted.task_id in await _ready_ids(client)
+
+    cancelled = await client.task_cancel(minted.task_id, agent="dave")
+    assert (await client.task_get(minted.task_id)).status == "cancelled"
+    assert (await client.task_get(minted.task_id)).resolved_at == cancelled.updated_at
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_cancel(minted.task_id, agent="dave")
+    assert excinfo.value.code == "task_not_found"
+
+
+async def test_completing_a_minted_predecessor_unblocks_its_minted_dependent() -> None:
+    """The oracle must see a minted predecessor's status change too, or a
+    dependent created against it could never be released."""
+    client = _client()
+    first = await client.task_create(title="First", agent="dave")
+    second = await client.task_create(
+        title="Second", agent="dave", depends_on=[first.task_id]
+    )
+    assert second.task_id in await _blocked(client)
+
+    completion = await client.task_complete(first.task_id, agent="dave")
+
+    assert completion.unblocked == (second.task_id,)
+    assert second.task_id in await _ready_ids(client)
+    assert second.task_id not in await _blocked(client)
+    reopen = await client.task_reopen(first.task_id, agent="dave")
+    assert reopen.reblocked == (second.task_id,)
+
+
+# ── upstream's validation order ────────────────────────────────────────
+
+#: A full-length (36-character) id no fixture holds: the resolver hands it
+#: straight through to the calling tool's own existence check.
+UNKNOWN_FULL_ID = "3f2b8e1c-9d4a-4c6e-8b7f-2a1d5e9c0b44"
+
+
+@pytest.mark.parametrize(
+    ("label", "arguments", "code", "message"),
+    [
+        # Both endpoints are resolved before the type or self-edge checks run
+        # (probed: upstream answers these two with the resolver's refusal).
+        (
+            "a too-short self edge",
+            {"from_task_id": "x", "to_task_id": "x", "edge_type": "blocks"},
+            "invalid_input",
+            "from_task_id 'x' is too short: pass the full task id or a prefix of "
+            "at least 6 characters.",
+        ),
+        (
+            "an unknown type between too-short ids",
+            {"from_task_id": "x", "to_task_id": "y", "edge_type": "duplicates"},
+            "invalid_input",
+            "from_task_id 'x' is too short: pass the full task id or a prefix of "
+            "at least 6 characters.",
+        ),
+        (
+            "a good source and a too-short target",
+            {"from_task_id": "pred", "to_task_id": "y", "edge_type": "duplicates"},
+            "invalid_input",
+            "to_task_id 'y' is too short: pass the full task id or a prefix of "
+            "at least 6 characters.",
+        ),
+        # Then the type, before the self-edge check …
+        (
+            "an unknown type on a self edge",
+            {"from_task_id": "pred", "to_task_id": "pred", "edge_type": "duplicates"},
+            "invalid_edge_type",
+            "edge type 'duplicates' is not accepted in this phase (accepted: "
+            "['blocks', 'discovered_from', 'parent_child', 'waits_on_gate']).",
+        ),
+        # … and the self-edge check before existence.
+        (
+            "a self edge on a task that does not exist",
+            {
+                "from_task_id": UNKNOWN_FULL_ID,
+                "to_task_id": UNKNOWN_FULL_ID,
+                "edge_type": "blocks",
+            },
+            "self_edge",
+            "An edge cannot connect a task to itself.",
+        ),
+        (
+            "an unknown type between tasks that do not exist",
+            {
+                "from_task_id": UNKNOWN_FULL_ID,
+                "to_task_id": "pred",
+                "edge_type": "duplicates",
+            },
+            "invalid_edge_type",
+            "edge type 'duplicates' is not accepted in this phase (accepted: "
+            "['blocks', 'discovered_from', 'parent_child', 'waits_on_gate']).",
+        ),
+    ],
+)
+async def test_an_edge_write_validates_in_upstreams_order(
+    label: str, arguments: dict[str, Any], code: str, message: str
+) -> None:
+    client = _client()
+    before = await _all_edges(client)
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_edge_upsert(agent="dave", **arguments)
+
+    assert (excinfo.value.code, str(excinfo.value)) == (code, message), label
+    assert await _all_edges(client) == before
+
+
+@pytest.mark.parametrize(
+    ("label", "arguments", "code", "message"),
+    [
+        (
+            "the parent is resolved before the predecessors",
+            {"parent_task_id": "x", "depends_on": ["zqxjqw"]},
+            "invalid_input",
+            "parent_task_id 'x' is too short: pass the full task id or a prefix "
+            "of at least 6 characters.",
+        ),
+        (
+            "ids are resolved before the metadata keys",
+            {"depends_on": ["x"], "metadata": {"depends_on": ["pred"]}},
+            "invalid_input",
+            "depends_on 'x' is too short: pass the full task id or a prefix of "
+            "at least 6 characters.",
+        ),
+        (
+            "ids are resolved before the task type",
+            {"depends_on": ["x"], "task_type": "milestone"},
+            "invalid_input",
+            "depends_on 'x' is too short: pass the full task id or a prefix of "
+            "at least 6 characters.",
+        ),
+        (
+            "the metadata keys come before the task type",
+            {"task_type": "milestone", "metadata": {"depends_on": ["pred"]}},
+            "invalid_metadata_key",
+            "metadata key(s) ['depends_on'] are no longer accepted: task "
+            "dependencies are first-class task edges. Use depends_on on "
+            "lithos_task_create, or lithos_task_edge_upsert.",
+        ),
+        (
+            "the gate rules come before existence",
+            {"task_type": "gate", "depends_on": [UNKNOWN_FULL_ID]},
+            "invalid_input",
+            "a gate task requires metadata.gate_type in ['ci', 'external_task', "
+            "'human', 'pr', 'timer'], got None.",
+        ),
+        (
+            "missing predecessors are named together, once each, before the parent",
+            {
+                "depends_on": [UNKNOWN_FULL_ID, UNKNOWN_FULL_ID],
+                "parent_task_id": UNKNOWN_FULL_ID[:-1] + "5",
+            },
+            "task_not_found",
+            f"depends_on references nonexistent task(s): ['{UNKNOWN_FULL_ID}']",
+        ),
+        (
+            "a missing parent",
+            {"parent_task_id": UNKNOWN_FULL_ID},
+            "task_not_found",
+            f"parent_task_id references nonexistent task: {UNKNOWN_FULL_ID}",
+        ),
+    ],
+)
+async def test_create_validates_in_upstreams_order(
+    label: str, arguments: dict[str, Any], code: str, message: str
+) -> None:
+    client = _client()
+    before = {task.id for task in await client.list_tasks()}
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await client.task_create(title="T", agent="dave", **arguments)
+
+    assert (excinfo.value.code, str(excinfo.value)) == (code, message), label
+    assert {task.id for task in await client.list_tasks()} == before
+
+
+# ── a timer gate's ready_at, as upstream stores it ─────────────────────
+
+
+@pytest.mark.parametrize(
+    ("sent", "stored"),
+    [
+        # An offset, and a fraction that is truncated rather than rounded.
+        ("2030-01-02T03:04:05.987654-05:00", "2030-01-02T08:04:05+00:00"),
+        # A naive value is read as UTC.
+        ("2030-01-02T03:04:05", "2030-01-02T03:04:05+00:00"),
+        ("2030-01-02T03:04:05Z", "2030-01-02T03:04:05+00:00"),
+    ],
+)
+async def test_a_timer_gates_ready_at_is_stored_in_utc_to_the_second(
+    sent: str, stored: str
+) -> None:
+    """Upstream validates ``ready_at`` by parsing it and stores the parsed
+    instant rewritten to UTC at second precision, so a read afterwards shows
+    that — never the caller's spelling, which no real server would return."""
+    client = _client()
+
+    created = await client.task_create(
+        title="Embargo",
+        agent="dave",
+        task_type="gate",
+        metadata={"gate_type": "timer", "ready_at": sent, "note": "kept"},
+    )
+
+    gate = await client.task_get(created.task_id)
+    assert gate.metadata == {"gate_type": "timer", "ready_at": stored, "note": "kept"}
+
+
+# ── the vendored envelopes, verbatim ───────────────────────────────────
+
+
+def influx_dataset(**statuses: str) -> FakeLithosDataset:
+    """The ids the contracts' envelopes name, in the relations they need.
+
+    ``influx-ingest-cutover`` blocks ``influx-backfill``, whose parent is
+    ``influx-epic``; ``influx-gate-human`` is a human gate. ``statuses``
+    overrides a task's status (underscores for hyphens).
+    """
+
+    def status(task_id: str) -> str:
+        return statuses.get(task_id.replace("-", "_"), "open")
+
+    return FakeLithosDataset(
+        tasks=(
+            replace(
+                _gate("influx-gate-human", "human"), status=status("influx-gate-human")
+            ),
+            _task("influx-ingest-cutover", status=status("influx-ingest-cutover")),
+            _task("influx-backfill", status=status("influx-backfill")),
+            _task("influx-epic", task_type="epic", status=status("influx-epic")),
+        ),
+        ready_ids=frozenset({"influx-gate-human", "influx-ingest-cutover"}),
+        blocked={"influx-backfill": (_task_blocker("influx-ingest-cutover"),)},
+        edges=_edge_map(
+            _edge("influx-ingest-cutover", "influx-backfill", "blocks"),
+            _edge("influx-epic", "influx-backfill", "parent_child"),
+        ),
+        children={"influx-epic": ("influx-backfill",)},
+    )
+
+
+def _edge_call(
+    from_task_id: str, to_task_id: str, edge_type: str = "blocks"
+) -> Callable[[FakeLithosClient], Awaitable[Any]]:
+    return lambda c: c.task_edge_upsert(
+        from_task_id=from_task_id,
+        to_task_id=to_task_id,
+        edge_type=edge_type,
+        agent="dave",
+    )
+
+
+def _create_call(**arguments: Any) -> Callable[[FakeLithosClient], Awaitable[Any]]:
+    return lambda c: c.task_create(title="T", agent="dave", **arguments)
+
+
+#: (tool, a phrase that picks ONE vendored envelope, the statuses the fixture
+#: needs, the call that must raise it).
+VERBATIM_ENVELOPES: list[
+    tuple[str, str, dict[str, str], Callable[[FakeLithosClient], Awaitable[Any]]]
+] = [
+    (
+        "lithos_task_complete",
+        "not in an open state",
+        {"influx_gate_human": "completed"},
+        lambda c: c.task_complete("influx-gate-human", agent="dave"),
+    ),
+    (
+        "lithos_task_complete",
+        "is too short",
+        {},
+        lambda c: c.task_complete("infl", agent="dave"),
+    ),
+    (
+        "lithos_task_cancel",
+        "already closed",
+        {"influx_backfill": "cancelled"},
+        lambda c: c.task_cancel("influx-backfill", agent="dave"),
+    ),
+    (
+        "lithos_task_cancel",
+        "No task matches",
+        {},
+        lambda c: c.task_cancel("influx-nope", agent="dave"),
+    ),
+    (
+        "lithos_task_reopen",
+        "already open",
+        {},
+        lambda c: c.task_reopen("influx-gate-human", agent="dave"),
+    ),
+    (
+        "lithos_task_reopen",
+        "No task matches",
+        {},
+        lambda c: c.task_reopen("influx-nope", agent="dave"),
+    ),
+    (
+        "lithos_task_create",
+        "depends_on references nonexistent",
+        {},
+        _create_call(depends_on=[UNKNOWN_FULL_ID]),
+    ),
+    (
+        "lithos_task_create",
+        "parent_task_id references nonexistent",
+        {},
+        _create_call(parent_task_id=UNKNOWN_FULL_ID),
+    ),
+    (
+        "lithos_task_create",
+        "is not accepted in this phase",
+        {},
+        _create_call(task_type="milestone"),
+    ),
+    (
+        "lithos_task_create",
+        "['blocked_on']",
+        {},
+        _create_call(metadata={"blocked_on": ["influx-backfill"]}),
+    ),
+    (
+        "lithos_task_create",
+        "requires metadata.gate_type",
+        {},
+        _create_call(task_type="gate"),
+    ),
+    (
+        "lithos_task_create",
+        "got 'soon'",
+        {},
+        _create_call(
+            task_type="gate", metadata={"gate_type": "timer", "ready_at": "soon"}
+        ),
+    ),
+    (
+        "lithos_task_create",
+        "No task matches",
+        {},
+        _create_call(depends_on=["influx-nope"]),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "would create a dependency cycle",
+        {},
+        _edge_call("influx-backfill", "influx-ingest-cutover"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "would create a hierarchy cycle",
+        {},
+        _edge_call("influx-backfill", "influx-epic", "parent_child"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "at most one parent",
+        {},
+        _edge_call("influx-ingest-cutover", "influx-backfill", "parent_child"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "requires the from_task",
+        {},
+        _edge_call("influx-ingest-cutover", "influx-backfill", "waits_on_gate"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "cannot connect a task to itself",
+        {},
+        _edge_call("influx-backfill", "influx-backfill"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "is not accepted in this phase",
+        {},
+        _edge_call("influx-ingest-cutover", "influx-backfill", "duplicates"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "to_task_id 'infl' is too short",
+        {},
+        _edge_call("influx-ingest-cutover", "infl"),
+    ),
+    (
+        "lithos_task_edge_upsert",
+        "'influx-nope' (from_task_id)",
+        {},
+        _edge_call("influx-nope", "influx-backfill"),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("tool", "phrase", "statuses", "call"),
+    VERBATIM_ENVELOPES,
+    ids=[f"{tool}:{phrase}" for tool, phrase, _, _ in VERBATIM_ENVELOPES],
+)
+async def test_the_fake_raises_the_vendored_envelope_verbatim(
+    tool: str,
+    phrase: str,
+    statuses: dict[str, str],
+    call: Callable[[FakeLithosClient], Awaitable[Any]],
+) -> None:
+    """The fake's refusals ARE the contract's, field for field.
+
+    Not "the same code": the whole envelope, message included, compared with
+    the one vendored for that scenario. A fake that invented its own wording —
+    one shared "not found or not open" for complete and cancel, a composed
+    cycle or parent message — passed every code-only assertion and still
+    handed the action slices text the server never sends.
+    """
+    (vendored,) = [
+        envelope
+        for envelope in load_contract(tool)["responses"]["errors"]
+        if phrase in envelope["message"]
+    ]
+    client = FakeLithosClient(dataset=influx_dataset(**statuses))
+
+    with pytest.raises(LithosToolError) as excinfo:
+        await call(client)
+
+    assert excinfo.value.envelope == vendored
