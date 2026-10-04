@@ -1050,7 +1050,7 @@ Lithos write failures return `{status: "error", code, message}`. Lens MUST map e
 
 | Code | Operator-facing copy (shape) |
 |------|------------------------------|
-| `task_not_found` | Complete and cancel return this for "not found" **and** for "not open". Lens re-reads the task: if it exists, the conflict page ("this task is now *\<status\>*"); if not, "Task no longer exists (it may have been removed since you loaded the page)." |
+| `task_not_found` | Complete and cancel return this for "not found" **and** for "not open". Lens re-reads the task: if it exists, the conflict page ("this task is now *\<status\>*"); if not, "Task no longer exists (it may have been removed since you loaded the page)." Create and edge return it for a task the request references (a prefix with no match, a missing parent, predecessor or edge endpoint): field-level re-render with the upstream message, input kept — unless the re-read shows the edge's own task gone. |
 | `task_not_resolved` | (reopen) Conflict page: "this task is already open." |
 | `invalid_input` | Field-level re-render of the form with the upstream message (e.g. invalid gate metadata), input kept |
 | `ambiguous_id_prefix` | "‘\<prefix\>’ matches more than one task", with the envelope's `candidates` offered as choices |

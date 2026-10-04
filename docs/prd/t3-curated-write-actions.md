@@ -375,7 +375,7 @@ extended to the codes the source raises:
 
 | Code | Raised by | Operator-facing copy (shape) |
 |---|---|---|
-| `task_not_found` | all | Complete and cancel return this for "not found **or not open**" — one code for two facts. The funnel re-reads the task: if it exists, the conflict page ("this task is now *\<status\>*"); if not, "this task no longer exists". |
+| `task_not_found` | all | Complete and cancel return this for "not found **or not open**" — one code for two facts. The funnel re-reads the task: if it exists, the conflict page ("this task is now *\<status\>*"); if not, "this task no longer exists". Create and edge return it for a task the request **references** (a prefix with no match, a missing parent, predecessor or edge endpoint): the form re-rendered with the upstream message on the field it names, input kept — unless the re-read shows the edge's own task gone. |
 | `task_not_resolved` | reopen | Conflict page: "this task is already open." |
 | `invalid_input` | create | The form re-rendered with the upstream message on the field it names, input kept. |
 | `ambiguous_id_prefix` | create, edge | "‘\<prefix\>’ matches more than one task" with the envelope's `candidates` as choices. |

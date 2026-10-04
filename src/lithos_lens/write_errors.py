@@ -44,6 +44,13 @@ re-reads the task and passes the result in, and the row splits on that. A task
 that exists gets the conflict page naming the status it has now; one that is
 gone is said to be gone. A re-read that itself failed claims neither.
 
+That split is the lifecycle actions' alone. Create and the edge actions spend
+the same code on a task the request REFERS to — a parent, a predecessor, an
+edge endpoint, or a prefix that matches nothing — so for them it is a mistyped
+or stale reference, refused on the form with Lithos's message (which names the
+parameter and the id) kept whole. Only a re-read showing the edge's own subject
+gone turns it back into the conflict page.
+
 **What is NOT decided here.** Which surface renders the copy. The two pages
 this module feeds are standalone answers to a POST (``writes/conflict.html``,
 ``writes/unknown_outcome.html``); a :data:`REFUSED` problem has no page of its
@@ -248,11 +255,11 @@ class WriteProblem:
     #: rule about codes Lens HAS copy for; where it has none, the code is the
     #: only handle the operator and the bug report have.
     show_code: bool = False
-    #: The ``lithos_task_create`` parameter an ``invalid_input`` message names
-    #: (``parent_task_id``, ``depends_on``, ``metadata.gate_type``,
-    #: ``metadata.ready_at``), for a field-level re-render with the operator's
-    #: input kept. The create form maps it to its own input. Empty when the
-    #: message names none of them — it then renders at form level.
+    #: The write parameter an ``invalid_input`` or missing-reference message
+    #: names (:data:`INVALID_INPUT_FIELDS`), for a field-level re-render with
+    #: the operator's input kept. The create and relation forms map it to their
+    #: own inputs. Empty when the message names none of them — it then renders
+    #: at form level.
     field: str = ""
     #: The id prefix that matched more than one task.
     prefix: str = ""
@@ -400,14 +407,19 @@ def _verbatim(message: str) -> tuple[MessageSegment, ...]:
     return (MessageSegment(text=message),) if message else ()
 
 
-#: The ``lithos_task_create`` parameters Lithos 0.5.0 names in an
-#: ``invalid_input`` message: ``resolve_task_id(…, field=…)`` for the two id
-#: references, ``_validate_gate_metadata`` for a gate's metadata
-#: (lithos a4d2d62 ``tools/tasks.py`` ``lithos_task_create``,
-#: ``coordination.py`` ``resolve_task_id`` and ``_validate_gate_metadata``).
+#: The write parameters Lithos 0.5.0 names in a refusal's message:
+#: ``resolve_task_id(…, field=…)`` for the id references — create's two and the
+#: edge's two endpoints — in both its ``invalid_input`` (too short) and its
+#: ``task_not_found`` (no match), ``create_task``'s ``task_not_found`` for a
+#: reference that does not exist, and ``_validate_gate_metadata`` for a gate's
+#: metadata (lithos a4d2d62 ``tools/tasks.py`` ``lithos_task_create`` and
+#: ``lithos_task_edge_upsert``, ``coordination.py`` ``resolve_task_id``,
+#: ``create_task`` and ``_validate_gate_metadata``).
 INVALID_INPUT_FIELDS: tuple[str, ...] = (
     "parent_task_id",
     "depends_on",
+    "from_task_id",
+    "to_task_id",
     "metadata.gate_type",
     "metadata.ready_at",
 )
@@ -422,7 +434,7 @@ _FIELD_NAMED = re.compile(
 
 
 def _field_named_in(message: str) -> str:
-    """The first create parameter an ``invalid_input`` message names, or ``""``."""
+    """The first write parameter a refusal's message names, or ``""``."""
     match = _FIELD_NAMED.search(message)
     return match.group(1) if match else ""
 
@@ -480,6 +492,12 @@ def _unknown_outcome_hint(reread: TaskReread) -> str:
     return "Reload to see the task's current state before trying again."
 
 
+#: The actions whose ``task_not_found`` is about the task they act on: complete
+#: and cancel spend it on "gone or no longer open", reopen on "gone". Every
+#: other action spends it on a task the request refers to.
+_LIFECYCLE_ACTIONS: frozenset[WriteAction] = frozenset({"complete", "reopen", "cancel"})
+
+
 def _task_not_found(attempt: _Attempt) -> WriteProblem:
     """One code, two facts — split by the re-read, never by the message.
 
@@ -487,8 +505,11 @@ def _task_not_found(attempt: _Attempt) -> WriteProblem:
     and for one that is no longer open. The re-read is the only thing that can
     tell those apart, and when it could not be made or failed, neither is
     claimed: the copy says what Lithos refused and that Lens cannot say which
-    of the two it was.
+    of the two it was. Create and edge refusals are a different fact, answered
+    by :func:`_missing_reference`.
     """
+    if attempt.action not in _LIFECYCLE_ACTIONS:
+        return _missing_reference(attempt)
     if attempt.reread.found:
         return _conflict(attempt, f"This task is now {attempt.reread.status}.")
     if attempt.reread.outcome == "absent":
@@ -501,6 +522,40 @@ def _task_not_found(attempt: _Attempt) -> WriteProblem:
         attempt,
         "Lithos refused this: the task is either gone or no longer open.",
         hint="Lens could not read the task to say which. Reload to see.",
+    )
+
+
+def _missing_reference(attempt: _Attempt) -> WriteProblem:
+    """Create or an edge named a task Lithos has no match for.
+
+    Lithos 0.5.0 raises ``task_not_found`` there for a prefix that matches
+    nothing ("No task matches id prefix 'bad123' (parent_task_id)."), for a
+    parent or predecessor that does not exist, and for an edge endpoint that
+    does not (``resolve_task_id``, ``create_task``, ``upsert_task_edge``). That
+    is a reference the operator typed or a page that went stale — not a task
+    that changed under them — so it is refused on the form, input kept, with
+    the message whole: it is the only thing that says WHICH reference and
+    what was sent. Plain rather than segmented, because an id in it names a
+    task that does not exist and a link to it would lead nowhere. The field is
+    found in the message as ``invalid_input``'s is, and the edge message that
+    names none renders at form level.
+
+    The one exception is a re-read showing the edge's own subject gone: then
+    the task the operator acted on no longer exists, which is the conflict
+    page's fact, not the form's.
+    """
+    if attempt.reread.outcome == "absent":
+        return _conflict(
+            attempt,
+            "This task no longer exists.",
+            hint="It may have been removed since you loaded the page.",
+        )
+    return _refused(
+        attempt,
+        "Lithos couldn't find a task this refers to.",
+        hint="Check the id and try again.",
+        detail=_verbatim(attempt.message),
+        field=_field_named_in(attempt.message),
     )
 
 

@@ -134,6 +134,17 @@ SHORT_PARENT_MESSAGE = (
     "least 6 characters."
 )
 
+#: Lithos 0.5.0's ``task_not_found`` messages for a task a create or an edge
+#: REFERS to (lithos a4d2d62): ``resolve_task_id`` for a prefix that matches
+#: nothing, ``create_task`` for a predecessor that does not exist, and
+#: ``upsert_task_edge`` for an endpoint that does not.
+NO_MATCH_PARENT_MESSAGE = "No task matches id prefix 'bad123' (parent_task_id)."
+MISSING_DEPENDS_ON_MESSAGE = (
+    f"depends_on references nonexistent task(s): ['{THIRD_ID}']"
+)
+MISSING_ENDPOINT_MESSAGE = f"edge references nonexistent task(s): ['{THIRD_ID}']"
+MISSING_REFERENCE_HEADLINE = "Lithos couldn't find a task this refers to."
+
 CASES: tuple[Case, ...] = (
     Case(
         name="task_not_found, task exists: the conflict page names the status now",
@@ -169,6 +180,54 @@ CASES: tuple[Case, ...] = (
         headline="Lithos refused this: the task is either gone or no longer open.",
         page=CONFLICT_PAGE,
         hint_contains="could not read the task",
+    ),
+    Case(
+        name="task_not_found on create: a parent prefix that matches nothing",
+        action="create",
+        envelope=envelope("task_not_found", NO_MATCH_PARENT_MESSAGE),
+        kind="refused",
+        status_code=422,
+        headline=MISSING_REFERENCE_HEADLINE,
+        detail_text=NO_MATCH_PARENT_MESSAGE,
+        field="parent_task_id",
+        hint_contains="Check the id",
+    ),
+    Case(
+        name="task_not_found on create: a predecessor that does not exist",
+        action="create",
+        envelope=envelope("task_not_found", MISSING_DEPENDS_ON_MESSAGE),
+        kind="refused",
+        status_code=422,
+        headline=MISSING_REFERENCE_HEADLINE,
+        detail_text=MISSING_DEPENDS_ON_MESSAGE,
+        field="depends_on",
+        hint_contains="Check the id",
+    ),
+    Case(
+        name="task_not_found on an edge, subject still open: the endpoint is missing",
+        action="edge_upsert",
+        envelope=envelope("task_not_found", MISSING_ENDPOINT_MESSAGE),
+        reread=TaskReread(outcome="exists", status="open"),
+        subject=SUBJECT,
+        kind="refused",
+        status_code=422,
+        headline=MISSING_REFERENCE_HEADLINE,
+        detail_text=MISSING_ENDPOINT_MESSAGE,
+        hint_contains="Check the id",
+    ),
+    Case(
+        name="task_not_found on an edge, subject gone: it no longer exists",
+        action="edge_upsert",
+        envelope=envelope(
+            "task_not_found", f"edge references nonexistent task(s): ['{BARE_ID}']"
+        ),
+        reread=TASK_ABSENT,
+        subject=SUBJECT,
+        kind="conflict",
+        status_code=409,
+        headline="This task no longer exists.",
+        page=CONFLICT_PAGE,
+        hint_contains="removed since you loaded the page",
     ),
     Case(
         name="task_not_resolved: reopen on an open task",
@@ -406,6 +465,55 @@ def test_a_status_the_re_read_did_not_return_is_not_named() -> None:
     assert problem.headline == (
         "Lithos refused this: the task is either gone or no longer open."
     )
+
+
+@pytest.mark.parametrize(
+    ("action", "message", "field"),
+    [
+        pytest.param("create", NO_MATCH_PARENT_MESSAGE, "parent_task_id", id="create"),
+        pytest.param(
+            "edge_upsert",
+            "No task matches id prefix 'bad123' (to_task_id).",
+            "to_task_id",
+            id="edge_upsert",
+        ),
+        pytest.param("edge_remove", MISSING_ENDPOINT_MESSAGE, "", id="edge_remove"),
+    ],
+)
+@pytest.mark.parametrize(
+    "reread",
+    [
+        pytest.param(NOT_READ, id="not read"),
+        pytest.param(TaskReread(outcome="exists", status="open"), id="subject open"),
+        pytest.param(REREAD_FAILED, id="re-read failed"),
+    ],
+)
+def test_task_not_found_on_create_or_an_edge_is_a_missing_reference(
+    action: WriteAction, message: str, field: str, reread: TaskReread
+) -> None:
+    """Create and the edge actions spend ``task_not_found`` on a task the
+    request REFERS to — a mistyped prefix, a stale predecessor, an edge
+    endpoint — not on the task the operator acted on. So the lifecycle split
+    (gone, or no longer open) is never claimed for them: the form is re-rendered
+    with Lithos's message whole, on the field it names, and the subject's
+    status is not mistaken for the reason."""
+    problem = map_write_error(
+        action, envelope("task_not_found", message), reread=reread, subject=SUBJECT
+    )
+
+    assert problem.kind == "refused"
+    assert problem.page == ""
+    assert problem.status_code == 422
+    assert problem.nothing_changed
+    assert problem.headline == MISSING_REFERENCE_HEADLINE
+    assert "is now" not in problem.headline
+    assert "no longer open" not in problem.headline
+    assert problem.field == field
+    assert problem.detail_text == message
+    html = render(NOTICE_PARTIAL, problem)
+    assert visible_text(detail_html(html)) == message
+    # An id in it names a task that does not exist: nothing to link to.
+    assert "<a " not in detail_html(html)
 
 
 # ── ambiguous_id_prefix: the envelope's candidates ─────────────────────
