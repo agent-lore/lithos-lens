@@ -111,8 +111,9 @@ e2e/artifacts/note-missing-1440.png
 
 The covered pages are the healthy dashboard and its truncated twin, four
 task-detail shapes, the graph page (`graph-picker`, `graph-project`,
-`graph-focus`, `graph-degraded`, `graph-refused`) and three note states. Since
-T2-A4 the graph page's captures split by what they exist to show:
+`graph-focus`, `graph-degraded`, `graph-refused`), the knowledge landing
+(`knowledge`, whose search input must fill its row) and three note states.
+Since T2-A4 the graph page's captures split by what they exist to show:
 `graph-project` and `graph-focus` are the CANVAS (arrowheads, the cycle as a
 compound node, the dimmed ghost, the overlays, the panel beside it), while
 `graph-degraded` takes the "show as text" toggle back to the text baseline,

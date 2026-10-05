@@ -1562,12 +1562,19 @@ button,
 
 .knowledge-search input {
   flex: 1;
+  min-width: 0;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--line);
-  border-radius: 0.4rem;
   background: var(--panel);
   color: var(--ink);
   font: inherit;
+}
+
+.knowledge-search button {
+  /* Overrides the shared control width:100%: left on it, the button's basis
+     is the whole row and the input (basis 0) never grows. */
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .knowledge-results {

@@ -671,6 +671,32 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The knowledge landing: the search row above "Recently updated". Its
+    // input once collapsed to two characters beside a full-row Search button
+    // (the shared `width: 100%` on the button in a flex row), and no capture
+    // covered the page, so nobody saw it. The proportion is asserted here,
+    // at every width, because this sandbox cannot read the PNG.
+    slug: "knowledge",
+    url: "/knowledge",
+    ready: async (page) => {
+      await expect(
+        page.getByRole("heading", { name: "Recently updated" }),
+      ).toBeVisible();
+      // Scoped to the landing's form: the chrome carries a search box with
+      // the same accessible name.
+      const search = page.locator("form.knowledge-search");
+      const form = await search.boundingBox();
+      const input = await search.getByRole("searchbox").boundingBox();
+      const button = await search
+        .getByRole("button", { name: "Search" })
+        .boundingBox();
+      expect(input!.width).toBeGreaterThanOrEqual(form!.width * 0.6);
+      // The button is content-width: it sits beside the input on one row.
+      expect(button!.width).toBeLessThan(form!.width * 0.4);
+      expect(button!.y).toBe(input!.y);
+    },
+  },
+  {
     slug: "note",
     url: "/note/note-influx-plan",
     ready: async (page) => {

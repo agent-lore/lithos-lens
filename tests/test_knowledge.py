@@ -197,6 +197,32 @@ def test_markdown_body_stylesheet_does_not_preserve_newlines() -> None:
     assert "pre-wrap" in pre_rule.group(1)
 
 
+def test_knowledge_search_stylesheet_lets_the_input_fill_the_row() -> None:
+    """Regression pin for the /knowledge search row (Dave, 2026-10-05).
+
+    The shared ``input, select, button`` rule gives every control
+    ``width: 100%``. In the ``.knowledge-search`` flex row the input's basis is
+    0 (``flex: 1``), so a button left on that shared width took the whole row
+    and the input collapsed to its own padding. The button must be
+    content-width and unshrinkable, the input free to shrink below its
+    intrinsic width, and the two corners drawn alike. The browser-truth check
+    — the input's rendered width against the form's — is in the Playwright
+    screenshot suite; this guards the rules themselves."""
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    button = re.search(r"\.knowledge-search button\s*\{([^}]*)\}", css)
+    assert button is not None, "lens.css has no .knowledge-search button rule"
+    assert re.search(r"flex:\s*0 0 auto;", button.group(1))
+    assert re.search(r"(?<!-)width:\s*auto;", button.group(1))
+    field = re.search(r"\.knowledge-search input\s*\{([^}]*)\}", css)
+    assert field is not None
+    assert re.search(r"min-width:\s*0;", field.group(1))
+    # Neither overrides the shared corner radius, so they cannot drift apart.
+    assert "border-radius" not in field.group(1)
+    assert "border-radius" not in button.group(1)
+
+
 def test_render_markdown_does_not_autolink_bare_urls() -> None:
     """Defense-in-depth: ``linkify`` stays off, so a bare URL is inert text —
     if it flipped on, the XSS boundary would silently widen."""
