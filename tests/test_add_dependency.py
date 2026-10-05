@@ -787,3 +787,40 @@ def test_every_attempt_is_recorded_with_its_arguments_and_already_exists(
         True,
     ]
     assert len(_upserts(fake)) == 1
+
+
+#: A well-formed full id no task has: the resolver passes it through to the
+#: tool's own lookup, which is what answers "not found".
+UNKNOWN_FULL_ID = "00000000-0000-4000-8000-000000000001"
+
+
+def test_the_fakes_missing_task_is_the_contracts_envelope(fake: LoggedFake) -> None:
+    """The fake's not-found for a full id carries the whole envelope, as
+    ``raise_for_error`` gives the real client — not a bare code."""
+    [canonical] = [
+        e
+        for e in load_contract("lithos_task_get")["responses"]["errors"]
+        if e["code"] == "task_not_found" and e["message"].startswith("Task '")
+    ]
+    assert canonical["message"] == "Task 'missing-task' not found."
+    with pytest.raises(LithosToolError) as raised:
+        asyncio.run(fake.task_get(UNKNOWN_FULL_ID))
+    assert raised.value.code == "task_not_found"
+    assert dict(raised.value.envelope) == {
+        **canonical,
+        "message": f"Task '{UNKNOWN_FULL_ID}' not found.",
+    }
+
+
+def test_an_unknown_full_id_is_refused_under_the_input(
+    client: TestClient, fake: LoggedFake
+) -> None:
+    response = _confirm(client, FOCAL, BLOCKED_BY, UNKNOWN_FULL_ID)
+
+    assert response.status_code == 422
+    error = re.search(r'data-relation-error="other".*?</div>', response.text, re.S)
+    assert error
+    assert f"Task '{UNKNOWN_FULL_ID}' not found." in _text(error.group(0))
+    _says_nothing_changed(response.text, "task_not_found")
+    assert f'value="{UNKNOWN_FULL_ID}"' in response.text
+    assert fake.write_calls == []
