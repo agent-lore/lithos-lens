@@ -15,7 +15,8 @@ dependency wiring for the same two objects.
 from __future__ import annotations
 
 import time
-from urllib.parse import quote
+from dataclasses import dataclass
+from urllib.parse import parse_qsl, quote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -27,8 +28,45 @@ from lithos_lens.knowledge_metadata import build_note_metadata
 from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.knowledge_resolver import ResolveOutcome, resolve_wiki_link
 from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
+from lithos_lens.request_filters import knowledge_landing_url, knowledge_note_url
 from lithos_lens.state import AppState
 from lithos_lens.telemetry import get_current_span, get_tracer
+from lithos_lens.template_vocabulary import format_tag
+from lithos_lens.write_guards import safe_next
+
+KNOWLEDGE_PATH = "/knowledge"
+
+
+@dataclass(frozen=True)
+class NoteBackLink:
+    """Where a note page's back link goes, and what it calls that place."""
+
+    href: str
+    label: str
+
+
+def note_back_link(next_url: str | None) -> NoteBackLink:
+    """The note page's back link when it was not opened from a task.
+
+    ``next_url`` is the untrusted ``next=`` the landing put on its result links
+    (``request_filters.knowledge_note_url``); ``safe_next`` admits only a
+    same-origin relative path, so a ``javascript:`` or ``//host`` value falls
+    back to the landing rather than becoming an href. The label names the
+    place the link actually goes: the results, the tag list, or the landing.
+    A same-origin path that is not the landing gets a plain "Back" rather than
+    a name it does not have. Note-to-note hops carry no ``next`` at all.
+    """
+    href = safe_next(next_url, default=KNOWLEDGE_PATH)
+    parts = urlsplit(href)
+    if parts.path != KNOWLEDGE_PATH:
+        return NoteBackLink(href, "Back")
+    params = dict(parse_qsl(parts.query))
+    if params.get("q", "").strip():
+        return NoteBackLink(href, "Back to search results")
+    tag = params.get("tag", "").strip()
+    if tag:
+        return NoteBackLink(href, f"Back to notes tagged {format_tag(tag)}")
+    return NoteBackLink(href, "Back to knowledge")
 
 
 async def _traced_related_panel(
@@ -54,6 +92,8 @@ def register_knowledge_routes(
     app: FastAPI, state: AppState, templates: Jinja2Templates
 ) -> None:
     """Attach the knowledge landing, wiki-link resolver and note routes."""
+
+    templates.env.globals["knowledge_note_url"] = knowledge_note_url
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
@@ -115,6 +155,8 @@ def register_knowledge_routes(
                 "active_view": "knowledge",
                 "query": query,
                 "tag": tag,
+                # The return address every result link carries as `next=`.
+                "landing_url": knowledge_landing_url(query, tag),
                 "search_results": search_results,
                 "results": results,
                 "error": error,
@@ -240,6 +282,7 @@ def register_knowledge_routes(
                 "note": note_record,
                 "note_meta": note_meta,
                 "task": task,
+                "back_link": note_back_link(request.query_params.get("next")),
                 "related": related,
                 "produced_by": produced_by,
                 "error": error,

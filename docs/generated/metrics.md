@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **38** (182 module-level)
+- Cross-component edges: **38** (184 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -45,12 +45,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 25 | 11373 | 8722 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 25 |
 | Tasks | 7 | 2227 | 1622 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1139 | 833 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 10 | 5041 | 4066 | 1 | 10 | 0.91 | 17 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 4 |
+| Web | 10 | 5104 | 4114 | 1 | 10 | 0.91 | 17 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 4 |
 | Writes | 7 | 2272 | 1659 | 2 | 1 | 0.33 | 12 (`lithos_lens.create_form.validate`) | 1 |
 
 ## Size
 
-- Modules: **74**, lines: **30536**, SLOC: **23519**
+- Modules: **74**, lines: **30599**, SLOC: **23567**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -62,7 +62,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **971**, cyclomatic > 10: **50**
+- Functions: **974**, cyclomatic > 10: **50**
 
 Top 10 most complex functions:
 
@@ -90,4 +90,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **111** (110 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.95** (59442 test lines / 30536 source lines)
+- Test-to-source line ratio: **1.95** (59720 test lines / 30599 source lines)

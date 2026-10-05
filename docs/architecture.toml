@@ -506,4 +506,8 @@ exclude_modules = [
     "lithos_lens.cancel_routes",
     # The create route group: route plumbing and template globals.
     "lithos_lens.create_routes",
+    # The knowledge route group: route plumbing. NoteBackLink is the note
+    # page's back-link href and label — where this request came from, not a
+    # model of anything in Lithos.
+    "lithos_lens.knowledge_routes",
 ]
