@@ -1,8 +1,8 @@
 # Lithos Lens - Specification
 
-Version: 0.4.0  
-Date: 2026-09-17  
-Status: Aligned with Implementation (T1, K1 and T2 shipped)
+Version: 0.5.0  
+Date: 2026-10-05  
+Status: Aligned with Implementation (T1, K1, T2 and T3 shipped)
 
 ## 1. Purpose
 
@@ -2651,13 +2651,15 @@ because they are described in `docs/REQUIREMENTS.md`.
 
 ## 11. Compatibility Statement
 
-This specification describes the behavior of Lithos Lens `0.4.0` as currently
+This specification describes the behavior of Lithos Lens `0.5.0` as currently
 implemented in this repository — the 0.1.0 foundation, the **T1** graph-native
-operator view and **K1** knowledge note view and search of 0.3.0, and the
-**T2** task relationship graphs (§5.10–§5.12, §5.6.1, §5.6.2), plus the first
-slices of **T3**'s curated write actions: the write posture, the operator
-identity and its guard (§5.13, §5.1), and the write-refusal copy (§5.14),
-which no route yet reaches — the actions themselves are still to come (§10).
+operator view and **K1** knowledge note view and search of 0.3.0, the **T2**
+task relationship graphs of 0.4.0 (§5.10–§5.12, §5.6.1, §5.6.2), and the
+**T3** curated write actions: the write posture, the operator identity and its
+guard (§5.13, §5.1), the write-refusal copy (§5.14), and the write funnel with
+its receipts and the five actions it carries — Complete and Proceed anyway,
+Reopen, Cancel, Create and Add a dependency (§5.15). Removing an edge is the
+one piece of the T3 contract not shipped (§10).
 
 If the implementation and this document diverge, the implementation should be
 treated as authoritative in the short term and this specification should be

@@ -1,7 +1,7 @@
 # Lithos Lens — Roadmap
 
-Version: 1.4.0
-Date: 2026-09-17
+Version: 1.5.0
+Date: 2026-10-05
 Status: Active
 
 This is the only document that tracks milestone sequence and status. It was
@@ -67,6 +67,16 @@ them and files what he finds (the first were filed the same morning: tag
 autocomplete `e8629bce`, a "created since" filter `cefb9629`, an agent picker
 that fades dead registrations `28105098`) — and T3 revisits in October.
 
+**Lens 0.5.0** adds **T3**, the curated write actions, and ends the read-only
+contract: a named human operator (cookie-backed, registered as a `human`
+agent, Origin-checked, audit-logged) can complete a human or external-task
+gate directly and a timer / CI / PR gate behind a "proceed anyway" confirm,
+reopen a completed or cancelled task, cancel with the consequences stated
+first, create a task, epic or gate under both project conventions, and add a
+dependency edge — every write a no-JS form POST answered by a page rendered
+from fresh reads, with a receipt naming what the write unblocked, re-blocked
+or stranded. Removing an edge was cut (2026-10-05) and is done outside Lens.
+
 `docs/SPECIFICATION.md` describes this state precisely, and is the document to
 update when behavior changes.
 
@@ -91,7 +101,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 2 | **K1** | Knowledge | Note view, wiki-links, related panel, search | **shipped** | [k1-knowledge-note-view.md](./prd/k1-knowledge-note-view.md) | 0.3.0 |
 | 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **shipped** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
 | 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
-| 4 | **T3** | Tasks | Curated write actions | planned | [t3-curated-write-actions.md](./prd/t3-curated-write-actions.md) | 0.5.0 |
+| 4 | **T3** | Tasks | Curated write actions | **shipped** | [t3-curated-write-actions.md](./prd/t3-curated-write-actions.md) | 0.5.0 |
 | 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
@@ -209,7 +219,7 @@ PR reconciliation state — badge, age, `needs_human` in attention (#85,
 2026-09-13) — pulled forward because lithos-loom's pr-reconciliation S7 needed
 a console to show it on. The rest of T2b is unsequenced.
 
-### T3 — Curated Write Actions
+### T3 — Curated Write Actions — SHIPPED in 0.5.0
 
 Held out of September at the W38 checkpoint (`bcaf9379`, 2026-09-16) because
 the loom intervention rate on T2 had not fallen; October's milestone. The PRD
@@ -230,6 +240,17 @@ attributed to a named human operator (cookie-backed, registered via
 `lithos_agent_register(type="human")`), audit-logged, Origin-checked, and
 always refresh-after-write — no optimistic mutations. No auth beyond the
 trusted-network boundary; see REQUIREMENTS §5C for the full contract.
+
+Landed across the nine slices as planned, 2026-10-04 → 2026-10-05 (PRs #106,
+#107, #108, #110, #111, #112, #113, #114, #115), about four weeks ahead of the
+October roadmap's weekly shape, which had dependency editing in the last week
+of the month; `docs/SPECIFICATION.md` §5.13–§5.15 describe the shipped
+behavior. One scope cut: W8 ships no removal offer for the edge it creates
+(ledger #2), so the October success criterion that Lens "never presents a
+permanent task edge without a demonstrated removal path" is met only by the
+tool existing upstream, not by a Lens action. Create's request-id
+de-duplication is in memory and forgotten on restart (SPECIFICATION §10).
+Nothing else from the milestone remains open.
 
 ### K2 — Knowledge Graph View
 
