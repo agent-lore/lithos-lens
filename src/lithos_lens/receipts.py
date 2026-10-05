@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 __all__ = [
+    "CancelFacts",
     "MAX_RECEIPTS",
     "MAX_TITLED_RELEASES",
     "RECEIPT_KEY",
@@ -82,6 +83,62 @@ class ReceiptTask:
 
 
 @dataclass(frozen=True)
+class CancelFacts:
+    """What a cancel strands, releases and keeps, in plain receipt terms (T3-W6).
+
+    Filled in by the cancel route module from its consequence read, because
+    this module may not import the TaskGraph walk that computes it; the same
+    record feeds the confirm page and the receipt, through one partial, so the
+    two cannot state the facts differently.
+
+    ``stated`` is false on the receipt of a cancel the operator confirmed on
+    the confirm page: that page already stated the facts (REQUIREMENTS: the
+    receipt carries them "instead", only when there was no confirm page).
+    ``reason_given`` says whether the cancel sent a reason — the receipt
+    repeats that it is recorded in the event stream only — never the reason.
+
+    ``stranded`` / ``behind`` are the first few by title, with their totals.
+    ``exact`` is false when the totals are lower bounds ("≥ N"), and
+    ``bound_reasons`` says why; ``unavailable`` is set when the consequence
+    could not be computed at all. The ``*_unread`` flags mark a claims or
+    children read that failed — never stated as "none". ``claims`` are
+    ``(agent, aspects)`` pairs.
+    """
+
+    stated: bool = True
+    reason_given: bool = False
+    stranded: tuple[ReceiptTask, ...] = ()
+    stranded_total: int = 0
+    behind: tuple[ReceiptTask, ...] = ()
+    behind_total: int = 0
+    exact: bool = True
+    bound_reasons: tuple[str, ...] = ()
+    unavailable: str = ""
+    claims: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    claims_unread: bool = False
+    children: tuple[ReceiptTask, ...] = ()
+    children_total: int = 0
+    children_unread: bool = False
+    gate: bool = False
+
+    @property
+    def claims_total(self) -> int:
+        return sum(len(aspects) for _, aspects in self.claims)
+
+    @property
+    def stranded_more(self) -> int:
+        return max(self.stranded_total - len(self.stranded), 0)
+
+    @property
+    def behind_more(self) -> int:
+        return max(self.behind_total - len(self.behind), 0)
+
+    @property
+    def children_more(self) -> int:
+        return max(self.children_total - len(self.children), 0)
+
+
+@dataclass(frozen=True)
 class WriteReceipt:
     """One write's outcome, as the banner states it.
 
@@ -109,6 +166,8 @@ class WriteReceipt:
     ``safe_next``: a follow-up form on the receipt (Reopen gate) posts it as its
     ``next``, because an HTMX receipt is rendered against the POST, whose own
     path is no page to come back to.
+    ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), None for every
+    other action.
     """
 
     action: str
@@ -123,6 +182,7 @@ class WriteReceipt:
     released_unread: bool = False
     released_waiting: bool = False
     back_to: str = ""
+    cancel: CancelFacts | None = None
 
     @property
     def released_more(self) -> int:

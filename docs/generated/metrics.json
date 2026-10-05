@@ -42,7 +42,7 @@
         "max_function": "lithos_lens.state.AppState.__init__"
       },
       "TaskGraph": {
-        "functions_over_10": 24,
+        "functions_over_10": 25,
         "max_complexity": 40,
         "max_function": "lithos_lens.frontier.load_dashboard"
       },
@@ -67,7 +67,7 @@
         "max_function": "lithos_lens.write_errors._candidates"
       }
     },
-    "functions_over_10": 47,
+    "functions_over_10": 48,
     "top_functions": [
       {
         "complexity": 40,
@@ -107,14 +107,14 @@
       },
       {
         "complexity": 18,
-        "qualname": "lithos_lens.graph_layout.build_topology"
+        "qualname": "lithos_lens.cancel_consequences.walk_downstream"
       }
     ],
-    "total_functions": 880
+    "total_functions": 908
   },
   "domain": {
-    "associations": 93,
-    "models": 94,
+    "associations": 103,
+    "models": 99,
     "models_without_docstrings": 16
   },
   "graph": {
@@ -187,7 +187,7 @@
       }
     },
     "cross_component_edges": 38,
-    "cross_component_module_edges": 151,
+    "cross_component_module_edges": 160,
     "longest_component_chain": 9,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -300,14 +300,14 @@
         "sloc": 62
       },
       "TaskGraph": {
-        "classes": 65,
-        "functions": 317,
+        "classes": 69,
+        "functions": 326,
         "largest_module": "lithos_lens.frontier",
         "largest_module_lines": 843,
-        "lines": 10804,
-        "modules": 23,
-        "public_symbols": 139,
-        "sloc": 8251
+        "lines": 11126,
+        "modules": 24,
+        "public_symbols": 145,
+        "sloc": 8516
       },
       "Tasks": {
         "classes": 21,
@@ -331,23 +331,23 @@
       },
       "Web": {
         "classes": 9,
-        "functions": 108,
+        "functions": 123,
         "largest_module": "lithos_lens.web",
         "largest_module_lines": 830,
-        "lines": 3745,
-        "modules": 7,
-        "public_symbols": 43,
-        "sloc": 2945
+        "lines": 4103,
+        "modules": 8,
+        "public_symbols": 48,
+        "sloc": 3250
       },
       "Writes": {
-        "classes": 12,
-        "functions": 59,
+        "classes": 13,
+        "functions": 63,
         "largest_module": "lithos_lens.write_errors",
         "largest_module_lines": 825,
-        "lines": 1645,
+        "lines": 1705,
         "modules": 5,
-        "public_symbols": 24,
-        "sloc": 1161
+        "public_symbols": 25,
+        "sloc": 1211
       }
     },
     "max_module": "lithos_lens.tasks",
@@ -359,13 +359,13 @@
       "lithos_lens.web",
       "lithos_lens.write_errors"
     ],
-    "total_lines": 28038,
-    "total_modules": 67,
-    "total_sloc": 21428
+    "total_lines": 28778,
+    "total_modules": 69,
+    "total_sloc": 22048
   },
   "tests": {
-    "ratio": 2.0,
-    "src_lines": 28038,
-    "test_lines": 56207
+    "ratio": 1.98,
+    "src_lines": 28778,
+    "test_lines": 56905
   }
 }

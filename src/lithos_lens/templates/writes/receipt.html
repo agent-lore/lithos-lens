@@ -105,5 +105,19 @@
         No dependents are waiting on this again &mdash; nothing depends on it.
       {% endif %}
     </div>
+  {% elif receipt.action == "cancel" and receipt.cancel %}
+    <p class="write-receipt-headline">
+      &#10005; Cancelled &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;
+      {% with task_id = receipt.task.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    <p class="write-receipt-detail" data-receipt-outcome>
+      Cancelled as {{ receipt.operator }}.
+      {%- if receipt.cancel.reason_given %} Your reason was {{ cancel_reason_note }}.{% endif %}
+    </p>
+    {#- The consequences, only when no confirm page stated them first
+        (`[writes].confirm_cancel = false`): the same partial, past tense. -#}
+    {% if receipt.cancel.stated %}
+      {% with facts = receipt.cancel, past = true %}{% include "writes/cancel_facts.html" %}{% endwith %}
+    {% endif %}
   {% endif %}
 </section>

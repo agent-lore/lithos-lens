@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps.
 
 **Tier:** Foundation
 
@@ -14,6 +14,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.attention` | M | 1 | 1 |
 | `lithos_lens.blocker_chain` | M | 2 | 2 |
 | `lithos_lens.board_strips` | S | 2 | 2 |
+| `lithos_lens.cancel_consequences` | M | 4 | 2 |
 | `lithos_lens.dashboard` | M | 2 | 0 |
 | `lithos_lens.epic_strip` | S | 2 | 3 |
 | `lithos_lens.frontier` | L | 1 | 1 |
@@ -52,6 +53,14 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `BoardStrips` — Both strips of one generation, plus the epic scope the first resolved.
 - def `load_board_strips` — Assemble both strips from the reads currently in hand.
 - def `build_project_strip` — The projects inside the current scope, with their open-row counts (§5.3).
+
+### `lithos_lens.cancel_consequences`
+- class `CancelClient` — The narrow client surface the consequence read needs.
+- class `DownstreamWalk` — The open dependents a cancel strands, as one bounded walk saw them.
+- class `ClaimHolder` — One agent's active claims on the task: who loses what if it is cancelled.
+- class `CancelConsequences` — Everything the cancel confirm page states about one open task.
+- def `walk_downstream` — Walk ``task``'s active dependents, hop by hop, within the bounds.
+- def `load_cancel_consequences` — Read what cancelling ``task`` (an open task) strands, releases and keeps.
 
 ### `lithos_lens.dashboard`
 - class `TaskSummary`

@@ -95,11 +95,12 @@ e2e/artifacts/<page>-<width>.png
 
 with `<width>` one of `320`, `768`, `1024`, `1440` and `<page>` one of the
 slugs in `PAGES` — four files each, so the run's file count is four times the
-length of that array, plus the three captures `writes.spec.ts` makes on its own
+length of that array, plus the four captures `writes.spec.ts` makes on its own
 instance under the same contract (`gate-complete-action`, the gate row with
 Complete and the identity before the write, `complete-receipt`, the
-receipt banner after it with its Reopen gate follow-up, and `proceed-anyway-confirm`, a timer gate's Proceed
-anyway confirm page):
+receipt banner after it with its Reopen gate follow-up, `proceed-anyway-confirm`, a timer gate's Proceed
+anyway confirm page, and `cancel-confirm`, the Cancel confirm page for the
+head of the demo's depth-5 chain):
 
 ```
 e2e/artifacts/dashboard-320.png

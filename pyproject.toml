@@ -89,6 +89,7 @@ source_modules = [
     "lithos_lens.graph_impact",
     "lithos_lens.graph_page",
     "lithos_lens.graph_mini",
+    "lithos_lens.cancel_consequences",
     "lithos_lens.frontier",
     "lithos_lens.gates",
     "lithos_lens.pr_reconciliation",
@@ -132,6 +133,7 @@ forbidden_modules = [
     "lithos_lens.write_routes",
     "lithos_lens.write_funnel",
     "lithos_lens.gate_override",
+    "lithos_lens.cancel_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -159,6 +161,7 @@ forbidden_modules = [
     "lithos_lens.write_routes",
     "lithos_lens.write_funnel",
     "lithos_lens.gate_override",
+    "lithos_lens.cancel_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

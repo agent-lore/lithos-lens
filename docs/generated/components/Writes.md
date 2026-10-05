@@ -13,7 +13,7 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 |---|---|---:|---:|
 | `lithos_lens.gate_completion` | S | 0 | 5 |
 | `lithos_lens.operator` | M | 4 | 2 |
-| `lithos_lens.receipts` | S | 3 | 1 |
+| `lithos_lens.receipts` | S | 4 | 1 |
 | `lithos_lens.write_errors` | L | 4 | 3 |
 | `lithos_lens.write_guards` | S | 0 | 2 |
 
@@ -36,6 +36,7 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 ### `lithos_lens.receipts`
 - class `ReceiptTask` — A task a receipt names: its id, and its title when one could be read.
+- class `CancelFacts` — What a cancel strands, releases and keeps, in plain receipt terms (T3-W6).
 - class `WriteReceipt` — One write's outcome, as the banner states it.
 - class `ReceiptStore` — The process's receipts, bounded in count and age (T3 D5).
 - def `receipt_url` — ``next_url`` with ``?receipt=<receipt_id>`` merged into its query.

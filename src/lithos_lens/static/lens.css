@@ -2562,3 +2562,57 @@ button,
   color: var(--muted);
   margin: 0;
 }
+
+/* ── Cancel, consequences first (T3-W6) ────────────────────────────────
+   The confirm page reuses the Proceed anyway page's frame; its facts block
+   (shared with the receipt) is a stack of short statements, the counts line
+   leading. The row's overflow menu is a no-JS <details> whose summary is
+   the ⋯ control; its body opens beneath the row's other content. */
+.cancel-page .cancel-facts {
+  border-left: 3px solid var(--line);
+  padding-left: 0.75rem;
+}
+
+.cancel-facts {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.cancel-facts-part {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.cancel-facts-part p {
+  margin: 0;
+}
+
+.cancel-facts-headline {
+  font-weight: 600;
+}
+
+.cancel-facts-bound {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.row-menu {
+  margin-top: 0.4rem;
+}
+
+.row-menu-toggle {
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-block;
+  font-weight: 700;
+  list-style: none;
+  padding: 0 0.4rem;
+}
+
+.row-menu-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.row-menu-body .complete-action {
+  margin-top: 0.3rem;
+}

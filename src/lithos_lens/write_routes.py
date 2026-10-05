@@ -25,6 +25,9 @@ What this module owns, and what every later slice reuses:
   for such a gate without it is sent here rather than performed.
 - ``POST /tasks/{task_id}/reopen`` (T3-W5) — reopen a completed or cancelled
   task (D8). No confirm page: each case's copy is rendered beside the button.
+- ``GET``/``POST /tasks/{task_id}/cancel`` (T3-W6) — cancel with its
+  consequences stated first, in ``cancel_routes``, registered from here with
+  this group's funnel.
 
 There is deliberately NO posture switch (D2): the routes are always registered
 and the affordances are part of the page. What decides whether an affordance
@@ -45,6 +48,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from lithos_lens.cancel_routes import register_cancel_routes
 from lithos_lens.gate_completion import (
     MAX_NOTE_LENGTH,
     PROCEED_ANYWAY_CONFIRMATION,
@@ -405,6 +409,9 @@ def register_write_routes(
         return receipts.take(request.query_params.get(RECEIPT_KEY))
 
     templates.env.globals["take_receipt"] = take_receipt
+
+    # Cancel's confirm page and action (T3-W6), through this group's funnel.
+    register_cancel_routes(app, state, templates, funnel)
 
     def render(
         request: Request,

@@ -67,6 +67,7 @@ from lithos_lens.operator import (
 )
 from lithos_lens.receipts import (
     MAX_TITLED_RELEASES,
+    CancelFacts,
     ReceiptStore,
     ReceiptTask,
     WriteReceipt,
@@ -208,8 +209,8 @@ class WriteDone:
     success result as Lithos returned it, for the audit line's result
     envelope (§5C.6): a success is recorded with what Lithos said, exactly
     as a refusal is. ``prior_status``, ``checked_status``, ``released_exact``,
-    ``released_unread`` and ``released_waiting`` are carried to the receipt as
-    they are (see
+    ``released_unread``, ``released_waiting`` and a cancel's ``cancel`` facts
+    are carried to the receipt as they are (see
     :class:`~lithos_lens.receipts.WriteReceipt`).
     """
 
@@ -222,6 +223,7 @@ class WriteDone:
     released_exact: bool = True
     released_unread: bool = False
     released_waiting: bool = False
+    cancel: CancelFacts | None = None
 
 
 def _applies(task: TaskRecord) -> tuple[str, str] | None:
@@ -595,6 +597,7 @@ class WriteFunnel:
             released_exact=done.released_exact,
             released_unread=done.released_unread,
             released_waiting=done.released_waiting,
+            cancel=done.cancel,
         )
 
 

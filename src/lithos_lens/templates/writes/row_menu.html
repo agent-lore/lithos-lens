@@ -1,0 +1,18 @@
+{#
+  A board row's overflow menu (T3-W6, clarification D6): a no-JS
+  `<details>` / `<summary>⋯</summary>`, shared by `tasks/row.html` and
+  `tasks/gate_row.html`. It holds only Cancel -- a link to the confirm page,
+  or the direct form when `[writes].confirm_cancel = false`; never the
+  consequences themselves (D9). Rendered only for an open task with a resolved
+  identity. A reconcile re-render collapses an open menu, which is accepted.
+
+  Context: `action_task`, `action_next` -- as `writes/cancel_action.html`.
+-#}
+{% if offers_cancel(action_task) and operator_identity(request).resolved %}
+  <details class="row-menu" data-row-menu data-task-id="{{ action_task.id }}">
+    <summary class="row-menu-toggle" aria-label="More actions">&#8943;</summary>
+    <div class="row-menu-body">
+      {% include "writes/cancel_action.html" %}
+    </div>
+  </details>
+{% endif %}
