@@ -90,6 +90,7 @@ source_modules = [
     "lithos_lens.graph_page",
     "lithos_lens.graph_mini",
     "lithos_lens.cancel_consequences",
+    "lithos_lens.relation_sentences",
     "lithos_lens.frontier",
     "lithos_lens.gates",
     "lithos_lens.pr_reconciliation",
@@ -137,6 +138,7 @@ forbidden_modules = [
     "lithos_lens.gate_override",
     "lithos_lens.cancel_routes",
     "lithos_lens.create_routes",
+    "lithos_lens.edge_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -166,6 +168,7 @@ forbidden_modules = [
     "lithos_lens.gate_override",
     "lithos_lens.cancel_routes",
     "lithos_lens.create_routes",
+    "lithos_lens.edge_routes",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

@@ -288,8 +288,15 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
             "edge before re-parenting.",
         ),
     },
-    # The read side, so its legs cannot quietly vanish either.
-    "lithos_task_get": {("task_not_found", "")},
+    # The read side, so its legs cannot quietly vanish either. `task_get`
+    # resolves a prefix through the shared resolver (T3-W8's confirm step
+    # types one), so it documents the resolver's three refusals too.
+    "lithos_task_get": {
+        ("task_not_found", "not found."),
+        ("invalid_input", "task_id 'infl' is too short"),
+        ("task_not_found", "No task matches id prefix 'influx-nope' (task_id)"),
+        ("ambiguous_id_prefix", "(task_id) is ambiguous"),
+    },
     "lithos_task_ready": {("invalid_input", "")},
     "lithos_task_blocked": {("invalid_input", "")},
     "lithos_task_edge_list": {("invalid_input", "")},
@@ -393,8 +400,11 @@ def _ambiguous_envelopes() -> list[tuple[str, dict[str, Any]]]:
 
 
 def test_every_tool_that_resolves_an_id_vendors_an_ambiguous_envelope() -> None:
-    """All five writes share the resolver, so all five document its refusal."""
+    """All five writes share the resolver, so all five document its refusal —
+    and so does ``lithos_task_get``, which the relation confirm step resolves
+    a typed prefix with (T3-W8, D8)."""
     assert {tool for tool, _ in _ambiguous_envelopes()} == {
+        "lithos_task_get",
         "lithos_task_complete",
         "lithos_task_reopen",
         "lithos_task_cancel",

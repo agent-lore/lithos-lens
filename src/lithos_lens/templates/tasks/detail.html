@@ -95,6 +95,9 @@
           {% include "writes/cancel_action.html" %}
           {#- Add child (T3-W7): an open epic — the create form, parent filled. -#}
           {% include "writes/add_child_action.html" %}
+          {#- Add a dependency (T3-W8): an open task — a sentence and the other
+             task, checked on a confirm step before anything is written. -#}
+          {% include "writes/relation_action.html" %}
         {% endwith %}
       </header>
 

@@ -1,0 +1,52 @@
+{#
+  The relation entry form (T3-W8, D2): a sentence about this task and the
+  other task's id. A GET to the confirm step, which resolves the other task
+  and restates the relation before anything is written -- so this form never
+  writes and carries no `expected_status`.
+
+  Context:
+    `relation_task`     -- the focal task (a `tasks.TaskRecord`);
+    `relation_next`     -- where the write's 303 returns the operator;
+    `relation_selected` -- the sentence key to preselect, or "";
+    `relation_typed`    -- the other task as typed, or "";
+    `relation_errors`   -- input name -> `create_form.FieldError`, or {}.
+
+  The gate sentence ("_ waits on this gate") is offered only on a gate's page
+  (`relation_sentences`). An error is listed under its input; an ambiguous
+  prefix's candidates are listed there AS TEXT, for the operator to retype --
+  nothing is chosen for them.
+-#}
+{% macro relation_error(name) -%}
+  {%- set error = (relation_errors or {}).get(name) -%}
+  {%- if error %}
+    <div class="create-field-error" role="alert" data-relation-error="{{ name }}">
+      <p>{{ error.message }}</p>
+      {% if error.candidates %}
+        <ul class="create-candidates" data-relation-candidates>
+          {% for candidate in error.candidates %}
+            <li data-relation-candidate="{{ candidate.task_id }}"><code>{{ candidate.task_id }}</code>{% if candidate.title %} &mdash; {{ candidate.title }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+  {%- endif -%}
+{%- endmacro %}
+<form class="complete-action relation-form" method="get" action="{{ edge_new_path(relation_task.id) }}" data-relation-form data-task-id="{{ relation_task.id }}">
+  <input type="hidden" name="next" value="{{ relation_next }}">
+  <label class="create-field" for="relation-sentence-{{ relation_task.id }}">
+    <span>Add a dependency</span>
+    <select id="relation-sentence-{{ relation_task.id }}" name="relation" data-relation-sentences>
+      {% for sentence in relation_sentences(relation_task) %}
+        <option value="{{ sentence.key }}" data-relation-sentence="{{ sentence.key }}"{% if relation_selected == sentence.key %} selected{% endif %}>{{ sentence.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {{ relation_error("relation") }}
+  <label class="create-field" for="relation-other-{{ relation_task.id }}">
+    <span>Other task <small>a full id, or at least six characters of one</small></span>
+    <input type="text" id="relation-other-{{ relation_task.id }}" name="other" value="{{ relation_typed }}" required autocomplete="off" spellcheck="false" data-relation-other>
+  </label>
+  {{ relation_error("other") }}
+  <button type="submit" class="complete-action-button" data-relation-check>Check relation&hellip;</button>
+  <p class="complete-action-meaning">Shows the relation with both titles and what it means for readiness before anything is written.</p>
+</form>

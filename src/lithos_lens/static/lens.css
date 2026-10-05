@@ -2708,3 +2708,36 @@ button,
 .create-page {
   min-width: 0;
 }
+
+/* Add a dependency (T3-W8): the entry form in the detail header, and the
+   confirm step's restated relation and its readiness meaning. */
+.relation-action {
+  min-width: 0;
+}
+
+.relation-form {
+  align-items: end;
+}
+
+.relation-form .create-field {
+  flex: 1 1 14rem;
+}
+
+.relation-form .create-field-error {
+  flex-basis: 100%;
+}
+
+.relation-page {
+  min-width: 0;
+}
+
+.relation-statement {
+  font-size: 1.05rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.relation-readiness {
+  color: var(--muted);
+  margin: 0;
+}

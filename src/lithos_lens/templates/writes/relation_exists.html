@@ -1,0 +1,13 @@
+{#
+  "Already exists" (T3-W8, D5): the one sentence both the confirm step and the
+  receipt say of a relation Lens's fresh read found -- and so did not write.
+
+  Context: `exists_by`, `exists_at` -- the existing edge's `created_by` and
+  `created_at`. An edge Lithos recorded without them (a seeded one) drops the
+  parenthesis rather than saying "added by nobody".
+-#}
+<p class="write-outcome-headline" data-relation-exists>
+  {{- relation_already_exists -}}
+  {%- if exists_by or exists_at %} (added{% if exists_by %} by {{ exists_by }}{% endif %}{% if exists_at %}{{ "," if exists_by else "" }} {{ exists_at | display_date }}{% endif %}){% endif -%}
+  ; nothing was written.
+</p>

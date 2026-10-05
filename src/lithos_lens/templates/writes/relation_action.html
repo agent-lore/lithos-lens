@@ -1,0 +1,18 @@
+{#
+  Add a dependency (T3-W8, D2) on an open task's detail page: the relation
+  entry form, a GET to the confirm step.
+
+  Context:
+    `action_task` -- the task (a `tasks.TaskRecord`) as the page read it;
+    `action_next` -- where the write's 303 returns the operator.
+
+  Rendered only when `offers_relation` (an open task of any type) and a
+  resolved operator identity both say yes.
+-#}
+{% if offers_relation(action_task) and operator_identity(request).resolved %}
+  <div class="relation-action" data-relation-action data-task-id="{{ action_task.id }}">
+    {% with relation_task = action_task, relation_next = action_next, relation_selected = "", relation_typed = "", relation_errors = {} %}
+      {% include "writes/relation_form.html" %}
+    {% endwith %}
+  </div>
+{% endif %}

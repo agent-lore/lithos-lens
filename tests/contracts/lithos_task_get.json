@@ -1,15 +1,20 @@
 {
   "tool": "lithos_task_get",
-  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d for the success payload and its legacy variant; the id-prefix envelopes (T3-W8) are lithos 0.6.0 @ d2c49bb (source read 2026-10-05) — the resolver call reached this tool with the short-prefix feature (8ce96bd, lithos #412), first released in 0.5.0",
   "source": [
     "lithos:src/lithos/tools/tasks.py::lithos_task_get",
-    "lithos:src/lithos/tools/tasks.py::_serialize_task_record"
+    "lithos:src/lithos/tools/tasks.py::_serialize_task_record",
+    "lithos:src/lithos/coordination.py::CoordinationService.resolve_task_id",
+    "lithos:src/lithos/id_resolution.py::MIN_PREFIX_LEN,AMBIGUITY_CANDIDATE_CAP",
+    "lithos:src/lithos/errors.py::AmbiguousIdPrefixError",
+    "lithos:src/lithos/tools/_seam.py::tool_span",
+    "lithos:src/lithos/envelopes.py::error_envelope,coordination_error_envelope"
   ],
   "request": {
     "canonical": {
       "task_id": "influx-ingest-cutover"
     },
-    "notes": ""
+    "notes": "`task_id` goes through the SHARED resolver (`resolve_task_id`, field `task_id`) before the lookup (`tools/tasks.py:1200` @ d2c49bb): a value of 36 or more characters is a full id and passes through untouched, a miss included, to this tool's own `task_not_found` (\"Task '<id>' not found.\"); anything shorter than `MIN_PREFIX_LEN` (6) is `invalid_input`; anything between is searched as a PREFIX — matching nothing is the resolver's own `task_not_found` (\"No task matches id prefix …\", same code, different message) and matching several is `ambiguous_id_prefix` (`AmbiguousIdPrefixError`, mapped by `tool_span`) with up to `AMBIGUITY_CANDIDATE_CAP` (5) `{id, title}` candidate RECORDS. A unique prefix answers the matched task, whose `id` is the FULL id — Lens's relation confirm step (T3-W8) posts that id, never the prefix typed."
   },
   "responses": {
     "success": {
@@ -61,8 +66,33 @@
         "status": "error",
         "code": "task_not_found",
         "message": "Task 'missing-task' not found."
+      },
+      {
+        "status": "error",
+        "code": "invalid_input",
+        "message": "task_id 'infl' is too short: pass the full task id or a prefix of at least 6 characters."
+      },
+      {
+        "status": "error",
+        "code": "task_not_found",
+        "message": "No task matches id prefix 'influx-nope' (task_id)."
+      },
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Task id prefix '506155' (task_id) is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "50615540-daf2-4622-afd7-787efcd6af62",
+            "title": "Rebuild the Influx ingest path"
+          },
+          {
+            "id": "5061554c-c2eb-43ff-9f9a-f45d3376a597",
+            "title": "Retire the old Influx writer"
+          }
+        ]
       }
     ]
   },
-  "observed_divergences": ""
+  "observed_divergences": "The 0.6.0 serializer (`_serialize_task_record`) also sends `updated_at`, which the 0.4.0 success payload above predates; the prefix envelopes were transcribed from source and not probed live from this environment — `make contracts-verify` on the host checks the request shape against a live server."
 }

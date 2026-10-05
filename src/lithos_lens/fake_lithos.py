@@ -39,7 +39,7 @@ from lithos_lens.config import LithosConfig
 from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
-from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore
+from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore, write_error
 from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -176,7 +176,8 @@ class FakeLithosClient:
     emitted and the browser sees the board move through the normal SSE path;
     without one (most unit tests) the writes still apply, they just announce
     nothing. An edge write publishes nothing — upstream emits no event for one,
-    and only the hub mints the synthetic ``lens.edge_upserted`` (T3 D11).
+    and Lens mints none either: its edge action evicts both endpoints' cached
+    edges itself (T3-W8).
     """
 
     def __init__(
@@ -318,11 +319,17 @@ class FakeLithosClient:
         return rows[:limit] if limit is not None else rows
 
     async def task_get(self, task_id: str) -> TaskRecord:
-        task = self._by_id(task_id)
+        # Upstream resolves the id through the shared resolver first (since
+        # 0.5.0): a prefix of at least six characters names its one match,
+        # and a short, unmatched or ambiguous one is the resolver's refusal.
+        resolved = self._writes.resolve_id(task_id)
+        task = self._by_id(resolved)
         if task is None:
-            # Mirror the concrete client: a missing task is an error envelope
-            # (code=task_not_found), surfaced as a coded LithosToolError.
-            raise LithosToolError(f"Task '{task_id}' not found.", code="task_not_found")
+            # Mirror the concrete client: a missing task is the tool's own
+            # error envelope (`lithos_task_get.json`), carried WHOLE on the
+            # coded LithosToolError as `raise_for_error` carries it — the
+            # relation confirm step maps a refusal only from its envelope.
+            raise write_error("task_not_found", f"Task '{resolved}' not found.")
         return task
 
     async def task_children(

@@ -1074,8 +1074,8 @@ async def test_each_write_publishes_the_event_body_the_server_would() -> None:
 
 
 async def test_an_edge_write_publishes_nothing() -> None:
-    """Upstream emits no event for an edge write; only the hub mints the
-    synthetic ``lens.edge_upserted`` (T3 D11), and that is W8's."""
+    """Upstream emits no event for an edge write, and neither does fake mode:
+    Lens's edge action evicts the cached edges itself (T3-W8)."""
     hub = FakeEventHub(EventsConfig(enabled=True), LithosConfig())
     await hub.start()
     client = FakeLithosClient(dataset=write_dataset(), events=hub)
