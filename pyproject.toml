@@ -131,6 +131,7 @@ forbidden_modules = [
     "lithos_lens.graph_routes",
     "lithos_lens.write_routes",
     "lithos_lens.write_funnel",
+    "lithos_lens.gate_override",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -157,6 +158,7 @@ forbidden_modules = [
     "lithos_lens.graph_routes",
     "lithos_lens.write_routes",
     "lithos_lens.write_funnel",
+    "lithos_lens.gate_override",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

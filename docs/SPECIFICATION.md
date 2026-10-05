@@ -126,15 +126,26 @@ The current application exposes these routes:
   trimmed first, because accepting `" dave "` would set an identity other than
   the one typed.
 - `POST /tasks/{task_id}/approve`
-  Completes an open **gate** a person resolves — `human` or `external_task` —
-  through the write funnel (§5.15). The path keeps REQUIREMENTS §5C.7's name;
-  the action the operator sees says **Complete**, never "Approve". A task that
-  is not a gate is answered 409, and every other gate type (`timer`, `ci`, `pr`,
-  or one Lens does not know) is refused with no write until the proceed-anyway
-  confirm step ships. A plain form POST answers `303 See Other` to the form's
-  `next` when it is a same-origin relative path, else the task's detail page,
-  carrying `?receipt=<id>`; an HTMX POST (a board row's action) answers a
-  fragment, always 200. No GET is registered on the path yet.
+  Completes an open **gate** through the write funnel (§5.15). The path keeps
+  REQUIREMENTS §5C.7's name; the action the operator sees says **Complete**,
+  never "Approve". A gate a person resolves — `human` or `external_task` —
+  completes directly. Any other gate type (`timer`, `ci`, `pr`, or one Lens
+  does not know) completes only when the form carries `confirm=proceed-anyway`,
+  which only the confirm page below posts; without it the POST is redirected
+  to that page (303, or `HX-Redirect` for HTMX) with `next` carried along, and
+  nothing is written. A task that is not a gate is answered 409. A plain form
+  POST answers `303 See Other` to the form's `next` when it is a same-origin
+  relative path, else the task's detail page, carrying `?receipt=<id>`; an HTMX
+  POST (a board row's action) answers a fragment, always 200.
+- `GET /tasks/{task_id}/approve`
+  The **Proceed anyway** confirm page for an open machine-owned gate (§5.15),
+  server-rendered and complete without JavaScript. `?next=` (same-origin
+  relative only, else the gate's page) is where its form and its "Keep
+  waiting" link return the operator. A `human` or `external_task` gate has
+  nothing to confirm and is redirected (303) to its detail page, where the
+  direct action is; a task that is not a gate, or a gate that is no longer
+  open, answers 409 saying why, an unknown id 404, and a failed read 503 — each
+  with no form.
 - `GET /tasks/new`
   Reserved for the create form (a later T3 slice). Until it exists the path
   answers 404 — never the detail page of a task whose id happens to be `new`,
@@ -1866,7 +1877,10 @@ in order:
    than `expected_status` is the conflict page — "This task is now
    *\<status\>*." — and **no write**. The conflict copy names the status only:
    Lithos's task record carries no actor or update time, and Lens invents none.
-   The action then says whether it applies to the task as read.
+   The action then says whether it applies to the task as read, and whether it
+   needs a confirmation the form did not carry — in which case a plain POST is
+   redirected (303) to the action's confirm page and an HTMX POST answers
+   `HX-Redirect` to it, and nothing is written (Proceed anyway, below).
 6. **The single Lithos call.**
 7. **Classification** — an error carrying a non-empty envelope is Lithos
    refusing, mapped by §5.14 (a `task_not_found` re-reads the task first, so a
@@ -1905,7 +1919,7 @@ Every way an attempt ends, for a plain POST:
 | the task is gone at the pre-check | 409 | conflict page: "This task no longer exists." | `conflict` |
 | upstream `task_not_found` on a task that exists and is not open | 409 | the same conflict page, via the re-read | `conflict` |
 | not a gate | 409 | "This task isn't a gate — only gates can be completed here." | `rejected` (`not_a_gate`) |
-| a gate type other than `human` / `external_task` | 409 | "A *\<type\>* gate is resolved by whatever watches it. Lens can't complete it yet." | `rejected` (`gate_type_unsupported`) |
+| a machine-owned gate posted without the confirmation | 303 to the confirm page | — | `rejected` (`confirmation_required`) |
 | `expected_status` missing or not a status | 400 | "The form didn't say what status you saw — reload and try again." | `rejected` (`bad_form`) |
 | the pre-check read fails | 503 | "Lens couldn't read the task, so it didn't try the write." | `rejected` (`precheck_failed`) |
 | an identity that belongs to an agent | 403 | the operator page's refusal copy | `rejected` (`identity_refused`) |
@@ -1952,7 +1966,52 @@ a row's form — the button or the note — never opens the side panel. The note
 whitespace folded to one line and bounded at 500 characters, is sent as the
 completion's `outcome`; with no note the outcome is "Completed via Lens by
 *\<operator\>*". The re-read at the pre-check is what binds: a task that is not
-an open gate of those two types is refused there, whatever the page offered.
+an open gate is refused there, and a gate of any other type is sent to its
+confirm page, whatever the page that posted offered.
+
+**Proceed anyway** (T3-W4b). A `timer` gate resolves itself at `ready_at`; a
+`ci` or `pr` gate is resolved by whatever watches the check or the PR.
+Completing one by hand overrides a machine wait — allowed, because completing
+is the only way to release a gate's waiters (cancelling strands them), but a
+decision, never a mis-click. So an open gate of those types — and of any type
+Lens does not know, the cautious path — carries a **Proceed anyway…** link in
+place of the Complete form, on the same three surfaces through the same
+partial, decided by the counterpart helper (`gate_completion.proceeds_anyway`);
+a gate gets one or the other, never both, and like Complete the link renders
+only when an operator identity resolves. It is an ordinary link, so on a board
+row it navigates rather than opening the side panel. It opens the confirm page
+(`GET /tasks/{task_id}/approve`), which states, from what Lens can read and
+nothing more:
+
+- **what would otherwise resolve the gate** — a timer's `ready_at`, and when
+  that has already passed, that *the gate no longer blocks anything; completing
+  it only closes it*; a timer whose `ready_at` is absent or unparseable says
+  Lens can't tell when it would resolve. A PR gate's `metadata.pr_url` as a
+  link (only an absolute `http`/`https` url is linked; any other value is shown
+  as text). For CI and unknown types, the gate's own description;
+- **the waiters completing it releases**, by title, from the same read the
+  gate row's waiter list uses (the whole open list and the blocked frontier at
+  `[tasks].frontier_limit`, falling back to the gate's `waits_on_gate` edges),
+  with that read's labels carried over: "blocks at least *N* tasks",
+  "blocks *N* tasks (unverified)", or "waiter count unavailable" — never a
+  confident zero;
+- that **whatever watches this gate will find it closed**.
+
+It does not describe how the gate's author reacts. A loom `pr` gate's waiter is
+the story itself, so proceeding makes the story ready again while its PR is
+still open; what loom's watcher then does is not in its specification, and the
+page names the PR and the released waiters and leaves the decision with the
+operator. Its form — the only one carrying the confirmation — has the
+`expected_status` the page read, the `next`, the optional note and a
+**Complete anyway** button, beside a "Keep waiting" link and the identity
+chip; with no identity the page states the same facts and offers no form. With
+no note, an override's outcome is "Completed early via Lens by
+*\<operator\>* — proceed anyway; *\<gate type\>* gate had not resolved" (an
+untyped gate is named "untyped"), so the record never claims a wait ended that
+did not. The span and the audit line record the gate type and
+`override: true` (`lens.write.override`, `write_override`) — for an
+unconfirmed attempt as for a performed one; a direct completion records
+`override: false`. The receipt is the same as a direct completion's.
 
 ## 6. Current Lithos Dependencies
 
@@ -2198,12 +2257,11 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the rest of the curated write actions** (T3) — proceed-anyway for
-  machine-owned gates (`timer`, `ci`, `pr`), reopen (and with it the receipt's
-  Reopen gate follow-up), cancel, create and add a dependency. The posture and
-  identity (§5.13), the refusal copy (§5.14), and the write funnel with its
-  receipts and the direct Complete action for human and external-task gates
-  (§5.15) ship now.
+- **the rest of the curated write actions** (T3) — reopen (and with it the
+  receipt's Reopen gate follow-up), cancel, create and add a dependency. The
+  posture and identity (§5.13), the refusal copy (§5.14), and the write funnel
+  with its receipts, the direct Complete action for human and external-task
+  gates, and Proceed anyway for every other gate type (§5.15) ship now.
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)

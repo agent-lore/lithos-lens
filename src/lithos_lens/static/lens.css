@@ -2477,3 +2477,74 @@ button,
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* ── Proceed anyway (T3-W4b) ───────────────────────────────────────────
+   The link a machine-owned gate carries instead of the Complete form, and
+   the confirm page it opens. The page is a read with one form at its foot;
+   its sections are the statements the decision rests on. */
+.proceed-anyway-link {
+  font-weight: 600;
+}
+
+.proceed-anyway-page {
+  display: grid;
+  gap: 1rem;
+  max-width: 48rem;
+}
+
+.proceed-anyway-page h1,
+.proceed-anyway-page h2 {
+  margin: 0;
+}
+
+.proceed-anyway-page h2 {
+  font-size: 1rem;
+}
+
+.proceed-anyway-subject {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.proceed-anyway-resolver,
+.proceed-anyway-waiters {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.proceed-anyway-resolver p,
+.proceed-anyway-waiters p {
+  margin: 0;
+}
+
+.proceed-anyway-description {
+  border-left: 3px solid var(--line);
+  margin: 0;
+  padding-left: 0.75rem;
+}
+
+.proceed-anyway-watcher {
+  font-weight: 600;
+  margin: 0;
+}
+
+.proceed-anyway-back {
+  font-size: 0.9rem;
+}
+
+.proceed-anyway-action {
+  justify-content: flex-start;
+}
+
+.proceed-anyway-form {
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.proceed-anyway-no-operator {
+  color: var(--muted);
+  margin: 0;
+}

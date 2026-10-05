@@ -13,7 +13,9 @@ order, with one shape:
    (``OperatorRegistry.ensure_registered``, W1).
 5. **Pre-check** — the task is re-read; a status other than the one the
    operator saw is the conflict page and no write (§5C.6). The action then
-   says whether it applies to the task as read.
+   says whether it applies to the task as read, and whether it needs a
+   confirmation the form did not carry — in which case the operator is sent
+   to the action's confirm page and nothing is written (T3-W4b).
 6. **The single Lithos call.**
 7. **Classification** — an answer with an envelope is a refusal, mapped by
    ``write_errors``; NO answer (a timeout, a dead session, an empty envelope)
@@ -26,7 +28,9 @@ order, with one shape:
     gets the receipt or refusal fragment, always ``200`` (htmx swaps nothing
     else), with ``HX-Trigger: lens:reconcile`` so ``tasks.js`` re-renders the
     board through the reconcile every event already drives. The one exception
-    is no identity, which answers ``HX-Redirect`` to the operator page.
+    is no identity, which answers ``HX-Redirect`` to the operator page — and,
+    the same way, an attempt that still needs its confirmation, which is sent
+    to the confirm page.
 
 Route handlers parse their form, describe their action as a :class:`TaskWrite`
 and hand both over; they never call a write method themselves. A second path to
@@ -91,6 +95,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AUDIT_EVENT",
+    "CONFIRMATION_REQUIRED",
     "RECONCILE_TRIGGER",
     "TaskWrite",
     "WriteDone",
@@ -126,6 +131,11 @@ RECEIPT_FRAGMENT = "writes/receipt.html"
 WriteResult = Literal[
     "ok", "conflict", "rejected", "unknown", "refused_origin", "no_operator"
 ]
+
+#: The code an attempt is recorded with when it was sent to its action's
+#: confirm page rather than performed. Recorded as ``rejected``: nothing was
+#: written, and the bounded result set has no other word for "not performed".
+CONFIRMATION_REQUIRED = "confirmation_required"
 
 #: The funnel's own refusals, each with the status a plain POST answers with.
 BAD_FORM_COPY = "The form didn't say what status you saw — reload and try again."
@@ -214,6 +224,17 @@ def _no_attributes(task: TaskRecord) -> Mapping[str, str | bool]:
     return {}
 
 
+def _no_confirmation(task: TaskRecord) -> str:
+    return ""
+
+
+@dataclass(frozen=True)
+class _Unconfirmed:
+    """An attempt the action sends to its confirm page instead of performing."""
+
+    page: str
+
+
 @dataclass(frozen=True)
 class TaskWrite:
     """One action on an existing task, as the funnel drives it.
@@ -223,13 +244,18 @@ class TaskWrite:
     - ``admits`` answers, for a task that passed the status pre-check, the
       ``(code, sentence)`` refusal when the action does not apply to it;
     - ``describe`` names the span attributes the task contributes (a
-      completion's gate type, whether it was an override).
+      completion's gate type, whether it was an override);
+    - ``confirm_page`` answers, for a task the action applies to, the URL of
+      the page that must confirm it first — empty when the task needs no
+      confirmation or the form already carried it. Decided on the task AS
+      READ, so the answer binds whatever the page that posted showed.
     """
 
     action: WriteAction
     perform: Callable[[LithosClientProtocol, TaskRecord, str], Awaitable[WriteDone]]
     admits: Callable[[TaskRecord], tuple[str, str] | None] = _applies
     describe: Callable[[TaskRecord], Mapping[str, str | bool]] = _no_attributes
+    confirm_page: Callable[[TaskRecord], str] = _no_confirmation
 
 
 @dataclass
@@ -336,6 +362,15 @@ class WriteFunnel:
         outcome = await self._attempt(form, write, identity.id, ledger)
         if isinstance(outcome, WriteProblem):
             return self._refuse(request, ledger, outcome, htmx)
+        if isinstance(outcome, _Unconfirmed):
+            # Not performed: the confirm page states what the override does
+            # and carries the confirmation. Answered like no identity — a
+            # redirect in either mode, since an HTMX swap cannot hold a page.
+            ledger.result = "rejected"
+            ledger.code = CONFIRMATION_REQUIRED
+            if htmx:
+                return Response(status_code=_OK, headers={"HX-Redirect": outcome.page})
+            return RedirectResponse(outcome.page, status_code=303)
         ledger.result = "ok"
         if htmx:
             return self._templates.TemplateResponse(
@@ -349,7 +384,7 @@ class WriteFunnel:
 
     async def _attempt(
         self, form: WriteForm, write: TaskWrite, operator: str, ledger: _Ledger
-    ) -> WriteReceipt | WriteProblem:
+    ) -> WriteReceipt | WriteProblem | _Unconfirmed:
         """Steps 3-9, for an attempt with an operator: a receipt, or why not."""
         action = write.action
         client = self._state.lithos_client
@@ -429,6 +464,9 @@ class WriteFunnel:
                 status_code=CONFLICT_STATUS,
                 subject=subject,
             )
+        confirm_page = write.confirm_page(task)
+        if confirm_page:
+            return _Unconfirmed(page=confirm_page)
 
         try:
             done = await write.perform(client, task, operator)

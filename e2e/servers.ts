@@ -82,3 +82,6 @@ export const WRITES_PORT = Number(process.env.LENS_E2E_WRITES_PORT ?? 8126);
 export const WRITES_BASE_URL = `http://127.0.0.1:${WRITES_PORT}`;
 // The demo dataset's only human gate.
 export const WRITES_HUMAN_GATE = "influx-read-swap-approval";
+// A timer gate in the same fixtures, completed only through its Proceed
+// anyway confirm page (T3-W4b).
+export const WRITES_TIMER_GATE = "influx-replica-cooldown";

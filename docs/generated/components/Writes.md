@@ -3,7 +3,7 @@
 
 # Writes
 
-Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action, the refusal for the rest, the default outcome).
+Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action and which the Proceed anyway confirmation, the not-a-gate refusal, the default outcome of a direct completion and of an override).
 
 **Tier:** Foundation
 
@@ -11,7 +11,7 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.gate_completion` | S | 0 | 3 |
+| `lithos_lens.gate_completion` | S | 0 | 5 |
 | `lithos_lens.operator` | M | 4 | 2 |
 | `lithos_lens.receipts` | S | 3 | 1 |
 | `lithos_lens.write_errors` | L | 4 | 3 |
@@ -21,6 +21,8 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 ### `lithos_lens.gate_completion`
 - def `completes_directly` — Whether a task carries the direct Complete action, right now.
+- def `proceeds_anyway` — Whether a task is completed only through the Proceed anyway page, now.
+- def `is_override` — Whether completing this task overrides a wait a person does not own.
 - def `refusal_for` — ``(code, sentence)`` for an open task Lens will not complete, or None.
 - def `default_outcome` — The outcome a completion records when the operator wrote no note.
 

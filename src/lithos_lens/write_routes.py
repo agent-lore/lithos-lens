@@ -15,10 +15,14 @@ What this module owns, and what every later slice reuses:
   guard-and-register-once ledger — and its
   :class:`~lithos_lens.receipts.ReceiptStore`, both held by the one
   :class:`~lithos_lens.write_funnel.WriteFunnel` every write goes through.
-- ``POST /tasks/{task_id}/approve`` (T3-W4) — complete a person-resolved gate.
-  The handler parses its form and describes the action; the funnel does the
-  rest. The Origin check (``write_funnel.origin_refusal``) is re-exported here
-  because ``POST /operator`` calls it too.
+- ``POST /tasks/{task_id}/approve`` (T3-W4) — complete a gate. The handler
+  parses its form and describes the action; the funnel does the rest. The
+  Origin check (``write_funnel.origin_refusal``) is re-exported here because
+  ``POST /operator`` calls it too.
+- ``GET /tasks/{task_id}/approve`` (T3-W4b) — the Proceed anyway confirm page
+  for a gate a machine resolves (``timer``, ``ci``, ``pr``, or a type Lens does
+  not know). Its form is the only one that carries the confirmation; a POST
+  for such a gate without it is sent here rather than performed.
 
 There is deliberately NO posture switch (D2): the routes are always registered
 and the affordances are part of the page. What decides whether an affordance
@@ -29,8 +33,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import UTC, datetime
 from functools import partial
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -38,11 +43,15 @@ from fastapi.templating import Jinja2Templates
 
 from lithos_lens.gate_completion import (
     MAX_NOTE_LENGTH,
+    PROCEED_ANYWAY_CONFIRMATION,
     completes_directly,
     default_outcome,
+    is_override,
+    proceeds_anyway,
     refusal_for,
 )
-from lithos_lens.lithos_client import LithosClientProtocol
+from lithos_lens.gate_override import GateOverride, load_gate_override
+from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
 from lithos_lens.operator import (
     OPERATOR_COOKIE_MAX_AGE_S,
     OPERATOR_COOKIE_NAME,
@@ -54,9 +63,9 @@ from lithos_lens.operator import (
 )
 from lithos_lens.receipts import RECEIPT_KEY, ReceiptStore, ReceiptTask, WriteReceipt
 from lithos_lens.request_filters import filter_query_oversized
-from lithos_lens.state import AppState
+from lithos_lens.state import AppState, HealthSnapshot
 from lithos_lens.task_links import gate_type_of
-from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES, TaskRecord
+from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES, TaskRecord, task_detail_path
 from lithos_lens.write_funnel import (
     TaskWrite,
     WriteDone,
@@ -144,6 +153,29 @@ def complete_gate_path(task_id: str) -> str:
     return f"/tasks/{quote(task_id, safe='')}/approve"
 
 
+def proceed_anyway_url(task_id: str, next_url: str = "") -> str:
+    """The Proceed anyway confirm page, returning the operator to ``next_url``.
+
+    The same path as the POST it confirms (§5C.7's ``/approve``), read with
+    GET. ``next_url`` rides along so the confirm page's form returns the
+    operator where they started; it is re-checked by ``safe_next`` there.
+    """
+    path = complete_gate_path(task_id)
+    return f"{path}?{urlencode({NEXT_KEY: next_url})}" if next_url else path
+
+
+def offers_proceed_anyway(task: TaskRecord | None) -> bool:
+    """Whether a surface showing ``task`` offers the Proceed anyway link.
+
+    The counterpart of :func:`offers_complete`, asked by the same partial: an
+    open gate that a machine resolves, or whose type Lens does not know. A
+    task gets one or the other, never both.
+    """
+    if task is None:
+        return False
+    return proceeds_anyway(task.task_type, task.status, gate_type_of(task))
+
+
 def offers_complete(task: TaskRecord | None) -> bool:
     """Whether a surface showing ``task`` offers the direct Complete action.
 
@@ -156,13 +188,20 @@ def offers_complete(task: TaskRecord | None) -> bool:
     return completes_directly(task.task_type, task.status, gate_type_of(task))
 
 
-def _complete_gate(note: str) -> TaskWrite:
-    """The complete action, as the funnel drives it (T3 D7, direct path)."""
+def _complete_gate(note: str, *, confirmed: bool, next_url: str) -> TaskWrite:
+    """The complete action, as the funnel drives it (T3 D7).
+
+    Direct for a person-resolved gate. For any other gate it is an override,
+    performed only when the form ``confirmed`` it — which only the Proceed
+    anyway page's form does; otherwise the funnel sends the operator to that
+    page (carrying ``next_url``) and writes nothing. Both are decided on the
+    gate type the pre-check READ, not on what the posting page showed.
+    """
 
     async def perform(
         client: LithosClientProtocol, task: TaskRecord, operator: str
     ) -> WriteDone:
-        outcome = note or default_outcome(operator)
+        outcome = note or default_outcome(operator, gate_type_of(task))
         result = await client.task_complete(task.id, agent=operator, outcome=outcome)
         return WriteDone(
             task=ReceiptTask(
@@ -175,15 +214,27 @@ def _complete_gate(note: str) -> TaskWrite:
         )
 
     def admits(task: TaskRecord) -> tuple[str, str] | None:
-        return refusal_for(task.task_type, gate_type_of(task))
+        return refusal_for(task.task_type)
 
     def describe(task: TaskRecord) -> dict[str, str | bool]:
-        # `override` is always False until W4b's proceed-anyway path exists;
-        # it is recorded now so the attribute means the same from day one.
-        return {"gate_type": gate_type_of(task), "override": False}
+        return {
+            "gate_type": gate_type_of(task),
+            "override": is_override(task.task_type, gate_type_of(task)),
+        }
+
+    def confirm_page(task: TaskRecord) -> str:
+        if confirmed or not is_override(task.task_type, gate_type_of(task)):
+            return ""
+        return proceed_anyway_url(
+            task.id, safe_next(next_url, default=task_detail_path(task.id))
+        )
 
     return TaskWrite(
-        action="complete", perform=perform, admits=admits, describe=describe
+        action="complete",
+        perform=perform,
+        admits=admits,
+        describe=describe,
+        confirm_page=confirm_page,
     )
 
 
@@ -214,6 +265,8 @@ def register_write_routes(
     templates.env.globals["operator_page_url"] = operator_page_url
     templates.env.globals["operator_path"] = OPERATOR_PATH
     templates.env.globals["offers_complete"] = offers_complete
+    templates.env.globals["offers_proceed_anyway"] = offers_proceed_anyway
+    templates.env.globals["proceed_anyway_url"] = proceed_anyway_url
     templates.env.globals["complete_gate_path"] = complete_gate_path
     templates.env.globals["write_return_path"] = write_return_path
     templates.env.globals["complete_note_max"] = MAX_NOTE_LENGTH
@@ -336,27 +389,117 @@ def register_write_routes(
         )
         return response
 
+    def render_proceed_anyway(
+        request: Request,
+        *,
+        next_url: str,
+        health: HealthSnapshot,
+        override: GateOverride | None = None,
+        task: TaskRecord | None = None,
+        notice: str = "",
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "writes/proceed_anyway.html",
+            {
+                "config": state.config,
+                "health": health,
+                "active_view": "tasks",
+                "override": override,
+                "task": task,
+                "notice": notice,
+                "next_url": next_url,
+                "confirmation": PROCEED_ANYWAY_CONFIRMATION,
+            },
+            status_code=status_code,
+        )
+
+    @app.get("/tasks/{task_id}/approve", response_class=HTMLResponse)
+    async def proceed_anyway_page(request: Request, task_id: str) -> Response:
+        """The Proceed anyway confirm page for a machine-owned gate (T3-W4b).
+
+        Server-rendered and complete without JavaScript, like the cancel
+        confirm. A read: it states what would otherwise resolve the gate and
+        which waiters completing it releases, then offers the one form that
+        carries the confirmation. A person-resolved gate has nothing to
+        confirm, so it is sent to its own page, where the direct action is;
+        anything else that cannot be completed says why, and offers no form.
+        """
+        back_to = safe_next(
+            request.query_params.get(NEXT_KEY), default=task_detail_path(task_id)
+        )
+        render = partial(render_proceed_anyway, request, next_url=back_to)
+        snapshot = await state.refresh_health()
+        if snapshot.lithos != "ok":
+            return render(
+                notice="Lithos is unreachable, so Lens can't show this gate.",
+                status_code=503,
+                health=snapshot,
+            )
+        client = state.lithos_client
+        try:
+            task = await client.task_get(task_id)
+        except Exception as exc:
+            if isinstance(exc, LithosToolError) and exc.code == "task_not_found":
+                return render(
+                    notice="This task no longer exists.",
+                    status_code=404,
+                    health=snapshot,
+                )
+            logger.warning("proceed-anyway read failed", extra={"task_id": task_id})
+            return render(
+                notice="Lens couldn't read this task. Reload once Lithos is reachable.",
+                status_code=503,
+                health=snapshot,
+            )
+        if completes_directly(task.task_type, task.status, gate_type_of(task)):
+            return RedirectResponse(task_detail_path(task.id), status_code=303)
+        if not proceeds_anyway(task.task_type, task.status, gate_type_of(task)):
+            refused = refusal_for(task.task_type)
+            return render(
+                task=task,
+                notice=refused[1]
+                if refused
+                else f"This gate is now {task.status} — there is nothing to complete.",
+                status_code=409,
+                health=snapshot,
+            )
+        override = await load_gate_override(
+            client,
+            task,
+            frontier_limit=state.config.tasks.frontier_limit,
+            now=datetime.now(UTC),
+        )
+        return render(task=task, override=override, health=snapshot)
+
     @app.post("/tasks/{task_id}/approve")
     async def complete_gate(request: Request, task_id: str) -> Response:
-        """Complete an open human or external-task gate (T3 D7, direct path).
+        """Complete an open gate (T3 D7).
 
-        The path keeps §5C.7's name; the action says "Complete". Every other
-        gate type, and every task that is not a gate, is refused by the
-        funnel's pre-check through :func:`_complete_gate`'s ``admits`` until
-        the proceed-anyway step (T3-W4b) exists. The note is ONE line, bounded
-        and stripped: it is stored as the outcome and echoed on every surface
-        that shows one.
+        The path keeps §5C.7's name; the action says "Complete". A human or
+        external-task gate completes directly. Any other gate is an override
+        and completes only when the form carries the confirmation, which only
+        the Proceed anyway page's form does; without it the funnel sends the
+        operator to that page and writes nothing. A task that is not a gate is
+        refused. The note is ONE line, bounded and stripped: it is stored as
+        the outcome and echoed on every surface that shows one.
         """
         form = await request.form()
         note = " ".join(str(form.get("note") or "").split())[:MAX_NOTE_LENGTH]
+        next_url = str(form.get(NEXT_KEY) or "")
         return await funnel.submit(
             request,
             WriteForm(
                 task_id=task_id,
                 expected_status=str(form.get("expected_status") or ""),
-                next_url=str(form.get(NEXT_KEY) or ""),
+                next_url=next_url,
                 # Ids, types, lengths — never the note's text (§5C.6).
                 arguments={"task_id": task_id, "note_chars": len(note)},
             ),
-            _complete_gate(note),
+            _complete_gate(
+                note,
+                confirmed=form.get("confirm") == PROCEED_ANYWAY_CONFIRMATION,
+                next_url=next_url,
+            ),
         )

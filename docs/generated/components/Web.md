@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer).
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases).
 
 **Tier:** Entrypoints
 
@@ -11,14 +11,19 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
 | `lithos_lens.request_filters` | M | 0 | 20 |
 | `lithos_lens.web` | L | 0 | 1 |
 | `lithos_lens.write_funnel` | M | 4 | 1 |
-| `lithos_lens.write_routes` | M | 0 | 7 |
+| `lithos_lens.write_routes` | M | 0 | 9 |
 
 ## Public API
+
+### `lithos_lens.gate_override`
+- class `GateOverride` — One open machine-owned gate, as its Proceed anyway page states it.
+- def `load_gate_override` — Read what the confirm page states about ``task``, an open gate.
 
 ### `lithos_lens.graph_routes`
 - def `register_graph_routes` — Attach `GET /tasks/graph` (scope picker + one scope's graph).
@@ -66,6 +71,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `operator_page_for` — The operator page, returning the operator to ``next_url`` afterwards.
 - def `write_return_path` — This page, as a write form's ``next``: where its 303 brings them back.
 - def `complete_gate_path` — The Complete action's POST target, the id as ONE encoded segment.
+- def `proceed_anyway_url` — The Proceed anyway confirm page, returning the operator to ``next_url``.
+- def `offers_proceed_anyway` — Whether a surface showing ``task`` offers the Proceed anyway link.
 - def `offers_complete` — Whether a surface showing ``task`` offers the direct Complete action.
 - def `register_write_routes` — Attach the write route group and its template globals.
 
