@@ -32,8 +32,15 @@ order, with one shape:
     the same way, an attempt that still needs its confirmation, which is sent
     to the confirm page.
 
+A create has no task to pre-check, so it enters through
+:meth:`WriteFunnel.submit_create` (T3-W7): the same Origin check, operator,
+registration, record and receipt, with Lens's form validation in place of the
+pre-check and the call made through the create coordinator, which runs at most
+one create per request id. Its refusals re-render the create form, input kept.
+
 Route handlers parse their form, describe their action as a :class:`TaskWrite`
-and hand both over; they never call a write method themselves. A second path to
+(or a :class:`CreateWrite`) and hand both over; they never call a write method
+themselves. A second path to
 Lithos is the defect this module exists to prevent — the audit line and the
 pre-check are guarantees only because nothing can go around them.
 
@@ -48,7 +55,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 from fastapi import Request
@@ -57,6 +64,20 @@ from fastapi.templating import Jinja2Templates
 from opentelemetry.trace import Span
 
 from lithos_lens import metrics
+from lithos_lens.create_coordinator import (
+    CreateCoordinator,
+    Created,
+    CreateOutcome,
+    OutcomeUnknown,
+    Refused,
+)
+from lithos_lens.create_form import (
+    CreateInput,
+    CreateRequest,
+    FieldError,
+    is_request_id,
+    validate,
+)
 from lithos_lens.lithos_client import LithosClientProtocol
 from lithos_lens.mcp_transport import LithosToolError
 from lithos_lens.operator import (
@@ -68,6 +89,7 @@ from lithos_lens.operator import (
 from lithos_lens.receipts import (
     MAX_TITLED_RELEASES,
     CancelFacts,
+    CreateFacts,
     ReceiptStore,
     ReceiptTask,
     WriteReceipt,
@@ -79,8 +101,10 @@ from lithos_lens.telemetry import get_tracer
 from lithos_lens.write_errors import (
     CONFLICT,
     CONFLICT_STATUS,
+    NO_SUBJECT,
     NOT_READ,
     REFUSED,
+    REFUSED_STATUS,
     REREAD_FAILED,
     TASK_ABSENT,
     TaskRef,
@@ -97,7 +121,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "AUDIT_EVENT",
     "CONFIRMATION_REQUIRED",
+    "INVALID_FORM",
     "RECONCILE_TRIGGER",
+    "CreateWrite",
     "TaskWrite",
     "WriteDone",
     "WriteForm",
@@ -138,7 +164,14 @@ WriteResult = Literal[
 #: written, and the bounded result set has no other word for "not performed".
 CONFIRMATION_REQUIRED = "confirmation_required"
 
+#: The code a create refused by Lens's own form validation is recorded with.
+INVALID_FORM = "invalid_form"
+
 #: The funnel's own refusals, each with the status a plain POST answers with.
+BAD_CREATE_FORM_COPY = (
+    "The form didn't carry the request id Lens gave it — reload the form and try again."
+)
+INVALID_FORM_COPY = "Lens didn't send this — fix the fields marked below."
 BAD_FORM_COPY = "The form didn't say what status you saw — reload and try again."
 PRECHECK_FAILED_COPY = "Lens couldn't read the task, so it didn't try the write."
 #: An HTMX attempt the Origin check refused. A plain POST keeps W1's 403 text;
@@ -266,6 +299,32 @@ class TaskWrite:
     admits: Callable[[TaskRecord], tuple[str, str] | None] = _applies
     describe: Callable[[TaskRecord], Mapping[str, str | bool]] = _no_attributes
     confirm_page: Callable[[TaskRecord], str] = _no_confirmation
+
+
+#: Re-renders the create form: the input as typed, the problem that stopped it
+#: (for the form-level notice), the per-field errors, and the status.
+RenderCreateForm = Callable[
+    [Request, CreateInput, WriteProblem | None, Mapping[str, FieldError], int],
+    Awaitable[Response],
+]
+
+
+@dataclass(frozen=True)
+class CreateWrite:
+    """A create, as the funnel drives it (T3-W7, D1).
+
+    ``typed`` is the form as posted. ``coordinator`` is the create routes'
+    process-wide :class:`~lithos_lens.create_coordinator.CreateCoordinator`.
+    ``render_form`` re-renders the form, input kept; ``render_unknown`` is
+    create's own "not visible yet" page. ``return_to`` is where the operator
+    page sends an operator who had no identity: the form, pre-filled again.
+    """
+
+    typed: CreateInput
+    coordinator: CreateCoordinator
+    render_form: RenderCreateForm
+    render_unknown: Callable[[Request, CreateInput], Awaitable[Response]]
+    return_to: str
 
 
 @dataclass
@@ -413,17 +472,9 @@ class WriteFunnel:
                 subject=subject,
             )
 
-        checked = await self._registry.ensure_registered(client, operator)
-        if not checked.ok:
-            unavailable = checked.code in _REGISTRATION_UNAVAILABLE
-            return funnel_problem(
-                action,
-                REFUSED,
-                REFUSAL_REGISTRATION_FAILED if unavailable else checked.reason,
-                code="registration_failed" if unavailable else "identity_refused",
-                status_code=_UNAVAILABLE if unavailable else _FORBIDDEN,
-                subject=subject,
-            )
+        unregistered = await self._register(action, operator, subject)
+        if unregistered is not None:
+            return unregistered
 
         try:
             task = await client.task_get(form.task_id)
@@ -509,6 +560,176 @@ class WriteFunnel:
         # (W8's synthetic-event publish lands here: after the call, before the
         # receipt. W4 publishes nothing — upstream emits complete's event.)
         return await self._mint(action, done, operator, client)
+
+    async def submit_create(self, request: Request, write: CreateWrite) -> Response:
+        """Run one create attempt end to end and answer it (D1). Recorded once.
+
+        Plain POST only. No ``expected_status``: there is no task yet, so
+        §5C.6's pre-check does not apply (D15) — Lens's validation stands in
+        its place, and the call goes through the coordinator.
+        """
+        ledger = _Ledger(action="create", task_id="", expected_status="", arguments={})
+        ledger.attributes["request_id"] = write.typed.request_id
+        with get_tracer().start_as_current_span("lens.writes.create") as span:
+            try:
+                return await self._run_create(request, write, ledger)
+            finally:
+                _record(span, ledger)
+
+    async def _run_create(
+        self, request: Request, write: CreateWrite, ledger: _Ledger
+    ) -> Response:
+        typed = write.typed
+        refused = origin_refusal(request)
+        if refused is not None:
+            ledger.result = "refused_origin"
+            return refused
+        identity = resolve_operator(
+            cookie=request.cookies.get(OPERATOR_COOKIE_NAME),
+            default_operator=self._state.config.writes.default_operator,
+        )
+        if not identity.resolved:
+            # Not replayed (D3): the form comes back pre-filled, not submitted.
+            ledger.result = "no_operator"
+            return RedirectResponse(
+                self._operator_page_for(write.return_to), status_code=303
+            )
+        ledger.operator = identity.id
+
+        if not is_request_id(typed.request_id):
+            return self._refuse(
+                request,
+                ledger,
+                funnel_problem(
+                    "create",
+                    REFUSED,
+                    BAD_CREATE_FORM_COPY,
+                    code="bad_form",
+                    status_code=_BAD_REQUEST,
+                ),
+                htmx=False,
+            )
+        validated = validate(
+            typed, project_tag_key=self._state.config.tasks.project_tag_key
+        )
+        if validated.request is None:
+            ledger.result = "rejected"
+            ledger.code = INVALID_FORM
+            problem = funnel_problem(
+                "create",
+                REFUSED,
+                INVALID_FORM_COPY,
+                code=INVALID_FORM,
+                status_code=REFUSED_STATUS,
+            )
+            return await write.render_form(
+                request, typed, problem, validated.errors, REFUSED_STATUS
+            )
+        create = validated.request
+        ledger.arguments = create.arguments()
+
+        unregistered = await self._register("create", identity.id, NO_SUBJECT)
+        if unregistered is not None:
+            ledger.result = "rejected"
+            ledger.code = unregistered.code
+            return await write.render_form(
+                request, typed, unregistered, {}, unregistered.status_code
+            )
+
+        settled = await write.coordinator.submit(
+            typed.request_id, lambda: self._create_once(create, identity.id)
+        )
+        if settled.dedup:
+            ledger.attributes["dedup"] = settled.dedup
+        outcome = settled.outcome
+        if isinstance(outcome, Refused):
+            ledger.result = "rejected"
+            ledger.envelope = dict(outcome.envelope)
+            problem = map_write_error("create", outcome.envelope)
+            ledger.code = problem.code
+            return await write.render_form(
+                request, typed, problem, {}, problem.status_code
+            )
+        if isinstance(outcome, OutcomeUnknown):
+            ledger.result = "unknown"
+            return await write.render_unknown(request, typed)
+        ledger.result = "ok"
+        ledger.task_id = outcome.task_id
+        ledger.envelope = dict(outcome.answer)
+        # Each submit mints its OWN receipt — a joined or remembered one too —
+        # because a receipt is consumed by the page that shows it.
+        receipt = WriteReceipt(
+            action="create",
+            task=ReceiptTask(task_id=outcome.task_id, title=outcome.title),
+            operator=identity.id,
+            created=CreateFacts(
+                task_type=create.task_type,
+                project=create.project,
+                repeated=bool(settled.dedup),
+            ),
+        )
+        receipt_id = self._receipts.put(receipt)
+        return RedirectResponse(
+            receipt_url(task_detail_path(outcome.task_id), receipt_id),
+            status_code=303,
+        )
+
+    async def _register(
+        self, action: WriteAction, operator: str, subject: TaskRef
+    ) -> WriteProblem | None:
+        """Step 4: guard and register the identity once, or why it can't write."""
+        checked = await self._registry.ensure_registered(
+            self._state.lithos_client, operator
+        )
+        if checked.ok:
+            return None
+        unavailable = checked.code in _REGISTRATION_UNAVAILABLE
+        return funnel_problem(
+            action,
+            REFUSED,
+            REFUSAL_REGISTRATION_FAILED if unavailable else checked.reason,
+            code="registration_failed" if unavailable else "identity_refused",
+            status_code=_UNAVAILABLE if unavailable else _FORBIDDEN,
+            subject=subject,
+        )
+
+    async def _create_once(self, create: CreateRequest, operator: str) -> CreateOutcome:
+        """The single ``lithos_task_create``, and how it ended.
+
+        Run by the coordinator at most once per request id. An answer with an
+        envelope is a refusal; anything else that raised — a timeout, a dead
+        session, an unparseable answer — is no answer, and the create may
+        still be landing upstream.
+        """
+        try:
+            result = await create.send(self._state.lithos_client, agent=operator)
+        except Exception as exc:
+            envelope = dict(exc.envelope) if isinstance(exc, LithosToolError) else {}
+            if envelope:
+                return Refused(envelope=envelope)
+            logger.warning(
+                "create outcome unknown",
+                extra={"request_id": create.request_id},
+                exc_info=True,
+            )
+            return OutcomeUnknown()
+        if not result.task_id:
+            logger.warning(
+                "create answered without a task id",
+                extra={"request_id": create.request_id},
+            )
+            return OutcomeUnknown()
+        # A task event evicts only the NEW id (`task.created`), so the parent's
+        # and the predecessors' cached edges are dropped here, and their pages
+        # show the new edge at once (D14).
+        for linked in (result.parent_task_id, *result.depends_on):
+            if linked:
+                self._state.graph_cache.evict(linked)
+        return Created(
+            task_id=result.task_id,
+            title=result.title or create.title,
+            answer={**asdict(result), "depends_on": list(result.depends_on)},
+        )
 
     def _refuse(
         self, request: Request, ledger: _Ledger, problem: WriteProblem, htmx: bool

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{#
+  A create Lens never heard back about (T3-W7, D7): a timeout or a transport
+  failure, so the call may still be landing upstream. Answered with 200, like
+  every unknown outcome (`write_errors.UNKNOWN_OUTCOME_STATUS`).
+
+  Context:
+    `typed`     -- the form as posted (a `create_form.CreateInput`);
+    `board_url` -- the board, filtered to the form's project when it had one.
+
+  It never says the task was not created: Lens cannot know that, and this
+  request id is never sent again (`create_coordinator`). What it offers is the
+  board, where the task appears if it was made, and Start again -- the form
+  with the input kept under a NEW request id, which is the operator's own
+  decision to risk a duplicate. Start again makes no call.
+-#}
+
+{% block title %}Not visible yet | Lithos Lens{% endblock %}
+
+{% block content %}
+<section class="proceed-anyway-page create-page" data-create-unknown>
+  <h1>Not visible yet</h1>
+  <div class="write-outcome-copy">
+    <p class="write-outcome-claim" data-create-unknown-claim>Lens could not confirm this task was created — it is not visible yet. If it was created, it will appear on the board.</p>
+    <p class="write-outcome-hint">Submitting this form again would not create it twice: Lens remembers this request and will not send it again.</p>
+  </div>
+  <p><a href="{{ board_url }}" data-create-board-link>Go to the board</a></p>
+  <form class="create-restart" method="post" action="{{ new_task_url() }}" data-create-restart>
+    <input type="hidden" name="intent" value="{{ restart_intent }}">
+    {% for name in ("title", "task_type", "description", "project", "tags", "parent", "predecessors", "gate_type", "ready_at") %}
+      <input type="hidden" name="{{ name }}" value="{{ typed[name] }}">
+    {% endfor %}
+    <button type="submit" class="complete-action-button" data-create-restart-button>Start again</button>
+    <p class="complete-action-meaning">Opens the form with what you typed, as a new request. If the first one did land, submitting it creates a second task.</p>
+  </form>
+</section>
+{% endblock %}

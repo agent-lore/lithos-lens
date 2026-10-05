@@ -14,14 +14,14 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 38 | 38 | 0 |
 | `cross_module_private_refs` | 0 | 0 | 0 |
-| `max_module_lines` | 849 | 850 | 1 |
+| `max_module_lines` | 864 | 875 | 11 |
 | `module_cycles` | 0 | 0 | 0 |
-| `modules_over_800_lines` | 5 | 5 | 0 |
+| `modules_over_800_lines` | 6 | 6 | 0 |
 | `tests_private_imports` | 0 | 0 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **38** (160 module-level)
+- Cross-component edges: **38** (171 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -45,23 +45,24 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 24 | 11127 | 8515 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 25 |
 | Tasks | 7 | 2227 | 1622 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1139 | 833 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 8 | 4103 | 3250 | 1 | 10 | 0.91 | 18 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 3 |
-| Writes | 5 | 1705 | 1211 | 2 | 1 | 0.33 | 8 (`lithos_lens.write_errors._candidates`) | 0 |
+| Web | 9 | 4548 | 3631 | 1 | 10 | 0.91 | 15 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 3 |
+| Writes | 7 | 2237 | 1631 | 2 | 1 | 0.33 | 12 (`lithos_lens.create_form.validate`) | 1 |
 
 ## Size
 
-- Modules: **69**, lines: **28779**, SLOC: **22047**
-- Largest module: `lithos_lens.tasks` (849 lines)
-- Modules over 800 lines: **5**
+- Modules: **72**, lines: **29756**, SLOC: **22848**
+- Largest module: `lithos_lens.write_funnel` (864 lines)
+- Modules over 800 lines: **6**
   - `lithos_lens.frontier`
   - `lithos_lens.graph_layout`
   - `lithos_lens.tasks`
   - `lithos_lens.web`
   - `lithos_lens.write_errors`
+  - `lithos_lens.write_funnel`
 
 ## Complexity
 
-- Functions: **908**, cyclomatic > 10: **48**
+- Functions: **941**, cyclomatic > 10: **49**
 
 Top 10 most complex functions:
 
@@ -88,5 +89,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **99** (103 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.99** (57169 test lines / 28779 source lines)
+- Domain models: **108** (107 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.95** (58091 test lines / 29756 source lines)

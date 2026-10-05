@@ -1029,10 +1029,10 @@ def test_the_write_surface_is_always_on_whatever_the_config_says(
 def test_tasks_new_is_never_routed_as_a_task_id(
     lithos_lens_config_env: Path,
 ) -> None:
-    """``new`` is a reserved task-path segment (§5C.7): the create form W7 adds
-    lives there, and until it does the path is a 404 — never the detail page of
-    a task whose id happens to be ``new``. The id itself stays addressable
-    through the existing id-in-query alias."""
+    """``new`` is a reserved task-path segment (§5C.7): the path is the create
+    form (T3-W7) — never the detail page of a task whose id happens to be
+    ``new``. The id itself stays addressable through the existing id-in-query
+    alias."""
     assert "new" in RESERVED_TASK_PATH_SEGMENTS
     fake = FakeLithosClient(
         None,
@@ -1045,8 +1045,9 @@ def test_tasks_new_is_never_routed_as_a_task_id(
         by_path = client.get("/tasks/new")
         by_alias = client.get("/tasks/id?task_id=new")
 
-    assert by_path.status_code == 404
-    assert "not a task" in by_path.text
+    assert by_path.status_code == 200
+    assert "data-create-page" in by_path.text
+    assert "A task genuinely called new" not in by_path.text
     # The same id, reached the way every page word is reached.
     assert by_alias.status_code == 200
     assert "A task genuinely called new" in by_alias.text

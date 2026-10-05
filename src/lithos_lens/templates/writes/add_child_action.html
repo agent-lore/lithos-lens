@@ -1,0 +1,17 @@
+{#
+  Add child (T3-W7, D12) on an open epic's detail page: a link to the create
+  form with this epic as its parent.
+
+  Context:
+    `action_task` -- the task (a `tasks.TaskRecord`) as the page read it.
+
+  Rendered only when `offers_add_child` (an open epic) and a resolved operator
+  identity both say yes.
+-#}
+{% if offers_add_child(action_task) and operator_identity(request).resolved %}
+  <div class="complete-action proceed-anyway-action" data-add-child-action data-task-id="{{ action_task.id }}">
+    <a class="proceed-anyway-link" href="{{ new_task_url(parent=action_task.id) }}" data-add-child-link>Add child</a>
+    <p class="complete-action-meaning">Opens the create form with this epic as the parent.</p>
+    {% include "writes/identity.html" %}
+  </div>
+{% endif %}

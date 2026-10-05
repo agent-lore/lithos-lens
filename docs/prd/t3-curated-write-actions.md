@@ -502,50 +502,67 @@ copy says the prior outcome is kept in that finding.
 
 ### D10. Create
 
+*Narrowed by the W7 scope cuts (Dave, 2026-10-05): de-duplication is in
+memory only, with no lookup and no Check again; no datalist of tasks;
+ambiguous candidates are listed as text; a person creates only `human`,
+`external_task` and `timer` gates.*
+
 - **One form** (`GET`/`POST /tasks/new`) for task, epic and gate: title,
   type, description (Markdown, as descriptions now render), project, tags,
   parent, predecessors, and a gate fieldset (gate type; `ready_at` for a
   timer). The no-JS form shows the gate fieldset labelled "only for gates";
-  script hides it for the other types.
-- **Pre-fill from context:** `?project=` from the board's filter,
-  `?parent=` from an epic's **Add child** link.
+  a small script of its own hides it for the other types.
+- **Pre-fill from context:** `?project=` from the board's filter (only when
+  exactly one project is selected), `?parent=` from an open epic's **Add
+  child** link.
 - **Project is written under both conventions** — `metadata.project` and
-  the `<project_tag_key>:<slug>` tag — per §5B.1.
-- **Parent and predecessors** are entered as full or short ids, with a
-  datalist of the board's open tasks (title and short id) as enhancement.
-  Lithos resolves prefixes; an ambiguous one comes back with candidates
-  (D6). No new search endpoint.
+  the `<project_tag_key>:<slug>` tag — per §5B.1. The project is optional
+  free text validated as a lowercase slug, with a datalist of the open
+  tasks' projects (the board filter's own derivation) as enhancement.
+- **Parent and predecessors** are typed or pasted as full or short ids
+  (predecessors and tags one per line). Lithos resolves prefixes; an
+  ambiguous one comes back with candidates (D6), listed as text — short id
+  and title — under the field the prefix was typed in, input kept. The
+  operator corrects the field. No datalist of tasks, no new search endpoint.
 - **Validation** runs in Lens before the call — title present, type known,
-  gate type in the five, `ready_at` present and parseable for a timer —
-  and Lithos remains the authority: its `invalid_input` re-renders the form
-  with input kept.
-- **De-duplicated on a request id — by Lens, best effort.** The form
-  carries a random request id, written to the task as
-  `metadata.lens_request_id`. Lithos gives no help here: create mints a
-  new id and inserts, with nothing unique about that metadata key, so a
-  lookup alone is a race. The mechanism is therefore three rules, all
-  inside the one Lens process:
+  gate type one a person may create (`human`, `external_task`, `timer`; a
+  hand-made `ci` or `pr` gate has nothing watching it, and loom creates its
+  own `pr` gates), `ready_at` present and parseable (UTC) for a timer — and
+  Lithos remains the authority: its `invalid_input` re-renders the form with
+  input kept and the message on its field. The task's metadata is the
+  project, `lens_request_id` and the gate's fields — nothing else.
+- **De-duplicated on a request id — by Lens, in memory, best effort.** The
+  server mints a random request id when it renders the form, and Lens writes
+  it to the task as `metadata.lens_request_id` (provenance, and so that a
+  lookup can be added later; nothing reads it back now). Lithos gives no help
+  here: create mints a new id and inserts, with nothing unique about that
+  metadata key. Lens keeps each id's outcome in a bounded in-process map:
   - **One create per request id at a time.** Submits carrying the same id
     are serialised: the first makes the call, and any that arrive while it
     is in flight wait and receive *its* outcome, whatever it is. They
     never make a call of their own.
-  - **Lookup before create.** A submit that finds a task already carrying
-    the id (a resubmit after the first finished, or after a Lens restart)
-    lands on that task and creates nothing.
+  - **A created id lands on its task.** A resubmit, a double-click or the
+    back button lands on the task the first submit created and creates
+    nothing.
   - **An unknown outcome is never retried under the same id.** After a
     transport failure or timeout the original call may still be running
-    upstream, so a lookup that finds nothing proves nothing. The page says
-    "Lens could not confirm this task was created — it is not visible
-    yet", and offers **Check again** (the lookup, which can turn the
-    answer into "it was created") and **Start again** (the form with the
-    input kept and a *new* request id — the operator's explicit decision
-    to risk a duplicate). Lens does not say "it was not created".
+    upstream. The page says "Lens could not confirm this task was created —
+    it is not visible yet. If it was created, it will appear on the board.",
+    links to the board, and offers **Start again** (the form with the input
+    kept and a *new* request id — the operator's explicit decision to risk a
+    duplicate). Lens does not say "it was not created".
+  - **A refused id is forgotten**, so the corrected form, same id, may create.
 
   The guarantee, stated as it is: a double-click or a resubmit creates one
   task; a create whose outcome Lens never learned can still be duplicated
-  if the operator starts again while it lands. Closing that needs an
+  if the operator starts again while it lands; and a Lens restart between a
+  submit and its resubmit forgets the request id. Closing those needs an
   idempotency key on `lithos_task_create` (upstream ask, Further Notes).
-- **After success:** redirect to the new task's detail page with a receipt.
+- **No `expected_status`.** §5C.6's stale-status rule covers forms on an
+  existing task; a create has none.
+- **After success:** redirect to the new task's detail page with a receipt;
+  a parent and predecessors leave the edge cache so their pages show the new
+  edge at once.
 
 ### D11. Add a dependency
 
@@ -687,7 +704,9 @@ New client calls: `lithos_task_complete`, `lithos_task_reopen`,
 tool `bd66d57c` ships. Existing calls used by the funnel:
 `lithos_task_get`, `lithos_task_status`, `lithos_task_edge_list` (the
 edge action's reads before and after the write), `lithos_agent_register`,
-`lithos_task_list` (create's request-id lookup, by `metadata_match`).
+`lithos_task_list` (the create form's project datalist; create's
+request-id lookup by `metadata_match` was cut from W7 — de-duplication is
+in memory).
 Upstream events already cover complete, cancel, reopen and create; the hub
 gains one synthetic event (`lens.edge_upserted`).
 
@@ -768,17 +787,21 @@ review gate is hermetic and headless.
   says its waiters become unsatisfiable; the reason field carries the
   not-stored note; with `confirm_cancel = false` the POST succeeds without
   the GET and the receipt carries the same facts.
-- **Create:** project lands under both conventions (call log); a timer
-  gate without `ready_at` is refused before any call; an upstream
-  `invalid_input` re-renders with input kept; an ambiguous parent prefix
-  renders candidates; `?parent=` and `?project=` pre-fill. De-duplication:
-  two **concurrent** POSTs with one request id produce exactly one
-  `lithos_task_create` (call log) and both land on the same task; a
-  resubmit after the first finished creates nothing; a create that times
-  out while the fake is still to complete it renders "not visible yet",
-  never "not created", and a second POST under that id makes no create
-  call; **Check again** after the fake completes reports the task;
-  **Start again** issues a new request id.
+- **Create:** project lands under both conventions, with the configured
+  tag key (call log); a timer gate without `ready_at` is refused before any
+  call, and so are `ci`, `pr` and an unknown gate type; an upstream
+  `invalid_input` re-renders with input kept and the message on its field;
+  an ambiguous parent prefix re-renders the form listing the candidates
+  under the parent field; `?parent=` and `?project=` pre-fill, and Add child
+  on an epic carries the epic as parent. De-duplication: two **concurrent**
+  POSTs with one request id produce exactly one `lithos_task_create` (call
+  log) and both land on the same task; a resubmit after the first finished
+  creates nothing and lands on the existing task (the in-memory map); a
+  create that times out while the fake is still to complete it renders "not
+  visible yet", never "not created", and a second POST under that id makes
+  no create call; **Start again** issues a new request id. The coordinator
+  is also tested directly (concurrent submits, a timed-out create that lands
+  later, a remembered created id, a refused id not remembered).
 - **Edge:** each sentence produces the right `from`, `to` and `type` (call
   log); the confirm step renders both titles and the readiness sentence;
   each refusal renders its copy and says nothing changed; a successful
@@ -852,9 +875,10 @@ slice updates `docs/SPECIFICATION.md` for what it ships and passes
    `confirm_cancel = false`. *Needs W4.*
    Acceptance: the Cancel cases.
 7. **W7 Create.** The form model, the form with gate fieldset and
-   pre-fill, both conventions, pickers, validation, request-id
-   de-duplication (serialised submits, lookup, the unknown-outcome page
-   with Check again / Start again), New task on the dashboard and Add child on epic detail.
+   pre-fill, both conventions, validation, in-memory request-id
+   de-duplication (serialised submits, remembered outcomes, the
+   unknown-outcome page with Start again), New task on the dashboard and Add
+   child on epic detail.
    *Needs W4.*
    Acceptance: the Create cases.
 8. **W8 Add a dependency.** Relation sentences, the two-step form with

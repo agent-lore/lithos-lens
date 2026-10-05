@@ -769,6 +769,42 @@ classDiagram
     +children_unread bool
     +gate bool
   }
+  class CreateFacts {
+    +task_type str
+    +project str
+    +repeated bool
+  }
+  class CreateInput {
+    +title str
+    +task_type str
+    +description str
+    +project str
+    +tags str
+    +parent str
+    +predecessors str
+    +gate_type str
+    +ready_at str
+    +request_id str
+  }
+  class CreateRequest {
+    +title str
+    +task_type str
+    +description str
+    +project str
+    +tags tuple[str, ...]
+    +metadata Mapping[str, Any]
+    +depends_on tuple[str, ...]
+    +parent_task_id str
+    +request_id str
+  }
+  class Created {
+    +task_id str
+    +title str
+    +answer Mapping[str, Any]
+  }
+  class FieldError {
+    +message str
+  }
   class IdentityCheck {
     +ok bool
     +code str
@@ -782,9 +818,17 @@ classDiagram
     +id str
     +source OperatorSource
   }
+  class OutcomeUnknown
   class ReceiptTask {
     +task_id str
     +title str
+  }
+  class Refused {
+    +envelope Mapping[str, Any]
+  }
+  class Settled {
+    +outcome CreateOutcome
+    +dedup Dedup
   }
   class TaskRef {
     +task_id str
@@ -794,6 +838,7 @@ classDiagram
     +outcome RereadOutcome
     +status str
   }
+  class Validated
   class WriteProblem {
     +action WriteAction
     +kind ProblemKind
@@ -822,10 +867,14 @@ classDiagram
   CancelFacts "1" --> "0..*" ReceiptTask : behind
   CancelFacts "1" --> "0..*" ReceiptTask : children
   CancelFacts "1" --> "0..*" ReceiptTask : stranded
+  FieldError "1" --> "0..*" TaskRef : candidates
+  Validated "1" --> "0..1" CreateRequest : request
+  Validated "1" --> "0..*" FieldError : errors
   WriteProblem "1" --> "0..*" MessageSegment : detail
   WriteProblem "1" --> "0..*" TaskRef : candidates
   WriteProblem "1" --> "1" TaskRef : subject
   WriteReceipt "1" --> "0..1" CancelFacts : cancel
+  WriteReceipt "1" --> "0..1" CreateFacts : created
   WriteReceipt "1" --> "0..*" ReceiptTask : released
   WriteReceipt "1" --> "1" ReceiptTask : task
 ```

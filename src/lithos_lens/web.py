@@ -444,12 +444,12 @@ def create_app(
     async def task_detail_by_path(request: Request, task_id: str) -> Response:
         """The detail page for an ordinary id — and a 404 for a page word.
 
-        Every page under ``/tasks/`` claims its segment above this route, so a
-        reserved word reaching here is one whose page this build does not serve
-        (``new``, the create form W7 adds). The 404 is what keeps the reserved
-        set's promise: ``/tasks/new`` is never "the task whose id is ``new``",
-        before or after that form exists. Such a task is reached through the
-        alias above, which does not pass through here.
+        Every page under ``/tasks/`` claims its segment above this route
+        (``new`` is the create form, T3-W7), so a reserved word reaching here
+        is one whose page this build does not serve for GET. The 404 is what
+        keeps the reserved set's promise: a page word is never "the task whose
+        id is that word". Such a task is reached through the alias above,
+        which does not pass through here.
         """
         if task_id in RESERVED_TASK_PATH_SEGMENTS:
             return PlainTextResponse(

@@ -34,6 +34,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 __all__ = [
     "CancelFacts",
+    "CreateFacts",
     "MAX_RECEIPTS",
     "MAX_TITLED_RELEASES",
     "RECEIPT_KEY",
@@ -139,6 +140,21 @@ class CancelFacts:
 
 
 @dataclass(frozen=True)
+class CreateFacts:
+    """What a create made, in receipt terms (T3-W7).
+
+    ``task_type`` and ``project`` are as the form asked for them. ``repeated``
+    is true when this submit made no call of its own — it carried a request id
+    whose create had already landed (or was landing), so Lens put the operator
+    on that task rather than create a second one (T3 D10).
+    """
+
+    task_type: str = "task"
+    project: str = ""
+    repeated: bool = False
+
+
+@dataclass(frozen=True)
 class WriteReceipt:
     """One write's outcome, as the banner states it.
 
@@ -166,8 +182,8 @@ class WriteReceipt:
     ``safe_next``: a follow-up form on the receipt (Reopen gate) posts it as its
     ``next``, because an HTMX receipt is rendered against the POST, whose own
     path is no page to come back to.
-    ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), None for every
-    other action.
+    ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), and ``created`` a
+    create's :class:`CreateFacts` (T3-W7); each is None for every other action.
     """
 
     action: str
@@ -183,6 +199,7 @@ class WriteReceipt:
     released_waiting: bool = False
     back_to: str = ""
     cancel: CancelFacts | None = None
+    created: CreateFacts | None = None
 
     @property
     def released_more(self) -> int:

@@ -172,10 +172,22 @@ The current application exposes these routes:
   nothing is written. Answered like the approve POST — 303 to `next` with
   `?receipt=<id>` — and always a plain form, never HTMX.
 - `GET /tasks/new`
-  Reserved for the create form (a later T3 slice). Until it exists the path
-  answers 404 — never the detail page of a task whose id happens to be `new`,
-  which is reachable through `/tasks/id?task_id=new` like every other page
-  word.
+  The **create form** for a task, an epic or a gate (§5.15, Create). `new` is a
+  reserved task-path segment: the path is this form, never the detail page of
+  a task whose id happens to be `new`, which is reachable through
+  `/tasks/id?task_id=new` like every other page word. `?project=` and
+  `?parent=` pre-fill it. With no operator identity it renders only the
+  "choose an operator" link and no form.
+- `POST /tasks/new`
+  Creates one task, epic or gate through the write funnel's task-less entry
+  point (§5.15, Create), de-duplicated on the form's request id. Success is
+  303 to the new task's page with `?receipt=<id>`; a refusal re-renders the
+  form with the input kept (422, or the funnel refusal's own status); an
+  unknown outcome is the "not visible yet" page (200). With `intent=restart`
+  (**Start again**) it makes no call and re-renders the form with the input
+  kept under a new request id. Plain form only, never HTMX. The form carries
+  **no `expected_status`**: §5C.6's stale-status pre-check is about forms on an
+  existing task, and there is no task yet.
 - `GET /knowledge`
   Renders the knowledge landing page: hybrid search, recently-updated notes,
   and tag browse.
@@ -1884,10 +1896,11 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
-### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen and Cancel
+### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen, Cancel and Create
 
 The task writes (T3-W4 onwards). Every curated write goes through **one function**
-(`lithos_lens.write_funnel.WriteFunnel.submit`); route handlers parse their form
+(`lithos_lens.write_funnel.WriteFunnel.submit`, or `submit_create` for a create,
+which has no task to pre-check — see Create below); route handlers parse their form
 and describe their action, and never call a Lithos write themselves. The steps,
 in order:
 
@@ -2176,6 +2189,101 @@ unsatisfiable …"). A failed read there degrades the facts to lower bounds or
 "couldn't work out"; it never becomes the cancel's failure. The confirm page
 still renders in that mode — it is a read.
 
+**Create** (T3-W7). One form, `GET`/`POST /tasks/new`, for a **task**, an
+**epic** or a **gate**: title, type, description (Markdown, rendered as
+descriptions are everywhere), project, tags, parent, predecessors ("Blocked
+by"), and a gate fieldset (gate type; `ready_at` for a timer). It is complete
+without JavaScript: the gate fieldset is shown to every type, labelled "only
+for gates", and a small script of its own (`create_form.js` — not `tasks.js`,
+which would open the event stream) hides it while another type is selected.
+The server drops the gate fields for a non-gate, because the no-JS form posts
+them anyway.
+
+- **Affordances.** **New task** in the dashboard's header — carrying
+  `?project=<slug>` only when exactly one project is selected — and **Add
+  child** on an **open epic**'s detail page, carrying `?parent=<epic id>`.
+  Both render only when an operator identity resolves.
+- **Inputs.** Tags and predecessors are **one per line** (a comma can be part
+  of a tag); parent is one input. Parent and predecessors are full ids or
+  prefixes of at least six characters, which Lithos resolves — there is no
+  task datalist and no search endpoint. Project is optional free text,
+  validated as a lowercase slug, with a datalist of the projects of the open
+  tasks (one cross-project `lithos_task_list(status="open")`, the union of
+  both §5B.1 conventions — the board filter's own derivation). A project with
+  no open task is not listed but can be typed; a failed or slow read (3 s)
+  renders the form without the list.
+- **Validated in Lens before any call:** a title; a type of `task` / `epic` /
+  `gate`; a project slug; for a gate, a gate type a **person** may create —
+  `human`, `external_task` or `timer` (a hand-made `ci` or `pr` gate has
+  nothing watching it; loom creates its own `pr` gates) — and for a timer a
+  `ready_at`, a `datetime-local` value read as **UTC** and sent as ISO with an
+  offset. A past `ready_at` is allowed: that timer is simply already ready.
+  Each refusal re-renders the form (422) with the input kept and the message
+  under its field, and makes no Lithos call.
+- **The write** is one `lithos_task_create(title, agent=<operator>,
+  description, tags, metadata, task_type, depends_on, parent_task_id)`. The
+  project is written under **both conventions** (§5B.1): `metadata.project =
+  <slug>` and the `<[tasks].project_tag_key>:<slug>` tag. The task's metadata
+  is the project, `lens_request_id` and the gate's `gate_type` / `ready_at` —
+  nothing else; the form has no input for advisory keys.
+- **Lithos stays the authority.** A refusal with an envelope re-renders the
+  form, input kept, with the §5.14 copy at the top and the upstream message
+  under the input it names (`parent_task_id` → Parent, `depends_on` → Blocked
+  by — which does not say which predecessor — `metadata.gate_type`,
+  `metadata.ready_at`). An `ambiguous_id_prefix` lists its candidates (short
+  id and title, as text) under the field whose typed value they all start
+  with; the operator corrects the field. `invalid_task_type` and
+  `invalid_metadata_key` take the unknown-code path at form level. The
+  identity guard and registration refusals re-render the form too.
+- **De-duplication on a request id — by Lens, in memory, best effort.** The
+  server mints a request id (`uuid4().hex`) each time it renders the form; the
+  form carries it and the task stores it as `metadata.lens_request_id`
+  (provenance — nothing reads it back). A POST without a well-formed one is
+  `bad_form` (400) with no call. One in-process coordinator remembers what
+  each id came to, in a map bounded at 512 settled entries (oldest first, no
+  TTL):
+  - **no entry** — this submit makes the call, shielded so a browser that
+    goes away cannot cancel it for the others;
+  - **in flight** — the submit waits and receives that call's outcome; it
+    makes no call of its own;
+  - **created** — it lands on that task, with no call;
+  - **unknown outcome** (a timeout, a dead session, an unparseable answer) —
+    never sent again under that id;
+  - **refused** — forgotten, so the re-rendered form keeps its id and a
+    corrected submit may create.
+
+  The guarantee, as it is: a double-click, a resubmit or the back button
+  lands on the one task the first submit created. A create whose outcome Lens
+  never learned can still be duplicated if the operator starts again while it
+  lands, and **a Lens restart between a submit and its resubmit forgets the
+  request id**, so that resubmit creates a second task. Closing either needs
+  an idempotency key on `lithos_task_create` upstream.
+- **Not visible yet.** After an unknown outcome, create's own page (200) says
+  "Lens could not confirm this task was created — it is not visible yet. If
+  it was created, it will appear on the board." It never says the task was
+  not created. It links to the board (filtered to the project when there is
+  one) and offers **Start again**: a POST with `intent=restart` and the full
+  input, which re-renders the form with the input kept under a **new**
+  request id — the operator's own decision to risk a duplicate. It makes no
+  call and is not an attempt.
+- **Answer and receipt.** Success is 303 to the new task's detail page with a
+  receipt: "Created *\<type\>* *\<title\>*", who created it and in which
+  project, and — for a submit that landed on an earlier one's task — that the
+  form had already been submitted and no second task was created. The page
+  below is the new task's own, read fresh, so its parent and predecessors are
+  stated there. After a create with a parent or predecessors, those tasks
+  leave the edge cache (`task.created` evicts only the new id), so their
+  pages show the new edge at once.
+- **Record.** The span is `lens.writes.create`; its `task_id` is the new id
+  once known, and it carries `lens.write.request_id` and, for a submit that
+  made no call, `lens.write.dedup` = `joined` / `remembered` (result `ok`; a
+  span and audit attribute, never a counter label). The audit line's
+  arguments are ids, type and lengths — `task_type`, `title_chars`,
+  `description_chars`, `project`, `tag_count`, `parent_task_id`,
+  `depends_on`, `gate_type` — never the title or description text; it has no
+  expected or observed status. A Lens validation refusal is recorded
+  `rejected` (`invalid_form`).
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -2422,12 +2530,14 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the rest of the curated write actions** (T3) — create and add a
-  dependency. The posture and identity (§5.13), the refusal copy (§5.14), and
-  the write funnel with its receipts, the direct Complete action for human and
-  external-task gates, Proceed anyway for every other gate type, Reopen with
-  the completion receipt's Reopen gate, and Cancel with its consequences
-  stated first (§5.15) ship now.
+- **the rest of the curated write actions** (T3) — add a dependency. The
+  posture and identity (§5.13), the refusal copy (§5.14), and the write funnel
+  with its receipts, the direct Complete action for human and external-task
+  gates, Proceed anyway for every other gate type, Reopen with the completion
+  receipt's Reopen gate, Cancel with its consequences stated first, and Create
+  (§5.15) ship now. Create's de-duplication is in memory only: there is no
+  lookup of `metadata.lens_request_id` in Lithos, so a restart forgets the
+  request ids it had seen (§5.15, Create).
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)
