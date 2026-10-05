@@ -174,6 +174,12 @@ classDiagram
     +misses int
     +ghost_reads int
   }
+  class CancelClient
+  class CancelConsequences {
+    +unavailable str
+    +claims_unread bool
+    +children_unread bool
+  }
   class CanvasNotes {
     +stated bool
     +relations_exact bool
@@ -184,6 +190,10 @@ classDiagram
     +exact bool
     +unreadable_nodes int
     +unresolvable_edges int
+  }
+  class ClaimHolder {
+    +agent str
+    +aspects tuple[str, ...]
   }
   class Condensation {
     +id str
@@ -251,6 +261,10 @@ classDiagram
     +chain_position int
     +chain_length int
     +stale bool
+  }
+  class DownstreamWalk {
+    +exact bool
+    +bound_reasons tuple[str, ...]
   }
   class EdgeCacheEntry {
     +task_id str
@@ -494,6 +508,10 @@ classDiagram
   BlockedTaskRecord "1" --> "1" TaskRecord : task
   BlockerLevel "1" --> "1" LinkPage : page
   Breadcrumb "1" --> "0..*" TaskRecord : ancestors
+  CancelConsequences "1" --> "0..*" ClaimHolder : claims
+  CancelConsequences "1" --> "0..1" DownstreamWalk : walk
+  CancelConsequences "1" --> "0..*" TaskRecord : open_children
+  CancelConsequences "1" --> "1" TaskRecord : task
   ChainView "1" --> "0..*" NodeView : nodes
   ChainView "1" --> "0..1" NodeView : through
   Condensation "1" --> "0..1" Cycle : cycle
@@ -508,6 +526,8 @@ classDiagram
   DashboardData "1" --> "0..*" SectionRow : sections
   DashboardData "1" --> "1" TaskFilters : filters
   DashboardData "1" --> "1" TaskSummary : summary
+  DownstreamWalk "1" --> "0..*" TaskRecord : behind
+  DownstreamWalk "1" --> "0..*" TaskRecord : direct
   EdgeCacheEntry "1" --> "0..*" EdgeRecord : edges
   FindingView "1" --> "1" FindingRecord : finding
   GateGroup "1" --> "0..*" GateRow : rows
@@ -735,6 +755,20 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class CancelFacts {
+    +stated bool
+    +reason_given bool
+    +stranded_total int
+    +behind_total int
+    +exact bool
+    +bound_reasons tuple[str, ...]
+    +unavailable str
+    +claims tuple[tuple[str, tuple[str, ...]], ...]
+    +claims_unread bool
+    +children_total int
+    +children_unread bool
+    +gate bool
+  }
   class IdentityCheck {
     +ok bool
     +code str
@@ -785,9 +819,13 @@ classDiagram
     +released_waiting bool
     +back_to str
   }
+  CancelFacts "1" --> "0..*" ReceiptTask : behind
+  CancelFacts "1" --> "0..*" ReceiptTask : children
+  CancelFacts "1" --> "0..*" ReceiptTask : stranded
   WriteProblem "1" --> "0..*" MessageSegment : detail
   WriteProblem "1" --> "0..*" TaskRef : candidates
   WriteProblem "1" --> "1" TaskRef : subject
+  WriteReceipt "1" --> "0..1" CancelFacts : cancel
   WriteReceipt "1" --> "0..*" ReceiptTask : released
   WriteReceipt "1" --> "1" ReceiptTask : task
 ```

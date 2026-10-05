@@ -1,0 +1,36 @@
+{#
+  Cancel (T3 D9) on the detail page and in a board row's overflow menu.
+
+  Context:
+    `action_task` -- the task (a `tasks.TaskRecord`) as the surface read it;
+    `action_next` -- where the confirm page's form (or this direct form's 303)
+                     returns the operator.
+
+  Rendered only when `offers_cancel` (an open task of any type) and a resolved
+  operator identity both say yes. With `[writes].confirm_cancel = true` it is
+  a LINK to the confirm page, which states the consequences and carries the
+  one form with the confirmation. With it false the affordance posts directly
+  -- a plain form, never HTMX (clarification D5) -- and the same facts are
+  stated on the receipt instead.
+-#}
+{% if offers_cancel(action_task) and operator_identity(request).resolved %}
+  {% if confirm_cancel %}
+    <div class="complete-action proceed-anyway-action" data-cancel-action data-task-id="{{ action_task.id }}">
+      <a class="proceed-anyway-link" href="{{ cancel_url(action_task.id, action_next) }}" data-cancel-link>Cancel&hellip;</a>
+      <p class="complete-action-meaning">Shows what cancelling strands and whose claims it releases before you confirm.</p>
+      {% include "writes/identity.html" %}
+    </div>
+  {% else %}
+    <form class="complete-action" method="post" action="{{ cancel_path(action_task.id) }}" data-cancel-action data-cancel-direct data-task-id="{{ action_task.id }}">
+      <input type="hidden" name="expected_status" value="{{ action_task.status }}">
+      <input type="hidden" name="next" value="{{ action_next }}">
+      <label class="complete-action-note">
+        <span>Reason</span>
+        <input type="text" name="reason" maxlength="{{ cancel_reason_max }}" autocomplete="off" placeholder="optional">
+      </label>
+      <button type="submit" class="complete-action-button" data-cancel-button>Cancel task</button>
+      <p class="complete-action-meaning" data-cancel-reason-note>The reason is {{ cancel_reason_note }}. What the cancel strands and releases is stated on its receipt.</p>
+      {% include "writes/identity.html" %}
+    </form>
+  {% endif %}
+{% endif %}

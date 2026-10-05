@@ -90,6 +90,9 @@
           {% include "writes/complete_action.html" %}
           {#- Reopen (T3 D8): a completed or cancelled task, any type. -#}
           {% include "writes/reopen_action.html" %}
+          {#- Cancel (T3 D9): an open task, any type — a link to the confirm
+             page, or the direct form when confirm_cancel is off. -#}
+          {% include "writes/cancel_action.html" %}
         {% endwith %}
       </header>
 

@@ -155,6 +155,22 @@ The current application exposes these routes:
   `expected_status` caught by the pre-check ("This task is now open.", no
   Lithos call), or Lithos's `task_not_resolved` for a task reopened in the
   window after it ("This task is already open.").
+- `GET /tasks/{task_id}/cancel`
+  The **Cancel** confirm page for an open task of any type (§5.15, Cancel),
+  server-rendered and complete without JavaScript, and a read in either
+  `[writes].confirm_cancel` mode. `?next=` (same-origin relative only, else
+  the task's page) is where its form and its "Keep it" link return the
+  operator. A task that is no longer open is the conflict page ("This task is
+  now *\<status\>*.", 409) stating no consequence; an unknown id is the
+  conflict page's "This task no longer exists." (404); a failed read is 503.
+- `POST /tasks/{task_id}/cancel`
+  Cancels an open task through the write funnel: one `lithos_task_cancel` as
+  the operator, with the optional `reason` folded to one line and bounded at
+  500 characters. With `confirm_cancel = true` it is performed only when the
+  form carries `confirm=cancel`, which only the confirm page posts; without it
+  the POST is redirected (303) to that page with `next` carried along, and
+  nothing is written. Answered like the approve POST — 303 to `next` with
+  `?receipt=<id>` — and always a plain form, never HTMX.
 - `GET /tasks/new`
   Reserved for the create form (a later T3 slice). Until it exists the path
   answers 404 — never the detail page of a task whose id happens to be `new`,
@@ -249,7 +265,9 @@ The current configuration model includes:
 - `writes.default_operator` *(operator identity used when a browser has no
   `lens_operator` cookie; validated at load against the same rule as the
   cookie, so a value that is not a lowercase slug fails the load)*
-- `writes.confirm_cancel` *(parsed; read by the cancel action, a later slice)*
+- `writes.confirm_cancel` *(default `true`: Cancel opens its consequence confirm
+  page; `false`: the affordance posts directly and the consequences are stated
+  on the receipt instead — §5.15, Cancel)*
 - `knowledge.related_title_fanout_cap`
 - `knowledge.search_limit`
 - `knowledge.recent_limit`
@@ -1866,7 +1884,7 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
-### 5.15 Write Funnel, Receipts, Complete a Gate and Reopen
+### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen and Cancel
 
 The task writes (T3-W4 onwards). Every curated write goes through **one function**
 (`lithos_lens.write_funnel.WriteFunnel.submit`); route handlers parse their form
@@ -1929,6 +1947,8 @@ Every way an attempt ends, for a plain POST:
 | upstream `task_not_found` on a task that exists and is not open | 409 | the same conflict page, via the re-read | `conflict` |
 | not a gate | 409 | "This task isn't a gate — only gates can be completed here." | `rejected` (`not_a_gate`) |
 | a machine-owned gate posted without the confirmation | 303 to the confirm page | — | `rejected` (`confirmation_required`) |
+| a cancel posted without the confirmation (`confirm_cancel = true`) | 303 to the confirm page | — | `rejected` (`confirmation_required`) |
+| a cancel whose form claims the task's own resolved status | 409 | "Only an open task can be cancelled; this one is *\<status\>*." | `rejected` (`not_open`) |
 | `expected_status` missing or not a status | 400 | "The form didn't say what status you saw — reload and try again." | `rejected` (`bad_form`) |
 | the pre-check read fails | 503 | "Lens couldn't read the task, so it didn't try the write." | `rejected` (`precheck_failed`) |
 | an identity that belongs to an agent | 403 | the operator page's refusal copy | `rejected` (`identity_refused`) |
@@ -2084,6 +2104,78 @@ it this way leaves the board as it started, and the second receipt names the
 tasks the first did. The detail page can show this form and its own Reopen at
 once; each has its own hook (`data-reopen-gate`, `data-reopen-action`).
 
+**Cancel** (T3-W6). A cancelled predecessor blocks its dependents forever, so
+the cancel states its consequence before it is made. Offered on the **detail
+page** and in a **board row's overflow menu** of any **open** task — task, epic
+or gate — decided by one helper (`cancel_routes.offers_cancel`) and rendered
+only when an operator identity resolves. The overflow menu is new: a no-JS
+`<details>` whose summary is **⋯**, shared by the ordinary row (open rows only;
+the same template renders the Completed and Cancelled sections) and the gate
+row, holding only the Cancel affordance. A reconcile that re-renders the board
+collapses an open menu. With `[writes].confirm_cancel = true` (default) the
+affordance is a **Cancel…** link to the confirm page; with it `false` it is a
+plain form posting directly, with the optional reason field.
+
+The confirm page (`GET /tasks/{task_id}/cancel`) states, from one consequence
+read (`cancel_consequences.load_cancel_consequences`):
+
+- **"Cancelling strands *N* tasks directly, *M* more behind them."** — *N* the
+  open dependents one hop out, which become *permanently blocked until
+  re-routed*, *M* the further open transitive dependents, each list naming its
+  first five by title, oldest `created_at` first (then id), with "and *K*
+  more". The walk goes downstream from the task over **active** `blocks` /
+  `waits_on_gate` edges (§5.12's edge states), through the per-task edge cache
+  with the task's own entry evicted and re-read first, and **crosses project
+  boundaries**: which dependents are open comes from one cross-project
+  `lithos_task_list(status="open")`, so a dependent in another project counts.
+  A visited set keeps a cycle from counting a task twice, and the task itself
+  is never counted. Nothing open behind it reads "Cancelling strands no open
+  tasks — nothing open depends on it."
+- **Lower bounds.** The walk visits at most `[graph].max_tasks` dependents and
+  runs for at most 10 seconds (a module constant). Past either, or after any
+  failed edge read, both numbers are rendered "≥ *N*" followed by "Both
+  numbers are lower bounds:" and the reason — "Lens couldn't read the
+  dependencies of *K* tasks (*\<code\>*)", "the walk stopped at its budget of
+  *K* tasks", "the walk took too long". Where the graph page refuses a scope
+  over its bound, this walk degrades. If the open list itself cannot be read
+  the page says Lens couldn't work out what the cancel strands, and why, and
+  still offers the cancel.
+- **The active claims the cancel releases**, by agent — "It releases *N*
+  active claims:" with each agent and its aspects — read with
+  `lithos_task_status` before the cancel (once it lands they are gone); "No
+  agent holds an active claim on it." when there are none, and a failed read is
+  said to have failed, never stated as none.
+- for a task with open children (any type): **"Its *N* open children are not
+  cancelled with it:"**, naming the first five (`lithos_task_children`);
+- for a gate: **"Its waiters become unsatisfiable. Completing the gate, not
+  cancelling it, is how they proceed."** (§5.2.3).
+
+Its form carries the `expected_status` the page read, the `next`, the
+confirmation, and an optional **Reason** field labelled "The reason is recorded
+in the event stream only — not stored on the task." (ROADMAP ledger #6), with a
+**Cancel task** button beside a "Keep it" link and the identity chip; with no
+identity the page states the same facts and offers no form. No future-tense
+consequence is shown for a task that is not open: the page is the conflict
+page. The write is one `lithos_task_cancel(task_id, agent=<operator>,
+reason=…)` (an empty reason is not sent); the span is `lens.writes.cancel`
+with no action-specific attributes, and the audit line's arguments are
+`{"task_id", "reason_chars"}` — the reason's text reaches Lithos and nothing
+else. The pre-check binds: a stale `expected_status` is the conflict page, and
+a form claiming the status a resolved task already has is refused, both with
+no call.
+
+The receipt reads "Cancelled *\<title\>*" and who cancelled it, and — when a
+reason was sent — that it was recorded in the event stream only, not stored on
+the task. After a confirmed cancel that is all: the confirm page already stated
+the consequences. With `confirm_cancel = false` there is no confirm page, so
+the same facts are read inside the write, just **before** the
+`lithos_task_cancel` call (the only moment the claims still exist), and the
+receipt states them instead, through the same partial in the past tense ("This
+cancel stranded …", "Released *N* active claims", "Its waiters are now
+unsatisfiable …"). A failed read there degrades the facts to lower bounds or
+"couldn't work out"; it never becomes the cancel's failure. The confirm page
+still renders in that mode — it is a read.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -2099,11 +2191,11 @@ provides:
   exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
   reads and the typed registration it writes
 - an `/events` SSE stream carrying task-related events
-- **two task writes**, attributed to the operator: `lithos_task_complete`
+- **three task writes**, attributed to the operator: `lithos_task_complete`
   (with an `outcome`), whose `unblocked` id list a completion's receipt names,
-  and `lithos_task_reopen`, whose `reblocked` id list a completed task's reopen
-  receipt names (§5.15); the client carries the other three T3 writes, which no
-  route calls yet
+  `lithos_task_reopen`, whose `reblocked` id list a completed task's reopen
+  receipt names, and `lithos_task_cancel` (with an optional `reason`) (§5.15);
+  the client carries the other two T3 writes, which no route calls yet
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
 ambiguous or partially missing, Lens treats parsing and enrichment as best
@@ -2330,11 +2422,12 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the rest of the curated write actions** (T3) — cancel, create and add a
+- **the rest of the curated write actions** (T3) — create and add a
   dependency. The posture and identity (§5.13), the refusal copy (§5.14), and
   the write funnel with its receipts, the direct Complete action for human and
-  external-task gates, Proceed anyway for every other gate type, and Reopen with
-  the completion receipt's Reopen gate (§5.15) ship now.
+  external-task gates, Proceed anyway for every other gate type, Reopen with
+  the completion receipt's Reopen gate, and Cancel with its consequences
+  stated first (§5.15) ship now.
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)

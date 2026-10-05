@@ -1,0 +1,104 @@
+{#
+  What a cancel strands, releases and keeps (T3 D9) -- ONE partial for the
+  confirm page and, with `[writes].confirm_cancel = false`, the receipt, so the
+  two cannot state the facts differently.
+
+  Context:
+    `facts` -- a `receipts.CancelFacts`;
+    `past`  -- true on the receipt (the cancel has happened), false on the
+               confirm page (it is about to).
+
+  Lower bounds are rendered "≥ N" with the reason (the T2 rule): past the
+  walk's node budget, past its deadline, or after any failed edge read. A read
+  that failed is said to have failed -- never stated as "none".
+-#}
+{% set ge = "" if facts.exact else "≥ " %}
+<div class="cancel-facts" data-cancel-facts data-cancel-exact="{{ 'yes' if facts.exact else 'no' }}">
+  <section class="cancel-facts-part" data-cancel-stranded>
+    {% if facts.unavailable %}
+      <p data-cancel-unavailable>
+        Lens couldn't work out what {{ "this cancel stranded" if past else "this cancel strands" }}: {{ facts.unavailable }}.
+        {%- if not past %} You can still cancel it; any task that depends on it would be permanently blocked until re-routed.{% endif %}
+      </p>
+    {% elif facts.exact and not facts.stranded_total and not facts.behind_total %}
+      <p class="cancel-facts-headline" data-cancel-counts data-cancel-direct="0" data-cancel-behind="0">
+        {{ "This cancel stranded" if past else "Cancelling strands" }} no open tasks &mdash; nothing open depends on it.
+      </p>
+    {% else %}
+      <p class="cancel-facts-headline" data-cancel-counts data-cancel-direct="{{ facts.stranded_total }}" data-cancel-behind="{{ facts.behind_total }}">
+        {{ "This cancel stranded" if past else "Cancelling strands" }} {{ ge }}{{ facts.stranded_total }} task{{ "" if facts.stranded_total == 1 else "s" }} directly, {{ ge }}{{ facts.behind_total }} more behind them.
+      </p>
+      {% if not facts.exact %}
+        <p class="cancel-facts-bound" data-cancel-bound>Both numbers are lower bounds: {{ facts.bound_reasons | join("; ") }}.</p>
+      {% endif %}
+      {% if facts.stranded %}
+        <p>{{ "These are" if past else "These become" }} permanently blocked until re-routed:</p>
+        <ul class="write-receipt-tasks" data-cancel-stranded-list>
+          {% for stranded in facts.stranded %}
+            <li data-cancel-stranded-task="{{ stranded.task_id }}">
+              <a href="{{ task_detail_url(request, stranded.task_id) }}">{{ stranded.title }}</a>
+              {% with task_id = stranded.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </li>
+          {% endfor %}
+          {% if facts.stranded_more %}<li>and {{ facts.stranded_more }} more</li>{% endif %}
+        </ul>
+      {% endif %}
+      {% if facts.behind %}
+        <p>Behind them, waiting on those:</p>
+        <ul class="write-receipt-tasks" data-cancel-behind-list>
+          {% for behind in facts.behind %}
+            <li data-cancel-behind-task="{{ behind.task_id }}">
+              <a href="{{ task_detail_url(request, behind.task_id) }}">{{ behind.title }}</a>
+              {% with task_id = behind.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </li>
+          {% endfor %}
+          {% if facts.behind_more %}<li>and {{ facts.behind_more }} more</li>{% endif %}
+        </ul>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  <section class="cancel-facts-part" data-cancel-claims>
+    {% if facts.claims_unread %}
+      <p>Lens couldn't read the task's claims, so it can't say whose work {{ "this released" if past else "this releases" }}.</p>
+    {% elif facts.claims %}
+      <p>{{ "Released" if past else "It releases" }} {{ facts.claims_total }} active claim{{ "" if facts.claims_total == 1 else "s" }}:</p>
+      <ul class="write-receipt-tasks">
+        {% for agent, aspects in facts.claims %}
+          <li data-cancel-claim-agent="{{ agent }}"><strong>{{ agent }}</strong> &mdash; {{ aspects | join(", ") }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No agent {{ "held" if past else "holds" }} an active claim on it.</p>
+    {% endif %}
+  </section>
+
+  {% if facts.children_unread %}
+    <section class="cancel-facts-part" data-cancel-children>
+      <p>Lens couldn't read its children. Cancelling a task never cancels its children.</p>
+    </section>
+  {% elif facts.children_total %}
+    <section class="cancel-facts-part" data-cancel-children="{{ facts.children_total }}">
+      <p>Its {{ facts.children_total }} open child{{ "" if facts.children_total == 1 else "ren" }} {% if facts.children_total == 1 %}{{ "was" if past else "is" }}{% else %}{{ "were" if past else "are" }}{% endif %} <strong>not</strong> cancelled with it:</p>
+      <ul class="write-receipt-tasks">
+        {% for child in facts.children %}
+          <li data-cancel-child="{{ child.task_id }}">
+            <a href="{{ task_detail_url(request, child.task_id) }}">{{ child.title }}</a>
+            {% with task_id = child.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+          </li>
+        {% endfor %}
+        {% if facts.children_more %}<li>and {{ facts.children_more }} more</li>{% endif %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if facts.gate %}
+    <section class="cancel-facts-part" data-cancel-gate>
+      {% if past %}
+        <p>Its waiters are now unsatisfiable. Completing a gate, not cancelling it, is how its waiters proceed &mdash; reopen it and complete it to release them.</p>
+      {% else %}
+        <p>Its waiters become unsatisfiable. Completing the gate, not cancelling it, is how they proceed.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+</div>

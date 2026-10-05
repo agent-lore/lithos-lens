@@ -135,5 +135,8 @@
      on every other row the helper says no and nothing renders. -#}
   {% with action_task = row.task, action_htmx = true, action_next = write_return_path(request) %}
     {% include "writes/complete_action.html" %}
+    {#- The overflow menu (T3-W6): Cancel, for an open row only — this
+       template also renders the Completed and Cancelled sections. -#}
+    {% include "writes/row_menu.html" %}
   {% endwith %}
 </article>

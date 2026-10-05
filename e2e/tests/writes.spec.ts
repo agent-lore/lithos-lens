@@ -28,6 +28,12 @@ import {
  *   proceed-anyway-confirm-<w>.png  a timer gate's Proceed anyway confirm page
  *                                   (T3-W4b): its ready_at, the waiters it
  *                                   releases, and the one confirming form
+ *   cancel-confirm-<w>.png          the Cancel confirm page for the head of the
+ *                                   demo's depth-5 chain (T3-W6): what it
+ *                                   strands directly and behind, the claims
+ *                                   line, and the form with its reason field.
+ *                                   GET only, so the chain stays intact for
+ *                                   every later step (clarification D11).
  */
 //
 // No retry, deliberately: a retry would find the gate already completed by
@@ -249,4 +255,39 @@ test("a timer gate is completed only through its Proceed anyway page", async ({
     "0",
   );
   await expect(row).toHaveCount(0);
+});
+
+test("the cancel confirm page states what cancelling the chain head strands", async ({
+  page,
+}) => {
+  await page.context().addCookies([
+    { name: "lens_operator", value: "dave", url: WRITES_BASE_URL },
+  ]);
+  // Reached from the detail page's link, as the operator would.
+  await page.goto(`${WRITES_BASE_URL}/tasks/loom-schema`);
+  const link = page.locator(
+    '[data-cancel-action][data-task-id="loom-schema"] [data-cancel-link]',
+  );
+  await expect(link).toHaveCount(1);
+  await link.click();
+  await expect(page).toHaveURL(/\/tasks\/loom-schema\/cancel\?next=/);
+
+  const counts = page.locator("[data-cancel-counts]");
+  await expect(counts).toHaveText(
+    "Cancelling strands 1 task directly, 4 more behind them.",
+  );
+  await expect(page.locator("[data-cancel-stranded-task]")).toHaveCount(1);
+  await expect(page.locator("[data-cancel-behind-task]")).toHaveCount(4);
+  await expect(
+    page.locator('[data-cancel-behind-task="lens-graph-page"]'),
+  ).toHaveCount(1);
+  const form = page.locator("[data-cancel-confirm-form]");
+  await expect(form.locator('input[name="confirm"]')).toHaveValue("cancel");
+  await expect(form.locator("[data-cancel-reason-note]")).toContainText(
+    "recorded in the event stream only — not stored on the task",
+  );
+
+  for (const width of WIDTHS) {
+    await capture(page, "cancel-confirm", width);
+  }
 });
