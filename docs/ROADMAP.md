@@ -1,6 +1,6 @@
 # Lithos Lens — Roadmap
 
-Version: 1.5.0
+Version: 1.6.0
 Date: 2026-10-05
 Status: Active
 
@@ -102,7 +102,7 @@ T and K milestones touch disjoint modules and may overlap in practice.
 | 3 | **T2** | Tasks | Task relationship graphs: graph pages, exploration mode, side panel, mini-graph | **shipped** | [t2-task-relationship-graphs.md](./prd/t2-task-relationship-graphs.md) | 0.4.0 |
 | 3b | **T2b** | Tasks | Operational insights: planning view rebase, findings feed, operator ergonomics | planned | — | 0.4.x |
 | 4 | **T3** | Tasks | Curated write actions | **shipped** | [t3-curated-write-actions.md](./prd/t3-curated-write-actions.md) | 0.5.0 |
-| 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | planned | — | — |
+| 5 | **K2** | Knowledge | Knowledge graph view + knowledge event wiring | **next** (PRD 2026-10-05) | [k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md) | 0.6.0 |
 | 6 | **K3** | Knowledge | Cognitive search (`lithos_retrieve`) + node stats | planned | — | — |
 | 7 | **X1** | Both | LLM finding-curation + desktop notifications | planned | — | — |
 | 8 | **K4** | Knowledge | Feed, feedback, cited-by panel | planned | — | — |
@@ -252,14 +252,31 @@ tool existing upstream, not by a Lens action. Create's request-id
 de-duplication is in memory and forgotten on restart (SPECIFICATION §10).
 Nothing else from the milestone remains open.
 
-### K2 — Knowledge Graph View
+### K2 — Knowledge Graph View — NEXT
 
-`/knowledge/graph?focus=<id>` ego-graph first, global mode second: typed LCMA
-edges colored per type, wiki-links thin grey, provenance dotted, `contradicts`
-edges red with unresolved `conflict_state` emphasized. Data via
-`lithos_related` + `lithos_edge_list`; freshness via `note.*`/`edge.upserted`
-events (with debounced-refetch fallback for id-less watcher events); node
-caps with a "refine your filters" banner.
+Brought forward on 2026-10-05: with T3 shipped, Dave judged the task surface
+good enough for now and the knowledge surface the place to spend October's
+remaining weeks. T2b stays sequenced after it. The PRD
+([k2-knowledge-graph-view.md](./prd/k2-knowledge-graph-view.md)) was written
+against the live store and corrected REQUIREMENTS §8 where it had drifted:
+the edge vocabulary is `supports` / `related_to` / `analogy_to` / `refines` /
+`is_example_of` / `depends_on` / `derived_from` / `contradicts` plus an
+unknown-type rule (the type column is an unvalidated string), and salience is
+flat (90% of nodes at the floor), so nodes are sized by degree until K3.
+
+`/knowledge/graph`: a **focus** (ego-graph) mode reached from note pages, a
+**scoped global** mode by edge type and/or namespace, and a **scope picker**
+with live facets in place of an unscoped hairball; `?type=contradicts` is the
+contradictions queue. One unfiltered `lithos_edge_list` call becomes a
+server-side **edge-table snapshot** (TTL, single-flight, patched from
+`edge.upserted`) that serves every graph read; node titles and facts come
+from a cached `lithos_read(max_length=1)` fan-out patched from `note.*`
+events; endpoints whose note is gone draw as missing-note ghosts. Node and
+edge panels — the edge panel shows the inferred rationale and, for a
+contradiction, both notes side by side, with the place for the pool's
+resolve action reserved. A knowledge event scope and `/knowledge/events`
+stream feed a "graph changed" pill. Seven slices; `lithos_edge_list` gets
+its contract in the first. No write, no salience, no centrality overlay.
 
 ### K3 — Cognitive Search + Node Stats
 
@@ -314,6 +331,10 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 | 10 | Retrieval receipts have no MCP read surface | Receipt read tool (optional) | K3 shows `receipt_id` as text without click-through. |
 | 11 | No readiness timestamp: `lithos_task_ready` returns `created_at` only, and nothing records when a task last *became* ready | `ready_since` on ready rows (or a `task.ready` event) | True ready-age ("how long has available work sat") is unobservable. T2b's Planning View ships median **open-age** of ready work, labelled as the proxy it is; a Lens-side lifecycle tracker is rejected for the same reason as the claim ledger (dies on restart, lies after a Lithos restart). |
 | 12 | Claims expose `expires_at` but no `claimed_at` (`with_claims` rows and `lithos_task_status`) | `claimed_at` on claim records | An in-progress task with no findings has no observable silence duration, so T2b's stalled rule cannot fire on it; Lens labels it `no findings yet` instead of guessing. |
+| 13 | `lithos_edge_list` has no limit, offset, ordering or total, and nothing enumerates edge types or namespaces (`EdgeStore.count` / `list_edges_between` exist unexposed) | A bounded edge list (limit/offset) and an aggregate facets read (counts by type and namespace), or edge counts in `lithos_stats` | K2 fetches the whole table (9,442 rows, 4.9 MB on 2026-10-05) into a server-side snapshot per TTL and refuses above `graph_edge_table_max_edges`; the picker's facets are computed Lens-side. |
+| 14 | No neighbourhood read with titles: `lithos_related.edges` carries endpoint ids only, and no tool returns an induced subgraph | The planned WS7 `lithos_related` `neighbours[]` (title, note_type, namespace, relation, direction, weight) or a `lithos_subgraph(ids)` | K2 titles nodes through a capped, cached `lithos_read(max_length=1)` fan-out patched from `note.*` events. |
+| 15 | Edge changes without events: `related_to` reinforcement, `derived_from` projection and weight decay write `edges.db` directly; `edge.upserted` carries no weight or evidence | Emit `edge.upserted` (with weight) for every edge write, or an `edge.changed` | K2's snapshot converges on its TTL for those changes and marks event-patched rows partial until the next fetch; the page states the snapshot age. |
+| 16 | `lithos_list` cannot filter by `namespace`, `note_type` or `status`, and its items carry only `extra` as metadata | Those three filters, and the standard frontmatter fields on list items | K2 cannot offer tag/type/status node filters without a per-node read (so it offers namespace, type, weight and provenance); the knowledge landing cannot facet by type or status. |
 
 Minor, noted: `task.updated` carries only `task_id` (forces refetch — fine at
 current scale); task events carry empty `tags`, so `/events?tags=` cannot

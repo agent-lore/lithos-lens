@@ -349,6 +349,12 @@ recent_limit = 20                 # recently-updated list size on /knowledge
 related_title_fanout_cap = 20     # cap on cached lithos_read title lookups per related panel
 graph_focus_max_nodes = 250       # knowledge graph cap, focus (ego) mode
 graph_global_max_nodes = 500      # knowledge graph cap, global mode
+graph_default_depth = 1           # ego-graph hops, 1 or 2 (ROADMAP K2)
+graph_min_weight_default = 0.1    # edges below this weight hidden by default (K2 §8.3)
+graph_edge_table_ttl_s = 300      # edge-table snapshot staleness bound (K2 §8.2)
+graph_edge_table_max_edges = 50000  # snapshot refused above this; filtered reads only (K2 §8.2)
+graph_note_facts_ttl_s = 3600     # note title/facts cache TTL (K2 §8.2)
+graph_title_fanout_cap = 300      # lithos_read(max_length=1) reads per graph render (K2 §8.2)
 
 [lithos-lens.events]
 enabled = true
@@ -1146,6 +1152,7 @@ One `lithos_related(id, depth=1)` populates four groups:
 - **Provenance** — `sources` (derived-from) and `derived` (derives), plus `unresolved_sources` rendered as inert stubs.
 - **Typed LCMA edges** — incoming/outgoing edge records with `type`, `weight`, and `conflict_state`. Edge records carry endpoint ids only, so Lens resolves endpoint titles via a **capped, cached `lithos_read(id, max_length=1)` fan-out** (`[knowledge].related_title_fanout_cap`, default 20; beyond the cap, render id stubs with lazy resolution on demand).
 - Each entry links to its note page; an "open in graph" affordance links to `/knowledge/graph?focus=<id>` (§8).
+- A note that is an endpoint of an **unresolved `contradicts`** edge (looked up in the K2 edge snapshot, no extra call) carries a banner above its body naming the other note and linking to the edge panel (§8.4); absent when the snapshot is unavailable.
 
 ### 6.6 Produced-by-task chip
 
@@ -1192,50 +1199,55 @@ When `llm.enabled = true`, a "Synthesise answer" toggle passes the top-N snippet
 
 ## 8. Knowledge Graph View
 
+*Execution plan: [`docs/prd/k2-knowledge-graph-view.md`](./prd/k2-knowledge-graph-view.md) (2026-10-05). This section was rewritten with that PRD against the live store: the edge vocabulary, the data path and the node-size rule below replace earlier drafts that named edge types which do not exist and a salience signal that is flat.*
+
 ### 8.1 Purpose and modes
 
-Interactive visualisation of the knowledge base as a typed, weighted graph. Two modes:
+Interactive visualisation of the knowledge base as a typed, weighted graph, with a complete server-rendered text baseline (the page is reviewable with no JavaScript; the canvas is drawn from the same embedded payload). Two modes on one route:
 
-- **Focus (ego-graph) mode — first-class:** `/knowledge/graph?focus=<note-id>` renders the neighbourhood of one note. This is the mode reachable from note pages and the one sized for the real corpus (~2,900 notes).
-- **Global mode — second:** `/knowledge/graph` renders the whole (capped) edge set for cluster/contradiction reconnaissance.
+- **Focus (ego-graph) mode — first-class:** `/knowledge/graph?focus=<note-id>&depth=1|2` renders the neighbourhood of one note: its typed edges one or two hops out, its wiki-links and provenance one hop out. This is the mode reachable from note pages and the one sized for the real corpus (~5,800 notes, ~9,400 typed edges).
+- **Scoped global mode:** `/knowledge/graph?type=<t>` and/or `?namespace=<ns>` renders every edge in that slice of the table. **There is no unscoped render**: with neither a focus nor a filter the page is a **scope picker** listing each edge type and namespace with its edge count and the unresolved-contradictions count. `?type=contradicts` is the contradictions queue (unresolved first).
 
 ### 8.2 Data assembly
 
-- **Focus mode:** `lithos_related(focus, depth=1..2)` supplies wiki-links, provenance, and typed edges around the focus; the frontier expands via `lithos_related` on neighbours up to the requested depth, capped by `[knowledge].graph_focus_max_nodes` (250).
-- **Global mode:** `lithos_edge_list(namespace?)` for typed edges, capped by `[knowledge].graph_global_max_nodes` (500).
-- Node detail panel: `lithos_related` + `lithos_node_stats` on demand.
+- **Edge-table snapshot.** One unfiltered `lithos_edge_list()` call fetches the whole edge table (no limit, offset or ordering exists upstream — ROADMAP ledger #13) into a server-side snapshot held under `[knowledge].graph_edge_table_ttl_s` with single-flight, indexed by endpoint, type and namespace, and patched in place from `edge.upserted` events (which carry identity and `conflict_state` but not weight or evidence; a patched row is marked partial until the next fetch). Every graph read — ego assembly, scoped mode, facets, the queue, the note-page conflict banner — is served from it. A table over `[knowledge].graph_edge_table_max_edges` is refused ("graph too large to index") and only filtered reads are served. The page states the snapshot's age.
+- **Wiki-links and provenance** for the focus note come from one `lithos_related(focus, include=["links","provenance"], depth=1)`; these entries carry titles. Depth above 1 is not expanded for these layers (`lithos_related` returns a flat reachable set with no intermediate pairs).
+- **Node facts** (title, `note_type`, `status`, `namespace`, `confidence`, lede) come from a semaphored, cached `lithos_read(id, max_length=1)` fan-out — `[knowledge].graph_note_facts_ttl_s`, per-render cap `[knowledge].graph_title_fanout_cap` — patched from `note.created`/`note.updated`/`note.renamed` and marked missing on `note.deleted` or `doc_not_found`. Edges outlive notes upstream; an endpoint that does not resolve is drawn as a **missing-note ghost** (id label, dashed outline), never dropped.
+- Node and edge panels are server-rendered for `?selected=<note-id>` / `?edge=<edge_id>` and swapped by HTMX on click; no further Lithos call beyond the facts cache.
 
 ### 8.3 Rendering
 
-Nodes are sized by `node_stats.salience` (confidence fallback) and coloured by namespace or profile tag. Edge styling:
+**Edge types are unvalidated strings upstream.** Lens keeps a known-type table — direction and symmetry are facts from the Lithos source and are cited in the `lithos_edge_list` contract — and renders anything else as unknown. The legend lists only the types present in the drawn graph, one plain-language line each.
 
-| Edge | Style |
-|------|-------|
-| Wiki-link | thin grey |
-| `derived_from` / provenance | dotted grey |
-| `related_to` | 🔵 blue |
-| `builds_on` | 🟢 green |
-| `contradicts` | 🔴 red — **unresolved** `conflict_state` renders dashed and emphasized, and an unresolved-contradictions counter shows in the toolbar; **resolved** renders muted with its resolution label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
-| `uses_method` | 🟡 yellow |
-| `analogous_to` | 🟣 purple |
-| *(unknown type)* | neutral with a text label — forward-compatible |
+| Edge | Direction | Style |
+|------|-----------|-------|
+| `supports`, `refines`, `is_example_of`, `depends_on` | directed (from → to) | solid, arrowhead, one fixed colour per type |
+| `related_to`, `analogy_to` | symmetric (stored `from_id <= to_id`) | solid, no arrowhead, one fixed colour per type |
+| `derived_from` (provenance) | directed, derived → source | dotted grey, arrowhead |
+| `contradicts` | symmetric | **unresolved** (`conflict_state` null): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
+| wiki-link | as written | thin grey |
+| *(unknown type)* | as stored | neutral grey, arrowhead, labelled with the raw type — forward-compatible |
+
+- **Weight → line width**, linear over [0.1, 1.0]. Edges below `[knowledge].graph_min_weight_default` (0.1) are hidden by default with the hidden count stated; a `min_weight=` control goes to 0. (Consolidation `related_to` edges start at 0.03 and dominate the low end.)
+- **Provenance filter** over the `provenance_type` values present (inferred / reinforced / declared / other), all on by default, hidden counts stated.
+- **Node size = degree within the drawn graph**, stated as such. Salience is **not** used for size in K2: 90% of nodes sit at the salience floor, and `lithos_node_stats` arrives with K3, which may add salience as a size toggle.
+- **Node colour = namespace** by default, `note_type` on a toggle; `archived` greyed, `quarantined` with the note page's red ring.
 
 ### 8.4 Interactions
 
-- Click a node → side panel (summary, related, stats, "open note"); double-click → `/note/{id}`.
-- **Bidirectional selection:** clicking a related-note row in the panel highlights and centres the corresponding node without rebuilding the layout.
-- "Centre on this" rebuilds the ego-graph around the selected node.
-- Filter panel: edge type, namespace, tag, date.
-- **Centrality overlay** (toggle): betweenness centrality computed client-side over the loaded subgraph (`cy.elements().bc()`); top-K nodes get a halo. Recomputed when the visible subgraph changes; no MCP calls.
-- `contradicts` edges expose the conflict-resolution panel (§11).
+- Click a node → **node panel** (title, chips, lede, degree in view, relations in view by type, "open note", **Centre on this** → `?focus=<id>` keeping depth and filters); double-click → `/note/{id}`.
+- Click an edge → **edge panel**: the relation sentence with direction, type, weight, namespace, provenance actor and type, timestamps, and the stored **evidence** — for an inferred edge the `rationale` paragraph with `model` and `confidence` chips; otherwise escaped text or "no rationale recorded" — then both endpoints as cards. For `contradicts` the conflict state leads and the two cards sit **side by side**: the two-pane read §11 needs, present before its write is. Resolving is not a K2 action (§11, deferred pool); the panel reserves the place for it.
+- Search within the drawn graph; focus/dim; depth control showing each depth's would-be node count before it is requested.
+- Filters: edge type (scoped mode), namespace, minimum weight, provenance. Tag and date filters are **not** offered: edges carry neither, and filtering nodes on them would need the per-node read the cap bounds.
+- Centrality overlay: **deferred pool** (little signal at the live degree distribution).
 
 ### 8.5 Freshness
 
-The graph subscribes to `note.created` / `note.updated` / `note.deleted` and `edge.upserted` through the shared pipeline. **Watcher-emitted note events may lack `id`** (they carry only `path`), so per-node patching is best-effort; the fallback is a debounced refetch of the current scope. As on the task graph page, changes show a "graph changed — refresh" pill rather than auto-re-layouting.
+The hub consumes `note.created`, `note.updated`, `note.deleted`, `note.renamed` and `edge.upserted` in a **knowledge scope** that never reaches `/tasks/events`; the graph page subscribes to `GET /knowledge/events`. Server-side, the events patch the edge snapshot and the note-facts cache. `edge.upserted` is emitted by `lithos_edge_upsert`, inferred-edge assertion and `conflict_resolve` — **not** by `related_to` reinforcement, `derived_from` projection or weight decay (ledger #15), which converge on the snapshot TTL. Edge events carry empty tags, so Lens's upstream subscription uses no `?tags=` filter. As on the task graph page, a change in the drawn set shows a **"graph changed — refresh"** pill rather than auto-re-layouting.
 
 ### 8.6 Caps and degradation
 
-Exceeding a node cap degrades to a "refine your filters" banner with a truncated sample — never a browser-melting render. Cytoscape comfortably handles the configured caps; the caps exist to keep the *layout* legible, not just performant.
+A scope over `[knowledge].graph_focus_max_nodes` (250) or `[knowledge].graph_global_max_nodes` (500) is **refused** with its count and the filters or depth that would bring it under — never rendered degraded or truncated silently. Filters apply before the cap so that hiding faint edges is a way under it. A failed `lithos_related` costs the wiki-link and provenance layers with an inline note; a title fan-out that reaches its cap or fails leaves nodes labelled by id and says so; an unavailable snapshot renders the page's refusal and the note page's conflict banner is simply absent.
 
 ---
 
