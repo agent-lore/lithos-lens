@@ -2043,9 +2043,17 @@ about an outcome. The write is one `lithos_task_reopen`; the span is
 arguments are the task id, its observed status is the prior status, and its
 envelope is Lithos's answer with `reblocked` as a list.
 
-The receipt reads "Reopened *\<title\>*", who reopened it and what it was, and
-— when there was one — that the prior outcome is kept in Lithos's
-`[Reopened]` finding, quoting it. Then, by the prior status:
+The receipt reads "Reopened *\<title\>*" and who reopened it. What the task
+was is worded as what Lens **read** just before the write — "Lens read it as
+*\<status\>*", and when it had an outcome, that Lithos keeps the outcome it
+cleared in its `[Reopened]` finding, quoting the outcome Lens read — because an
+agent can resolve the task again between that read and the call, and nothing
+Lithos returns says what the task was (the finding is free text any client can
+post). The case is the status the pre-check read, unless Lithos's answer
+proves otherwise: `reblocked` is non-empty only for a task that was completed
+when the reopen applied, so a task read as cancelled but re-blocking
+dependents is the completed case, and the receipt says the read was stale and
+quotes no outcome. Then, by that case:
 
 - **completed** — "Re-blocked *N* dependents" naming them, from Lithos's
   `reblocked` ids (titled at mint like a completion's releases: first five,
@@ -2053,7 +2061,8 @@ The receipt reads "Reopened *\<title\>*", who reopened it and what it was, and
   dependents — nothing that waits on this task had become ready."
 - **cancelled** — Lithos's `reblocked` is empty by design here, so the receipt
   reads the task's outgoing `blocks` / `waits_on_gate` edges after the write,
-  through the detail page's bounded dependents reader, and names the **open**
+  through the detail page's bounded dependents reader — one entry per dependent
+  task, however many of the two edge types reach it — and names the **open**
   ones: "*N* dependents are waiting on this again"; "At least *N* …" when that
   page is truncated or a dependent's read failed; with none, "No dependents are
   waiting on this again — nothing depends on it." A failed edge read does not

@@ -17,7 +17,7 @@
   status the operator saw, which the funnel re-checks before it writes.
 -#}
 {% if offers_reopen(action_task) and operator_identity(request).resolved %}
-  <form class="complete-action reopen-action" method="post" action="{{ reopen_path(action_task.id) }}" data-reopen-action data-task-id="{{ action_task.id }}">
+  <form class="complete-action" method="post" action="{{ reopen_path(action_task.id) }}" data-reopen-action data-task-id="{{ action_task.id }}">
     <input type="hidden" name="expected_status" value="{{ action_task.status }}">
     <input type="hidden" name="next" value="{{ action_next }}">
     <button type="submit" class="complete-action-button" data-reopen-button>Reopen</button>

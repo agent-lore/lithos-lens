@@ -71,6 +71,7 @@ from lithos_lens.state import AppState, HealthSnapshot
 from lithos_lens.task_links import (
     BLOCKER_EDGE_TYPES,
     LINK_READ_TIMEOUT_S,
+    LinkTarget,
     gate_type_of,
     load_link_page,
     outgoing_targets,
@@ -235,19 +236,24 @@ async def _waiting_dependents(
     Lithos's ``reblocked`` is empty by design in this case — those dependents
     were stranded, not ready — so the receipt's count comes from the task's own
     outgoing ``blocks`` / ``waits_on_gate`` edges, through the same bounded
-    reader the detail page's Blocks line uses. A truncated page, or a dependent
-    whose read failed, makes the count a lower bound. The read catches its own
-    errors: it runs after a reopen that APPLIED, and anything raised from
-    ``perform`` would be classified as the write's own failure.
+    reader the detail page's Blocks line uses. The targets are deduplicated by
+    task id first, keeping the first edge: a task may depend on this one by
+    both a ``blocks`` and a ``waits_on_gate`` edge, and the receipt counts
+    TASKS, so a link count would name one twice and push "at least N" past the
+    number of tasks there are. A truncated page, or a dependent whose read
+    failed, makes the count a lower bound. The read catches its own errors: it
+    runs after a reopen that APPLIED, and anything raised from ``perform``
+    would be classified as the write's own failure.
     """
     try:
         edges = await asyncio.wait_for(
             client.task_edge_list(task_id, direction="outgoing"),
             LINK_READ_TIMEOUT_S,
         )
-        page = await load_link_page(
-            client, outgoing_targets(task_id, edges, BLOCKER_EDGE_TYPES)
-        )
+        distinct: dict[str, LinkTarget] = {}
+        for target in outgoing_targets(task_id, edges, BLOCKER_EDGE_TYPES):
+            distinct.setdefault(target.task_id, target)
+        page = await load_link_page(client, tuple(distinct.values()))
     except Exception:
         logger.warning("reopen dependents read failed", extra={"task_id": task_id})
         return _Dependents(exact=False, unread=True)
@@ -261,30 +267,38 @@ async def _waiting_dependents(
 def _reopen_task() -> TaskWrite:
     """The reopen action, as the funnel drives it (T3 D8).
 
-    The receipt names what the write did, by the case the pre-check READ: the
-    ``reblocked`` ids for a completed task, the dependents now waiting on it
-    again for a cancelled one. The prior outcome rides as the receipt's
-    ``outcome``: Lithos clears it and keeps it only in its ``[Reopened]``
-    finding, which the receipt says.
+    The receipt names what the write did, by its case: the ``reblocked`` ids
+    for a completed task, the dependents now waiting on it again for a
+    cancelled one. The case is the status the pre-check read, unless Lithos's
+    answer proves otherwise — ``reblocked`` is non-empty only for a task that
+    was COMPLETED when the reopen applied, so an agent that resolved it again
+    in the window after the pre-check cannot make the receipt drop the tasks
+    this write re-blocked. Nothing else says what the task was when Lithos
+    reopened it (the ``[Reopened]`` finding is free text any client can post,
+    ``tasks.REOPENED_FINDING_PREFIX``), so the receipt words the status and
+    outcome as what Lens READ before the write, and quotes no outcome once the
+    answer shows that read was stale.
     """
 
     async def perform(
         client: LithosClientProtocol, task: TaskRecord, operator: str
     ) -> WriteDone:
         result = await client.task_reopen(task.id, agent=operator)
+        prior_status = "completed" if result.reblocked else task.status
         dependents = (
             await _waiting_dependents(client, task.id)
-            if task.status == "cancelled"
+            if prior_status == "cancelled"
             else _Dependents(waiting=result.reblocked)
         )
         return WriteDone(
             task=ReceiptTask(
                 task_id=result.task_id or task.id, title=result.title or task.title
             ),
-            outcome=task.outcome,
+            outcome=task.outcome if prior_status == task.status else "",
             released=dependents.waiting,
             answer={**asdict(result), "reblocked": list(result.reblocked)},
-            prior_status=task.status,
+            prior_status=prior_status,
+            checked_status=task.status,
             released_exact=dependents.exact,
             released_unread=dependents.unread,
         )

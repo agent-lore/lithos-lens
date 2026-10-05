@@ -96,7 +96,10 @@ class WriteReceipt:
     A reopen (T3-W5) fills the same fields: ``released`` are the dependents it
     names — the ``reblocked`` ids for a completed task, the open dependents now
     waiting on it again for a cancelled one — and ``prior_status`` says which
-    case the banner words. ``released_exact`` is false when that count is a
+    case the banner words. ``checked_status`` is the status the pre-check read;
+    it differs from ``prior_status`` only when Lithos's answer proved that read
+    stale (a non-empty ``reblocked`` for a task read as cancelled), and the
+    banner then says so. ``released_exact`` is false when that count is a
     lower bound (a truncated or partly unread dependents page), and
     ``released_unread`` true when the dependents could not be read at all.
     ``back_to`` is the page the write returned to, already checked by
@@ -112,6 +115,7 @@ class WriteReceipt:
     released: tuple[ReceiptTask, ...] = ()
     released_total: int = 0
     prior_status: str = ""
+    checked_status: str = ""
     released_exact: bool = True
     released_unread: bool = False
     back_to: str = ""

@@ -207,8 +207,8 @@ class WriteDone:
     first few to titles when it mints the receipt. ``answer`` is the canonical
     success result as Lithos returned it, for the audit line's result
     envelope (§5C.6): a success is recorded with what Lithos said, exactly
-    as a refusal is. ``prior_status``, ``released_exact`` and
-    ``released_unread`` are carried to the receipt as they are (see
+    as a refusal is. ``prior_status``, ``checked_status``, ``released_exact``
+    and ``released_unread`` are carried to the receipt as they are (see
     :class:`~lithos_lens.receipts.WriteReceipt`).
     """
 
@@ -217,6 +217,7 @@ class WriteDone:
     released: tuple[str, ...] = ()
     answer: Mapping[str, Any] = field(default_factory=dict)
     prior_status: str = ""
+    checked_status: str = ""
     released_exact: bool = True
     released_unread: bool = False
 
@@ -588,6 +589,7 @@ class WriteFunnel:
             released=released,
             released_total=len(done.released),
             prior_status=done.prior_status,
+            checked_status=done.checked_status,
             released_exact=done.released_exact,
             released_unread=done.released_unread,
         )

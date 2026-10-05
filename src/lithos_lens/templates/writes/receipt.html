@@ -57,9 +57,18 @@
       &#8634; Reopened &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;
       {% with task_id = receipt.task.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
     </p>
+    {#- What the task was is worded as what Lens READ before the write: an agent
+        can resolve it again between that read and the reopen. Lithos's answer
+        overrides the read only where it proves it stale (re-blocked
+        dependents mean it was completed), and then no outcome is quoted. -#}
     <p class="write-receipt-detail" data-receipt-outcome>
-      Reopened as {{ receipt.operator }}; it was {{ receipt.prior_status }}.
-      {%- if receipt.outcome %} Its prior outcome is kept in Lithos's [Reopened] finding: &ldquo;{{ receipt.outcome }}&rdquo;{% endif %}
+      Reopened as {{ receipt.operator }}.
+      {%- if receipt.prior_status != receipt.checked_status %}
+        Lens read it as {{ receipt.checked_status }} just before reopening, but Lithos re-blocked dependents, so it had been completed again by the time this reopen applied. Any outcome it cleared is kept in Lithos's [Reopened] finding.
+      {%- else %}
+        Lens read it as {{ receipt.prior_status }} just before reopening.
+        {%- if receipt.outcome %} Lithos keeps the outcome it cleared in its [Reopened] finding; Lens read it as &ldquo;{{ receipt.outcome }}&rdquo;.{% endif %}
+      {%- endif %}
     </p>
     {% set waiting = receipt.prior_status == "cancelled" %}
     {% set dependents = receipt.released_total ~ " dependent" ~ ("" if receipt.released_total == 1 else "s") %}

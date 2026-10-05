@@ -779,6 +779,7 @@ classDiagram
     +outcome str
     +released_total int
     +prior_status str
+    +checked_status str
     +released_exact bool
     +released_unread bool
     +back_to str

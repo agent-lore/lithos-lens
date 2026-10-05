@@ -304,8 +304,13 @@ def test_reopening_a_completed_task_names_the_re_blocked_and_blocks_them_again(
     assert "Story S7" in text and "Docs sweep" in text
     assert _named(receipt) == ["waiter-a", "waiter-b"]
     assert "waiting on this again" not in text
-    # The outcome Lithos cleared, and where it is kept.
-    assert "kept in Lithos's [Reopened] finding: “Go”" in text
+    # The outcome Lithos cleared, where it is kept, and that it is what Lens
+    # READ before the write rather than a claim about what Lithos reopened.
+    assert "Lens read it as completed just before reopening." in text
+    assert (
+        "Lithos keeps the outcome it cleared in its [Reopened] finding; "
+        "Lens read it as “Go”." in text
+    )
 
     # The page under the receipt is rendered from fresh reads.
     board = _sections(page)
@@ -390,40 +395,208 @@ def test_an_unreadable_dependent_makes_the_count_a_lower_bound(config) -> None:
     assert _named(response.text) == ["waiter-a"]
 
 
-def _fan_dataset(count: int) -> FakeLithosDataset:
-    """A cancelled task with ``count`` open dependents, stamped from now."""
+#: How a dependent of the cancelled root depends on it: the edge types, one
+#: edge each, in the order the root's edge list reports them.
+BOTH = ("blocks", "waits_on_gate")
+
+
+def _root_dataset(
+    dependents: list[tuple[str, str, tuple[str, ...]]],
+) -> FakeLithosDataset:
+    """A cancelled gate ``root`` and its dependents, stamped from now.
+
+    Each dependent is ``(id, status, edge types)``; a dependent with both
+    types is one TASK reached by two edges, which Lithos permits (an edge is
+    identified by ``(from, to, type)``).
+    """
     now = datetime.now(UTC)
     root = TaskRecord(
         id="root",
         title="Cancelled root",
         status="cancelled",
+        task_type="gate",
+        metadata={"gate_type": "human"},
         created_by="planner",
         created_at=(now - timedelta(hours=2)).isoformat(),
         resolved_at=(now - timedelta(hours=1)).isoformat(),
     )
-    dependents = [
-        TaskRecord(
-            id=f"dep-{n:02d}",
-            title=f"Dependent {n}",
-            status="open",
-            created_by="planner",
-            created_at=(now - timedelta(hours=1)).isoformat(),
-        )
-        for n in range(count)
-    ]
+    tasks = [root]
     edges: dict[str, list[EdgeRecord]] = {"root": []}
-    for task in dependents:
-        edge = EdgeRecord(from_task_id="root", to_task_id=task.id, type="blocks")
-        edges["root"].append(
-            EdgeRecord(edge.from_task_id, edge.to_task_id, "blocks", "outgoing")
+    for task_id, status, types in dependents:
+        tasks.append(
+            TaskRecord(
+                id=task_id,
+                title=f"Dependent {task_id}",
+                status=status,  # type: ignore[arg-type]
+                created_by="planner",
+                created_at=(now - timedelta(hours=1)).isoformat(),
+                resolved_at=""
+                if status == "open"
+                else (now - timedelta(minutes=30)).isoformat(),
+            )
         )
-        edges[task.id] = [
-            EdgeRecord(edge.from_task_id, edge.to_task_id, "blocks", "incoming")
-        ]
+        for edge_type in types:
+            edges["root"].append(EdgeRecord("root", task_id, edge_type, "outgoing"))
+            edges.setdefault(task_id, []).append(
+                EdgeRecord("root", task_id, edge_type, "incoming")
+            )
     return FakeLithosDataset(
-        tasks=(root, *dependents),
+        tasks=tuple(tasks),
         edges={task_id: tuple(rows) for task_id, rows in edges.items()},
     )
+
+
+def _fan_dataset(count: int, types: tuple[str, ...] = ("blocks",)):
+    return _root_dataset([(f"dep-{n:02d}", "open", types) for n in range(count)])
+
+
+def test_the_waiting_count_is_open_dependent_tasks_not_links_or_resolved_ones(
+    config,
+) -> None:
+    """Only OPEN dependents wait on the reopened task, and one reached by both
+    a ``blocks`` and a ``waits_on_gate`` edge is one task, named once."""
+    fake = LoggedFake(
+        _root_dataset(
+            [
+                ("open-a", "open", BOTH),
+                ("open-b", "open", ("waits_on_gate",)),
+                ("done-c", "completed", ("blocks",)),
+                ("gone-d", "cancelled", ("waits_on_gate",)),
+            ]
+        )
+    )
+    with _client(config, fake) as client:
+        fake.write_calls.clear()
+        response = _reopen(client, "root", expected_status="cancelled", headers=HTMX)
+
+    text = _text(response.text)
+    assert "2 dependents are waiting on this again:" in text
+    assert _named(response.text) == ["open-a", "open-b"]
+    assert 'data-receipt-exact="yes"' in response.text
+    assert fake.write_calls == [
+        ("lithos_task_reopen", {"task_id": "root", "agent": OPERATOR})
+    ]
+
+
+def test_two_edges_per_dependent_never_push_the_count_past_the_tasks(
+    config,
+) -> None:
+    """Twenty tasks, forty edges: more LINKS than one page, but every task
+    fits on it — so the count is exact, and never "at least" more than there
+    are."""
+    fake = LoggedFake(_fan_dataset(20, BOTH))
+    with _client(config, fake) as client:
+        response = _reopen(client, "root", expected_status="cancelled", headers=HTMX)
+
+    text = _text(response.text)
+    assert "20 dependents are waiting on this again:" in text
+    assert "At least" not in text
+    assert "and 15 more" in text
+    named = _named(response.text)
+    assert len(named) == len(set(named)) == 5
+
+
+def test_the_dependents_are_read_after_the_reopen_and_not_after_a_refusal(
+    config,
+) -> None:
+    """Clarification 4: the read follows the SUCCESSFUL write — what it counts
+    is the state the reopen left — and a refused reopen makes no such read."""
+    fake = LoggedFake(demo_dataset())
+    with _client(config, fake) as client:
+        fake.method_calls.clear()
+        _reopen(client, CANCELLED_PRED, expected_status="cancelled", headers=HTMX)
+    called = [name for name, _ in fake.method_calls]
+    assert called.index("task_reopen") < called.index("task_edge_list")
+
+    refused = ReopenedMeanwhile(demo_dataset())
+    with _client(config, refused) as client:
+        refused.method_calls.clear()
+        response = _reopen(
+            client, CANCELLED_PRED, expected_status="cancelled", headers=HTMX
+        )
+    assert "This task is already open." in _text(response.text)
+    called = [name for name, _ in refused.method_calls]
+    assert called.count("task_reopen") == 1
+    assert "task_edge_list" not in called
+
+
+class ResolvedAgainMeanwhile(LoggedFake):
+    """An agent reopens the task and resolves it AGAIN in the window after the
+    pre-check — so the operator's reopen succeeds, on a state Lens never read.
+    """
+
+    def __init__(self, then: str) -> None:
+        super().__init__()
+        self.then = then
+
+    async def task_reopen(self, task_id: str, *, agent: str):
+        await FakeLithosClient.task_reopen(self, task_id, agent="agent-zero")
+        if self.then == "complete":
+            await FakeLithosClient.task_complete(
+                self, task_id, agent="agent-zero", outcome="New completion"
+            )
+        else:
+            await FakeLithosClient.task_cancel(self, task_id, agent="agent-zero")
+        return await FakeLithosClient.task_reopen(self, task_id, agent=agent)
+
+
+def _operators_finding(fake: FakeLithosClient, task_id: str) -> str:
+    """The ``[Reopened]`` finding the OPERATOR's reopen made Lithos record."""
+    findings = asyncio.run(fake.list_findings(task_id))
+    return [f.summary for f in findings if f.agent == OPERATOR][-1]
+
+
+def test_a_task_completed_again_meanwhile_keeps_the_re_blocked_it_returned(
+    config,
+) -> None:
+    """Read as cancelled; reopened and COMPLETED by an agent before the call.
+    Lithos's ``reblocked`` proves the completed case: the receipt names those
+    tasks, says the read was stale, and quotes no outcome from it."""
+    fake = ResolvedAgainMeanwhile("complete")
+    asyncio.run(fake.task_cancel("gate-human", agent="agent-zero"))
+    with _client(config, fake) as client:
+        response = _reopen(
+            client, "gate-human", expected_status="cancelled", headers=HTMX
+        )
+
+    assert response.status_code == 200
+    text = _text(response.text)
+    assert "Re-blocked 2 dependents:" in text
+    assert _named(response.text) == ["waiter-a", "waiter-b"]
+    assert "waiting on this again" not in text
+    assert (
+        "Lens read it as cancelled just before reopening, but Lithos re-blocked "
+        "dependents, so it had been completed again by the time this reopen "
+        "applied." in text
+    )
+    # What Lithos recorded agrees with the receipt's case, not the stale read.
+    assert _operators_finding(fake, "gate-human") == (
+        "[Reopened] task reopened (was completed); prior outcome: New completion"
+    )
+    assert "New completion" not in text
+
+
+def test_a_task_cancelled_meanwhile_is_not_claimed_as_completed(config) -> None:
+    """Read as completed (outcome "Go"); reopened and CANCELLED by an agent
+    before the call. Nothing in Lithos's answer says so, so the receipt states
+    only what it knows: Lithos re-blocked no one, and the status and outcome are
+    what Lens read before the write."""
+    fake = ResolvedAgainMeanwhile("cancel")
+    asyncio.run(fake.task_complete("gate-human", agent="agent-zero", outcome="Go"))
+    with _client(config, fake) as client:
+        response = _reopen(
+            client, "gate-human", expected_status="completed", headers=HTMX
+        )
+
+    text = _text(response.text)
+    assert "Re-blocked no dependents" in text
+    assert "Lens read it as completed just before reopening." in text
+    assert "Lens read it as “Go”." in text
+    assert "was cancelled" in _operators_finding(fake, "gate-human")
+    # Never stated as the reopened state: no unqualified "it was completed",
+    # and the outcome is not presented as what Lithos's finding holds.
+    assert "it was completed" not in text
+    assert "finding: “Go”" not in text
 
 
 def test_more_dependents_than_one_page_is_a_lower_bound(config) -> None:
