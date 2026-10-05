@@ -45,11 +45,13 @@ from lithos_lens.relation_sentences import (
     SENTENCES,
     WAITED_ON_BY,
     Relation,
+    existing_edge,
     readiness,
     sentence_named,
     sentence_of,
     sentences_for,
 )
+from lithos_lens.task_graph import EdgeRecord
 from lithos_lens.tasks import TaskRecord, TaskStatusName
 from lithos_lens.web import create_app
 from lithos_lens.write_funnel import AUDIT_EVENT
@@ -66,6 +68,7 @@ FOCAL_TITLE = "Tidy the harness docs"
 OTHER = "loom-metrics-note"
 OTHER_TITLE = "Note the harness metrics gaps"
 GATE = "influx-read-swap-approval"
+GATE_TITLE = "Approve the Influx read swap"
 
 
 # ── the sentence model ───────────────────────────────────────────────────
@@ -125,6 +128,20 @@ def test_a_relation_that_does_not_touch_the_task_or_has_no_sentence_is_refused()
     assert sentence_of(Relation("a", "b", "blocks"), task) is None
     assert sentence_of(Relation("focal", "b", "parent_child"), task) is None
     assert sentence_of(Relation("a", "focal", "discovered_from"), task) is None
+
+
+def test_a_relation_is_its_from_to_and_type_not_its_endpoints() -> None:
+    """Relation identity is ``(from, to, type)``: another relation between the
+    same two tasks — another type, or the other direction — is not it."""
+    relation = Relation("g", "w", "waits_on_gate")
+    same = EdgeRecord(from_task_id="g", to_task_id="w", type="waits_on_gate")
+    other_type = EdgeRecord(from_task_id="g", to_task_id="w", type="blocks")
+    reversed_ = EdgeRecord(from_task_id="w", to_task_id="g", type="waits_on_gate")
+    assert relation.is_edge(same)
+    assert not relation.is_edge(other_type)
+    assert not relation.is_edge(reversed_)
+    assert existing_edge([other_type, reversed_], relation) is None
+    assert existing_edge([other_type, same, reversed_], relation) == same
 
 
 @pytest.mark.parametrize(
@@ -354,12 +371,44 @@ def test_the_gate_sentence_draws_the_edge_from_the_gate(client: TestClient) -> N
     )
 
 
+def _says_nothing_changed(html: str, code: str) -> None:
+    """A refused check states the W2 claim first, above the kept input."""
+    notice = re.search(
+        rf'data-relation-problem="{code}">(.*?)</div>\s*</div>', html, re.S
+    )
+    assert notice, f"no {code} notice"
+    assert _text(notice.group(1)).startswith("Nothing was changed.")
+    assert "data-relation-confirm-form" not in html
+
+
 def test_the_gate_sentence_is_not_accepted_on_a_task(client: TestClient) -> None:
     response = _confirm(client, FOCAL, WAITED_ON_BY, OTHER)
 
     assert response.status_code == 400
     assert 'data-relation-error="relation"' in response.text
-    assert "data-relation-confirm-form" not in response.text
+    _says_nothing_changed(response.text, "bad_relation")
+
+
+def test_naming_no_other_task_is_refused_and_says_nothing_changed(
+    client: TestClient,
+) -> None:
+    response = _confirm(client, FOCAL, BLOCKS, "")
+
+    assert response.status_code == 400
+    assert 'data-relation-error="other"' in response.text
+    _says_nothing_changed(response.text, "bad_form")
+
+
+def test_the_task_itself_is_refused_on_the_confirm_step(
+    client: TestClient, fake: LoggedFake
+) -> None:
+    response = _confirm(client, FOCAL, BLOCKED_BY, FOCAL)
+
+    assert response.status_code == 422
+    _says_nothing_changed(response.text, "self_edge")
+    assert "A task can't depend on itself." in _text(response.text)
+    assert 'data-relation-error="other"' in response.text
+    assert fake.write_calls == []
 
 
 def test_an_ambiguous_prefix_lists_its_candidates_under_the_input(
@@ -374,28 +423,37 @@ def test_an_ambiguous_prefix_lists_its_candidates_under_the_input(
         "loom-design-done",
         "loom-docs-tidy",
     ]
-    # As text, to retype — not links that choose for the operator.
+    # As text, to retype — not links that choose for the operator, and only
+    # under the input: the notice above it carries no second, linked list.
     assert "<a " not in error.group(0)
+    assert response.text.count("data-relation-candidate=") == 2
+    _says_nothing_changed(response.text, "ambiguous_id_prefix")
+    assert "'loom-d' matches more than one task." in _text(response.text)
     assert 'value="loom-d"' in response.text
     assert "data-relation-confirm-form" not in response.text
     assert fake.write_calls == []
 
 
 @pytest.mark.parametrize(
-    ("typed", "copy"),
+    ("typed", "code", "copy"),
     [
-        ("loom-nope", "No task matches id prefix 'loom-nope' (task_id)."),
-        ("loom", "task_id 'loom' is too short"),
+        (
+            "loom-nope",
+            "task_not_found",
+            "No task matches id prefix 'loom-nope' (task_id).",
+        ),
+        ("loom", "invalid_input", "task_id 'loom' is too short"),
     ],
 )
 def test_an_unresolvable_other_task_is_said_under_the_input(
-    client: TestClient, typed: str, copy: str
+    client: TestClient, typed: str, code: str, copy: str
 ) -> None:
     response = _confirm(client, FOCAL, BLOCKS, typed)
 
     assert response.status_code == 422
     error = re.search(r'data-relation-error="other".*?</div>', response.text, re.S)
     assert error and copy in _text(error.group(0))
+    _says_nothing_changed(response.text, code)
 
 
 def test_a_successful_write_is_one_upsert_with_no_metadata_and_evicts_both_ends(
@@ -427,6 +485,75 @@ def test_a_successful_write_is_one_upsert_with_no_metadata_and_evicts_both_ends(
     assert f"Added dependency: “{OTHER_TITLE}”" in receipt
     assert f"blocks “{FOCAL_TITLE}”" in receipt
     assert "Added as dave." in receipt
+
+
+@pytest.mark.parametrize(
+    ("focal", "key", "upsert", "headline"),
+    [
+        (
+            FOCAL,
+            BLOCKED_BY,
+            {"from_task_id": OTHER, "to_task_id": FOCAL, "type": "blocks"},
+            f"Added dependency: “{OTHER_TITLE}” {OTHER[:8]} blocks “{FOCAL_TITLE}”",
+        ),
+        (
+            FOCAL,
+            BLOCKS,
+            {"from_task_id": FOCAL, "to_task_id": OTHER, "type": "blocks"},
+            f"Added dependency: “{FOCAL_TITLE}” {FOCAL[:8]} blocks “{OTHER_TITLE}”",
+        ),
+        (
+            GATE,
+            WAITED_ON_BY,
+            {"from_task_id": GATE, "to_task_id": OTHER, "type": "waits_on_gate"},
+            f"Added dependency: “{OTHER_TITLE}” {OTHER[:8]} waits on gate "
+            f"“{GATE_TITLE}”",
+        ),
+    ],
+    ids=[BLOCKED_BY, BLOCKS, WAITED_ON_BY],
+)
+def test_each_sentence_writes_its_own_edge_through_the_confirm_form(
+    client: TestClient,
+    fake: LoggedFake,
+    focal: str,
+    key: str,
+    upsert: dict[str, str],
+    headline: str,
+) -> None:
+    fields = _hidden(_confirm(client, focal, key, OTHER).text)
+
+    response = _post(client, focal, fields)
+
+    assert _upserts(fake) == [{**upsert, "agent": OPERATOR}]
+    receipt = _receipt(_landed(client, response))
+    assert headline in receipt
+    # And Lithos now has exactly that edge, as the focal task's list says.
+    edges = asyncio.run(fake.task_edge_list(focal))
+    assert any(Relation(**upsert).is_edge(edge) for edge in edges)
+
+
+def test_another_relation_between_the_same_two_tasks_does_not_stop_this_one(
+    client: TestClient, fake: LoggedFake
+) -> None:
+    """An agent's gate → waiter ``blocks`` edge is not the ``waits_on_gate``
+    relation the operator asks for: it is confirmed and written."""
+    _insert_as(fake, "worker-b", Relation(GATE, OTHER, "blocks"))
+
+    confirm = _confirm(client, GATE, WAITED_ON_BY, OTHER)
+
+    assert "data-relation-exists" not in confirm.text
+    response = _post(client, GATE, _hidden(confirm.text))
+    assert _upserts(fake) == [
+        {
+            "from_task_id": GATE,
+            "to_task_id": OTHER,
+            "type": "waits_on_gate",
+            "agent": OPERATOR,
+        }
+    ]
+    receipt = _receipt(_landed(client, response))
+    assert "Added dependency:" in receipt
+    assert "already exists" not in receipt
 
 
 def test_an_edge_in_lithos_but_not_in_the_cache_already_exists_on_both_steps(

@@ -195,7 +195,10 @@ The current application exposes these routes:
   of at least six characters) and `?next=` where the write returns the
   operator. A sentence the page does not offer, or no other task, re-renders
   the entry form (400); an other task Lithos cannot resolve re-renders it with
-  the message — or an ambiguous prefix's candidates — under the input (422).
+  the message — or an ambiguous prefix's candidates — under the input (422),
+  and naming the task itself is refused there as `self_edge` (422). Every
+  such re-render carries the §5.14 notice above the form, "Nothing was
+  changed." first, with the input kept.
   A task that is no longer open is the conflict page (409); an unknown id is
   "This task no longer exists." (404); a failed read is 503.
 - `POST /tasks/{task_id}/edges`

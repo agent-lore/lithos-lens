@@ -10,6 +10,9 @@
     `task`       -- the focal task as read, when it was read;
     `sentence`   -- the chosen `relation_sentences.RelationSentence`, if valid;
     `typed`      -- the other task as typed;
+    `problem`    -- the `write_errors.WriteProblem` a refused check renders
+                    above the entry form -- "Nothing was changed." first --
+                    with its candidates moved under the input;
     `errors`     -- input name -> `create_form.FieldError` (the entry form is
                     shown again with them, input kept);
     `notice`     -- why this page offers no form, or "";
@@ -72,6 +75,13 @@
       {% endif %}
     {% endif %}
   {% elif task %}
+    {#- A refused check (D6): what it changed -- nothing -- and why, above the
+        entry form; the message, and any candidates, sit under the input. -#}
+    {% if problem %}
+      <div class="write-outcome-refused create-notice" data-relation-problem="{{ problem.code }}">
+        {% include "writes/notice.html" %}
+      </div>
+    {% endif %}
     {% with relation_task = task, relation_next = next_url, relation_selected = sentence.key if sentence else "", relation_typed = typed, relation_errors = errors %}
       {% include "writes/relation_form.html" %}
     {% endwith %}

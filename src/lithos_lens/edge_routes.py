@@ -39,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from typing import Any
 from urllib.parse import quote
@@ -68,6 +68,7 @@ from lithos_lens.write_errors import (
     CONFLICT,
     CONFLICT_STATUS,
     REFUSED,
+    REFUSED_STATUS,
     TaskRef,
     WriteProblem,
     funnel_problem,
@@ -268,6 +269,7 @@ def register_edge_routes(
         task: TaskRecord | None = None,
         sentence: RelationSentence | None = None,
         typed: str = "",
+        problem: WriteProblem | None = None,
         errors: Mapping[str, FieldError] | None = None,
         notice: str = "",
         status_code: int = 200,
@@ -283,6 +285,7 @@ def register_edge_routes(
                 "task": task,
                 "sentence": sentence,
                 "typed": typed,
+                "problem": problem,
                 "errors": dict(errors or {}),
                 "notice": notice,
                 "next_url": next_url,
@@ -351,34 +354,51 @@ def register_edge_routes(
             )
             return render_conflict(request, problem, snapshot)
         page = partial(page, task=task)
+        subject = TaskRef(task_id=task.id, title=task.title)
+
+        def refuse(problem: WriteProblem, name: str, error: FieldError) -> HTMLResponse:
+            """The entry form again, input kept: the refusal's W2 copy — its
+            "Nothing was changed." first — above the form, and the message
+            under the input it is about. The candidates go under the input
+            only, as text, as W7's form places them."""
+            return page(
+                problem=replace(problem, candidates=()),
+                errors={name: error},
+                status_code=problem.status_code,
+            )
+
+        def lens_refusal(code: str, sentence: str, status_code: int) -> WriteProblem:
+            return funnel_problem(
+                "edge_upsert",
+                REFUSED,
+                sentence,
+                code=code,
+                status_code=status_code,
+                subject=subject,
+            )
+
         sentence = sentence_named(str(params.get("relation") or ""), task)
         if sentence is None:
-            return page(
-                errors={"relation": FieldError("Choose one of the relations offered.")},
-                status_code=_BAD_REQUEST,
+            copy = "Choose one of the relations offered."
+            return refuse(
+                lens_refusal("bad_relation", copy, _BAD_REQUEST),
+                "relation",
+                FieldError(copy),
             )
         page = partial(page, sentence=sentence)
         if not typed:
-            return page(
-                errors={
-                    "other": FieldError(
-                        "Name the other task: its full id, or at least six "
-                        "characters of it."
-                    )
-                },
-                status_code=_BAD_REQUEST,
+            copy = "Name the other task: its full id, or at least six characters of it."
+            return refuse(
+                lens_refusal("bad_form", copy, _BAD_REQUEST), "other", FieldError(copy)
             )
         try:
             other = await client.task_get(typed)
         except Exception as exc:
             if isinstance(exc, LithosToolError) and exc.envelope:
                 problem = map_write_error(
-                    "edge_upsert", exc.envelope, subject=TaskRef(task_id=task.id)
+                    "edge_upsert", exc.envelope, subject=subject, typed_id=typed
                 )
-                return page(
-                    errors={"other": _field_error(problem, typed)},
-                    status_code=problem.status_code,
-                )
+                return refuse(problem, "other", _field_error(problem, typed))
             logger.warning("relation confirm read failed", extra={"task_id": typed})
             return page(
                 notice="Lens couldn't read the other task. Reload once Lithos is "
@@ -386,9 +406,12 @@ def register_edge_routes(
                 status_code=_UNAVAILABLE,
             )
         if other.id == task.id:
-            return page(
-                errors={"other": FieldError("A task can't depend on itself.")},
-                status_code=_BAD_REQUEST,
+            # W2's own self_edge copy, caught before any write is offered.
+            copy = "A task can't depend on itself."
+            return refuse(
+                lens_refusal("self_edge", copy, REFUSED_STATUS),
+                "other",
+                FieldError(copy),
             )
         relation = sentence.relation(task.id, other.id)
         try:
