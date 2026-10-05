@@ -20,10 +20,12 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeLithosClient
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.lithos_client import LithosClientProtocol
 from lithos_lens.request_filters import knowledge_landing_url, knowledge_note_url
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
+from tests.test_knowledge_related import KnowledgeFakeLithosClient
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
 # An id that addresses something else entirely if interpolated raw. (No `/`:
@@ -252,6 +254,90 @@ def test_following_a_result_and_its_back_link_returns_to_the_results(
     assert href == "/knowledge?q=ingest&tag=project%3Ax"
     assert "Results for &ldquo;ingest&rdquo;" in back.text
     assert "Filtered by project: x" in back.text
+
+
+# ── note-to-note hops carry no next= ──────────────────────────────────
+
+SEARCH_LANDING = "/knowledge?q=ingest"
+
+
+def test_related_and_replaces_links_drop_next_and_go_back_to_knowledge(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A note opened from search results returns there; a note reached FROM it
+    (related panel, ``replaces:`` chip) does not inherit that return address —
+    its back link is the landing, not the first note's results."""
+    root = NoteRecord(
+        id="root",
+        title="Root Note",
+        content="Body.",
+        metadata={"supersedes": "prior"},
+    )
+    neighborhood = RelatedNeighborhood(
+        links=(RelatedRef(id="out-1"),),
+        backlinks=(RelatedRef(id="in-1"),),
+        sources=(RelatedRef(id="src-1"),),
+        edges=(RelatedRef(id="edge-1", edge_type="supports"),),
+    )
+    titles = {
+        "out-1": "Outgoing Note",
+        "in-1": "Incoming Note",
+        "src-1": "Source Note",
+        "edge-1": "Edge Note",
+        "prior": "Prior Note",
+    }
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=neighborhood, titles=titles, note=root
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        first = client.get("/note/root", params={"next": SEARCH_LANDING})
+        assert _back_link(first.text) == (SEARCH_LANDING, "Back to search results")
+
+        panel = first.text.split('<aside class="related-panel"', 1)[1]
+        chip = first.text.split('class="chip note-supersedes"', 1)[1]
+        chip = chip.split("</span>", 1)[0]
+        hops = _note_hrefs(panel) + _note_hrefs(chip)
+        assert sorted(hops) == [
+            "/note/edge-1",
+            "/note/in-1",
+            "/note/out-1",
+            "/note/prior",
+            "/note/src-1",
+        ]
+        for href in hops:
+            second = client.get(href)
+            assert second.status_code == 200
+            assert _back_link(second.text) == ("/knowledge", "Back to knowledge"), href
+
+
+def test_wiki_link_through_the_resolver_drops_next(
+    lithos_lens_config_env: Path,
+) -> None:
+    target_id = "33333333-3333-4333-8333-333333333333"
+    notes = {
+        "root": NoteRecord(id="root", title="Root", content="See [[guides/target]]."),
+        target_id: NoteRecord(id=target_id, title="Target Note", content="Body."),
+    }
+    fake = FakeLithosClient(
+        dataset=FakeLithosDataset(
+            notes=notes, note_paths={"guides/target.md": target_id}
+        )
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        first = client.get("/note/root", params={"next": SEARCH_LANDING})
+        resolve_hrefs = re.findall(r'href="(/knowledge/resolve\?[^"]*)"', first.text)
+        assert len(resolve_hrefs) == 1, first.text
+        wiki = unescape(resolve_hrefs[0])
+        assert "next" not in parse_qs(urlsplit(wiki).query)
+        redirect = client.get(wiki, follow_redirects=False)
+        assert redirect.status_code == 302
+        assert redirect.headers["location"] == f"/note/{target_id}"
+        second = client.get(redirect.headers["location"])
+
+    assert "Target Note" in second.text
+    assert _back_link(second.text) == ("/knowledge", "Back to knowledge")
 
 
 # ── /knowledge/resolve: no more "Back to tasks" ────────────────────────
