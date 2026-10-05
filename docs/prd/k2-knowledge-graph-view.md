@@ -190,8 +190,10 @@ redesign.
     pill when an edge in my scope is upserted or a note in it is updated,
     renamed or deleted, rather than a canvas that re-lays itself out under
     my cursor.
-21. As a reader, I want a note title that changes upstream to be right the
-    next time it is drawn, without waiting for a cache to expire.
+21. As a reader, I want a note whose title, status or summary changed
+    upstream — a note quarantined by misleading feedback, say — to be
+    right the next time it is drawn, without waiting for a cache to
+    expire.
 
 ### Every page
 
@@ -291,10 +293,24 @@ those fields) backs every graph render: semaphored fan-out (T2's gate),
 TTL `[knowledge].graph_note_facts_ttl_s` (default 3600 s — titles rarely
 change and events patch them), and a per-render cap
 `[knowledge].graph_title_fanout_cap` (default 300, above the 250 node cap
-so a full ego graph is always titled). `note.created`/`note.updated`
-events carry `{id, title, path}` and update the cached title and path in
-place; `note.renamed` updates the path; `note.deleted` marks the entry
-**missing**.
+so a full ego graph is always titled).
+
+**What an event can and cannot patch.** `note.created`/`note.updated`
+carry only `{id, title, path}`, and `note.updated` fires for every
+metadata change — including the misleading-feedback path that
+**quarantines** a note (`cognitive_memory.py:789-806` at d2c49bb), a
+confidence edit, or a new summary. So an update patches the title and
+path in place and **invalidates the rest of the entry**: `note_type`,
+`status`, `namespace`, `confidence` and lede are marked stale, and the
+next graph or panel request that draws the node re-reads them (one
+`lithos_read(max_length=1)`, under the same gate and per-render cap; a
+stale node past the cap keeps its last-known facts and is marked
+"facts pending" in its panel and in the payload). The "graph changed —
+refresh" pill therefore rebuilds from fresh facts for every node the
+events touched, not from the cache that the event could not update.
+`note.renamed` updates the path only (nothing else changes on a rename);
+`note.deleted` marks the entry **missing**. The TTL remains the bound for
+changes that emit no event at all.
 
 **Missing-note ghost.** A read answering `doc_not_found` (edges outlive
 notes; nothing deletes them) caches the id as missing. The node draws with
@@ -572,9 +588,15 @@ reverted**; the architecture budgets hold; no coverage percentage.
   filters applied before the cap; refusal names count and remedy; the
   would-be counts per depth; ghosts for unknown ids retained; wiki-link
   and provenance layers one hop regardless of depth.
-- **Title cache (fake)**: fan-out under the semaphore; cap reached leaves
-  id-labelled nodes and says so; `doc_not_found` → ghost; `note.updated`
-  patches the title without a read; `note.deleted` → ghost on next draw.
+- **Note facts cache (fake)**: fan-out under the semaphore; cap reached
+  leaves id-labelled nodes and says so; `doc_not_found` → ghost;
+  `note.updated` patches the title and path without a read **and marks
+  the other facts stale**; a `note.updated` with an **unchanged title**
+  after the fake quarantines the note and changes its summary → the next
+  draw re-reads that node (exactly one read) and renders the quarantined
+  status and the new lede; a stale node past the per-render cap keeps its
+  last facts and is marked "facts pending"; `note.renamed` changes the
+  path and nothing else; `note.deleted` → ghost on next draw.
 - **Page (TestClient + fake dataset with every known type, an unknown
   type, a ghost, an unresolved and a resolved contradiction)**: the text
   baseline names every node and edge the payload carries and they agree;
