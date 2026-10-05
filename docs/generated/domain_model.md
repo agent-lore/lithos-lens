@@ -782,6 +782,7 @@ classDiagram
     +checked_status str
     +released_exact bool
     +released_unread bool
+    +released_waiting bool
     +back_to str
   }
   WriteProblem "1" --> "0..*" MessageSegment : detail

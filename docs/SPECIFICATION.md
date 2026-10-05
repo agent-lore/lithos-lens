@@ -2058,7 +2058,12 @@ quotes no outcome. Then, by that case:
 - **completed** — "Re-blocked *N* dependents" naming them, from Lithos's
   `reblocked` ids (titled at mint like a completion's releases: first five,
   "and *N* more", short id alone on a failed read); with none, "Re-blocked no
-  dependents — nothing that waits on this task had become ready."
+  dependents — nothing that waits on this task had become ready.", followed by
+  the open dependents waiting on it again, read as in the cancelled case below
+  (with no line when there are none). An empty `reblocked` does not prove the
+  task was completed — an agent may have cancelled it after the pre-check — so
+  the receipt states what is true either way rather than drop the dependents
+  this reopen may have un-stranded.
 - **cancelled** — Lithos's `reblocked` is empty by design here, so the receipt
   reads the task's outgoing `blocks` / `waits_on_gate` edges after the write,
   through the detail page's bounded dependents reader — one entry per dependent

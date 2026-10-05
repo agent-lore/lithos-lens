@@ -267,17 +267,20 @@ async def _waiting_dependents(
 def _reopen_task() -> TaskWrite:
     """The reopen action, as the funnel drives it (T3 D8).
 
-    The receipt names what the write did, by its case: the ``reblocked`` ids
-    for a completed task, the dependents now waiting on it again for a
-    cancelled one. The case is the status the pre-check read, unless Lithos's
-    answer proves otherwise — ``reblocked`` is non-empty only for a task that
-    was COMPLETED when the reopen applied, so an agent that resolved it again
-    in the window after the pre-check cannot make the receipt drop the tasks
-    this write re-blocked. Nothing else says what the task was when Lithos
-    reopened it (the ``[Reopened]`` finding is free text any client can post,
-    ``tasks.REOPENED_FINDING_PREFIX``), so the receipt words the status and
-    outcome as what Lens READ before the write, and quotes no outcome once the
-    answer shows that read was stale.
+    The receipt names what the write did. A non-empty ``reblocked`` is proof:
+    Lithos returns ids only for a task that was COMPLETED when the reopen
+    applied, so those are named as re-blocked whatever the pre-check read — an
+    agent that resolved the task again in the window after it cannot make the
+    receipt drop them. An EMPTY ``reblocked`` proves neither case: a completed
+    task nothing had become ready behind, or a cancelled one (reblocked is
+    empty by design there) — including one an agent cancelled after the
+    pre-check read it as completed. So then the receipt states what is true
+    in both: Lithos re-blocked no one, and the open dependents read after the
+    write are waiting on it again. Nothing else says what the task was when
+    Lithos reopened it (the ``[Reopened]`` finding is free text any client can
+    post, ``tasks.REOPENED_FINDING_PREFIX``), so the status and outcome are
+    worded as what Lens READ before the write, and no outcome is quoted once
+    the answer shows that read was stale.
     """
 
     async def perform(
@@ -286,9 +289,9 @@ def _reopen_task() -> TaskWrite:
         result = await client.task_reopen(task.id, agent=operator)
         prior_status = "completed" if result.reblocked else task.status
         dependents = (
-            await _waiting_dependents(client, task.id)
-            if prior_status == "cancelled"
-            else _Dependents(waiting=result.reblocked)
+            _Dependents(waiting=result.reblocked)
+            if result.reblocked
+            else await _waiting_dependents(client, task.id)
         )
         return WriteDone(
             task=ReceiptTask(
@@ -301,6 +304,7 @@ def _reopen_task() -> TaskWrite:
             checked_status=task.status,
             released_exact=dependents.exact,
             released_unread=dependents.unread,
+            released_waiting=not result.reblocked,
         )
 
     return TaskWrite(action="reopen", perform=perform)

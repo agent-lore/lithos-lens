@@ -102,6 +102,9 @@ class WriteReceipt:
     banner then says so. ``released_exact`` is false when that count is a
     lower bound (a truncated or partly unread dependents page), and
     ``released_unread`` true when the dependents could not be read at all.
+    ``released_waiting`` says which of the two a reopen's ``released`` are:
+    true for the dependents read after the write (Lithos re-blocked no one),
+    false for Lithos's own ``reblocked`` ids.
     ``back_to`` is the page the write returned to, already checked by
     ``safe_next``: a follow-up form on the receipt (Reopen gate) posts it as its
     ``next``, because an HTMX receipt is rendered against the POST, whose own
@@ -118,6 +121,7 @@ class WriteReceipt:
     checked_status: str = ""
     released_exact: bool = True
     released_unread: bool = False
+    released_waiting: bool = False
     back_to: str = ""
 
     @property

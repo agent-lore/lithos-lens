@@ -500,13 +500,38 @@ def test_the_dependents_are_read_after_the_reopen_and_not_after_a_refusal(
     config,
 ) -> None:
     """Clarification 4: the read follows the SUCCESSFUL write — what it counts
-    is the state the reopen left — and a refused reopen makes no such read."""
-    fake = LoggedFake(demo_dataset())
+    is the state the reopen left — and a refused reopen makes no such read.
+
+    The reopen answers late (it yields to the event loop before it applies),
+    as a real MCP call does, so a read started alongside the call rather than
+    after its answer would be seen landing before the write applied."""
+
+    class SlowReopen(LoggedFake):
+        def __init__(self) -> None:
+            super().__init__(demo_dataset())
+            self.order: list[str] = []
+
+        async def task_reopen(self, task_id: str, *, agent: str):
+            for _ in range(3):
+                await asyncio.sleep(0)
+            result = await FakeLithosClient.task_reopen(self, task_id, agent=agent)
+            self.order.append("reopen applied")
+            return result
+
+        async def task_edge_list(self, task_id: str, **kwargs: Any):
+            self.order.append("dependents read")
+            return await FakeLithosClient.task_edge_list(self, task_id, **kwargs)
+
+    fake = SlowReopen()
     with _client(config, fake) as client:
-        fake.method_calls.clear()
-        _reopen(client, CANCELLED_PRED, expected_status="cancelled", headers=HTMX)
-    called = [name for name, _ in fake.method_calls]
-    assert called.index("task_reopen") < called.index("task_edge_list")
+        fake.order.clear()
+        response = _reopen(
+            client, CANCELLED_PRED, expected_status="cancelled", headers=HTMX
+        )
+    assert fake.order == ["reopen applied", "dependents read"]
+    # The read succeeded (it catches its own errors, so say so explicitly).
+    assert "1 dependent is waiting on this again:" in _text(response.text)
+    assert _named(response.text) == [STRANDED]
 
     refused = ReopenedMeanwhile(demo_dataset())
     with _client(config, refused) as client:
@@ -578,9 +603,10 @@ def test_a_task_completed_again_meanwhile_keeps_the_re_blocked_it_returned(
 
 def test_a_task_cancelled_meanwhile_is_not_claimed_as_completed(config) -> None:
     """Read as completed (outcome "Go"); reopened and CANCELLED by an agent
-    before the call. Nothing in Lithos's answer says so, so the receipt states
-    only what it knows: Lithos re-blocked no one, and the status and outcome are
-    what Lens read before the write."""
+    before the call. An empty ``reblocked`` proves neither case, so the receipt
+    states what is true in both: Lithos re-blocked no one, and — from the read
+    after the write — the dependents now waiting on it again, by name. The
+    status and outcome are what Lens read before the write."""
     fake = ResolvedAgainMeanwhile("cancel")
     asyncio.run(fake.task_complete("gate-human", agent="agent-zero", outcome="Go"))
     with _client(config, fake) as client:
@@ -589,7 +615,14 @@ def test_a_task_cancelled_meanwhile_is_not_claimed_as_completed(config) -> None:
         )
 
     text = _text(response.text)
-    assert "Re-blocked no dependents" in text
+    assert (
+        "Re-blocked no dependents — nothing that waits on this task had become "
+        "ready." in text
+    )
+    # The waiters this reopen un-stranded are named, not suppressed.
+    assert "2 dependents are waiting on this again:" in text
+    assert _named(response.text) == ["waiter-a", "waiter-b"]
+    assert 'data-receipt-case="waiting"' in response.text
     assert "Lens read it as completed just before reopening." in text
     assert "Lens read it as “Go”." in text
     assert "was cancelled" in _operators_finding(fake, "gate-human")

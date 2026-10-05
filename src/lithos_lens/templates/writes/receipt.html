@@ -70,9 +70,16 @@
         {%- if receipt.outcome %} Lithos keeps the outcome it cleared in its [Reopened] finding; Lens read it as &ldquo;{{ receipt.outcome }}&rdquo;.{% endif %}
       {%- endif %}
     </p>
-    {% set waiting = receipt.prior_status == "cancelled" %}
+    {#- `released` are Lithos's `reblocked` ids when it returned any, and
+        otherwise the open dependents read after the write. An empty
+        `reblocked` proves neither case, so a task Lens read as completed says
+        both true things: Lithos re-blocked no one, and who waits on it now. -#}
+    {% set waiting = receipt.released_waiting %}
     {% set dependents = receipt.released_total ~ " dependent" ~ ("" if receipt.released_total == 1 else "s") %}
     <div class="write-receipt-detail" data-receipt-released="{{ receipt.released_total }}" data-receipt-case="{{ 'waiting' if waiting else 'reblocked' }}" data-receipt-exact="{{ 'yes' if receipt.released_exact else 'no' }}">
+      {% if waiting and receipt.prior_status == "completed" %}
+        <p class="write-receipt-detail" data-receipt-reblocked-none>Re-blocked no dependents &mdash; nothing that waits on this task had become ready.</p>
+      {% endif %}
       {% if receipt.released_unread %}
         Lens couldn't read its dependents just now.
       {% elif receipt.released_total %}
@@ -92,12 +99,10 @@
             <li data-receipt-released-more="{{ receipt.released_more }}">and {{ receipt.released_more }} more</li>
           {% endif %}
         </ul>
-      {% elif waiting and not receipt.released_exact %}
+      {% elif not receipt.released_exact %}
         No dependent read as waiting on this again &mdash; but Lens couldn't read all of them.
-      {% elif waiting %}
+      {% elif receipt.prior_status == "cancelled" %}
         No dependents are waiting on this again &mdash; nothing depends on it.
-      {% else %}
-        Re-blocked no dependents &mdash; nothing that waits on this task had become ready.
       {% endif %}
     </div>
   {% endif %}
