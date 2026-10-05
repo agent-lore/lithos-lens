@@ -2348,6 +2348,20 @@ button,
   padding-left: 1.2rem;
 }
 
+/* A receipt's follow-up (Reopen gate, T3-W5): the button, its one line of
+   why beside it, wrapping beneath on a narrow screen. */
+.write-receipt-followup {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.write-receipt-followup .write-receipt-detail {
+  margin: 0;
+}
+
 /* One line on a row: the note grows, the button keeps its label, and the
    meaning line and the identity chip wrap beneath them. */
 .complete-action {

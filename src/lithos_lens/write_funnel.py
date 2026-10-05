@@ -48,7 +48,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from fastapi import Request
@@ -207,13 +207,21 @@ class WriteDone:
     first few to titles when it mints the receipt. ``answer`` is the canonical
     success result as Lithos returned it, for the audit line's result
     envelope (§5C.6): a success is recorded with what Lithos said, exactly
-    as a refusal is.
+    as a refusal is. ``prior_status``, ``checked_status``, ``released_exact``,
+    ``released_unread`` and ``released_waiting`` are carried to the receipt as
+    they are (see
+    :class:`~lithos_lens.receipts.WriteReceipt`).
     """
 
     task: ReceiptTask
     outcome: str = ""
     released: tuple[str, ...] = ()
     answer: Mapping[str, Any] = field(default_factory=dict)
+    prior_status: str = ""
+    checked_status: str = ""
+    released_exact: bool = True
+    released_unread: bool = False
+    released_waiting: bool = False
 
 
 def _applies(task: TaskRecord) -> tuple[str, str] | None:
@@ -372,6 +380,9 @@ class WriteFunnel:
                 return Response(status_code=_OK, headers={"HX-Redirect": outcome.page})
             return RedirectResponse(outcome.page, status_code=303)
         ledger.result = "ok"
+        # Where this write returns the operator, for a follow-up form on the
+        # receipt (Reopen gate) — the same checked value the 303 uses.
+        outcome = replace(outcome, back_to=back_to)
         if htmx:
             return self._templates.TemplateResponse(
                 request,
@@ -579,6 +590,11 @@ class WriteFunnel:
             outcome=done.outcome,
             released=released,
             released_total=len(done.released),
+            prior_status=done.prior_status,
+            checked_status=done.checked_status,
+            released_exact=done.released_exact,
+            released_unread=done.released_unread,
+            released_waiting=done.released_waiting,
         )
 
 

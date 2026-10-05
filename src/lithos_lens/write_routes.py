@@ -23,6 +23,8 @@ What this module owns, and what every later slice reuses:
   for a gate a machine resolves (``timer``, ``ci``, ``pr``, or a type Lens does
   not know). Its form is the only one that carries the confirmation; a POST
   for such a gate without it is sent here rather than performed.
+- ``POST /tasks/{task_id}/reopen`` (T3-W5) — reopen a completed or cancelled
+  task (D8). No confirm page: each case's copy is rendered beside the button.
 
 There is deliberately NO posture switch (D2): the routes are always registered
 and the affordances are part of the page. What decides whether an affordance
@@ -31,10 +33,12 @@ renders is the task's state and whether an identity resolves — never config.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import asdict
 from datetime import UTC, datetime
 from functools import partial
+from typing import NamedTuple
 from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, Request
@@ -64,7 +68,14 @@ from lithos_lens.operator import (
 from lithos_lens.receipts import RECEIPT_KEY, ReceiptStore, ReceiptTask, WriteReceipt
 from lithos_lens.request_filters import filter_query_oversized
 from lithos_lens.state import AppState, HealthSnapshot
-from lithos_lens.task_links import gate_type_of
+from lithos_lens.task_links import (
+    BLOCKER_EDGE_TYPES,
+    LINK_READ_TIMEOUT_S,
+    LinkTarget,
+    gate_type_of,
+    load_link_page,
+    outgoing_targets,
+)
 from lithos_lens.tasks import MAX_FILTER_QUERY_BYTES, TaskRecord, task_detail_path
 from lithos_lens.write_funnel import (
     TaskWrite,
@@ -188,6 +199,117 @@ def offers_complete(task: TaskRecord | None) -> bool:
     return completes_directly(task.task_type, task.status, gate_type_of(task))
 
 
+#: The statuses Reopen is offered on: the two terminal ones (D8).
+REOPENABLE_STATUSES = frozenset({"completed", "cancelled"})
+
+
+def reopen_path(task_id: str) -> str:
+    """The Reopen action's POST target, the id as ONE encoded segment."""
+    return f"/tasks/{quote(task_id, safe='')}/reopen"
+
+
+def offers_reopen(task: TaskRecord | None) -> bool:
+    """Whether a surface showing ``task`` offers Reopen (T3 D8).
+
+    Any completed or cancelled task — task, epic or gate alike. Asked by the
+    detail page's partial; whether an identity resolves is its other question.
+    The completion receipt's Reopen gate needs no helper: the gate it names was
+    just completed, and the pre-check binds if it has moved since.
+    """
+    return task is not None and task.status in REOPENABLE_STATUSES
+
+
+class _Dependents(NamedTuple):
+    """The open dependents waiting on a reopened task, as one bounded read saw
+    them."""
+
+    waiting: tuple[str, ...] = ()
+    exact: bool = True
+    unread: bool = False
+
+
+async def _waiting_dependents(
+    client: LithosClientProtocol, task_id: str
+) -> _Dependents:
+    """The open tasks a reopened CANCELLED task now holds back again.
+
+    Lithos's ``reblocked`` is empty by design in this case — those dependents
+    were stranded, not ready — so the receipt's count comes from the task's own
+    outgoing ``blocks`` / ``waits_on_gate`` edges, through the same bounded
+    reader the detail page's Blocks line uses. The targets are deduplicated by
+    task id first, keeping the first edge: a task may depend on this one by
+    both a ``blocks`` and a ``waits_on_gate`` edge, and the receipt counts
+    TASKS, so a link count would name one twice and push "at least N" past the
+    number of tasks there are. A truncated page, or a dependent whose read
+    failed, makes the count a lower bound. The read catches its own errors: it
+    runs after a reopen that APPLIED, and anything raised from ``perform``
+    would be classified as the write's own failure.
+    """
+    try:
+        edges = await asyncio.wait_for(
+            client.task_edge_list(task_id, direction="outgoing"),
+            LINK_READ_TIMEOUT_S,
+        )
+        distinct: dict[str, LinkTarget] = {}
+        for target in outgoing_targets(task_id, edges, BLOCKER_EDGE_TYPES):
+            distinct.setdefault(target.task_id, target)
+        page = await load_link_page(client, tuple(distinct.values()))
+    except Exception:
+        logger.warning("reopen dependents read failed", extra={"task_id": task_id})
+        return _Dependents(exact=False, unread=True)
+    return _Dependents(
+        waiting=tuple(link.task_id for link in page.links if link.status == "open"),
+        exact=not page.tail.truncated
+        and not any(link.unresolved for link in page.links),
+    )
+
+
+def _reopen_task() -> TaskWrite:
+    """The reopen action, as the funnel drives it (T3 D8).
+
+    The receipt names what the write did. A non-empty ``reblocked`` is proof:
+    Lithos returns ids only for a task that was COMPLETED when the reopen
+    applied, so those are named as re-blocked whatever the pre-check read — an
+    agent that resolved the task again in the window after it cannot make the
+    receipt drop them. An EMPTY ``reblocked`` proves neither case: a completed
+    task nothing had become ready behind, or a cancelled one (reblocked is
+    empty by design there) — including one an agent cancelled after the
+    pre-check read it as completed. So then the receipt states what is true
+    in both: Lithos re-blocked no one, and the open dependents read after the
+    write are waiting on it again. Nothing else says what the task was when
+    Lithos reopened it (the ``[Reopened]`` finding is free text any client can
+    post, ``tasks.REOPENED_FINDING_PREFIX``), so the status and outcome are
+    worded as what Lens READ before the write, and no outcome is quoted once
+    the answer shows that read was stale.
+    """
+
+    async def perform(
+        client: LithosClientProtocol, task: TaskRecord, operator: str
+    ) -> WriteDone:
+        result = await client.task_reopen(task.id, agent=operator)
+        prior_status = "completed" if result.reblocked else task.status
+        dependents = (
+            _Dependents(waiting=result.reblocked)
+            if result.reblocked
+            else await _waiting_dependents(client, task.id)
+        )
+        return WriteDone(
+            task=ReceiptTask(
+                task_id=result.task_id or task.id, title=result.title or task.title
+            ),
+            outcome=task.outcome if prior_status == task.status else "",
+            released=dependents.waiting,
+            answer={**asdict(result), "reblocked": list(result.reblocked)},
+            prior_status=prior_status,
+            checked_status=task.status,
+            released_exact=dependents.exact,
+            released_unread=dependents.unread,
+            released_waiting=not result.reblocked,
+        )
+
+    return TaskWrite(action="reopen", perform=perform)
+
+
 def _complete_gate(note: str, *, confirmed: bool, next_url: str) -> TaskWrite:
     """The complete action, as the funnel drives it (T3 D7).
 
@@ -270,6 +392,8 @@ def register_write_routes(
     templates.env.globals["complete_gate_path"] = complete_gate_path
     templates.env.globals["write_return_path"] = write_return_path
     templates.env.globals["complete_note_max"] = MAX_NOTE_LENGTH
+    templates.env.globals["offers_reopen"] = offers_reopen
+    templates.env.globals["reopen_path"] = reopen_path
 
     def take_receipt(request: Request) -> WriteReceipt | None:
         """The receipt this page's ``?receipt=`` names, consumed — or None.
@@ -502,4 +626,25 @@ def register_write_routes(
                 confirmed=form.get("confirm") == PROCEED_ANYWAY_CONFIRMATION,
                 next_url=next_url,
             ),
+        )
+
+    @app.post("/tasks/{task_id}/reopen")
+    async def reopen_task(request: Request, task_id: str) -> Response:
+        """Reopen a completed or cancelled task (T3 D8).
+
+        One ``lithos_task_reopen`` through the funnel. An already-open task is
+        the conflict page either way: the pre-check catches a stale form with
+        no call, and Lithos refuses one reopened in the window after it with
+        ``task_not_resolved`` (§5.14).
+        """
+        form = await request.form()
+        return await funnel.submit(
+            request,
+            WriteForm(
+                task_id=task_id,
+                expected_status=str(form.get("expected_status") or ""),
+                next_url=str(form.get(NEXT_KEY) or ""),
+                arguments={"task_id": task_id},
+            ),
+            _reopen_task(),
         )

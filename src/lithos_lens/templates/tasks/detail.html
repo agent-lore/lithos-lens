@@ -88,6 +88,8 @@
            plain form whose 303 returns here with the receipt above the page. -#}
         {% with action_task = detail.task, action_htmx = false, action_next = task_detail_url(request, detail.task.id) %}
           {% include "writes/complete_action.html" %}
+          {#- Reopen (T3 D8): a completed or cancelled task, any type. -#}
+          {% include "writes/reopen_action.html" %}
         {% endwith %}
       </header>
 

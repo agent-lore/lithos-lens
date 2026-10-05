@@ -17,7 +17,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.request_filters` | M | 0 | 20 |
 | `lithos_lens.web` | L | 0 | 1 |
 | `lithos_lens.write_funnel` | M | 4 | 1 |
-| `lithos_lens.write_routes` | M | 0 | 9 |
+| `lithos_lens.write_routes` | M | 0 | 11 |
 
 ## Public API
 
@@ -74,6 +74,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `proceed_anyway_url` — The Proceed anyway confirm page, returning the operator to ``next_url``.
 - def `offers_proceed_anyway` — Whether a surface showing ``task`` offers the Proceed anyway link.
 - def `offers_complete` — Whether a surface showing ``task`` offers the direct Complete action.
+- def `reopen_path` — The Reopen action's POST target, the id as ONE encoded segment.
+- def `offers_reopen` — Whether a surface showing ``task`` offers Reopen (T3 D8).
 - def `register_write_routes` — Attach the write route group and its template globals.
 
 ## Dependencies

@@ -98,7 +98,7 @@ slugs in `PAGES` — four files each, so the run's file count is four times the
 length of that array, plus the three captures `writes.spec.ts` makes on its own
 instance under the same contract (`gate-complete-action`, the gate row with
 Complete and the identity before the write, `complete-receipt`, the
-receipt banner after it, and `proceed-anyway-confirm`, a timer gate's Proceed
+receipt banner after it with its Reopen gate follow-up, and `proceed-anyway-confirm`, a timer gate's Proceed
 anyway confirm page):
 
 ```

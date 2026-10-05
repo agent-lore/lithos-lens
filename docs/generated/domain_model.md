@@ -778,6 +778,12 @@ classDiagram
     +operator str
     +outcome str
     +released_total int
+    +prior_status str
+    +checked_status str
+    +released_exact bool
+    +released_unread bool
+    +released_waiting bool
+    +back_to str
   }
   WriteProblem "1" --> "0..*" MessageSegment : detail
   WriteProblem "1" --> "0..*" TaskRef : candidates
