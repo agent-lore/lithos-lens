@@ -34,6 +34,8 @@ import {
  *                                   line, and the form with its reason field.
  *                                   GET only, so the chain stays intact for
  *                                   every later step (clarification D11).
+ *   create-form-<w>.png             the create form with the gate fieldset
+ *                                   shown for a gate (T3-W7). GET only.
  */
 //
 // No retry, deliberately: a retry would find the gate already completed by
@@ -289,5 +291,40 @@ test("the cancel confirm page states what cancelling the chain head strands", as
 
   for (const width of WIDTHS) {
     await capture(page, "cancel-confirm", width);
+  }
+});
+
+/**
+ * The create form with its gate fieldset (T3-W7), for the visual review.
+ * GET only (clarification D16): nothing is created, so no later step and no
+ * capture of BOARD sees a task this spec made. `gate` is selected the way an
+ * operator would, so `create_form.js` shows the fieldset it hides for the
+ * other types.
+ *   create-form-<w>.png  the form, type `gate`, timer selected, with the
+ *                        fieldset's gate types and its UTC ready_at
+ */
+test("the create form shows the gate fieldset for a gate", async ({ page }) => {
+  await page.context().addCookies([
+    { name: "lens_operator", value: "dave", url: WRITES_BASE_URL },
+  ]);
+  await page.goto(`${WRITES_BASE_URL}/tasks/new?project=influx`);
+
+  const form = page.locator("[data-create-form]");
+  await expect(form.locator('input[name="project"]')).toHaveValue("influx");
+  const gate = form.locator("[data-create-gate]");
+  // Hidden by the script while the type is not a gate...
+  await expect(gate).toBeHidden();
+  await form.locator("[data-create-type]").selectOption("gate");
+  // ...and shown, still labelled, once it is.
+  await expect(gate).toBeVisible();
+  await expect(gate.locator("[data-create-gate-only]")).toHaveText(
+    "only for gates",
+  );
+  await gate.locator('select[name="gate_type"]').selectOption("timer");
+  await form.locator('input[name="title"]').fill("Wait for the embargo to lift");
+  await expect(gate.locator('select[name="gate_type"] option')).toHaveCount(3);
+
+  for (const width of WIDTHS) {
+    await capture(page, "create-form", width);
   }
 });

@@ -2616,3 +2616,95 @@ button,
 .row-menu-body .complete-action {
   margin-top: 0.3rem;
 }
+
+/* ── Create (T3-W7) ────────────────────────────────────────────────────
+   The New task link on the board's header, the Add child link on an epic,
+   and the create form: one column of labelled fields, the gate fieldset set
+   apart (and hidden by create_form.js for a non-gate), a refusal written
+   under the field it is about. The "not visible yet" page reuses the
+   outcome copy and the Proceed anyway page's frame. */
+.new-task-link {
+  display: inline-block;
+  font-weight: 600;
+}
+
+.create-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.create-field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.create-field small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.create-field input,
+.create-field select,
+.create-field textarea {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  width: 100%;
+}
+
+.create-gate {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  min-width: 0;
+  padding: 0.5rem 1rem 1rem;
+}
+
+.create-gate legend small {
+  color: var(--muted);
+}
+
+.create-gate[hidden] {
+  display: none;
+}
+
+.create-field-error {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  padding: 0.4rem 0.75rem;
+}
+
+.create-field-error p {
+  margin: 0;
+}
+
+.create-candidates {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.create-notice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 1rem 0.75rem;
+}
+
+.create-submit {
+  border-top: 1px solid var(--line);
+}
+
+.create-restart {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+}
+
+.create-page {
+  min-width: 0;
+}

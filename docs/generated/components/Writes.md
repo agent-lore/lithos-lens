@@ -3,7 +3,7 @@
 
 # Writes
 
-Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action and which the Proceed anyway confirmation, the not-a-gate refusal, the default outcome of a direct completion and of an override).
+Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action and which the Proceed anyway confirmation, the not-a-gate refusal, the default outcome of a direct completion and of an override); plus the create-form model (form → validated create request, the project under both conventions, the gate types a person may create, and where an upstream refusal lands on the form) and the create coordinator (the in-process, bounded map from request id to outcome that makes a double submit create one task).
 
 **Tier:** Foundation
 
@@ -11,13 +11,34 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
+| `lithos_lens.create_coordinator` | S | 5 | 0 |
+| `lithos_lens.create_form` | M | 5 | 5 |
 | `lithos_lens.gate_completion` | S | 0 | 5 |
 | `lithos_lens.operator` | M | 4 | 2 |
-| `lithos_lens.receipts` | S | 4 | 1 |
+| `lithos_lens.receipts` | S | 5 | 1 |
 | `lithos_lens.write_errors` | L | 4 | 3 |
 | `lithos_lens.write_guards` | S | 0 | 2 |
 
 ## Public API
+
+### `lithos_lens.create_coordinator`
+- class `Created` — The create applied: the task it minted, and Lithos's answer whole.
+- class `OutcomeUnknown` — Lithos never answered: the task may exist, or may yet.
+- class `Refused` — Lithos refused the create with this error envelope. Nothing was made.
+- class `Settled` — One submit's answer: the create's outcome and how this submit got it.
+- class `CreateCoordinator` — The process's request ids and what each came to (D5).
+
+### `lithos_lens.create_form`
+- def `new_request_id` — A fresh request id for a form being rendered (D6).
+- def `is_request_id` — Whether ``value`` is a request id this Lens could have minted.
+- def `split_lines` — One entry per line, stripped, blanks and repeats dropped, order kept.
+- class `CreateInput` — The form's fields as typed, and the request id it carries.
+- class `FieldError` — A refusal placed on one input: the sentence, and any candidates.
+- class `CreateClient` — The one Lithos call a create makes, structurally (F6).
+- class `CreateRequest` — One validated ``lithos_task_create``, ready to send as an operator.
+- class `Validated` — What :func:`validate` made of a form: a request, or the errors.
+- def `validate` — Lens's checks before any call (D10), and the request they allow.
+- def `place_problem` — Put an upstream refusal on the input it names (D8).
 
 ### `lithos_lens.gate_completion`
 - def `completes_directly` — Whether a task carries the direct Complete action, right now.
@@ -37,6 +58,7 @@ Curated write actions (REQUIREMENTS §5C), minus their routes: the operator iden
 ### `lithos_lens.receipts`
 - class `ReceiptTask` — A task a receipt names: its id, and its title when one could be read.
 - class `CancelFacts` — What a cancel strands, releases and keeps, in plain receipt terms (T3-W6).
+- class `CreateFacts` — What a create made, in receipt terms (T3-W7).
 - class `WriteReceipt` — One write's outcome, as the banner states it.
 - class `ReceiptStore` — The process's receipts, bounded in count and age (T3 D5).
 - def `receipt_url` — ``next_url`` with ``?receipt=<receipt_id>`` merged into its query.

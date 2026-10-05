@@ -30,6 +30,12 @@
     <p class="eyebrow">Operational dashboard</p>
     <h1>Tasks</h1>
     <p>Current Lithos task activity, claims, and findings.</p>
+    {#- New task (T3-W7): the create form, carrying the project only when
+        exactly one is selected -- with several, none is the obvious one. -#}
+    {% if operator_identity(request).resolved %}
+      {% set selected_projects = dashboard.filters.projects if dashboard else () %}
+      <a class="new-task-link" href="{{ new_task_url(project=selected_projects[0] if selected_projects | length == 1 else '') }}" data-new-task-link>New task</a>
+    {% endif %}
   </section>
 
   {% if health.lithos != "ok" %}

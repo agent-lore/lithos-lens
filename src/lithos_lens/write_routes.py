@@ -28,6 +28,8 @@ What this module owns, and what every later slice reuses:
 - ``GET``/``POST /tasks/{task_id}/cancel`` (T3-W6) — cancel with its
   consequences stated first, in ``cancel_routes``, registered from here with
   this group's funnel.
+- ``GET``/``POST /tasks/new`` (T3-W7) — create a task, epic or gate, in
+  ``create_routes``, registered from here the same way.
 
 There is deliberately NO posture switch (D2): the routes are always registered
 and the affordances are part of the page. What decides whether an affordance
@@ -49,6 +51,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens.cancel_routes import register_cancel_routes
+from lithos_lens.create_routes import register_create_routes
 from lithos_lens.gate_completion import (
     MAX_NOTE_LENGTH,
     PROCEED_ANYWAY_CONFIRMATION,
@@ -412,6 +415,8 @@ def register_write_routes(
 
     # Cancel's confirm page and action (T3-W6), through this group's funnel.
     register_cancel_routes(app, state, templates, funnel)
+    # Create (T3-W7), the funnel's one task-less entry point.
+    register_create_routes(app, state, templates, funnel)
 
     def render(
         request: Request,

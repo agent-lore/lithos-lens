@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{#
+  Create a task, epic or gate (T3-W7, D10): the one form, complete without
+  JavaScript.
+
+  Context:
+    `typed`    -- a `create_form.CreateInput`: the fields as typed and the
+                  request id this render carries (minted by the server);
+    `problem`  -- the `write_errors.WriteProblem` that stopped a submit, or
+                  None. Its candidates were moved under their field already;
+    `errors`   -- field name -> `create_form.FieldError`;
+    `projects` -- the known project slugs for the datalist (may be empty);
+    `task_types`, `gate_types`, `gate_type_labels`, `project_tag_key`.
+
+  With no operator identity the page offers no form, only the choice (D3): a
+  POST would be sent to the operator page and its input not replayed, so
+  nothing is typed here that would be lost.
+
+  The gate fieldset is shown to every type and labelled "only for gates";
+  `create_form.js` hides it while another type is selected. It is not
+  `tasks.js`, which would open the event stream on a page that shows no board.
+-#}
+
+{% macro field_error(name) -%}
+  {%- set error = errors.get(name) -%}
+  {%- if error %}
+    <div class="create-field-error" role="alert" data-create-error="{{ name }}">
+      <p>{{ error.message }}</p>
+      {% if error.candidates %}
+        <ul class="create-candidates" data-create-candidates="{{ name }}">
+          {% for candidate in error.candidates %}
+            <li data-create-candidate="{{ candidate.task_id }}"><code>{{ candidate.task_id }}</code>{% if candidate.title %} &mdash; {{ candidate.title }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+  {%- endif -%}
+{%- endmacro %}
+
+{% block title %}New task | Lithos Lens{% endblock %}
+
+{% block content %}
+<section class="proceed-anyway-page create-page" data-create-page>
+  <h1>New task, epic or gate</h1>
+
+  {% if not operator_identity(request).resolved %}
+    <p class="proceed-anyway-no-operator" data-create-no-operator>
+      No operator identity is set, so there is no form to fill in.
+      <a href="{{ operator_page_url(request) }}">Choose an operator to act</a>, then come back here.
+    </p>
+  {% else %}
+    {% if problem %}
+      <div class="write-outcome-refused create-notice" data-create-problem="{{ problem.code }}">
+        {% include "writes/notice.html" %}
+      </div>
+    {% endif %}
+
+    <form class="create-form" method="post" action="{{ new_task_url() }}" data-create-form>
+      <input type="hidden" name="request_id" value="{{ typed.request_id }}" data-create-request-id>
+
+      <label class="create-field" for="create-title">
+        <span>Title</span>
+        <input type="text" id="create-title" name="title" value="{{ typed.title }}" required autocomplete="off">
+      </label>
+      {{ field_error("title") }}
+
+      <label class="create-field" for="create-type">
+        <span>Type</span>
+        <select id="create-type" name="task_type" data-create-type>
+          {% for task_type in task_types %}
+            <option value="{{ task_type }}"{% if typed.task_type == task_type %} selected{% endif %}>{{ task_type }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {{ field_error("task_type") }}
+
+      <label class="create-field" for="create-description">
+        <span>Description <small>Markdown</small></span>
+        <textarea id="create-description" name="description" rows="6">{{ typed.description }}</textarea>
+      </label>
+
+      <label class="create-field" for="create-project">
+        <span>Project <small>optional; written as <code>metadata.project</code> and the <code>{{ project_tag_key }}:&lt;slug&gt;</code> tag</small></span>
+        <input type="text" id="create-project" name="project" value="{{ typed.project }}" list="create-projects" autocomplete="off" spellcheck="false">
+      </label>
+      {% if projects %}
+        <datalist id="create-projects" data-create-projects>
+          {% for project in projects %}<option value="{{ project }}"></option>{% endfor %}
+        </datalist>
+      {% endif %}
+      {{ field_error("project") }}
+
+      <label class="create-field" for="create-tags">
+        <span>Tags <small>one per line</small></span>
+        <textarea id="create-tags" name="tags" rows="3" spellcheck="false">{{ typed.tags }}</textarea>
+      </label>
+
+      <label class="create-field" for="create-parent">
+        <span>Parent <small>a full id, or at least six characters of one</small></span>
+        <input type="text" id="create-parent" name="parent" value="{{ typed.parent }}" autocomplete="off" spellcheck="false">
+      </label>
+      {{ field_error("parent") }}
+
+      <label class="create-field" for="create-predecessors">
+        <span>Blocked by <small>one id per line, full or at least six characters; each must finish before this one is ready</small></span>
+        <textarea id="create-predecessors" name="predecessors" rows="3" spellcheck="false">{{ typed.predecessors }}</textarea>
+      </label>
+      {{ field_error("predecessors") }}
+
+      <fieldset class="create-gate" data-create-gate>
+        <legend>Gate <small data-create-gate-only>only for gates</small></legend>
+        <label class="create-field" for="create-gate-type">
+          <span>Gate type</span>
+          <select id="create-gate-type" name="gate_type">
+            {% for gate_type in gate_types %}
+              <option value="{{ gate_type }}"{% if typed.gate_type == gate_type %} selected{% endif %}>{{ gate_type_labels[gate_type] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {{ field_error("gate_type") }}
+        <label class="create-field" for="create-ready-at">
+          <span>Ready at <small>UTC; required for a timer</small></span>
+          <input type="datetime-local" id="create-ready-at" name="ready_at" value="{{ typed.ready_at }}">
+        </label>
+        {{ field_error("ready_at") }}
+      </fieldset>
+
+      <div class="complete-action create-submit">
+        <button type="submit" class="complete-action-button" data-create-button>Create</button>
+        <p class="complete-action-meaning">Submitting twice creates one task: this form carries its own request id.</p>
+        {% include "writes/identity.html" %}
+      </div>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', path='create_form.js') }}" defer></script>
+{% endblock %}

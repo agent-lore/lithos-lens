@@ -105,6 +105,20 @@
         No dependents are waiting on this again &mdash; nothing depends on it.
       {% endif %}
     </div>
+  {% elif receipt.action == "create" and receipt.created %}
+    {#- Create (T3-W7). The page below is the new task's own, read fresh, so
+        its parent and predecessors are stated there, not repeated here. -#}
+    <p class="write-receipt-headline">
+      + Created {{ receipt.created.task_type }} &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;
+      {% with task_id = receipt.task.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    <p class="write-receipt-detail" data-receipt-outcome>
+      Created as {{ receipt.operator }}
+      {%- if receipt.created.project %} in project {{ receipt.created.project }}{% endif %}.
+    </p>
+    {% if receipt.created.repeated %}
+      <p class="write-receipt-detail" data-receipt-repeated>This form had already been submitted, so Lens brought you to the task it created rather than creating another.</p>
+    {% endif %}
   {% elif receipt.action == "cancel" and receipt.cancel %}
     <p class="write-receipt-headline">
       &#10005; Cancelled &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;

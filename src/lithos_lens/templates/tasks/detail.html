@@ -93,6 +93,8 @@
           {#- Cancel (T3 D9): an open task, any type — a link to the confirm
              page, or the direct form when confirm_cancel is off. -#}
           {% include "writes/cancel_action.html" %}
+          {#- Add child (T3-W7): an open epic — the create form, parent filled. -#}
+          {% include "writes/add_child_action.html" %}
         {% endwith %}
       </header>
 
