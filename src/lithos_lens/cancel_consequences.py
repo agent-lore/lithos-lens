@@ -205,28 +205,29 @@ async def walk_downstream(
                         "cancel consequence edge read failed",
                         extra={"task_id": task.id, "incomplete": dict(incomplete)},
                     )
-                candidates = [
-                    dependent
+                # The hop's candidates, deduplicated and ordered BEFORE the
+                # budget is spent on them, so which tasks a budget stop keeps
+                # (and names) does not depend on the order Lithos listed the
+                # edges in: the oldest are kept, as "the first few" are.
+                candidates = {
+                    dependent.id: dependent
                     for entry in entries
                     for dependent in _active_dependents(
                         entry,
                         task.status if entry.task_id == task.id else "open",
                         open_index,
                     )
-                ]
+                    if dependent.id not in visited
+                }
                 found: list[TaskRecord] = []
-                for dependent in candidates:
-                    if dependent.id in visited:
-                        continue
+                for dependent in _order(tuple(candidates.values())):
                     if len(hops) >= max_nodes:
                         over_budget = True
                         break
                     visited.add(dependent.id)
                     hops[dependent.id] = hop
                     found.append(dependent)
-                # Ordered, so which nodes a budget stop leaves unread does not
-                # depend on the order Lithos listed the edges in.
-                frontier = list(_order(found))
+                frontier = found
     except TimeoutError:
         reasons.append(REASON_DEADLINE)
     if unread:

@@ -31,6 +31,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import replace
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -47,12 +48,13 @@ from lithos_lens.cancel_consequences import (
     walk_downstream,
 )
 from lithos_lens.config import load_config
-from lithos_lens.fake_dataset import demo_dataset
+from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
+from lithos_lens.fake_graph_dataset import edge_index
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.graph_cache import GraphCache
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.operator import OPERATOR_COOKIE_NAME
-from lithos_lens.tasks import ClaimRecord
+from lithos_lens.tasks import ClaimRecord, TaskRecord
 from lithos_lens.web import create_app
 from lithos_lens.write_funnel import AUDIT_EVENT
 from tests.test_complete_gate import LoggedFake
@@ -338,6 +340,10 @@ def test_an_epic_with_open_children_says_they_are_kept(client: TestClient) -> No
 
     text = _text(page)
     assert "Its 7 open children are not cancelled with it:" in text
+    # Its parent_child edges are hierarchy, not dependency: nothing stranded.
+    assert 'data-cancel-direct="0" data-cancel-behind="0"' in page
+    assert "Cancelling strands no open tasks — nothing open depends on it." in text
+    assert _stranded(page) == [] and _behind(page) == []
     children = re.findall(r'data-cancel-child="([^"]+)"', page)
     # The first five, oldest first; the rest counted.
     assert len(children) == 5
@@ -696,3 +702,261 @@ def test_the_consequence_read_never_raises_on_failed_claims_and_children() -> No
     assert consequences.claims_unread and consequences.children_unread
     assert consequences.claims == () and consequences.open_children == ()
     assert consequences.walk is not None and consequences.walk.exact
+
+
+def test_a_budget_stop_keeps_the_oldest_whatever_order_lithos_lists_edges_in() -> None:
+    """correctness/f-001: the budget is spent on the hop's candidates in
+    (created_at, id) order, so reversing Lithos's edge list keeps the same one."""
+
+    class Reversed(FakeLithosClient):
+        async def task_edge_list(self, task_id: str, **kwargs: Any):
+            return list(reversed(await super().task_edge_list(task_id, **kwargs)))
+
+    async def walk(fake: FakeLithosClient):
+        task = await fake.task_get("loom-ship")
+        index = {row.id: row for row in await fake.list_tasks(status="open")}
+        return await walk_downstream(
+            fake,
+            task,
+            open_index=index,
+            cache=GraphCache(),
+            fetch_concurrency=4,
+            max_nodes=1,
+        )
+
+    for fake_type in (FakeLithosClient, Reversed):
+        result = asyncio.run(walk(fake_type(None, dataset=demo_dataset())))
+        # loom-announce (20h old) is older than lens-graph-page (18h).
+        assert [row.id for row in result.direct] == ["loom-announce"]
+        assert not result.exact
+
+
+# ── which relationships a cancel strands through ─────────────────────────
+
+
+def _mixed_task(task_id: str, minutes_old: int, **overrides: Any) -> TaskRecord:
+    fields: dict[str, Any] = {
+        "status": "open",
+        "created_by": "planner",
+        "created_at": f"2026-10-01T{12 - minutes_old // 60:02d}:"
+        f"{59 - minutes_old % 60:02d}:00+00:00",
+        "tags": ("project:mixed",),
+    }
+    fields.update(overrides)
+    return TaskRecord(id=task_id, title=f"Task {task_id}", **fields)
+
+
+def mixed_dataset() -> FakeLithosDataset:
+    """An ordinary task with every kind of neighbour a cancel must tell apart.
+
+    Only ``focal -blocks-> dep-a -blocks-> dep-b`` strands anything. A resolved
+    dependent, the task's own predecessor (an INCOMING edge), its children
+    (``parent_child``) and a follow-on (``discovered_from``) do not — nor does
+    anything reachable only through them.
+    """
+    resolved = {"status": "completed", "resolved_at": "2026-10-02T09:00:00+00:00"}
+    tasks = (
+        _mixed_task("focal", 120),
+        _mixed_task("dep-a", 110),
+        _mixed_task("dep-b", 100),
+        _mixed_task("done-dep", 90, **resolved),
+        _mixed_task("after-done", 80),
+        _mixed_task("child-c", 70),
+        _mixed_task("child-e", 65),
+        _mixed_task("child-closed", 60, **resolved),
+        _mixed_task("after-child", 50),
+        _mixed_task("spawned-d", 40),
+        _mixed_task("pred-p", 30),
+    )
+    return FakeLithosDataset(
+        tasks=tasks,
+        edges=edge_index(
+            (
+                ("focal", "dep-a", "blocks"),
+                ("dep-a", "dep-b", "blocks"),
+                ("focal", "done-dep", "blocks"),
+                ("done-dep", "after-done", "blocks"),
+                ("focal", "child-c", "parent_child"),
+                ("focal", "child-e", "parent_child"),
+                ("focal", "child-closed", "parent_child"),
+                ("child-c", "after-child", "blocks"),
+                ("focal", "spawned-d", "discovered_from"),
+                ("pred-p", "focal", "blocks"),
+            )
+        ),
+        children={"focal": ("child-c", "child-e", "child-closed")},
+    )
+
+
+def test_only_open_outgoing_dependency_targets_and_what_waits_on_them_count(
+    config,
+) -> None:
+    with _client(config, LoggedFake(mixed_dataset())) as client:
+        page = client.get("/tasks/focal/cancel").text
+
+    assert _stranded(page) == ["dep-a"]
+    assert _behind(page) == ["dep-b"]
+    assert "Cancelling strands 1 task directly, 1 more behind them." in _text(page)
+
+
+def test_an_ordinary_parent_states_its_open_children_on_the_page_and_the_receipt(
+    config,
+) -> None:
+    """test-quality/f-003: D9's children statement is for ANY task, and D4
+    puts the same facts on the receipt when there is no confirm page."""
+    with _client(config, LoggedFake(mixed_dataset())) as client:
+        page = client.get("/tasks/focal/cancel").text
+    assert "Its 2 open children are not cancelled with it:" in _text(page)
+    assert re.findall(r'data-cancel-child="([^"]+)"', page) == ["child-c", "child-e"]
+
+    fake = LoggedFake(mixed_dataset())
+    with _client(_without_confirm(config), fake) as client:
+        response = _post(client, "focal", confirmed=False)
+        receipt = _receipt(client.get(response.headers["location"]).text)
+
+    assert len(fake.write_calls) == 1
+    text = _text(receipt)
+    assert "Its 2 open children were not cancelled with it:" in text
+    assert "Task child-c" in text and "Task child-e" in text
+    assert re.findall(r'data-cancel-child="([^"]+)"', receipt) == [
+        "child-c",
+        "child-e",
+    ]
+    assert "This cancel stranded 1 task directly, 1 more behind them." in text
+
+
+# ── the rendered forms, submitted as a browser would ─────────────────────
+
+
+class _Forms(HTMLParser):
+    """Every <form>: its method, action, data attributes and named inputs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.forms: list[dict[str, Any]] = []
+        self._open: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key: value or "" for key, value in attrs}
+        if tag == "form":
+            self._open = {"attrs": values, "inputs": {}}
+            self.forms.append(self._open)
+        elif tag == "input" and self._open is not None and values.get("name"):
+            self._open["inputs"][values["name"]] = values.get("value", "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form":
+            self._open = None
+
+
+def _form(html: str, marker: str) -> dict[str, Any]:
+    parser = _Forms()
+    parser.feed(html)
+    (form,) = [f for f in parser.forms if marker in f["attrs"]]
+    return form
+
+
+def _submit(client: TestClient, form: dict[str, Any], **typed: str):
+    """Submit ``form`` exactly as rendered — its method, action and fields."""
+    return client.request(
+        form["attrs"].get("method", "get").upper(),
+        form["attrs"]["action"],
+        data={**form["inputs"], **typed},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+
+
+def test_the_confirm_pages_own_form_performs_the_cancel(
+    client: TestClient, fake: LoggedFake
+) -> None:
+    """test-quality/f-002: from the detail page's link to the confirm page's
+    form, as rendered — no hand-built URL or field."""
+    detail = client.get(f"/tasks/{HEAD}").text
+    (link,) = re.findall(r'href="([^"]*)"[^>]*data-cancel-link', detail)
+    page = client.get(unescape(link)).text
+    form = _form(page, "data-cancel-confirm-form")
+    assert form["attrs"]["method"] == "post"
+    assert form["attrs"]["action"] == f"/tasks/{HEAD}/cancel"
+
+    response = _submit(client, form, reason="Superseded")
+
+    assert response.status_code == 303
+    assert fake.write_calls == [
+        (
+            "lithos_task_cancel",
+            {"task_id": HEAD, "agent": OPERATOR, "reason": "Superseded"},
+        )
+    ]
+    receipt = _text(_receipt(client.get(response.headers["location"]).text))
+    assert "Cancelled “Design the run-record schema”" in receipt
+
+
+@pytest.mark.parametrize("surface", ["detail", "row"])
+def test_the_direct_forms_perform_the_cancel_without_the_confirm_step(
+    config, surface: str
+) -> None:
+    fake = LoggedFake(demo_dataset())
+    with _client(_without_confirm(config), fake) as client:
+        html = client.get(f"/tasks/{HEAD}" if surface == "detail" else "/tasks").text
+        if surface == "row":
+            html = _row(html, HEAD)
+        form = _form(html, "data-cancel-direct")
+        assert form["attrs"]["method"] == "post"
+        assert form["attrs"]["action"] == f"/tasks/{HEAD}/cancel"
+
+        response = _submit(client, form)
+        assert response.status_code == 303
+        receipt = _text(_receipt(client.get(response.headers["location"]).text))
+
+    assert fake.write_calls == [
+        ("lithos_task_cancel", {"task_id": HEAD, "agent": OPERATOR})
+    ]
+    assert "This cancel stranded 1 task directly, 4 more behind them." in receipt
+
+
+# ── the confirm page when the task cannot be read ────────────────────────
+
+
+class Unreachable(LoggedFake):
+    async def health(self) -> Any:
+        return "unreachable"
+
+
+class TaskReadDown(LoggedFake):
+    async def task_get(self, task_id: str):
+        if task_id == HEAD:
+            raise LithosToolError("did not answer", code="timeout")
+        return await super().task_get(task_id)
+
+
+@pytest.mark.parametrize(
+    ("fake_type", "notice"),
+    [
+        pytest.param(
+            Unreachable,
+            "Lithos is unreachable, so Lens can't show what this cancel would do.",
+            id="lithos-unreachable",
+        ),
+        pytest.param(
+            TaskReadDown,
+            "Lens couldn't read this task. Reload once Lithos is reachable.",
+            id="task-read-failed",
+        ),
+    ],
+)
+def test_an_unreadable_task_is_503_with_no_consequences_and_no_form(
+    config, fake_type: type[LoggedFake], notice: str
+) -> None:
+    """test-quality/f-004: D7's failed-read case."""
+    fake = fake_type(demo_dataset())
+    with _client(config, fake) as client:
+        response = client.get(f"/tasks/{HEAD}/cancel")
+
+    assert response.status_code == 503
+    text = _text(response.text)
+    assert notice in text
+    assert "strands" not in text
+    assert "data-cancel-facts" not in response.text
+    assert "data-cancel-confirm-form" not in response.text
+    assert fake.write_calls == []
