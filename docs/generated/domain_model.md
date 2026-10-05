@@ -801,6 +801,8 @@ classDiagram
     +task_id str
     +title str
     +answer Mapping[str, Any]
+    +task_type str
+    +project str
   }
   class FieldError {
     +message str

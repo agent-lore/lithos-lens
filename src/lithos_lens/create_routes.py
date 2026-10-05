@@ -9,7 +9,8 @@ The routes and the surfaces of the create action:
   epic's **Add child**) pre-fill it, and the server mints the request id the
   form carries. Its one Lithos read is the open tasks the project datalist is
   derived from — the board filter's own derivation — and a failed read renders
-  the form without the list. With no operator identity the page renders only
+  the form without the list; a POST's re-render makes no read. With no
+  operator identity the page renders only
   the "choose an operator" link, so nothing is typed that a redirect would
   lose (D3).
 - ``POST /tasks/new`` — one create through the write funnel
@@ -142,8 +143,16 @@ def register_create_routes(
         problem: WriteProblem | None = None,
         errors: Mapping[str, FieldError] | None = None,
         status_code: int = 200,
+        *,
+        projects: tuple[str, ...] = (),
     ) -> Response:
-        identity = resolved(request)
+        """The form. ``projects`` feeds the datalist and is read only by the GET.
+
+        A POST's re-render — a refusal, Lens's or Lithos's, and Start again —
+        makes no Lithos call of its own: those answers are promised to make
+        none, and must not wait on a slow Lithos for an enhancement. The
+        operator's typed project is kept either way.
+        """
         placed = dict(errors or {})
         if problem is not None:
             problem, upstream = place_problem(typed, problem)
@@ -157,8 +166,7 @@ def register_create_routes(
                 "typed": typed,
                 "problem": problem,
                 "errors": placed,
-                # Only an operator who can submit gets the read behind the list.
-                "projects": await known_projects() if identity else (),
+                "projects": projects,
                 "task_types": CREATABLE_TASK_TYPES,
                 "gate_types": CREATABLE_GATE_TYPES,
                 "gate_type_labels": GATE_TYPE_LABELS,
@@ -192,7 +200,9 @@ def register_create_routes(
             project=request.query_params.get("project", ""),
             parent=request.query_params.get("parent", ""),
         )
-        return await render_form(request, typed)
+        # Only an operator who can submit gets the read behind the list.
+        projects = await known_projects() if resolved(request) else ()
+        return await render_form(request, typed, projects=projects)
 
     @app.post(NEW_TASK_PATH)
     async def create_task(request: Request) -> Response:

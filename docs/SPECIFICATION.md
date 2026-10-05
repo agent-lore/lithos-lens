@@ -2211,7 +2211,9 @@ them anyway.
   tasks (one cross-project `lithos_task_list(status="open")`, the union of
   both §5B.1 conventions — the board filter's own derivation). A project with
   no open task is not listed but can be typed; a failed or slow read (3 s)
-  renders the form without the list.
+  renders the form without the list. The list is read by the `GET` only: a
+  form re-rendered by a `POST` — a refusal, Lens's or Lithos's, or Start again
+  — makes no read of its own and carries no list (the typed project is kept).
 - **Validated in Lens before any call:** a title; a type of `task` / `epic` /
   `gate`; a project slug; for a gate, a gate type a **person** may create —
   `human`, `external_task` or `timer` (a hand-made `ci` or `pr` gate has
@@ -2269,7 +2271,9 @@ them anyway.
 - **Answer and receipt.** Success is 303 to the new task's detail page with a
   receipt: "Created *\<type\>* *\<title\>*", who created it and in which
   project, and — for a submit that landed on an earlier one's task — that the
-  form had already been submitted and no second task was created. The page
+  form had already been submitted and no second task was created. The type
+  and project it states are those of the create that ran, so a resubmit of an
+  edited form under the same id still describes the task that exists. The page
   below is the new task's own, read fresh, so its parent and predecessors are
   stated there. After a create with a parent or predecessors, those tasks
   leave the edge cache (`task.created` evicts only the new id), so their

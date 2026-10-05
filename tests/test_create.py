@@ -25,12 +25,14 @@ import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -56,10 +58,11 @@ from lithos_lens.fake_writes import write_error
 from lithos_lens.gates import KNOWN_GATE_TYPES
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.operator import OPERATOR_COOKIE_NAME
-from lithos_lens.tasks import TaskRecord
+from lithos_lens.tasks import AgentRecord, TaskRecord
 from lithos_lens.web import create_app
 from lithos_lens.write_errors import map_write_error
 from lithos_lens.write_funnel import AUDIT_EVENT
+from tests.conftest import metric_value
 from tests.test_complete_gate import LoggedFake
 
 ORIGIN = "http://lens.test"
@@ -181,6 +184,47 @@ def _post(client: TestClient, data: dict[str, str], **kwargs: Any):
 
 def _creates(fake: FakeLithosClient) -> list[dict[str, Any]]:
     return [args for tool, args in fake.write_calls if tool == "lithos_task_create"]
+
+
+def _receipt_id(response) -> str:
+    return parse_qs(urlsplit(response.headers["location"]).query)["receipt"][0]
+
+
+class _Controls(HTMLParser):
+    """The successful controls of ONE form on a page, as a browser posts them."""
+
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self.marker = marker
+        self.inside = False
+        self.controls: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "form":
+            self.inside = self.marker in values
+        elif tag == "input" and self.inside and values.get("name"):
+            self.controls.append((values["name"] or "", values.get("value") or ""))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form":
+            self.inside = False
+
+
+def _form_controls(html: str, marker: str) -> dict[str, str]:
+    parser = _Controls(marker)
+    parser.feed(html)
+    controls = dict(parser.controls)
+    assert len(controls) == len(parser.controls), "a control is posted twice"
+    return controls
+
+
+def _selected(html: str, name: str) -> str:
+    select = re.search(rf'<select[^>]*name="{name}"[^>]*>(.*?)</select>', html, re.S)
+    assert select, f"no select {name}"
+    chosen = re.findall(r'<option value="([^"]*)" selected>', select.group(1))
+    assert len(chosen) == 1, chosen
+    return chosen[0]
 
 
 def _landed_on(response) -> str:
@@ -390,6 +434,59 @@ def test_two_concurrent_submits_make_one_create() -> None:
     assert calls == 1
     assert first.outcome == second.outcome == Created(task_id="new-1", title="T")
     assert (first.dedup, second.dedup) == ("", "joined")
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(Refused(envelope={"code": "invalid_input"}), id="refused"),
+        pytest.param(OutcomeUnknown(), id="unknown"),
+    ],
+)
+def test_a_joined_waiter_receives_the_first_calls_outcome_whatever_it_is(
+    outcome: Any,
+) -> None:
+    """In flight, a refusal and an unknown outcome are shared like a success;
+    once settled, they part: a refused id may be sent again (nothing was
+    created), an unknown one never."""
+
+    async def scenario() -> tuple[list[Any], int, Any, int]:
+        coordinator = CreateCoordinator()
+        calls = 0
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def held():
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return outcome
+
+        first = asyncio.create_task(coordinator.submit("r1", held))
+        await started.wait()
+        second = asyncio.create_task(coordinator.submit("r1", held))
+        await asyncio.sleep(0)
+        release.set()
+        settled = [await first, await second]
+        in_flight_calls = calls
+
+        async def corrected():
+            nonlocal calls
+            calls += 1
+            return Created(task_id="new-1", title="T")
+
+        after = await coordinator.submit("r1", corrected)
+        return settled, in_flight_calls, after, calls
+
+    (first, second), in_flight_calls, after, calls = asyncio.run(scenario())
+    assert in_flight_calls == 1
+    assert first.outcome == second.outcome == outcome
+    assert (first.dedup, second.dedup) == ("", "joined")
+    if isinstance(outcome, Refused):
+        assert calls == 2 and after.outcome == Created(task_id="new-1", title="T")
+    else:
+        assert calls == 1
+        assert after.outcome == OutcomeUnknown() and after.dedup == "remembered"
 
 
 def test_a_waiter_going_away_does_not_cancel_the_create() -> None:
@@ -640,6 +737,54 @@ def test_depends_on_and_parent_produce_edges_shown_on_the_new_page(
     assert chain and "Cut ingest over" in chain.group(0)
 
 
+@pytest.mark.parametrize(
+    ("fields", "metadata"),
+    [
+        pytest.param({"task_type": "epic"}, {}, id="epic"),
+        pytest.param(
+            {"task_type": "gate", "gate_type": "human"},
+            {"gate_type": "human"},
+            id="human-gate",
+        ),
+        pytest.param(
+            {"task_type": "gate", "gate_type": "external_task"},
+            {"gate_type": "external_task"},
+            id="external-task-gate",
+        ),
+        pytest.param(
+            {"task_type": "gate", "gate_type": "timer", "ready_at": "2026-10-09T09:00"},
+            {"gate_type": "timer", "ready_at": "2026-10-09T09:00:00+00:00"},
+            id="timer-gate",
+        ),
+    ],
+)
+def test_each_type_is_created_as_chosen_with_its_markdown_description(
+    client: TestClient,
+    fake: LoggedFake,
+    fields: dict[str, str],
+    metadata: dict[str, str],
+) -> None:
+    description = "Dual-write **first**, then swap.\n\n- one\n- two"
+    data = _form(description=description, **fields)
+
+    response = _post(client, data)
+    task_id = _landed_on(response)
+    page = client.get(response.headers["location"])
+
+    [call] = _creates(fake)
+    assert call["task_type"] == fields["task_type"]
+    assert call["description"] == description
+    assert call["metadata"] == {**metadata, "lens_request_id": data["request_id"]}
+    assert f'data-task-detail="{task_id}"' in page.text
+    assert f'data-task-type="{fields["task_type"]}"' in page.text
+    if "gate_type" in metadata:
+        assert f'data-gate-type="{metadata["gate_type"]}"' in page.text
+    # The description is stored as typed and rendered as Markdown.
+    assert "<strong>first</strong>" in page.text
+    assert "<li>two</li>" in page.text
+    assert f"Created {fields['task_type']} “{data['title']}”" in _text(page.text)
+
+
 def test_a_timer_gate_without_ready_at_is_refused_before_any_call(
     client: TestClient, fake: LoggedFake
 ) -> None:
@@ -647,7 +792,8 @@ def test_a_timer_gate_without_ready_at_is_refused_before_any_call(
     response = _post(client, data)
 
     assert response.status_code == 422
-    assert _creates(fake) == []
+    # Not one Lithos call of any kind — not even the datalist's read.
+    assert fake.method_calls == []
     assert "A timer gate needs the date and time" in _error(response.text, "ready_at")
     # Input kept, and the SAME request id: nothing was created.
     assert _field_value(response.text, "title") == data["title"]
@@ -662,7 +808,7 @@ def test_a_gate_type_a_person_may_not_create_is_refused_before_any_call(
     response = _post(client, _form(task_type="gate", gate_type=gate_type))
 
     assert response.status_code == 422
-    assert _creates(fake) == []
+    assert fake.method_calls == []
     assert _error(response.text, "gate_type")
 
 
@@ -778,23 +924,55 @@ def test_a_resubmit_after_the_first_finished_creates_nothing(
     client: TestClient, fake: LoggedFake
 ) -> None:
     data = _form(project="influx")
-    first = _landed_on(_post(client, data))
+    first = _post(client, data)
+    # The first tab's receipt is shown (and consumed) before the resubmit.
+    first_page = client.get(first.headers["location"])
     second = _post(client, data)
 
-    assert _landed_on(second) == first
+    assert _landed_on(second) == _landed_on(first)
     assert len(_creates(fake)) == 1
-    page = client.get(second.headers["location"])
-    assert "data-receipt-repeated" in page.text
+    assert _receipt_id(first) != _receipt_id(second)
+    second_page = client.get(second.headers["location"])
+    for page in (first_page, second_page):
+        assert 'data-receipt-action="create"' in page.text
+    assert "data-receipt-repeated" not in first_page.text
+    assert "data-receipt-repeated" in second_page.text
+
+
+def test_a_resubmit_of_a_changed_form_reports_the_task_that_exists(
+    client: TestClient, fake: LoggedFake
+) -> None:
+    """The back button, the form edited, the same request id sent again: one
+    task, and the second receipt states THAT task — not the edited form."""
+    data = _form(project="influx")
+    first = _post(client, data)
+    client.get(first.headers["location"])
+    second = _post(client, {**data, "task_type": "epic", "project": "lithos-loom"})
+
+    assert _landed_on(second) == _landed_on(first)
+    assert len(_creates(fake)) == 1
+    receipt = _text(client.get(second.headers["location"]).text)
+    assert "Created task “Swap reads onto the new store”" in receipt
+    assert "in project influx." in receipt
+    assert "epic" not in receipt.split("Created as")[0]
+    assert "lithos-loom" not in receipt
 
 
 class HeldCreate(LoggedFake):
-    """A create that waits, in Lithos, until the test lets it through."""
+    """A create that waits, in Lithos, until the test lets it through — then
+    applies (``created``), is refused by the fake's own rules (``refused``,
+    driven by the form), or times out while still landing upstream
+    (``unknown``: it lands once ``land`` is set)."""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "created") -> None:
         super().__init__(create_dataset())
+        self.mode = mode
         self.started = threading.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.release: asyncio.Event | None = None
+        self.land: asyncio.Event | None = None
+        self.landed = threading.Event()
+        self.landing: asyncio.Task[Any] | None = None
 
     async def task_create(self, **kwargs: Any):
         self.loop = asyncio.get_running_loop()
@@ -804,16 +982,32 @@ class HeldCreate(LoggedFake):
             self.release = asyncio.Event()
         self.started.set()
         await self.release.wait()
+        if self.mode == "unknown":
+            self.land = asyncio.Event()
+            self.landing = asyncio.create_task(self._land(kwargs))
+            raise LithosToolError("did not answer within 10s", code="timeout")
         return await super().task_create(**kwargs)
 
+    async def _land(self, kwargs: dict[str, Any]) -> None:
+        assert self.land is not None
+        await self.land.wait()
+        await FakeLithosClient.task_create(self, **kwargs)
+        self.landed.set()
 
+
+@pytest.mark.parametrize("mode", ["created", "refused", "unknown"])
 def test_two_concurrent_posts_with_one_request_id_make_one_create(
-    config, monkeypatch: pytest.MonkeyPatch
+    config,
+    monkeypatch: pytest.MonkeyPatch,
+    spans: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
 ) -> None:
     """Two POSTs genuinely in flight together: the second arrives while the
-    first is inside ``lithos_task_create``. Ordered by barriers, not sleeps:
-    the release is sent only once the second submit has reached the
-    coordinator, which then has no await before it joins the flight."""
+    first is inside ``lithos_task_create``, and receives THAT call's outcome
+    whatever it is. Ordered by barriers, not sleeps: the release is sent only
+    once the second submit has reached the coordinator, which then has no
+    await before it joins the flight."""
     arrivals: list[str] = []
     second_arrived = threading.Event()
 
@@ -825,9 +1019,11 @@ def test_two_concurrent_posts_with_one_request_id_make_one_create(
             return await super().submit(request_id, create)
 
     monkeypatch.setattr(create_routes, "CreateCoordinator", SpyCoordinator)
-    fake = HeldCreate()
-    data = _form(project="influx")
+    fake = HeldCreate(mode)
+    # `refused`: the fake refuses a too-short parent prefix after the hold.
+    data = _form(project="influx", parent="infl" if mode == "refused" else "")
     answers: dict[str, Any] = {}
+    caplog.set_level(logging.INFO)
 
     with _client(config, fake) as client:
 
@@ -844,10 +1040,52 @@ def test_two_concurrent_posts_with_one_request_id_make_one_create(
         fake.loop.call_soon_threadsafe(fake.release.set)
         first.join(10)
         second.join(10)
+        assert len(fake.reads_of("task_create")) == 1
 
-    assert len(fake.reads_of("task_create")) == 1
-    assert len(_creates(fake)) == 1
-    assert _landed_on(answers["first"]) == _landed_on(answers["second"])
+        if mode == "created":
+            # Each tab gets its OWN receipt (a receipt is consumed once), and
+            # both render; the joined one says it made no second task.
+            assert _landed_on(answers["first"]) == _landed_on(answers["second"])
+            assert _receipt_id(answers["first"]) != _receipt_id(answers["second"])
+            leader = client.get(answers["first"].headers["location"])
+            joined = client.get(answers["second"].headers["location"])
+            for page in (leader, joined):
+                assert 'data-receipt-action="create"' in page.text
+            assert "data-receipt-repeated" not in leader.text
+            assert "data-receipt-repeated" in joined.text
+        elif mode == "refused":
+            for name in ("first", "second"):
+                assert answers[name].status_code == 422
+                assert "is too short" in _error(answers[name].text, "parent")
+                assert _request_id(answers[name].text) == data["request_id"]
+            # Nothing was created, so the corrected form, same id, may create.
+            _landed_on(_post(client, {**data, "parent": EPIC}))
+            assert len(fake.reads_of("task_create")) == 2
+        else:
+            for name in ("first", "second"):
+                assert answers[name].status_code == 200
+                assert NOT_VISIBLE in _text(answers[name].text)
+            assert fake.land is not None
+            fake.loop.call_soon_threadsafe(fake.land.set)
+            assert fake.landed.wait(10)
+            later = _post(client, data)
+            assert NOT_VISIBLE in _text(later.text)
+            # Landed upstream, and still never sent again under this id.
+            assert len(fake.reads_of("task_create")) == 1
+
+    expected = {"created": "ok", "refused": "rejected", "unknown": "unknown"}[mode]
+    lines = [vars(record) for record in _audit(caplog)][:2]
+    assert [line["result"] for line in lines] == [expected, expected]
+    assert sorted(line.get("write_dedup", "") for line in lines) == ["", "joined"]
+    created_spans = [
+        dict(span.attributes or {})
+        for span in spans.get_finished_spans()
+        if span.name == "lens.writes.create"
+    ][:2]
+    assert sorted(str(span.get("lens.write.dedup", "")) for span in created_spans) == [
+        "",
+        "joined",
+    ]
 
 
 class LandsLater(LoggedFake):
@@ -886,7 +1124,6 @@ def test_a_create_that_times_out_is_not_visible_yet_and_never_sent_again(
         assert fake.landed.wait(10)
         third = _post(client, data)
         board = client.get("/tasks?project=influx")
-        restart = _post(client, {**data, "intent": "restart"})
 
     for page in (first, second, third):
         assert page.status_code == 200
@@ -898,12 +1135,55 @@ def test_a_create_that_times_out_is_not_visible_yet_and_never_sent_again(
     # ONE call under the id, ever — before and after it landed.
     assert len(fake.reads_of("task_create")) == 1
     assert "Swap reads onto the new store" in board.text
-    # Start again: the input kept under a NEW request id, and no call.
+
+
+def test_start_again_posts_the_rendered_input_back_under_a_new_id(
+    config,
+    spans: InMemorySpanExporter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Start again is submitted exactly as the "not visible yet" page renders
+    it — its own hidden controls — so what survives is what the page carried,
+    not what the test remembers typing (D7)."""
+    fake = LandsLater()
+    data = _form(
+        title="Wait for the embargo to lift",
+        task_type="gate",
+        description="Lift at **09:00**.\n\nThen ship.",
+        project="influx",
+        tags="area:data\nmilestone:t3, late",
+        parent=EPIC,
+        predecessors=f"{PREDECESSOR}\n{TWIN_A}",
+        gate_type="timer",
+        ready_at="2026-10-09T09:00",
+    )
+    caplog.set_level(logging.INFO)
+    with _client(config, fake) as client:
+        unknown = _post(client, data)
+        assert NOT_VISIBLE in _text(unknown.text)
+        controls = _form_controls(unknown.text, "data-create-restart")
+        attempts = len(_audit(caplog))
+        spans.clear()
+        fake.method_calls.clear()
+        restart = _post(client, controls)
+        calls = list(fake.method_calls)
+
+    assert controls["intent"] == "restart"
+    assert "request_id" not in controls
     assert restart.status_code == 200
-    assert _field_value(restart.text, "description") == "Keep me"
-    assert _field_value(restart.text, "project") == "influx"
-    assert _request_id(restart.text) != data["request_id"]
-    assert len(fake.reads_of("task_create")) == 1
+    for name in ("title", "description", "project", "tags", "parent", "predecessors"):
+        assert _field_value(restart.text, name) == data[name], name
+    assert _field_value(restart.text, "ready_at") == data["ready_at"]
+    assert _selected(restart.text, "task_type") == "gate"
+    assert _selected(restart.text, "gate_type") == "timer"
+    fresh = _request_id(restart.text)
+    assert re.fullmatch(r"[0-9a-f]{32}", fresh) and fresh != data["request_id"]
+    # No call of any kind, and not an attempt: no audit line, no span.
+    assert calls == []
+    assert len(_audit(caplog)) == attempts
+    assert [
+        s for s in spans.get_finished_spans() if s.name == "lens.writes.create"
+    ] == []
 
 
 def test_an_upstream_refusal_is_answered_on_the_form_not_a_standalone_page(
@@ -919,3 +1199,130 @@ def test_an_upstream_refusal_is_answered_on_the_form_not_a_standalone_page(
     assert response.status_code == 422
     assert "data-create-form" in response.text
     assert "invalid_task_type" in response.text  # the unmapped-code path
+
+
+class _NoAnswer(LoggedFake):
+    async def task_create(self, **kwargs: Any):
+        raise LithosToolError("did not answer within 10s", code="timeout")
+
+
+#: One create attempt per row, and how it must be recorded:
+#: (id, form overrides, operator, headers, fake, result, code, status).
+_ATTEMPTS = [
+    ("ok", {}, OPERATOR, SAME_ORIGIN, LoggedFake, "ok", "", 303),
+    (
+        "invalid-form",
+        {"task_type": "gate", "gate_type": "timer"},
+        OPERATOR,
+        SAME_ORIGIN,
+        LoggedFake,
+        "rejected",
+        "invalid_form",
+        422,
+    ),
+    (
+        "bad-form",
+        {"request_id": "not-an-id"},
+        OPERATOR,
+        SAME_ORIGIN,
+        LoggedFake,
+        "rejected",
+        "bad_form",
+        400,
+    ),
+    ("no-operator", {}, "", SAME_ORIGIN, LoggedFake, "no_operator", "", 303),
+    (
+        "foreign-origin",
+        {},
+        OPERATOR,
+        {"Origin": "http://elsewhere.test"},
+        LoggedFake,
+        "refused_origin",
+        "",
+        403,
+    ),
+    (
+        "identity-refused",
+        {},
+        "agent-zero",
+        SAME_ORIGIN,
+        LoggedFake,
+        "rejected",
+        "identity_refused",
+        403,
+    ),
+    (
+        "registration-failed",
+        {},
+        OPERATOR,
+        SAME_ORIGIN,
+        LoggedFake,
+        "rejected",
+        "registration_failed",
+        503,
+    ),
+    (
+        "upstream-refusal",
+        {"parent": "infl"},
+        OPERATOR,
+        SAME_ORIGIN,
+        LoggedFake,
+        "rejected",
+        "invalid_input",
+        422,
+    ),
+    ("no-answer", {}, OPERATOR, SAME_ORIGIN, _NoAnswer, "unknown", "", 200),
+]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "operator", "headers", "fake_type", "result", "code", "status"),
+    [pytest.param(*row[1:], id=row[0]) for row in _ATTEMPTS],
+)
+def test_every_create_attempt_is_recorded_once(
+    config,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    caplog: pytest.LogCaptureFixture,
+    overrides: dict[str, str],
+    operator: str,
+    headers: dict[str, str],
+    fake_type: type[LoggedFake],
+    result: str,
+    code: str,
+    status: int,
+) -> None:
+    """D1/D2: one audit line, one span and one counter increment per create
+    attempt, whatever its ending, carrying the request id."""
+    dataset = replace(
+        create_dataset(), agents=(AgentRecord(id="agent-zero", type="claude-code"),)
+    )
+    fake = fake_type(dataset)
+    fake.register_operator_fails = code == "registration_failed"
+    data = _form(**overrides)
+    caplog.set_level(logging.INFO)
+    with _client(config, fake, operator=operator) as client:
+        spans.clear()
+        response = client.post(
+            "/tasks/new", data=data, headers=headers, follow_redirects=False
+        )
+
+    assert response.status_code == status
+    [line] = [vars(record) for record in _audit(caplog)]
+    assert (line["action"], line["result"], line["code"]) == ("create", result, code)
+    assert line["write_request_id"] == data["request_id"]
+    assert "write_dedup" not in line
+    [span] = [
+        dict(s.attributes or {})
+        for s in spans.get_finished_spans()
+        if s.name == "lens.writes.create"
+    ]
+    assert span["lens.write.result"] == result
+    assert span.get("lens.write.code", "") == code
+    assert span["lens.write.request_id"] == data["request_id"]
+    assert (
+        metric_value(
+            metric_reader, "lens_writes_total", action="create", result=result
+        ).value
+        == 1
+    )

@@ -57,11 +57,19 @@ MAX_REMEMBERED_REQUESTS = 512
 
 @dataclass(frozen=True)
 class Created:
-    """The create applied: the task it minted, and Lithos's answer whole."""
+    """The create applied: the task it minted, and Lithos's answer whole.
+
+    ``task_type`` and ``project`` are what THIS create asked for. A later
+    submit under the same id — the back button, a second tab — may carry a
+    different form, and its receipt must state the task that exists, not the
+    form it was re-sent from.
+    """
 
     task_id: str
     title: str
     answer: Mapping[str, Any] = field(default_factory=dict)
+    task_type: str = "task"
+    project: str = ""
 
 
 @dataclass(frozen=True)
