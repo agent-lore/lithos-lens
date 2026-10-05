@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{#
+  A write Lens or Lithos refused on its content, answered as a page (§5C.4).
+  Context: `problem` -- a `write_errors.WriteProblem` of kind `refused`.
+
+  `write_errors` gives a refused problem no page of its own, because its usual
+  home is the form that was submitted, re-rendered with the input kept. A
+  lifecycle action (complete, and later reopen and cancel) has no such form --
+  its form is a button on a row -- so its refusals land here: not a gate, a
+  gate type Lens cannot complete yet, a form that named no status, an identity
+  Lens will not write under, a pre-check read that failed, or an upstream
+  refusal with an envelope. The status code is the problem's own.
+-#}
+
+{% block title %}Write refused | Lithos Lens{% endblock %}
+
+{% block content %}
+  {% include "writes/outcome.html" %}
+{% endblock %}

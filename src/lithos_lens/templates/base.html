@@ -34,6 +34,16 @@
       </nav>
     </header>
     <main class="shell-main">
+      {#
+        The receipt slot (T3 D5): ONE per page, above the content and outside
+        every `data-refresh-fragment` region, so the reconcile that re-renders
+        the board after a write neither wipes a receipt nor shows it twice.
+        A plain write's redirect names its receipt in `?receipt=`, taken (and
+        consumed -- shown once) here; a row's HTMX write swaps its answer in.
+      #}
+      <div id="write-receipt" class="write-receipt-slot" data-write-receipt-slot aria-live="polite">
+        {%- with receipt = take_receipt(request) %}{% if receipt %}{% include "writes/receipt.html" %}{% endif %}{% endwith -%}
+      </div>
       {% block content %}{% endblock %}
     </main>
     {% block scripts %}{% endblock %}

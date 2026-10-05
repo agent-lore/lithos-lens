@@ -11,7 +11,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.metrics` | M | 0 | 20 |
+| `lithos_lens.metrics` | M | 0 | 21 |
 | `lithos_lens.telemetry` | M | 0 | 6 |
 
 ## Public API
@@ -37,6 +37,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `tasks_graph_cycle_reads` — Counter of the graph page's scoped `lithos_task_blocked` reads.
 - def `tasks_minigraph_renders` — Counter of detail mini-graph fragment renders (§5.6, T2-A5).
 - def `tasks_panel_opens` — Counter of side-panel renders by where the request came from (§5.5).
+- def `writes` — Counter of curated-write ATTEMPTS by action and result (§5C, T3 D4).
 
 ### `lithos_lens.telemetry`
 - def `setup_telemetry` — Install the tracer, meter and (when exporting) log providers.

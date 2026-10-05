@@ -762,6 +762,21 @@ for (const { slug, url, ready } of PAGES) {
       );
       expect(scrollWidth).toBeLessThanOrEqual(width);
 
+      // No row runs past its card. The page-level check above cannot see
+      // this: `.task-group` clips with `overflow: hidden`, so a row held wide
+      // by one long unbroken token in its description (a path in a code
+      // block) lost its right edge — title, prose and list items cut off
+      // mid-sentence — while the document stayed exactly the viewport wide.
+      const overflowingRows = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".task-group .task-row"))
+          .filter((row) => {
+            const card = row.closest(".task-group")!.getBoundingClientRect();
+            return row.getBoundingClientRect().right > card.right + 1;
+          })
+          .map((row) => (row as HTMLElement).dataset.taskId),
+      );
+      expect(overflowingRows).toEqual([]);
+
       // Settle before capturing: fonts loaded plus a double rAF tick. This is
       // the real mitigation for Chromium's intermittent full-page
       // Page.captureScreenshot abort; the retry above is only a backstop.

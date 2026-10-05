@@ -734,6 +734,10 @@ classDiagram
     +id str
     +source OperatorSource
   }
+  class ReceiptTask {
+    +task_id str
+    +title str
+  }
   class TaskRef {
     +task_id str
     +title str
@@ -755,7 +759,15 @@ classDiagram
     +prefix str
     +log_level RefusalLogLevel
   }
+  class WriteReceipt {
+    +action str
+    +operator str
+    +outcome str
+    +released_total int
+  }
   WriteProblem "1" --> "0..*" MessageSegment : detail
   WriteProblem "1" --> "0..*" TaskRef : candidates
   WriteProblem "1" --> "1" TaskRef : subject
+  WriteReceipt "1" --> "0..*" ReceiptTask : released
+  WriteReceipt "1" --> "1" ReceiptTask : task
 ```

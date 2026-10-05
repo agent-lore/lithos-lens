@@ -1,0 +1,45 @@
+{#
+  One write's receipt (T3 D5): what the write returned, shown once, above the
+  page the write's redirect landed on -- or, for a row action, as the whole of
+  the HTMX answer, swapped into the same slot (`base.html`).
+  Context: `receipt` -- a `receipts.WriteReceipt`.
+
+  Feedback, not state. Nothing here is claimed that the page below does not
+  re-derive from fresh reads: the released tasks are named because Lithos said
+  this write released them, and whether they are ready NOW is what the board
+  under the banner shows.
+
+  A released task is named by its title when the funnel could read one, and
+  always by the shared short-id element (§5.3); a task whose read failed is
+  named by its short id alone rather than by a title Lens invented.
+-#}
+<section class="write-receipt" role="status" data-write-receipt data-receipt-action="{{ receipt.action }}">
+  {% if receipt.action == "complete" %}
+    <p class="write-receipt-headline">
+      &#10003; Completed gate &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;
+      {% with task_id = receipt.task.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    <p class="write-receipt-detail" data-receipt-outcome>Recorded as {{ receipt.operator }}: &ldquo;{{ receipt.outcome }}&rdquo;</p>
+    <div class="write-receipt-detail" data-receipt-released="{{ receipt.released_total }}">
+      {% if receipt.released_total %}
+        Unblocked {{ receipt.released_total }} task{{ "" if receipt.released_total == 1 else "s" }}:
+        <ul class="write-receipt-tasks">
+          {% for released in receipt.released %}
+            <li data-receipt-released-task="{{ released.task_id }}">
+              {% if released.title %}<a href="{{ task_detail_url(request, released.task_id) }}">{{ released.title }}</a>{% endif %}
+              {% with task_id = released.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </li>
+          {% endfor %}
+          {% if receipt.released_more %}
+            <li data-receipt-released-more="{{ receipt.released_more }}">and {{ receipt.released_more }} more</li>
+          {% endif %}
+        </ul>
+      {% else %}
+        Unblocked no tasks &mdash; nothing that waits on this gate became ready.
+      {% endif %}
+    </div>
+    {#- FOLLOW-UP SLOT (T3-W5): the "Reopen gate" form renders here, as an
+        ordinary form, with its one line of why it is a reopen and not an
+        undo. Nothing is offered until that slice ships it. -#}
+  {% endif %}
+</section>

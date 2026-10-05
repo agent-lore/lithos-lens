@@ -9,6 +9,8 @@ import {
   TRUNCATED_BASE_URL,
   TRUNCATED_FRONTIER_LIMIT,
   TRUNCATED_PORT,
+  WRITES_BASE_URL,
+  WRITES_PORT,
 } from "./servers";
 
 /**
@@ -19,11 +21,12 @@ import {
  * driven end to end against the in-memory fixtures in
  * `src/lithos_lens/fake_lithos.py` — no Lithos MCP server required.
  * `LITHOS_LENS_CONFIG` points at the checked-in example config so discovery
- * never depends on the developer's machine. There are three instances (ports
+ * never depends on the developer's machine. There are four instances (ports
  * and rationale in `servers.ts`): the default board, one running at a low
  * `frontier_limit` so the truncated board can be captured without degrading the
- * healthy one, and one whose graph guards are tight enough to photograph the
- * graph page's partial-signal and refused states.
+ * healthy one, one whose graph guards are tight enough to photograph the
+ * graph page's partial-signal and refused states, and one the curated writes
+ * mutate, so a completed gate never reaches another test's board.
  *
  * Run with `make e2e` (installs deps + Chromium), or from this directory:
  *   npm install && npm run install-browsers && npm test
@@ -32,6 +35,16 @@ import {
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
+  // A FIXED worker count, not Playwright's default of half the CPUs the OS
+  // reports. Inside a CPU-limited container (`--cpus`, a cgroup quota) the OS
+  // still reports every HOST core, so the default launched ~16 browsers
+  // against two CPUs' worth of time — alongside the four Lens instances and a
+  // Cytoscape layout per graph page — and the graph-page tests timed out
+  // inside `page.evaluate` (reproduced with `taskset -c 0-1`). Two workers
+  // finish the suite in the same wall time on a large machine, because the
+  // servers rather than the browsers are the bound. `LENS_E2E_WORKERS`
+  // overrides it for a run that wants more or fewer.
+  workers: Number(process.env.LENS_E2E_WORKERS ?? 2),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "list" : [["list"], ["html", { open: "never" }]],
@@ -93,14 +106,15 @@ export default defineConfig({
       dependencies: ["app", "live-events"],
     },
   ],
-  // THREE instances (see servers.ts): the default board, a second one whose
-  // frontier_limit is low enough that the demo fixtures truncate, and a third
-  // whose graph guards produce the partial-signal and refused states. Separate
-  // PROCESSES, so the extra two also sit outside the event-leak problem the
-  // projects above are sequenced around — `EventHub.publish` fans to the tabs
-  // of ITS server only, and no driving phase talks to either.
+  // FOUR instances (see servers.ts): the default board, a second one whose
+  // frontier_limit is low enough that the demo fixtures truncate, a third
+  // whose graph guards produce the partial-signal and refused states, and a
+  // fourth the curated writes mutate. Separate PROCESSES, so the extra three
+  // also sit outside the event-leak problem the projects above are sequenced
+  // around — `EventHub.publish` fans to the tabs of ITS server only, and only
+  // the writes spec talks to the fourth.
   //
-  // ALL THREE pin `LENS_HOST` to loopback. Lens defaults to every interface, which
+  // ALL FOUR pin `LENS_HOST` to loopback. Lens defaults to every interface, which
   // is the accepted posture for the container (REQUIREMENTS §5C.1) but the
   // wrong one here: fake mode registers `POST /tasks/events/publish`, an
   // unauthenticated write seam with no Origin check, so on a shared segment
@@ -157,6 +171,22 @@ export default defineConfig({
         // guard then separates the scope that renders from the one refused.
         LITHOS_LENS_TASKS_FRONTIER_LIMIT: GRAPH_DEGRADED_FRONTIER_LIMIT,
         LITHOS_LENS_GRAPH_MAX_TASKS: GRAPH_REFUSAL_MAX_TASKS,
+      },
+    },
+    {
+      // The writes instance (T3-W4): the fake keeps every write for the life
+      // of its process, so the spec that completes a gate gets a process of
+      // its own. No `default_operator` here either — the spec sets the
+      // cookie, so the identity in its captures is one it chose.
+      command: "uv run --directory .. lithos-lens",
+      url: WRITES_BASE_URL,
+      reuseExistingServer: process.env.LENS_E2E_REUSE_SERVER === "1",
+      timeout: 120_000,
+      env: {
+        LITHOS_LENS_FAKE_LITHOS: "1",
+        LITHOS_LENS_CONFIG: "lithos-lens.example.toml",
+        LENS_PORT: String(WRITES_PORT),
+        LENS_HOST: "127.0.0.1",
       },
     },
   ],

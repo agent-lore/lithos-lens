@@ -84,6 +84,11 @@
            to a keyboard and to a screen reader. §5.5.4 is where the gate is judged,
            so here it is text. #}
         {% if detail.pr_reconciliation and detail.pr_reconciliation.detail %}<p class="reconciliation-detail" data-reconciliation-detail>{{ detail.pr_reconciliation.detail }}</p>{% endif %}
+        {#- Complete (T3 D7): the same partial the board's gate row uses, as a
+           plain form whose 303 returns here with the receipt above the page. -#}
+        {% with action_task = detail.task, action_htmx = false, action_next = task_detail_url(request, detail.task.id) %}
+          {% include "writes/complete_action.html" %}
+        {% endwith %}
       </header>
 
       {% if detail.errors %}

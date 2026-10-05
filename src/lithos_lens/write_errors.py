@@ -30,11 +30,9 @@ Three rules hold for every row, and none of them is a per-route decision:
 **The whole envelope, not a code and a message.** The mapper takes the error
 envelope as a mapping because fields beyond those two carry what the copy
 needs: ``ambiguous_id_prefix`` is useless without its ``candidates``, and a
-field upstream adds later reaches the copy without a signature change. T3-W3
-separately makes the client's coded tool error carry the envelope; until it
-does, the funnel has nothing to pass but ``{"code": ..., "message": ...}`` and
-every row below still works, degraded exactly where the missing fields are
-(the ambiguous row loses its choices and keeps its prefix copy).
+field upstream adds later reaches the copy without a signature change. The
+client's coded tool error carries the envelope whole (T3-W3); an error with an
+EMPTY one is no answer at all, and the funnel passes ``None`` for it.
 
 **One code, two facts.** ``task_not_found`` is what complete and cancel answer
 for a task that is missing AND for one that is no longer open — Lithos spends
@@ -357,6 +355,38 @@ def map_write_error(
     )
     row = _ROWS.get(attempt.code, _unmapped_code)
     return row(attempt)
+
+
+def funnel_problem(
+    action: WriteAction,
+    kind: ProblemKind,
+    headline: str,
+    *,
+    code: str,
+    status_code: int,
+    subject: TaskRef = NO_SUBJECT,
+    hint: str = "",
+) -> WriteProblem:
+    """A refusal the write funnel decides itself, before Lithos sees a write.
+
+    The funnel's own checks — a stale ``expected_status``, a form that says
+    nothing usable, a task the action does not apply to, an identity that
+    cannot write — refuse a write that was never sent, so nothing was changed
+    by construction and the claim is fixed. They answer through the same pages
+    and the same notice as an upstream refusal, so the operator reads one kind
+    of copy whichever side caught it; ``code`` is the funnel's own name for
+    the case (``not_a_gate``, ``bad_form`` …), carried for the audit line.
+    """
+    return WriteProblem(
+        action=action,
+        kind=kind,
+        claim="nothing",
+        status_code=status_code,
+        headline=headline,
+        hint=hint,
+        code=code,
+        subject=subject,
+    )
 
 
 def message_segments(message: str) -> tuple[MessageSegment, ...]:

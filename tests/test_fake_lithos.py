@@ -492,9 +492,9 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
     config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
     entries = _web_server_entries(config.read_text())
 
-    assert len(entries) >= 3, (
-        "three instances: the healthy board, the truncated board, and the "
-        "graph page's degraded states"
+    assert len(entries) >= 4, (
+        "four instances: the healthy board, the truncated board, the graph "
+        "page's degraded states, and the one the curated writes mutate"
     )
     for index, entry in enumerate(entries):
         pinned = re.search(r'LENS_HOST:\s*"([^"]+)"', entry)
@@ -502,6 +502,25 @@ def test_the_e2e_harness_binds_every_instance_to_loopback() -> None:
         assert pinned.group(1) in {"127.0.0.1", "localhost", "::1"}, (
             f"webServer entry {index} binds {pinned.group(1)!r}, not loopback"
         )
+
+
+def test_the_e2e_harness_bounds_its_worker_count() -> None:
+    """``make e2e`` must not size its browser pool from the host's core count.
+
+    In a CPU-limited container the OS reports every host core, so Playwright's
+    default (half of them) put ~16 browsers on two CPUs and the graph-page
+    tests timed out in the clean-container gate. The bound is a decision in
+    the config file, so it is pinned there: a fixed default, overridable by
+    ``LENS_E2E_WORKERS``.
+    """
+    config = Path(__file__).resolve().parents[1] / "e2e/playwright.config.ts"
+    pinned = re.search(
+        r"^\s*workers:\s*Number\(process\.env\.LENS_E2E_WORKERS \?\? (\d+)\)",
+        config.read_text(),
+        re.M,
+    )
+    assert pinned, "playwright.config.ts does not pin its worker count"
+    assert 1 <= int(pinned.group(1)) <= 4
 
 
 def test_the_scoped_stripe_board_still_has_an_empty_needs_attention_list(

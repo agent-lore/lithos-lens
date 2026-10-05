@@ -108,6 +108,8 @@ source_modules = [
     "lithos_lens.config_schema",
     "lithos_lens.operator",
     "lithos_lens.write_guards",
+    "lithos_lens.receipts",
+    "lithos_lens.gate_completion",
     "lithos_lens.logging",
     "lithos_lens.telemetry",
     "lithos_lens.metrics",
@@ -128,6 +130,7 @@ forbidden_modules = [
     "lithos_lens.knowledge_routes",
     "lithos_lens.graph_routes",
     "lithos_lens.write_routes",
+    "lithos_lens.write_funnel",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]
@@ -153,6 +156,7 @@ forbidden_modules = [
     "lithos_lens.knowledge_routes",
     "lithos_lens.graph_routes",
     "lithos_lens.write_routes",
+    "lithos_lens.write_funnel",
     "lithos_lens.main",
     "lithos_lens.__main__",
 ]

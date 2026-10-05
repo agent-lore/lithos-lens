@@ -122,6 +122,13 @@
         <a class="button-secondary" href="{{ task_detail_url(request, detail.task.id) }}" data-panel-expand>Expand</a>
         <a class="button-secondary" href="{{ panel_close_url or tasks_url(request) }}" data-panel-close>Close</a>
       </div>
+      {#- Complete (T3 D7), as a plain form: the panel is re-rendered by the
+         reconcile, so its write returns to the host page through the 303 and
+         the receipt banner, like the detail page's. This fragment extends no
+         layout, so the identity chip rides in with the partial. -#}
+      {% with action_task = detail.task, action_htmx = false, action_next = panel_close_url or tasks_url(request) %}
+        {% include "writes/complete_action.html" %}
+      {% endwith %}
     </header>
 
     {#- The description (§5.3), as markdown and cut to the same budget the

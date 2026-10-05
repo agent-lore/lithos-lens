@@ -66,3 +66,19 @@ export const GRAPH_REFUSAL_MAX_TASKS = "9";
 // capture cannot drift apart about which one is which.
 export const GRAPH_DEGRADED_SCOPE = "loom-epic";
 export const GRAPH_REFUSED_SCOPE = "lithos-loom";
+
+/**
+ * A FOURTH instance, for the curated writes (T3-W4 onward).
+ *
+ * The fake keeps a write for the life of its process: a gate completed here
+ * stays completed. Completing the demo's human gate on the default board's
+ * server would change what every later driving test and every capture of that
+ * board sees, so writes run against their own process, which nothing else
+ * drives or photographs. The operator is chosen with the cookie inside each
+ * test, never with `default_operator` on a shared server — that would put a
+ * Complete button into every existing capture of the default board.
+ */
+export const WRITES_PORT = Number(process.env.LENS_E2E_WRITES_PORT ?? 8126);
+export const WRITES_BASE_URL = `http://127.0.0.1:${WRITES_PORT}`;
+// The demo dataset's only human gate.
+export const WRITES_HUMAN_GATE = "influx-read-swap-approval";

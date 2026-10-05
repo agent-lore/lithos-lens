@@ -64,12 +64,21 @@ LITHOS_LENS_FAKE_LITHOS=1 LITHOS_LENS_CONFIG=lithos-lens.example.toml \
 
 so you do not need to start a server yourself.
 
+The suite runs a **fixed** two workers (`workers` in the config; override with
+`LENS_E2E_WORKERS`). Playwright's default sizes the pool from the CPUs the OS
+reports, and inside a CPU-limited container that is every *host* core: about
+16 browsers on two CPUs' worth of time timed the graph-page tests out. Two
+workers take the same wall time on a large machine, because the four Lens
+instances, not the browsers, are the bound.
+
 `LENS_HOST` is not decoration. Lens binds every interface by default — the
 accepted posture for the container it ships as — but fake mode registers
 `POST /tasks/events/publish`, an unauthenticated write seam, and the suite runs
-three such instances (the healthy board, one at a low `frontier_limit` for the
-truncated board, and one whose graph guards are tight enough to photograph the
-graph page's partial-signal and refused states — see
+four such instances (the healthy board, one at a low `frontier_limit` for the
+truncated board, one whose graph guards are tight enough to photograph the
+graph page's partial-signal and refused states, and one the curated writes
+mutate — the fake keeps a completed gate completed for the life of its
+process, so `writes.spec.ts` must never touch the shared board; see
 [`servers.ts`](./servers.ts)). Loopback keeps a run on a shared network from having a
 foreign event fanned into the tabs being photographed. Use it for any fake-mode
 instance you start by hand, too.
@@ -86,7 +95,10 @@ e2e/artifacts/<page>-<width>.png
 
 with `<width>` one of `320`, `768`, `1024`, `1440` and `<page>` one of the
 slugs in `PAGES` — four files each, so the run's file count is four times the
-length of that array:
+length of that array, plus the two captures `writes.spec.ts` makes on its own
+instance under the same contract (`gate-complete-action`, the gate row with
+Complete and the identity before the write, and `complete-receipt`, the
+receipt banner after it):
 
 ```
 e2e/artifacts/dashboard-320.png
