@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{#
+  Add a dependency (T3-W8, D2): the confirm step. A read -- it writes nothing.
+  Direction is the mistake this step exists to prevent, so the relation is
+  restated with both titles and what it means for readiness before the one
+  form that writes it.
+
+  Context:
+    `task`       -- the focal task as read, when it was read;
+    `sentence`   -- the chosen `relation_sentences.RelationSentence`, if valid;
+    `typed`      -- the other task as typed;
+    `errors`     -- input name -> `create_form.FieldError` (the entry form is
+                    shown again with them, input kept);
+    `notice`     -- why this page offers no form, or "";
+    `next_url`   -- where the write's 303 returns the operator (`safe_next`);
+    and, once the other task resolved and the focal task's edges were read
+    fresh: `other`, `relation` (from / to / type), `terms` (the sentence's two
+    tasks in reading order), `readiness`, and `existing` -- the relation's
+    edge when it is already there, in which case there is NO form (D5).
+-#}
+
+{% block title %}Add a dependency | Lithos Lens{% endblock %}
+
+{% block content %}
+<section class="proceed-anyway-page relation-page" data-relation-page>
+  <h1>Add a dependency</h1>
+  {% if task %}
+    <p class="proceed-anyway-subject">
+      <a href="{{ task_detail_url(request, task.id) }}">{{ task.title }}</a>
+      <span class="badge">{{ task.task_type or "task" }}</span>
+      {% with task_id = task.id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+  {% endif %}
+
+  {% if notice %}
+    <div class="write-outcome-copy">
+      <p class="write-outcome-headline" data-relation-notice>{{ notice }}</p>
+      <p class="write-outcome-hint"><a href="{{ next_url }}">Back</a></p>
+    </div>
+  {% elif other %}
+    {% set first, second = terms %}
+    <p class="relation-statement" data-relation-statement data-relation-from="{{ relation.from_task_id }}" data-relation-to="{{ relation.to_task_id }}" data-relation-type="{{ relation.type }}">
+      <strong>&ldquo;{{ first.title or first.id }}&rdquo;</strong>
+      {% with task_id = first.id %}{% include "tasks/short_id.html" %}{% endwith %}
+      {{ sentence.verb }}
+      <strong>&ldquo;{{ second.title or second.id }}&rdquo;</strong>
+      {% with task_id = second.id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    {% if existing %}
+      <div class="write-outcome-copy">
+        {% with exists_by = existing.created_by, exists_at = existing.created_at %}{% include "writes/relation_exists.html" %}{% endwith %}
+        <p class="write-outcome-hint"><a href="{{ next_url }}">Back</a></p>
+      </div>
+    {% else %}
+      <p class="relation-readiness" data-relation-readiness>{{ readiness }}</p>
+      {% if operator_identity(request).resolved %}
+        <form class="complete-action proceed-anyway-form" method="post" action="{{ edge_path(task.id) }}" data-relation-confirm-form data-task-id="{{ task.id }}">
+          <input type="hidden" name="from_task_id" value="{{ relation.from_task_id }}">
+          <input type="hidden" name="to_task_id" value="{{ relation.to_task_id }}">
+          <input type="hidden" name="type" value="{{ relation.type }}">
+          <input type="hidden" name="expected_status" value="{{ task.status }}">
+          <input type="hidden" name="next" value="{{ next_url }}">
+          <button type="submit" class="complete-action-button" data-relation-add>Add this dependency</button>
+          <a class="proceed-anyway-back" href="{{ next_url }}">Don&rsquo;t add it</a>
+          {% include "writes/identity.html" %}
+        </form>
+      {% else %}
+        <p class="proceed-anyway-no-operator" data-relation-no-operator>
+          No operator identity is set, so this page offers no form. Choose one from the link at the top of the page.
+        </p>
+      {% endif %}
+    {% endif %}
+  {% elif task %}
+    {% with relation_task = task, relation_next = next_url, relation_selected = sentence.key if sentence else "", relation_typed = typed, relation_errors = errors %}
+      {% include "writes/relation_form.html" %}
+    {% endwith %}
+  {% endif %}
+</section>
+{% endblock %}

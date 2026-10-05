@@ -87,8 +87,7 @@ class FakeWriteOutcome:
     fields: a reopen's event names the ``prior_status`` and ``prior_outcome``
     its own return value has just cleared, and a create's event does not name
     the agent its request did. ``event_type`` is empty for an edge write —
-    upstream emits no event for one, and only the hub mints the synthetic
-    ``lens.edge_upserted`` (T3 D11).
+    upstream emits no event for one, and Lens mints none either (T3-W8).
     """
 
     payload: dict[str, Any]

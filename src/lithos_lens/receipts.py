@@ -35,6 +35,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 __all__ = [
     "CancelFacts",
     "CreateFacts",
+    "EdgeFacts",
     "MAX_RECEIPTS",
     "MAX_TITLED_RELEASES",
     "RECEIPT_KEY",
@@ -155,6 +156,26 @@ class CreateFacts:
 
 
 @dataclass(frozen=True)
+class EdgeFacts:
+    """What an add-dependency did, in receipt terms (T3-W8, D11).
+
+    ``source`` and ``target`` are the edge's ``from`` and ``to`` tasks, titled
+    as Lithos (or a read) named them; ``edge_type`` is the edge's type, which
+    the banner words. ``already_exists`` is true when Lens's fresh read found
+    the relation before the call and so wrote nothing (D5); ``created_by`` and
+    ``created_at`` are then the existing edge's stamps — empty on an edge
+    Lithos recorded without them, when the banner drops them.
+    """
+
+    source: ReceiptTask
+    target: ReceiptTask
+    edge_type: str
+    already_exists: bool = False
+    created_by: str = ""
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
 class WriteReceipt:
     """One write's outcome, as the banner states it.
 
@@ -182,8 +203,9 @@ class WriteReceipt:
     ``safe_next``: a follow-up form on the receipt (Reopen gate) posts it as its
     ``next``, because an HTMX receipt is rendered against the POST, whose own
     path is no page to come back to.
-    ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), and ``created`` a
-    create's :class:`CreateFacts` (T3-W7); each is None for every other action.
+    ``cancel`` is a cancel's :class:`CancelFacts` (T3-W6), ``created`` a
+    create's :class:`CreateFacts` (T3-W7), and ``edge`` an add-dependency's
+    :class:`EdgeFacts` (T3-W8); each is None for every other action.
     """
 
     action: str
@@ -200,6 +222,7 @@ class WriteReceipt:
     back_to: str = ""
     cancel: CancelFacts | None = None
     created: CreateFacts | None = None
+    edge: EdgeFacts | None = None
 
     @property
     def released_more(self) -> int:

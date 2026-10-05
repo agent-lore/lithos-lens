@@ -176,7 +176,8 @@ class FakeLithosClient:
     emitted and the browser sees the board move through the normal SSE path;
     without one (most unit tests) the writes still apply, they just announce
     nothing. An edge write publishes nothing — upstream emits no event for one,
-    and only the hub mints the synthetic ``lens.edge_upserted`` (T3 D11).
+    and Lens mints none either: its edge action evicts both endpoints' cached
+    edges itself (T3-W8).
     """
 
     def __init__(
@@ -318,7 +319,10 @@ class FakeLithosClient:
         return rows[:limit] if limit is not None else rows
 
     async def task_get(self, task_id: str) -> TaskRecord:
-        task = self._by_id(task_id)
+        # Upstream resolves the id through the shared resolver first (since
+        # 0.5.0): a prefix of at least six characters names its one match,
+        # and a short, unmatched or ambiguous one is the resolver's refusal.
+        task = self._by_id(self._writes.resolve_id(task_id))
         if task is None:
             # Mirror the concrete client: a missing task is an error envelope
             # (code=task_not_found), surfaced as a coded LithosToolError.

@@ -440,6 +440,19 @@ classDiagram
     +tone str
     +severity int
   }
+  class Relation {
+    +from_task_id str
+    +to_task_id str
+    +type str
+  }
+  class RelationSentence {
+    +key str
+    +verb str
+    +edge_type str
+    +focal_first bool
+    +focal_is_from bool
+    +gate_only bool
+  }
   class ScopeRefusal {
     +count int
     +max_tasks int
@@ -805,6 +818,12 @@ classDiagram
     +project str
     +operator str
   }
+  class EdgeFacts {
+    +edge_type str
+    +already_exists bool
+    +created_by str
+    +created_at str
+  }
   class FieldError {
     +message str
   }
@@ -870,6 +889,8 @@ classDiagram
   CancelFacts "1" --> "0..*" ReceiptTask : behind
   CancelFacts "1" --> "0..*" ReceiptTask : children
   CancelFacts "1" --> "0..*" ReceiptTask : stranded
+  EdgeFacts "1" --> "1" ReceiptTask : source
+  EdgeFacts "1" --> "1" ReceiptTask : target
   FieldError "1" --> "0..*" TaskRef : candidates
   Validated "1" --> "0..1" CreateRequest : request
   Validated "1" --> "0..*" FieldError : errors
@@ -878,6 +899,7 @@ classDiagram
   WriteProblem "1" --> "1" TaskRef : subject
   WriteReceipt "1" --> "0..1" CancelFacts : cancel
   WriteReceipt "1" --> "0..1" CreateFacts : created
+  WriteReceipt "1" --> "0..1" EdgeFacts : edge
   WriteReceipt "1" --> "0..*" ReceiptTask : released
   WriteReceipt "1" --> "1" ReceiptTask : task
 ```

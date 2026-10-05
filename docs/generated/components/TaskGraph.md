@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps, and the add-dependency relation sentences: each sentence about a task mapped to the edge it means (and back), whether the relation is already among a task's edges, and what it will mean for readiness by the blocker's status.
 
 **Tier:** Foundation
 
@@ -32,6 +32,7 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.graph_snapshot` | M | 1 | 4 |
 | `lithos_lens.graph_view` | M | 11 | 3 |
 | `lithos_lens.pr_reconciliation` | M | 1 | 2 |
+| `lithos_lens.relation_sentences` | S | 2 | 5 |
 | `lithos_lens.task_detail` | M | 3 | 2 |
 | `lithos_lens.task_graph` | S | 3 | 3 |
 | `lithos_lens.task_links` | M | 6 | 7 |
@@ -200,6 +201,15 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - class `ReconciliationStyle` — How ONE reconciliation state renders: its text, its colour, its rank.
 - def `known_states` — The rendered vocabulary, most severe first — the mapping, read-only.
 - def `reconciliation_of` — The PR reconciliation state to RENDER for a gate, or None for none.
+
+### `lithos_lens.relation_sentences`
+- class `Relation` — One edge to write: ``from`` → ``to``, of ``type``.
+- class `RelationSentence` — One sentence about the focal task, and the edge it means.
+- def `sentences_for` — The sentences a task's page offers: the gate one only on a gate.
+- def `sentence_named` — The sentence ``key`` names, if ``task``'s page offers it.
+- def `sentence_of` — The sentence on ``task``'s page that means ``relation``, or None.
+- def `existing_edge` — The relation's edge among ``edges`` (one task's list), if present.
+- def `readiness` — What the relation will mean for readiness, as one or two sentences.
 
 ### `lithos_lens.task_detail`
 - class `TaskDetailClient` — The subset of the Lithos client the detail page consumes.

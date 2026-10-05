@@ -188,6 +188,21 @@ The current application exposes these routes:
   kept under a new request id. Plain form only, never HTMX. The form carries
   **no `expected_status`**: §5C.6's stale-status pre-check is about forms on an
   existing task, and there is no task yet.
+- `GET /tasks/{task_id}/edges/new`
+  The **relation confirm step** for an open task (§5.15, Add a dependency): a
+  read. `?relation=` names the sentence (`blocked_by`, `blocks`, or — on a
+  gate only — `waited_on_by`), `?other=` the other task (full id or a prefix
+  of at least six characters) and `?next=` where the write returns the
+  operator. A sentence the page does not offer, or no other task, re-renders
+  the entry form (400); an other task Lithos cannot resolve re-renders it with
+  the message — or an ambiguous prefix's candidates — under the input (422).
+  A task that is no longer open is the conflict page (409); an unknown id is
+  "This task no longer exists." (404); a failed read is 503.
+- `POST /tasks/{task_id}/edges`
+  Adds one dependency edge through the write funnel: `from_task_id`,
+  `to_task_id`, `type` and `expected_status`, as the confirm step's form posts
+  them. Answered like the approve POST — 303 to `next` with `?receipt=<id>`
+  — and always a plain form, never HTMX.
 - `GET /knowledge`
   Renders the knowledge landing page: hybrid search, recently-updated notes,
   and tag browse.
@@ -1896,7 +1911,7 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
-### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen, Cancel and Create
+### 5.15 Write Funnel, Receipts, Complete a Gate, Reopen, Cancel, Create and Add a Dependency
 
 The task writes (T3-W4 onwards). Every curated write goes through **one function**
 (`lithos_lens.write_funnel.WriteFunnel.submit`, or `submit_create` for a create,
@@ -2290,6 +2305,72 @@ them anyway.
   expected or observed status. A Lens validation refusal is recorded
   `rejected` (`invalid_form`).
 
+**Add a dependency** (T3-W8). Direction is the mistake this action exists to
+prevent, so the operator never picks an edge's `from` or `to`: they pick a
+**sentence** about the task whose page they are on and name the other task,
+and the relation is restated before anything is written.
+
+- **Affordance.** On an **open** task's detail page, in the header's action
+  block, when an operator identity resolves: one small form — a sentence and
+  the other task's id or prefix — that GETs the confirm step. The sentences
+  (`relation_sentences`), each one edge: "This task is blocked by ▁"
+  (`blocks`, other → this), "This task blocks ▁" (`blocks`, this → other),
+  and, only when `task_type` is `gate` (a gate with no `metadata.gate_type`
+  included), "▁ waits on this gate" (`waits_on_gate`, this gate → other).
+  There is no `parent_child` sentence (a parent is set at create) and no
+  `discovered_from`.
+- **The confirm step** resolves the other task with `lithos_task_get` —
+  Lithos resolves a prefix of at least six characters; an
+  `ambiguous_id_prefix` lists its candidates (id and title, as text) under
+  the input for the operator to retype, and `invalid_input` or an unmatched
+  prefix puts Lithos's message there — and reads the focal task's edges
+  **fresh** (its cache entry evicted, then one `lithos_task_edge_list` under
+  the 5 s link-read deadline). If the relation is already there it says
+  **"This relation already exists (added by *\<agent\>*, *\<date\>*);
+  nothing was written."** — no parenthesis when the edge carries no
+  `created_by` / `created_at` — and offers no form. Otherwise it restates the
+  sentence with both titles and short ids, and what the relation means for
+  readiness, by the blocker's status: an open blocker — "*B* will not be
+  ready until *A* completes"; a completed one adds no wait; a cancelled one
+  strands its dependent (`blocker_unsatisfiable`) until it is reopened; a
+  waiter waits until its gate resolves — completed, or a timer gate past its
+  `ready_at`, which is said when it already has. A dependent that is itself
+  resolved is told it waits on nothing now. Its form posts the resolved
+  **full** ids, the type and the focal task's status as `expected_status`.
+- **The write** goes through the funnel (`expected_status` checked, the task
+  must be open, and the relation must be one the task's page offers —
+  `bad_relation` otherwise, with no call). Its `perform` re-reads the focal
+  task's edges fresh, then: the relation already there is a **success that
+  writes nothing** (`ok`, `lens.write.already_exists = true`, the same
+  receipt sentence); otherwise one `lithos_task_edge_upsert(from_task_id,
+  to_task_id, type, agent=<operator>)` with **no metadata** — the edge's
+  `created_by` records the operator. **A fresh read that fails writes
+  nothing** — an upsert could replace the metadata of an edge Lens could not
+  see — and is refused 503 `precheck_failed`: "Lens couldn't check whether
+  this relation exists — nothing was written." The funnel lets `perform`
+  answer that refusal itself rather than classifying it as the write's own
+  failure. A refusal from Lithos takes its §5.14 row: `cycle` (the message
+  verbatim), `self_edge`, `not_a_gate`, `task_not_found` (a missing endpoint,
+  with Lithos's message; the focal task gone is the conflict page) and
+  `invalid_edge_type` (the Lens-defect path).
+- **Convergence.** An edge write emits no event, upstream or Lens's own.
+  After the upsert — applied, refused or unanswered — **both endpoints leave
+  the edge cache**, so the page the redirect lands on renders from fresh
+  reads; other tabs converge on the cache's 30 s TTL or their next event.
+  An already-existing relation evicts the other endpoint (its entry may
+  predate the relation).
+- **Receipt.** "+ Added dependency: *A* blocks *B*" (or "*W* waits on gate
+  *G*") and who added it; or "Already related: …" with the already-exists
+  sentence. **No removal is offered:** a mis-drawn edge is removed outside
+  Lens with `lithos_task_edge_delete` (Lithos 0.6.0).
+- **Not serialised, and one residual.** Two concurrent submits of one
+  relation may both upsert it — the same edge, the same (empty) metadata.
+  Another agent inserting the same relation between Lens's fresh read and
+  its upsert has its metadata replaced by Lens's; closing that needs an
+  upstream `created` signal on the upsert response.
+- **Record.** The span is `lens.writes.edge_upsert`; the audit arguments are
+  `from_task_id`, `to_task_id` and `type`.
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -2305,11 +2386,14 @@ provides:
   exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
   reads and the typed registration it writes
 - an `/events` SSE stream carrying task-related events
-- **three task writes**, attributed to the operator: `lithos_task_complete`
+- **five task writes**, attributed to the operator: `lithos_task_complete`
   (with an `outcome`), whose `unblocked` id list a completion's receipt names,
   `lithos_task_reopen`, whose `reblocked` id list a completed task's reopen
-  receipt names, and `lithos_task_cancel` (with an optional `reason`) (§5.15);
-  the client carries the other two T3 writes, which no route calls yet
+  receipt names, `lithos_task_cancel` (with an optional `reason`),
+  `lithos_task_create`, and `lithos_task_edge_upsert`, which emits no event
+  (§5.15)
+- id-prefix resolution in `lithos_task_get` (Lithos 0.5.0 and later), which
+  the relation confirm step relies on to resolve the task the operator typed
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
 ambiguous or partially missing, Lens treats parsing and enrichment as best
@@ -2536,14 +2620,13 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the rest of the curated write actions** (T3) — add a dependency. The
-  posture and identity (§5.13), the refusal copy (§5.14), and the write funnel
-  with its receipts, the direct Complete action for human and external-task
-  gates, Proceed anyway for every other gate type, Reopen with the completion
-  receipt's Reopen gate, Cancel with its consequences stated first, and Create
-  (§5.15) ship now. Create's de-duplication is in memory only: there is no
-  lookup of `metadata.lens_request_id` in Lithos, so a restart forgets the
-  request ids it had seen (§5.15, Create).
+- **removing a dependency edge** (T3 cut it, 2026-10-05): the curated write
+  actions — posture and identity (§5.13), refusal copy (§5.14), the write
+  funnel with its receipts, Complete and Proceed anyway, Reopen, Cancel,
+  Create and Add a dependency (§5.15) — ship now, but an edge is removed
+  outside Lens with `lithos_task_edge_delete`. Create's de-duplication is in
+  memory only: there is no lookup of `metadata.lens_request_id` in Lithos, so
+  a restart forgets the request ids it had seen (§5.15, Create).
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)

@@ -46,8 +46,8 @@ pre-check are guarantees only because nothing can go around them.
 
 **Never optimistic.** A write's result informs the receipt and nothing else:
 no row is hand-assembled from it, and every page after a write is rendered from
-fresh reads. A step for the synthetic-event publish the edge slice (W8) needs
-sits between the classification and the receipt; W4 publishes nothing.
+fresh reads. An edge write emits no event, upstream or here: the edge action
+evicts both endpoints' cached edges itself (T3-W8).
 """
 
 from __future__ import annotations
@@ -90,6 +90,7 @@ from lithos_lens.receipts import (
     MAX_TITLED_RELEASES,
     CancelFacts,
     CreateFacts,
+    EdgeFacts,
     ReceiptStore,
     ReceiptTask,
     WriteReceipt,
@@ -242,8 +243,8 @@ class WriteDone:
     success result as Lithos returned it, for the audit line's result
     envelope (§5C.6): a success is recorded with what Lithos said, exactly
     as a refusal is. ``prior_status``, ``checked_status``, ``released_exact``,
-    ``released_unread``, ``released_waiting`` and a cancel's ``cancel`` facts
-    are carried to the receipt as they are (see
+    ``released_unread``, ``released_waiting``, a cancel's ``cancel`` facts and
+    an add-dependency's ``edge`` facts are carried to the receipt as they are (see
     :class:`~lithos_lens.receipts.WriteReceipt`).
     """
 
@@ -257,6 +258,7 @@ class WriteDone:
     released_unread: bool = False
     released_waiting: bool = False
     cancel: CancelFacts | None = None
+    edge: EdgeFacts | None = None
 
 
 def _applies(task: TaskRecord) -> tuple[str, str] | None:
@@ -283,7 +285,9 @@ class TaskWrite:
     """One action on an existing task, as the funnel drives it.
 
     - ``perform`` places the single Lithos call for the task as read, under
-      the operator's id, and reports what it did;
+      the operator's id, and reports what it did — or answers a refusal it
+      decided itself before making that call (an edge whose fresh read failed,
+      T3-W8 D3), which is NOT the write's own failure and is answered as is;
     - ``admits`` answers, for a task that passed the status pre-check, the
       ``(code, sentence)`` refusal when the action does not apply to it;
     - ``describe`` names the span attributes the task contributes (a
@@ -295,7 +299,9 @@ class TaskWrite:
     """
 
     action: WriteAction
-    perform: Callable[[LithosClientProtocol, TaskRecord, str], Awaitable[WriteDone]]
+    perform: Callable[
+        [LithosClientProtocol, TaskRecord, str], Awaitable[WriteDone | WriteProblem]
+    ]
     admits: Callable[[TaskRecord], tuple[str, str] | None] = _applies
     describe: Callable[[TaskRecord], Mapping[str, str | bool]] = _no_attributes
     confirm_page: Callable[[TaskRecord], str] = _no_confirmation
@@ -556,9 +562,11 @@ class WriteFunnel:
                 action, envelope or None, reread=reread, subject=subject
             )
 
+        if isinstance(done, WriteProblem):
+            return done
         ledger.envelope = done.answer
-        # (W8's synthetic-event publish lands here: after the call, before the
-        # receipt. W4 publishes nothing — upstream emits complete's event.)
+        if done.edge is not None:
+            ledger.attributes["already_exists"] = done.edge.already_exists
         return await self._mint(action, done, operator, client)
 
     async def submit_create(self, request: Request, write: CreateWrite) -> Response:
@@ -826,6 +834,7 @@ class WriteFunnel:
             released_unread=done.released_unread,
             released_waiting=done.released_waiting,
             cancel=done.cancel,
+            edge=done.edge,
         )
 
 

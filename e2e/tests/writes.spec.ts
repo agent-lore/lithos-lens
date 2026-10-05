@@ -36,6 +36,9 @@ import {
  *                                   every later step (clarification D11).
  *   create-form-<w>.png             the create form with the gate fieldset
  *                                   shown for a gate (T3-W7). GET only.
+ *   relation-confirm-<w>.png        the relation confirm step (T3-W8): both
+ *                                   titles, the readiness sentence and the
+ *                                   writing form. GET only.
  */
 //
 // No retry, deliberately: a retry would find the gate already completed by
@@ -326,5 +329,46 @@ test("the create form shows the gate fieldset for a gate", async ({ page }) => {
 
   for (const width of WIDTHS) {
     await capture(page, "create-form", width);
+  }
+});
+
+/**
+ * The relation confirm step (T3-W8), for the visual review. GET only
+ * (clarification D9): the sentence is chosen and the other task typed on the
+ * detail page the way an operator would, and the step that restates the
+ * relation is captured — nothing is written, so no later step sees an edge
+ * this spec drew. `loom-docs-tidy` and `loom-metrics-note` are open and
+ * unconnected, and no other step here touches them.
+ *   relation-confirm-<w>.png  "Tidy the harness docs" is blocked by "Note the
+ *                             harness metrics gaps": both titles, the
+ *                             readiness sentence, and the one writing form
+ */
+test("the relation confirm step restates the relation before writing", async ({
+  page,
+}) => {
+  await page.context().addCookies([
+    { name: "lens_operator", value: "dave", url: WRITES_BASE_URL },
+  ]);
+  await page.goto(`${WRITES_BASE_URL}/tasks/loom-docs-tidy`);
+
+  const form = page.locator(
+    '[data-relation-action][data-task-id="loom-docs-tidy"] [data-relation-form]',
+  );
+  await form.locator("[data-relation-sentences]").selectOption("blocked_by");
+  await form.locator("[data-relation-other]").fill("loom-metrics-note");
+  await form.locator("[data-relation-check]").click();
+
+  await expect(page).toHaveURL(/\/tasks\/loom-docs-tidy\/edges\/new\?/);
+  await expect(page.locator("[data-relation-statement]")).toHaveAttribute(
+    "data-relation-from",
+    "loom-metrics-note",
+  );
+  await expect(page.locator("[data-relation-readiness]")).toHaveText(
+    "“Tidy the harness docs” will not be ready until “Note the harness metrics gaps” completes.",
+  );
+  await expect(page.locator("[data-relation-confirm-form]")).toBeVisible();
+
+  for (const width of WIDTHS) {
+    await capture(page, "relation-confirm", width);
   }
 });

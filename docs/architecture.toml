@@ -26,14 +26,14 @@ src_layout   = "src"
 # for every component in [components].
 [component_docs]
 Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`)."
-Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the \"not visible yet\" page with Start again."
+Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the \"not visible yet\" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or \"already exists\") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
 Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
 LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary."
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML loading over it, and the environment-override pass applied on top (env beats file beats default)."
 Writes       = "Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action and which the Proceed anyway confirmation, the not-a-gate refusal, the default outcome of a direct completion and of an override); plus the create-form model (form → validated create request, the project under both conventions, the gate types a person may create, and where an upstream refusal lands on the form) and the create coordinator (the in-process, bounded map from request id to outcome that makes a double submit create one task)."
 Tasks        = "Tasks-dashboard data loading and normalization (task/claim/finding records + view models), plus the task-write wire: one request builder and one result record per Lithos write tool."
-TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps."
+TaskGraph    = "Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps, and the add-dependency relation sentences: each sentence about a task mapped to the edge it means (and back), whether the relation is already among a task's edges, and what it will mean for readiness by the blocker's status."
 Knowledge    = "Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided."
 Logging      = "Structured JSON logging setup (JsonFormatter)."
 Telemetry    = "OpenTelemetry setup and the named metric-instrument catalogue: providers, exporter selection, the FastAPI/httpx instrumentation, and one function per instrument so every metric name, unit and label set is declared in one reviewable place. A required dependency, on by default; `telemetry.enabled` governs export, not whether the instrumentation exists."
@@ -41,14 +41,14 @@ Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes"]
+Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes", "lithos_lens.edge_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_writes", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_writes", "lithos_lens.fake_store", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset"]
 Config       = ["lithos_lens.config", "lithos_lens.config_env", "lithos_lens.config_fields", "lithos_lens.config_schema"]
 Writes       = ["lithos_lens.operator", "lithos_lens.write_guards", "lithos_lens.write_errors", "lithos_lens.receipts", "lithos_lens.gate_completion", "lithos_lens.create_form", "lithos_lens.create_coordinator"]
 Tasks        = ["lithos_lens.tasks", "lithos_lens.task_writes", "lithos_lens.template_vocabulary", "lithos_lens.task_filtering", "lithos_lens.normalizers", "lithos_lens.agent_picker", "lithos_lens.filter_options"]
-TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini", "lithos_lens.cancel_consequences"]
+TaskGraph    = ["lithos_lens.task_graph", "lithos_lens.frontier", "lithos_lens.frontier_fallback", "lithos_lens.frontier_join", "lithos_lens.board_strips", "lithos_lens.epic_strip", "lithos_lens.attention", "lithos_lens.gates", "lithos_lens.pr_reconciliation", "lithos_lens.dashboard", "lithos_lens.task_detail", "lithos_lens.task_links", "lithos_lens.blocker_chain", "lithos_lens.graph_cache", "lithos_lens.graph_fanout", "lithos_lens.graph_scope", "lithos_lens.graph_layout", "lithos_lens.graph_cycles", "lithos_lens.graph_view", "lithos_lens.graph_snapshot", "lithos_lens.graph_impact", "lithos_lens.graph_page", "lithos_lens.graph_mini", "lithos_lens.cancel_consequences", "lithos_lens.relation_sentences"]
 Knowledge    = ["lithos_lens.knowledge", "lithos_lens.knowledge_resolver", "lithos_lens.knowledge_metadata", "lithos_lens.knowledge_produced_by"]
 Logging      = ["lithos_lens.logging"]
 Telemetry    = ["lithos_lens.telemetry", "lithos_lens.metrics"]
@@ -389,8 +389,27 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # create_coordinator.py), and the routes to create_routes.py, so the funnel
 # holds only the steps themselves. The stop-loss moves just past the new
 # largest module, as its definition says it should; it is fully spent again.
-modules_over_800_lines = 6    # write_funnel.py (871), tasks.py (849), frontier.py (843), web.py (830), graph_layout.py (830), write_errors.py (825)
-max_module_lines       = 875  # stop-loss over those exceptions, fully spent; the threshold stays 800
+#
+# Raised 875 -> 880 for write_funnel.py (880), on T3-W8 (add a dependency).
+# The edge action must refuse BEFORE its call when its fresh edge read fails
+# — an upsert then could replace the metadata of an edge Lens could not see —
+# and the funnel classified anything `perform` raised as the write's own
+# failure. The clarifications that settle the slice (D3, recheck against W7,
+# Dave, 2026-10-05) ask for "the smallest funnel hook that lets `perform`
+# return a refusal", in this module, and name this raise as the way to pay
+# for it. It is: `perform` may answer a WriteProblem, which the funnel
+# answers as is (+2), and the action's facts ride on WriteDone / WriteReceipt
+# as fields the way W6's CancelFacts do, the `already_exists` fact reaching
+# the span and the audit line (+4); the rest is `perform`'s widened type,
+# one import and the docstrings saying so. The
+# same responsibility — "the single path a curated write takes" — grown by
+# the first action that may decline its own call, not a second one; the
+# routes, the sentence model and the fresh read live in edge_routes.py and
+# relation_sentences.py. No extraction was on offer that would not move the
+# record step across a seam `cross_module_private_refs = 0` forbids. The
+# count stays 6; the stop-loss is fully spent again.
+modules_over_800_lines = 6    # write_funnel.py (880), tasks.py (849), frontier.py (843), web.py (830), graph_layout.py (830), write_errors.py (825)
+max_module_lines       = 880  # stop-loss over those exceptions, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
 
@@ -425,6 +444,9 @@ include_modules = [
     # task strands, releases and keeps — a view model over the edge cache, like
     # graph_impact's downstream count.
     "lithos_lens.cancel_consequences",
+    # RelationSentence and Relation: the add-dependency sentences and the edge
+    # each one means — what the operator asks for, before Lithos sees it.
+    "lithos_lens.relation_sentences",
     "lithos_lens.knowledge",
     "lithos_lens.knowledge_resolver",
     "lithos_lens.knowledge_metadata",

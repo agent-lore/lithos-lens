@@ -213,9 +213,10 @@ a console to show it on. The rest of T2b is unsequenced.
 
 Held out of September at the W38 checkpoint (`bcaf9379`, 2026-09-16) because
 the loom intervention rate on T2 had not fallen; October's milestone. The PRD
-(written 2026-10-01) sequences nine slices. The add-dependency slice is gated
-on `bd66d57c` (no task-edge delete) and is detachable: if upstream slips,
-0.5.0 ships the other actions and the edge slice follows.
+(written 2026-10-01) sequences nine slices. The add-dependency slice was gated
+on `bd66d57c` (no task-edge delete) and detachable; the delete tool landed in
+Lithos 0.6.0, and the slice shipped without a removal offer (2026-10-05 scope
+cuts), so it no longer waits on upstream.
 
 Lens's read-only contract ends. A small operator-console action set is part
 of the product, always on — the `[writes] enabled` flag earlier drafts
@@ -280,8 +281,8 @@ or issue against the `lithos` repo; Lens documents its workaround until then.
 
 | # | Gap | Ask | Impact on Lens |
 |---|-----|-----|----------------|
-| 1 | `lithos_task_edge_upsert` emits no event | `task_edge.upserted` event (`from_task_id`, `to_task_id`, `type`, `agent`) | Other agents' dependency edits are invisible until the next task event. T3 covers its own writes with synthetic internal `lens.edge_upserted` events. |
-| 2 | No `lithos_task_edge_delete` | Edge delete (or tombstone) tool | Mistaken dependencies are permanent; re-parenting is impossible (`parent_exists` is a dead end). T3's add-dependency slice waits for it rather than ship an edge button on permanent edges, and offers removal of an edge it has just added. **Top ask.** |
+| 1 | `lithos_task_edge_upsert` emits no event | `task_edge.upserted` event (`from_task_id`, `to_task_id`, `type`, `agent`) | Other agents' dependency edits are invisible until the next task event. T3's own edge writes evict both endpoints from the edge cache in-process (no synthetic event); other tabs converge on the cache TTL or their next event. |
+| 2 | ~~No `lithos_task_edge_delete`~~ — **landed upstream** (`bd66d57c`, Lithos 0.6.0) | Edge delete (or tombstone) tool | The delete tool exists upstream, and Lens does not use it yet: T3's add-dependency slice (W8) shipped without a removal offer (scope cut S1, 2026-10-05), so a mis-drawn edge — or a re-parent past `parent_exists` — is removed outside Lens with `lithos_task_edge_delete`. Lens can add a delete later; its contract is not vendored until then. |
 | 3 | No bulk graph fetch | `lithos_task_graph(project \| task_ids)` → `{tasks, edges}` | T2 assembles graphs via N per-task `edge_list` calls (semaphored, per-task cached, ~100 calls/project); T2b's corpus scope would be ~330. One indexed SQL join upstream collapses this to one call. |
 | 4 | Expired claims unobservable (lazy query-time filtering) | Expose recently-expired claims, or a `claim.expired` event | The old "expired claim" attention rule is impossible; T1 substitutes a pre-expiry warning. True abandoned-work detection stays blocked. |
 | 5 | Timer-gate resolution emits no event (query-time evaluation) | `gate.resolved` event | T1 self-schedules a dashboard refresh at `min(ready_at)` of visible timer gates. |

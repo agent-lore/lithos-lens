@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or "already exists") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it.
 
 **Tier:** Entrypoints
 
@@ -13,6 +13,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 |---|---|---:|---:|
 | `lithos_lens.cancel_routes` | M | 0 | 5 |
 | `lithos_lens.create_routes` | S | 0 | 3 |
+| `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_routes` | S | 0 | 1 |
@@ -34,6 +35,12 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `new_task_url` — The create form, pre-filled with a project and/or a parent.
 - def `offers_add_child` — Whether a page showing ``task`` offers **Add child**: an OPEN epic (D12).
 - def `register_create_routes` — Attach the create routes and their template globals.
+
+### `lithos_lens.edge_routes`
+- def `edge_new_path` — The confirm step's path, the id as ONE encoded segment.
+- def `edge_path` — The write's path.
+- def `offers_relation` — Whether a page showing ``task`` offers Add dependency: an OPEN task.
+- def `register_edge_routes` — Attach the add-dependency routes and their template globals.
 
 ### `lithos_lens.gate_override`
 - class `GateOverride` — One open machine-owned gate, as its Proceed anyway page states it.

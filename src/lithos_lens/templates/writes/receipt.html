@@ -133,5 +133,24 @@
     {% if receipt.cancel.stated %}
       {% with facts = receipt.cancel, past = true %}{% include "writes/cancel_facts.html" %}{% endwith %}
     {% endif %}
+  {% elif receipt.action == "edge_upsert" and receipt.edge %}
+    {#- Add a dependency (T3-W8). Worded as the edge reads: a `blocks` edge's
+        source blocks its target; a `waits_on_gate` edge's target waits on the
+        gate it comes from. "Already exists" wrote nothing (D5). -#}
+    {% set edge = receipt.edge %}
+    {% set first, second = (edge.target, edge.source) if edge.edge_type == "waits_on_gate" else (edge.source, edge.target) %}
+    <p class="write-receipt-headline" data-receipt-edge="{{ edge.edge_type }}" data-receipt-edge-exists="{{ 'yes' if edge.already_exists else 'no' }}">
+      {{ "Already related:" if edge.already_exists else "+ Added dependency:" }}
+      &ldquo;{{ first.title or (first.task_id | short_id) }}&rdquo;
+      {% with task_id = first.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+      {{ "waits on gate" if edge.edge_type == "waits_on_gate" else edge.edge_type }}
+      &ldquo;{{ second.title or (second.task_id | short_id) }}&rdquo;
+      {% with task_id = second.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    {% if edge.already_exists %}
+      {% with exists_by = edge.created_by, exists_at = edge.created_at %}{% include "writes/relation_exists.html" %}{% endwith %}
+    {% else %}
+      <p class="write-receipt-detail" data-receipt-outcome>Added as {{ receipt.operator }}.</p>
+    {% endif %}
   {% endif %}
 </section>
