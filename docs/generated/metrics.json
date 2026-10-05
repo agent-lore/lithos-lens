@@ -333,25 +333,25 @@
         "classes": 10,
         "functions": 136,
         "largest_module": "lithos_lens.write_funnel",
-        "largest_module_lines": 868,
-        "lines": 4562,
+        "largest_module_lines": 871,
+        "lines": 4565,
         "modules": 9,
         "public_symbols": 52,
-        "sloc": 3642
+        "sloc": 3643
       },
       "Writes": {
         "classes": 24,
         "functions": 83,
         "largest_module": "lithos_lens.write_errors",
         "largest_module_lines": 825,
-        "lines": 2245,
+        "lines": 2249,
         "modules": 7,
         "public_symbols": 41,
-        "sloc": 1638
+        "sloc": 1640
       }
     },
     "max_module": "lithos_lens.write_funnel",
-    "max_module_lines": 868,
+    "max_module_lines": 871,
     "modules_over_800": [
       "lithos_lens.frontier",
       "lithos_lens.graph_layout",
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 29778,
+    "total_lines": 29785,
     "total_modules": 72,
-    "total_sloc": 22866
+    "total_sloc": 22869
   },
   "tests": {
-    "ratio": 1.96,
-    "src_lines": 29778,
-    "test_lines": 58498
+    "ratio": 1.97,
+    "src_lines": 29785,
+    "test_lines": 58580
   }
 }

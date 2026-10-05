@@ -59,10 +59,11 @@ MAX_REMEMBERED_REQUESTS = 512
 class Created:
     """The create applied: the task it minted, and Lithos's answer whole.
 
-    ``task_type`` and ``project`` are what THIS create asked for. A later
-    submit under the same id — the back button, a second tab — may carry a
-    different form, and its receipt must state the task that exists, not the
-    form it was re-sent from.
+    ``task_type``, ``project`` and ``operator`` are what THIS create asked
+    for, and under whom. A later submit under the same id — the back button,
+    a second tab, after the operator label was switched — may carry a
+    different form and identity, and its receipt must state the task that
+    exists, not the submit it was re-sent from.
     """
 
     task_id: str
@@ -70,6 +71,9 @@ class Created:
     answer: Mapping[str, Any] = field(default_factory=dict)
     task_type: str = "task"
     project: str = ""
+    #: Who the call was made as. The label can be switched between a submit
+    #: and its resubmit; the receipt names who CREATED the task.
+    operator: str = ""
 
 
 @dataclass(frozen=True)

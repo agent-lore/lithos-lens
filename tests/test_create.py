@@ -62,7 +62,7 @@ from lithos_lens.tasks import AgentRecord, TaskRecord
 from lithos_lens.web import create_app
 from lithos_lens.write_errors import map_write_error
 from lithos_lens.write_funnel import AUDIT_EVENT
-from tests.conftest import metric_value
+from tests.conftest import metric_points, metric_value
 from tests.test_complete_gate import LoggedFake
 
 ORIGIN = "http://lens.test"
@@ -184,6 +184,25 @@ def _post(client: TestClient, data: dict[str, str], **kwargs: Any):
 
 def _creates(fake: FakeLithosClient) -> list[dict[str, Any]]:
     return [args for tool, args in fake.write_calls if tool == "lithos_task_create"]
+
+
+def _write_counts(reader: InMemoryMetricReader) -> dict[tuple[str, str], int]:
+    """Every ``lens_writes_total`` label set and its value — so an extra label
+    (a dedup marker, say) shows up as a set of its own."""
+    counts: dict[tuple[str, str], int] = {}
+    for point in metric_points(reader, "lens_writes_total"):
+        labels = dict(point.attributes or {})
+        assert set(labels) == {"action", "result"}, labels
+        counts[(str(labels["action"]), str(labels["result"]))] = point.value
+    return counts
+
+
+def _create_spans(spans: InMemorySpanExporter) -> list[dict[str, Any]]:
+    return [
+        dict(span.attributes or {})
+        for span in spans.get_finished_spans()
+        if span.name == "lens.writes.create"
+    ]
 
 
 def _receipt_id(response) -> str:
@@ -921,9 +940,13 @@ def test_one_audit_line_and_span_per_attempt_by_ids_and_lengths(
 
 
 def test_a_resubmit_after_the_first_finished_creates_nothing(
-    client: TestClient, fake: LoggedFake
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    client: TestClient,
+    fake: LoggedFake,
 ) -> None:
     data = _form(project="influx")
+    spans.clear()
     first = _post(client, data)
     # The first tab's receipt is shown (and consumed) before the resubmit.
     first_page = client.get(first.headers["location"])
@@ -937,6 +960,50 @@ def test_a_resubmit_after_the_first_finished_creates_nothing(
         assert 'data-receipt-action="create"' in page.text
     assert "data-receipt-repeated" not in first_page.text
     assert "data-receipt-repeated" in second_page.text
+    # D1/D2: both are attempts, both `ok`; the dedup marker is on the span,
+    # never a counter label.
+    task_id = _landed_on(first)
+    recorded = _create_spans(spans)
+    assert [span["lens.write.result"] for span in recorded] == ["ok", "ok"]
+    assert [span["lens.write.task_id"] for span in recorded] == [task_id, task_id]
+    assert [span["lens.write.request_id"] for span in recorded] == [
+        data["request_id"]
+    ] * 2
+    assert [span.get("lens.write.dedup", "") for span in recorded] == [
+        "",
+        "remembered",
+    ]
+    assert _write_counts(metric_reader) == {("create", "ok"): 2}
+
+
+def test_a_resubmit_after_an_operator_switch_names_who_created_the_task(
+    client: TestClient, fake: LoggedFake, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The label is switched on the operator page between the submit and its
+    resubmit: the receipt still names who CREATED the task; the resubmit's
+    own attempt is recorded under the identity that sent it."""
+    data = _form(project="influx")
+    first = _post(client, data)
+    client.get(first.headers["location"])
+    switched = client.post(
+        "/operator",
+        data={"operator": "dave-alt"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert switched.status_code == 303
+    caplog.set_level(logging.INFO)
+    second = _post(client, data)
+
+    [call] = _creates(fake)
+    assert call["agent"] == OPERATOR
+    assert _landed_on(second) == _landed_on(first)
+    receipt = _text(client.get(second.headers["location"]).text)
+    assert f"Created as {OPERATOR} in project influx." in receipt
+    assert "Created as dave-alt" not in receipt
+    [line] = [vars(record) for record in _audit(caplog)]
+    assert line["operator"] == "dave-alt"
+    assert line["write_dedup"] == "remembered"
 
 
 def test_a_resubmit_of_a_changed_form_reports_the_task_that_exists(
@@ -1000,6 +1067,7 @@ def test_two_concurrent_posts_with_one_request_id_make_one_create(
     config,
     monkeypatch: pytest.MonkeyPatch,
     spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     caplog: pytest.LogCaptureFixture,
     mode: str,
 ) -> None:
@@ -1077,15 +1145,29 @@ def test_two_concurrent_posts_with_one_request_id_make_one_create(
     lines = [vars(record) for record in _audit(caplog)][:2]
     assert [line["result"] for line in lines] == [expected, expected]
     assert sorted(line.get("write_dedup", "") for line in lines) == ["", "joined"]
-    created_spans = [
-        dict(span.attributes or {})
-        for span in spans.get_finished_spans()
-        if span.name == "lens.writes.create"
-    ][:2]
-    assert sorted(str(span.get("lens.write.dedup", "")) for span in created_spans) == [
+    recorded = _create_spans(spans)[:2]
+    assert [span["lens.write.result"] for span in recorded] == [expected] * 2
+    assert [span["lens.write.request_id"] for span in recorded] == [
+        data["request_id"]
+    ] * 2
+    assert sorted(str(span.get("lens.write.dedup", "")) for span in recorded) == [
         "",
         "joined",
     ]
+    if mode == "created":
+        task_ids = {span["lens.write.task_id"] for span in recorded}
+        assert task_ids == {_landed_on(answers["first"])}
+    # Every attempt counted once, by action and result only. The follow-up
+    # submit each mode makes (a corrected create; a POST after the landing)
+    # is an attempt too.
+    assert (
+        _write_counts(metric_reader)
+        == {
+            "created": {("create", "ok"): 2},
+            "refused": {("create", "rejected"): 2, ("create", "ok"): 1},
+            "unknown": {("create", "unknown"): 3},
+        }[mode]
+    )
 
 
 class LandsLater(LoggedFake):

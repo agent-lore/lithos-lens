@@ -661,9 +661,11 @@ class WriteFunnel:
         receipt = WriteReceipt(
             action="create",
             task=ReceiptTask(task_id=outcome.task_id, title=outcome.title),
-            operator=identity.id,
-            # The facts of the create that RAN, not of this submit's form,
-            # which a resubmit under the same id may have changed.
+            # The facts of the create that RAN — its creator too — not of this
+            # submit's form or identity, which a resubmit under the same id
+            # may have changed. The attempt itself is recorded under the
+            # submitting operator (`ledger.operator`).
+            operator=outcome.operator,
             created=CreateFacts(
                 task_type=outcome.task_type,
                 project=outcome.project,
@@ -733,6 +735,7 @@ class WriteFunnel:
             answer={**asdict(result), "depends_on": list(result.depends_on)},
             task_type=create.task_type,
             project=create.project,
+            operator=operator,
         )
 
     def _refuse(

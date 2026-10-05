@@ -368,7 +368,7 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # modules for a counter, which this file's policy calls the wrong answer. The
 # stop-loss does not move: 825 is under 850, and tasks.py (849) stays nearest.
 #
-# Raised 5 -> 6, and the stop-loss 850 -> 875, for write_funnel.py (868), on
+# Raised 5 -> 6, and the stop-loss 850 -> 875, for write_funnel.py (871), on
 # T3-W7. Create has no task to pre-check, so it enters the funnel through a
 # second, task-less door, `submit_create` — and the clarifications that settle
 # the slice (D1, Dave, 2026-10-05) put that door IN the funnel on purpose: the
@@ -389,7 +389,7 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # create_coordinator.py), and the routes to create_routes.py, so the funnel
 # holds only the steps themselves. The stop-loss moves just past the new
 # largest module, as its definition says it should; it is fully spent again.
-modules_over_800_lines = 6    # write_funnel.py (868), tasks.py (849), frontier.py (843), web.py (830), graph_layout.py (830), write_errors.py (825)
+modules_over_800_lines = 6    # write_funnel.py (871), tasks.py (849), frontier.py (843), web.py (830), graph_layout.py (830), write_errors.py (825)
 max_module_lines       = 875  # stop-loss over those exceptions, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way

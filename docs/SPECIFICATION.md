@@ -2271,9 +2271,11 @@ them anyway.
 - **Answer and receipt.** Success is 303 to the new task's detail page with a
   receipt: "Created *\<type\>* *\<title\>*", who created it and in which
   project, and — for a submit that landed on an earlier one's task — that the
-  form had already been submitted and no second task was created. The type
-  and project it states are those of the create that ran, so a resubmit of an
-  edited form under the same id still describes the task that exists. The page
+  form had already been submitted and no second task was created. The type,
+  project and creator it states are those of the create that ran, so a
+  resubmit of an edited form under the same id — or after the operator label
+  was switched — still describes the task that exists; that resubmit's own
+  attempt is recorded under the identity that sent it. The page
   below is the new task's own, read fresh, so its parent and predecessors are
   stated there. After a create with a parent or predecessors, those tasks
   leave the edge cache (`task.created` evicts only the new id), so their

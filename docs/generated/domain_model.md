@@ -803,6 +803,7 @@ classDiagram
     +answer Mapping[str, Any]
     +task_type str
     +project str
+    +operator str
   }
   class FieldError {
     +message str
