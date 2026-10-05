@@ -1,7 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { WRITES_BASE_URL, WRITES_HUMAN_GATE } from "../servers";
+import {
+  WRITES_BASE_URL,
+  WRITES_HUMAN_GATE,
+  WRITES_TIMER_GATE,
+} from "../servers";
 
 /**
  * Curated writes, end to end (T3-W4): the Complete action on a human gate's
@@ -16,9 +20,12 @@ import { WRITES_BASE_URL, WRITES_HUMAN_GATE } from "../servers";
  *
  * Captures follow the artifacts-dir contract (`<page>-<width>.png`, exact
  * width, no horizontal overflow) that `screenshots.spec.ts` documents, for
- * the two artifacts the PRD's visual review asks of this slice:
+ * the artifacts the PRD's visual review asks of these slices:
  *   gate-complete-action-<w>.png  the gate row with Complete and the identity
  *   complete-receipt-<w>.png      the receipt banner above the reconciled board
+ *   proceed-anyway-confirm-<w>.png  a timer gate's Proceed anyway confirm page
+ *                                   (T3-W4b): its ready_at, the waiters it
+ *                                   releases, and the one confirming form
  */
 //
 // No retry, deliberately: a retry would find the gate already completed by
@@ -159,4 +166,53 @@ test("a human gate is completed from its row and the receipt says so", async ({
   for (const width of WIDTHS) {
     await capture(page, "complete-receipt", width);
   }
+});
+
+test("a timer gate is completed only through its Proceed anyway page", async ({
+  page,
+}) => {
+  await page.context().addCookies([
+    { name: "lens_operator", value: "dave", url: WRITES_BASE_URL },
+  ]);
+  await page.goto(BOARD);
+
+  // The row offers the link and no direct form (T3-W4b).
+  const row = page.locator(
+    `[data-gate-row][data-task-id="${WRITES_TIMER_GATE}"]`,
+  );
+  await expect(row.locator("[data-complete-action]")).toHaveCount(0);
+  const link = row.locator("[data-proceed-anyway-link]");
+  await expect(link).toHaveCount(1);
+  // An ordinary link: it navigates rather than opening the side panel.
+  await link.click();
+  await expect(page).toHaveURL(
+    new RegExp(`/tasks/${WRITES_TIMER_GATE}/approve\\?next=`),
+  );
+  await expect(page.locator("[data-task-panel]")).toHaveCount(0);
+
+  // The page states what would resolve the gate and what completing releases.
+  await expect(page.locator("[data-timer-pending] time")).toHaveCount(1);
+  const waiters = page.locator("[data-proceed-anyway-waiters]");
+  await expect(waiters.locator("li")).not.toHaveCount(0);
+  await expect(page.locator("[data-proceed-anyway-watcher]")).toHaveText(
+    "Whatever watches this gate will find it closed.",
+  );
+  const form = page.locator("[data-proceed-anyway-form]");
+  await expect(form.locator('input[name="confirm"]')).toHaveValue(
+    "proceed-anyway",
+  );
+
+  for (const width of WIDTHS) {
+    await capture(page, "proceed-anyway-confirm", width);
+  }
+
+  // Confirmed, it completes and returns to the board with the receipt; with
+  // no note the recorded outcome says it was early and names the gate type.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await form.locator("[data-complete-button]").click();
+  await expect(page).toHaveURL(/\/tasks\?.*receipt=/);
+  const receipt = page.locator("#write-receipt [data-write-receipt]");
+  await expect(receipt).toContainText("Completed early via Lens by dave");
+  await expect(receipt).toContainText("timer gate had not resolved");
+  await expect(row).toHaveCount(0);
 });

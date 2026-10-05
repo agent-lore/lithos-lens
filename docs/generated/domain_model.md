@@ -717,6 +717,20 @@ classDiagram
   TaskStatusRecord "1" --> "0..*" ClaimRecord : claims
 ```
 
+## Web
+
+```mermaid
+classDiagram
+  class GateOverride {
+    +lapsed bool
+    +pr_url str
+    +pr_text str
+  }
+  class GateRow
+  <<TaskGraph>> GateRow
+  GateOverride "1" --> "1" GateRow : gate
+```
+
 ## Writes
 
 ```mermaid

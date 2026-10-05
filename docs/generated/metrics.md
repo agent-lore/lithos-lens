@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **38** (146 module-level)
+- Cross-component edges: **38** (151 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -45,12 +45,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 23 | 10804 | 8251 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 24 |
 | Tasks | 7 | 2227 | 1622 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1139 | 833 | 4 | 2 | 0.33 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 6 | 3255 | 2525 | 1 | 10 | 0.91 | 17 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 3 |
-| Writes | 5 | 1585 | 1117 | 2 | 1 | 0.33 | 8 (`lithos_lens.write_errors._candidates`) | 0 |
+| Web | 7 | 3584 | 2807 | 1 | 10 | 0.91 | 18 (`lithos_lens.write_funnel.WriteFunnel._attempt`) | 3 |
+| Writes | 5 | 1622 | 1139 | 2 | 1 | 0.33 | 8 (`lithos_lens.write_errors._candidates`) | 0 |
 
 ## Size
 
-- Modules: **66**, lines: **27488**, SLOC: **20964**
+- Modules: **67**, lines: **27854**, SLOC: **21268**
 - Largest module: `lithos_lens.tasks` (849 lines)
 - Modules over 800 lines: **5**
   - `lithos_lens.frontier`
@@ -61,7 +61,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **862**, cyclomatic > 10: **47**
+- Functions: **874**, cyclomatic > 10: **47**
 
 Top 10 most complex functions:
 
@@ -88,5 +88,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **93** (92 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.98** (54477 test lines / 27488 source lines)
+- Domain models: **94** (93 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.98** (55171 test lines / 27854 source lines)

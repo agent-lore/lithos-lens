@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{#
+  Proceed anyway (T3-W4b, D7): the confirm page for completing a gate that a
+  machine resolves -- `timer`, `ci`, `pr` -- or whose type Lens does not know.
+  Server-rendered and complete without JavaScript, like the cancel confirm.
+
+  Context:
+    `override`     -- a `gate_override.GateOverride`, or None when there is
+                      nothing to confirm (then `notice` says why);
+    `task`         -- the task as read, when it was read;
+    `notice`       -- why this page offers no form, or "";
+    `next_url`     -- where the form's 303 (and "Keep waiting") returns the
+                      operator, already passed through `safe_next`;
+    `confirmation` -- the value only this form posts as `confirm`.
+
+  It states what Lens can read and nothing more: what would otherwise resolve
+  the gate, the waiters completing it releases (with the gate row's own
+  "at least N" / "unverified" labels, from the same read), and that whatever
+  watches the gate will find it closed. It does NOT describe how the gate's
+  author reacts -- a loom `pr` gate's waiter is the story itself, and what
+  loom's watcher does when the story is ready again with its PR still open is
+  not something Lens can read, so the page names the PR and the waiters and
+  leaves the decision with the operator.
+-#}
+
+{% block title %}Proceed anyway? | Lithos Lens{% endblock %}
+
+{% block content %}
+<section class="proceed-anyway-page" data-proceed-anyway-page>
+  {% if override %}
+    {% set gate = override.gate %}
+    <h1>Proceed anyway?</h1>
+    <p class="proceed-anyway-subject">
+      <a href="{{ task_detail_url(request, gate.task.id) }}">{{ gate.task.title }}</a>
+      <span class="badge badge-gate badge-gate-{{ gate.type_slug }}">{{ gate.type_label }}</span>
+      {% with task_id = gate.task.id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+
+    <section class="proceed-anyway-resolver" data-proceed-anyway-resolver>
+      <h2>What would otherwise resolve it</h2>
+      {% if gate.is_timer %}
+        {% if override.lapsed %}
+          <p data-timer-lapsed>
+            This timer gate resolved itself at
+            <time datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">{{ gate.ready_at[:16].replace("T", " ") }}</time>
+            — that has already passed. <strong>The gate no longer blocks anything;</strong>
+            completing it only closes it.
+          </p>
+        {% elif gate.ready_instant %}
+          <p data-timer-pending>
+            This timer gate resolves itself at
+            <time datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">{{ gate.ready_at[:16].replace("T", " ") }}</time>.
+            Completing it now releases its waiters before then.
+          </p>
+        {% elif gate.ready_at %}
+          <p data-timer-unreadable>
+            This timer gate's <code>ready_at</code> reads “{{ gate.ready_at }}”, which Lens can't parse, so it can't say when the gate would resolve itself.
+          </p>
+        {% else %}
+          <p data-timer-unreadable>This timer gate carries no <code>ready_at</code>, so Lens can't say when it would resolve itself.</p>
+        {% endif %}
+      {% elif override.is_pr %}
+        {% if override.pr_url %}
+          <p data-pr-link>
+            This PR gate is resolved by whatever watches its pull request:
+            <a href="{{ override.pr_url }}" rel="noopener noreferrer">{{ override.pr_url }}</a>.
+            Completing the gate does nothing to the PR itself.
+          </p>
+        {% elif override.pr_text %}
+          <p data-pr-link>
+            This PR gate is resolved by whatever watches its pull request. It names “{{ override.pr_text }}”, which is not a web link.
+          </p>
+        {% else %}
+          <p data-pr-link>This PR gate is resolved by whatever watches its pull request. It names no PR url.</p>
+        {% endif %}
+      {% else %}
+        <p>
+          This {{ gate.type_label }} gate is resolved by whatever watches it.
+          {%- if gate.task.description %} Its description says:{% else %} It has no description to say more.{% endif %}
+        </p>
+      {% endif %}
+      {% if gate.task.description and not gate.is_timer and not override.is_pr %}
+        <blockquote class="proceed-anyway-description" data-proceed-anyway-description>
+          {% with description = gate.task.description %}{% include "tasks/description.html" %}{% endwith %}
+        </blockquote>
+      {% endif %}
+    </section>
+
+    {# The gate row's own waiter read and labels (GateWaiterState): an
+       "at least N" count, an "(unverified)" one, or an unavailable one stays
+       exactly as qualified here as on the board. #}
+    <section class="proceed-anyway-waiters" data-proceed-anyway-waiters data-gate-waiters-state="{{ gate.waiters_state }}">
+      <h2>What completing it releases</h2>
+      <p data-gate-waiting="{{ gate.waiting }}">This gate {{ gate.waiters_label }}.</p>
+      {% if gate.waiters %}
+        <ul class="gate-waiter-list">
+          {% for waiter in gate.waiters %}
+            <li>
+              <a href="{{ task_detail_url(request, waiter.id) }}">{{ waiter.title }}</a>
+              <span class="badge badge-{{ waiter.status }}">{{ waiter.status }}</span>
+              {% with task_id = waiter.id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">{{ gate.waiters_empty_note }}</p>
+      {% endif %}
+    </section>
+
+    <p class="proceed-anyway-watcher" data-proceed-anyway-watcher>
+      Whatever watches this gate will find it closed.
+    </p>
+
+    {% if operator_identity(request).resolved %}
+      <form class="complete-action proceed-anyway-form" method="post" action="{{ complete_gate_path(gate.task.id) }}" data-proceed-anyway-form data-task-id="{{ gate.task.id }}">
+        <input type="hidden" name="expected_status" value="{{ gate.task.status }}">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <input type="hidden" name="confirm" value="{{ confirmation }}">
+        <label class="complete-action-note">
+          <span>Note</span>
+          <input type="text" name="note" maxlength="{{ complete_note_max }}" autocomplete="off" placeholder="optional, stored as the outcome">
+        </label>
+        <button type="submit" class="complete-action-button" data-complete-button>Complete anyway</button>
+        <a class="proceed-anyway-back" href="{{ next_url }}">Keep waiting</a>
+        <p class="complete-action-meaning">
+          With no note, the gate records that it was completed early via Lens by you, and that its {{ gate.type_label }} wait had not resolved.
+        </p>
+        {% include "writes/identity.html" %}
+      </form>
+    {% else %}
+      <p class="proceed-anyway-no-operator" data-proceed-anyway-no-operator>
+        No operator identity is set, so this page offers no form. Choose one from the link at the top of the page.
+      </p>
+    {% endif %}
+  {% else %}
+    <h1>Nothing to confirm</h1>
+    {% if task %}
+      <p class="proceed-anyway-subject">
+        <a href="{{ task_detail_url(request, task.id) }}">{{ task.title }}</a>
+        {% with task_id = task.id %}{% include "tasks/short_id.html" %}{% endwith %}
+      </p>
+    {% endif %}
+    <div class="write-outcome-copy">
+      <p class="write-outcome-headline" data-proceed-anyway-notice>{{ notice }}</p>
+      <p class="write-outcome-hint"><a href="{{ next_url }}">Back</a></p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

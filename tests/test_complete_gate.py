@@ -382,7 +382,9 @@ class Attempt(NamedTuple):
 
     ``copy`` is what the plain page and the HTMX fragment both say (``htmx_copy``
     when the two differ); ``pre_write`` marks the endings decided before the
-    Lithos call, which must leave the fake's write log empty.
+    Lithos call, which must leave the fake's write log empty. ``redirect`` is
+    the path an ending sends the operator to instead of answering it — a 303
+    to a plain POST, ``HX-Redirect`` to an HTMX one.
     """
 
     case: str
@@ -397,6 +399,7 @@ class Attempt(NamedTuple):
     copy: str
     pre_write: bool
     htmx_copy: str = ""
+    redirect: str = ""
 
 
 ATTEMPTS = [
@@ -453,18 +456,21 @@ ATTEMPTS = [
         "This task isn't a gate — only gates can be completed here.",
         True,
     ),
+    # T3-W4b: a machine-owned gate posted without the confirmation is sent
+    # to its confirm page, not performed — and recorded as an attempt.
     Attempt(
-        "machine-gate",
+        "unconfirmed-override",
         LoggedFake,
         "gate-ci",
         {},
         OPERATOR,
         SAME_ORIGIN,
-        409,
+        303,
         "rejected",
-        "gate_type_unsupported",
-        "A ci gate is resolved by whatever watches it.",
+        "confirmation_required",
+        "",
         True,
+        redirect="/tasks/gate-ci/approve",
     ),
     Attempt(
         "bad-form",
@@ -597,6 +603,7 @@ ATTEMPTS = [
         "",
         "",
         True,
+        redirect="/operator",
     ),
 ]
 
@@ -648,9 +655,9 @@ def test_every_attempt_answers_and_is_recorded_once_in_either_mode(
         assert response.status_code == attempt.status
         assert "hx-trigger" not in response.headers
         expected_copy = attempt.copy
-    elif attempt.result == "no_operator":
+    elif attempt.redirect:
         assert response.status_code == 200
-        assert urlsplit(response.headers["hx-redirect"]).path == "/operator"
+        assert urlsplit(response.headers["hx-redirect"]).path == attempt.redirect
         assert "hx-trigger" not in response.headers
         expected_copy = ""
     else:
@@ -658,9 +665,13 @@ def test_every_attempt_answers_and_is_recorded_once_in_either_mode(
         assert response.headers["hx-trigger"] == RECONCILE_EVENT
         assert "<html" not in response.text
         expected_copy = attempt.htmx_copy or attempt.copy
+    if mode == "plain" and attempt.redirect:
+        assert urlsplit(response.headers["location"]).path == attempt.redirect
     if expected_copy:
         assert expected_copy in text
-    if attempt.result in {"conflict", "rejected", "refused_origin"}:
+    if attempt.result in {"conflict", "rejected", "refused_origin"} and not (
+        attempt.redirect
+    ):
         assert NOTHING_CHANGED in text
     if attempt.result == "unknown":
         assert NOTHING_CHANGED not in text
@@ -702,6 +713,9 @@ def test_every_attempt_answers_and_is_recorded_once_in_either_mode(
         assert attributes["lens.write.gate_type"] == "human"
         assert attributes["lens.write.override"] is False
         assert attributes["lens.write.operator"] == OPERATOR
+    if attempt.code == "confirmation_required":
+        assert attributes["lens.write.gate_type"] == "ci"
+        assert attributes["lens.write.override"] is True
 
 
 def test_a_successful_attempt_records_lithoss_answer_as_its_envelope(
@@ -980,18 +994,6 @@ def test_completing_a_plain_task_by_url_is_409_and_writes_nothing(
     assert fake.write_calls == []
 
 
-@pytest.mark.parametrize("gate_id", ["gate-timer", "gate-ci", "gate-pr"])
-def test_a_machine_owned_gate_posted_to_the_route_is_refused_with_no_write(
-    client: TestClient, fake: LoggedFake, gate_id: str
-) -> None:
-    response = _complete(client, gate_id)
-
-    assert response.status_code == 409
-    assert "is resolved by whatever watches it" in _text(response)
-    assert NOTHING_CHANGED in _text(response)
-    assert fake.write_calls == []
-
-
 def test_a_missing_task_is_the_conflict_page(
     client: TestClient, fake: LoggedFake
 ) -> None:
@@ -1028,7 +1030,7 @@ def test_with_no_note_the_outcome_names_the_operator(
 
     ((_, arguments),) = fake.write_calls
     assert arguments["outcome"] == "Completed via Lens by dave"
-    assert arguments["outcome"] == default_outcome(OPERATOR)
+    assert arguments["outcome"] == default_outcome(OPERATOR, "human")
 
 
 def test_the_receipt_names_the_first_five_released_titles_and_counts_the_rest(

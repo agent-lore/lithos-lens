@@ -1,17 +1,27 @@
 {#
-  The direct Complete action on a gate (T3 D7) -- ONE partial for every surface
-  that offers it: the gate row (the Gates section, and the row Needs attention
-  promotes), the side panel and the detail page.
+  Completing a gate (T3 D7) -- ONE partial for every surface that offers it:
+  the gate row (the Gates section, and the row Needs attention promotes), the
+  side panel and the detail page. A gate gets exactly one of two affordances:
+
+  - the direct Complete form, for a gate a person resolves (below);
+  - the "Proceed anyway…" LINK, for a gate a machine resolves (`timer`, `ci`,
+    `pr`) or whose type Lens does not know (T3-W4b). No form: the link opens
+    the confirm page, which states what the override does and carries the
+    one form with the confirmation. It is an ordinary link, so on a board row
+    it navigates rather than opening the panel (`tasks.js`).
+
   Context:
     `action_task` -- the task (a `tasks.TaskRecord`) as the surface read it;
-    `action_next` -- where a plain POST's 303 returns the operator;
+    `action_next` -- where a plain POST's 303 returns the operator (the link
+                     carries it to the confirm page, whose form posts it);
     `action_htmx` -- true on a board ROW only, so the operator keeps their
                      place: the answer swaps into the page's one receipt slot
                      and the board reconciles from fresh reads.
 
-  Rendered only when BOTH questions say yes: `offers_complete` (the one
-  helper over task type, status and gate type -- an open human or
-  external-task gate) and a resolved operator identity. With no identity the
+  Rendered only when BOTH questions say yes: `offers_complete` or
+  `offers_proceed_anyway` (the two helpers over task type, status and gate
+  type -- an open human or external-task gate, or any other open gate) and a
+  resolved operator identity. With no identity the
   chrome's single "choose an operator" link is the only prompt; nothing is
   added here.
 
@@ -25,7 +35,13 @@
   carries the status the operator saw, which the funnel re-checks before it
   writes.
 -#}
-{% if offers_complete(action_task) and operator_identity(request).resolved %}
+{% if offers_proceed_anyway(action_task) and operator_identity(request).resolved %}
+  <div class="complete-action proceed-anyway-action" data-proceed-anyway data-task-id="{{ action_task.id }}">
+    <a class="proceed-anyway-link" href="{{ proceed_anyway_url(action_task.id, action_next) }}" data-proceed-anyway-link>Proceed anyway&hellip;</a>
+    <p class="complete-action-meaning">Whatever watches this gate resolves it. Completing it now overrides that wait.</p>
+    {% include "writes/identity.html" %}
+  </div>
+{% elif offers_complete(action_task) and operator_identity(request).resolved %}
   <form class="complete-action" method="post" action="{{ complete_gate_path(action_task.id) }}" data-complete-action data-task-id="{{ action_task.id }}"
     {%- if action_htmx %} hx-post="{{ complete_gate_path(action_task.id) }}" hx-target="#write-receipt" hx-swap="innerHTML"{% endif %}>
     <input type="hidden" name="expected_status" value="{{ action_task.status }}">
