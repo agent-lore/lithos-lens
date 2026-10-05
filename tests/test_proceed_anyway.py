@@ -249,6 +249,28 @@ def _section(html: str, section: str) -> str:
     return html[start : end if end != -1 else len(html)]
 
 
+#: The page's PEER-authored parts — the gate's title, badge and id, its
+#: description, the PR url it names, its ``ready_at`` stamp and the waiters'
+#: titles — each folded to a placeholder, so what is left is the copy Lens
+#: itself writes. Order matters only in that no pattern spans another.
+_PEER_AUTHORED = (
+    (r'<p class="proceed-anyway-subject">.*?</p>', "[gate]"),
+    (r"<blockquote[^>]*>.*?</blockquote>", "[description]"),
+    (r'<ul class="gate-waiter-list">.*?</ul>', "[waiters]"),
+    (r"<time[^>]*>.*?</time>", "[ready_at]"),
+    (rf'<a href="{re.escape(PR_URL)}"[^>]*>.*?</a>', "[pr_url]"),
+)
+
+
+def _lens_copy(html: str) -> str:
+    """Every word Lens itself writes on the confirm page, peer text folded."""
+    start = html.index("data-proceed-anyway-page")
+    page = html[start : html.index("</main>", start)]
+    for pattern, placeholder in _PEER_AUTHORED:
+        page = re.sub(pattern, f" {placeholder} ", page, flags=re.DOTALL)
+    return _text(page.split(">", 1)[1])
+
+
 def _page_section(html: str, marker: str) -> str:
     start = html.index(marker)
     return html[start : html.index("</section>", start)]
@@ -405,9 +427,80 @@ def test_a_pr_gates_page_names_its_pr_link_and_its_waiter(client: TestClient) ->
     assert f'<a href="{PR_URL}"' in resolver
     waiters = _page_section(page.text, "data-proceed-anyway-waiters")
     assert "Story S7: PR #431" in waiters
-    # It names the PR and the waiters and leaves the rest to the operator:
-    # nothing on the page describes how the gate's author reacts.
-    assert "loom" not in _text(page.text).lower()
+
+
+#: The confirm page's copy, EXACTLY, per gate type, with every peer-authored
+#: part folded to a placeholder (``_PEER_AUTHORED``). D7: the page states what
+#: Lens can read and nothing more, and never how the gate's author reacts — a
+#: loom `pr` gate's waiter is the story itself, and what loom's watcher does
+#: once the story is ready again is not something Lens can read. A predicate
+#: over words ("no 'loom'") cannot hold that line: "The story will restart
+#: while its PR is open" names no author. Pinning the whole of Lens's own copy
+#: can — any sentence added to the page fails here, and is reviewed as copy.
+_SHARED_TAIL = (
+    "Whatever watches this gate will find it closed. Note Complete anyway "
+    "Keep waiting With no note, the gate records that it was completed early "
+    "via Lens by you, and that its {type} wait had not resolved. "
+    "Acting as dave · switch"
+)
+LENS_COPY = {
+    "gate-timer": (
+        "Proceed anyway? [gate] What would otherwise resolve it This timer gate "
+        "resolves itself at [ready_at] . Completing it now releases its waiters "
+        "before then. What completing it releases This gate blocks 2 tasks. "
+        "[waiters] " + _SHARED_TAIL.format(type="timer")
+    ),
+    "gate-lapsed": (
+        "Proceed anyway? [gate] What would otherwise resolve it This timer gate "
+        "stopped waiting at [ready_at] , which has already passed. The gate no "
+        "longer blocks anything; completing it only closes it. What completing "
+        "it releases This gate blocks 0 tasks. No open tasks are waiting on this "
+        "gate. " + _SHARED_TAIL.format(type="timer")
+    ),
+    "gate-ci": (
+        "Proceed anyway? [gate] What would otherwise resolve it This ci gate is "
+        "resolved by whatever watches it. Its description says: [description] "
+        "What completing it releases This gate blocks 1 task. [waiters] "
+        + _SHARED_TAIL.format(type="ci")
+    ),
+    "gate-pr": (
+        "Proceed anyway? [gate] What would otherwise resolve it This PR gate is "
+        "resolved by whatever watches its pull request: [pr_url] . Completing "
+        "the gate does nothing to the PR itself. What completing it releases "
+        "This gate blocks 1 task. [waiters] " + _SHARED_TAIL.format(type="pr")
+    ),
+    "gate-mystery": (
+        "Proceed anyway? [gate] What would otherwise resolve it This mystery "
+        "gate is resolved by whatever watches it. Its description says: "
+        "[description] What completing it releases This gate blocks 1 task. "
+        "[waiters] " + _SHARED_TAIL.format(type="mystery")
+    ),
+}
+
+
+@pytest.mark.parametrize("gate_id", sorted(LENS_COPY))
+def test_the_page_says_what_lens_can_read_and_nothing_more(
+    client: TestClient, gate_id: str
+) -> None:
+    assert (
+        _lens_copy(client.get(f"/tasks/{gate_id}/approve").text) == (LENS_COPY[gate_id])
+    )
+
+
+def test_a_prediction_of_the_authors_reaction_fails_the_copy_check(
+    client: TestClient,
+) -> None:
+    """The check above, shown to catch what the old word filter did not: an
+    unsupported prediction Lens wrote, naming no author at all."""
+    html = client.get("/tasks/gate-pr/approve").text
+    predicted = html.replace(
+        "Whatever watches this gate will find it closed.",
+        "Whatever watches this gate will find it closed. The story will "
+        "automatically restart while its PR remains open.",
+    )
+
+    assert _lens_copy(html) == LENS_COPY["gate-pr"]
+    assert _lens_copy(predicted) != LENS_COPY["gate-pr"]
 
 
 def test_a_pr_url_that_is_not_a_web_link_is_shown_and_not_linked(config) -> None:
@@ -637,9 +730,19 @@ def test_the_confirmed_post_returns_to_next_with_the_unblocked_receipt(
     target = urlsplit(response.headers["location"])
     assert target.path == "/tasks"
     assert parse_qs(target.query)["project"] == ["influx"]
-    landed = _text(client.get(response.headers["location"]).text)
-    assert "Unblocked 2 tasks" in landed
-    assert "Promote the replica" in landed and "Reindex search" in landed
+    landed = client.get(response.headers["location"]).text
+    # Scoped to the receipt: the waiters' titles are on the board below it too,
+    # now as ready rows, so a page-wide search would pass with no receipt.
+    receipt = landed[landed.index('<section class="write-receipt"') :]
+    receipt = receipt[: receipt.index("</section>")]
+    assert "Unblocked 2 tasks" in _text(receipt)
+    named = dict(
+        re.findall(
+            r'data-receipt-released-task="([^"]+)">\s*<a [^>]*>([^<]*)</a>', receipt
+        )
+    )
+    assert named == {"wait-t1": "Promote the replica", "wait-t2": "Reindex search"}
+    assert "Completed early via Lens by dave" in _text(receipt)
 
 
 def test_the_audit_line_and_the_span_record_the_override(

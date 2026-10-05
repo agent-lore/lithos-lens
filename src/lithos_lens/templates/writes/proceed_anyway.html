@@ -42,9 +42,9 @@
       {% if gate.is_timer %}
         {% if override.lapsed %}
           <p data-timer-lapsed>
-            This timer gate resolved itself at
-            <time datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">{{ gate.ready_at[:16].replace("T", " ") }}</time>
-            — that has already passed. <strong>The gate no longer blocks anything;</strong>
+            This timer gate stopped waiting at
+            <time datetime="{{ gate.ready_instant }}" data-gate-ready-at="{{ gate.ready_instant }}">{{ gate.ready_at[:16].replace("T", " ") }}</time>,
+            which has already passed. <strong>The gate no longer blocks anything;</strong>
             completing it only closes it.
           </p>
         {% elif gate.ready_instant %}

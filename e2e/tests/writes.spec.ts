@@ -214,5 +214,12 @@ test("a timer gate is completed only through its Proceed anyway page", async ({
   const receipt = page.locator("#write-receipt [data-write-receipt]");
   await expect(receipt).toContainText("Completed early via Lens by dave");
   await expect(receipt).toContainText("timer gate had not resolved");
+  // The released list is the receipt's own, read from what Lithos answered.
+  // This demo timer's waiter has a second blocker, so it releases none; the
+  // titled-release case is pinned in tests/test_proceed_anyway.py.
+  await expect(receipt.locator("[data-receipt-released]")).toHaveAttribute(
+    "data-receipt-released",
+    "0",
+  );
   await expect(row).toHaveCount(0);
 });
