@@ -1,0 +1,36 @@
+{#
+  Reopening a completed or cancelled task (T3 D8), on its detail page.
+
+  No confirm page: the case's copy is said BESIDE the button, worded by the
+  status the page read, because the two cases do opposite things to the
+  dependents. Reopening a completed task blocks again whatever became ready
+  when it completed; reopening a cancelled one -- the usual remedy for a
+  stranded dependent -- un-strands them, so the operator must not expect
+  "re-blocked" there.
+
+  Context:
+    `action_task` -- the task (a `tasks.TaskRecord`) as the page read it;
+    `action_next` -- where the 303 returns the operator.
+
+  Rendered only when `offers_reopen` (a completed or cancelled task of any
+  type) and a resolved operator identity both say yes. The form carries the
+  status the operator saw, which the funnel re-checks before it writes.
+-#}
+{% if offers_reopen(action_task) and operator_identity(request).resolved %}
+  <form class="complete-action reopen-action" method="post" action="{{ reopen_path(action_task.id) }}" data-reopen-action data-task-id="{{ action_task.id }}">
+    <input type="hidden" name="expected_status" value="{{ action_task.status }}">
+    <input type="hidden" name="next" value="{{ action_next }}">
+    <button type="submit" class="complete-action-button" data-reopen-button>Reopen</button>
+    <p class="complete-action-meaning" data-reopen-copy="{{ action_task.status }}">
+      {%- if action_task.status == "completed" %}
+        Reopening puts this task back to open. Tasks that became ready when it completed will be blocked again.
+      {%- else %}
+        Reopening returns this task to open. Its dependents stop being permanently blocked and wait on it again.
+      {%- endif %}
+      {%- if action_task.outcome %}
+        Its outcome is cleared; Lithos keeps it in the [Reopened] finding it records.
+      {%- endif %}
+    </p>
+    {% include "writes/identity.html" %}
+  </form>
+{% endif %}

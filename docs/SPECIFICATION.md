@@ -146,6 +146,15 @@ The current application exposes these routes:
   direct action is; a task that is not a gate, or a gate that is no longer
   open, answers 409 saying why, an unknown id 404, and a failed read 503 — each
   with no form.
+- `POST /tasks/{task_id}/reopen`
+  Reopens a **completed or cancelled** task of any type through the write
+  funnel (§5.15, Reopen). No confirm page and no `GET`: the case's copy is
+  rendered beside the button. Answered like the approve POST — 303 to `next`
+  (same-origin relative, else the task's page) with `?receipt=<id>`. An
+  already-open task is the conflict page on both paths: a stale
+  `expected_status` caught by the pre-check ("This task is now open.", no
+  Lithos call), or Lithos's `task_not_resolved` for a task reopened in the
+  window after it ("This task is already open.").
 - `GET /tasks/new`
   Reserved for the create form (a later T3 slice). Until it exists the path
   answers 404 — never the detail page of a task whose id happens to be `new`,
@@ -1857,9 +1866,9 @@ Three rules hold across every row:
   the absence of a claim: a 4xx would blame a request that was fine and a 5xx
   would say the action failed, which is the one thing it must not say.
 
-### 5.15 Write Funnel, Receipts and Complete a Gate
+### 5.15 Write Funnel, Receipts, Complete a Gate and Reopen
 
-The first task write (T3-W4). Every curated write goes through **one function**
+The task writes (T3-W4 onwards). Every curated write goes through **one function**
 (`lithos_lens.write_funnel.WriteFunnel.submit`); route handlers parse their form
 and describe their action, and never call a Lithos write themselves. The steps,
 in order:
@@ -1946,7 +1955,7 @@ was recorded as its outcome and under whose name, and "Unblocked *N* tasks"
 naming the first five by title — read with `lithos_task_get` when the receipt is
 minted, because the pages a receipt lands on hold no task index — with "and *N*
 more" for the rest; a task whose title cannot be read is named by its short id
-alone. The receipt's **Reopen gate** follow-up arrives with reopen.
+alone. A completion's receipt carries a **Reopen gate** follow-up (below).
 
 **Complete.** Offered as one action — a **Complete** button, an optional
 one-line note, a line pointing at the gate's own description (completing a gate
@@ -2013,6 +2022,54 @@ did not. The span and the audit line record the gate type and
 unconfirmed attempt as for a performed one; a direct completion records
 `override: false`. The receipt is the same as a direct completion's.
 
+**Reopen** (T3-W5). Offered on the **detail page** of any completed or
+cancelled task — task, epic or gate — decided by one helper
+(`write_routes.offers_reopen`) and rendered only when an operator identity
+resolves; it is not offered on board rows or in the side panel. A **Reopen**
+button posts the status the page read, beside copy worded by that status,
+because the two cases do opposite things to the dependents:
+
+- **completed** — "Reopening puts this task back to open. Tasks that became
+  ready when it completed will be blocked again."
+- **cancelled** — "Reopening returns this task to open. Its dependents stop
+  being permanently blocked and wait on it again." (Reopening a cancelled
+  blocker is the remedy for Needs-attention rule 1: the effect is
+  un-stranding, not re-blocking.)
+
+When the task has an outcome the copy adds that it is cleared and that Lithos
+keeps it in the `[Reopened]` finding it records; with none it says nothing
+about an outcome. The write is one `lithos_task_reopen`; the span is
+`lens.writes.reopen` with no action-specific attributes, the audit line's
+arguments are the task id, its observed status is the prior status, and its
+envelope is Lithos's answer with `reblocked` as a list.
+
+The receipt reads "Reopened *\<title\>*", who reopened it and what it was, and
+— when there was one — that the prior outcome is kept in Lithos's
+`[Reopened]` finding, quoting it. Then, by the prior status:
+
+- **completed** — "Re-blocked *N* dependents" naming them, from Lithos's
+  `reblocked` ids (titled at mint like a completion's releases: first five,
+  "and *N* more", short id alone on a failed read); with none, "Re-blocked no
+  dependents — nothing that waits on this task had become ready."
+- **cancelled** — Lithos's `reblocked` is empty by design here, so the receipt
+  reads the task's outgoing `blocks` / `waits_on_gate` edges after the write,
+  through the detail page's bounded dependents reader, and names the **open**
+  ones: "*N* dependents are waiting on this again"; "At least *N* …" when that
+  page is truncated or a dependent's read failed; with none, "No dependents are
+  waiting on this again — nothing depends on it." A failed edge read does not
+  make the reopen unknown: the receipt still reports it and says "Lens couldn't
+  read its dependents just now."
+
+**Reopen gate.** A completion's receipt — in either answer mode — carries an
+ordinary form posting to the reopen route with `expected_status=completed` and,
+as its `next`, the page the completion returned to (for an HTMX row action,
+the board, never the POST's own path). It is labelled **Reopen gate**, not
+"Undo", with one line of why: it re-blocks the waiters, but does not recall
+anything their agents started in between. Completing a gate and then reopening
+it this way leaves the board as it started, and the second receipt names the
+tasks the first did. The detail page can show this form and its own Reopen at
+once; each has its own hook (`data-reopen-gate`, `data-reopen-action`).
+
 ## 6. Current Lithos Dependencies
 
 Lens currently assumes the availability of an existing Lithos deployment that
@@ -2028,9 +2085,11 @@ provides:
   exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
   reads and the typed registration it writes
 - an `/events` SSE stream carrying task-related events
-- **one task write**, `lithos_task_complete` (attributed to the operator, with
-  an `outcome`), whose `unblocked` id list a completion's receipt names (§5.15);
-  the client carries the other four T3 writes, which no route calls yet
+- **two task writes**, attributed to the operator: `lithos_task_complete`
+  (with an `outcome`), whose `unblocked` id list a completion's receipt names,
+  and `lithos_task_reopen`, whose `reblocked` id list a completed task's reopen
+  receipt names (§5.15); the client carries the other three T3 writes, which no
+  route calls yet
 
 Lens is intentionally conservative in what it assumes from Lithos. When data is
 ambiguous or partially missing, Lens treats parsing and enrichment as best
@@ -2257,11 +2316,11 @@ guard fails when reverted rather than assuming it binds.
 
 The following requirement areas are not yet implemented in the current state:
 
-- **the rest of the curated write actions** (T3) — reopen (and with it the
-  receipt's Reopen gate follow-up), cancel, create and add a dependency. The
-  posture and identity (§5.13), the refusal copy (§5.14), and the write funnel
-  with its receipts, the direct Complete action for human and external-task
-  gates, and Proceed anyway for every other gate type (§5.15) ship now.
+- **the rest of the curated write actions** (T3) — cancel, create and add a
+  dependency. The posture and identity (§5.13), the refusal copy (§5.14), and
+  the write funnel with its receipts, the direct Complete action for human and
+  external-task gates, Proceed anyway for every other gate type, and Reopen with
+  the completion receipt's Reopen gate (§5.15) ship now.
 - knowledge graph view and knowledge event wiring (K2)
 - cognitive search (`lithos_retrieve`) and node stats (K3)
 - feed, feedback, and cited-by panel (K4)

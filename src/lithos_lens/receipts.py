@@ -92,6 +92,17 @@ class WriteReceipt:
     write freed — titled up to :data:`MAX_TITLED_RELEASES` — and
     ``released_total`` is how many Lithos reported, so the banner can say
     "and N more" without the store holding ids it never shows.
+
+    A reopen (T3-W5) fills the same fields: ``released`` are the dependents it
+    names — the ``reblocked`` ids for a completed task, the open dependents now
+    waiting on it again for a cancelled one — and ``prior_status`` says which
+    case the banner words. ``released_exact`` is false when that count is a
+    lower bound (a truncated or partly unread dependents page), and
+    ``released_unread`` true when the dependents could not be read at all.
+    ``back_to`` is the page the write returned to, already checked by
+    ``safe_next``: a follow-up form on the receipt (Reopen gate) posts it as its
+    ``next``, because an HTMX receipt is rendered against the POST, whose own
+    path is no page to come back to.
     """
 
     action: str
@@ -100,6 +111,10 @@ class WriteReceipt:
     outcome: str = ""
     released: tuple[ReceiptTask, ...] = ()
     released_total: int = 0
+    prior_status: str = ""
+    released_exact: bool = True
+    released_unread: bool = False
+    back_to: str = ""
 
     @property
     def released_more(self) -> int:

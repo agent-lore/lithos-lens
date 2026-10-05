@@ -9,7 +9,8 @@ import {
 
 /**
  * Curated writes, end to end (T3-W4): the Complete action on a human gate's
- * row, and the receipt the write answers with.
+ * row, the receipt the write answers with, and (T3-W5) that receipt's Reopen
+ * gate, which returns the gate to open as the spec found it.
  *
  * Runs against the WRITES instance only (servers.ts): the fake keeps a
  * completed gate completed for the life of its process, so this spec must
@@ -22,7 +23,8 @@ import {
  * width, no horizontal overflow) that `screenshots.spec.ts` documents, for
  * the artifacts the PRD's visual review asks of these slices:
  *   gate-complete-action-<w>.png  the gate row with Complete and the identity
- *   complete-receipt-<w>.png      the receipt banner above the reconciled board
+ *   complete-receipt-<w>.png      the receipt banner above the reconciled board,
+ *                                 with its Reopen gate follow-up (T3-W5)
  *   proceed-anyway-confirm-<w>.png  a timer gate's Proceed anyway confirm page
  *                                   (T3-W4b): its ready_at, the waiters it
  *                                   releases, and the one confirming form
@@ -163,9 +165,34 @@ test("a human gate is completed from its row and the receipt says so", async ({
   await expect(row).toHaveCount(0);
   await expect(page.locator("[data-task-panel]")).toHaveCount(0);
 
+  // The receipt's follow-up (T3-W5): Reopen gate, labelled a reopen with its
+  // limits stated. Captured with the receipt — the artifact shows both.
+  const reopenGate = receipt.locator("[data-reopen-gate]");
+  await expect(reopenGate.locator("[data-reopen-gate-button]")).toHaveText(
+    "Reopen gate",
+  );
+  await expect(reopenGate.locator("[data-reopen-gate-limits]")).toContainText(
+    "does not recall anything their agents started",
+  );
+
   for (const width of WIDTHS) {
     await capture(page, "complete-receipt", width);
   }
+
+  // Submitting it leaves this server's demo gate open, as the spec found it.
+  // An ordinary form: it returns to this board (the funnel's checked `next`,
+  // not the HTMX POST's path) with the reopen's receipt. The demo gate's only
+  // waiter has other blockers, so it re-blocks no one.
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await reopenGate.locator("[data-reopen-gate-button]").click();
+  await expect(page).toHaveURL(/\/tasks\?.*receipt=/);
+  const reopened = page.locator("#write-receipt [data-write-receipt]");
+  await expect(reopened).toHaveAttribute("data-receipt-action", "reopen");
+  await expect(reopened.locator("[data-receipt-released]")).toContainText(
+    "Re-blocked no dependents",
+  );
+  await expect(row).toHaveCount(1);
+  await expect(row.locator("[data-complete-action]")).toHaveCount(1);
 });
 
 test("a timer gate is completed only through its Proceed anyway page", async ({

@@ -38,8 +38,58 @@
         Unblocked no tasks &mdash; nothing that waits on this gate became ready.
       {% endif %}
     </div>
-    {#- FOLLOW-UP SLOT (T3-W5): the "Reopen gate" form renders here, as an
-        ordinary form, with its one line of why it is a reopen and not an
-        undo. Nothing is offered until that slice ships it. -#}
+    {#- Reopen gate (T3-W5): an ordinary form, in either answer mode, posting
+        to reopen with the status the write just left. Labelled a reopen,
+        never an undo: it re-blocks the waiters but recalls nothing their
+        agents started meanwhile. Its `next` is the page the write returned to
+        (`receipt.back_to`) -- an HTMX receipt is rendered against the POST,
+        whose own path is no page to come back to. -#}
+    {% if operator_identity(request).resolved %}
+      <form class="write-receipt-followup" method="post" action="{{ reopen_path(receipt.task.task_id) }}" data-reopen-gate data-task-id="{{ receipt.task.task_id }}">
+        <input type="hidden" name="expected_status" value="completed">
+        <input type="hidden" name="next" value="{{ receipt.back_to }}">
+        <button type="submit" class="complete-action-button" data-reopen-gate-button>Reopen gate</button>
+        <span class="write-receipt-detail" data-reopen-gate-limits>Re-blocks its waiters, but does not recall anything their agents started in between.</span>
+      </form>
+    {% endif %}
+  {% elif receipt.action == "reopen" %}
+    <p class="write-receipt-headline">
+      &#8634; Reopened &ldquo;{{ receipt.task.title or (receipt.task.task_id | short_id) }}&rdquo;
+      {% with task_id = receipt.task.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+    </p>
+    <p class="write-receipt-detail" data-receipt-outcome>
+      Reopened as {{ receipt.operator }}; it was {{ receipt.prior_status }}.
+      {%- if receipt.outcome %} Its prior outcome is kept in Lithos's [Reopened] finding: &ldquo;{{ receipt.outcome }}&rdquo;{% endif %}
+    </p>
+    {% set waiting = receipt.prior_status == "cancelled" %}
+    {% set dependents = receipt.released_total ~ " dependent" ~ ("" if receipt.released_total == 1 else "s") %}
+    <div class="write-receipt-detail" data-receipt-released="{{ receipt.released_total }}" data-receipt-case="{{ 'waiting' if waiting else 'reblocked' }}" data-receipt-exact="{{ 'yes' if receipt.released_exact else 'no' }}">
+      {% if receipt.released_unread %}
+        Lens couldn't read its dependents just now.
+      {% elif receipt.released_total %}
+        {% if waiting %}
+          {{ "" if receipt.released_exact else "At least " }}{{ dependents }} {{ "is" if receipt.released_total == 1 else "are" }} waiting on this again:
+        {% else %}
+          Re-blocked {{ dependents }}:
+        {% endif %}
+        <ul class="write-receipt-tasks">
+          {% for released in receipt.released %}
+            <li data-receipt-released-task="{{ released.task_id }}">
+              {% if released.title %}<a href="{{ task_detail_url(request, released.task_id) }}">{{ released.title }}</a>{% endif %}
+              {% with task_id = released.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </li>
+          {% endfor %}
+          {% if receipt.released_more %}
+            <li data-receipt-released-more="{{ receipt.released_more }}">and {{ receipt.released_more }} more</li>
+          {% endif %}
+        </ul>
+      {% elif waiting and not receipt.released_exact %}
+        No dependent read as waiting on this again &mdash; but Lens couldn't read all of them.
+      {% elif waiting %}
+        No dependents are waiting on this again &mdash; nothing depends on it.
+      {% else %}
+        Re-blocked no dependents &mdash; nothing that waits on this task had become ready.
+      {% endif %}
+    </div>
   {% endif %}
 </section>
