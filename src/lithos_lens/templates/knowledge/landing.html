@@ -40,10 +40,14 @@
     {% elif search_results is not none %}
       <h2>Results for &ldquo;{{ query }}&rdquo;</h2>
       {% if search_results %}
+        {% include "knowledge/chips_capped.html" %}
         <ul class="knowledge-cards">
           {% for result in search_results %}
             <li class="knowledge-card">
               <a class="knowledge-card-title" href="{{ knowledge_note_url(result.id, landing_url) }}">{{ result.label }}</a>
+              {% with meta = chips.for_note(result.id), compact = true %}
+                {% if meta %}{% include "knowledge/note_chips.html" %}{% endif %}
+              {% endwith %}
               {% if result.path %}
                 <span class="knowledge-card-path">{{ result.path }}</span>
               {% endif %}
@@ -69,10 +73,14 @@
       {% endif %}
 
       {% if results %}
+        {% include "knowledge/chips_capped.html" %}
         <ul class="knowledge-results">
           {% for note in results %}
             <li>
               <a href="{{ knowledge_note_url(note.id, landing_url) }}">{{ note.title or note.path or note.id }}</a>
+              {% with meta = chips.for_note(note.id), compact = true %}
+                {% if meta %}{% include "knowledge/note_chips.html" %}{% endif %}
+              {% endwith %}
               {% if note.path %}
                 <span class="knowledge-result-path">{{ note.path }}</span>
               {% endif %}

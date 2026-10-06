@@ -109,6 +109,7 @@ DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 20
 MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
 DEFAULT_KNOWLEDGE_SEARCH_LIMIT = 20
 DEFAULT_KNOWLEDGE_RECENT_LIMIT = 20
+DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP = 40
 # Ceiling on the /knowledge result/recent limits: a misconfigured limit must not
 # let one landing-page request materialize an unbounded lithos_search /
 # lithos_list result set (the same bound the related-panel fan-out cap enforces).
@@ -271,6 +272,9 @@ class KnowledgeConfig:
     # recently-updated browse list length (K1-S6).
     search_limit: int = DEFAULT_KNOWLEDGE_SEARCH_LIMIT
     recent_limit: int = DEFAULT_KNOWLEDGE_RECENT_LIMIT
+    # How many landing rows get metadata chips: one lithos_read per distinct
+    # row, since neither lithos_search nor lithos_list carries the fields.
+    list_chip_fanout_cap: int = DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP
 
 
 @dataclass(frozen=True)

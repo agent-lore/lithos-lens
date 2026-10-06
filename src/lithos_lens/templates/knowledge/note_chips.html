@@ -1,0 +1,26 @@
+{#-
+  A note's frontmatter chips (§6.4), shared by the note page and the
+  /knowledge landing's cards and rows. `meta` is a NoteMetadata. `compact`
+  is the landing's one-line variant: the standing chips only — `supersedes`
+  is a link to another note, so it stays on the note page.
+-#}
+{% if compact %}<div class="note-chips note-chips-compact">{% else %}<div class="note-chips">{% endif %}
+  {% if meta.note_type %}
+    <span class="chip note-type">{{ meta.note_type }}</span>
+  {% endif %}
+  {% if meta.status %}
+    <span class="chip note-status note-status-{{ meta.status_slug }}">{{ meta.status }}</span>
+  {% endif %}
+  {% if meta.access_scope %}
+    <span class="chip note-scope">{{ meta.access_scope }}</span>
+  {% endif %}
+  {% if meta.namespace %}
+    <span class="chip note-namespace">{{ meta.namespace }}</span>
+  {% endif %}
+  {% if meta.confidence %}
+    <span class="chip note-confidence">confidence {{ meta.confidence }}</span>
+  {% endif %}
+  {% if meta.supersedes and not compact %}
+    <span class="chip note-supersedes">replaces: <a href="/note/{{ meta.supersedes }}">{{ meta.supersedes }}</a></span>
+  {% endif %}
+</div>

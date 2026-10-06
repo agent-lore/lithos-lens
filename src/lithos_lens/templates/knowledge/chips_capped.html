@@ -1,0 +1,5 @@
+{#- Says why the rows past `list_chip_fanout_cap` carry no chips: each chip
+    row costs a lithos_read, and only the first N are spent. -#}
+{% if chips.capped_at %}
+  <p class="knowledge-chips-capped">Chips shown for the first {{ chips.capped_at }} notes.</p>
+{% endif %}

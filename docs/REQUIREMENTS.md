@@ -347,6 +347,7 @@ confirm_cancel = true             # consequence-aware cancel confirmation
 search_limit = 20                 # lithos_search / lithos_retrieve result limit
 recent_limit = 20                 # recently-updated list size on /knowledge
 related_title_fanout_cap = 20     # cap on cached lithos_read title lookups per related panel
+list_chip_fanout_cap = 40         # landing rows given metadata chips (one lithos_read each; §7.1)
 graph_focus_max_nodes = 250       # knowledge graph cap, focus (ego) mode
 graph_global_max_nodes = 500      # knowledge graph cap, global mode
 graph_default_depth = 1           # ego-graph hops, 1 or 2 (ROADMAP K2)
@@ -1178,6 +1179,7 @@ When `metadata.source` contains a task id, Lens calls `lithos_task_get` and rend
 - **With a query:** `lithos_search(query, mode="hybrid", limit=[knowledge].search_limit)`. Result cards show title, path, score, `updated_at`, an `is_stale` marker, and the snippet.
 - **Snippets MUST be rendered escaped.** Verified live: `lithos_search` snippets contain raw markdown (headings, wiki-link syntax, code). Lens HTML-escapes snippet text (query-term highlighting, if any, is applied *after* escaping). Snippets are never fed through the markdown renderer.
 - **Without a query:** a recently-updated list via `lithos_list(limit=[knowledge].recent_limit)` ordered by `updated`.
+- **Metadata chips on every card and row:** the note page's chips (§6.4 — type, status colour-coded, namespace, confidence, scope when not `shared`) in a compact one-line variant, so a quarantined hypothesis and a shared summary do not look alike in a list. Neither `lithos_search` rows nor `lithos_list` items carry these fields (ROADMAP ledger #16), so Lens reads each row's frontmatter with a `lithos_read(id, max_length=1)`, once per id per request, for the first `[knowledge].list_chip_fanout_cap` (default 40) rows; past it rows render chipless and the page says "chips shown for the first N". A failed read leaves only its own row chipless.
 - Filters: `q` and `tag` only (`?tag=` maps to the `tags=` argument of search/list). Richer filtering belongs to the feed (§9).
 
 ### 7.2 Cognitive search evolution

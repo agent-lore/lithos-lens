@@ -13,7 +13,8 @@ from lithos_lens.config import ConfigError, LithosConfig, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import SearchResult, normalize_search_result
-from lithos_lens.lithos_client import LithosClient
+from lithos_lens.knowledge_metadata import load_list_chips
+from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
 
@@ -499,6 +500,7 @@ def test_config_defaults_search_and_recent_limits(lithos_lens_config_env: Path) 
 
     assert config.knowledge.search_limit == 20
     assert config.knowledge.recent_limit == 20
+    assert config.knowledge.list_chip_fanout_cap == 40
 
 
 def test_config_reads_search_and_recent_limits(tmp_path: Path) -> None:
@@ -509,15 +511,19 @@ def test_config_reads_search_and_recent_limits(tmp_path: Path) -> None:
         "[lithos-lens.knowledge]\n"
         "search_limit = 5\n"
         "recent_limit = 7\n"
+        "list_chip_fanout_cap = 9\n"
     )
 
     config = load_config(config_path)
 
     assert config.knowledge.search_limit == 5
     assert config.knowledge.recent_limit == 7
+    assert config.knowledge.list_chip_fanout_cap == 9
 
 
-@pytest.mark.parametrize("key", ["search_limit", "recent_limit"])
+@pytest.mark.parametrize(
+    "key", ["search_limit", "recent_limit", "list_chip_fanout_cap"]
+)
 def test_config_rejects_oversized_landing_limit(tmp_path: Path, key: str) -> None:
     config_path = tmp_path / "lithos-lens.toml"
     config_path.write_text(
@@ -529,3 +535,273 @@ def test_config_rejects_oversized_landing_limit(tmp_path: Path, key: str) -> Non
 
     with pytest.raises(ConfigError, match=key):
         load_config(config_path)
+
+
+# ── landing metadata chips (type, status, scope, namespace, confidence) ─
+
+
+def _record_reads(fake: FakeLithosClient) -> list[tuple[str, int | None]]:
+    """Record every ``read_note`` the landing makes, in order."""
+    reads: list[tuple[str, int | None]] = []
+    original_read = fake.read_note
+
+    async def record_read(
+        knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        reads.append((knowledge_id, max_length))
+        return await original_read(knowledge_id, max_length=max_length)
+
+    fake.read_note = record_read  # type: ignore[method-assign]
+    return reads
+
+
+def _row_html(html: str, note_id: str) -> str:
+    """The one ``<li>`` (card or row) whose link opens ``note_id``."""
+    anchor = html.index(f'href="/note/{note_id}?next=')
+    return html[html.rindex("<li", 0, anchor) : html.index("</li>", anchor)]
+
+
+def _set_chip_cap(config_path: Path, cap: int) -> None:
+    with config_path.open("a") as handle:
+        handle.write(f"\n[lithos-lens.knowledge]\nlist_chip_fanout_cap = {cap}\n")
+
+
+_QUARANTINED = NoteRecord(
+    id="hypo",
+    title="Ingest hypothesis",
+    content="The ingest path drops late points.",
+    metadata={
+        "note_type": "hypothesis",
+        "status": "quarantined",
+        "namespace": "research",
+        "access_scope": "shared",
+        "confidence": 0.3,
+        "updated_at": "2026-08-02T10:00:00+00:00",
+    },
+)
+_SUMMARY = NoteRecord(
+    id="summary",
+    title="Ingest summary",
+    content="The ingest path is healthy.",
+    metadata={
+        "note_type": "summary",
+        "status": "active",
+        "namespace": "influx",
+        "access_scope": "task",
+        "supersedes": "hypo",
+        "updated_at": "2026-08-01T10:00:00+00:00",
+    },
+)
+
+
+def test_search_card_carries_the_notes_standing_as_compact_chips(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A quarantined hypothesis and a shared summary must not look identical in
+    a result list: each card carries the note page's chips, compact."""
+    fake = FakeLithosClient(
+        dataset=_dataset({"hypo": _QUARANTINED, "summary": _SUMMARY})
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=ingest")
+
+    assert response.status_code == 200
+    card = _row_html(response.text, "hypo")
+    assert 'class="note-chips note-chips-compact"' in card
+    # The red status chip — the class `.note-status-quarantined` colours.
+    assert (
+        '<span class="chip note-status note-status-quarantined">quarantined</span>'
+        in card
+    )
+    assert '<span class="chip note-type">hypothesis</span>' in card
+    assert '<span class="chip note-namespace">research</span>' in card
+    assert '<span class="chip note-confidence">confidence 30%</span>' in card
+    # `shared` is the quiet default: no scope chip for it.
+    assert "note-scope" not in card
+    other = _row_html(response.text, "summary")
+    assert "note-status-active" in other
+    assert '<span class="chip note-namespace">influx</span>' in other
+    assert '<span class="chip note-scope">task</span>' in other
+    # `supersedes` is a link to another note; it stays on the note page.
+    assert "note-supersedes" not in other
+    assert "Chips shown for the first" not in response.text
+
+
+def test_recent_row_carries_compact_chips(lithos_lens_config_env: Path) -> None:
+    fake = FakeLithosClient(dataset=_dataset({"hypo": _QUARANTINED}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    row = _row_html(response.text, "hypo")
+    assert 'class="note-chips note-chips-compact"' in row
+    assert "note-status-quarantined" in row
+    assert '<span class="chip note-namespace">research</span>' in row
+
+
+def test_note_page_keeps_its_full_chip_row(lithos_lens_config_env: Path) -> None:
+    """The note page renders the same partial, NOT compact, and with the
+    `supersedes` link the list rows leave out."""
+    fake = FakeLithosClient(dataset=_dataset({"summary": _SUMMARY}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/summary")
+
+    assert '<div class="note-chips">' in response.text
+    assert "note-chips-compact" not in response.text
+    assert 'replaces: <a href="/note/hypo">hypo</a>' in response.text
+
+
+def test_landing_reads_each_row_once_with_the_cheap_read(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = FakeLithosClient(
+        dataset=_dataset({"hypo": _QUARANTINED, "summary": _SUMMARY})
+    )
+    reads = _record_reads(fake)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        client.get("/knowledge?q=ingest")
+
+    assert sorted(reads) == [("hypo", 1), ("summary", 1)]
+
+
+def test_an_id_shown_twice_is_read_once(lithos_lens_config_env: Path) -> None:
+    """The per-request cache: rows sharing an id share one read, and both
+    carry its chips."""
+    fake = FakeLithosClient(dataset=_dataset({"hypo": _QUARANTINED}))
+    reads = _record_reads(fake)
+
+    async def twice(query: str, **kwargs: Any) -> list[SearchResult]:
+        row = SearchResult(id="hypo", title="Ingest hypothesis")
+        return [row, row]
+
+    fake.search_notes = twice  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=ingest")
+
+    assert reads == [("hypo", 1)]
+    assert response.text.count("note-status-quarantined") == 2
+
+
+def test_rows_past_the_chip_cap_are_chipless_and_the_page_says_so(
+    lithos_lens_config_env: Path,
+) -> None:
+    _set_chip_cap(lithos_lens_config_env, 2)
+    notes = {
+        f"n{day}": NoteRecord(
+            id=f"n{day}",
+            title=f"Note {day}",
+            content="Body.",
+            metadata={
+                "status": "quarantined",
+                "updated_at": f"2026-08-0{day}T10:00:00+00:00",
+            },
+        )
+        for day in (1, 2, 3, 4)
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+    reads = _record_reads(fake)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    # Newest first: n4 and n3 are the first two rows, and the only two read.
+    assert sorted(reads) == [("n3", 1), ("n4", 1)]
+    assert "note-status-quarantined" in _row_html(response.text, "n4")
+    assert "note-status-quarantined" in _row_html(response.text, "n3")
+    assert "note-chips" not in _row_html(response.text, "n2")
+    assert "note-chips" not in _row_html(response.text, "n1")
+    assert "Chips shown for the first 2 notes." in response.text
+
+
+def test_a_list_exactly_at_the_cap_says_nothing_about_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    _set_chip_cap(lithos_lens_config_env, 2)
+    fake = FakeLithosClient(
+        dataset=_dataset({"hypo": _QUARANTINED, "summary": _SUMMARY})
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge")
+
+    assert "note-status-quarantined" in response.text
+    assert "Chips shown for the first" not in response.text
+
+
+def test_a_failed_chip_read_leaves_only_that_row_chipless(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = FakeLithosClient(
+        dataset=_dataset({"hypo": _QUARANTINED, "summary": _SUMMARY})
+    )
+    original_read = fake.read_note
+
+    async def flaky_read(
+        knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        if knowledge_id == "summary":
+            raise LithosToolError("upstream timeout", code="timeout")
+        return await original_read(knowledge_id, max_length=max_length)
+
+    fake.read_note = flaky_read  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=ingest")
+
+    assert response.status_code == 200
+    summary_card = _row_html(response.text, "summary")
+    assert "Ingest summary" in summary_card
+    assert "note-chips" not in summary_card
+    assert "note-status-quarantined" in _row_html(response.text, "hypo")
+    assert "currently unavailable" not in response.text
+
+
+def test_load_list_chips_dedupes_caps_and_survives_failures() -> None:
+    class Reader:
+        def __init__(self) -> None:
+            self.reads: list[str] = []
+
+        async def read_note(
+            self, knowledge_id: str, *, max_length: int | None = None
+        ) -> NoteRecord | None:
+            self.reads.append(knowledge_id)
+            if knowledge_id == "boom":
+                raise RuntimeError("down")
+            if knowledge_id == "gone":
+                return None
+            return NoteRecord(
+                id=knowledge_id, title="", content="", metadata={"status": "active"}
+            )
+
+    reader = Reader()
+    chips = asyncio.run(
+        load_list_chips(reader, ["a", "boom", "a", "gone", "", "b", "c"], cap=4)
+    )
+
+    assert reader.reads == ["a", "boom", "gone", "b"]
+    assert chips.fanout == 4
+    assert chips.capped_at == 4
+    assert chips.for_note("a") is not None
+    assert chips.for_note("b") is not None
+    assert chips.for_note("boom") is None
+    assert chips.for_note("gone") is None
+    assert chips.for_note("c") is None
+
+
+def test_load_list_chips_under_the_cap_reports_no_cap() -> None:
+    class Reader:
+        async def read_note(
+            self, knowledge_id: str, *, max_length: int | None = None
+        ) -> NoteRecord | None:
+            return NoteRecord(id=knowledge_id, title="", content="")
+
+    chips = asyncio.run(load_list_chips(Reader(), ["a", "b"], cap=2))
+
+    assert chips.fanout == 2
+    assert chips.capped_at == 0
+    # Frontmatter with none of the standing fields renders no chip row.
+    assert chips.for_note("a") is None

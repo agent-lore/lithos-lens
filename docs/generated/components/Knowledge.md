@@ -12,7 +12,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 8 | 7 |
-| `lithos_lens.knowledge_metadata` | S | 1 | 1 |
+| `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 
@@ -38,6 +38,9 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
 - def `build_note_metadata` — Project a note's frontmatter into the §6.4 metadata view model.
+- class `NoteHeadReader` — The one Lithos read the landing's chip fan-out needs.
+- class `ListChips` — The landing rows' chips, keyed by note id, and what reading them cost.
+- def `load_list_chips` — Read the chips for the first ``cap`` distinct ids, once each.
 
 ### `lithos_lens.knowledge_produced_by`
 - class `ProducedByTask` — The validated 'produced by task' chip for a note's ``metadata.source``.

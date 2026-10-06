@@ -1626,6 +1626,27 @@ button,
   color: var(--muted);
 }
 
+/* The note page's chips on a landing card or row (§5.7): the same pills, one
+   line and smaller, so a list stays scannable. Two-class selectors, so they
+   beat `.chip` wherever it is declared; the status colours are untouched. */
+.note-chips-compact {
+  flex-wrap: nowrap;
+  gap: 0.3rem;
+  margin: 0.3rem 0;
+  overflow: hidden;
+}
+
+.note-chips-compact .chip {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.45rem;
+  white-space: nowrap;
+}
+
+.knowledge-chips-capped {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 @media (max-width: 700px) {
   .shell-header,
   .task-row {
