@@ -1030,14 +1030,21 @@ def test_fixture_inferred_edge_row_discloses_its_rationale(
     (inferred,) = [row for row in rows if 'edge-type">supports' in row]
 
     assert '<details class="edge-why" data-edge-why>' in inferred
-    assert "<summary>why?</summary>" in inferred
-    assert "inferred by lithos-enrich" in inferred
-    assert (
+    details = inferred.split("<details", 1)[1].split("</details>", 1)[0]
+    assert "<summary>why?</summary>" in details
+    assert "inferred by lithos-enrich" in details
+    # The rationale is a paragraph; model and confidence are small chips.
+    rationale = re.escape(
         "The capacity report&#39;s measured write rate is the headroom "
-        "the migration plan&#39;s cutover window assumes." in inferred
+        "the migration plan&#39;s cutover window assumes."
     )
-    assert "model claude-haiku-4-5" in inferred
-    assert "confidence 0.82" in inferred
+    assert re.search(
+        rf'<p\b[^>]*class="edge-why-rationale"[^>]*>{rationale}</p>', details
+    )
+    assert re.search(
+        r'<span\b[^>]*class="chip"[^>]*>model claude-haiku-4-5</span>', details
+    )
+    assert re.search(r'<span\b[^>]*class="chip"[^>]*>confidence 0\.82</span>', details)
     # A reinforcement edge has no rationale, and says what it is instead.
     (reinforced,) = [row for row in rows if 'edge-type">related_to' in row]
     assert "reinforced by citation" in reinforced

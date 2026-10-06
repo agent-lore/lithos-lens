@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from lithos_lens.knowledge import normalize_related
 from lithos_lens.knowledge_edge_evidence import (
     EdgeEvidence,
     EdgeWhy,
@@ -57,12 +58,44 @@ def test_partial_evidence_json_yields_only_the_present_fields(
         "{rationale: unquoted}",  # broken JSON
         '["a", "list"]',  # JSON, not an object
         "0.9",  # JSON scalar
-        '{"source": "manual"}',  # an object with none of the three keys
         "<script>alert(1)</script>",
+        # Decoded, but a number no float holds: a normalization failure.
+        json.dumps({"rationale": "Manual supporting evidence.", "confidence": 10**400}),
+        '{"rationale": "Not a number.", "confidence": NaN}',
     ],
 )
 def test_evidence_that_is_not_the_inference_json_is_kept_raw(raw: str) -> None:
     assert parse_edge_evidence(raw) == EdgeEvidence(raw=raw)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"source": "manual"}, {"rationale": "", "model": ""}],
+)
+def test_a_decoded_object_with_none_of_the_keys_is_empty_not_raw(
+    payload: dict[str, object],
+) -> None:
+    """Zero present fields is the partial-JSON boundary: nothing to show, but
+    it decoded, so the raw fallback (for decoding failures) does not apply."""
+    assert parse_edge_evidence(json.dumps(payload)) == EdgeEvidence()
+
+
+def test_an_overflowing_confidence_keeps_the_neighborhood_renderable() -> None:
+    """One edge's unconvertible evidence must not fail the whole panel."""
+    evidence = json.dumps({"rationale": "Manual.", "confidence": 10**400})
+    row = {
+        "from_id": "root",
+        "to_id": "other",
+        "type": "supports",
+        "provenance_type": "asserted",
+        "provenance_actor": "agent-x",
+        "evidence": evidence,
+    }
+    (ref,) = normalize_related({"edges": {"outgoing": [row]}}).edges
+
+    assert ref.why == EdgeWhy(
+        provenance="asserted by agent-x", evidence=EdgeEvidence(raw=evidence)
+    )
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])
@@ -105,6 +138,7 @@ def test_a_frontmatter_edge_has_provenance_and_no_evidence() -> None:
     assert edge_why(row) == EdgeWhy(provenance="declared in frontmatter")
 
 
-def test_a_row_with_null_evidence_and_no_provenance_has_no_disclosure() -> None:
-    row = {"provenance_type": None, "provenance_actor": None, "evidence": None}
+@pytest.mark.parametrize("evidence", [None, "{}"])
+def test_a_row_with_nothing_to_show_has_no_disclosure(evidence: str | None) -> None:
+    row = {"provenance_type": None, "provenance_actor": None, "evidence": evidence}
     assert edge_why(row) is None

@@ -15,6 +15,7 @@ so that module stays under the god-module ceiling.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -32,15 +33,20 @@ _PROVENANCE_PHRASES = {
 class EdgeEvidence:
     """An edge's parsed ``evidence``: the three known keys, or the raw text.
 
-    ``raw`` is set only when the string did not parse to a JSON object carrying
-    any of the three keys; it is shown as escaped text so the reader still sees
-    what was stored.
+    ``raw`` is set only when the string could not be read as a JSON object
+    (or one of its values could not be converted); it is shown as escaped text
+    so the reader still sees what was stored.
     """
 
     rationale: str = ""
     model: str = ""
     confidence: float | None = None
     raw: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        """A decoded object carrying none of the three keys: nothing to show."""
+        return self == EdgeEvidence()
 
 
 @dataclass(frozen=True)
@@ -52,12 +58,13 @@ class EdgeWhy:
 
 
 def parse_edge_evidence(value: Any) -> EdgeEvidence | None:
-    """Parse an edge row's ``evidence``; ``None`` when there is nothing to show.
+    """Parse an edge row's ``evidence``; ``None`` when it is null (or blank).
 
     ``json.loads`` on the string: a dict yields whichever of ``rationale`` /
-    ``model`` / ``confidence`` it carries (missing or mistyped ones omitted);
-    anything else — invalid JSON, a non-object, an object with none of the
-    three — falls back to the raw string. Null (or blank) means no evidence.
+    ``model`` / ``confidence`` it carries (missing or mistyped ones omitted, so
+    ``{}`` yields an empty projection). Any failure — invalid JSON, a
+    non-object, a ``confidence`` number no float holds (``1e400``, ``NaN``) —
+    falls back to the raw string.
     """
     if not isinstance(value, str) or not value.strip():
         return None
@@ -67,14 +74,14 @@ def parse_edge_evidence(value: Any) -> EdgeEvidence | None:
         return EdgeEvidence(raw=value)
     if not isinstance(parsed, dict):
         return EdgeEvidence(raw=value)
-    evidence = EdgeEvidence(
+    confidence = parsed.get("confidence")
+    if _is_number(confidence) and number_or_none(confidence) is None:
+        return EdgeEvidence(raw=value)
+    return EdgeEvidence(
         rationale=_text(parsed.get("rationale")),
         model=_text(parsed.get("model")),
-        confidence=number_or_none(parsed.get("confidence")),
+        confidence=number_or_none(confidence),
     )
-    if evidence == EdgeEvidence():
-        return EdgeEvidence(raw=value)
-    return evidence
 
 
 def provenance_label(provenance_type: Any, provenance_actor: Any) -> str:
@@ -101,17 +108,29 @@ def edge_why(row: Mapping[str, Any]) -> EdgeWhy | None:
         ),
         evidence=parse_edge_evidence(row.get("evidence")),
     )
+    if why.evidence is not None and why.evidence.is_empty:
+        why = EdgeWhy(provenance=why.provenance)
     return why if why.provenance or why.evidence else None
 
 
 def number_or_none(value: Any) -> float | None:
-    """A JSON number (not a bool) as a float; anything else is ``None``.
+    """A finite JSON number (not a bool) as a float; anything else is ``None``.
 
     Shared with ``knowledge``'s edge-row ``weight``, the same kind of column.
+    An integer too large for a float (``float`` raises) is ``None`` too, so one
+    odd row never fails the panel it sits in.
     """
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    return None
+    if not _is_number(value):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _text(value: Any) -> str:

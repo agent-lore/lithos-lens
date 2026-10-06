@@ -39,10 +39,10 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 ### `lithos_lens.knowledge_edge_evidence`
 - class `EdgeEvidence` — An edge's parsed ``evidence``: the three known keys, or the raw text.
 - class `EdgeWhy` — What the "why?" disclosure on a typed-edge row shows.
-- def `parse_edge_evidence` — Parse an edge row's ``evidence``; ``None`` when there is nothing to show.
+- def `parse_edge_evidence` — Parse an edge row's ``evidence``; ``None`` when it is null (or blank).
 - def `provenance_label` — The plain-language provenance line, e.g. "inferred by lithos-enrich".
 - def `edge_why` — The disclosure for one raw edge row; ``None`` when it would be empty.
-- def `number_or_none` — A JSON number (not a bool) as a float; anything else is ``None``.
+- def `number_or_none` — A finite JSON number (not a bool) as a float; anything else is ``None``.
 
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
