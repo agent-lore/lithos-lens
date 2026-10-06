@@ -57,7 +57,7 @@
         "max_function": "lithos_lens.telemetry.setup_telemetry"
       },
       "Web": {
-        "functions_over_10": 4,
+        "functions_over_10": 5,
         "max_complexity": 17,
         "max_function": "lithos_lens.write_funnel.WriteFunnel._attempt"
       },
@@ -67,7 +67,7 @@
         "max_function": "lithos_lens.create_form.validate"
       }
     },
-    "functions_over_10": 50,
+    "functions_over_10": 51,
     "top_functions": [
       {
         "complexity": 40,
@@ -110,11 +110,11 @@
         "qualname": "lithos_lens.cancel_consequences.walk_downstream"
       }
     ],
-    "total_functions": 974
+    "total_functions": 979
   },
   "domain": {
-    "associations": 110,
-    "models": 111,
+    "associations": 111,
+    "models": 112,
     "models_without_docstrings": 16
   },
   "graph": {
@@ -223,11 +223,11 @@
         "classes": 13,
         "functions": 33,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 606,
-        "lines": 1516,
+        "largest_module_lines": 619,
+        "lines": 1533,
         "modules": 4,
         "public_symbols": 27,
-        "sloc": 1200
+        "sloc": 1213
       },
       "Entrypoint": {
         "classes": 0,
@@ -260,14 +260,14 @@
         "sloc": 517
       },
       "Knowledge": {
-        "classes": 14,
-        "functions": 58,
+        "classes": 16,
+        "functions": 63,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 1331,
+        "lines": 1421,
         "modules": 4,
-        "public_symbols": 24,
-        "sloc": 997
+        "public_symbols": 27,
+        "sloc": 1063
       },
       "LithosClient": {
         "classes": 15,
@@ -334,10 +334,10 @@
         "functions": 157,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 880,
-        "lines": 5104,
+        "lines": 5124,
         "modules": 10,
         "public_symbols": 60,
-        "sloc": 4114
+        "sloc": 4130
       },
       "Writes": {
         "classes": 25,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 30599,
+    "total_lines": 30726,
     "total_modules": 74,
-    "total_sloc": 23567
+    "total_sloc": 23662
   },
   "tests": {
-    "ratio": 1.95,
-    "src_lines": 30599,
-    "test_lines": 59806
+    "ratio": 1.96,
+    "src_lines": 30726,
+    "test_lines": 60188
   }
 }

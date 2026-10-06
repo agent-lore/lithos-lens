@@ -33,6 +33,10 @@ classDiagram
     +source str
     +truncated bool
   }
+  class ListChips {
+    +fanout int
+    +capped_at int
+  }
   class NoteMetadata {
     +note_type str
     +status str
@@ -99,6 +103,7 @@ classDiagram
     +updated str
     +score float | None
   }
+  ListChips "1" --> "0..*" NoteMetadata : by_id
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived
   RelatedNeighborhood "1" --> "0..*" RelatedRef : edges

@@ -83,26 +83,7 @@
           </p>
         {% endif %}
         {% if note_meta and note_meta.has_chips %}
-          <div class="note-chips">
-            {% if note_meta.note_type %}
-              <span class="chip note-type">{{ note_meta.note_type }}</span>
-            {% endif %}
-            {% if note_meta.status %}
-              <span class="chip note-status note-status-{{ note_meta.status_slug }}">{{ note_meta.status }}</span>
-            {% endif %}
-            {% if note_meta.access_scope %}
-              <span class="chip note-scope">{{ note_meta.access_scope }}</span>
-            {% endif %}
-            {% if note_meta.namespace %}
-              <span class="chip note-namespace">{{ note_meta.namespace }}</span>
-            {% endif %}
-            {% if note_meta.confidence %}
-              <span class="chip note-confidence">confidence {{ note_meta.confidence }}</span>
-            {% endif %}
-            {% if note_meta.supersedes %}
-              <span class="chip note-supersedes">replaces: <a href="/note/{{ note_meta.supersedes }}">{{ note_meta.supersedes }}</a></span>
-            {% endif %}
-          </div>
+          {% with meta = note_meta, compact = false %}{% include "knowledge/note_chips.html" %}{% endwith %}
         {% endif %}
         {% if note_meta and note_meta.has_authorship %}
           <div class="note-authorship detail-meta">

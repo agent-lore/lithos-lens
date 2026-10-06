@@ -9,15 +9,26 @@ the body, a ``supersedes`` back-reference, and an authorship line
 ``NoteRecord.metadata`` so the ``/note/{id}`` route stays a thin orchestrator;
 every field degrades to empty when its frontmatter key is absent, so the
 template renders only the chips a note actually carries.
+
+The /knowledge landing's result cards and recent-list rows carry the same
+chips, compact. Neither ``lithos_search`` rows nor ``lithos_list`` items carry
+these fields (ROADMAP ledger #16), so :func:`load_list_chips` reads each row's
+frontmatter with the cheap ``lithos_read(id, max_length=1)`` the related
+panel's title resolution uses — capped, and once per id per request.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from lithos_lens.tasks import NoteRecord
+
+logger = logging.getLogger(__name__)
 
 # Anything outside this class-safe set collapses to ``-`` in a status slug.
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -41,13 +52,22 @@ class NoteMetadata:
 
     @property
     def has_chips(self) -> bool:
+        return self.has_standing_chips or bool(self.supersedes)
+
+    @property
+    def has_standing_chips(self) -> bool:
+        """Whether any chip a list row carries is present.
+
+        The note's standing — type, status, scope, namespace, confidence — and
+        not ``supersedes``, which is a link to another note and stays on the
+        note page.
+        """
         return bool(
             self.note_type
             or self.status
             or self.confidence
             or self.access_scope
             or self.namespace
-            or self.supersedes
         )
 
     @property
@@ -150,3 +170,73 @@ def _derive_namespace(meta: dict[str, Any]) -> str:
         return explicit
     path = _meta_str(meta, "path")
     return path.rsplit("/", 1)[0] if "/" in path else ""
+
+
+# ── Landing list chips ─────────────────────────────────────────────────
+
+
+class NoteHeadReader(Protocol):
+    """The one Lithos read the landing's chip fan-out needs."""
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None: ...
+
+
+@dataclass(frozen=True)
+class ListChips:
+    """The landing rows' chips, keyed by note id, and what reading them cost."""
+
+    by_id: Mapping[str, NoteMetadata] = field(default_factory=dict)
+    #: ``lithos_read`` calls spent — one per distinct id, at most the cap.
+    fanout: int = 0
+    #: The cap, set only when the list named more distinct ids than it, so
+    #: the page can say which rows are chipless and why.
+    capped_at: int = 0
+
+    def for_note(self, note_id: str) -> NoteMetadata | None:
+        """The row's chips, or ``None`` for a row past the cap, a failed read,
+        or a note whose frontmatter carries none of them."""
+        meta = self.by_id.get(note_id)
+        return meta if meta is not None and meta.has_standing_chips else None
+
+
+async def load_list_chips(
+    lithos: NoteHeadReader, ids: Iterable[str], *, cap: int
+) -> ListChips:
+    """Read the chips for the first ``cap`` distinct ids, once each.
+
+    ``ids`` is every row the page shows, in page order, across all its
+    sections; deduping here is the per-request cache, so an id two rows (or two
+    sections) share is read once. Each read is the related panel's cheap
+    ``max_length=1`` read, which still returns complete frontmatter, and runs
+    under the same process-wide call gate (``mcp_transport``) — the cap bounds
+    the call count, the gate how many run at once. A failed read leaves only
+    its own row chipless; it never fails the list.
+    """
+    distinct = list(dict.fromkeys(note_id for note_id in ids if note_id))
+    to_read = distinct[: max(cap, 0)]
+
+    async def fetch(note_id: str) -> tuple[NoteRecord | None, bool]:
+        try:
+            return await lithos.read_note(note_id, max_length=1), False
+        except Exception:
+            return None, True
+
+    results = await asyncio.gather(*(fetch(note_id) for note_id in to_read))
+    failures = sum(1 for _, failed in results if failed)
+    if failures:
+        # One aggregate line, as the related panel's title lookup logs: a list
+        # of 200 rows against a flaky backend must not spam the log.
+        logger.warning(
+            "knowledge list chip read failed for %d of %d ids", failures, len(to_read)
+        )
+    return ListChips(
+        by_id={
+            note_id: build_note_metadata(note)
+            for note_id, (note, _) in zip(to_read, results, strict=True)
+            if note is not None
+        },
+        fanout=len(to_read),
+        capped_at=cap if len(distinct) > len(to_read) else 0,
+    )
