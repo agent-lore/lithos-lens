@@ -72,6 +72,18 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
         # Trimming + whitespace collapsing; an ATX closing sequence is ignored.
         ("  #  Influx \t plan  \nBody", " Influx  plan", "Body"),
         ("# Influx plan ##\nBody", "Influx plan", "Body"),
+        # CR-only and CRLF line endings end the heading line too.
+        ("# Influx plan\r\rBody.", "Influx plan", "Body."),
+        ("# Influx plan\r\n\r\nBody", "Influx plan", "Body"),
+        # Only complete blank lines go: the first kept line keeps its indent.
+        ("# Influx plan\n\n    code", "Influx plan", "    code"),
+        ("# Influx plan\n \n\tcode", "Influx plan", "\tcode"),
+        # Compared by rendered text, like the note page: the markup-wrapped
+        # title matches, and a title that IS the markup source does not.
+        ("# **Influx plan**\n\nBody", "Influx plan", "Body"),
+        ("# **Influx plan**\nBody", "**Influx plan**", "# **Influx plan**\nBody"),
+        # A setext H1 is the same heading.
+        ("Influx plan\n===\nBody", "Influx plan", "Body"),
         # Case-sensitive, like the note page.
         ("# influx plan\nBody", "Influx plan", "# influx plan\nBody"),
         # A non-matching H1 is kept.
@@ -516,6 +528,19 @@ def test_client_search_notes_reads_the_results_envelope() -> None:
     assert rows[0].path == "plans/influx-migration.md"
     assert rows[0].snippet == "Cut over the ingest path first, then # backfill"
     assert rows[0].updated == "2026-08-01T10:00:00+00:00"
+
+
+def test_client_search_notes_drops_a_snippet_title_line_repeating_the_title() -> None:
+    # The live path: the real client's own normalization, on the vendored
+    # lithos_search row shape, with a snippet opening on the note's title.
+    row = dict(REAL_LITHOS_SEARCH_PAYLOAD["results"][0])
+    row["snippet"] = "# Influx migration plan\n\n## Cutover\n\nThe influx cutover runs…"
+    client = _StubLithosClient({"lithos_search": {"results": [row], "total": 1}})
+
+    rows = _run_client(client, client.search_notes("influx"))
+
+    assert rows[0].title == "Influx migration plan"
+    assert rows[0].snippet == "## Cutover\n\nThe influx cutover runs…"
 
 
 def test_client_search_notes_sends_hybrid_mode_and_filters() -> None:

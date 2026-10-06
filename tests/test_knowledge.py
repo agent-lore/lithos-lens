@@ -604,36 +604,75 @@ def test_note_page_renders_markdown_body_as_html(
 
 
 @pytest.mark.parametrize(
-    ("body", "title", "h1s", "kept"),
+    ("body", "title", "expected"),
     [
         # Matching H1 as the first block: omitted, the rest of the body stays.
-        ("# Influx plan\n\nBody text.", "Influx plan", 0, "Body text."),
+        ("# Influx plan\n\nBody text.", "Influx plan", "<p>Body text.</p>\n"),
         # Trimming + whitespace collapsing on both sides; setext H1 too.
-        ("#   Influx \t plan  \n\nBody.", "  Influx  plan ", 0, "Body."),
-        ("Influx plan\n===========\n\nBody.", "Influx plan", 0, "Body."),
-        ("# Influx plan #\n\nBody.", "Influx plan", 0, "Body."),
+        ("#   Influx \t plan  \n\nBody.", "  Influx  plan ", "<p>Body.</p>\n"),
+        ("Influx plan\n===========\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# Influx plan #\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        # CR-only and CRLF line endings are line endings.
+        ("# Influx plan\r\rBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# Influx plan\r\n\r\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        # Compared by the text the H1 RENDERS: markup, entities, escapes, code
+        # spans and link labels all reduce to their text.
+        ("# **Influx plan**\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# R&amp;D\n\nBody.", "R&D", "<p>Body.</p>\n"),
+        ("# 1\\. Plan\n\nBody.", "1. Plan", "<p>Body.</p>\n"),
+        ("# The `ingest` path\n\nBody.", "The ingest path", "<p>Body.</p>\n"),
+        (
+            "# [Influx plan](https://x.example)\n\nBody.",
+            "Influx plan",
+            "<p>Body.</p>\n",
+        ),
+        # ...so an H1 whose SOURCE equals the title but renders differently is
+        # a different heading, and is kept.
+        (
+            "# **Influx plan**\n\nBody.",
+            "**Influx plan**",
+            "<h1><strong>Influx plan</strong></h1>\n<p>Body.</p>\n",
+        ),
         # Case-sensitive: a differently-cased H1 is a different heading.
-        ("# influx plan\n\nBody.", "Influx plan", 1, "influx plan"),
+        (
+            "# influx plan\n\nBody.",
+            "Influx plan",
+            "<h1>influx plan</h1>\n<p>Body.</p>\n",
+        ),
         # A non-matching H1 is kept.
-        ("# Something else\n\nBody.", "Influx plan", 1, "Something else"),
+        (
+            "# Something else\n\nBody.",
+            "Influx plan",
+            "<h1>Something else</h1>\n<p>Body.</p>\n",
+        ),
         # An H2 is never collapsed, even when its text matches.
-        ("## Influx plan\n\nBody.", "Influx plan", 0, "<h2>Influx plan</h2>"),
+        (
+            "## Influx plan\n\nBody.",
+            "Influx plan",
+            "<h2>Influx plan</h2>\n<p>Body.</p>\n",
+        ),
         # An H1-shaped line inside a code fence is code, not a heading.
-        ("```\n# Influx plan\n```", "Influx plan", 0, "# Influx plan"),
+        (
+            "```\n# Influx plan\n```",
+            "Influx plan",
+            "<pre><code># Influx plan\n</code></pre>\n",
+        ),
         # A matching H1 that is not the first block is kept.
-        ("Intro.\n\n# Influx plan", "Influx plan", 1, "Influx plan"),
+        (
+            "Intro.\n\n# Influx plan",
+            "Influx plan",
+            "<p>Intro.</p>\n<h1>Influx plan</h1>\n",
+        ),
         # Only the first block: a second matching H1 right after is kept.
-        ("# Influx plan\n\n# Influx plan", "Influx plan", 1, "Influx plan"),
+        ("# Influx plan\n\n# Influx plan", "Influx plan", "<h1>Influx plan</h1>\n"),
         # No title to compare against: nothing is collapsed.
-        ("# Influx plan", "", 1, "Influx plan"),
+        ("# Influx plan", "", "<h1>Influx plan</h1>\n"),
     ],
 )
 def test_render_markdown_collapses_a_leading_h1_repeating_the_title(
-    body: str, title: str, h1s: int, kept: str
+    body: str, title: str, expected: str
 ) -> None:
-    html = render_markdown(body, "n", title=title)
-    assert html.count("<h1>") == h1s
-    assert kept in html
+    assert render_markdown(body, "n", title=title) == expected
 
 
 def test_note_page_collapses_body_h1_that_repeats_the_title(
@@ -650,10 +689,15 @@ def test_note_page_collapses_body_h1_that_repeats_the_title(
         response = client.get("/note/dup-note")
 
     assert response.status_code == 200
-    # The header's title is the one h1; the body's repeat of it is gone.
+    # The header's title is the one h1; the body's repeat of it is gone —
+    # not demoted to some other element, but absent from the body entirely.
     assert response.text.count("<h1") == 1
     assert "<h1>Influx migration plan</h1>" in response.text
-    assert "Cut over the ingest path first." in response.text
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == "<p>Cut over the ingest path first.</p>\n"
 
 
 # --- K1 slice 7: nav enablement + degraded states ---------------------------

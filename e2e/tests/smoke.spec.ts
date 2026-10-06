@@ -893,6 +893,9 @@ test("knowledge note renders server-side markdown", async ({ page }) => {
       .getByRole("heading", { name: "Influx migration plan" }),
   ).toBeVisible();
   await expect(page.locator(".markdown-body h1")).toHaveCount(0);
+  await expect(page.locator(".markdown-body")).not.toContainText(
+    "Influx migration plan",
+  );
   // And the markdown really rendered (list items, not a plaintext <pre>).
   await expect(
     page.locator(".markdown-body").getByRole("listitem").first(),

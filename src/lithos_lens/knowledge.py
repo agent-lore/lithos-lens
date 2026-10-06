@@ -104,12 +104,14 @@ def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
 
     ``title`` is the note's frontmatter title, which the page already shows
     above the body: a first block that is an H1 repeating it is omitted (see
-    :func:`_collapse_title_heading`).
+    :func:`is_title_heading`).
     """
     body = text or ""
     try:
         env: dict[str, Any] = {}
-        tokens = _collapse_title_heading(MARKDOWN.parse(body, env), title)
+        tokens = MARKDOWN.parse(body, env)
+        if is_title_heading(tokens, title):
+            tokens = tokens[3:]
         _splice_wiki_links(tokens, from_id)
         return MARKDOWN.renderer.render(tokens, MARKDOWN.options, env)
     except Exception:
@@ -120,33 +122,39 @@ def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
         return _escaped_plaintext(body)
 
 
-def same_title(text: str, title: str) -> bool:
-    """Whether heading ``text`` repeats ``title``.
-
-    Both sides are trimmed and their whitespace runs collapsed; the comparison
-    is case-sensitive. An empty title matches nothing.
-    """
-    wanted = " ".join(title.split())
-    return bool(wanted) and " ".join(text.split()) == wanted
-
-
-def _collapse_title_heading(tokens: list[Token], title: str) -> list[Token]:
-    """Drop a first-block H1 that repeats the note's title.
+def is_title_heading(tokens: list[Token], title: str) -> bool:
+    """Whether the first block of a parsed body is an H1 repeating ``title``.
 
     Most ingested notes open their body with their own title as an ``# H1``,
-    under the page header that already shows it. This works on the PARSED
-    stream, never a regex over the raw markdown (§6.3): an H1-shaped line in a
-    code fence is a fence token, and only the very first block is considered,
-    so a matching H1 further down — or one that differs — is kept.
+    under a header that already shows it. This reads the PARSED stream, never
+    a regex over the raw markdown (§6.3): an H1-shaped line in a code fence is
+    a fence token, and only the very first block is considered. The H1 is
+    compared by the text it renders, not its source, so ``# **Plan**`` repeats
+    the title ``Plan`` while ``# Plan`` does not repeat ``**Plan**``. Both sides
+    are trimmed and whitespace-collapsed; the match is case-sensitive, and an
+    empty title matches nothing.
     """
-    if (
-        len(tokens) >= 3
+    wanted = " ".join(title.split())
+    return (
+        bool(wanted)
+        and len(tokens) >= 3
         and tokens[0].type == "heading_open"
         and tokens[0].tag == "h1"
-        and same_title(tokens[1].content, title)
-    ):
-        return tokens[3:]
-    return tokens
+        and " ".join(_inline_text(tokens[1].children or []).split()) == wanted
+    )
+
+
+def _inline_text(children: list[Token]) -> str:
+    """The text inline tokens render to: entities decoded, markup dropped."""
+    parts: list[str] = []
+    for child in children:
+        if child.type in ("text", "code_inline"):
+            parts.append(child.content)
+        elif child.type in ("softbreak", "hardbreak"):
+            parts.append(" ")
+        elif child.type == "image":
+            parts.append(_inline_text(child.children or []))
+    return "".join(parts)
 
 
 def _escaped_plaintext(body: str) -> str:

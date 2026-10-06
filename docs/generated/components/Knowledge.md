@@ -21,7 +21,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 
 ### `lithos_lens.knowledge`
 - def `render_markdown` — Render a note's markdown body to safe HTML.
-- def `same_title` — Whether heading ``text`` repeats ``title``.
+- def `is_title_heading` — Whether the first block of a parsed body is an H1 repeating ``title``.
 - def `render_description` — Render a task description's markdown to safe HTML (§5.3).
 - class `DescriptionPreview` — A task description as one surface shows it (§5.3).
 - def `description_preview` — Cut a description to ``limit`` characters at a BLOCK boundary (§5.3).
