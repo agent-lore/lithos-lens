@@ -13,7 +13,18 @@
       ],
       "limit": 20
     },
-    "notes": "Lens always sends mode='hybrid' (K1 PRD §7.1); tags/limit ride along only when active. Rows live under 'results' — distinct from lithos_list's 'items'. Each row is _build_result: id, title, snippet, score, path, source_url, updated_at, is_stale, derived_from_ids. Snippets are raw markdown — the results page must escape them, never render them."
+    "variants": {
+      "namespace_scoped": {
+        "query": "influx",
+        "mode": "hybrid",
+        "tags": [
+          "project:influx"
+        ],
+        "path_prefix": "plans/",
+        "limit": 20
+      }
+    },
+    "notes": "Lens always sends mode='hybrid' (K1 PRD §7.1); tags/path_prefix/limit ride along only when active. The 'namespace_scoped' variant is the /knowledge?namespace=<ns> search: the PATH-derived namespace, sent as path_prefix='<ns>/' (tool docstring: 'Filter by path prefix (fulltext/semantic/hybrid only)'; lithos_search has no frontmatter-namespace filter — ROADMAP ledger #16). Rows live under 'results' — distinct from lithos_list's 'items'. Each row is _build_result: id, title, snippet, score, path, source_url, updated_at, is_stale, derived_from_ids. Snippets are raw markdown — the results page must escape them, never render them."
   },
   "responses": {
     "success": {

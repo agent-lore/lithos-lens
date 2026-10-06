@@ -110,6 +110,13 @@ MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP = 100
 DEFAULT_KNOWLEDGE_SEARCH_LIMIT = 20
 DEFAULT_KNOWLEDGE_RECENT_LIMIT = 20
 DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP = 40
+# Paths the intake pipelines write under (§7.1): a note there is "intake" on the
+# /knowledge landing even without an ``ingested-by:*`` tag.
+DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES: tuple[str, ...] = (
+    "articles/",
+    "papers/",
+    "digests/",
+)
 # Ceiling on the /knowledge result/recent limits: a misconfigured limit must not
 # let one landing-page request materialize an unbounded lithos_search /
 # lithos_list result set (the same bound the related-panel fan-out cap enforces).
@@ -275,6 +282,9 @@ class KnowledgeConfig:
     # How many landing rows get metadata chips: one lithos_read per distinct
     # row, since neither lithos_search nor lithos_list carries the fields.
     list_chip_fanout_cap: int = DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP
+    # Path prefixes that make a note intake (with any ``ingested-by:*`` tag),
+    # splitting the landing into "Your notes" and "Recent intake" (§7.1).
+    intake_path_prefixes: tuple[str, ...] = DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES
 
 
 @dataclass(frozen=True)

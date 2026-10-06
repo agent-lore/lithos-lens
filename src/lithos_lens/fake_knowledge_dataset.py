@@ -13,6 +13,9 @@ keys exactly as ``lithos_related`` sends them
 show each provenance the related panel words differently — an inference with
 its rationale, a citation reinforcement, a frontmatter declaration — and one
 edge (the ``contradicts`` pair) with neither, which renders no disclosure.
+
+It also carries the demo's intake notes (:func:`intake_fixtures`), so the
+``/knowledge`` landing shows both of its sections in fake mode.
 """
 
 from __future__ import annotations
@@ -21,8 +24,9 @@ import json
 
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_edge_evidence import EdgeWhy, edge_why
+from lithos_lens.tasks import NoteRecord
 
-__all__ = ["related_fixtures"]
+__all__ = ["intake_fixtures", "related_fixtures"]
 
 
 def _inferred(rationale: str, confidence: float) -> EdgeWhy | None:
@@ -134,3 +138,43 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
             ),
         ),
     }
+
+
+def intake_fixtures() -> tuple[dict[str, NoteRecord], dict[str, str]]:
+    """Intake notes (§7.1) and their paths, one per way a note becomes intake.
+
+    Tagged only (``ingested-by:influx`` under ``influx/``), tagged AND under an
+    intake prefix (``papers/``), and prefixed only (``digests/``, untagged).
+    All three are newer than every one of the demo's own notes, which is the
+    live corpus's shape: a single recency list would be intake end to end.
+    Their text names neither "influx" nor "ingest", so the demo's searches for
+    those still answer the notes they always did.
+    """
+    notes = {
+        "intake-rss-tail-latency": NoteRecord(
+            id="intake-rss-tail-latency",
+            title="Tracing tail latency in streaming pipelines",
+            content="Feed item: where p99 hides in a streaming pipeline.\n",
+            tags=("ingested-by:influx", "source:rss"),
+            metadata={"updated_at": "2026-08-09T07:00:00+00:00"},
+        ),
+        "intake-paper-compaction": NoteRecord(
+            id="intake-paper-compaction",
+            title="Log-structured compaction under write bursts",
+            content="Paper: compaction scheduling when writes arrive in bursts.\n",
+            tags=("ingested-by:influx", "source:arxiv"),
+            metadata={"updated_at": "2026-08-08T07:00:00+00:00"},
+        ),
+        "intake-digest-storage": NoteRecord(
+            id="intake-digest-storage",
+            title="Weekly digest: storage engines",
+            content="Digest: this week's storage-engine reading.\n",
+            metadata={"updated_at": "2026-08-07T07:00:00+00:00"},
+        ),
+    }
+    paths = {
+        "influx/rss/tracing-tail-latency.md": "intake-rss-tail-latency",
+        "papers/log-structured-compaction.md": "intake-paper-compaction",
+        "digests/2026-w32-storage-engines.md": "intake-digest-storage",
+    }
+    return notes, paths

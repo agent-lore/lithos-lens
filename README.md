@@ -178,6 +178,7 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS` | `lithos-lens.tasks.agent_inactive_days` | Integer 1-3650 (same bounds as the TOML key). How long an agent may be idle before the Agent picker stops offering it by default (`?all_agents=1` shows them all). |
 | `LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES` | `lithos-lens.tasks.dispatch_trigger_tag_prefixes` | Comma-separated tag prefixes, no blank entries. Scopes Needs-attention rule 6 to work a fleet dispatches on. Set it to the empty string for the empty list (the TOML `[]` opt-out: rule 6 judges every ready task). |
 | `LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.related_title_fanout_cap` | Integer 1-100 (same bounds as the TOML key). |
+| `LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES` | `lithos-lens.knowledge.intake_path_prefixes` | Comma-separated path prefixes, no blank entries. A note under one is intake on the `/knowledge` landing (as is one tagged `ingested-by:*`). Set it to the empty string for the empty list (only the tag marks intake). |
 | `LITHOS_LENS_GRAPH_CACHE_TTL_S` | `lithos-lens.graph.cache_ttl_s` | Must be a positive integer. Staleness bound on the per-task edge cache. |
 | `LITHOS_LENS_GRAPH_MAX_TASKS` | `lithos-lens.graph.max_tasks` | Integer 1-2000 (same bounds as the TOML key). Ghosts count toward it. |
 | `LITHOS_LENS_GRAPH_FETCH_CONCURRENCY` | `lithos-lens.graph.fetch_concurrency` | Integer 1-64 (same bounds as the TOML key). |

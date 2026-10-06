@@ -645,6 +645,7 @@ class FakeLithosClient:
         query: str,
         *,
         tags: list[str] | None = None,
+        path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]:
         """Hybrid-search stand-in: substring match over title and body.
@@ -664,6 +665,9 @@ class FakeLithosClient:
         for note in self.dataset.notes.values():
             if tags and not all(tag in note.tags for tag in tags):
                 continue
+            path = paths_by_id.get(note.id, "")
+            if path_prefix and not path.startswith(path_prefix):
+                continue
             haystack = f"{note.title}\n{note.content}".lower()
             if needle and needle not in haystack:
                 continue
@@ -672,7 +676,7 @@ class FakeLithosClient:
                     {
                         "id": note.id,
                         "title": note.title,
-                        "path": paths_by_id.get(note.id, ""),
+                        "path": path,
                         "snippet": _snippet(note.content, needle),
                         "updated_at": str(
                             note.metadata.get("updated")

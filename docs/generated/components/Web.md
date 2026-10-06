@@ -72,7 +72,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `mini_graph_url` — The detail page's mini-graph fragment for one task (T2-A5).
 - def `blocker_expand_url` — Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
 - def `note_url` — Link a finding's document, id-encoded, carrying the task back-link.
-- def `knowledge_landing_url` — The ``/knowledge`` landing as rendered: its search and tag filter, if any.
+- def `knowledge_landing_url` — The ``/knowledge`` landing as rendered: its search and filters, if any.
 - def `knowledge_note_url` — Link a landing result to its note, id-encoded, carrying ``next=``.
 - def `epic_scope_url` — Link an epic chip to the dashboard scoped to that epic — or unscoped.
 - def `task_card_url` — Link a summary card to the board it actually counts.

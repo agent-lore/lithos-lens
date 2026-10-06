@@ -756,17 +756,35 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
-    // The knowledge landing: the search row above "Recently updated". Its
-    // input once collapsed to two characters beside a full-row Search button
-    // (the shared `width: 100%` on the button in a flex row), and no capture
+    // The knowledge landing: the search row and the namespace filter row
+    // above "Your notes" and then "Recent intake" (§7.1). Its input once
+    // collapsed to two characters beside a full-row Search button (the
+    // shared `width: 100%` on the button in a flex row), and no capture
     // covered the page, so nobody saw it. The proportion is asserted here,
     // at every width, because this sandbox cannot read the PNG.
     slug: "knowledge",
     url: "/knowledge",
     ready: async (page) => {
-      await expect(
-        page.getByRole("heading", { name: "Recently updated" }),
-      ).toBeVisible();
+      const yours = page.getByRole("heading", { level: 2, name: "Your notes" });
+      const intake = page.getByRole("heading", {
+        level: 2,
+        name: "Recent intake",
+      });
+      await expect(yours).toBeVisible();
+      await expect(intake).toBeVisible();
+      // Your notes first, intake second — the order is the point of the page.
+      expect((await yours.boundingBox())!.y).toBeLessThan(
+        (await intake.boundingBox())!.y,
+      );
+      const namespaces = page.getByRole("navigation", {
+        name: "Namespace filter",
+      });
+      await expect(namespaces.getByRole("link", { name: "all" })).toBeVisible();
+      // The row wraps: it never widens the page past a narrow viewport.
+      const row = await namespaces.boundingBox();
+      expect(row!.x + row!.width).toBeLessThanOrEqual(
+        page.viewportSize()!.width,
+      );
       // Scoped to the landing's form: the chrome carries a search box with
       // the same accessible name.
       const search = page.locator("form.knowledge-search");

@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, and wiki-link resolution recording which arm decided.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, and wiki-link resolution recording which arm decided.
 
 **Tier:** Foundation
 
@@ -13,6 +13,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 7 | 7 |
 | `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
+| `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
@@ -43,6 +44,16 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `provenance_label` — The plain-language provenance line, e.g. "inferred by lithos-enrich".
 - def `edge_why` — The disclosure for one raw edge row; ``None`` when it would be empty.
 - def `number_or_none` — A finite JSON number (not a bool) as a float; anything else is ``None``.
+
+### `lithos_lens.knowledge_landing`
+- class `NamespaceFacet` — One entry of the namespace filter row: a namespace and its note count.
+- class `RecentLanding` — The browse landing as rendered: its two sections and the filter row.
+- def `is_intake` — Whether ``row`` is intake: an ``ingested-by:*`` tag, or an intake path.
+- def `normalize_namespace` — The ``?namespace=`` value as matched: trimmed, without edge slashes.
+- def `namespace_path_prefix` — The path prefix a namespace filters on (``""`` for no filter).
+- def `path_namespace` — A path's namespace for the filter row: its first segment, if it has one.
+- def `namespace_facets` — The namespaces present in ``paths``, most notes first (ties by name).
+- def `build_recent_landing` — Partition the newest-first ``rows`` into the landing's two sections.
 
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).

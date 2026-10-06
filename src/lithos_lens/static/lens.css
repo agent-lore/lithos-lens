@@ -1984,6 +1984,32 @@ button,
   margin: 0;
 }
 
+/* The namespace filter row (§7.1): wraps rather than widening the page. */
+.knowledge-namespaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  font-size: 0.9rem;
+}
+
+.knowledge-namespaces a[aria-current] {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.knowledge-namespace-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.knowledge-section h2 {
+  margin-bottom: 0.25rem;
+}
+
+.knowledge-section-back {
+  margin: 0;
+}
+
 .resolve-panel {
   margin-top: 1rem;
   padding: 1.5rem;

@@ -24,6 +24,15 @@ from fastapi.templating import Jinja2Templates
 
 from lithos_lens import metrics
 from lithos_lens.knowledge import RelatedPanel, load_related_panel
+from lithos_lens.knowledge_landing import (
+    SECTIONS,
+    NamespaceFacet,
+    RecentLanding,
+    build_recent_landing,
+    namespace_facets,
+    namespace_path_prefix,
+    normalize_namespace,
+)
 from lithos_lens.knowledge_metadata import (
     ListChips,
     build_note_metadata,
@@ -98,26 +107,36 @@ def register_knowledge_routes(
     """Attach the knowledge landing, wiki-link resolver and note routes."""
 
     templates.env.globals["knowledge_note_url"] = knowledge_note_url
+    templates.env.globals["knowledge_landing_url"] = knowledge_landing_url
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
-        """Knowledge landing: hybrid search, tag browse, and recently-updated.
+        """Knowledge landing: hybrid search, or your notes and recent intake.
 
-        Three branches (§7.1): a ``?q=`` query runs ``lithos_search`` and
+        Two branches (§7.1): a ``?q=`` query runs ``lithos_search`` and
         renders hybrid-search result cards (title, escaped snippet, updated);
-        a ``?tag=`` filter and the bare landing both run ``lithos_list`` for a
-        lightweight note list (tagged, or recently updated). Every branch is
-        capped from config so a broad ``?q=a`` / ``?tag=`` cannot materialize
-        an unbounded result set (the resolver caps candidates for the same
+        without one, ``recent_notes`` walks ``lithos_list`` newest-first and
+        the walk is split into "Your notes" and "Recent intake"
+        (``knowledge_landing``), each cut to ``recent_limit`` — ``?section=``
+        shows one of them alone. ``?tag=`` and ``?namespace=`` (a path
+        prefix) narrow both branches and compose. The rendered lists are
+        capped from config so a broad ``?q=a`` / ``?tag=`` cannot render an
+        unbounded result set (the resolver caps candidates for the same
         reason). Each card and row carries the note page's metadata chips,
         compact, for the first ``list_chip_fanout_cap`` notes (one capped
         ``lithos_read`` each — see ``load_list_chips``).
         """
         query = request.query_params.get("q", "").strip()
         tag = request.query_params.get("tag", "").strip()
+        namespace = normalize_namespace(request.query_params.get("namespace", ""))
+        section = request.query_params.get("section", "").strip()
+        if query or section not in SECTIONS:
+            section = ""
+        knowledge_config = state.config.knowledge
         snapshot = await state.refresh_health()
         search_results = None
-        results = None
+        browse: RecentLanding | None = None
+        facets: tuple[NamespaceFacet, ...] = ()
         error = ""
         mode = "search" if query else "browse"
         if snapshot.lithos != "ok":
@@ -129,28 +148,44 @@ def register_knowledge_routes(
                     search_results = await state.lithos_client.search_notes(
                         query,
                         tags=[tag] if tag else None,
-                        limit=state.config.knowledge.search_limit,
+                        path_prefix=namespace_path_prefix(namespace) or None,
+                        limit=knowledge_config.search_limit,
                     )
+                    facets = namespace_facets(row.path for row in search_results)
                 else:
-                    # Both browse branches (tagged and bare) are recency
-                    # lists: recent_notes owns the newest-first ordering
-                    # lithos_list cannot provide (upstream task e0e31654).
-                    results = await state.lithos_client.recent_notes(
-                        tags=[tag] if tag else None,
-                        limit=state.config.knowledge.recent_limit,
+                    # The whole (tagged) corpus, newest-first: recent_notes
+                    # owns the ordering lithos_list cannot provide (upstream
+                    # task e0e31654), and the intake split and namespace counts
+                    # are over every row — no limit, so no section can be
+                    # starved by the other's notes (bound: the client's
+                    # runaway guard). The namespace filter is applied here, on
+                    # path, so the filter row still counts every namespace.
+                    rows = await state.lithos_client.recent_notes(
+                        tags=[tag] if tag else None
                     )
+                    browse = build_recent_landing(
+                        rows,
+                        intake_path_prefixes=knowledge_config.intake_path_prefixes,
+                        namespace=namespace,
+                        section=section,
+                        limit=knowledge_config.recent_limit,
+                    )
+                    facets = browse.namespaces
             except Exception:
                 mode = "error"
                 error = "Knowledge search is currently unavailable."
+        if search_results is not None:
+            rendered_ids = [row.id for row in search_results]
+        else:
+            rendered_ids = [row.id for row in browse.rows] if browse else []
         chips = ListChips()
-        if search_results or results:
-            # Both sections' ids in one call, so the per-request dedupe holds
+        if rendered_ids:
+            # Every section's ids in one call, so the per-request dedupe holds
             # across them: an id is read once however many rows show it.
             chips = await load_list_chips(
                 state.lithos_client,
-                [row.id for row in search_results or ()]
-                + [row.id for row in results or ()],
-                cap=state.config.knowledge.list_chip_fanout_cap,
+                rendered_ids,
+                cap=knowledge_config.list_chip_fanout_cap,
             )
         span = get_current_span()
         # The query is deliberately absent from the metric LABEL: one series
@@ -159,8 +194,9 @@ def register_knowledge_routes(
         # `http.target`, where it costs no series and helps read a trace -- and
         # is bounded there by `MAX_LOGGED_VALUE_CHARS` (telemetry.py).
         span.set_attribute("lens.mode", mode)
-        span.set_attribute("lens.result_count", len(search_results or results or ()))
+        span.set_attribute("lens.result_count", len(rendered_ids))
         span.set_attribute("lens.has_tag", bool(tag))
+        span.set_attribute("lens.has_namespace", bool(namespace))
         # lithos_read calls spent on the rows' chips: the landing's backend
         # cost beyond its one list call, bounded by list_chip_fanout_cap.
         span.set_attribute("lens.chips.fanout", chips.fanout)
@@ -174,10 +210,15 @@ def register_knowledge_routes(
                 "active_view": "knowledge",
                 "query": query,
                 "tag": tag,
+                "namespace": namespace,
+                "section": section,
                 # The return address every result link carries as `next=`.
-                "landing_url": knowledge_landing_url(query, tag),
+                "landing_url": knowledge_landing_url(
+                    query, tag, namespace=namespace, section=section
+                ),
                 "search_results": search_results,
-                "results": results,
+                "browse": browse,
+                "namespace_facets": facets,
                 "chips": chips,
                 "error": error,
             },

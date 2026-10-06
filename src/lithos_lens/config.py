@@ -40,6 +40,7 @@ from lithos_lens.config_schema import (
     DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES,
     DEFAULT_GREETING,
     DEFAULT_HEALTH_REFRESH_INTERVAL_S,
+    DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES,
     DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP,
     DEFAULT_KNOWLEDGE_RECENT_LIMIT,
     DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
@@ -105,6 +106,7 @@ __all__ = [
     "DEFAULT_GRAPH_MINI_GRAPH_MAX_NODES",
     "DEFAULT_GREETING",
     "DEFAULT_HEALTH_REFRESH_INTERVAL_S",
+    "DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES",
     "DEFAULT_KNOWLEDGE_LIST_CHIP_FANOUT_CAP",
     "DEFAULT_KNOWLEDGE_RECENT_LIMIT",
     "DEFAULT_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP",
@@ -552,6 +554,15 @@ def _parse_knowledge(data: Any, config_path: Path) -> KnowledgeConfig:
             # The landing's two list sizes share this ceiling, so a cap above
             # it could never be reached — and could not bound anything either.
             maximum=MAX_KNOWLEDGE_LANDING_LIMIT,
+        ),
+        # ``[]`` is meaningful (only the ``ingested-by:*`` tag marks intake);
+        # a blank entry is not — as a prefix it would make every note intake.
+        intake_path_prefixes=optional_str_list(
+            data,
+            "intake_path_prefixes",
+            DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES,
+            config_path,
+            "lithos-lens.knowledge",
         ),
     )
 

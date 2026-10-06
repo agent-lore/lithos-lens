@@ -207,8 +207,8 @@ The current application exposes these routes:
   them. Answered like the approve POST — 303 to `next` with `?receipt=<id>`
   — and always a plain form, never HTMX.
 - `GET /knowledge`
-  Renders the knowledge landing page: hybrid search, recently-updated notes,
-  and tag browse.
+  Renders the knowledge landing page: hybrid search, or "Your notes" then
+  "Recent intake", with tag (`?tag=`) and namespace (`?namespace=`) filters.
 - `GET /knowledge/resolve`
   Resolves a wiki-link target to a note, or renders the disambiguation /
   not-found page when it cannot.
@@ -303,6 +303,9 @@ The current configuration model includes:
 - `knowledge.recent_limit`
 - `knowledge.list_chip_fanout_cap` *(default 40, 1-200: how many landing rows
   get metadata chips, one `lithos_read` each — §5.7)*
+- `knowledge.intake_path_prefixes` *(default `["articles/", "papers/",
+  "digests/"]`: a note under one is intake on the landing, as is one tagged
+  `ingested-by:*` — §5.7; `[]` leaves only the tag)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1263,9 +1266,28 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   (the note page's rule, found by parsing the snippet); it otherwise stays
   escaped text, never rendered, and is shown whole as Lithos windowed it —
   Lens adds no truncation
-- with no query, a **recently-updated list** — title, path, updated date —
-  newest first over the whole corpus; `?tag=` narrows it (and a search) to
-  one tag (`knowledge.recent_limit`)
+- with no query, **two sections** — title, path, updated date — newest first
+  over the whole corpus: **"Your notes"** (non-intake), then **"Recent
+  intake"**, each cut to `knowledge.recent_limit`. A note is intake when it
+  carries an `ingested-by:*` tag or its path starts with one of
+  `knowledge.intake_path_prefixes`; one that is both is intake, once. The
+  sections partition the one `recent_notes` walk (`knowledge_landing.
+  build_recent_landing`), which, asked for no limit, returns the whole
+  tag-filtered corpus newest-first — 12 pages for the 5,818-note live corpus,
+  bounded by the 40-page (20,000-note) runaway guard — so no extra Lithos call
+  and no section starved by the other. Each heading links to its section alone
+  (`?section=notes|intake`, filters kept)
+- a **namespace filter** `?namespace=<ns>` on the landing and on search: a
+  row ("all", then the top 8 namespaces present in what was fetched, most
+  notes first — the intake namespace is shown, not hidden), the active entry
+  `aria-current`. The namespace is path-derived — the first path segment,
+  matched as the prefix `<ns>/` (`lithos_list` cannot filter frontmatter
+  namespace, ROADMAP ledger #16). Search sends it as `lithos_search`'s
+  `path_prefix`; the browse sections filter on path Lens-side after the walk,
+  so the row still counts every namespace — over every fetched note, whichever
+  section is shown (a `?section=` view offers the landing's row). `?tag=` narrows the sections and a
+  search to one tag and composes with it; the "Filtered by" line names both,
+  and the search form carries both as hidden inputs
 - **metadata chips** on every card and row: the note page's chip partial
   (`knowledge/note_chips.html` — type, status colour-coded, scope when not
   `shared`, namespace, confidence; not `supersedes`) in its compact one-line

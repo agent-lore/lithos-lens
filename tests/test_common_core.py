@@ -157,6 +157,7 @@ class RecordingLithosClient(ReadOnlyWriteSurface):
         query: str,
         *,
         tags: list[str] | None = None,
+        path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]:
         return []

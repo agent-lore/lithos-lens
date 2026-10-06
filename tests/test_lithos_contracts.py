@@ -1461,6 +1461,56 @@ def test_recent_notes_paginates_until_total_so_late_rows_surface(
     assert [row.id for row in result] == [newest["id"]]
 
 
+def test_recent_notes_without_limit_returns_the_whole_walk_newest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The landing's call (§7.1): no ``limit``, because its intake split and
+    namespace counts are over every row. Every page's rows come back — none
+    truncated away between pages — sorted newest-first across the pages."""
+    import lithos_lens.lithos_client as lithos_client_module
+
+    monkeypatch.setattr(lithos_client_module, "RECENT_NOTES_FETCH_PAGE", 2)
+    contract = load_contract("lithos_list")
+    fixture_rows = contract["responses"]["variants"]["insertion_ordered_recent"][
+        "items"
+    ]
+    oldest, newest, middle = fixture_rows
+    client = _PagedStubClient(
+        {
+            0: {"items": [oldest, middle], "total": 3},
+            2: {"items": [newest], "total": 3},
+        }
+    )
+
+    async def _driver() -> list[Any]:
+        try:
+            return await client.recent_notes()
+        finally:
+            await client.close()
+
+    result = asyncio.run(_driver())
+
+    assert [row.id for row in result] == [newest["id"], middle["id"], oldest["id"]]
+
+
+def test_search_notes_namespace_sends_the_scoped_variant() -> None:
+    """``?namespace=`` on a search is ``lithos_search``'s ``path_prefix``,
+    vendored as the ``namespace_scoped`` request variant (§7.1)."""
+    contract = load_contract("lithos_search")
+    result, calls = _run(
+        contract["responses"]["success"],
+        lambda c: c.search_notes(
+            "influx", tags=["project:influx"], path_prefix="plans/", limit=20
+        ),
+    )
+    assert calls == [
+        ("lithos_search", contract["request"]["variants"]["namespace_scoped"])
+    ]
+    assert [row.id for row in result] == [
+        row["id"] for row in contract["responses"]["success"]["results"]
+    ]
+
+
 def test_recent_notes_advances_past_short_pages_by_page_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
