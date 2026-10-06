@@ -1207,7 +1207,23 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   back-reference, and an authorship line
 - a **related panel** — the note's neighborhood, sectioned by relationship,
   with back-links and a bounded title fanout that falls back to bare ids past
-  the cap
+  the cap. Each group carries an id (`related-links`, `related-backlinks`,
+  `related-sources`, `related-derived`, `related-unresolved`, `related-edges`;
+  the panel itself is `#related`). At and above the stylesheet's two-column
+  breakpoint (`min-width: 701px`, the complement of the task pages'
+  `max-width: 700px` collapse) the panel is a second column beside the
+  article, sticky to the top of the viewport and scrolling in its own box when
+  taller than the window; below it, the panel follows the body. The DOM order
+  is article then aside at every width, so the no-JS reading order is unchanged
+- a **related summary line** directly under the metadata chips, from the
+  panel's already-loaded data (no extra Lithos call): "Related: 2 outgoing
+  links · 1 source · 3 typed edges" — one item per non-empty group, in the
+  panel's order and wording (outgoing link(s), back-link(s), source(s),
+  derived from, unresolved, typed edge(s)), each count the group's full size
+  including its "+N more" overflow and each an in-page link to that group's id.
+  A note with no relations reads "Related: none"; a failed related read reads
+  "Related: could not be loaded". K2's "open in graph" link joins this line
+  after the counts
 - a **produced-by chip** when the note came from a task and that task reads
   back successfully
 - a **back link** naming where it returns to: with `?task=` (a finding's

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -550,6 +551,206 @@ def test_note_page_renders_provenance_overflow(
     assert "Provenance" in response.text
     assert "Sources" in response.text
     assert "+5 more" in response.text
+
+
+# ── summary line under the chips (§5.7) ─────────────────────────────
+
+_SUMMARY_RE = re.compile(
+    r'<p class="related-summary" data-related-summary>(.*?)</p>', re.S
+)
+_SUMMARY_LINK_RE = re.compile(r'<a href="#(related-[a-z]+)">(\d+) ([^<]+)</a>')
+_PANEL_GROUP_IDS = (
+    "related-links",
+    "related-backlinks",
+    "related-sources",
+    "related-derived",
+    "related-unresolved",
+    "related-edges",
+)
+
+
+def _summary(html: str) -> str:
+    (line,) = _SUMMARY_RE.findall(html)
+    return line
+
+
+def _summary_counts(html: str) -> dict[str, tuple[int, str]]:
+    """``{section id: (count, wording)}`` as the summary line states them."""
+    return {
+        anchor: (int(count), " ".join(label.split()))
+        for anchor, count, label in _SUMMARY_LINK_RE.findall(_summary(html))
+    }
+
+
+def _panel_group_sizes(html: str) -> dict[str, int]:
+    """Each rendered panel group's size, counted off the panel itself: its
+    rows plus its "+N more" overflow. Every group is one ``<ul>`` under the
+    element carrying the id."""
+    panel = html.split('<aside class="related-panel"', 1)[1]
+    sizes = {}
+    for group_id in _PANEL_GROUP_IDS:
+        marker = f'id="{group_id}"'
+        if marker not in panel:
+            continue
+        body = panel.split(marker, 1)[1].split("</ul>", 1)[0]
+        rows = body.count("<li>")
+        more = sum(int(n) for n in re.findall(r"\+(\d+) more", body))
+        sizes[group_id] = rows + more
+    return sizes
+
+
+def test_summary_line_counts_equal_the_fixture_notes_panel_groups(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the long-body demo note, the line under the chips states each
+    non-empty panel group's size, in the panel's wording, and links to it."""
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(lithos_lens_config_env))
+    with TestClient(app) as client:
+        response = client.get("/note/note-influx-capacity")
+    assert response.status_code == 200
+    html = response.text
+
+    counts = _summary_counts(html)
+    assert counts == {
+        "related-links": (2, "outgoing links"),
+        "related-sources": (1, "source"),
+        "related-edges": (3, "typed edges"),
+    }
+    # The same numbers the panel renders, and every link lands on a section.
+    assert {anchor: n for anchor, (n, _) in counts.items()} == _panel_group_sizes(html)
+    # The fixture has no back-links: the group is absent, not "0 back-links".
+    assert "back-link" not in _summary(html)
+    # Under the chips, inside the article header — above the body.
+    chips = html.index('<div class="note-chips">')
+    assert chips < html.index("data-related-summary") < html.index("markdown-body")
+
+
+def test_summary_line_names_every_group_and_counts_overflow(
+    lithos_lens_config_env: Path,
+) -> None:
+    """All six groups, singular and plural wording, and a group past the render
+    cap counted at its full size ("+N more" included), not its visible rows."""
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    neighborhood = RelatedNeighborhood(
+        links=(RelatedRef(id="out-1", title="Out"),),
+        backlinks=(
+            RelatedRef(id="in-1", title="In 1"),
+            RelatedRef(id="in-2", title="In 2"),
+        ),
+        sources=(RelatedRef(id="src-1", title="Source"),),
+        derived=(
+            RelatedRef(id="der-1", title="D1"),
+            RelatedRef(id="der-2", title="D2"),
+        ),
+        unresolved=("drafts/a.md",),
+        edges=tuple(
+            RelatedRef(id=f"edge-{i}", edge_type="supports") for i in range(25)
+        ),
+    )
+    titles = {f"edge-{i}": f"Edge {i}" for i in range(25)}
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=neighborhood, titles=titles, note=note
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    assert "+5 more" in html
+    counts = _summary_counts(html)
+    assert counts == {
+        "related-links": (1, "outgoing link"),
+        "related-backlinks": (2, "back-links"),
+        "related-sources": (1, "source"),
+        "related-derived": (2, "derived from"),
+        "related-unresolved": (1, "unresolved"),
+        "related-edges": (25, "typed edges"),
+    }
+    assert {anchor: n for anchor, (n, _) in counts.items()} == _panel_group_sizes(html)
+    # Panel order, separated by middots.
+    assert list(counts) == list(_PANEL_GROUP_IDS)
+    assert _summary(html).count(" · ") == 5
+
+
+def test_summary_line_reports_a_failed_related_read(
+    lithos_lens_config_env: Path,
+) -> None:
+    note = NoteRecord(id="root", title="Root Note", content="Still here.")
+    fake = KnowledgeFakeLithosClient(note=note, related_error=True)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    line = _summary(html)
+    assert "could not be loaded" in line
+    assert _summary_counts(html) == {}
+    assert "related-summary-counts" not in line
+
+
+def test_summary_line_for_a_note_with_no_relations_says_none(
+    lithos_lens_config_env: Path,
+) -> None:
+    note = NoteRecord(id="root", title="Root Note", content="Alone.")
+    fake = KnowledgeFakeLithosClient(note=note)
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    assert _summary_counts(html) == {}
+    assert '<a href="#related">none</a>' in _summary(html)
+    assert '<aside class="related-panel" id="related"' in html
+
+
+def test_summary_line_costs_no_lithos_calls_beyond_the_panel(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The summary line is built from the panel already loaded: one full read
+    of the note, one ``lithos_related``, and one ``max_length=1`` read per
+    untitled edge endpoint — nothing more, and no second read of the note."""
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    neighborhood = RelatedNeighborhood(
+        links=(RelatedRef(id="out-1", title="Out"),),
+        backlinks=(RelatedRef(id="in-1", title="In"),),
+        sources=(RelatedRef(id="src-1", title="Source"),),
+        unresolved=("drafts/a.md",),
+        edges=(
+            RelatedRef(id="edge-1", edge_type="supports"),
+            RelatedRef(id="edge-2", edge_type="contradicts"),
+        ),
+    )
+    titles = {"edge-1": "Edge 1", "edge-2": "Edge 2"}
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=neighborhood, titles=titles, note=note
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    assert len(_summary_counts(html)) == 5
+    assert fake.related_calls == ["root"]
+    assert sorted(fake.read_calls, key=str) == sorted(
+        [("root", None), ("edge-1", 1), ("edge-2", 1)], key=str
+    )
+
+
+def test_note_layout_keeps_article_before_aside(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The sidebar is a stylesheet placement only: in the DOM the article
+    still comes first and the aside after it, inside the two-column wrapper."""
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    fake = KnowledgeFakeLithosClient(
+        note=note,
+        neighborhood=RelatedNeighborhood(links=(RelatedRef(id="a", title="A"),)),
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    layout = html.index('<div class="note-layout note-layout-with-related">')
+    article = html.index('<article class="detail-panel">')
+    aside = html.index('<aside class="related-panel"')
+    assert layout < article < html.index("</article>") < aside
 
 
 def test_config_rejects_oversized_related_fanout_cap(tmp_path: Path) -> None:
