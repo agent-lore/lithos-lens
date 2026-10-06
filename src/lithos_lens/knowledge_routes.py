@@ -24,7 +24,11 @@ from fastapi.templating import Jinja2Templates
 
 from lithos_lens import metrics
 from lithos_lens.knowledge import RelatedPanel, load_related_panel
-from lithos_lens.knowledge_metadata import build_note_metadata
+from lithos_lens.knowledge_metadata import (
+    ListChips,
+    build_note_metadata,
+    load_list_chips,
+)
 from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.knowledge_resolver import ResolveOutcome, resolve_wiki_link
 from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
@@ -105,7 +109,9 @@ def register_knowledge_routes(
         lightweight note list (tagged, or recently updated). Every branch is
         capped from config so a broad ``?q=a`` / ``?tag=`` cannot materialize
         an unbounded result set (the resolver caps candidates for the same
-        reason).
+        reason). Each card and row carries the note page's metadata chips,
+        compact, for the first ``list_chip_fanout_cap`` notes (one capped
+        ``lithos_read`` each — see ``load_list_chips``).
         """
         query = request.query_params.get("q", "").strip()
         tag = request.query_params.get("tag", "").strip()
@@ -136,6 +142,16 @@ def register_knowledge_routes(
             except Exception:
                 mode = "error"
                 error = "Knowledge search is currently unavailable."
+        chips = ListChips()
+        if search_results or results:
+            # Both sections' ids in one call, so the per-request dedupe holds
+            # across them: an id is read once however many rows show it.
+            chips = await load_list_chips(
+                state.lithos_client,
+                [row.id for row in search_results or ()]
+                + [row.id for row in results or ()],
+                cap=state.config.knowledge.list_chip_fanout_cap,
+            )
         span = get_current_span()
         # The query is deliberately absent from the metric LABEL: one series
         # per distinct search is unbounded cardinality from unauthenticated
@@ -145,6 +161,9 @@ def register_knowledge_routes(
         span.set_attribute("lens.mode", mode)
         span.set_attribute("lens.result_count", len(search_results or results or ()))
         span.set_attribute("lens.has_tag", bool(tag))
+        # lithos_read calls spent on the rows' chips: the landing's backend
+        # cost beyond its one list call, bounded by list_chip_fanout_cap.
+        span.set_attribute("lens.chips.fanout", chips.fanout)
         metrics.knowledge_searches().add(1, {"mode": mode})
         return templates.TemplateResponse(
             request,
@@ -159,6 +178,7 @@ def register_knowledge_routes(
                 "landing_url": knowledge_landing_url(query, tag),
                 "search_results": search_results,
                 "results": results,
+                "chips": chips,
                 "error": error,
             },
         )

@@ -301,6 +301,8 @@ The current configuration model includes:
 - `knowledge.related_title_fanout_cap`
 - `knowledge.search_limit`
 - `knowledge.recent_limit`
+- `knowledge.list_chip_fanout_cap` *(default 40, 1-200: how many landing rows
+  get metadata chips, one `lithos_read` each — §5.7)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1217,11 +1219,29 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   hops (related panel, wiki-links, the resolver) carry no `next`, and the
   resolver's own pages link back to `/knowledge` too
 
-`GET /knowledge` is the landing page: hybrid search over notes, a
-recently-updated list, and tag browse. A search result's snippet drops a leading
-`# <title>` line that repeats the card's title (the note page's rule, found by
-parsing the snippet); the snippet otherwise stays escaped text, never rendered,
-and is shown whole as Lithos windowed it — Lens adds no truncation.
+`GET /knowledge` is the landing page:
+
+- **hybrid search** (`?q=`) renders result cards — title, path, escaped
+  snippet, updated date — from `lithos_search` (`knowledge.search_limit`).
+  A snippet drops a leading `# <title>` line that repeats the card's title
+  (the note page's rule, found by parsing the snippet); it otherwise stays
+  escaped text, never rendered, and is shown whole as Lithos windowed it —
+  Lens adds no truncation
+- with no query, a **recently-updated list** — title, path, updated date —
+  newest first over the whole corpus; `?tag=` narrows it (and a search) to
+  one tag (`knowledge.recent_limit`)
+- **metadata chips** on every card and row: the note page's chip partial
+  (`knowledge/note_chips.html` — type, status colour-coded, scope when not
+  `shared`, namespace, confidence; not `supersedes`) in its compact one-line
+  variant (`.note-chips-compact`). Neither `lithos_search` rows nor
+  `lithos_list` items carry these fields (ROADMAP ledger #16), so
+  `knowledge_metadata.load_list_chips` reads each row's frontmatter with a
+  `lithos_read(id, max_length=1)` — the related panel's cheap read, under the
+  same process-wide MCP call gate — once per distinct id per request, for the
+  first `knowledge.list_chip_fanout_cap` ids (default 40). Rows past the cap
+  render chipless under a "Chips shown for the first N notes." line; a failed
+  read leaves only its own row chipless, never the list. The number of reads
+  is the landing span's `lens.chips.fanout`
 
 ### 5.8 Live Updates
 

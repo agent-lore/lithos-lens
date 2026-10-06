@@ -290,6 +290,51 @@ def test_each_landing_branch_reports_its_mode(
     )
 
 
+@pytest.mark.parametrize("path", ["/knowledge?q=influx", "/knowledge"])
+def test_the_landing_reports_its_chip_fanout(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    path: str,
+) -> None:
+    """One `lithos_read` per distinct row for its chips, beyond the one list
+    call: the landing's real backend cost, counted from the reads the fake
+    actually served rather than read back off the route."""
+    fake = FakeLithosClient()
+    reads: list[str] = []
+    original_read = fake.read_note
+
+    async def record_read(
+        knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        reads.append(knowledge_id)
+        return await original_read(knowledge_id, max_length=max_length)
+
+    fake.read_note = record_read  # type: ignore[method-assign]
+
+    with _client(lithos_lens_config_env, fake) as client:
+        assert client.get(path).status_code == 200
+
+    assert reads, "the demo corpus answers this branch emptily"
+    span = _route_span(spans, "/knowledge")
+    assert _attr(span, "lens.chips.fanout") == len(reads)
+
+
+def test_an_offline_landing_spends_no_chip_reads(
+    lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+) -> None:
+    class OfflineClient(FakeLithosClient):
+        async def health(self) -> Any:
+            return "unreachable"
+
+    with _client(lithos_lens_config_env, OfflineClient()) as client:
+        assert client.get("/knowledge").status_code == 200
+
+    span = _route_span(spans, "/knowledge")
+    assert _attr(span, "lens.mode") == "offline"
+    assert _attr(span, "lens.chips.fanout") == 0
+
+
 def test_the_search_query_never_reaches_a_metric_label(
     lithos_lens_config_env: Path,
     metric_reader: InMemoryMetricReader,
