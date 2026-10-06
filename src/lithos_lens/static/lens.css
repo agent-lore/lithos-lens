@@ -1596,12 +1596,16 @@ button,
   font-size: 0.85rem;
 }
 
+/* `minmax(0, 1fr)`, not the implicit `auto` track: an auto track grows to
+   its widest card's min-content, so one card's one-line chip row widened the
+   whole page past a 320px viewport instead of scrolling inside the card. */
 .knowledge-cards {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .knowledge-card {
@@ -1628,15 +1632,21 @@ button,
 
 /* The note page's chips on a landing card or row (§5.7): the same pills, one
    line and smaller, so a list stays scannable. Two-class selectors, so they
-   beat `.chip` wherever it is declared; the status colours are untouched. */
+   beat `.chip` wherever it is declared; the status colours are untouched.
+   A row too wide for a narrow window SCROLLS rather than clips: clipped, the
+   namespace and confidence chips were present in the markup and unreachable
+   on screen (320px). `flex: none` keeps each pill whole instead of squeezing
+   it under its own text. */
 .note-chips-compact {
   flex-wrap: nowrap;
   gap: 0.3rem;
   margin: 0.3rem 0;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .note-chips-compact .chip {
+  flex: none;
   font-size: 0.7rem;
   padding: 0.2rem 0.45rem;
   white-space: nowrap;
@@ -1868,9 +1878,12 @@ button,
 
 /* --- Knowledge landing + wiki-link resolution ---------------------------- */
 
+/* Bounded for the same reason as `.knowledge-cards`: the result lists are
+   this grid's items, and an auto track would let their content widen it. */
 .knowledge-landing {
   display: grid;
   gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .knowledge-active-filter {

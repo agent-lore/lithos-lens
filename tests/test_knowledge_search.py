@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -686,11 +687,14 @@ def test_an_id_shown_twice_is_read_once(lithos_lens_config_env: Path) -> None:
     assert response.text.count("note-status-quarantined") == 2
 
 
-def test_rows_past_the_chip_cap_are_chipless_and_the_page_says_so(
-    lithos_lens_config_env: Path,
-) -> None:
-    _set_chip_cap(lithos_lens_config_env, 2)
-    notes = {
+def _dated_quarantined(*days: int) -> dict[str, NoteRecord]:
+    """Quarantined notes ``n<day>``, inserted in the order given.
+
+    Given newest-first, the search branch (the fake answers in insertion
+    order) and the recent branch (newest-first) list the rows identically, so
+    one set of row assertions holds for both.
+    """
+    return {
         f"n{day}": NoteRecord(
             id=f"n{day}",
             title=f"Note {day}",
@@ -700,15 +704,29 @@ def test_rows_past_the_chip_cap_are_chipless_and_the_page_says_so(
                 "updated_at": f"2026-08-0{day}T10:00:00+00:00",
             },
         )
-        for day in (1, 2, 3, 4)
+        for day in days
     }
-    fake = FakeLithosClient(dataset=_dataset(notes))
+
+
+# Both landing branches: separate template branches, each with its own
+# chips-capped notice.
+_LANDING_BRANCHES = pytest.mark.parametrize(
+    "path", ["/knowledge?q=Body", "/knowledge"], ids=["search", "recent"]
+)
+
+
+@_LANDING_BRANCHES
+def test_rows_past_the_chip_cap_are_chipless_and_the_page_says_so(
+    lithos_lens_config_env: Path, path: str
+) -> None:
+    _set_chip_cap(lithos_lens_config_env, 2)
+    fake = FakeLithosClient(dataset=_dataset(_dated_quarantined(4, 3, 2, 1)))
     reads = _record_reads(fake)
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/knowledge")
+        response = client.get(path)
 
-    # Newest first: n4 and n3 are the first two rows, and the only two read.
+    # n4 and n3 are the first two rows, and the only two read.
     assert sorted(reads) == [("n3", 1), ("n4", 1)]
     assert "note-status-quarantined" in _row_html(response.text, "n4")
     assert "note-status-quarantined" in _row_html(response.text, "n3")
@@ -717,19 +735,62 @@ def test_rows_past_the_chip_cap_are_chipless_and_the_page_says_so(
     assert "Chips shown for the first 2 notes." in response.text
 
 
+@_LANDING_BRANCHES
 def test_a_list_exactly_at_the_cap_says_nothing_about_it(
-    lithos_lens_config_env: Path,
+    lithos_lens_config_env: Path, path: str
 ) -> None:
     _set_chip_cap(lithos_lens_config_env, 2)
-    fake = FakeLithosClient(
-        dataset=_dataset({"hypo": _QUARANTINED, "summary": _SUMMARY})
-    )
+    fake = FakeLithosClient(dataset=_dataset(_dated_quarantined(2, 1)))
+    reads = _record_reads(fake)
 
     with _client(lithos_lens_config_env, fake) as client:
-        response = client.get("/knowledge")
+        response = client.get(path)
 
-    assert "note-status-quarantined" in response.text
+    assert sorted(reads) == [("n1", 1), ("n2", 1)]
+    assert "note-status-quarantined" in _row_html(response.text, "n2")
+    assert "note-status-quarantined" in _row_html(response.text, "n1")
     assert "Chips shown for the first" not in response.text
+
+
+def _css_rule(css: str, selector: str) -> str:
+    """The declarations of ``selector``'s one rule in lens.css."""
+    match = re.search(rf"(?m)^{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+    assert match is not None, f"lens.css has no {selector} rule"
+    return match.group(1)
+
+
+def _rem(declarations: str, prop: str) -> float:
+    match = re.search(rf"(?<![-\w]){prop}:\s*([\d.]+)rem;", declarations)
+    assert match is not None, f"no {prop} in rem"
+    return float(match.group(1))
+
+
+def test_compact_chip_row_stylesheet_is_one_smaller_line_that_scrolls() -> None:
+    """The compact variant's layout contract (§5.7), pinned on the rules.
+
+    One line (no wrap), smaller type than the note page's chips, and a row too
+    wide for its card SCROLLS: it once clipped with ``overflow: hidden``, so at
+    320px the namespace and confidence chips were in the markup and nowhere on
+    screen. The landing's two grids bound their track, or one chip row widens
+    the page instead of scrolling. The browser-truth check — one line, smaller,
+    every chip reachable, no page overflow at 320px — is in the Playwright
+    screenshot suite (``compactChipRowsAreWhole``); this guards the rules.
+    """
+    css = (
+        Path(__file__).parent.parent / "src" / "lithos_lens" / "static" / "lens.css"
+    ).read_text()
+    row = _css_rule(css, ".note-chips-compact")
+    assert re.search(r"flex-wrap:\s*nowrap;", row)
+    assert re.search(r"overflow-x:\s*auto;", row)
+    assert not re.search(r"(?<![-\w])overflow:\s*hidden;", row)
+    chip = _css_rule(css, ".note-chips-compact .chip")
+    assert re.search(r"white-space:\s*nowrap;", chip)
+    assert re.search(r"flex:\s*none;", chip)
+    assert _rem(chip, "font-size") < _rem(_css_rule(css, ".chip"), "font-size")
+    for grid in (".knowledge-cards", ".knowledge-landing"):
+        assert re.search(
+            r"grid-template-columns:\s*minmax\(0,\s*1fr\);", _css_rule(css, grid)
+        ), grid
 
 
 def test_a_failed_chip_read_leaves_only_that_row_chipless(

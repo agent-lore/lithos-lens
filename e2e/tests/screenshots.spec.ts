@@ -121,6 +121,47 @@ async function canvasIsLegible(page: Page) {
   else await expect(hint).toBeHidden();
 }
 
+/**
+ * The landing's compact chip rows (§5.7): one line each, in smaller type than
+ * the note page's chips, and every chip REACHABLE. A row too wide for the
+ * window scrolls inside itself; it once clipped (`overflow: hidden`), so at
+ * 320px the namespace and confidence chips were in the markup and nowhere on
+ * screen — while the search cards' auto grid track grew the page instead. The
+ * page-width check in the loop below covers the second; this the first.
+ */
+async function compactChipRowsAreWhole(page: Page) {
+  const rows = await page.evaluate(() => {
+    // The full variant's chip size, measured rather than restated.
+    const probe = document.createElement("span");
+    probe.className = "chip";
+    document.body.append(probe);
+    const fullSize = parseFloat(getComputedStyle(probe).fontSize);
+    probe.remove();
+    return Array.from(document.querySelectorAll(".note-chips-compact")).map(
+      (row) => {
+        const chips = Array.from(row.querySelectorAll(".chip"));
+        const tops = new Set(
+          chips.map((chip) => Math.round(chip.getBoundingClientRect().top)),
+        );
+        row.scrollLeft = row.scrollWidth;
+        const box = row.getBoundingClientRect();
+        const last = chips[chips.length - 1].getBoundingClientRect();
+        const reachable = last.width > 0 && last.right <= box.right + 1;
+        row.scrollLeft = 0;
+        return {
+          lines: tops.size,
+          reachable,
+          smaller: parseFloat(getComputedStyle(chips[0]).fontSize) < fullSize,
+        };
+      },
+    );
+  });
+  expect(rows.length).toBeGreaterThan(0);
+  for (const row of rows) {
+    expect(row).toEqual({ lines: 1, reachable: true, smaller: true });
+  }
+}
+
 const WIDTHS = [320, 768, 1024, 1440] as const;
 
 const PAGES: ReadonlyArray<{
@@ -694,6 +735,22 @@ const PAGES: ReadonlyArray<{
       // The button is content-width: it sits beside the input on one row.
       expect(button!.width).toBeLessThan(form!.width * 0.4);
       expect(button!.y).toBe(input!.y);
+      // The quarantined fixture's row is the widest chip row in the corpus.
+      await expect(page.locator(".note-status-quarantined")).toBeVisible();
+      await compactChipRowsAreWhole(page);
+    },
+  },
+  {
+    // The search branch's result cards: a separate template branch and a
+    // separate layout (a grid of cards), whose auto track once let one chip
+    // row widen the page past a 320px viewport.
+    slug: "knowledge-search",
+    url: "/knowledge?q=influx",
+    ready: async (page) => {
+      await expect(
+        page.getByRole("heading", { level: 2, name: "Results for “influx”" }),
+      ).toBeVisible();
+      await compactChipRowsAreWhole(page);
     },
   },
   {
