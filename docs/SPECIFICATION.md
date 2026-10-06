@@ -1284,7 +1284,8 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   matched as the prefix `<ns>/` (`lithos_list` cannot filter frontmatter
   namespace, ROADMAP ledger #16). Search sends it as `lithos_search`'s
   `path_prefix`; the browse sections filter on path Lens-side after the walk,
-  so the row still counts every namespace. `?tag=` narrows the sections and a
+  so the row still counts every namespace — over every fetched note, whichever
+  section is shown (a `?section=` view offers the landing's row). `?tag=` narrows the sections and a
   search to one tag and composes with it; the "Filtered by" line names both,
   and the search form carries both as hidden inputs
 - **metadata chips** on every card and row: the note page's chip partial

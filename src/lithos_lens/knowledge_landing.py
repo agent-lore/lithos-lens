@@ -111,28 +111,28 @@ def build_recent_landing(
     """Partition the newest-first ``rows`` into the landing's two sections.
 
     ``rows`` is the whole (tag-filtered) corpus newest-first, so each section
-    is its class's newest ``limit`` notes. The filter row counts every row of
-    the sections shown BEFORE the namespace filter — it is how the operator
-    moves between namespaces — and the sections are cut after it.
+    is its class's newest ``limit`` notes. The filter row counts EVERY fetched
+    row, before both the section and the namespace filter: it is how the
+    operator moves between namespaces, and a ``?section=`` view fetched the
+    same corpus, so it offers the same row (intake's dominant namespace stays
+    on "Your notes"). Only the rendered sections are selected and cut.
     """
     # "" (no namespace) is a prefix of every path.
     prefix = namespace_path_prefix(namespace)
     shown: dict[str, list[NoteSummary]] = {
         key: [] for key in SECTIONS if not section or key == section
     }
-    shown_paths: list[str] = []
+    fetched_paths: list[str] = []
     for row in rows:
+        fetched_paths.append(row.path)
         kind = SECTION_INTAKE if is_intake(row, intake_path_prefixes) else SECTION_NOTES
         bucket = shown.get(kind)
-        if bucket is None:
-            continue
-        shown_paths.append(row.path)
-        if row.path.startswith(prefix) and len(bucket) < limit:
+        if bucket is not None and row.path.startswith(prefix) and len(bucket) < limit:
             bucket.append(row)
     return RecentLanding(
         notes=_section_rows(shown, SECTION_NOTES),
         intake=_section_rows(shown, SECTION_INTAKE),
-        namespaces=namespace_facets(shown_paths),
+        namespaces=namespace_facets(fetched_paths),
     )
 
 

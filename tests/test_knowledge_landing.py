@@ -426,3 +426,42 @@ def test_env_override_reaches_the_landing(
     # stays intake by its tag.
     assert "article" in (_section_ids(html, "your-notes") or [])
     assert "both" in (_section_ids(html, "recent-intake") or [])
+
+
+def test_a_section_view_keeps_the_fetched_set_namespace_row(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-001: a heading's single-section view still fetches the whole corpus,
+    so its row is the fetched set's — same entries, counts and ranking as the
+    landing — not the shown section's. influx (intake only) stays on "Your
+    notes", and plans (own notes only) stays on "Recent intake"."""
+    fake = _corpus_fake()
+    with _client(lithos_lens_config_env, fake) as client:
+        bare = _facets(client.get("/knowledge").text)
+        notes = _facets(client.get("/knowledge?section=notes").text)
+        intake = _facets(client.get("/knowledge?section=intake").text)
+
+    assert notes == bare
+    assert intake == bare
+    assert ("influx", "2", False) in notes
+    assert ("plans", "1", False) in intake
+
+
+def test_a_namespace_shared_by_both_classes_counts_every_note_in_a_section() -> None:
+    rows = [
+        NoteSummary(id="feed", path="user/feed.md", tags=("ingested-by:influx",)),
+        NoteSummary(id="own", path="user/plan.md"),
+        NoteSummary(id="other", path="plans/a.md"),
+    ]
+    for section in ("", "notes", "intake"):
+        landing = build_recent_landing(
+            rows,
+            intake_path_prefixes=DEFAULT_PREFIXES,
+            namespace="",
+            section=section,
+            limit=20,
+        )
+        assert landing.namespaces == (
+            NamespaceFacet("user", 2),
+            NamespaceFacet("plans", 1),
+        ), section
