@@ -655,6 +655,7 @@ classDiagram
     +content str
     +tags tuple[str, ...]
     +metadata dict[str, Any]
+    +frontmatter_title str | None
   }
   class NoteSummary {
     +id str

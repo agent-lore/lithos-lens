@@ -304,6 +304,11 @@ class NoteRecord:
     content: str
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    # The title exactly as Lithos sent it, before ``normalize_note`` gives an
+    # empty one its "Untitled document" display label: a body H1 repeats the
+    # note's title, never that label. ``None`` (a record built without one)
+    # means ``title`` is the frontmatter title.
+    frontmatter_title: str | None = None
 
 
 @dataclass(frozen=True)

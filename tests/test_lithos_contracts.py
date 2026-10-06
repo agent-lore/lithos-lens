@@ -598,6 +598,7 @@ def _expected_note(success: dict[str, Any]) -> NoteRecord:
         content=success["content"],
         tags=tuple(success["metadata"]["tags"]),
         metadata=success["metadata"],
+        frontmatter_title=success["title"],
     )
 
 

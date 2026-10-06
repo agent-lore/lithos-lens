@@ -151,7 +151,10 @@
             {% endfor %}
           </div>
         {% endif %}
-        <div class="markdown-body">{{ note.content | render_markdown(note.id, note.title) | safe }}</div>
+        {#- The collapse compares the frontmatter title, not the header's
+            "Untitled document" fallback for an empty one. -#}
+        {%- set frontmatter_title = note.title if note.frontmatter_title is none else note.frontmatter_title %}
+        <div class="markdown-body">{{ note.content | render_markdown(note.id, frontmatter_title) | safe }}</div>
       </article>
 
       {% if related %}

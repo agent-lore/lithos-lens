@@ -12,8 +12,10 @@ from lithos_lens import knowledge, knowledge_metadata
 from lithos_lens.config import load_config
 from lithos_lens.knowledge import render_markdown
 from lithos_lens.knowledge_metadata import build_note_metadata
+from lithos_lens.normalizers import normalize_note
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
 
@@ -762,6 +764,48 @@ def test_note_page_collapses_body_h1_that_repeats_the_title(
     )
     assert body is not None
     assert body.group(1) == "<p>Cut over the ingest path first.</p>\n"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_body"),
+    [
+        # An empty frontmatter title is what the body's empty H1 repeats...
+        ("#\n\nBody.", "<p>Body.</p>\n"),
+        # ...and the header's "Untitled document" label is a display
+        # fallback, not the title, so a body H1 spelling it is kept.
+        (
+            "# Untitled document\n\nBody.",
+            "<h1>Untitled document</h1>\n<p>Body.</p>\n",
+        ),
+    ],
+)
+def test_note_page_compares_the_body_h1_with_the_frontmatter_title_not_its_fallback(
+    lithos_lens_config_env: Path, content: str, expected_body: str
+) -> None:
+    # Through the real read normalization: the vendored lithos_read success
+    # payload with an empty title, as normalize_note receives it.
+    payload = load_contract("lithos_read")["responses"]["success"]
+    raw = {
+        **payload,
+        "title": "",
+        "content": content,
+        "metadata": {**payload["metadata"], "title": ""},
+    }
+    record = normalize_note(raw)
+    assert record.title == "Untitled document"
+    fake = TaskFakeLithosClient()
+    fake.notes[record.id] = record
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/note/{record.id}")
+
+    assert response.status_code == 200
+    assert "<h1>Untitled document</h1>" in response.text
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == expected_body
 
 
 # --- K1 slice 7: nav enablement + degraded states ---------------------------
