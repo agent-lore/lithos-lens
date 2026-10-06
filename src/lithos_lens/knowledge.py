@@ -8,7 +8,8 @@ call turned into four scannable sections (outgoing links, back-links,
 provenance, typed edges) with link/edge endpoints shown by title rather than
 bare id. The frontmatter-driven metadata chips + lede (K1-S3) live in the
 sibling ``knowledge_metadata`` module to keep this one under the god-module
-ceiling, and the search-result view model (K1-S6) lives in ``knowledge_search``.
+ceiling, the search-result view model (K1-S6) lives in ``knowledge_search``,
+and a typed edge's parsed evidence/provenance in ``knowledge_edge_evidence``.
 
 It also owns the SAFE MARKDOWN itself, which is not only a note concern: a task
 description is agent-authored markdown too (§5.3), so the description renderer
@@ -30,6 +31,7 @@ from markdown_it import MarkdownIt
 from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
 
+from lithos_lens.knowledge_edge_evidence import EdgeWhy, edge_why, number_or_none
 from lithos_lens.tasks import NoteRecord, SectionState
 
 logger = logging.getLogger(__name__)
@@ -473,7 +475,7 @@ class RelatedRef:
     endpoint of the edge (``to_id`` for an outgoing edge, ``from_id`` for an
     incoming one) and ``direction`` / ``edge_type`` / ``weight`` /
     ``conflict_state`` are carried through from the raw edge row per
-    REQUIREMENTS.md §6.5.
+    REQUIREMENTS.md §6.5, with ``why`` parsed from its evidence/provenance.
     """
 
     id: str
@@ -482,6 +484,7 @@ class RelatedRef:
     weight: float | None = None
     direction: str = ""
     conflict_state: str = ""
+    why: EdgeWhy | None = None
 
 
 @dataclass(frozen=True)
@@ -503,7 +506,7 @@ class RelatedItem:
     For typed-edge items, ``direction`` (``outgoing`` / ``incoming``) and a
     non-empty ``conflict_state`` carry through from the transport ref so the
     panel can show which way an edge points and flag unresolved conflicts
-    (REQUIREMENTS.md §6.5).
+    (REQUIREMENTS.md §6.5), with ``why`` for the row's "why?" disclosure.
     """
 
     id: str
@@ -512,6 +515,7 @@ class RelatedItem:
     weight: float | None = None
     direction: str = ""
     conflict_state: str = ""
+    why: EdgeWhy | None = None
 
     @property
     def label(self) -> str:
@@ -741,6 +745,7 @@ def _build_section(
                     weight=ref.weight,
                     direction=ref.direction,
                     conflict_state=ref.conflict_state,
+                    why=ref.why,
                 )
             )
         else:
@@ -774,19 +779,14 @@ def _normalize_edges(items: Any, *, direction: str) -> tuple[RelatedRef, ...]:
         ref_id = str(item.get(endpoint_key) or "")
         if not ref_id:
             continue
-        raw_weight = item.get("weight")
-        weight = (
-            float(raw_weight)
-            if isinstance(raw_weight, (int, float)) and not isinstance(raw_weight, bool)
-            else None
-        )
         refs.append(
             RelatedRef(
                 id=ref_id,
                 edge_type=str(item.get("type") or ""),
-                weight=weight,
+                weight=number_or_none(item.get("weight")),
                 direction=direction,
                 conflict_state=str(item.get("conflict_state") or ""),
+                why=edge_why(item),
             )
         )
     return tuple(refs)

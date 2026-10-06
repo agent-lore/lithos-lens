@@ -6,6 +6,37 @@
   <a href="/note/{{ item.id }}">{{ item.label }}</a>
 {%- endmacro %}
 
+{#- A typed-edge row's "why?": how the edge came to be (an inference, a
+    citation reinforcement, a frontmatter declaration), then whatever evidence
+    it stored — an inference's rationale with its model and confidence, or the
+    raw string when it is not that JSON. Closed by default: the row stays one
+    line, and the sentence is a click away. -#}
+{% macro edge_why(why) %}
+  <details class="edge-why" data-edge-why>
+    <summary>why?</summary>
+    {% if why.provenance %}
+      <p class="edge-why-provenance" data-edge-provenance>{{ why.provenance }}</p>
+    {% endif %}
+    {% set evidence = why.evidence %}
+    {% if evidence and evidence.rationale %}
+      <p class="edge-why-rationale" data-edge-rationale>{{ evidence.rationale }}</p>
+    {% endif %}
+    {% if evidence and (evidence.model or evidence.confidence is not none) %}
+      <div class="edge-why-chips">
+        {% if evidence.model %}
+          <span class="chip" data-edge-model>model {{ evidence.model }}</span>
+        {% endif %}
+        {% if evidence.confidence is not none %}
+          <span class="chip" data-edge-confidence>confidence {{ "%.2f"|format(evidence.confidence) }}</span>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if evidence and evidence.raw %}
+      <p class="edge-why-raw" data-edge-evidence-raw>{{ evidence.raw }}</p>
+    {% endif %}
+  </details>
+{%- endmacro %}
+
 {% macro related_section(heading, anchor, section, edges=False) %}
   {% if section.items or section.overflow %}
     <section class="related-section" id="{{ anchor }}">
@@ -25,6 +56,9 @@
             {% endif %}
             {% if edges and item.conflict_state %}
               <span class="edge-conflict">conflict: {{ item.conflict_state }}</span>
+            {% endif %}
+            {% if edges and item.why %}
+              {{ edge_why(item.why) }}
             {% endif %}
           </li>
         {% endfor %}

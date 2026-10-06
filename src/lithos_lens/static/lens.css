@@ -1885,6 +1885,52 @@ button,
   color: var(--ink);
 }
 
+/* An edge's "why?" disclosure: closed it is one small muted word on the row;
+   open, the provenance line, the inference's rationale, and its model and
+   confidence as the panel's usual small chips. */
+.edge-why {
+  font-size: 0.85rem;
+  margin-top: 0.2rem;
+}
+
+.edge-why summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.edge-why-provenance {
+  color: var(--muted);
+  font-style: italic;
+  margin: 0.3rem 0 0;
+}
+
+.edge-why-rationale {
+  margin: 0.3rem 0 0;
+}
+
+.edge-why-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.edge-why-chips .chip {
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+}
+
+/* Evidence that is not the inference JSON, shown as stored (escaped text). */
+.edge-why-raw {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* Frontmatter chips. `.chip` already gives them the pill; these modifiers say
    WHICH fact each pill carries. Three of the six rendered a bare word —
    "summary", "task", "plans" — with nothing to say what it meant, while the

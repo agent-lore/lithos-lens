@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ import pytest
 from lithos_lens.config import LithosConfig
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.knowledge_edge_evidence import EdgeEvidence, EdgeWhy, provenance_label
 from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import (
     LithosClient,
@@ -610,14 +612,33 @@ def _check_related(result: Any, success: dict[str, Any]) -> None:
     def _refs(entries: list[dict[str, Any]]) -> tuple[RelatedRef, ...]:
         return tuple(RelatedRef(id=raw["id"], title=raw["title"]) for raw in entries)
 
+    def _why(raw: dict[str, Any]) -> EdgeWhy:
+        # `evidence` is a JSON string (an inferred edge's three keys) or null.
+        evidence = None
+        if raw["evidence"] is not None:
+            parsed = json.loads(raw["evidence"])
+            evidence = EdgeEvidence(
+                rationale=parsed["rationale"],
+                model=parsed["model"],
+                confidence=parsed["confidence"],
+            )
+        return EdgeWhy(
+            provenance=provenance_label(
+                raw["provenance_type"], raw["provenance_actor"]
+            ),
+            evidence=evidence,
+        )
+
     def _edge_ref(raw: dict[str, Any], direction: str) -> RelatedRef:
-        # The ref keeps the OPPOSITE endpoint by direction (§6.5).
+        # The ref keeps the OPPOSITE endpoint by direction (§6.5); a null
+        # conflict_state reads as "none".
         return RelatedRef(
             id=raw["to_id"] if direction == "outgoing" else raw["from_id"],
             edge_type=raw["type"],
             weight=raw["weight"],
             direction=direction,
-            conflict_state=raw["conflict_state"],
+            conflict_state=raw["conflict_state"] or "",
+            why=_why(raw),
         )
 
     assert result == RelatedNeighborhood(

@@ -1,8 +1,9 @@
 {
   "tool": "lithos_related",
-  "lithos_version": "lithos 0.4.0 @ 917cb5d",
+  "lithos_version": "lithos 0.4.0 @ 917cb5d; the edge rows re-read at lithos 0.6.0 @ d2c49bb (source read 2026-10-05)",
   "source": [
-    "lithos:src/lithos/tools/read_search.py::lithos_related"
+    "lithos:src/lithos/tools/read_search.py::lithos_related",
+    "lithos:src/lithos/lcma/edge_inference.py (inferred-edge evidence: json.dumps({rationale, model, confidence}), written at confidence >= 0.6, conflict_state NULL)"
   ],
   "request": {
     "canonical": {
@@ -61,10 +62,10 @@
             "namespace": "default",
             "created_at": "2026-05-01T00:00:00+00:00",
             "updated_at": "2026-05-01T00:00:00+00:00",
-            "provenance_actor": "agent-x",
-            "provenance_type": "asserted",
-            "evidence": "",
-            "conflict_state": ""
+            "provenance_actor": "lithos-enrich",
+            "provenance_type": "inferred",
+            "evidence": "{\"rationale\": \"The root note's benchmark is the evidence the target's claim rests on.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.75}",
+            "conflict_state": null
           }
         ],
         "incoming": [
@@ -79,7 +80,7 @@
             "updated_at": "2026-05-01T00:00:00+00:00",
             "provenance_actor": "agent-x",
             "provenance_type": "asserted",
-            "evidence": "",
+            "evidence": null,
             "conflict_state": "unresolved"
           }
         ]

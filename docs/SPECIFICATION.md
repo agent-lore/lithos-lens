@@ -1217,7 +1217,24 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   `max-width: 700px` collapse) the panel is a second column beside the
   article, sticky to the top of the viewport and scrolling in its own box when
   taller than the window; below it, the panel follows the body. The DOM order
-  is article then aside at every width, so the no-JS reading order is unchanged
+  is article then aside at every width, so the no-JS reading order is unchanged.
+  Each typed-edge row (direction, type, weight, conflict) carries a closed
+  `<details>` **"why?"** disclosure built from the edge row's own
+  `provenance_type` / `provenance_actor` / `evidence` (no extra Lithos call;
+  `knowledge_edge_evidence`): first how the edge came to be — "inferred by
+  <actor>", "reinforced by citation" (`consolidation`), "declared in
+  frontmatter" (`frontmatter`), otherwise "<type> by <actor>" — then the
+  evidence. `evidence` is a JSON string or null; an inferred edge's is
+  `{"rationale", "model", "confidence"}` (lithos `lcma/edge_inference.py`),
+  shown as the rationale paragraph with model and confidence chips, any
+  missing (or mistyped) key omitted — an object with none of the three shows
+  no evidence at all. Any failure to read it — not JSON, JSON nested deeper than
+  the decoder's recursion limit, not an object, or a `confidence` number no
+  float holds (`1e400`, `NaN`) — shows the string raw
+  as escaped text, and never fails the rest of the panel. A row with nothing
+  to show (null or empty evidence, no provenance) has no disclosure; a
+  reinforcement or frontmatter edge (null evidence) shows its provenance line
+  and no rationale
 - a **related summary line** directly under the metadata chips, from the
   panel's already-loaded data (no extra Lithos call): "Related: 2 outgoing
   links · 1 source · 3 typed edges" — one item per non-empty group, in the
