@@ -2,6 +2,10 @@
 
 {% block title %}Knowledge | Lithos Lens{% endblock %}
 
+{# The page's own form below is the one search here: the nav box GETs the
+   same /knowledge?q= but would drop the tag and namespace filters. #}
+{% block nav_search %}{% endblock %}
+
 {% macro recent_rows(rows) %}
   {% if rows %}
     <ul class="knowledge-results">
@@ -51,6 +55,7 @@
         value="{{ query }}"
         placeholder="Search notes"
         aria-label="Search knowledge"
+        {%- if not query %} autofocus{% endif %}
       >
       {% if tag %}
         {# An active tag filter survives a search submitted from this page —

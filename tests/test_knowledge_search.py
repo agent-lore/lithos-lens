@@ -499,6 +499,84 @@ def test_nav_search_box_present_on_note_page(lithos_lens_config_env: Path) -> No
     assert 'class="nav-search"' in response.text
 
 
+def _search_forms(html: str) -> list[str]:
+    """Every ``role="search"`` form's opening-to-closing markup on a page."""
+    return re.findall(r'<form\b[^>]*role="search"[^>]*>.*?</form>', html, re.S)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/knowledge",
+        "/knowledge?q=shared",
+        "/knowledge?tag=project:x",
+        "/knowledge?section=notes",
+    ],
+)
+def test_knowledge_landing_renders_one_search_form(
+    lithos_lens_config_env: Path, url: str
+) -> None:
+    """The landing's own form is its search; the chrome's nav box, which
+    GETs the same /knowledge?q=, is not rendered beside it."""
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(url)
+
+    assert response.status_code == 200
+    forms = _search_forms(response.text)
+    assert len(forms) == 1
+    assert 'class="knowledge-search"' in forms[0]
+    assert 'class="nav-search"' not in response.text
+
+
+def test_landing_single_form_keeps_the_hidden_tag(lithos_lens_config_env: Path) -> None:
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=shared&tag=project:x")
+
+    (form,) = _search_forms(response.text)
+    assert '<input type="hidden" name="tag" value="project:x">' in form
+
+
+def test_nav_search_box_stays_on_other_knowledge_pages(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Only the landing drops the nav box: the resolver's pages share the
+    knowledge nav highlight but have no search of their own."""
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge/resolve?target=nothing-by-this-name")
+
+    assert response.status_code == 200
+    assert 'aria-current="page" href="/knowledge"' in response.text
+    assert 'class="nav-search"' in response.text
+
+
+@pytest.mark.parametrize(
+    ("url", "focused"),
+    [
+        ("/knowledge", True),
+        ("/knowledge?tag=project:x", True),
+        ("/knowledge?q=", True),
+        ("/knowledge?q=shared", False),
+        ("/knowledge?q=shared&tag=project:x", False),
+    ],
+)
+def test_landing_input_autofocuses_only_without_a_query(
+    lithos_lens_config_env: Path, url: str, focused: bool
+) -> None:
+    fake = FakeLithosClient(dataset=_dataset({}))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(url)
+
+    assert response.status_code == 200
+    assert ("autofocus" in response.text) is focused
+
+
 # ── concrete client transport (lithos_search) ──────────────────────────
 
 

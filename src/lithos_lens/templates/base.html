@@ -23,6 +23,9 @@
         <a class="{{ 'active' if active_view == 'graph' else '' }}"{% if active_view == 'graph' %} aria-current="page"{% endif %} href="/tasks/graph">Graph</a>
         <a class="{{ 'active' if active_view == 'knowledge' else '' }}"{% if active_view == 'knowledge' %} aria-current="page"{% endif %} href="/knowledge">Knowledge</a>
         <a aria-disabled="true" href="#">Settings</a>
+        {# A block so a page whose own search is this one can drop it: the
+           knowledge landing renders a single search form (§5.7). #}
+        {% block nav_search %}
         <form class="nav-search" method="get" action="/knowledge" role="search">
           <input
             type="search"
@@ -31,6 +34,7 @@
             aria-label="Search knowledge"
           >
         </form>
+        {% endblock %}
       </nav>
     </header>
     <main class="shell-main">

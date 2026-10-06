@@ -1260,6 +1260,13 @@ K1 replaced the minimal note path with a browsable knowledge surface.
 
 `GET /knowledge` is the landing page:
 
+- **one search form**: the page's own `form.knowledge-search` (input, button,
+  and the active `tag` / `namespace` as hidden inputs) is the landing's only
+  `role="search"` form — the landing overrides base.html's `nav_search` block,
+  so the header's nav search box, which GETs the same `/knowledge?q=` without
+  the filters, is not rendered here. Every other page (the note page, the
+  resolver's pages, the task pages) keeps the nav box. With an empty `q` the
+  landing's input is `autofocus`; with a query it is not
 - **hybrid search** (`?q=`) renders result cards — title, path, escaped
   snippet, updated date — from `lithos_search` (`knowledge.search_limit`).
   A snippet drops a leading `# <title>` line that repeats the card's title
