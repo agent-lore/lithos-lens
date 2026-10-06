@@ -41,7 +41,12 @@ from lithos_lens.knowledge_metadata import (
 )
 from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.knowledge_resolver import ResolveOutcome, resolve_wiki_link
-from lithos_lens.knowledge_tags import TagBrowse, build_tag_browse, tag_count
+from lithos_lens.knowledge_tags import (
+    TagBrowse,
+    build_tag_browse,
+    tag_count,
+    tag_label,
+)
 from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
 from lithos_lens.request_filters import (
     knowledge_landing_url,
@@ -81,13 +86,24 @@ def note_back_link(next_url: str | None) -> NoteBackLink:
     parts = urlsplit(href)
     if parts.path != KNOWLEDGE_PATH:
         return NoteBackLink(href, "Back")
-    params = dict(parse_qsl(parts.query))
+    # Blank values kept: ``tag=`` is the empty tag, not "no tag" (see
+    # `filter_tag_label`).
+    params = dict(parse_qsl(parts.query, keep_blank_values=True))
     if params.get("q", "").strip():
         return NoteBackLink(href, "Back to search results")
-    tag = params.get("tag", "").strip()
-    if tag:
-        return NoteBackLink(href, f"Back to notes tagged {format_tag(tag)}")
+    if "tag" in params:
+        return NoteBackLink(
+            href, f"Back to notes tagged {filter_tag_label(params['tag'])}"
+        )
     return NoteBackLink(href, "Back to knowledge")
+
+
+def filter_tag_label(tag: str) -> str:
+    """The active tag as the landing names it: ``key: value``, as everywhere,
+    unless that would hide which tag it is — the empty tag and a padded one
+    take :func:`knowledge_tags.tag_label`'s spelling instead."""
+    label = tag_label(tag)
+    return format_tag(tag) if label == tag else label
 
 
 async def active_tag_count(client: LithosClientProtocol, tag: str) -> int | None:
@@ -135,6 +151,8 @@ def register_knowledge_routes(
     templates.env.globals["knowledge_note_url"] = knowledge_note_url
     templates.env.globals["knowledge_landing_url"] = knowledge_landing_url
     templates.env.globals["knowledge_tags_url"] = knowledge_tags_url
+    templates.env.filters["tag_label"] = tag_label
+    templates.env.filters["filter_tag_label"] = filter_tag_label
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
@@ -154,7 +172,11 @@ def register_knowledge_routes(
         ``lithos_read`` each — see ``load_list_chips``).
         """
         query = request.query_params.get("q", "").strip()
-        tag = request.query_params.get("tag", "").strip()
+        # Verbatim, and None only when absent: Lithos keeps tag names as given
+        # ("" and surrounding whitespace included) and matches them exactly,
+        # so a trimmed or dropped value would select a different tag than the
+        # link that sent it (a /knowledge/tags row, a note chip).
+        tag = request.query_params.get("tag")
         namespace = normalize_namespace(request.query_params.get("namespace", ""))
         section = request.query_params.get("section", "").strip()
         if query or section not in SECTIONS:
@@ -174,7 +196,7 @@ def register_knowledge_routes(
                 if query:
                     search_results = await state.lithos_client.search_notes(
                         query,
-                        tags=[tag] if tag else None,
+                        tags=[tag] if tag is not None else None,
                         path_prefix=namespace_path_prefix(namespace) or None,
                         limit=knowledge_config.search_limit,
                     )
@@ -188,7 +210,7 @@ def register_knowledge_routes(
                     # runaway guard). The namespace filter is applied here, on
                     # path, so the filter row still counts every namespace.
                     rows = await state.lithos_client.recent_notes(
-                        tags=[tag] if tag else None
+                        tags=[tag] if tag is not None else None
                     )
                     browse = build_recent_landing(
                         rows,
@@ -202,7 +224,7 @@ def register_knowledge_routes(
                 mode = "error"
                 error = "Knowledge search is currently unavailable."
         tag_notes = None
-        if tag and mode != "offline":
+        if tag is not None and mode != "offline":
             tag_notes = await active_tag_count(state.lithos_client, tag)
         if search_results is not None:
             rendered_ids = [row.id for row in search_results]
@@ -225,7 +247,7 @@ def register_knowledge_routes(
         # is bounded there by `MAX_LOGGED_VALUE_CHARS` (telemetry.py).
         span.set_attribute("lens.mode", mode)
         span.set_attribute("lens.result_count", len(rendered_ids))
-        span.set_attribute("lens.has_tag", bool(tag))
+        span.set_attribute("lens.has_tag", tag is not None)
         span.set_attribute("lens.has_namespace", bool(namespace))
         # lithos_read calls spent on the rows' chips: the landing's backend
         # cost beyond its one list call, bounded by list_chip_fanout_cap.
@@ -267,7 +289,9 @@ def register_knowledge_routes(
         banner stands in for the list.
         """
         query = request.query_params.get("q", "").strip()
-        prefix = request.query_params.get("prefix", "").strip()
+        # Verbatim like the landing's tag: a family is read off stored names,
+        # so one with surrounding whitespace is matched as such.
+        prefix = request.query_params.get("prefix", "")
         snapshot = await state.refresh_health()
         browse: TagBrowse | None = None
         error = ""

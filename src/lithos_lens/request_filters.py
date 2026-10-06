@@ -592,23 +592,29 @@ def note_url(knowledge_id: str, task_id: str = "") -> str:
 
 
 def knowledge_landing_url(
-    query: str = "", tag: str = "", *, namespace: str = "", section: str = ""
+    query: str = "",
+    tag: str | None = None,
+    *,
+    namespace: str = "",
+    section: str = "",
 ) -> str:
     """The ``/knowledge`` landing as rendered: its search and filters, if any.
 
     The return address the landing hands to every note it links (see
     :func:`knowledge_note_url`), so a back link lands on the same results; and
-    the href of each namespace-row entry and section heading (§7.1).
+    the href of each namespace-row entry and section heading (§7.1). ``tag``
+    is ``None`` for no tag filter and is otherwise carried verbatim — ``""``
+    is the empty tag, which Lithos keeps like any other.
     """
     params = [
         (key, value)
-        for key, value in (
-            ("q", query),
-            ("tag", tag),
-            ("namespace", namespace),
-            ("section", section),
+        for key, value, present in (
+            ("q", query, bool(query)),
+            ("tag", tag or "", tag is not None),
+            ("namespace", namespace, bool(namespace)),
+            ("section", section, bool(section)),
         )
-        if value
+        if present
     ]
     return f"/knowledge?{urlencode(params)}" if params else "/knowledge"
 

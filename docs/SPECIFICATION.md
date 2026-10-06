@@ -1315,13 +1315,22 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   ("project: influx (12 notes)"): `lithos_tags(prefix=<tag>)`, read back by
   the EXACT key (the prefix answer also carries longer tags; an absent key is
   0). A failed count read drops only the count
+- `?tag=` is taken **verbatim**, and only its absence means "no tag filter":
+  Lithos stores tag names as given — `""` and surrounding whitespace included —
+  and matches them exactly, so `?tag=` is the empty tag and `?tag=%20x%20` is
+  ` x `, not `x`. The value reaches the list/search `tags` argument, the count,
+  the hidden search input, every link the landing builds and the note page's
+  back link unchanged. The "Filtered by" line names the empty tag "(empty
+  tag)" and quotes a padded one (`“ x ”`), so neither passes for another
 
 `GET /knowledge/tags` is the tag browse page (`knowledge_tags`):
 
 - **every tag with its note count**, from ONE `lithos_tags` call with no
-  arguments (2,057 tags on 2026-10-05), most notes first, ties by name. Each
-  tag links to `/knowledge?tag=<tag>` (url-encoded), and the line above the
-  list reads "M tags, most notes first" — "N of M" when filtered
+  arguments (2,057 tags on 2026-10-05), most notes first, ties by name —
+  every string key, kept verbatim (the empty tag reads "(empty tag)", a
+  padded one is quoted). Each tag links to `/knowledge?tag=<tag>`
+  (url-encoded), and the line above the list reads "M tags, most notes
+  first" — "N of M" when filtered
 - **`?q=`** narrows the list to tags containing the substring
   (case-insensitive), from a GET form; **`?prefix=`** to tags starting with a
   family (case-insensitive, as `lithos_tags`'s own `prefix`). Both apply
@@ -1329,7 +1338,10 @@ K1 replaced the minimal note path with a browsable knowledge surface.
 - the **family row** ("all", then up to 12 `key:` families, most tags first,
   the active one `aria-current`) is derived from the tags present — a family
   is the text before a tag's first `:` plus the colon, never a fixed list —
-  and counts every tag, whichever filter is active; each entry keeps `q`
+  and counts every tag, whichever filter is active; each entry keeps `q`.
+  Families differing only in case are one entry (the filter matching all of
+  them), counted together and spelled as most of its tags spell it, ties by
+  name; exactly one entry is current
 - the list is cut to `knowledge.tags_page_limit` (default 500) with "N more —
   narrow the filter" under it
 - with Lithos offline or degraded, or on a failed `lithos_tags` read, the

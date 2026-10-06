@@ -39,7 +39,7 @@
       <nav class="knowledge-namespaces" aria-label="Tag family filter">
         <a href="{{ knowledge_tags_url(query) }}"{% if not prefix %} aria-current="true"{% endif %}>all</a>
         {% for family in browse.families %}
-          <a href="{{ knowledge_tags_url(query, family.prefix) }}"{% if family.prefix | lower == prefix | lower %} aria-current="true"{% endif %}>{{ family.prefix }} <span class="knowledge-namespace-count">{{ family.count }}</span></a>
+          <a href="{{ knowledge_tags_url(query, family.prefix) }}"{% if family == browse.active_family %} aria-current="true"{% endif %}>{{ family.prefix | tag_label }} <span class="knowledge-namespace-count">{{ family.count }}</span></a>
         {% endfor %}
       </nav>
     {% endif %}
@@ -56,7 +56,7 @@
         <ul class="knowledge-results">
           {% for row in browse.tags %}
             <li>
-              <a href="{{ knowledge_tag_url(row.tag) }}">{{ row.tag }}</a>
+              <a href="{{ knowledge_tag_url(row.tag) }}">{{ row.tag | tag_label }}</a>
               <span class="knowledge-namespace-count">{{ row.count }}</span>
             </li>
           {% endfor %}

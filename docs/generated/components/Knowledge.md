@@ -18,7 +18,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 | `lithos_lens.knowledge_search` | XS | 1 | 1 |
-| `lithos_lens.knowledge_tags` | S | 3 | 5 |
+| `lithos_lens.knowledge_tags` | S | 3 | 6 |
 
 ## Public API
 
@@ -84,6 +84,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `TagBrowse` — The tag page as rendered: the capped list and what it was cut from.
 - def `normalize_tag_counts` — ``lithos_tags``'s ``tags`` map as rows, most notes first, ties by name.
 - def `tag_count` — The count of exactly ``tag`` among ``rows`` (``None`` when absent).
+- def `tag_label` — How a tag reads on a page, never hiding which tag it is.
 - def `tag_family` — A tag's family, ``key:`` — or ``""`` when it has no key before a colon.
 - def `tag_families` — The families present in ``tags``, most tags first (ties by name).
 - def `build_tag_browse` — Filter the ranked ``rows`` by ``prefix`` and ``query``, then cut to ``limit``.

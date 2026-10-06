@@ -57,7 +57,7 @@
         aria-label="Search knowledge"
         {%- if not query %} autofocus{% endif %}
       >
-      {% if tag %}
+      {% if tag is not none %}
         {# An active tag filter survives a search submitted from this page —
            without this, searching from /knowledge?tag=… silently drops the
            tag (PR #39 review). #}
@@ -69,13 +69,14 @@
       <button type="submit">Search</button>
     </form>
 
-    {% if tag or namespace %}
+    {# `tag is not none`, never truthiness: "" is the empty tag, a filter. #}
+    {% if tag is not none or namespace %}
       <p class="knowledge-active-filter">
         Filtered by
-        {%- if tag %} {{ tag | format_tag }}
+        {%- if tag is not none %} {{ tag | filter_tag_label }}
           {%- if tag_notes is not none %} <span class="knowledge-namespace-count">({{ tag_notes }} note{{ "" if tag_notes == 1 else "s" }})</span>{% endif %}
         {%- endif %}
-        {%- if tag and namespace %} and{% endif %}
+        {%- if tag is not none and namespace %} and{% endif %}
         {%- if namespace %} namespace {{ namespace }}{% endif %}
         <a href="{{ knowledge_landing_url(query, section=section) }}">clear filter</a>
       </p>

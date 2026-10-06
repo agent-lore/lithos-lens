@@ -25,6 +25,7 @@ from lithos_lens.knowledge_tags import (
     normalize_tag_counts,
     tag_families,
     tag_family,
+    tag_label,
 )
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.tasks import NoteRecord
@@ -115,20 +116,29 @@ def _families(html: str) -> list[tuple[str, str | None, bool]]:
 # ── the view model (pure) ───────────────────────────────────────────────
 
 
-def test_normalize_ranks_by_count_then_name_and_skips_junk() -> None:
+def test_normalize_ranks_by_count_then_name_and_skips_non_counts() -> None:
     rows = normalize_tag_counts(
         {
             "tags": {
                 "b": 2,
                 "a": 2,
                 "c": 5,
-                "": 9,  # no name
+                # Lithos stores tag names verbatim (no trim, no non-empty
+                # check at d2c49bb): these are tags, kept as sent.
+                "": 9,
+                " a ": 1,
                 "flag": True,  # a bool is not a count
                 "text": "3",
             }
         }
     )
-    assert rows == (TagCount("c", 5), TagCount("a", 2), TagCount("b", 2))
+    assert rows == (
+        TagCount("", 9),
+        TagCount("c", 5),
+        TagCount("a", 2),
+        TagCount("b", 2),
+        TagCount(" a ", 1),
+    )
     assert normalize_tag_counts({"tags": ["a"]}) == ()
     assert normalize_tag_counts({}) == ()
 
@@ -149,6 +159,27 @@ def test_tag_family_is_the_key_before_the_first_colon(tag: str, family: str) -> 
 def test_tag_families_are_derived_from_the_tags_present() -> None:
     families = tag_families(["zeta:1", "alpha:1", "alpha:2", "plain", "zeta:2"])
     assert families == (TagFamily("alpha:", 2), TagFamily("zeta:", 2))
+
+
+def test_families_differing_only_in_case_are_one_family() -> None:
+    """The prefix filter is case-insensitive, so ``Project:`` and ``project:``
+    select the same tags: one entry, counting both, in the spelling most of
+    its tags use (ties by name)."""
+    families = tag_families(["Project:a", "project:b", "project:c", "AREA:x", "area:y"])
+    assert families == (TagFamily("project:", 3), TagFamily("AREA:", 2))
+
+
+@pytest.mark.parametrize(
+    ("tag", "label"),
+    [
+        ("project:influx", "project:influx"),
+        ("", "(empty tag)"),
+        (" project:influx ", "\u201c project:influx \u201d"),
+        ("   ", "\u201c   \u201d"),
+    ],
+)
+def test_tag_label_never_hides_which_tag_it_is(tag: str, label: str) -> None:
+    assert tag_label(tag) == label
 
 
 def test_build_tag_browse_filters_then_caps_and_facets_over_everything() -> None:
@@ -367,3 +398,178 @@ def test_tags_page_limit_rejects_out_of_range(
 
     with pytest.raises(ConfigError, match="tags_page_limit"):
         load_config(lithos_lens_config_env)
+
+
+# ── tag identity: names Lithos keeps verbatim ───────────────────────────
+
+# Lithos stores tag strings as given — "" and surrounding whitespace included —
+# and its tag index matches them exactly, so each of these is its own tag.
+_ODD_CORPUS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("plain", ("project:influx",)),
+    ("empty", ("",)),
+    ("padded", (" project:influx ",)),
+    ("blank", ("   ",)),
+)
+
+
+def _odd_fake() -> FakeLithosClient:
+    notes = {
+        note_id: NoteRecord(
+            id=note_id,
+            title=f"Title {note_id}",
+            content="body",
+            tags=tags,
+            metadata={"updated_at": "2026-08-01T10:00:00+00:00"},
+        )
+        for note_id, tags in _ODD_CORPUS
+    }
+    paths = {f"notes/{note_id}.md": note_id for note_id, _ in _ODD_CORPUS}
+    return FakeLithosClient(dataset=FakeLithosDataset(notes=notes, note_paths=paths))
+
+
+def test_every_tag_name_is_listed_with_a_visible_label(
+    lithos_lens_config_env: Path,
+) -> None:
+    html = _get(lithos_lens_config_env, "/knowledge/tags", _odd_fake())
+
+    assert sorted(_tag_rows(html)) == sorted(
+        [
+            ("/knowledge?tag=project%3Ainflux", "project:influx", 1),
+            ("/knowledge?tag=", "(empty tag)", 1),
+            ("/knowledge?tag=+project%3Ainflux+", "\u201c project:influx \u201d", 1),
+            ("/knowledge?tag=+++", "\u201c   \u201d", 1),
+        ]
+    )
+    assert "4 tags, most notes first" in html
+
+
+@pytest.mark.parametrize(
+    ("tag", "note_id", "label"),
+    [
+        ("project:influx", "plain", "project: influx"),
+        ("", "empty", "(empty tag)"),
+        (" project:influx ", "padded", "\u201c project:influx \u201d"),
+        ("   ", "blank", "\u201c   \u201d"),
+    ],
+)
+def test_a_tag_link_selects_exactly_that_tag_on_the_landing(
+    lithos_lens_config_env: Path, tag: str, note_id: str, label: str
+) -> None:
+    """The browse row's link must select the tag it names: no trimming between
+    the link and the filter, the count, or the links the landing builds."""
+    fake = _odd_fake()
+    with _client(lithos_lens_config_env, fake) as client:
+        tags_html = client.get("/knowledge/tags").text
+        href = next(h for h, _, _ in _tag_rows(tags_html) if h == _tag_href(tag))
+        html = client.get(href).text
+
+    assert re.findall(r'href="/note/([^?"]+)\?next=', html) == [note_id]
+    start = html.index('<p class="knowledge-active-filter">')
+    filtered_by = html[start : html.index("</p>", start)]
+    assert f"Filtered by {label}" in filtered_by
+    assert "(1 note)" in filtered_by
+    assert ("lithos_tags", {"prefix": tag}) in fake.tool_calls
+    # A search from here keeps the same tag, verbatim.
+    assert f'<input type="hidden" name="tag" value="{tag}">' in html
+
+
+def _tag_href(tag: str) -> str:
+    from urllib.parse import urlencode
+
+    return f"/knowledge?{urlencode({'tag': tag})}"
+
+
+def test_no_tag_param_is_no_filter(lithos_lens_config_env: Path) -> None:
+    fake = _odd_fake()
+    html = _get(lithos_lens_config_env, "/knowledge", fake)
+
+    assert "knowledge-active-filter" not in html
+    assert '<input type="hidden" name="tag"' not in html
+    assert not [call for call in fake.tool_calls if call[0] == "lithos_tags"]
+    assert sorted(re.findall(r'href="/note/([^?"]+)\?next=', html)) == sorted(
+        note_id for note_id, _ in _ODD_CORPUS
+    )
+
+
+def test_a_note_opened_under_the_empty_tag_goes_back_to_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _client(lithos_lens_config_env, _odd_fake()) as client:
+        landing = client.get("/knowledge?tag=").text
+        href = re.findall(r'href="(/note/empty\?next=[^"]+)"', landing)[0]
+        note = client.get(href.replace("&amp;", "&")).text
+
+    assert 'href="/knowledge?tag="' in note
+    assert "Back to notes tagged (empty tag)" in note
+
+
+# ── the operator's own controls ─────────────────────────────────────────
+
+
+def test_the_filter_form_submits_by_get_and_keeps_the_family(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Drive the RENDERED form: its method, action and named controls, as a
+    browser would submit them, not a URL the test built."""
+    with _client(lithos_lens_config_env, _corpus_fake()) as client:
+        page = client.get("/knowledge/tags?prefix=project%3A").text
+        start = page.index('<form class="knowledge-search"')
+        form = page[start : page.index("</form>", start)]
+        opening = form[: form.index(">")]
+        assert re.search(r'method="get"', opening)
+        action = re.search(r'action="([^"]+)"', opening)
+        assert action is not None
+        controls = dict(
+            re.findall(r'<input[^>]*?name="([^"]+)"[^>]*?value="([^"]*)"', form)
+        )
+        assert set(controls) == {"q", "prefix"}
+        controls["q"] = "old"
+        submitted = client.get(action.group(1), params=controls)
+
+    assert submitted.status_code == 200
+    assert [label for _, label, _ in _tag_rows(submitted.text)] == [
+        "project:influx-old"
+    ]
+    assert ("project:", "2", True) in _families(submitted.text)
+
+
+def test_prefix_matches_the_start_of_a_tag_only(lithos_lens_config_env: Path) -> None:
+    """``source:project:influx`` is in the ``source:`` family: ``prefix=project:``
+    excludes it, while a ``q`` substring finds it."""
+    rows = normalize_tag_counts(
+        {"tags": {"project:influx": 2, "source:project:influx": 1}}
+    )
+    by_prefix = build_tag_browse(rows, query="", prefix="project:", limit=10)
+    assert [row.tag for row in by_prefix.tags] == ["project:influx"]
+    by_query = build_tag_browse(rows, query="project:", prefix="", limit=10)
+    assert [row.tag for row in by_query.tags] == [
+        "project:influx",
+        "source:project:influx",
+    ]
+
+    notes = {
+        "a": NoteRecord(id="a", title="A", content="", tags=("project:influx",)),
+        "b": NoteRecord(id="b", title="B", content="", tags=("source:project:influx",)),
+    }
+    fake = FakeLithosClient(dataset=FakeLithosDataset(notes=notes))
+    html = _get(lithos_lens_config_env, "/knowledge/tags?prefix=project%3A", fake)
+    assert [label for _, label, _ in _tag_rows(html)] == ["project:influx"]
+    html = _get(lithos_lens_config_env, "/knowledge/tags?q=project%3A", fake)
+    assert [label for _, label, _ in _tag_rows(html)] == [
+        "project:influx",
+        "source:project:influx",
+    ]
+
+
+def test_case_variant_families_are_one_entry_and_one_is_current(
+    lithos_lens_config_env: Path,
+) -> None:
+    notes = {
+        "a": NoteRecord(id="a", title="A", content="", tags=("Project:a",)),
+        "b": NoteRecord(id="b", title="B", content="", tags=("project:b", "project:c")),
+    }
+    fake = FakeLithosClient(dataset=FakeLithosDataset(notes=notes))
+    html = _get(lithos_lens_config_env, "/knowledge/tags?prefix=PROJECT%3A", fake)
+
+    assert _families(html) == [("all", None, False), ("project:", "3", True)]
+    assert len(_tag_rows(html)) == 3

@@ -18,6 +18,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+# How the empty tag reads: Lithos keeps "" as a tag like any other.
+EMPTY_TAG_LABEL = "(empty tag)"
+
 # How many families the facet row offers, most tags first. A row, not a
 # picker: past this the operator types ``?prefix=`` or narrows with ``?q=``.
 TAG_FAMILY_FACET_LIMIT = 12
@@ -45,12 +48,14 @@ class TagBrowse:
 
     ``matched`` counts every tag passing the filters, ``total`` every tag in
     the corpus; ``hidden`` is what the cap left off ("N more").
+    ``active_family`` is the row entry the ``prefix`` filter selects, if any.
     """
 
     tags: tuple[TagCount, ...] = ()
     matched: int = 0
     total: int = 0
     families: tuple[TagFamily, ...] = ()
+    active_family: TagFamily | None = None
 
     @property
     def hidden(self) -> int:
@@ -60,8 +65,10 @@ class TagBrowse:
 def normalize_tag_counts(payload: dict[str, Any]) -> tuple[TagCount, ...]:
     """``lithos_tags``'s ``tags`` map as rows, most notes first, ties by name.
 
-    A key that is not a non-empty string, or a count that is not an int (a
-    bool is not a count), is skipped rather than guessed at.
+    Every string key is a tag, kept verbatim: Lithos stores tag names as given
+    (no trim, no non-empty check) and its index matches them exactly, so ``""``
+    and ``" x "`` are tags of their own. A count that is not an int (a bool is
+    not a count) is skipped rather than guessed at.
     """
     raw = payload.get("tags")
     if not isinstance(raw, dict):
@@ -70,7 +77,6 @@ def normalize_tag_counts(payload: dict[str, Any]) -> tuple[TagCount, ...]:
         TagCount(tag, count)
         for tag, count in raw.items()
         if isinstance(tag, str)
-        and tag
         and isinstance(count, int)
         and not isinstance(count, bool)
     ]
@@ -82,6 +88,20 @@ def tag_count(rows: Iterable[TagCount], tag: str) -> int | None:
     return next((row.count for row in rows if row.tag == tag), None)
 
 
+def tag_label(tag: str) -> str:
+    """How a tag reads on a page, never hiding which tag it is.
+
+    HTML shows nothing for ``""`` and collapses surrounding whitespace, yet
+    each is a distinct tag upstream: the empty tag reads "(empty tag)", and a
+    padded one is quoted so it cannot pass for its trimmed twin.
+    """
+    if not tag:
+        return EMPTY_TAG_LABEL
+    if tag != tag.strip():
+        return f"\u201c{tag}\u201d"
+    return tag
+
+
 def tag_family(tag: str) -> str:
     """A tag's family, ``key:`` — or ``""`` when it has no key before a colon."""
     head, sep, _ = tag.partition(":")
@@ -91,9 +111,22 @@ def tag_family(tag: str) -> str:
 def tag_families(
     tags: Iterable[str], *, limit: int = TAG_FAMILY_FACET_LIMIT
 ) -> tuple[TagFamily, ...]:
-    """The families present in ``tags``, most tags first (ties by name)."""
-    counts = Counter(family for family in map(tag_family, tags) if family)
-    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    """The families present in ``tags``, most tags first (ties by name).
+
+    Families differing only in case are ONE entry, because the ``prefix``
+    filter matches case-insensitively (as ``lithos_tags``'s own does) and so
+    selects all of them: its count is theirs together, and it is shown in the
+    spelling most of its tags use, ties by name.
+    """
+    spellings: dict[str, Counter[str]] = {}
+    for family in map(tag_family, tags):
+        if family:
+            spellings.setdefault(family.casefold(), Counter())[family] += 1
+    merged = [
+        (min(seen.items(), key=lambda item: (-item[1], item[0]))[0], seen.total())
+        for seen in spellings.values()
+    ]
+    ranked = sorted(merged, key=lambda item: (-item[1], item[0]))
     return tuple(TagFamily(prefix, count) for prefix, count in ranked[:limit])
 
 
@@ -115,9 +148,13 @@ def build_tag_browse(
         for row in all_rows
         if row.tag.casefold().startswith(head) and needle in row.tag.casefold()
     ]
+    families = tag_families(row.tag for row in all_rows)
     return TagBrowse(
         tags=tuple(matched[:limit]),
         matched=len(matched),
         total=len(all_rows),
-        families=tag_families(row.tag for row in all_rows),
+        families=families,
+        active_family=next(
+            (f for f in families if prefix and f.prefix.casefold() == head), None
+        ),
     )

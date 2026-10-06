@@ -16,7 +16,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_routes` | M | 1 | 3 |
+| `lithos_lens.knowledge_routes` | M | 1 | 4 |
 | `lithos_lens.request_filters` | L | 0 | 23 |
 | `lithos_lens.web` | L | 0 | 1 |
 | `lithos_lens.write_funnel` | L | 5 | 1 |
@@ -54,6 +54,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 ### `lithos_lens.knowledge_routes`
 - class `NoteBackLink` — Where a note page's back link goes, and what it calls that place.
 - def `note_back_link` — The note page's back link when it was not opened from a task.
+- def `filter_tag_label` — The active tag as the landing names it: ``key: value``, as everywhere, unless that would hide which tag it is — the empty tag and a padded one take :func:`knowledge_tags.tag_label`'s spelling instead.
 - def `active_tag_count` — How many notes carry ``tag``, for the landing's "Filtered by" line.
 - def `register_knowledge_routes` — Attach the knowledge landing, wiki-link resolver and note routes.
 

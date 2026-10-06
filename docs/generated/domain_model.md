@@ -151,6 +151,7 @@ classDiagram
   RelatedSection "1" --> "0..*" RelatedItem : items
   ResolveOutcome "1" --> "0..*" ResolveCandidate : candidates
   TagBrowse "1" --> "0..*" TagCount : tags
+  TagBrowse "1" --> "0..1" TagFamily : active_family
   TagBrowse "1" --> "0..*" TagFamily : families
 ```
 
