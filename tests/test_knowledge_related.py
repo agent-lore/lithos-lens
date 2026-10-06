@@ -701,6 +701,38 @@ def test_summary_line_for_a_note_with_no_relations_says_none(
     assert '<aside class="related-panel" id="related"' in html
 
 
+def test_summary_line_costs_no_lithos_calls_beyond_the_panel(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The summary line is built from the panel already loaded: one full read
+    of the note, one ``lithos_related``, and one ``max_length=1`` read per
+    untitled edge endpoint — nothing more, and no second read of the note."""
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    neighborhood = RelatedNeighborhood(
+        links=(RelatedRef(id="out-1", title="Out"),),
+        backlinks=(RelatedRef(id="in-1", title="In"),),
+        sources=(RelatedRef(id="src-1", title="Source"),),
+        unresolved=("drafts/a.md",),
+        edges=(
+            RelatedRef(id="edge-1", edge_type="supports"),
+            RelatedRef(id="edge-2", edge_type="contradicts"),
+        ),
+    )
+    titles = {"edge-1": "Edge 1", "edge-2": "Edge 2"}
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=neighborhood, titles=titles, note=note
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    assert len(_summary_counts(html)) == 5
+    assert fake.related_calls == ["root"]
+    assert sorted(fake.read_calls, key=str) == sorted(
+        [("root", None), ("edge-1", 1), ("edge-2", 1)], key=str
+    )
+
+
 def test_note_layout_keeps_article_before_aside(
     lithos_lens_config_env: Path,
 ) -> None:

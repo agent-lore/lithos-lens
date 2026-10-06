@@ -170,6 +170,11 @@ async function compactChipRowsAreWhole(page: Page) {
  * the chips is on the first screen. The page is scrolled back to the top
  * before returning so the capture starts where a reader does.
  */
+// The first width at which the note page's related panel is a sidebar: the
+// complement of the stylesheet's `max-width: 700px` block, where the task
+// pages' two-column rows collapse (§5.7).
+const SIDEBAR_MIN_WIDTH = 701;
+
 async function relatedPanelPlacement(page: Page) {
   const width = page.viewportSize()!.width;
   const placement = await page.evaluate(() => {
@@ -193,7 +198,7 @@ async function relatedPanelPlacement(page: Page) {
   });
   expect(placement.long).toBe(true);
   expect(placement.summaryOnFirstScreen).toBe(true);
-  if (width >= 701) {
+  if (width >= SIDEBAR_MIN_WIDTH) {
     expect(placement.beside).toBe(true);
     expect(placement.stuck).toBe(true);
   } else {
@@ -938,3 +943,36 @@ for (const { slug, url, ready } of PAGES) {
     });
   }
 }
+
+/**
+ * The sidebar breakpoint IS the task pages' two-column breakpoint, checked on
+ * both sides of the boundary rather than only at the capture widths (which
+ * would pass with the threshold anywhere in 321–768px). At 700px a task row
+ * has collapsed to one column and the related panel follows the note body;
+ * at 701px the row has two columns and the panel is a sticky sidebar.
+ */
+test("the related sidebar starts where the task rows' two columns do", async ({
+  page,
+}) => {
+  const rowColumns = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".task-row")!)
+          .gridTemplateColumns.split(" ").length,
+    );
+  for (const [width, columns] of [
+    [SIDEBAR_MIN_WIDTH - 1, 1],
+    [SIDEBAR_MIN_WIDTH, 2],
+  ] as const) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/tasks?since=2026-08-01");
+    await expect(page.locator(".task-row").first()).toBeVisible();
+    expect(await rowColumns()).toBe(columns);
+
+    await page.goto("/note/note-influx-capacity");
+    await expect(
+      page.getByRole("complementary", { name: "Related notes" }),
+    ).toBeVisible();
+    await relatedPanelPlacement(page);
+  }
+});
