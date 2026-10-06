@@ -600,6 +600,62 @@ def test_note_page_renders_markdown_body_as_html(
     assert 'href="javascript:' not in response.text
 
 
+# --- A leading body H1 that repeats the note title is collapsed -------------
+
+
+@pytest.mark.parametrize(
+    ("body", "title", "h1s", "kept"),
+    [
+        # Matching H1 as the first block: omitted, the rest of the body stays.
+        ("# Influx plan\n\nBody text.", "Influx plan", 0, "Body text."),
+        # Trimming + whitespace collapsing on both sides; setext H1 too.
+        ("#   Influx \t plan  \n\nBody.", "  Influx  plan ", 0, "Body."),
+        ("Influx plan\n===========\n\nBody.", "Influx plan", 0, "Body."),
+        ("# Influx plan #\n\nBody.", "Influx plan", 0, "Body."),
+        # Case-sensitive: a differently-cased H1 is a different heading.
+        ("# influx plan\n\nBody.", "Influx plan", 1, "influx plan"),
+        # A non-matching H1 is kept.
+        ("# Something else\n\nBody.", "Influx plan", 1, "Something else"),
+        # An H2 is never collapsed, even when its text matches.
+        ("## Influx plan\n\nBody.", "Influx plan", 0, "<h2>Influx plan</h2>"),
+        # An H1-shaped line inside a code fence is code, not a heading.
+        ("```\n# Influx plan\n```", "Influx plan", 0, "# Influx plan"),
+        # A matching H1 that is not the first block is kept.
+        ("Intro.\n\n# Influx plan", "Influx plan", 1, "Influx plan"),
+        # Only the first block: a second matching H1 right after is kept.
+        ("# Influx plan\n\n# Influx plan", "Influx plan", 1, "Influx plan"),
+        # No title to compare against: nothing is collapsed.
+        ("# Influx plan", "", 1, "Influx plan"),
+    ],
+)
+def test_render_markdown_collapses_a_leading_h1_repeating_the_title(
+    body: str, title: str, h1s: int, kept: str
+) -> None:
+    html = render_markdown(body, "n", title=title)
+    assert html.count("<h1>") == h1s
+    assert kept in html
+
+
+def test_note_page_collapses_body_h1_that_repeats_the_title(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["dup-note"] = NoteRecord(
+        id="dup-note",
+        title="Influx migration plan",
+        content="# Influx migration plan\n\nCut over the ingest path first.",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/dup-note")
+
+    assert response.status_code == 200
+    # The header's title is the one h1; the body's repeat of it is gone.
+    assert response.text.count("<h1") == 1
+    assert "<h1>Influx migration plan</h1>" in response.text
+    assert "Cut over the ingest path first." in response.text
+
+
 # --- K1 slice 7: nav enablement + degraded states ---------------------------
 
 

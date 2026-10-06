@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import ConfigError, LithosConfig, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.knowledge import SearchResult, normalize_search_result
+from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.lithos_client import LithosClient
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
@@ -58,6 +58,65 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
 
     assert row.updated == "2026-08-02"
     assert row.score is None
+
+
+@pytest.mark.parametrize(
+    ("snippet", "title", "expected"),
+    [
+        # A leading `# <title>` line is dropped (with the blank line after it).
+        (
+            "# Influx plan\n\n## Cutover\nPhase one",
+            "Influx plan",
+            "## Cutover\nPhase one",
+        ),
+        # Trimming + whitespace collapsing; an ATX closing sequence is ignored.
+        ("  #  Influx \t plan  \nBody", " Influx  plan", "Body"),
+        ("# Influx plan ##\nBody", "Influx plan", "Body"),
+        # Case-sensitive, like the note page.
+        ("# influx plan\nBody", "Influx plan", "# influx plan\nBody"),
+        # A non-matching H1 is kept.
+        ("# Something else\nBody", "Influx plan", "# Something else\nBody"),
+        # An H2 (or `#` with no space, which is not a heading) is kept.
+        ("## Influx plan\nBody", "Influx plan", "## Influx plan\nBody"),
+        ("#Influx plan\nBody", "Influx plan", "#Influx plan\nBody"),
+        # An H1-shaped line inside a code fence is not the first line.
+        ("```\n# Influx plan\n```", "Influx plan", "```\n# Influx plan\n```"),
+        # A matching H1 that is not the first line is kept.
+        ("Intro\n# Influx plan", "Influx plan", "Intro\n# Influx plan"),
+        # Only the first line: a second matching line right after is kept.
+        ("# Influx plan\n# Influx plan\nBody", "Influx plan", "# Influx plan\nBody"),
+        # The snippet is just the title line: nothing is left to show.
+        ("# Influx plan", "Influx plan", ""),
+        # No title to compare against: the snippet is untouched.
+        ("# Influx plan\nBody", "", "# Influx plan\nBody"),
+    ],
+)
+def test_normalize_search_result_drops_a_leading_title_line(
+    snippet: str, title: str, expected: str
+) -> None:
+    row = normalize_search_result({"id": "n", "title": title, "snippet": snippet})
+    assert row.snippet == expected
+
+
+def test_knowledge_search_card_omits_the_title_line_from_its_snippet(
+    lithos_lens_config_env: Path,
+) -> None:
+    notes = {
+        "plan": NoteRecord(
+            id="plan",
+            title="Influx migration plan",
+            content="# Influx migration plan\n\nCut over the ingest path first.",
+        )
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=ingest")
+
+    assert response.status_code == 200
+    assert "Cut over the ingest path first." in response.text
+    # The card title still shows; the snippet no longer repeats it.
+    assert "# Influx migration plan" not in response.text
 
 
 def test_search_result_label_falls_back_to_path_then_id() -> None:

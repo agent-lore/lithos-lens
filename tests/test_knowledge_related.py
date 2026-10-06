@@ -20,10 +20,10 @@ from lithos_lens.knowledge import (
     RELATED_RENDER_CAP,
     RelatedNeighborhood,
     RelatedRef,
-    SearchResult,
     load_related_panel,
     normalize_related,
 )
+from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import LithosClient, LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (

@@ -8,7 +8,7 @@ call turned into four scannable sections (outgoing links, back-links,
 provenance, typed edges) with link/edge endpoints shown by title rather than
 bare id. The frontmatter-driven metadata chips + lede (K1-S3) live in the
 sibling ``knowledge_metadata`` module to keep this one under the god-module
-ceiling; later slices add the search view models.
+ceiling, and the search-result view model (K1-S6) lives in ``knowledge_search``.
 
 It also owns the SAFE MARKDOWN itself, which is not only a note concern: a task
 description is agent-authored markdown too (§5.3), so the description renderer
@@ -89,7 +89,7 @@ MARKDOWN = (
 MARKDOWN.validateLink = _validate_link
 
 
-def render_markdown(text: str, from_id: str = "") -> str:
+def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
     """Render a note's markdown body to safe HTML.
 
     Raw HTML in ``text`` is escaped and link schemes outside the §6.2
@@ -101,11 +101,15 @@ def render_markdown(text: str, from_id: str = "") -> str:
     document page, so bounding render cost would be an explicit product
     decision, not a silent cap. If parsing fails for any reason the fallback is
     HTML-escaped plaintext — never raw passthrough.
+
+    ``title`` is the note's frontmatter title, which the page already shows
+    above the body: a first block that is an H1 repeating it is omitted (see
+    :func:`_collapse_title_heading`).
     """
     body = text or ""
     try:
         env: dict[str, Any] = {}
-        tokens = MARKDOWN.parse(body, env)
+        tokens = _collapse_title_heading(MARKDOWN.parse(body, env), title)
         _splice_wiki_links(tokens, from_id)
         return MARKDOWN.renderer.render(tokens, MARKDOWN.options, env)
     except Exception:
@@ -114,6 +118,35 @@ def render_markdown(text: str, from_id: str = "") -> str:
             exc_info=True,
         )
         return _escaped_plaintext(body)
+
+
+def same_title(text: str, title: str) -> bool:
+    """Whether heading ``text`` repeats ``title``.
+
+    Both sides are trimmed and their whitespace runs collapsed; the comparison
+    is case-sensitive. An empty title matches nothing.
+    """
+    wanted = " ".join(title.split())
+    return bool(wanted) and " ".join(text.split()) == wanted
+
+
+def _collapse_title_heading(tokens: list[Token], title: str) -> list[Token]:
+    """Drop a first-block H1 that repeats the note's title.
+
+    Most ingested notes open their body with their own title as an ``# H1``,
+    under the page header that already shows it. This works on the PARSED
+    stream, never a regex over the raw markdown (§6.3): an H1-shaped line in a
+    code fence is a fence token, and only the very first block is considered,
+    so a matching H1 further down — or one that differs — is kept.
+    """
+    if (
+        len(tokens) >= 3
+        and tokens[0].type == "heading_open"
+        and tokens[0].tag == "h1"
+        and same_title(tokens[1].content, title)
+    ):
+        return tokens[3:]
+    return tokens
 
 
 def _escaped_plaintext(body: str) -> str:
@@ -748,52 +781,3 @@ def _normalize_unresolved(items: Any) -> tuple[str, ...]:
     if not isinstance(items, list):
         return ()
     return tuple(item for item in items if isinstance(item, str) and item)
-
-
-# ── Search results (K1-S6) ─────────────────────────────────────────────
-#
-# ``/knowledge?q=…`` renders hybrid-search result cards from ``lithos_search``.
-# The snippet arrives as raw markdown (verified live, §7.1) and is rendered
-# ESCAPED by the template — never fed through the markdown renderer — so markup
-# in a snippet cannot break the results page.
-
-
-@dataclass(frozen=True)
-class SearchResult:
-    """One ``lithos_search`` hit rendered as a result card (§7.1)."""
-
-    id: str
-    title: str = ""
-    path: str = ""
-    snippet: str = ""
-    updated: str = ""
-    score: float | None = None
-
-    @property
-    def label(self) -> str:
-        """Human label: title, then path, falling back to the bare id."""
-        return self.title or self.path or self.id
-
-
-def normalize_search_result(raw: dict[str, Any]) -> SearchResult:
-    """Normalize one ``lithos_search`` result row into a ``SearchResult``.
-
-    ``lithos_search`` answers ``{"results": [{"id", "title", "path",
-    "snippet", "updated_at", "score", ...}]}``. ``updated`` / ``updated_at``
-    are both accepted for the timestamp (parity with
-    :func:`~lithos_lens.tasks.normalize_note_summary`).
-    """
-    raw_score = raw.get("score")
-    score = (
-        float(raw_score)
-        if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
-        else None
-    )
-    return SearchResult(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        path=str(raw.get("path") or ""),
-        snippet=str(raw.get("snippet") or ""),
-        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
-        score=score,
-    )

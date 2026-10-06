@@ -127,7 +127,7 @@
           {% endfor %}
         </div>
       {% endif %}
-      <div class="markdown-body">{{ note.content | render_markdown(note.id) | safe }}</div>
+      <div class="markdown-body">{{ note.content | render_markdown(note.id, note.title) | safe }}</div>
     </article>
 
     {% if related %}

@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **38** (184 module-level)
+- Cross-component edges: **38** (186 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -38,7 +38,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
-| Knowledge | 4 | 1331 | 997 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
+| Knowledge | 5 | 1395 | 1046 | 2 | 1 | 0.33 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
 | LithosClient | 8 | 4516 | 3610 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 88 | 62 | 1 | 4 | 0.80 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
@@ -50,7 +50,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **74**, lines: **30599**, SLOC: **23567**
+- Modules: **75**, lines: **30663**, SLOC: **23616**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -62,7 +62,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **974**, cyclomatic > 10: **50**
+- Functions: **977**, cyclomatic > 10: **50**
 
 Top 10 most complex functions:
 
@@ -90,4 +90,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **111** (110 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.95** (59806 test lines / 30599 source lines)
+- Test-to-source line ratio: **1.95** (59924 test lines / 30663 source lines)

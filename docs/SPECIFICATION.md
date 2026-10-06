@@ -1191,6 +1191,11 @@ K1 replaced the minimal note path with a browsable knowledge surface.
 
 - server-side markdown (headings, tables, code); raw HTML is escaped and
   `javascript:` hrefs are neutralized
+- the body's **first H1 collapsed when it repeats the title**: when the first
+  block of the parsed body is an H1 whose text equals the frontmatter `title`
+  (trimmed, whitespace collapsed, case-sensitive), it is omitted, since the
+  header already shows the title. A token-level rule, so an H1-shaped line in
+  a code fence, an H1 further down, or one that differs is kept
 - **wiki-links** (`[[target]]`) resolved through `/knowledge/resolve`, which
   renders a disambiguation page when a target is ambiguous and a not-found
   panel when it resolves to nothing
@@ -1212,7 +1217,9 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   resolver's own pages link back to `/knowledge` too
 
 `GET /knowledge` is the landing page: hybrid search over notes, a
-recently-updated list, and tag browse.
+recently-updated list, and tag browse. A search result's snippet drops a leading
+`# <title>` line that repeats the card's title (same comparison as the note
+page); the snippet otherwise stays escaped text, never rendered.
 
 ### 5.8 Live Updates
 

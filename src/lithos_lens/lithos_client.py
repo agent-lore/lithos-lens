@@ -21,12 +21,8 @@ from typing import Any, Literal, Protocol
 import httpx
 
 from lithos_lens.config import LithosConfig
-from lithos_lens.knowledge import (
-    RelatedNeighborhood,
-    SearchResult,
-    normalize_related,
-    normalize_search_result,
-)
+from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
+from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.lithos_writes import LithosWriteMethods, LithosWriteProtocol
 from lithos_lens.mcp_transport import (
     CALL_TIMEOUT_S,

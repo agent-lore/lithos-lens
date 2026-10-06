@@ -40,7 +40,8 @@ from lithos_lens.events import EventHub, normalize_lithos_event
 from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
 from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore, write_error
-from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
+from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -652,7 +653,8 @@ class FakeLithosClient:
         settles for a case-insensitive substring match over title and content
         so the /knowledge query path lights up offline. The snippet is a short
         window of the body around the first match (raw markdown, exactly as the
-        real tool returns it — the results page escapes it).
+        real tool returns it — the results page escapes it). Each row goes
+        through the real :func:`normalize_search_result`, as a live row does.
         """
         needle = query.strip().lower()
         paths_by_id = {
@@ -666,16 +668,18 @@ class FakeLithosClient:
             if needle and needle not in haystack:
                 continue
             results.append(
-                SearchResult(
-                    id=note.id,
-                    title=note.title,
-                    path=paths_by_id.get(note.id, ""),
-                    snippet=_snippet(note.content, needle),
-                    updated=str(
-                        note.metadata.get("updated")
-                        or note.metadata.get("updated_at")
-                        or ""
-                    ),
+                normalize_search_result(
+                    {
+                        "id": note.id,
+                        "title": note.title,
+                        "path": paths_by_id.get(note.id, ""),
+                        "snippet": _snippet(note.content, needle),
+                        "updated_at": str(
+                            note.metadata.get("updated")
+                            or note.metadata.get("updated_at")
+                            or ""
+                        ),
+                    }
                 )
             )
         return results[:limit] if limit is not None else results
