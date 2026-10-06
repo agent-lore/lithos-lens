@@ -591,13 +591,25 @@ def note_url(knowledge_id: str, task_id: str = "") -> str:
     return f"/note/{quote(knowledge_id, safe='')}{task_suffix}"
 
 
-def knowledge_landing_url(query: str = "", tag: str = "") -> str:
-    """The ``/knowledge`` landing as rendered: its search and tag filter, if any.
+def knowledge_landing_url(
+    query: str = "", tag: str = "", *, namespace: str = "", section: str = ""
+) -> str:
+    """The ``/knowledge`` landing as rendered: its search and filters, if any.
 
     The return address the landing hands to every note it links (see
-    :func:`knowledge_note_url`), so a back link lands on the same results.
+    :func:`knowledge_note_url`), so a back link lands on the same results; and
+    the href of each namespace-row entry and section heading (§7.1).
     """
-    params = [(key, value) for key, value in (("q", query), ("tag", tag)) if value]
+    params = [
+        (key, value)
+        for key, value in (
+            ("q", query),
+            ("tag", tag),
+            ("namespace", namespace),
+            ("section", section),
+        )
+        if value
+    ]
     return f"/knowledge?{urlencode(params)}" if params else "/knowledge"
 
 

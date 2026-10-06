@@ -46,6 +46,10 @@ classDiagram
     +fanout int
     +capped_at int
   }
+  class NamespaceFacet {
+    +namespace str
+    +count int
+  }
   class NoteMetadata {
     +note_type str
     +status str
@@ -64,6 +68,7 @@ classDiagram
     +title str
     +is_task_record bool
   }
+  class RecentLanding
   class RelatedItem {
     +id str
     +title str
@@ -112,8 +117,13 @@ classDiagram
     +updated str
     +score float | None
   }
+  class NoteSummary
+  <<Tasks>> NoteSummary
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
   ListChips "1" --> "0..*" NoteMetadata : by_id
+  RecentLanding "1" --> "0..*" NamespaceFacet : namespaces
+  RecentLanding "1" --> "0..*" NoteSummary : intake
+  RecentLanding "1" --> "0..*" NoteSummary : notes
   RelatedItem "1" --> "0..1" EdgeWhy : why
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived

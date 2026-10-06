@@ -403,6 +403,7 @@ class TaskFakeLithosClient(ReadOnlyWriteSurface):
         query: str,
         *,
         tags: list[str] | None = None,
+        path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]:
         self.search_calls.append({"query": query, "tags": tags, "limit": limit})

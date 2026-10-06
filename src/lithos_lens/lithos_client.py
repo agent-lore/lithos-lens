@@ -66,9 +66,12 @@ LithosHealth = Literal["ok", "degraded", "unreachable"]
 RECENT_NOTES_FETCH_PAGE = 500
 
 # Runaway guard for the pagination loop, NOT an expected bound: the walk
-# normally terminates on the response's `total` (~6 pages for today's ~2.9k
-# note corpus). This only stops a server reporting an absurd total from
-# turning one landing-page render into an unbounded crawl.
+# normally terminates on the response's `total` (12 pages for the 5,818-note
+# live corpus of 2026-10-05). The guard admits 40 x 500 = 20,000 notes, so the
+# landing's split into "Your notes" and "Recent intake" (§7.1) sees the whole
+# corpus — every non-intake note among ~4,200 intake ones — with room for it
+# to grow 3x. This only stops a server reporting an absurd total from turning
+# one landing-page render into an unbounded crawl.
 _RECENT_NOTES_MAX_PAGES = 40
 
 
@@ -169,6 +172,7 @@ class LithosClientProtocol(LithosWriteProtocol, Protocol):
         query: str,
         *,
         tags: list[str] | None = None,
+        path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]: ...
 
@@ -629,7 +633,10 @@ class LithosClient(LithosWriteMethods):
         re-sorted newest-first and, when ``limit`` is given, truncated — so
         result-record memory stays bounded by page size + ``limit``; the
         cross-page dedup id set is the one O(corpus) piece (a few thousand
-        strings today).
+        strings today). Without ``limit`` the whole (filtered) corpus comes
+        back newest-first, sorted once at the end: the landing asks for that,
+        because its intake split and namespace counts are over every row
+        (bounded by the runaway guard, ``_RECENT_NOTES_MAX_PAGES`` pages).
         """
         rows: list[NoteSummary] = []
         seen_ids: set[str] = set()
@@ -654,8 +661,8 @@ class LithosClient(LithosWriteMethods):
             fresh = [row for row in page_rows if row.id not in seen_ids]
             seen_ids.update(row.id for row in fresh)
             rows.extend(fresh)
-            rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
             if limit is not None:
+                rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
                 del rows[limit:]
             fetched += len(page_rows)
             pages += 1
@@ -681,6 +688,8 @@ class LithosClient(LithosWriteMethods):
                 fetched,
             )
         logger.debug("recent_notes fetched %d rows in %d page(s)", fetched, pages)
+        if limit is None:
+            rows.sort(key=lambda s: note_updated_sort_key(s.updated), reverse=True)
         return rows
 
     async def search_notes(
@@ -688,6 +697,7 @@ class LithosClient(LithosWriteMethods):
         query: str,
         *,
         tags: list[str] | None = None,
+        path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]:
         """Hybrid-search notes via ``lithos_search`` (the /knowledge query path).
@@ -701,6 +711,11 @@ class LithosClient(LithosWriteMethods):
         arguments: dict[str, Any] = {"query": query, "mode": "hybrid"}
         if tags:
             arguments["tags"] = tags
+        if path_prefix:
+            # The landing's ?namespace= filter (§7.1) — the path-derived
+            # namespace, since nothing here filters the frontmatter one
+            # (ROADMAP ledger #16).
+            arguments["path_prefix"] = path_prefix
         if limit is not None:
             arguments["limit"] = limit
         payload = await self._call_tool("lithos_search", arguments)

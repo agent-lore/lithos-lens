@@ -39,13 +39,14 @@ def load_contract(tool: str) -> dict[str, Any]:
 
 
 #: The env overrides read with NO default, so that absent and present-empty
-#: stay distinguishable: ``FOO=`` is a written value for both — the documented
-#: empty list for one, a value naming no convention (and so a config error) for
-#: the deprecated posture knob (§4.4). Every other override is truthiness-gated
-#: and is neutralised below by being set empty; these two cannot be.
+#: stay distinguishable: ``FOO=`` is a written value for each — the documented
+#: empty list for the two prefix lists, a value naming no convention (and so a
+#: config error) for the deprecated posture knob (§4.4). Every other override is
+#: truthiness-gated and is neutralised below by being set empty; these cannot be.
 PRESENT_EMPTY_ENV_KNOBS = (
     "LITHOS_LENS_TASKS_PROJECT_CONVENTION",
     "LITHOS_LENS_TASKS_DISPATCH_TRIGGER_TAG_PREFIXES",
+    "LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES",
 )
 
 
@@ -56,7 +57,7 @@ def _no_ambient_present_empty_env(monkeypatch: pytest.MonkeyPatch) -> None:
     Autouse rather than folded into ``lithos_lens_config_env``, because the
     exposure is not limited to tests that take that fixture: every test that
     calls ``load_config`` on a config file of its own is equally at the mercy
-    of the invoking shell. Blanking these two would not isolate them — for
+    of the invoking shell. Blanking these would not isolate them — for
     these, blank IS a value — so they are removed. A test that wants one sets
     it itself, and its own ``setenv`` runs after this. The other way a value
     arrives uninvited — a developer ``.env``, read by ``load_dotenv`` on every
@@ -123,7 +124,7 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
 
     Env-var overrides from the invoking shell are cleared. They are neutralised
     by being set EMPTY, which every truthiness-gated override reads as
-    "unset"; the two that read absent and present-empty apart are handled
+    "unset"; the ones that read absent and present-empty apart are handled
     suite-wide by :func:`_no_ambient_present_empty_env`, and ``load_dotenv``'s
     search for a developer ``.env`` by :func:`dotenv_file`.
     """

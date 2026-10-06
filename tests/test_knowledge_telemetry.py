@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_landing import is_intake
 from lithos_lens.lithos_client import LithosToolError
 from lithos_lens.tasks import NoteRecord, NoteSummary
 from lithos_lens.web import create_app
@@ -88,11 +89,12 @@ def _expected_result_count(config_path: Path, path: str) -> int:
             )
         )
     else:
-        found = asyncio.run(
-            fake.recent_notes(
-                tags=[tag] if tag else None, limit=config.knowledge.recent_limit
-            )
-        )
+        # Two sections, each cut to recent_limit: your notes, then intake.
+        rows = asyncio.run(fake.recent_notes(tags=[tag] if tag else None))
+        prefixes = config.knowledge.intake_path_prefixes
+        intake = sum(1 for row in rows if is_intake(row, prefixes))
+        limit = config.knowledge.recent_limit
+        return min(len(rows) - intake, limit) + min(intake, limit)
     return len(found)
 
 

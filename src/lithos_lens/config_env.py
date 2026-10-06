@@ -82,6 +82,9 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     knowledge_fanout_cap_override = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", ""
     )
+    # No "" default, for ``trigger_prefixes_env``'s reason: blank is the
+    # documented empty list (only the ``ingested-by:*`` tag marks intake).
+    intake_prefixes_env = os.environ.get("LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES")
     graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     graph_concurrency_env = os.environ.get("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
@@ -220,6 +223,16 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
             ),
         )
         new_cfg = replace(new_cfg, knowledge=new_knowledge)
+    if intake_prefixes_env is not None:
+        new_cfg = replace(
+            new_cfg,
+            knowledge=replace(
+                new_cfg.knowledge,
+                intake_path_prefixes=_parse_env_str_list(
+                    "LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES", intake_prefixes_env
+                ),
+            ),
+        )
     if writes_default_operator_env or writes_confirm_cancel_env:
         new_writes = new_cfg.writes
         if writes_default_operator_env:

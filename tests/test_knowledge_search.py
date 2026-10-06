@@ -312,7 +312,7 @@ def test_bare_knowledge_renders_recent_list_newest_first(
         response = client.get("/knowledge")
 
     assert response.status_code == 200
-    assert "Recently updated" in response.text
+    assert "Your notes" in response.text
     positions = {
         note_id: response.text.index(f'href="/note/{note_id}?next=')
         for note_id in ("newest", "middle", "oldest")
@@ -326,8 +326,9 @@ def test_bare_knowledge_renders_recent_list_newest_first(
 def test_bare_knowledge_uses_recent_notes_not_search(
     lithos_lens_config_env: Path,
 ) -> None:
-    """No query → the recent browse path (recent_notes with the configured
-    recent_limit), never lithos_search."""
+    """No query → the recent browse path, never lithos_search. recent_notes is
+    asked for the whole corpus (no limit): the intake split and the namespace
+    counts are over every row, and each section is cut to recent_limit after."""
     notes = {"n": _dated_note("n", "A note", "2026-08-01T10:00:00+00:00")}
     fake = FakeLithosClient(dataset=_dataset(notes))
     recent_calls: list[dict[str, Any]] = []
@@ -349,7 +350,7 @@ def test_bare_knowledge_uses_recent_notes_not_search(
     with _client(lithos_lens_config_env, fake) as client:
         client.get("/knowledge")
 
-    assert recent_calls == [{"tags": None, "limit": 20}]  # [knowledge].recent_limit
+    assert recent_calls == [{"tags": None}]
     assert search_calls == []
 
 
@@ -382,7 +383,7 @@ def test_knowledge_tag_browse_forwards_tag_and_orders_newest_first(
     with _client(lithos_lens_config_env, fake) as client:
         response = client.get("/knowledge?tag=project:x")
 
-    assert recent_calls == [{"tags": ["project:x"], "limit": 20}]
+    assert recent_calls == [{"tags": ["project:x"]}]
     assert response.status_code == 200
     assert 'href="/note/y' not in response.text
     assert response.text.index('href="/note/new-x?next=') < response.text.index(
@@ -601,7 +602,12 @@ class _ServerSnippetFake(FakeLithosClient):
         self._snippet = snippet
 
     async def search_notes(
-        self, query: str, *, tags: list[str] | None = None, limit: int | None = None
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        path_prefix: str | None = None,
+        limit: int | None = None,
     ) -> list[SearchResult]:
         return [
             normalize_search_result(

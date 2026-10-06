@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import Any
 
 from lithos_lens.fake_graph_dataset import ROADMAP_TAG, graph_fixtures
-from lithos_lens.fake_knowledge_dataset import related_fixtures
+from lithos_lens.fake_knowledge_dataset import intake_fixtures, related_fixtures
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -544,14 +544,16 @@ def demo_dataset() -> FakeLithosDataset:
         + graph.tasks
     )
 
+    intake_notes, intake_paths = intake_fixtures()
     return FakeLithosDataset(
         tasks=tasks,
-        notes=notes,
+        notes={**notes, **intake_notes},
         note_paths={
             "plans/influx-migration.md": "note-influx-plan",
             "plans/legacy-ingest.md": "note-influx-legacy-ingest",
             "runbooks/influx-rollback.md": "note-influx-rollback",
             "reports/influx-capacity.md": "note-influx-capacity",
+            **intake_paths,
         },
         related_neighborhoods=related_fixtures(),
         # Graph oracle: every open workable task is placed on exactly one

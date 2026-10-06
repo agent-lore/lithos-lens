@@ -538,7 +538,7 @@ def test_knowledge_landing_without_query_lists_recent(
         response = client.get("/knowledge")
 
     assert response.status_code == 200
-    assert "Recently updated" in response.text
+    assert "Your notes" in response.text
     assert "Note A" in response.text
     assert "Note B" in response.text
 

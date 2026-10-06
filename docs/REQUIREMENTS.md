@@ -237,6 +237,7 @@ LITHOS_LENS_WRITES_CONFIRM_CANCEL=true
 LITHOS_LENS_KNOWLEDGE_SEARCH_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RECENT_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
+LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES=articles/,papers/,digests/   # comma-separated; empty = only the ingested-by:* tag
 
 # Optional LLM client — disabled by default
 LITHOS_LENS_LLM_ENABLED=false
@@ -345,9 +346,10 @@ confirm_cancel = true             # consequence-aware cancel confirmation
 
 [lithos-lens.knowledge]            # knowledge browser (Part C)
 search_limit = 20                 # lithos_search / lithos_retrieve result limit
-recent_limit = 20                 # recently-updated list size on /knowledge
+recent_limit = 20                 # size of each /knowledge browse section (your notes, recent intake)
 related_title_fanout_cap = 20     # cap on cached lithos_read title lookups per related panel
 list_chip_fanout_cap = 40         # landing rows given metadata chips (one lithos_read each; §7.1)
+intake_path_prefixes = ["articles/", "papers/", "digests/"]  # paths that make a note intake (§7.1); [] = only the ingested-by:* tag
 graph_focus_max_nodes = 250       # knowledge graph cap, focus (ego) mode
 graph_global_max_nodes = 500      # knowledge graph cap, global mode
 graph_default_depth = 1           # ego-graph hops, 1 or 2 (ROADMAP K2)
@@ -1178,9 +1180,10 @@ When `metadata.source` contains a task id, Lens calls `lithos_task_get` and rend
 - A search box lives in the global nav on every Knowledge page; submitting goes to `/knowledge?q=…`.
 - **With a query:** `lithos_search(query, mode="hybrid", limit=[knowledge].search_limit)`. Result cards show title, path, score, `updated_at`, an `is_stale` marker, and the snippet.
 - **Snippets MUST be rendered escaped.** Verified live: `lithos_search` snippets contain raw markdown (headings, wiki-link syntax, code). Lens HTML-escapes snippet text (query-term highlighting, if any, is applied *after* escaping). Snippets are never fed through the markdown renderer.
-- **Without a query:** a recently-updated list via `lithos_list(limit=[knowledge].recent_limit)` ordered by `updated`.
+- **Without a query:** two sections, in this order — **"Your notes"**, the most recently updated **non-intake** notes, then **"Recent intake"**, the most recently updated **intake** notes — each newest-first by `updated` and cut to `[knowledge].recent_limit`. A note is **intake** when it carries an `ingested-by:*` tag **or** its path starts with one of `[knowledge].intake_path_prefixes` (default `["articles/", "papers/", "digests/"]`); a note that is both appears once, under intake. Both sections are a partition of one newest-first walk of `lithos_list` (paged via `offset` to the response's `total`, since the tool has no ordering parameter), so they cost no extra call; the walk covers the whole corpus up to its 20,000-note runaway guard (5,818 notes on 2026-10-05, ~4,200 of them intake). Each section's heading links to that section on its own (`?section=notes` / `?section=intake`, filters kept).
+- **Namespace filter `?namespace=<prefix>`**, on the landing and on search: a row of the top namespaces present in what was fetched (by count, most first — the intake namespace dominates and is shown, not hidden) plus "all". The namespace is **path-derived** — a note's first path segment, matched as the prefix `<ns>/` — because `lithos_list` cannot filter on frontmatter `namespace` (ROADMAP ledger #16). Search passes it as `lithos_search(path_prefix="<ns>/")`; the browse sections filter on path Lens-side, after the walk, so the row still counts every namespace.
 - **Metadata chips on every card and row:** the note page's chips (§6.4 — type, status colour-coded, namespace, confidence, scope when not `shared`) in a compact one-line variant, so a quarantined hypothesis and a shared summary do not look alike in a list. Neither `lithos_search` rows nor `lithos_list` items carry these fields (ROADMAP ledger #16), so Lens reads each row's frontmatter with a `lithos_read(id, max_length=1)`, once per id per request, for the first `[knowledge].list_chip_fanout_cap` (default 40) rows; past it rows render chipless and the page says "chips shown for the first N". A failed read leaves only its own row chipless.
-- Filters: `q` and `tag` only (`?tag=` maps to the `tags=` argument of search/list). Richer filtering belongs to the feed (§9).
+- Filters: `q`, `tag` and `namespace` (`?tag=` maps to the `tags=` argument of search/list; `?namespace=` as above). `tag` and `namespace` compose, and the "Filtered by" line names both. Richer filtering belongs to the feed (§9).
 
 ### 7.2 Cognitive search evolution
 
@@ -1419,7 +1422,7 @@ Both log sinks are size-bounded. `MAX_LOGGED_VALUE_CHARS` is applied centrally i
 | `lens.writes.<action>` | One span per write attempt (`complete`, `reopen`, `cancel`, `create`, `edge_upsert`); attributes: operator, result code, for `complete` the gate type and whether it was an override, and for `edge_upsert` whether the relation already existed (`already_exists`, no call made) |
 | `lens.events.connect` | SSE connection lifecycle |
 | `lens.knowledge.related` | Related-panel load inside a note render; attributes: fan-out, section state |
-| ~~`lens.knowledge.note` / `.resolve` / `.search`~~ | **Superseded.** These three are recorded as ATTRIBUTES on the request's own server span (`lens.outcome`, `lens.mode`, `lens.result_count`, `lens.has_tag`, `lens.candidate_count`) rather than as named spans — see the note below |
+| ~~`lens.knowledge.note` / `.resolve` / `.search`~~ | **Superseded.** These three are recorded as ATTRIBUTES on the request's own server span (`lens.outcome`, `lens.mode`, `lens.result_count`, `lens.has_tag`, `lens.has_namespace`, `lens.candidate_count`) rather than as named spans — see the note below |
 | `lens.graph.knowledge` / `lens.graph.centrality` | Knowledge graph assembly / centrality overlay |
 | `lens.retrieve` | Cognitive search call |
 | `lens.llm.*` | LLM calls (curation, synthesis) |
@@ -1552,7 +1555,7 @@ Additional payload notes: task events carry empty `tags`, so upstream `?tags=` f
 | `GET /tasks/events` | SSE re-broadcast to browser tabs |
 | `GET/POST /operator`, `POST /tasks/{task_id}/approve` (gate-only; + `GET …/approve` proceed-anyway confirm) \| `/reopen` \| `/cancel` (+ `GET …/cancel` confirm), `GET/POST /tasks/new`, `GET /tasks/{task_id}/edges/new`, `POST /tasks/{task_id}/edges` | Curated writes (§5C.7) |
 | `GET /note/{id}` | Note View (§6) |
-| `GET /knowledge` | Search / recently-updated landing (`?q=`, `?tag=`) |
+| `GET /knowledge` | Search / your-notes-and-intake landing (`?q=`, `?tag=`, `?namespace=`, `?section=`) |
 | `GET /knowledge/resolve` | Wiki-link resolver (`?target=`, `?from=`) |
 | `GET /knowledge/graph` | Knowledge graph (`?focus=` for ego mode) |
 | `POST /api/feedback` | Feedback write (§10; write-gated) |

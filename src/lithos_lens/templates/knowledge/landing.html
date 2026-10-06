@@ -2,6 +2,41 @@
 
 {% block title %}Knowledge | Lithos Lens{% endblock %}
 
+{% macro recent_rows(rows) %}
+  {% if rows %}
+    <ul class="knowledge-results">
+      {% for note in rows %}
+        <li>
+          <a href="{{ knowledge_note_url(note.id, landing_url) }}">{{ note.title or note.path or note.id }}</a>
+          {% with meta = chips.for_note(note.id), compact = true %}
+            {% if meta %}{% include "knowledge/note_chips.html" %}{% endif %}
+          {% endwith %}
+          {% if note.path %}
+            <span class="knowledge-result-path">{{ note.path }}</span>
+          {% endif %}
+          {% if note.updated %}
+            <span class="knowledge-result-updated">{{ note.updated | display_date }}</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="knowledge-empty">No matching notes.</p>
+  {% endif %}
+{% endmacro %}
+
+{# A section heading: a link to that section on its own (filters kept), or
+   plain text when it already is the page. #}
+{% macro section_heading(key, label) %}
+  <h2>
+    {% if section == key %}
+      {{ label }}
+    {% else %}
+      <a href="{{ knowledge_landing_url('', tag, namespace=namespace, section=key) }}">{{ label }}</a>
+    {% endif %}
+  </h2>
+{% endmacro %}
+
 {% block content %}
   <section class="knowledge-landing">
     <header>
@@ -23,14 +58,31 @@
            tag (PR #39 review). #}
         <input type="hidden" name="tag" value="{{ tag }}">
       {% endif %}
+      {% if namespace %}
+        <input type="hidden" name="namespace" value="{{ namespace }}">
+      {% endif %}
       <button type="submit">Search</button>
     </form>
 
-    {% if tag %}
+    {% if tag or namespace %}
       <p class="knowledge-active-filter">
-        Filtered by {{ tag | format_tag }}
-        <a href="/knowledge{% if query %}?q={{ query | urlencode }}{% endif %}">clear filter</a>
+        Filtered by
+        {%- if tag %} {{ tag | format_tag }}{% endif %}
+        {%- if tag and namespace %} and{% endif %}
+        {%- if namespace %} namespace {{ namespace }}{% endif %}
+        <a href="{{ knowledge_landing_url(query, section=section) }}">clear filter</a>
       </p>
+    {% endif %}
+
+    {% if namespace_facets or namespace %}
+      {# The path-derived namespaces present in what was fetched, most notes
+         first (§7.1). "all" drops the namespace and keeps every other filter. #}
+      <nav class="knowledge-namespaces" aria-label="Namespace filter">
+        <a href="{{ knowledge_landing_url(query, tag, section=section) }}"{% if not namespace %} aria-current="true"{% endif %}>all</a>
+        {% for facet in namespace_facets %}
+          <a href="{{ knowledge_landing_url(query, tag, namespace=facet.namespace, section=section) }}"{% if facet.namespace == namespace %} aria-current="true"{% endif %}>{{ facet.namespace }} <span class="knowledge-namespace-count">{{ facet.count }}</span></a>
+        {% endfor %}
+      </nav>
     {% endif %}
 
     {% if error %}
@@ -65,33 +117,24 @@
       {% else %}
         <p class="knowledge-empty">No matching notes.</p>
       {% endif %}
-    {% elif results is not none %}
-      {% if tag %}
-        <h2>Notes tagged {{ tag | format_tag }}</h2>
-      {% else %}
-        <h2>Recently updated</h2>
+    {% elif browse is not none %}
+      {% include "knowledge/chips_capped.html" %}
+      {% if browse.notes is not none %}
+        <section class="knowledge-section" id="your-notes">
+          {{ section_heading("notes", "Your notes") }}
+          {{ recent_rows(browse.notes) }}
+        </section>
       {% endif %}
-
-      {% if results %}
-        {% include "knowledge/chips_capped.html" %}
-        <ul class="knowledge-results">
-          {% for note in results %}
-            <li>
-              <a href="{{ knowledge_note_url(note.id, landing_url) }}">{{ note.title or note.path or note.id }}</a>
-              {% with meta = chips.for_note(note.id), compact = true %}
-                {% if meta %}{% include "knowledge/note_chips.html" %}{% endif %}
-              {% endwith %}
-              {% if note.path %}
-                <span class="knowledge-result-path">{{ note.path }}</span>
-              {% endif %}
-              {% if note.updated %}
-                <span class="knowledge-result-updated">{{ note.updated | display_date }}</span>
-              {% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="knowledge-empty">No matching notes.</p>
+      {% if browse.intake is not none %}
+        <section class="knowledge-section" id="recent-intake">
+          {{ section_heading("intake", "Recent intake") }}
+          {{ recent_rows(browse.intake) }}
+        </section>
+      {% endif %}
+      {% if section %}
+        <p class="knowledge-section-back">
+          <a href="{{ knowledge_landing_url('', tag, namespace=namespace) }}">Show your notes and recent intake</a>
+        </p>
       {% endif %}
     {% endif %}
   </section>

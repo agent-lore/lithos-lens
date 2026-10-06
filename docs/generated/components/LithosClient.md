@@ -13,7 +13,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 |---|---|---:|---:|
 | `lithos_lens.fake_dataset` | L | 1 | 1 |
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
-| `lithos_lens.fake_knowledge_dataset` | S | 0 | 1 |
+| `lithos_lens.fake_knowledge_dataset` | S | 0 | 2 |
 | `lithos_lens.fake_lithos` | L | 2 | 1 |
 | `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
@@ -34,6 +34,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 
 ### `lithos_lens.fake_knowledge_dataset`
 - def `related_fixtures` — Related-panel (K1-S4) neighborhoods over the influx notes.
+- def `intake_fixtures` — Intake notes (§7.1) and their paths, one per way a note becomes intake.
 
 ### `lithos_lens.fake_lithos`
 - def `fake_lithos_enabled` — Return whether the fake-Lithos app mode is switched on via the environment.
