@@ -6,9 +6,9 @@
   <a href="/note/{{ item.id }}">{{ item.label }}</a>
 {%- endmacro %}
 
-{% macro related_section(heading, section, edges=False) %}
+{% macro related_section(heading, anchor, section, edges=False) %}
   {% if section.items or section.overflow %}
-    <section class="related-section">
+    <section class="related-section" id="{{ anchor }}">
       <h3>{{ heading }}</h3>
       <ul>
         {% for item in section.items %}
@@ -36,9 +36,9 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro related_ref_list(heading, section) %}
+{% macro related_ref_list(heading, anchor, section) %}
   {% if section.items or section.overflow %}
-    <div class="related-group">
+    <div class="related-group" id="{{ anchor }}">
       <h4>{{ heading }}</h4>
       <ul>
         {% for item in section.items %}
@@ -50,6 +50,44 @@
       </ul>
     </div>
   {% endif %}
+{%- endmacro %}
+
+{#- The note's place in the corpus, stated under the chips because the panel
+    itself can sit thousands of pixels down a long body (below the sidebar
+    breakpoint). Counts are the panel's own group sizes (rows plus "+N more"),
+    in the panel's order and wording, each an in-page link to its section;
+    an empty group is left out. -#}
+{% macro related_summary(related) %}
+  <p class="related-summary" data-related-summary>
+    Related:
+    {% if related.state == "error" %}
+      <span class="related-summary-error">could not be loaded</span>
+    {% else %}
+      {%- set groups = [
+        ("related-links", related.links.items | length + related.links.overflow,
+         "outgoing link", "outgoing links"),
+        ("related-backlinks", related.backlinks.items | length + related.backlinks.overflow,
+         "back-link", "back-links"),
+        ("related-sources", related.sources.items | length + related.sources.overflow,
+         "source", "sources"),
+        ("related-derived", related.derived.items | length + related.derived.overflow,
+         "derived from", "derived from"),
+        ("related-unresolved", related.unresolved | length, "unresolved", "unresolved"),
+        ("related-edges", related.edges.items | length + related.edges.overflow,
+         "typed edge", "typed edges"),
+      ] -%}
+      <span class="related-summary-counts">
+        {%- for anchor, count, singular, plural in groups if count -%}
+          {% if not loop.first %} · {% endif -%}
+          <a href="#{{ anchor }}">{{ count }} {{ singular if count == 1 else plural }}</a>
+        {%- else -%}
+          <a href="#related">none</a>
+        {%- endfor -%}
+      </span>
+    {% endif %}
+    {#- K2: "open in graph" joins this line here, after the counts, as one
+        more " · "-separated item. -#}
+  </p>
 {%- endmacro %}
 
 {% block content %}
@@ -65,84 +103,90 @@
       <span>{{ error }}</span>
     </section>
   {% elif note %}
-    <article class="detail-panel">
-      <header>
-        <p class="eyebrow">Knowledge note</p>
-        <h1>{{ note.title }}</h1>
-        {% if produced_by %}
-          <p class="produced-by">
-            <a class="produced-by-chip{% if produced_by.is_task_record %} produced-by-chip-record{% endif %}"
-               href="{{ produced_by.url }}">
-              {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
-              {{ produced_by.title }}
-            </a>
-            {# Beside the chip, not inside it: the chip's text is the sentence
-               ("Produced by task: <title>"), and the id is a fact about the
-               task that sentence names. #}
-            {% with task_id = produced_by.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
-          </p>
+    {#- Article then aside in the DOM at every width — the no-JS reading
+        order. At wide widths the stylesheet lays the aside out beside the
+        article as a sticky sidebar; below it, it follows the body. -#}
+    <div class="note-layout{% if related %} note-layout-with-related{% endif %}">
+      <article class="detail-panel">
+        <header>
+          <p class="eyebrow">Knowledge note</p>
+          <h1>{{ note.title }}</h1>
+          {% if produced_by %}
+            <p class="produced-by">
+              <a class="produced-by-chip{% if produced_by.is_task_record %} produced-by-chip-record{% endif %}"
+                 href="{{ produced_by.url }}">
+                {%- if produced_by.is_task_record %}Task record: {% else %}Produced by task: {% endif -%}
+                {{ produced_by.title }}
+              </a>
+              {# Beside the chip, not inside it: the chip's text is the sentence
+                 ("Produced by task: <title>"), and the id is a fact about the
+                 task that sentence names. #}
+              {% with task_id = produced_by.task_id %}{% include "tasks/short_id.html" %}{% endwith %}
+            </p>
+          {% endif %}
+          {% if note_meta and note_meta.has_chips %}
+            {% with meta = note_meta, compact = false %}{% include "knowledge/note_chips.html" %}{% endwith %}
+          {% endif %}
+          {% if related %}{{ related_summary(related) }}{% endif %}
+          {% if note_meta and note_meta.has_authorship %}
+            <div class="note-authorship detail-meta">
+              {% if note_meta.author %}<span>By {{ note_meta.author }}</span>{% endif %}
+              {% if note_meta.contributors %}<span>Contributors: {{ note_meta.contributors | join(", ") }}</span>{% endif %}
+              {% if note_meta.created_at %}<time datetime="{{ note_meta.created_at }}">Created {{ note_meta.created_at }}</time>{% endif %}
+              {% if note_meta.updated_at %}<time datetime="{{ note_meta.updated_at }}">Updated {{ note_meta.updated_at }}</time>{% endif %}
+            </div>
+          {% endif %}
+        </header>
+        {% if note_meta and note_meta.lede %}
+          <p class="note-lede">{{ note_meta.lede }}</p>
         {% endif %}
-        {% if note_meta and note_meta.has_chips %}
-          {% with meta = note_meta, compact = false %}{% include "knowledge/note_chips.html" %}{% endwith %}
-        {% endif %}
-        {% if note_meta and note_meta.has_authorship %}
-          <div class="note-authorship detail-meta">
-            {% if note_meta.author %}<span>By {{ note_meta.author }}</span>{% endif %}
-            {% if note_meta.contributors %}<span>Contributors: {{ note_meta.contributors | join(", ") }}</span>{% endif %}
-            {% if note_meta.created_at %}<time datetime="{{ note_meta.created_at }}">Created {{ note_meta.created_at }}</time>{% endif %}
-            {% if note_meta.updated_at %}<time datetime="{{ note_meta.updated_at }}">Updated {{ note_meta.updated_at }}</time>{% endif %}
+        {% if note.tags %}
+          <div class="tag-list">
+            {#- Knowledge's own classifier, not the task one: a project document
+               carries the literal `project:<slug>` tag (§5B.2), while
+               `[tasks].project_tag_key` spells the TASK convention (§5B.9). One
+               shared classifier let the task knob restyle these chips. -#}
+            {% for tag in note.tags %}
+              <a class="{{ knowledge_tag_chip_class(tag) }}" href="{{ knowledge_tag_url(tag) }}">{{ tag | format_tag }}</a>
+            {% endfor %}
           </div>
         {% endif %}
-      </header>
-      {% if note_meta and note_meta.lede %}
-        <p class="note-lede">{{ note_meta.lede }}</p>
-      {% endif %}
-      {% if note.tags %}
-        <div class="tag-list">
-          {#- Knowledge's own classifier, not the task one: a project document
-             carries the literal `project:<slug>` tag (§5B.2), while
-             `[tasks].project_tag_key` spells the TASK convention (§5B.9). One
-             shared classifier let the task knob restyle these chips. -#}
-          {% for tag in note.tags %}
-            <a class="{{ knowledge_tag_chip_class(tag) }}" href="{{ knowledge_tag_url(tag) }}">{{ tag | format_tag }}</a>
-          {% endfor %}
-        </div>
-      {% endif %}
-      <div class="markdown-body">{{ note.content | render_markdown(note.id) | safe }}</div>
-    </article>
+        <div class="markdown-body">{{ note.content | render_markdown(note.id) | safe }}</div>
+      </article>
 
-    {% if related %}
-      <aside class="related-panel" aria-label="Related notes">
-        <h2>Related</h2>
-        {% if related.state == "error" %}
-          <p class="related-error" role="status">
-            The related panel could not be loaded.
-          </p>
-        {% elif related.is_empty %}
-          <p class="related-empty">No related notes.</p>
-        {% else %}
-          {{ related_section("Outgoing links", related.links) }}
-          {{ related_section("Back-links", related.backlinks) }}
-          {% if related.has_provenance %}
-            <section class="related-section related-provenance">
-              <h3>Provenance</h3>
-              {{ related_ref_list("Sources", related.sources) }}
-              {{ related_ref_list("Derived from", related.derived) }}
-              {% if related.unresolved %}
-                <div class="related-group">
-                  <h4>Unresolved</h4>
-                  <ul>
-                    {% for target in related.unresolved %}
-                      <li>{{ target }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-            </section>
+      {% if related %}
+        <aside class="related-panel" id="related" aria-label="Related notes">
+          <h2>Related</h2>
+          {% if related.state == "error" %}
+            <p class="related-error" role="status">
+              The related panel could not be loaded.
+            </p>
+          {% elif related.is_empty %}
+            <p class="related-empty">No related notes.</p>
+          {% else %}
+            {{ related_section("Outgoing links", "related-links", related.links) }}
+            {{ related_section("Back-links", "related-backlinks", related.backlinks) }}
+            {% if related.has_provenance %}
+              <section class="related-section related-provenance">
+                <h3>Provenance</h3>
+                {{ related_ref_list("Sources", "related-sources", related.sources) }}
+                {{ related_ref_list("Derived from", "related-derived", related.derived) }}
+                {% if related.unresolved %}
+                  <div class="related-group" id="related-unresolved">
+                    <h4>Unresolved</h4>
+                    <ul>
+                      {% for target in related.unresolved %}
+                        <li>{{ target }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </section>
+            {% endif %}
+            {{ related_section("Typed edges", "related-edges", related.edges, edges=True) }}
           {% endif %}
-          {{ related_section("Typed edges", related.edges, edges=True) }}
-        {% endif %}
-      </aside>
-    {% endif %}
+        </aside>
+      {% endif %}
+    </div>
   {% endif %}
 {% endblock %}

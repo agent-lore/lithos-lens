@@ -162,6 +162,45 @@ async function compactChipRowsAreWhole(page: Page) {
   }
 }
 
+/**
+ * The note page's related panel placement (§5.7). At and above the sidebar
+ * breakpoint (`min-width: 701px`, the stylesheet's one two-column breakpoint)
+ * the aside sits BESIDE the article and stays on screen while a long body
+ * scrolls; below it, it follows the body. Either way the summary line under
+ * the chips is on the first screen. The page is scrolled back to the top
+ * before returning so the capture starts where a reader does.
+ */
+async function relatedPanelPlacement(page: Page) {
+  const width = page.viewportSize()!.width;
+  const placement = await page.evaluate(() => {
+    const article = document.querySelector(".note-layout > article")!;
+    const aside = document.querySelector(".note-layout > aside.related-panel")!;
+    const summary = document.querySelector("[data-related-summary]")!;
+    const a = article.getBoundingClientRect();
+    const r = aside.getBoundingClientRect();
+    // Far down the body, past the panel's own height.
+    window.scrollTo(0, a.top + window.scrollY + a.height / 2);
+    const scrolled = aside.getBoundingClientRect();
+    window.scrollTo(0, 0);
+    return {
+      long: a.height > 2 * window.innerHeight,
+      beside: r.left >= a.right && Math.abs(r.top - a.top) < 2,
+      below: r.top >= a.bottom,
+      stuck: scrolled.top >= 0 && scrolled.top < 40,
+      summaryOnFirstScreen:
+        summary.getBoundingClientRect().bottom <= window.innerHeight,
+    };
+  });
+  expect(placement.long).toBe(true);
+  expect(placement.summaryOnFirstScreen).toBe(true);
+  if (width >= 701) {
+    expect(placement.beside).toBe(true);
+    expect(placement.stuck).toBe(true);
+  } else {
+    expect(placement.below).toBe(true);
+  }
+}
+
 const WIDTHS = [320, 768, 1024, 1440] as const;
 
 const PAGES: ReadonlyArray<{
@@ -761,6 +800,22 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.getByRole("complementary", { name: "Related notes" }),
       ).toBeVisible();
+    },
+  },
+  {
+    // A full-text note several screens long: the related panel is a sticky
+    // sidebar at the wide widths and follows the body at the narrow ones, and
+    // the summary line under the chips states its groups on the first screen.
+    slug: "note-long",
+    url: "/note/note-influx-capacity",
+    ready: async (page) => {
+      await expect(
+        page.getByRole("complementary", { name: "Related notes" }),
+      ).toBeVisible();
+      await expect(page.locator("[data-related-summary]")).toHaveText(
+        /Related:\s*2 outgoing links · 1 source · 3 typed edges/,
+      );
+      await relatedPanelPlacement(page);
     },
   },
   {

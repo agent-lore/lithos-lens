@@ -1767,6 +1767,54 @@ button,
   margin-top: 0;
 }
 
+/* The panel's group counts under the note's chips (§5.7): one quiet line that
+   says where the note sits in the corpus before a long body pushes the panel
+   off the first screen. Each count links to its section. */
+.related-summary {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0;
+}
+
+.related-summary-counts a {
+  white-space: nowrap;
+}
+
+.related-summary-error {
+  color: var(--ink);
+}
+
+/* The note page's article + related panel. One bounded track below the
+   sidebar breakpoint, for the reason `.knowledge-cards` is bounded: an auto
+   track grows to its widest content, so one wide table in the body would
+   widen the page instead of scrolling inside its block. */
+.note-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* At and above the stylesheet's one two-column breakpoint (the `max-width:
+   700px` block below collapses the task pages' two-column rows), the panel
+   moves beside the article and stays on screen while the body scrolls. Below
+   it the panel follows the body, as the DOM order (article, then aside) reads
+   with no stylesheet at all. A panel taller than the window scrolls in its
+   own box rather than hiding its tail below the sticky edge. */
+@media (min-width: 701px) {
+  .note-layout-with-related {
+    align-items: start;
+    gap: 1.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem);
+  }
+
+  .note-layout-with-related .related-panel {
+    margin-top: 0;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    position: sticky;
+    top: 1rem;
+  }
+}
+
 .related-section + .related-section,
 .related-section + .related-group {
   border-top: 1px solid var(--line);
