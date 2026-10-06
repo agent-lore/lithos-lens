@@ -117,6 +117,18 @@ classDiagram
     +updated str
     +score float | None
   }
+  class TagBrowse {
+    +matched int
+    +total int
+  }
+  class TagCount {
+    +tag str
+    +count int
+  }
+  class TagFamily {
+    +prefix str
+    +count int
+  }
   class NoteSummary
   <<Tasks>> NoteSummary
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
@@ -138,6 +150,8 @@ classDiagram
   RelatedRef "1" --> "0..1" EdgeWhy : why
   RelatedSection "1" --> "0..*" RelatedItem : items
   ResolveOutcome "1" --> "0..*" ResolveCandidate : candidates
+  TagBrowse "1" --> "0..*" TagCount : tags
+  TagBrowse "1" --> "0..*" TagFamily : families
 ```
 
 ## LithosClient

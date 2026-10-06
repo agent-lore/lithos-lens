@@ -121,6 +121,11 @@ DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES: tuple[str, ...] = (
 # let one landing-page request materialize an unbounded lithos_search /
 # lithos_list result set (the same bound the related-panel fan-out cap enforces).
 MAX_KNOWLEDGE_LANDING_LIMIT = 200
+# /knowledge/tags renders at most this many tags ("N more — narrow the
+# filter"). One lithos_tags call answers every tag whatever the cap, so the
+# ceiling bounds only the rendered page, not a Lithos read.
+DEFAULT_KNOWLEDGE_TAGS_PAGE_LIMIT = 500
+MAX_KNOWLEDGE_TAGS_PAGE_LIMIT = 5000
 
 # ── [lithos-lens.graph] — task dependency graph pages (§5.7) ───────────
 DEFAULT_GRAPH_CACHE_TTL_S = 30
@@ -285,6 +290,8 @@ class KnowledgeConfig:
     # Path prefixes that make a note intake (with any ``ingested-by:*`` tag),
     # splitting the landing into "Your notes" and "Recent intake" (§7.1).
     intake_path_prefixes: tuple[str, ...] = DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES
+    # How many tags /knowledge/tags renders before "N more — narrow the filter".
+    tags_page_limit: int = DEFAULT_KNOWLEDGE_TAGS_PAGE_LIMIT
 
 
 @dataclass(frozen=True)

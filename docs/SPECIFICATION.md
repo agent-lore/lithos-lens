@@ -306,6 +306,9 @@ The current configuration model includes:
 - `knowledge.intake_path_prefixes` *(default `["articles/", "papers/",
   "digests/"]`: a note under one is intake on the landing, as is one tagged
   `ingested-by:*` — §5.7; `[]` leaves only the tag)*
+- `knowledge.tags_page_limit` *(default 500, 1-5000: how many tags
+  `/knowledge/tags` renders before "N more — narrow the filter" — §5.7; one
+  `lithos_tags` call answers every tag whatever the value)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1307,6 +1310,30 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   render chipless under a "Chips shown for the first N notes." line; a failed
   read leaves only its own row chipless, never the list. The number of reads
   is the landing span's `lens.chips.fanout`
+- a **"Browse tags"** link above the two sections to `/knowledge/tags`, and,
+  when `?tag=` is active, that tag's note count on the "Filtered by" line
+  ("project: influx (12 notes)"): `lithos_tags(prefix=<tag>)`, read back by
+  the EXACT key (the prefix answer also carries longer tags; an absent key is
+  0). A failed count read drops only the count
+
+`GET /knowledge/tags` is the tag browse page (`knowledge_tags`):
+
+- **every tag with its note count**, from ONE `lithos_tags` call with no
+  arguments (2,057 tags on 2026-10-05), most notes first, ties by name. Each
+  tag links to `/knowledge?tag=<tag>` (url-encoded), and the line above the
+  list reads "M tags, most notes first" — "N of M" when filtered
+- **`?q=`** narrows the list to tags containing the substring
+  (case-insensitive), from a GET form; **`?prefix=`** to tags starting with a
+  family (case-insensitive, as `lithos_tags`'s own `prefix`). Both apply
+  Lens-side and compose; the form carries the family as a hidden input
+- the **family row** ("all", then up to 12 `key:` families, most tags first,
+  the active one `aria-current`) is derived from the tags present — a family
+  is the text before a tag's first `:` plus the colon, never a fixed list —
+  and counts every tag, whichever filter is active; each entry keeps `q`
+- the list is cut to `knowledge.tags_page_limit` (default 500) with "N more —
+  narrow the filter" under it
+- with Lithos offline or degraded, or on a failed `lithos_tags` read, the
+  landing's warning banner replaces the list
 
 ### 5.8 Live Updates
 

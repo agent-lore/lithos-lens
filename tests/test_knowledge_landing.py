@@ -267,7 +267,13 @@ def test_tag_and_namespace_compose_on_the_landing(
 
     assert _section_ids(html, "your-notes") == []
     assert _section_ids(html, "recent-intake") == ["feed-2"]
-    assert "Filtered by project: x and namespace influx" in html
+    # The tag carries its corpus-wide note count (lithos_tags), not the
+    # namespace-narrowed one.
+    assert (
+        "Filtered by project: x "
+        '<span class="knowledge-namespace-count">(4 notes)</span>'
+        " and namespace influx"
+    ) in html
     # The search form carries both, so a search keeps the filters.
     assert '<input type="hidden" name="tag" value="project:x">' in html
     assert '<input type="hidden" name="namespace" value="influx">' in html
@@ -353,7 +359,13 @@ def test_tag_and_namespace_compose_on_search(lithos_lens_config_env: Path) -> No
     assert calls[0]["tags"] == ["project:x"]
     assert calls[0]["path_prefix"] == "influx/"
     assert re.findall(r'href="/note/([^?"]+)\?next=', html) == ["feed-2"]
-    assert "Filtered by project: x and namespace influx" in html
+    # The tag carries its corpus-wide note count (lithos_tags), not the
+    # namespace-narrowed one.
+    assert (
+        "Filtered by project: x "
+        '<span class="knowledge-namespace-count">(4 notes)</span>'
+        " and namespace influx"
+    ) in html
 
 
 # ── config: [knowledge].intake_path_prefixes ────────────────────────────

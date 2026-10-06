@@ -72,7 +72,9 @@
     {% if tag or namespace %}
       <p class="knowledge-active-filter">
         Filtered by
-        {%- if tag %} {{ tag | format_tag }}{% endif %}
+        {%- if tag %} {{ tag | format_tag }}
+          {%- if tag_notes is not none %} <span class="knowledge-namespace-count">({{ tag_notes }} note{{ "" if tag_notes == 1 else "s" }})</span>{% endif %}
+        {%- endif %}
         {%- if tag and namespace %} and{% endif %}
         {%- if namespace %} namespace {{ namespace }}{% endif %}
         <a href="{{ knowledge_landing_url(query, section=section) }}">clear filter</a>
@@ -123,6 +125,8 @@
         <p class="knowledge-empty">No matching notes.</p>
       {% endif %}
     {% elif browse is not none %}
+      {# Tag browse (§5.7): which tags exist, beside the newest notes. #}
+      <p class="knowledge-browse-links"><a href="/knowledge/tags">Browse tags</a></p>
       {% include "knowledge/chips_capped.html" %}
       {% if browse.notes is not none %}
         <section class="knowledge-section" id="your-notes">

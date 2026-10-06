@@ -613,6 +613,17 @@ def knowledge_landing_url(
     return f"/knowledge?{urlencode(params)}" if params else "/knowledge"
 
 
+def knowledge_tags_url(query: str = "", prefix: str = "") -> str:
+    """The ``/knowledge/tags`` page with its substring and family filters.
+
+    The href of each family-row entry (``q`` kept) and of "clear filter".
+    """
+    params = [
+        (key, value) for key, value in (("q", query), ("prefix", prefix)) if value
+    ]
+    return f"/knowledge/tags?{urlencode(params)}" if params else "/knowledge/tags"
+
+
 def knowledge_note_url(knowledge_id: str, next_url: str) -> str:
     """Link a landing result to its note, id-encoded, carrying ``next=``.
 

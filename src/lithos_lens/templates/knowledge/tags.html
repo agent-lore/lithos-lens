@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Tags | Knowledge | Lithos Lens{% endblock %}
+
+{% block content %}
+  <section class="knowledge-landing">
+    <header>
+      <p class="eyebrow"><a href="/knowledge">Knowledge</a></p>
+      <h1>Tags</h1>
+    </header>
+
+    <form class="knowledge-search" method="get" action="/knowledge/tags">
+      <input
+        type="search"
+        name="q"
+        value="{{ query }}"
+        placeholder="Filter tags"
+        aria-label="Filter tags"
+      >
+      {% if prefix %}
+        <input type="hidden" name="prefix" value="{{ prefix }}">
+      {% endif %}
+      <button type="submit">Filter</button>
+    </form>
+
+    {% if query or prefix %}
+      <p class="knowledge-active-filter">
+        Tags
+        {%- if prefix %} starting with {{ prefix }}{% endif %}
+        {%- if query and prefix %} and{% endif %}
+        {%- if query %} containing &ldquo;{{ query }}&rdquo;{% endif %}
+        <a href="{{ knowledge_tags_url() }}">clear filter</a>
+      </p>
+    {% endif %}
+
+    {% if browse is not none and browse.families %}
+      {# The key: families present among every tag, most tags first. "all"
+         drops the family and keeps the substring filter. #}
+      <nav class="knowledge-namespaces" aria-label="Tag family filter">
+        <a href="{{ knowledge_tags_url(query) }}"{% if not prefix %} aria-current="true"{% endif %}>all</a>
+        {% for family in browse.families %}
+          <a href="{{ knowledge_tags_url(query, family.prefix) }}"{% if family.prefix | lower == prefix | lower %} aria-current="true"{% endif %}>{{ family.prefix }} <span class="knowledge-namespace-count">{{ family.count }}</span></a>
+        {% endfor %}
+      </nav>
+    {% endif %}
+
+    {% if error %}
+      <section class="banner banner-warning" role="status">
+        <span>{{ error }}</span>
+      </section>
+    {% elif browse is not none %}
+      <p class="knowledge-tag-total">
+        {% if query or prefix %}{{ browse.matched }} of {% endif %}{{ browse.total }} tag{{ "" if browse.total == 1 else "s" }}, most notes first
+      </p>
+      {% if browse.tags %}
+        <ul class="knowledge-results">
+          {% for row in browse.tags %}
+            <li>
+              <a href="{{ knowledge_tag_url(row.tag) }}">{{ row.tag }}</a>
+              <span class="knowledge-namespace-count">{{ row.count }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+        {% if browse.hidden %}
+          <p class="knowledge-tags-capped">{{ browse.hidden }} more &mdash; narrow the filter</p>
+        {% endif %}
+      {% else %}
+        <p class="knowledge-empty">No matching tags.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+{% endblock %}

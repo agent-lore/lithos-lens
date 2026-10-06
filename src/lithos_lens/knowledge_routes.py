@@ -14,6 +14,7 @@ dependency wiring for the same two objects.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, quote, urlsplit
@@ -40,12 +41,19 @@ from lithos_lens.knowledge_metadata import (
 )
 from lithos_lens.knowledge_produced_by import load_produced_by
 from lithos_lens.knowledge_resolver import ResolveOutcome, resolve_wiki_link
+from lithos_lens.knowledge_tags import TagBrowse, build_tag_browse, tag_count
 from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
-from lithos_lens.request_filters import knowledge_landing_url, knowledge_note_url
+from lithos_lens.request_filters import (
+    knowledge_landing_url,
+    knowledge_note_url,
+    knowledge_tags_url,
+)
 from lithos_lens.state import AppState
 from lithos_lens.telemetry import get_current_span, get_tracer
 from lithos_lens.template_vocabulary import format_tag
 from lithos_lens.write_guards import safe_next
+
+logger = logging.getLogger(__name__)
 
 KNOWLEDGE_PATH = "/knowledge"
 
@@ -82,6 +90,24 @@ def note_back_link(next_url: str | None) -> NoteBackLink:
     return NoteBackLink(href, "Back to knowledge")
 
 
+async def active_tag_count(client: LithosClientProtocol, tag: str) -> int | None:
+    """How many notes carry ``tag``, for the landing's "Filtered by" line.
+
+    ``lithos_tags`` with the tag as its ``prefix`` (one small answer rather
+    than the whole tag map), read back by EXACT key: the prefix also matches
+    longer tags. A tag the index does not hold has no notes, so 0. A failed
+    read is ``None`` and the line names the tag without a count — the count
+    is garnish on a page that otherwise rendered.
+    """
+    try:
+        rows = await client.list_tags(prefix=tag)
+    except Exception:
+        logger.info("active tag count unavailable", exc_info=True)
+        return None
+    count = tag_count(rows, tag)
+    return 0 if count is None else count
+
+
 async def _traced_related_panel(
     client: LithosClientProtocol, knowledge_id: str, *, cap: int
 ) -> RelatedPanel:
@@ -108,6 +134,7 @@ def register_knowledge_routes(
 
     templates.env.globals["knowledge_note_url"] = knowledge_note_url
     templates.env.globals["knowledge_landing_url"] = knowledge_landing_url
+    templates.env.globals["knowledge_tags_url"] = knowledge_tags_url
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
@@ -174,6 +201,9 @@ def register_knowledge_routes(
             except Exception:
                 mode = "error"
                 error = "Knowledge search is currently unavailable."
+        tag_notes = None
+        if tag and mode != "offline":
+            tag_notes = await active_tag_count(state.lithos_client, tag)
         if search_results is not None:
             rendered_ids = [row.id for row in search_results]
         else:
@@ -210,6 +240,7 @@ def register_knowledge_routes(
                 "active_view": "knowledge",
                 "query": query,
                 "tag": tag,
+                "tag_notes": tag_notes,
                 "namespace": namespace,
                 "section": section,
                 # The return address every result link carries as `next=`.
@@ -220,6 +251,55 @@ def register_knowledge_routes(
                 "browse": browse,
                 "namespace_facets": facets,
                 "chips": chips,
+                "error": error,
+            },
+        )
+
+    @app.get("/knowledge/tags", response_class=HTMLResponse)
+    async def knowledge_tags(request: Request) -> HTMLResponse:
+        """Tag browse: every tag with its note count, from ``lithos_tags``.
+
+        One call with no arguments answers the whole tag map; ``?q=`` (a
+        substring) and ``?prefix=`` (a ``key:`` family) filter it Lens-side,
+        because the family row is derived from every tag, and the list is cut
+        to ``tags_page_limit`` (``knowledge_tags``). Each tag links to the
+        landing filtered by it. Offline, or on a failed read, the landing's
+        banner stands in for the list.
+        """
+        query = request.query_params.get("q", "").strip()
+        prefix = request.query_params.get("prefix", "").strip()
+        snapshot = await state.refresh_health()
+        browse: TagBrowse | None = None
+        error = ""
+        mode = "browse"
+        if snapshot.lithos != "ok":
+            mode = "offline"
+            error = "Lithos is offline or degraded. Tags are unavailable."
+        else:
+            try:
+                rows = await state.lithos_client.list_tags()
+                browse = build_tag_browse(
+                    rows,
+                    query=query,
+                    prefix=prefix,
+                    limit=state.config.knowledge.tags_page_limit,
+                )
+            except Exception:
+                mode = "error"
+                error = "Tags are currently unavailable."
+        span = get_current_span()
+        span.set_attribute("lens.mode", mode)
+        span.set_attribute("lens.result_count", len(browse.tags) if browse else 0)
+        return templates.TemplateResponse(
+            request,
+            "knowledge/tags.html",
+            {
+                "config": state.config,
+                "health": snapshot,
+                "active_view": "knowledge",
+                "query": query,
+                "prefix": prefix,
+                "browse": browse,
                 "error": error,
             },
         )

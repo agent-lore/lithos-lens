@@ -16,8 +16,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_routes` | M | 1 | 2 |
-| `lithos_lens.request_filters` | M | 0 | 22 |
+| `lithos_lens.knowledge_routes` | M | 1 | 3 |
+| `lithos_lens.request_filters` | L | 0 | 23 |
 | `lithos_lens.web` | L | 0 | 1 |
 | `lithos_lens.write_funnel` | L | 5 | 1 |
 | `lithos_lens.write_routes` | M | 0 | 11 |
@@ -54,6 +54,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 ### `lithos_lens.knowledge_routes`
 - class `NoteBackLink` — Where a note page's back link goes, and what it calls that place.
 - def `note_back_link` — The note page's back link when it was not opened from a task.
+- def `active_tag_count` — How many notes carry ``tag``, for the landing's "Filtered by" line.
 - def `register_knowledge_routes` — Attach the knowledge landing, wiki-link resolver and note routes.
 
 ### `lithos_lens.request_filters`
@@ -73,6 +74,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `blocker_expand_url` — Link a blocker line's expander to the fragment for its OWN blockers (T1-S8).
 - def `note_url` — Link a finding's document, id-encoded, carrying the task back-link.
 - def `knowledge_landing_url` — The ``/knowledge`` landing as rendered: its search and filters, if any.
+- def `knowledge_tags_url` — The ``/knowledge/tags`` page with its substring and family filters.
 - def `knowledge_note_url` — Link a landing result to its note, id-encoded, carrying ``next=``.
 - def `epic_scope_url` — Link an epic chip to the dashboard scoped to that epic — or unscoped.
 - def `task_card_url` — Link a summary card to the board it actually counts.

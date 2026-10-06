@@ -14,6 +14,7 @@ from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.knowledge_search import SearchResult
+from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS, JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -161,6 +162,9 @@ class RecordingLithosClient(ReadOnlyWriteSurface):
         limit: int | None = None,
     ) -> list[SearchResult]:
         return []
+
+    async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
+        return ()
 
     async def close(self) -> None:
         self.closed = True

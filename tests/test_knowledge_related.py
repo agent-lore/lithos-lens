@@ -26,6 +26,7 @@ from lithos_lens.knowledge import (
 )
 from lithos_lens.knowledge_edge_evidence import EdgeWhy, edge_why
 from lithos_lens.knowledge_search import SearchResult
+from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import LithosClient, LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -194,6 +195,9 @@ class KnowledgeFakeLithosClient(ReadOnlyWriteSurface):
 
     async def register_operator(self, operator_id: str) -> bool:
         return True
+
+    async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
+        return ()
 
     async def close(self) -> None:
         self.closed = True

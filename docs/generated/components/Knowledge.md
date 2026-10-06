@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, and wiki-link resolution recording which arm decided.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided.
 
 **Tier:** Foundation
 
@@ -18,6 +18,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
 | `lithos_lens.knowledge_search` | XS | 1 | 1 |
+| `lithos_lens.knowledge_tags` | S | 3 | 5 |
 
 ## Public API
 
@@ -76,6 +77,16 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 ### `lithos_lens.knowledge_search`
 - class `SearchResult` — One ``lithos_search`` hit rendered as a result card (§7.1).
 - def `normalize_search_result` — Normalize one ``lithos_search`` result row into a ``SearchResult``.
+
+### `lithos_lens.knowledge_tags`
+- class `TagCount` — One tag and how many notes carry it.
+- class `TagFamily` — One entry of the family facet row: a ``key:`` prefix and its tag count.
+- class `TagBrowse` — The tag page as rendered: the capped list and what it was cut from.
+- def `normalize_tag_counts` — ``lithos_tags``'s ``tags`` map as rows, most notes first, ties by name.
+- def `tag_count` — The count of exactly ``tag`` among ``rows`` (``None`` when absent).
+- def `tag_family` — A tag's family, ``key:`` — or ``""`` when it has no key before a colon.
+- def `tag_families` — The families present in ``tags``, most tags first (ties by name).
+- def `build_tag_browse` — Filter the ranked ``rows`` by ``prefix`` and ``query``, then cut to ``limit``.
 
 ## Dependencies
 
