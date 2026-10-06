@@ -1228,8 +1228,9 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   `{"rationale", "model", "confidence"}` (lithos `lcma/edge_inference.py`),
   shown as the rationale paragraph with model and confidence chips, any
   missing (or mistyped) key omitted — an object with none of the three shows
-  no evidence at all. Any failure to read it — not JSON, not an object, or a
-  `confidence` number no float holds (`1e400`, `NaN`) — shows the string raw
+  no evidence at all. Any failure to read it — not JSON, JSON nested deeper than
+  the decoder's recursion limit, not an object, or a `confidence` number no
+  float holds (`1e400`, `NaN`) — shows the string raw
   as escaped text, and never fails the rest of the panel. A row with nothing
   to show (null or empty evidence, no provenance) has no disclosure; a
   reinforcement or frontmatter edge (null evidence) shows its provenance line

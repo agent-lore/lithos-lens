@@ -62,6 +62,9 @@ def test_partial_evidence_json_yields_only_the_present_fields(
         # Decoded, but a number no float holds: a normalization failure.
         json.dumps({"rationale": "Manual supporting evidence.", "confidence": 10**400}),
         '{"rationale": "Not a number.", "confidence": NaN}',
+        # Nested past the decoder's recursion limit: json.loads raises
+        # RecursionError, not ValueError.
+        pytest.param("[" * 10000 + "0" + "]" * 10000, id="nested-past-recursion"),
     ],
 )
 def test_evidence_that_is_not_the_inference_json_is_kept_raw(raw: str) -> None:
@@ -96,6 +99,19 @@ def test_an_overflowing_confidence_keeps_the_neighborhood_renderable() -> None:
     assert ref.why == EdgeWhy(
         provenance="asserted by agent-x", evidence=EdgeEvidence(raw=evidence)
     )
+
+
+def test_too_deeply_nested_evidence_keeps_the_neighborhood_renderable() -> None:
+    evidence = "[" * 10000 + "0" + "]" * 10000
+    row = {
+        "from_id": "root",
+        "to_id": "other",
+        "type": "supports",
+        "evidence": evidence,
+    }
+    (ref,) = normalize_related({"edges": {"outgoing": [row]}}).edges
+
+    assert ref.why == EdgeWhy(evidence=EdgeEvidence(raw=evidence))
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])

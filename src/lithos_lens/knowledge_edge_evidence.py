@@ -62,15 +62,17 @@ def parse_edge_evidence(value: Any) -> EdgeEvidence | None:
 
     ``json.loads`` on the string: a dict yields whichever of ``rationale`` /
     ``model`` / ``confidence`` it carries (missing or mistyped ones omitted, so
-    ``{}`` yields an empty projection). Any failure — invalid JSON, a
-    non-object, a ``confidence`` number no float holds (``1e400``, ``NaN``) —
-    falls back to the raw string.
+    ``{}`` yields an empty projection). Any failure — invalid or too deeply
+    nested JSON, a non-object, a ``confidence`` number no float holds
+    (``1e400``, ``NaN``) — falls back to the raw string.
     """
     if not isinstance(value, str) or not value.strip():
         return None
     try:
         parsed = json.loads(value)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: nesting deeper than the decoder's limit is a decode
+        # failure too, and must not fail the panel the row sits in.
         return EdgeEvidence(raw=value)
     if not isinstance(parsed, dict):
         return EdgeEvidence(raw=value)

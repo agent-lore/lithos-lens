@@ -264,7 +264,7 @@
         "functions": 74,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 1653,
+        "lines": 1655,
         "modules": 6,
         "public_symbols": 34,
         "sloc": 1246
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 31105,
+    "total_lines": 31107,
     "total_modules": 77,
     "total_sloc": 23977
   },
   "tests": {
     "ratio": 1.96,
-    "src_lines": 31105,
-    "test_lines": 61042
+    "src_lines": 31107,
+    "test_lines": 61058
   }
 }
