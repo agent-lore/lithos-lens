@@ -162,6 +162,50 @@ async function compactChipRowsAreWhole(page: Page) {
   }
 }
 
+/**
+ * The note page's related panel placement (§5.7). At and above the sidebar
+ * breakpoint (`min-width: 701px`, the stylesheet's one two-column breakpoint)
+ * the aside sits BESIDE the article and stays on screen while a long body
+ * scrolls; below it, it follows the body. Either way the summary line under
+ * the chips is on the first screen. The page is scrolled back to the top
+ * before returning so the capture starts where a reader does.
+ */
+// The first width at which the note page's related panel is a sidebar: the
+// complement of the stylesheet's `max-width: 700px` block, where the task
+// pages' two-column rows collapse (§5.7).
+const SIDEBAR_MIN_WIDTH = 701;
+
+async function relatedPanelPlacement(page: Page) {
+  const width = page.viewportSize()!.width;
+  const placement = await page.evaluate(() => {
+    const article = document.querySelector(".note-layout > article")!;
+    const aside = document.querySelector(".note-layout > aside.related-panel")!;
+    const summary = document.querySelector("[data-related-summary]")!;
+    const a = article.getBoundingClientRect();
+    const r = aside.getBoundingClientRect();
+    // Far down the body, past the panel's own height.
+    window.scrollTo(0, a.top + window.scrollY + a.height / 2);
+    const scrolled = aside.getBoundingClientRect();
+    window.scrollTo(0, 0);
+    return {
+      long: a.height > 2 * window.innerHeight,
+      beside: r.left >= a.right && Math.abs(r.top - a.top) < 2,
+      below: r.top >= a.bottom,
+      stuck: scrolled.top >= 0 && scrolled.top < 40,
+      summaryOnFirstScreen:
+        summary.getBoundingClientRect().bottom <= window.innerHeight,
+    };
+  });
+  expect(placement.long).toBe(true);
+  expect(placement.summaryOnFirstScreen).toBe(true);
+  if (width >= SIDEBAR_MIN_WIDTH) {
+    expect(placement.beside).toBe(true);
+    expect(placement.stuck).toBe(true);
+  } else {
+    expect(placement.below).toBe(true);
+  }
+}
+
 const WIDTHS = [320, 768, 1024, 1440] as const;
 
 const PAGES: ReadonlyArray<{
@@ -764,6 +808,22 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // A full-text note several screens long: the related panel is a sticky
+    // sidebar at the wide widths and follows the body at the narrow ones, and
+    // the summary line under the chips states its groups on the first screen.
+    slug: "note-long",
+    url: "/note/note-influx-capacity",
+    ready: async (page) => {
+      await expect(
+        page.getByRole("complementary", { name: "Related notes" }),
+      ).toBeVisible();
+      await expect(page.locator("[data-related-summary]")).toHaveText(
+        /Related:\s*2 outgoing links · 1 source · 3 typed edges/,
+      );
+      await relatedPanelPlacement(page);
+    },
+  },
+  {
     slug: "note-quarantined",
     url: "/note/note-influx-legacy-ingest",
     ready: async (page) => {
@@ -883,3 +943,36 @@ for (const { slug, url, ready } of PAGES) {
     });
   }
 }
+
+/**
+ * The sidebar breakpoint IS the task pages' two-column breakpoint, checked on
+ * both sides of the boundary rather than only at the capture widths (which
+ * would pass with the threshold anywhere in 321–768px). At 700px a task row
+ * has collapsed to one column and the related panel follows the note body;
+ * at 701px the row has two columns and the panel is a sticky sidebar.
+ */
+test("the related sidebar starts where the task rows' two columns do", async ({
+  page,
+}) => {
+  const rowColumns = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".task-row")!)
+          .gridTemplateColumns.split(" ").length,
+    );
+  for (const [width, columns] of [
+    [SIDEBAR_MIN_WIDTH - 1, 1],
+    [SIDEBAR_MIN_WIDTH, 2],
+  ] as const) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/tasks?since=2026-08-01");
+    await expect(page.locator(".task-row").first()).toBeVisible();
+    expect(await rowColumns()).toBe(columns);
+
+    await page.goto("/note/note-influx-capacity");
+    await expect(
+      page.getByRole("complementary", { name: "Related notes" }),
+    ).toBeVisible();
+    await relatedPanelPlacement(page);
+  }
+});

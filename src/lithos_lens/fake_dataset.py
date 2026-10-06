@@ -124,6 +124,31 @@ class FakeLithosDataset:
                 object.__setattr__(self, f.name, MappingProxyType(dict(value)))
 
 
+def _capacity_report_body() -> str:
+    """A full-text note several screens long — the related panel's layout case."""
+    rows = "".join(
+        f"| {w} | {9000 + 450 * w} | {120 + 7 * w} | {41 + 3 * w}% |\n"
+        for w in range(1, 13)
+    )
+    weeks = "".join(
+        f"## Week {w}\n\nIngest held steady through week {w}; dual-write added a "
+        "small, flat overhead on writes and none on reads, and compaction kept "
+        "pace.\n\nQuery latency tracked the dashboard refresh cycle rather than "
+        "ingest volume, so the read path's cache, not storage, is the next "
+        "constraint. The rollback route was exercised once in staging and "
+        f"restored dual-write in time.\n\n- Peak burst: {12000 + 300 * w} points/s"
+        "\n- Incidents: none\n\n"
+        for w in range(1, 13)
+    )
+    return (
+        "# Influx capacity report\n\nWrite and query load across the migration "
+        "window. See [[plans/influx-migration|the migration plan]] for the stages "
+        "these weeks map onto.\n\n## Weekly load\n\n| Week | Writes/s (p95) | "
+        "Query p95 (ms) | Disk used |\n| --- | --- | --- | --- |\n"
+        f"{rows}\n{weeks}"
+    )
+
+
 def demo_dataset() -> FakeLithosDataset:
     """Build the shipped demo fixture set for fake-Lithos app mode.
 
@@ -207,6 +232,20 @@ def demo_dataset() -> FakeLithosDataset:
             tags=("project:influx", "kind:runbook"),
             metadata={"updated_at": "2026-08-05T12:00:00+00:00"},
         ),
+        # Long-body fixture: the summary line + sidebar case (§5.7).
+        "note-influx-capacity": NoteRecord(
+            id="note-influx-capacity",
+            title="Influx capacity report",
+            content=_capacity_report_body(),
+            tags=("project:influx", "kind:report"),
+            metadata={
+                "note_type": "observation",
+                "status": "active",
+                "namespace": "reports",
+                "confidence": 0.8,
+                "updated_at": "2026-07-28T09:00:00+00:00",
+            },
+        ),
     }
 
     # Related-panel (K1-S4) neighborhood fixtures over the two notes: the plan
@@ -227,6 +266,22 @@ def demo_dataset() -> FakeLithosDataset:
                     direction="incoming",
                     conflict_state="unresolved",
                 ),
+            ),
+        ),
+        # Every group but back-links: the summary line counts and omits.
+        "note-influx-capacity": RelatedNeighborhood(
+            links=(
+                RelatedRef(id="note-influx-plan", title="Influx migration plan"),
+                RelatedRef(id="note-influx-rollback", title="Influx rollback route"),
+            ),
+            sources=(RelatedRef(id="note-influx-plan", title="Influx migration plan"),),
+            edges=tuple(
+                RelatedRef(id=f"note-influx-{end}", edge_type=kind, direction=way)
+                for end, kind, way in (
+                    ("plan", "supports", "outgoing"),
+                    ("rollback", "related_to", "outgoing"),
+                    ("legacy-ingest", "contradicts", "incoming"),
+                )
             ),
         ),
         "note-influx-rollback": RelatedNeighborhood(
@@ -547,6 +602,7 @@ def demo_dataset() -> FakeLithosDataset:
             "plans/influx-migration.md": "note-influx-plan",
             "plans/legacy-ingest.md": "note-influx-legacy-ingest",
             "runbooks/influx-rollback.md": "note-influx-rollback",
+            "reports/influx-capacity.md": "note-influx-capacity",
         },
         related_neighborhoods=related_neighborhoods,
         # Graph oracle: every open workable task is placed on exactly one
