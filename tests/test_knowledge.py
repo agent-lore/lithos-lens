@@ -665,8 +665,12 @@ def test_note_page_renders_markdown_body_as_html(
         ),
         # Only the first block: a second matching H1 right after is kept.
         ("# Influx plan\n\n# Influx plan", "Influx plan", "<h1>Influx plan</h1>\n"),
-        # No title to compare against: nothing is collapsed.
+        # An empty title differs from a non-empty H1, which is kept...
         ("# Influx plan", "", "<h1>Influx plan</h1>\n"),
+        # ...but an empty H1 repeats an empty or whitespace-only title (the
+        # header shows an empty h1 too), so it is collapsed like any other.
+        ("#\n\nBody.", "", "<p>Body.</p>\n"),
+        ("#\n\nBody.", " \t ", "<p>Body.</p>\n"),
         # A wiki-link renders as an anchor showing its display text, so the H1
         # is compared by that text (with or without a ``|display`` alias)...
         ("# [[Plan]]\n\nBody.", "Plan", "<p>Body.</p>\n"),
@@ -708,6 +712,31 @@ def test_render_markdown_collapses_a_leading_h1_repeating_the_title(
     body: str, title: str, expected: str
 ) -> None:
     assert render_markdown(body, "n", title=title) == expected
+
+
+def test_render_markdown_without_a_title_collapses_nothing() -> None:
+    # No title supplied is not an empty title: even an empty H1 is kept.
+    assert render_markdown("#\n\nBody.", "n") == "<h1></h1>\n<p>Body.</p>\n"
+
+
+def test_note_page_collapses_an_empty_body_h1_under_a_blank_title(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["blank-note"] = NoteRecord(
+        id="blank-note", title=" \t ", content="#\n\nBody."
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/blank-note")
+
+    assert response.status_code == 200
+    assert response.text.count("<h1") == 1
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == "<p>Body.</p>\n"
 
 
 def test_note_page_collapses_body_h1_that_repeats_the_title(

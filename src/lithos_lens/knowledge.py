@@ -90,7 +90,7 @@ MARKDOWN = (
 MARKDOWN.validateLink = _validate_link
 
 
-def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
+def render_markdown(text: str, from_id: str = "", title: str | None = None) -> str:
     """Render a note's markdown body to safe HTML.
 
     Raw HTML in ``text`` is escaped and link schemes outside the §6.2
@@ -105,7 +105,7 @@ def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
 
     ``title`` is the note's frontmatter title, which the page already shows
     above the body: a first block that is an H1 repeating it is omitted (see
-    :func:`is_title_heading`).
+    :func:`is_title_heading`). ``None`` (no title supplied) collapses nothing.
     """
     body = text or ""
     try:
@@ -123,7 +123,7 @@ def render_markdown(text: str, from_id: str = "", title: str = "") -> str:
         return _escaped_plaintext(body)
 
 
-def is_title_heading(tokens: list[Token], title: str) -> bool:
+def is_title_heading(tokens: list[Token], title: str | None) -> bool:
     """Whether the first block of a parsed body is an H1 repeating ``title``.
 
     Most ingested notes open their body with their own title as an ``# H1``,
@@ -132,17 +132,17 @@ def is_title_heading(tokens: list[Token], title: str) -> bool:
     a fence token, and only the very first block is considered. The H1 is
     compared by the text it renders, not its source, so ``# **Plan**`` repeats
     the title ``Plan`` while ``# Plan`` does not repeat ``**Plan**`` — and a
-    ``[[wiki-link]]`` counts as the text its anchor shows. Both sides
-    are trimmed and whitespace-collapsed; the match is case-sensitive, and an
-    empty title matches nothing.
+    ``[[wiki-link]]`` counts as the text its anchor shows. Both sides are
+    trimmed and whitespace-collapsed; the match is case-sensitive, so a blank
+    title (an empty header) matches an empty H1. ``None`` matches nothing.
     """
-    wanted = " ".join(title.split())
     return (
-        bool(wanted)
+        title is not None
         and len(tokens) >= 3
         and tokens[0].type == "heading_open"
         and tokens[0].tag == "h1"
-        and " ".join(_heading_text(tokens[1].children or []).split()) == wanted
+        and " ".join(_heading_text(tokens[1].children or []).split())
+        == " ".join(title.split())
     )
 
 

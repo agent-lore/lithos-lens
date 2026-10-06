@@ -101,8 +101,11 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
         ("# Influx plan\n# Influx plan\nBody", "Influx plan", "# Influx plan\nBody"),
         # The snippet is just the title line: nothing is left to show.
         ("# Influx plan", "Influx plan", ""),
-        # No title to compare against: the snippet is untouched.
+        # An empty title differs from a non-empty heading line, which is kept...
         ("# Influx plan\nBody", "", "# Influx plan\nBody"),
+        # ...but an empty heading repeats an empty or whitespace-only title.
+        ("#\nBody", "", "Body"),
+        ("#\n\nBody.", " \t ", "Body."),
         # An image counts as its rendered alt (code spans dropped), as on the
         # note page.
         ("# Influx plan ![`deco`](/i.svg)\nBody", "Influx plan", "Body"),

@@ -367,6 +367,6 @@
   "tests": {
     "ratio": 1.96,
     "src_lines": 30821,
-    "test_lines": 60490
+    "test_lines": 60522
   }
 }
