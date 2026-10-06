@@ -105,7 +105,7 @@ When a finding links to a knowledge document, clicking that link opens the note 
 
 ![](screenshots/note.png)
 
-The note page shows the document's title, its tags, and its content, with a **← Back to tasks** link to return to where you came from. Because you arrived from a finding, Lens keeps the originating task in context. This is a reading view onto Lithos knowledge — Lens displays the note, it does not let you edit it.
+The note page shows the document's title, its tags, and its content, with a back link to return to where you came from. Arriving from a finding, Lens keeps the originating task in context and the link reads **← Back to** *the task's title*. Arriving from the knowledge view, it returns you to the list you clicked: **← Back to search results**, or **← Back to notes tagged** *the tag*. Anywhere else — a related note, a wiki-link — it reads **← Back to knowledge**. This is a reading view onto Lithos knowledge — Lens displays the note, it does not let you edit it.
 
 ---
 

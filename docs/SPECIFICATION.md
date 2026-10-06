@@ -1202,6 +1202,14 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   the cap
 - a **produced-by chip** when the note came from a task and that task reads
   back successfully
+- a **back link** naming where it returns to: with `?task=` (a finding's
+  document link, `request_filters.note_url`), "Back to <task title>" — this
+  takes priority; otherwise with a `next=` that passes `write_guards.safe_next`
+  (the landing's result links carry the landing URL, q and tag preserved, via
+  `request_filters.knowledge_note_url`), "Back to search results" / "Back to
+  notes tagged <tag>"; otherwise "Back to knowledge" → `/knowledge`. Note-to-note
+  hops (related panel, wiki-links, the resolver) carry no `next`, and the
+  resolver's own pages link back to `/knowledge` too
 
 `GET /knowledge` is the landing page: hybrid search over notes, a
 recently-updated list, and tag browse.

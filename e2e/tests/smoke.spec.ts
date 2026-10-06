@@ -941,6 +941,29 @@ test("clicking a note tag opens the filtered knowledge landing", async ({
   ).toBeVisible();
 });
 
+test("a note opened from search results goes back to those results", async ({
+  page,
+}) => {
+  await page.goto("/knowledge?q=influx");
+
+  await page
+    .locator(".knowledge-cards a", { hasText: "Influx migration plan" })
+    .click();
+  await expect(page).toHaveURL(/\/note\/note-influx-plan\?next=/);
+
+  const back = page.getByRole("link", { name: "← Back to search results" });
+  await expect(back).toBeVisible();
+  await back.click();
+
+  await expect(page).toHaveURL(/\/knowledge\?q=influx$/);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Results for “influx”" }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".knowledge-cards a", { hasText: "Influx migration plan" }),
+  ).toBeVisible();
+});
+
 test("quarantined note is visibly quarantined (computed style)", async ({
   page,
 }) => {

@@ -591,6 +591,26 @@ def note_url(knowledge_id: str, task_id: str = "") -> str:
     return f"/note/{quote(knowledge_id, safe='')}{task_suffix}"
 
 
+def knowledge_landing_url(query: str = "", tag: str = "") -> str:
+    """The ``/knowledge`` landing as rendered: its search and tag filter, if any.
+
+    The return address the landing hands to every note it links (see
+    :func:`knowledge_note_url`), so a back link lands on the same results.
+    """
+    params = [(key, value) for key, value in (("q", query), ("tag", tag)) if value]
+    return f"/knowledge?{urlencode(params)}" if params else "/knowledge"
+
+
+def knowledge_note_url(knowledge_id: str, next_url: str) -> str:
+    """Link a landing result to its note, id-encoded, carrying ``next=``.
+
+    The id is a free string off a Lithos payload, encoded as ONE path segment
+    for the reason :func:`note_url` gives. ``next_url`` comes back to
+    ``/note/{id}`` as untrusted input and is re-checked by ``safe_next`` there.
+    """
+    return f"/note/{quote(knowledge_id, safe='')}?{urlencode({'next': next_url})}"
+
+
 def epic_scope_url(request: Request, epic_id: str) -> str:
     """Link an epic chip to the dashboard scoped to that epic — or unscoped.
 

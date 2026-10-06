@@ -86,7 +86,7 @@ def test_knowledge_query_renders_search_cards_with_snippet_and_updated(
 
     assert response.status_code == 200
     assert "Results for" in response.text
-    assert 'href="/note/plan"' in response.text
+    assert 'href="/note/plan?next=' in response.text
     assert "Influx migration plan" in response.text
     # The card carries a snippet window of the body...
     assert "ingest path" in response.text
@@ -182,8 +182,8 @@ def test_knowledge_query_with_tag_filters_the_search(
         response = client.get("/knowledge?q=shared&tag=project:x")
 
     assert response.status_code == 200
-    assert 'href="/note/a"' in response.text
-    assert 'href="/note/b"' not in response.text
+    assert 'href="/note/a?next=' in response.text
+    assert 'href="/note/b' not in response.text
 
 
 # ── landing page: recently-updated browse (no query) ───────────────────
@@ -220,7 +220,7 @@ def test_bare_knowledge_renders_recent_list_newest_first(
     assert response.status_code == 200
     assert "Recently updated" in response.text
     positions = {
-        note_id: response.text.index(f'href="/note/{note_id}"')
+        note_id: response.text.index(f'href="/note/{note_id}?next=')
         for note_id in ("newest", "middle", "oldest")
     }
     assert positions["newest"] < positions["middle"] < positions["oldest"]
@@ -290,9 +290,9 @@ def test_knowledge_tag_browse_forwards_tag_and_orders_newest_first(
 
     assert recent_calls == [{"tags": ["project:x"], "limit": 20}]
     assert response.status_code == 200
-    assert 'href="/note/y"' not in response.text
-    assert response.text.index('href="/note/new-x"') < response.text.index(
-        'href="/note/old-x"'
+    assert 'href="/note/y' not in response.text
+    assert response.text.index('href="/note/new-x?next=') < response.text.index(
+        'href="/note/old-x?next='
     )
 
 
@@ -372,8 +372,8 @@ def test_search_submitted_from_tag_page_stays_filtered(
 
     assert '<input type="hidden" name="tag" value="project:x">' in tag_page.text
     assert response.status_code == 200
-    assert 'href="/note/a"' in response.text
-    assert 'href="/note/b"' not in response.text
+    assert 'href="/note/a?next=' in response.text
+    assert 'href="/note/b' not in response.text
     # The results page still shows (and can clear) the active filter.
     assert "Filtered by" in response.text
     assert "clear filter" in response.text
