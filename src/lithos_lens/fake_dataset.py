@@ -23,7 +23,8 @@ from types import MappingProxyType
 from typing import Any
 
 from lithos_lens.fake_graph_dataset import ROADMAP_TAG, graph_fixtures
-from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.fake_knowledge_dataset import related_fixtures
+from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
     AgentRecord,
@@ -245,58 +246,6 @@ def demo_dataset() -> FakeLithosDataset:
                 "confidence": 0.8,
                 "updated_at": "2026-07-28T09:00:00+00:00",
             },
-        ),
-    }
-
-    # Related-panel (K1-S4) neighborhood fixtures over the two notes: the plan
-    # wiki-links the rollback route (outgoing link / incoming back-link) and
-    # the rollback route carries an unresolved ``contradicts`` edge against the
-    # plan, so the panel's direction badges and conflict label all render.
-    related_neighborhoods: dict[str, RelatedNeighborhood] = {
-        "note-influx-plan": RelatedNeighborhood(
-            links=(
-                RelatedRef(id="note-influx-rollback", title="Influx rollback route"),
-            ),
-            unresolved=("drafts/influx-capacity.md",),
-            edges=(
-                RelatedRef(
-                    id="note-influx-rollback",
-                    edge_type="contradicts",
-                    weight=0.8,
-                    direction="incoming",
-                    conflict_state="unresolved",
-                ),
-            ),
-        ),
-        # Every group but back-links: the summary line counts and omits.
-        "note-influx-capacity": RelatedNeighborhood(
-            links=(
-                RelatedRef(id="note-influx-plan", title="Influx migration plan"),
-                RelatedRef(id="note-influx-rollback", title="Influx rollback route"),
-            ),
-            sources=(RelatedRef(id="note-influx-plan", title="Influx migration plan"),),
-            edges=tuple(
-                RelatedRef(id=f"note-influx-{end}", edge_type=kind, direction=way)
-                for end, kind, way in (
-                    ("plan", "supports", "outgoing"),
-                    ("rollback", "related_to", "outgoing"),
-                    ("legacy-ingest", "contradicts", "incoming"),
-                )
-            ),
-        ),
-        "note-influx-rollback": RelatedNeighborhood(
-            backlinks=(
-                RelatedRef(id="note-influx-plan", title="Influx migration plan"),
-            ),
-            edges=(
-                RelatedRef(
-                    id="note-influx-plan",
-                    edge_type="contradicts",
-                    weight=0.8,
-                    direction="outgoing",
-                    conflict_state="unresolved",
-                ),
-            ),
         ),
     }
 
@@ -604,7 +553,7 @@ def demo_dataset() -> FakeLithosDataset:
             "runbooks/influx-rollback.md": "note-influx-rollback",
             "reports/influx-capacity.md": "note-influx-capacity",
         },
-        related_neighborhoods=related_neighborhoods,
+        related_neighborhoods=related_fixtures(),
         # Graph oracle: every open workable task is placed on exactly one
         # frontier so none falls into the Not-classified tail (a healthy corpus
         # this small can never be limit-truncated). `influx-ingest-cutover` is

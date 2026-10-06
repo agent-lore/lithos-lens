@@ -105,6 +105,7 @@ source_modules = [
     "lithos_lens.knowledge_metadata",
     "lithos_lens.knowledge_produced_by",
     "lithos_lens.knowledge_search",
+    "lithos_lens.knowledge_edge_evidence",
     "lithos_lens.config",
     "lithos_lens.config_env",
     "lithos_lens.config_fields",
@@ -129,6 +130,7 @@ forbidden_modules = [
     "lithos_lens.fake_store",
     "lithos_lens.fake_dataset",
     "lithos_lens.fake_graph_dataset",
+    "lithos_lens.fake_knowledge_dataset",
     "lithos_lens.state",
     "lithos_lens.web",
     "lithos_lens.request_filters",
@@ -157,6 +159,7 @@ source_modules = [
     "lithos_lens.fake_store",
     "lithos_lens.fake_dataset",
     "lithos_lens.fake_graph_dataset",
+    "lithos_lens.fake_knowledge_dataset",
     "lithos_lens.state",
 ]
 forbidden_modules = [

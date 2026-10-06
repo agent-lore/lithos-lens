@@ -33,6 +33,15 @@ classDiagram
     +source str
     +truncated bool
   }
+  class EdgeEvidence {
+    +rationale str
+    +model str
+    +confidence float | None
+    +raw str
+  }
+  class EdgeWhy {
+    +provenance str
+  }
   class ListChips {
     +fanout int
     +capped_at int
@@ -103,7 +112,9 @@ classDiagram
     +updated str
     +score float | None
   }
+  EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
   ListChips "1" --> "0..*" NoteMetadata : by_id
+  RelatedItem "1" --> "0..1" EdgeWhy : why
   RelatedNeighborhood "1" --> "0..*" RelatedRef : backlinks
   RelatedNeighborhood "1" --> "0..*" RelatedRef : derived
   RelatedNeighborhood "1" --> "0..*" RelatedRef : edges
@@ -114,6 +125,7 @@ classDiagram
   RelatedPanel "1" --> "1" RelatedSection : edges
   RelatedPanel "1" --> "1" RelatedSection : links
   RelatedPanel "1" --> "1" RelatedSection : sources
+  RelatedRef "1" --> "0..1" EdgeWhy : why
   RelatedSection "1" --> "0..*" RelatedItem : items
   ResolveOutcome "1" --> "0..*" ResolveCandidate : candidates
 ```

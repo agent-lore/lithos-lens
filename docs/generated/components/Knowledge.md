@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, the search-result view model, and wiki-link resolution recording which arm decided.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, and wiki-link resolution recording which arm decided.
 
 **Tier:** Foundation
 
@@ -12,6 +12,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 7 | 7 |
+| `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
@@ -34,6 +35,14 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `KnowledgeLithosClientProtocol` — Subset of Lithos operations required by the knowledge note view.
 - def `load_related_panel` — Load and resolve a note's related panel from one ``lithos_related`` call.
 - def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
+
+### `lithos_lens.knowledge_edge_evidence`
+- class `EdgeEvidence` — An edge's parsed ``evidence``: the three known keys, or the raw text.
+- class `EdgeWhy` — What the "why?" disclosure on a typed-edge row shows.
+- def `parse_edge_evidence` — Parse an edge row's ``evidence``; ``None`` when there is nothing to show.
+- def `provenance_label` — The plain-language provenance line, e.g. "inferred by lithos-enrich".
+- def `edge_why` — The disclosure for one raw edge row; ``None`` when it would be empty.
+- def `number_or_none` — A JSON number (not a bool) as a float; anything else is ``None``.
 
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).

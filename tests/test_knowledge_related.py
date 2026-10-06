@@ -24,6 +24,7 @@ from lithos_lens.knowledge import (
     load_related_panel,
     normalize_related,
 )
+from lithos_lens.knowledge_edge_evidence import EdgeWhy, edge_why
 from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import LithosClient, LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
@@ -223,8 +224,8 @@ def _edge_row(**overrides: Any) -> dict[str, Any]:
         "updated_at": "2026-05-01T00:00:00+00:00",
         "provenance_actor": "agent-x",
         "provenance_type": "asserted",
-        "evidence": "",
-        "conflict_state": "",
+        "evidence": None,
+        "conflict_state": None,
     }
     row.update(overrides)
     return row
@@ -257,6 +258,7 @@ def test_normalize_related_outgoing_edge_selects_to_id_endpoint() -> None:
             weight=0.75,
             direction="outgoing",
             conflict_state="",
+            why=EdgeWhy(provenance="asserted by agent-x"),
         ),
     )
 
@@ -285,6 +287,7 @@ def test_normalize_related_incoming_edge_selects_from_id_endpoint() -> None:
             weight=0.9,
             direction="incoming",
             conflict_state="unresolved",
+            why=EdgeWhy(provenance="asserted by agent-x"),
         ),
     )
 
@@ -986,3 +989,102 @@ def test_note_page_flows_raw_related_payload_to_html(
     assert related_calls == [("lithos_related", {"id": "root", "depth": 1})]
     # The duplicated edge endpoint is looked up once, not per edge row.
     assert stub.read_ids().count("dup-1") == 1
+
+
+# ── typed-edge "why?" disclosure ───────────────────────────────────────
+
+
+def test_normalize_related_parses_the_contract_edges_evidence() -> None:
+    """The contract's inferred edge carries its evidence JSON string; the
+    asserted edge's evidence is null, so it explains itself by provenance."""
+    outgoing, incoming = normalize_related(REAL_RELATED_PAYLOAD).edges
+
+    assert outgoing.why is not None and outgoing.why.evidence is not None
+    assert outgoing.why.provenance == "inferred by lithos-enrich"
+    assert outgoing.why.evidence.rationale.startswith("The root note's benchmark")
+    assert outgoing.why.evidence.confidence == 0.75
+    assert incoming.why == EdgeWhy(provenance="asserted by agent-x")
+
+
+def _edge_rows(html: str) -> list[str]:
+    """The typed-edge section's rows, one markup string each."""
+    section = html.split('id="related-edges"', 1)[1].split("</ul>", 1)[0]
+    return section.split("<li>")[1:]
+
+
+def _fixture_note(config_path: Path, monkeypatch: pytest.MonkeyPatch, note: str) -> str:
+    monkeypatch.setenv("LITHOS_LENS_FAKE_LITHOS", "1")
+    app = create_app(load_config(config_path))
+    with TestClient(app) as client:
+        response = client.get(f"/note/{note}")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_fixture_inferred_edge_row_discloses_its_rationale(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = _edge_rows(
+        _fixture_note(lithos_lens_config_env, monkeypatch, "note-influx-capacity")
+    )
+    (inferred,) = [row for row in rows if 'edge-type">supports' in row]
+
+    assert '<details class="edge-why" data-edge-why>' in inferred
+    assert "<summary>why?</summary>" in inferred
+    assert "inferred by lithos-enrich" in inferred
+    assert (
+        "The capacity report&#39;s measured write rate is the headroom "
+        "the migration plan&#39;s cutover window assumes." in inferred
+    )
+    assert "model claude-haiku-4-5" in inferred
+    assert "confidence 0.82" in inferred
+    # A reinforcement edge has no rationale, and says what it is instead.
+    (reinforced,) = [row for row in rows if 'edge-type">related_to' in row]
+    assert "reinforced by citation" in reinforced
+    assert "data-edge-rationale" not in reinforced
+
+
+def test_fixture_frontmatter_row_says_declared_and_shows_no_rationale(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = _edge_rows(
+        _fixture_note(lithos_lens_config_env, monkeypatch, "note-influx-rollback")
+    )
+    (declared,) = [row for row in rows if 'edge-type">derived_from' in row]
+
+    assert "data-edge-why" in declared
+    assert "declared in frontmatter" in declared
+    assert "data-edge-rationale" not in declared
+    assert "data-edge-model" not in declared
+    # An edge row with neither evidence nor provenance gets no disclosure.
+    (bare,) = [row for row in rows if 'edge-type">contradicts' in row]
+    assert "data-edge-why" not in bare
+
+
+def test_raw_evidence_renders_as_escaped_text(
+    lithos_lens_config_env: Path,
+) -> None:
+    note = NoteRecord(id="root", title="Root Note", content="Body.")
+    why = edge_why(
+        {
+            "provenance_type": "asserted",
+            "provenance_actor": "agent-x",
+            "evidence": "<script>alert(1)</script>",
+        }
+    )
+    fake = KnowledgeFakeLithosClient(
+        neighborhood=RelatedNeighborhood(
+            edges=(RelatedRef(id="edge-1", edge_type="supports", why=why),)
+        ),
+        titles={"edge-1": "Edge Note"},
+        note=note,
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        html = client.get("/note/root").text
+
+    (row,) = _edge_rows(html)
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in row
+    assert "data-edge-evidence-raw" in row
+    assert "asserted by agent-x" in row
