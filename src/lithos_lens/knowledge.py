@@ -130,7 +130,8 @@ def is_title_heading(tokens: list[Token], title: str) -> bool:
     a regex over the raw markdown (§6.3): an H1-shaped line in a code fence is
     a fence token, and only the very first block is considered. The H1 is
     compared by the text it renders, not its source, so ``# **Plan**`` repeats
-    the title ``Plan`` while ``# Plan`` does not repeat ``**Plan**``. Both sides
+    the title ``Plan`` while ``# Plan`` does not repeat ``**Plan**`` — and a
+    ``[[wiki-link]]`` counts as the text its anchor shows. Both sides
     are trimmed and whitespace-collapsed; the match is case-sensitive, and an
     empty title matches nothing.
     """
@@ -140,8 +141,13 @@ def is_title_heading(tokens: list[Token], title: str) -> bool:
         and len(tokens) >= 3
         and tokens[0].type == "heading_open"
         and tokens[0].tag == "h1"
-        and " ".join(_inline_text(tokens[1].children or []).split()) == wanted
+        and " ".join(_heading_text(tokens[1].children or []).split()) == wanted
     )
+
+
+def _heading_text(children: list[Token]) -> str:
+    """The text an H1 renders, read after ``[[wiki-link]]`` splicing (copied)."""
+    return _inline_text(_splice_children(children, ""))
 
 
 def _inline_text(children: list[Token]) -> str:

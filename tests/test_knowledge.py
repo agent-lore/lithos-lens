@@ -667,6 +667,26 @@ def test_note_page_renders_markdown_body_as_html(
         ("# Influx plan\n\n# Influx plan", "Influx plan", "<h1>Influx plan</h1>\n"),
         # No title to compare against: nothing is collapsed.
         ("# Influx plan", "", "<h1>Influx plan</h1>\n"),
+        # A wiki-link renders as an anchor showing its display text, so the H1
+        # is compared by that text (with or without a ``|display`` alias)...
+        ("# [[Plan]]\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        ("# [[elsewhere|Plan]]\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        # ...and a title that IS the wiki source differs from what it renders.
+        (
+            "# [[Plan]]\n\nBody.",
+            "[[Plan]]",
+            '<h1><a href="/knowledge/resolve?target=Plan&amp;from=n" '
+            'class="wiki-link">Plan</a></h1>\n<p>Body.</p>\n',
+        ),
+        # Wiki syntax in a code span or a Markdown link label stays literal,
+        # so it is compared literally.
+        ("# `[[Plan]]`\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),
+        ("# [[[Plan]]](https://x.example)\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),
+        (
+            "# `[[Plan]]`\n\nBody.",
+            "Plan",
+            "<h1><code>[[Plan]]</code></h1>\n<p>Body.</p>\n",
+        ),
     ],
 )
 def test_render_markdown_collapses_a_leading_h1_repeating_the_title(

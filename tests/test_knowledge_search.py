@@ -101,6 +101,9 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
         ("# Influx plan", "Influx plan", ""),
         # No title to compare against: the snippet is untouched.
         ("# Influx plan\nBody", "", "# Influx plan\nBody"),
+        # A wiki-link heading compares by its display text, like the note page.
+        ("# [[Influx plan]]\nBody", "Influx plan", "Body"),
+        ("# [[Influx plan]]\nBody", "[[Influx plan]]", "# [[Influx plan]]\nBody"),
     ],
 )
 def test_normalize_search_result_drops_a_leading_title_line(
@@ -541,6 +544,68 @@ def test_client_search_notes_drops_a_snippet_title_line_repeating_the_title() ->
 
     assert rows[0].title == "Influx migration plan"
     assert rows[0].snippet == "## Cutover\n\nThe influx cutover runs…"
+
+
+# A server-windowed snippet well past any plausible Lens-side cap (the fake's
+# own 160-char window included), ending in a suffix only a whole snippet keeps.
+_LONG_SNIPPET_BODY = "The influx cutover runs in three phases. " * 15 + "TAIL-7f3e9"
+
+
+@pytest.mark.parametrize(
+    ("snippet", "expected"),
+    [
+        # Matching title line: dropped, the rest shown whole.
+        ("# Influx migration plan\n\n" + _LONG_SNIPPET_BODY, _LONG_SNIPPET_BODY),
+        # Non-matching title line: the snippet exactly as Lithos sent it.
+        ("# Other\n\n" + _LONG_SNIPPET_BODY, "# Other\n\n" + _LONG_SNIPPET_BODY),
+    ],
+)
+def test_client_search_notes_keeps_a_long_snippet_whole(
+    snippet: str, expected: str
+) -> None:
+    # Lithos windows the snippet; Lens adds no truncation of its own.
+    row = dict(REAL_LITHOS_SEARCH_PAYLOAD["results"][0])
+    row["snippet"] = snippet
+    client = _StubLithosClient({"lithos_search": {"results": [row], "total": 1}})
+
+    rows = _run_client(client, client.search_notes("influx"))
+
+    assert rows[0].snippet == expected
+
+
+class _ServerSnippetFake(FakeLithosClient):
+    """Answers ``search_notes`` with one row carrying a given server snippet."""
+
+    def __init__(self, snippet: str) -> None:
+        super().__init__(dataset=_dataset({}))
+        self._snippet = snippet
+
+    async def search_notes(
+        self, query: str, *, tags: list[str] | None = None, limit: int | None = None
+    ) -> list[SearchResult]:
+        return [
+            normalize_search_result(
+                {
+                    "id": "plan",
+                    "title": "Influx migration plan",
+                    "snippet": self._snippet,
+                }
+            )
+        ]
+
+
+@pytest.mark.parametrize("heading", ["# Influx migration plan", "# Other"])
+def test_knowledge_search_card_shows_a_long_server_snippet_whole(
+    lithos_lens_config_env: Path, heading: str
+) -> None:
+    fake = _ServerSnippetFake(f"{heading}\n\n{_LONG_SNIPPET_BODY}")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=influx")
+
+    assert response.status_code == 200
+    assert _LONG_SNIPPET_BODY in response.text
+    assert ("# Other" in response.text) is (heading == "# Other")
 
 
 def test_client_search_notes_sends_hybrid_mode_and_filters() -> None:
