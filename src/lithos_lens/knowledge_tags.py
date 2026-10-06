@@ -13,6 +13,7 @@ Foundation module.
 
 from __future__ import annotations
 
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -89,17 +90,40 @@ def tag_count(rows: Iterable[TagCount], tag: str) -> int | None:
 
 
 def tag_label(tag: str) -> str:
-    """How a tag reads on a page, never hiding which tag it is.
+    """How a tag reads on a page: one label per tag, never shared by two.
 
-    HTML shows nothing for ``""`` and collapses surrounding whitespace, yet
-    each is a distinct tag upstream: the empty tag reads "(empty tag)", and a
-    padded one is quoted so it cannot pass for its trimmed twin.
+    Lithos keeps tag names verbatim, and HTML would hide what sets some apart
+    (``""`` shows nothing; CR, LF and NUL show as a space or not at all). So a
+    name reads bare only when it is ORDINARY — non-empty, no surrounding
+    whitespace, no control character, not opening with the quote mark and not
+    spelling the empty tag's label. The empty tag reads "(empty tag)"; any
+    other name is quoted, with control characters and the backslash itself
+    backslash-escaped. The three forms cannot meet and the escaping is
+    reversible, so distinct tags get distinct labels (the page renders them
+    with whitespace preserved, ``.knowledge-tag-label``).
     """
     if not tag:
         return EMPTY_TAG_LABEL
-    if tag != tag.strip():
-        return f"\u201c{tag}\u201d"
-    return tag
+    if _is_ordinary(tag):
+        return tag
+    return f"\u201c{''.join(map(_escaped_char, tag))}\u201d"
+
+
+def _is_ordinary(tag: str) -> bool:
+    return (
+        tag == tag.strip()
+        and not tag.startswith("\u201c")
+        and tag != EMPTY_TAG_LABEL
+        and not any(unicodedata.category(ch) == "Cc" for ch in tag)
+    )
+
+
+def _escaped_char(ch: str) -> str:
+    if ch == "\\":
+        return "\\\\"
+    if unicodedata.category(ch) == "Cc":
+        return ch.encode("unicode_escape").decode("ascii")
+    return ch
 
 
 def tag_family(tag: str) -> str:

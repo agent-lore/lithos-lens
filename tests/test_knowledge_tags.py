@@ -9,6 +9,7 @@ puts the active tag's count on its "Filtered by" line.
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 from pathlib import Path
 
@@ -87,10 +88,10 @@ def _get(config_path: Path, url: str, fake: FakeLithosClient | None = None) -> s
 
 def _tag_rows(html: str) -> list[tuple[str, str, int]]:
     """The rendered tag list as (href, label, count), in page order."""
-    start = html.index('<ul class="knowledge-results">')
+    start = html.index('<ul class="knowledge-results')
     body = html[start : html.index("</ul>", start)]
     return [
-        (href, label.replace("&amp;", "&"), int(count))
+        (href, html_lib.unescape(label), int(count))
         for href, label, count in re.findall(
             r'<a href="([^"]+)">([^<]+)</a>\s*'
             r'<span class="knowledge-namespace-count">(\d+)</span>',
@@ -316,7 +317,7 @@ def test_offline_lithos_renders_the_banner_and_makes_no_call(
 
     assert "banner banner-warning" in html
     assert "Lithos is offline or degraded. Tags are unavailable." in html
-    assert '<ul class="knowledge-results">' not in html
+    assert '<ul class="knowledge-results' not in html
     assert not [call for call in fake.tool_calls if call[0] == "lithos_tags"]
 
 
@@ -331,7 +332,7 @@ def test_a_failed_lithos_tags_read_renders_the_banner(
 
     assert "banner banner-warning" in html
     assert "Tags are currently unavailable." in html
-    assert '<ul class="knowledge-results">' not in html
+    assert '<ul class="knowledge-results' not in html
 
 
 # ── the landing ─────────────────────────────────────────────────────────
@@ -573,3 +574,140 @@ def test_case_variant_families_are_one_entry_and_one_is_current(
 
     assert _families(html) == [("all", None, False), ("project:", "3", True)]
     assert len(_tag_rows(html)) == 3
+
+
+# ── labels: one per tag ─────────────────────────────────────────────────
+
+_LOOKALIKES = (
+    "",
+    "(empty tag)",  # spells the empty tag's label
+    " x ",
+    "“ x ”",  # spells the padded tag's label
+    "x",
+    "alpha beta",
+    "alpha\nbeta",
+    "alpha\rbeta",
+    "alpha\r\nbeta",
+    "alpha\x00beta",
+    "alpha\\nbeta",  # a literal backslash-n
+    "alpha\\\\nbeta",
+)
+
+
+def test_no_two_tags_share_a_label() -> None:
+    labels = [tag_label(tag) for tag in _LOOKALIKES]
+    assert len(set(labels)) == len(labels), labels
+    # Ordinary names stay bare.
+    assert tag_label("project:influx") == "project:influx"
+    assert tag_label("alpha beta") == "alpha beta"
+
+
+def test_lookalike_tags_render_distinct_labels(lithos_lens_config_env: Path) -> None:
+    notes = {
+        f"n{i}": NoteRecord(id=f"n{i}", title=f"N{i}", content="", tags=(tag,))
+        for i, tag in enumerate(_LOOKALIKES)
+    }
+    fake = FakeLithosClient(dataset=FakeLithosDataset(notes=notes))
+    html = _get(lithos_lens_config_env, "/knowledge/tags", fake)
+
+    labels = [label for _, label, _ in _tag_rows(html)]
+    assert len(labels) == len(_LOOKALIKES)
+    assert len(set(labels)) == len(labels), labels
+    # Rendered with whitespace preserved, so a label's spaces are not merged.
+    assert '<ul class="knowledge-results knowledge-tag-label">' in html
+
+
+# ── tag identity through the browser's own form handling ────────────────
+
+# Each its own tag upstream. A browser folds CR and CRLF to LF while parsing a
+# hidden input's value, replaces NUL with U+FFFD, and submits every line break
+# as CRLF — so each of the first four would come back as a DIFFERENT tag that
+# also exists here, if its form carried it raw.
+_CONTROL_CORPUS: tuple[tuple[str, str], ...] = (
+    ("cr", "alpha\rbeta"),
+    ("lf", "alpha\nbeta"),
+    ("crlf", "alpha\r\nbeta"),
+    ("nul", "alpha\x00beta"),
+    ("fffd", "alpha�beta"),
+)
+
+
+def _control_fake() -> FakeLithosClient:
+    notes = {
+        note_id: NoteRecord(id=note_id, title=note_id, content="body", tags=(tag,))
+        for note_id, tag in _CONTROL_CORPUS
+    }
+    paths = {f"notes/{note_id}.md": note_id for note_id, _ in _CONTROL_CORPUS}
+    return FakeLithosClient(dataset=FakeLithosDataset(notes=notes, note_paths=paths))
+
+
+def _as_a_browser_submits(attribute_value: str) -> str:
+    """What a standards-following browser sends for a hidden input whose
+    attribute text is ``attribute_value``: HTML input-stream preprocessing
+    folds CRLF and CR to LF, a NUL in an attribute value becomes U+FFFD, and
+    form-entry construction normalizes every line break to CRLF. (Checked
+    against Chromium for this change; the rules are the HTML standard's.)"""
+    parsed = (
+        html_lib.unescape(attribute_value)
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\x00", "�")
+    )
+    return parsed.replace("\n", "\r\n")
+
+
+def _submit(client: TestClient, page: str, form_start: str, **typed: str) -> str:
+    """Submit the rendered form as a browser would, typing ``typed`` into it."""
+    start = page.index(form_start)
+    form = page[start : page.index("</form>", start)]
+    action = re.search(r'action="([^"]+)"', form)
+    assert action is not None
+    controls = {
+        name: _as_a_browser_submits(value)
+        for name, value in re.findall(
+            r'<input[^>]*?name="([^"]+)"[^>]*?value="([^"]*)"', form
+        )
+    }
+    controls.update(typed)
+    response = client.get(action.group(1), params=controls)
+    assert response.status_code == 200
+    return response.text
+
+
+@pytest.mark.parametrize(("note_id", "tag"), _CONTROL_CORPUS)
+def test_a_search_from_a_tagged_landing_keeps_the_exact_tag(
+    lithos_lens_config_env: Path, note_id: str, tag: str
+) -> None:
+    fake = _control_fake()
+    with _client(lithos_lens_config_env, fake) as client:
+        landing = client.get(_tag_href(tag)).text
+        assert re.findall(r'href="/note/([^?"]+)\?next=', landing) == [note_id]
+        searched = _submit(client, landing, '<form class="knowledge-search"', q="body")
+
+    assert re.findall(r'href="/note/([^?"]+)\?next=', searched) == [note_id]
+    start = searched.index('<p class="knowledge-active-filter">')
+    assert "(1 note)" in searched[start : searched.index("</p>", start)]
+    counts = [args for tool, args in fake.tool_calls if tool == "lithos_tags"]
+    assert counts == [{"prefix": tag}, {"prefix": tag}]
+
+
+def test_the_tag_filter_form_keeps_an_exact_family(
+    lithos_lens_config_env: Path,
+) -> None:
+    notes = {
+        "cr": NoteRecord(id="cr", title="cr", content="", tags=("alpha\rbeta:value",)),
+        "crlf": NoteRecord(
+            id="crlf", title="crlf", content="", tags=("alpha\r\nbeta:value",)
+        ),
+    }
+    fake = FakeLithosClient(dataset=FakeLithosDataset(notes=notes))
+    with _client(lithos_lens_config_env, fake) as client:
+        page = client.get("/knowledge/tags", params={"prefix": "alpha\rbeta:"}).text
+        assert [label for _, label, _ in _tag_rows(page)] == [
+            tag_label("alpha\rbeta:value")
+        ]
+        filtered = _submit(client, page, '<form class="knowledge-search"', q="value")
+
+    assert [label for _, label, _ in _tag_rows(filtered)] == [
+        tag_label("alpha\rbeta:value")
+    ]

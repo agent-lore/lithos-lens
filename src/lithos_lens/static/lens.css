@@ -2018,6 +2018,12 @@ button,
   font-size: 0.9rem;
 }
 
+/* Tag labels keep their whitespace: `knowledge_tags.tag_label` gives every
+   tag its own label, and collapsing runs of spaces would merge some again. */
+.knowledge-tag-label a {
+  white-space: pre-wrap;
+}
+
 /* The landing's "Browse tags" link, above its two sections. */
 .knowledge-browse-links {
   margin: 0;

@@ -49,6 +49,9 @@ from lithos_lens.knowledge_tags import (
 )
 from lithos_lens.lithos_client import LithosClientProtocol, LithosToolError
 from lithos_lens.request_filters import (
+    exact_query_param,
+    form_encode,
+    form_unstable,
     knowledge_landing_url,
     knowledge_note_url,
     knowledge_tags_url,
@@ -153,6 +156,8 @@ def register_knowledge_routes(
     templates.env.globals["knowledge_tags_url"] = knowledge_tags_url
     templates.env.filters["tag_label"] = tag_label
     templates.env.filters["filter_tag_label"] = filter_tag_label
+    templates.env.filters["form_unstable"] = form_unstable
+    templates.env.filters["form_encode"] = form_encode
 
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge(request: Request) -> HTMLResponse:
@@ -175,8 +180,9 @@ def register_knowledge_routes(
         # Verbatim, and None only when absent: Lithos keeps tag names as given
         # ("" and surrounding whitespace included) and matches them exactly,
         # so a trimmed or dropped value would select a different tag than the
-        # link that sent it (a /knowledge/tags row, a note chip).
-        tag = request.query_params.get("tag")
+        # link or form that sent it (a /knowledge/tags row, a note chip, this
+        # page's own search form — whose carrier `exact_query_param` decodes).
+        tag = exact_query_param(request, "tag")
         namespace = normalize_namespace(request.query_params.get("namespace", ""))
         section = request.query_params.get("section", "").strip()
         if query or section not in SECTIONS:
@@ -291,7 +297,7 @@ def register_knowledge_routes(
         query = request.query_params.get("q", "").strip()
         # Verbatim like the landing's tag: a family is read off stored names,
         # so one with surrounding whitespace is matched as such.
-        prefix = request.query_params.get("prefix", "")
+        prefix = exact_query_param(request, "prefix") or ""
         snapshot = await state.refresh_health()
         browse: TagBrowse | None = None
         error = ""

@@ -1320,21 +1320,33 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   and matches them exactly, so `?tag=` is the empty tag and `?tag=%20x%20` is
   ` x `, not `x`. The value reaches the list/search `tags` argument, the count,
   the hidden search input, every link the landing builds and the note page's
-  back link unchanged. The "Filtered by" line names the empty tag "(empty
-  tag)" and quotes a padded one (`“ x ”`), so neither passes for another
+  back link unchanged. A browser alters CR, LF and NUL in a hidden input on
+  the way to the request (the parser folds CR to LF and NUL to U+FFFD; GET
+  serialization sends every line break as CRLF), so a tag holding one rides
+  the search form percent-encoded as `tag_enc`, which wins over `tag` and is
+  decoded (`request_filters.form_unstable` / `exact_query_param`); any other
+  tag, and every link, keeps plain `tag=`. The "Filtered by" line names the
+  tag by the label rule below, `key: value` for an ordinary name
 
 `GET /knowledge/tags` is the tag browse page (`knowledge_tags`):
 
 - **every tag with its note count**, from ONE `lithos_tags` call with no
   arguments (2,057 tags on 2026-10-05), most notes first, ties by name —
-  every string key, kept verbatim (the empty tag reads "(empty tag)", a
-  padded one is quoted). Each tag links to `/knowledge?tag=<tag>`
+  every string key, kept verbatim. **No two tags share a label**
+  (`knowledge_tags.tag_label`): an ordinary name — non-empty, no surrounding
+  whitespace, no control character, not opening with `“` and not spelling
+  "(empty tag)" — reads bare; the empty tag reads "(empty tag)"; any other
+  name is quoted with control characters and backslash backslash-escaped
+  (`“ x ”`, `“alpha\nbeta”`, `“(empty tag)”`), and labels render with
+  whitespace preserved. Each tag links to `/knowledge?tag=<tag>`
   (url-encoded), and the line above the list reads "M tags, most notes
   first" — "N of M" when filtered
 - **`?q=`** narrows the list to tags containing the substring
   (case-insensitive), from a GET form; **`?prefix=`** to tags starting with a
   family (case-insensitive, as `lithos_tags`'s own `prefix`). Both apply
   Lens-side and compose; the form carries the family as a hidden input
+  (`prefix_enc`, percent-encoded, when it holds CR, LF or NUL — as the
+  landing's tag)
 - the **family row** ("all", then up to 12 `key:` families, most tags first,
   the active one `aria-current`) is derived from the tags present — a family
   is the text before a tag's first `:` plus the colon, never a fixed list —

@@ -61,7 +61,13 @@
         {# An active tag filter survives a search submitted from this page —
            without this, searching from /knowledge?tag=… silently drops the
            tag (PR #39 review). #}
-        <input type="hidden" name="tag" value="{{ tag }}">
+        {# A tag a browser would alter in transit (CR, LF, NUL) rides
+           percent-encoded instead (request_filters.form_unstable). #}
+        {% if tag | form_unstable %}
+          <input type="hidden" name="tag_enc" value="{{ tag | form_encode }}">
+        {% else %}
+          <input type="hidden" name="tag" value="{{ tag }}">
+        {% endif %}
       {% endif %}
       {% if namespace %}
         <input type="hidden" name="namespace" value="{{ namespace }}">
