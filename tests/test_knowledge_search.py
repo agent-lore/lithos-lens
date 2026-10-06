@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import ConfigError, LithosConfig, load_config
 from lithos_lens.fake_dataset import FakeLithosDataset
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.knowledge import SearchResult, normalize_search_result
 from lithos_lens.knowledge_metadata import load_list_chips
+from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.lithos_client import LithosClient, LithosToolError
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
@@ -60,6 +60,98 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
 
     assert row.updated == "2026-08-02"
     assert row.score is None
+
+
+@pytest.mark.parametrize(
+    ("snippet", "title", "expected"),
+    [
+        # A leading `# <title>` line is dropped (with the blank line after it).
+        (
+            "# Influx plan\n\n## Cutover\nPhase one",
+            "Influx plan",
+            "## Cutover\nPhase one",
+        ),
+        # Trimming + whitespace collapsing; an ATX closing sequence is ignored.
+        ("  #  Influx \t plan  \nBody", " Influx  plan", "Body"),
+        ("# Influx plan ##\nBody", "Influx plan", "Body"),
+        # CR-only and CRLF line endings end the heading line too.
+        ("# Influx plan\r\rBody.", "Influx plan", "Body."),
+        ("# Influx plan\r\n\r\nBody", "Influx plan", "Body"),
+        # Only complete blank lines go: the first kept line keeps its indent.
+        ("# Influx plan\n\n    code", "Influx plan", "    code"),
+        ("# Influx plan\n \n\tcode", "Influx plan", "\tcode"),
+        # Compared by rendered text, like the note page: the markup-wrapped
+        # title matches, and a title that IS the markup source does not.
+        ("# **Influx plan**\n\nBody", "Influx plan", "Body"),
+        ("# **Influx plan**\nBody", "**Influx plan**", "# **Influx plan**\nBody"),
+        # A setext H1 is the same heading.
+        ("Influx plan\n===\nBody", "Influx plan", "Body"),
+        # Case-sensitive, like the note page.
+        ("# influx plan\nBody", "Influx plan", "# influx plan\nBody"),
+        # A non-matching H1 is kept.
+        ("# Something else\nBody", "Influx plan", "# Something else\nBody"),
+        # An H2 (or `#` with no space, which is not a heading) is kept.
+        ("## Influx plan\nBody", "Influx plan", "## Influx plan\nBody"),
+        ("#Influx plan\nBody", "Influx plan", "#Influx plan\nBody"),
+        # An H1-shaped line inside a code fence is not the first line.
+        ("```\n# Influx plan\n```", "Influx plan", "```\n# Influx plan\n```"),
+        # A matching H1 that is not the first line is kept.
+        ("Intro\n# Influx plan", "Influx plan", "Intro\n# Influx plan"),
+        # Only the first line: a second matching line right after is kept.
+        ("# Influx plan\n# Influx plan\nBody", "Influx plan", "# Influx plan\nBody"),
+        # The snippet is just the title line: nothing is left to show.
+        ("# Influx plan", "Influx plan", ""),
+        # An empty title differs from a non-empty heading line, which is kept...
+        ("# Influx plan\nBody", "", "# Influx plan\nBody"),
+        # ...but an empty heading repeats an empty or whitespace-only title.
+        ("#\nBody", "", "Body"),
+        ("#\n\nBody.", " \t ", "Body."),
+        # An image counts as its rendered alt (code spans dropped), as on the
+        # note page.
+        ("# Influx plan ![`deco`](/i.svg)\nBody", "Influx plan", "Body"),
+        (
+            "# Influx plan ![`deco`](/i.svg)\nBody",
+            "Influx plan deco",
+            "# Influx plan ![`deco`](/i.svg)\nBody",
+        ),
+        # A non-empty alt does count toward the heading's text.
+        ("# Influx plan ![logo](/i.svg)\nBody", "Influx plan logo", "Body"),
+        (
+            "# Influx plan ![logo](/i.svg)\nBody",
+            "Influx plan",
+            "# Influx plan ![logo](/i.svg)\nBody",
+        ),
+        # A wiki-link heading compares by its display text, like the note page.
+        ("# [[Influx plan]]\nBody", "Influx plan", "Body"),
+        ("# [[Influx plan]]\nBody", "[[Influx plan]]", "# [[Influx plan]]\nBody"),
+    ],
+)
+def test_normalize_search_result_drops_a_leading_title_line(
+    snippet: str, title: str, expected: str
+) -> None:
+    row = normalize_search_result({"id": "n", "title": title, "snippet": snippet})
+    assert row.snippet == expected
+
+
+def test_knowledge_search_card_omits_the_title_line_from_its_snippet(
+    lithos_lens_config_env: Path,
+) -> None:
+    notes = {
+        "plan": NoteRecord(
+            id="plan",
+            title="Influx migration plan",
+            content="# Influx migration plan\n\nCut over the ingest path first.",
+        )
+    }
+    fake = FakeLithosClient(dataset=_dataset(notes))
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=ingest")
+
+    assert response.status_code == 200
+    assert "Cut over the ingest path first." in response.text
+    # The card title still shows; the snippet no longer repeats it.
+    assert "# Influx migration plan" not in response.text
 
 
 def test_search_result_label_falls_back_to_path_then_id() -> None:
@@ -459,6 +551,81 @@ def test_client_search_notes_reads_the_results_envelope() -> None:
     assert rows[0].path == "plans/influx-migration.md"
     assert rows[0].snippet == "Cut over the ingest path first, then # backfill"
     assert rows[0].updated == "2026-08-01T10:00:00+00:00"
+
+
+def test_client_search_notes_drops_a_snippet_title_line_repeating_the_title() -> None:
+    # The live path: the real client's own normalization, on the vendored
+    # lithos_search row shape, with a snippet opening on the note's title.
+    row = dict(REAL_LITHOS_SEARCH_PAYLOAD["results"][0])
+    row["snippet"] = "# Influx migration plan\n\n## Cutover\n\nThe influx cutover runs…"
+    client = _StubLithosClient({"lithos_search": {"results": [row], "total": 1}})
+
+    rows = _run_client(client, client.search_notes("influx"))
+
+    assert rows[0].title == "Influx migration plan"
+    assert rows[0].snippet == "## Cutover\n\nThe influx cutover runs…"
+
+
+# A server-windowed snippet well past any plausible Lens-side cap (the fake's
+# own 160-char window included), ending in a suffix only a whole snippet keeps.
+_LONG_SNIPPET_BODY = "The influx cutover runs in three phases. " * 15 + "TAIL-7f3e9"
+
+
+@pytest.mark.parametrize(
+    ("snippet", "expected"),
+    [
+        # Matching title line: dropped, the rest shown whole.
+        ("# Influx migration plan\n\n" + _LONG_SNIPPET_BODY, _LONG_SNIPPET_BODY),
+        # Non-matching title line: the snippet exactly as Lithos sent it.
+        ("# Other\n\n" + _LONG_SNIPPET_BODY, "# Other\n\n" + _LONG_SNIPPET_BODY),
+    ],
+)
+def test_client_search_notes_keeps_a_long_snippet_whole(
+    snippet: str, expected: str
+) -> None:
+    # Lithos windows the snippet; Lens adds no truncation of its own.
+    row = dict(REAL_LITHOS_SEARCH_PAYLOAD["results"][0])
+    row["snippet"] = snippet
+    client = _StubLithosClient({"lithos_search": {"results": [row], "total": 1}})
+
+    rows = _run_client(client, client.search_notes("influx"))
+
+    assert rows[0].snippet == expected
+
+
+class _ServerSnippetFake(FakeLithosClient):
+    """Answers ``search_notes`` with one row carrying a given server snippet."""
+
+    def __init__(self, snippet: str) -> None:
+        super().__init__(dataset=_dataset({}))
+        self._snippet = snippet
+
+    async def search_notes(
+        self, query: str, *, tags: list[str] | None = None, limit: int | None = None
+    ) -> list[SearchResult]:
+        return [
+            normalize_search_result(
+                {
+                    "id": "plan",
+                    "title": "Influx migration plan",
+                    "snippet": self._snippet,
+                }
+            )
+        ]
+
+
+@pytest.mark.parametrize("heading", ["# Influx migration plan", "# Other"])
+def test_knowledge_search_card_shows_a_long_server_snippet_whole(
+    lithos_lens_config_env: Path, heading: str
+) -> None:
+    fake = _ServerSnippetFake(f"{heading}\n\n{_LONG_SNIPPET_BODY}")
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/knowledge?q=influx")
+
+    assert response.status_code == 200
+    assert _LONG_SNIPPET_BODY in response.text
+    assert ("# Other" in response.text) is (heading == "# Other")
 
 
 def test_client_search_notes_sends_hybrid_mode_and_filters() -> None:

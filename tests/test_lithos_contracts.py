@@ -42,7 +42,8 @@ import pytest
 
 from lithos_lens.config import LithosConfig
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef, SearchResult
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -597,6 +598,7 @@ def _expected_note(success: dict[str, Any]) -> NoteRecord:
         content=success["content"],
         tags=tuple(success["metadata"]["tags"]),
         metadata=success["metadata"],
+        frontmatter_title=success["title"],
     )
 
 

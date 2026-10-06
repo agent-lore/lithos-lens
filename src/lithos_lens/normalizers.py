@@ -110,6 +110,7 @@ def normalize_note(raw: dict[str, Any]) -> NoteRecord:
         content=str(raw.get("content") or ""),
         tags=tuple(str(tag) for tag in tags),
         metadata=metadata,
+        frontmatter_title=str(raw.get("title") or ""),
     )
 
 

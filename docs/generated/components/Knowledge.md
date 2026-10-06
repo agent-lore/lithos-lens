@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, and wiki-link resolution recording which arm decided.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count, the frontmatter metadata chips + lede, the search-result view model, and wiki-link resolution recording which arm decided.
 
 **Tier:** Foundation
 
@@ -11,15 +11,17 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.knowledge` | L | 8 | 7 |
+| `lithos_lens.knowledge` | L | 7 | 7 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
 | `lithos_lens.knowledge_resolver` | S | 3 | 1 |
+| `lithos_lens.knowledge_search` | XS | 1 | 1 |
 
 ## Public API
 
 ### `lithos_lens.knowledge`
 - def `render_markdown` — Render a note's markdown body to safe HTML.
+- def `is_title_heading` — Whether the first block of a parsed body is an H1 repeating ``title``.
 - def `render_description` — Render a task description's markdown to safe HTML (§5.3).
 - class `DescriptionPreview` — A task description as one surface shows it (§5.3).
 - def `description_preview` — Cut a description to ``limit`` characters at a BLOCK boundary (§5.3).
@@ -32,8 +34,6 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `KnowledgeLithosClientProtocol` — Subset of Lithos operations required by the knowledge note view.
 - def `load_related_panel` — Load and resolve a note's related panel from one ``lithos_related`` call.
 - def `normalize_related` — Normalize a ``lithos_related`` payload into a ``RelatedNeighborhood``.
-- class `SearchResult` — One ``lithos_search`` hit rendered as a result card (§7.1).
-- def `normalize_search_result` — Normalize one ``lithos_search`` result row into a ``SearchResult``.
 
 ### `lithos_lens.knowledge_metadata`
 - class `NoteMetadata` — Frontmatter-derived chips, lede, supersedes link, and authorship (§6.4).
@@ -52,6 +52,10 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `ResolveOutcome` — The result of resolving one wiki-link click.
 - class `WikiResolverClientProtocol` — Subset of Lithos operations required by the wiki-link resolver.
 - def `resolve_wiki_link` — Resolve a wiki-link ``target`` clicked from note ``from_id`` (§6.3).
+
+### `lithos_lens.knowledge_search`
+- class `SearchResult` — One ``lithos_search`` hit rendered as a result card (§7.1).
+- def `normalize_search_result` — Normalize one ``lithos_search`` result row into a ``SearchResult``.
 
 ## Dependencies
 

@@ -8,7 +8,7 @@ call turned into four scannable sections (outgoing links, back-links,
 provenance, typed edges) with link/edge endpoints shown by title rather than
 bare id. The frontmatter-driven metadata chips + lede (K1-S3) live in the
 sibling ``knowledge_metadata`` module to keep this one under the god-module
-ceiling; later slices add the search view models.
+ceiling, and the search-result view model (K1-S6) lives in ``knowledge_search``.
 
 It also owns the SAFE MARKDOWN itself, which is not only a note concern: a task
 description is agent-authored markdown too (§5.3), so the description renderer
@@ -27,6 +27,7 @@ from typing import Any, Protocol
 from urllib.parse import urlencode, urlparse
 
 from markdown_it import MarkdownIt
+from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
 
 from lithos_lens.tasks import NoteRecord, SectionState
@@ -89,7 +90,7 @@ MARKDOWN = (
 MARKDOWN.validateLink = _validate_link
 
 
-def render_markdown(text: str, from_id: str = "") -> str:
+def render_markdown(text: str, from_id: str = "", title: str | None = None) -> str:
     """Render a note's markdown body to safe HTML.
 
     Raw HTML in ``text`` is escaped and link schemes outside the §6.2
@@ -101,11 +102,17 @@ def render_markdown(text: str, from_id: str = "") -> str:
     document page, so bounding render cost would be an explicit product
     decision, not a silent cap. If parsing fails for any reason the fallback is
     HTML-escaped plaintext — never raw passthrough.
+
+    ``title`` is the note's frontmatter title, which the page already shows
+    above the body: a first block that is an H1 repeating it is omitted (see
+    :func:`is_title_heading`). ``None`` (no title supplied) collapses nothing.
     """
     body = text or ""
     try:
         env: dict[str, Any] = {}
         tokens = MARKDOWN.parse(body, env)
+        if is_title_heading(tokens, title):
+            tokens = tokens[3:]
         _splice_wiki_links(tokens, from_id)
         return MARKDOWN.renderer.render(tokens, MARKDOWN.options, env)
     except Exception:
@@ -114,6 +121,48 @@ def render_markdown(text: str, from_id: str = "") -> str:
             exc_info=True,
         )
         return _escaped_plaintext(body)
+
+
+def is_title_heading(tokens: list[Token], title: str | None) -> bool:
+    """Whether the first block of a parsed body is an H1 repeating ``title``.
+
+    Most ingested notes open their body with their own title as an ``# H1``,
+    under a header that already shows it. This reads the PARSED stream, never
+    a regex over the raw markdown (§6.3): an H1-shaped line in a code fence is
+    a fence token, and only the very first block is considered. The H1 is
+    compared by the text it renders, not its source, so ``# **Plan**`` repeats
+    the title ``Plan`` while ``# Plan`` does not repeat ``**Plan**`` — and a
+    ``[[wiki-link]]`` counts as the text its anchor shows. Both sides are
+    trimmed and whitespace-collapsed; the match is case-sensitive, so a blank
+    title (an empty header) matches an empty H1. ``None`` matches nothing.
+    """
+    return (
+        title is not None
+        and len(tokens) >= 3
+        and tokens[0].type == "heading_open"
+        and tokens[0].tag == "h1"
+        and " ".join(_heading_text(tokens[1].children or []).split())
+        == " ".join(title.split())
+    )
+
+
+def _heading_text(children: list[Token]) -> str:
+    """The text an H1 renders, read after ``[[wiki-link]]`` splicing (copied)."""
+    return _inline_text(_splice_children(children, ""))
+
+
+def _inline_text(children: list[Token]) -> str:
+    """The text inline tokens render to: entities decoded, markup dropped."""
+    parts: list[str] = []
+    for child in children:
+        if child.type in ("text", "code_inline"):
+            parts.append(child.content)
+        elif child.type in ("softbreak", "hardbreak"):
+            parts.append(" ")
+        elif child.type == "image":  # its alt, built as the renderer builds it
+            r = RendererHTML()  # MARKDOWN's renderer class
+            parts.append(r.renderInlineAsText(child.children, MARKDOWN.options, {}))
+    return "".join(parts)
 
 
 def _escaped_plaintext(body: str) -> str:
@@ -748,52 +797,3 @@ def _normalize_unresolved(items: Any) -> tuple[str, ...]:
     if not isinstance(items, list):
         return ()
     return tuple(item for item in items if isinstance(item, str) and item)
-
-
-# ── Search results (K1-S6) ─────────────────────────────────────────────
-#
-# ``/knowledge?q=…`` renders hybrid-search result cards from ``lithos_search``.
-# The snippet arrives as raw markdown (verified live, §7.1) and is rendered
-# ESCAPED by the template — never fed through the markdown renderer — so markup
-# in a snippet cannot break the results page.
-
-
-@dataclass(frozen=True)
-class SearchResult:
-    """One ``lithos_search`` hit rendered as a result card (§7.1)."""
-
-    id: str
-    title: str = ""
-    path: str = ""
-    snippet: str = ""
-    updated: str = ""
-    score: float | None = None
-
-    @property
-    def label(self) -> str:
-        """Human label: title, then path, falling back to the bare id."""
-        return self.title or self.path or self.id
-
-
-def normalize_search_result(raw: dict[str, Any]) -> SearchResult:
-    """Normalize one ``lithos_search`` result row into a ``SearchResult``.
-
-    ``lithos_search`` answers ``{"results": [{"id", "title", "path",
-    "snippet", "updated_at", "score", ...}]}``. ``updated`` / ``updated_at``
-    are both accepted for the timestamp (parity with
-    :func:`~lithos_lens.tasks.normalize_note_summary`).
-    """
-    raw_score = raw.get("score")
-    score = (
-        float(raw_score)
-        if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
-        else None
-    )
-    return SearchResult(
-        id=str(raw.get("id") or ""),
-        title=str(raw.get("title") or ""),
-        path=str(raw.get("path") or ""),
-        snippet=str(raw.get("snippet") or ""),
-        updated=str(raw.get("updated") or raw.get("updated_at") or ""),
-        score=score,
-    )

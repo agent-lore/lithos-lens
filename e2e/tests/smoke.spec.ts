@@ -884,15 +884,18 @@ test("PR reconciliation tones are visibly distinct colours (computed style)", as
 test("knowledge note renders server-side markdown", async ({ page }) => {
   await page.goto("/note/note-influx-plan");
 
-  // Since K1-S1 the body is rendered markdown, so the fixture's `# Influx
-  // migration plan` yields a second h1 inside .markdown-body — scope the
-  // page-title assertion to the article header instead of tripping strict
-  // mode on the duplicate.
+  // The fixture body opens with `# Influx migration plan`, the note's own
+  // title: that leading H1 is collapsed, so the article header's h1 is the
+  // only one on the page.
   await expect(
     page
       .locator("article header")
       .getByRole("heading", { name: "Influx migration plan" }),
   ).toBeVisible();
+  await expect(page.locator(".markdown-body h1")).toHaveCount(0);
+  await expect(page.locator(".markdown-body")).not.toContainText(
+    "Influx migration plan",
+  );
   // And the markdown really rendered (list items, not a plaintext <pre>).
   await expect(
     page.locator(".markdown-body").getByRole("listitem").first(),

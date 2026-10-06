@@ -17,7 +17,8 @@ from starlette.datastructures import QueryParams
 
 from lithos_lens.config import load_config
 from lithos_lens.epic_strip import EPIC_FANOUT_BATCH
-from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
+from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, BlockerRecord, EdgeRecord

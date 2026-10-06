@@ -12,8 +12,10 @@ from lithos_lens import knowledge, knowledge_metadata
 from lithos_lens.config import load_config
 from lithos_lens.knowledge import render_markdown
 from lithos_lens.knowledge_metadata import build_note_metadata
+from lithos_lens.normalizers import normalize_note
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
+from tests.conftest import load_contract
 from tests.test_tasks_mvp import TaskFakeLithosClient
 
 
@@ -598,6 +600,212 @@ def test_note_page_renders_markdown_body_as_html(
     assert "<script>alert(1)</script>" not in response.text
     assert "&lt;script&gt;" in response.text
     assert 'href="javascript:' not in response.text
+
+
+# --- A leading body H1 that repeats the note title is collapsed -------------
+
+
+@pytest.mark.parametrize(
+    ("body", "title", "expected"),
+    [
+        # Matching H1 as the first block: omitted, the rest of the body stays.
+        ("# Influx plan\n\nBody text.", "Influx plan", "<p>Body text.</p>\n"),
+        # Trimming + whitespace collapsing on both sides; setext H1 too.
+        ("#   Influx \t plan  \n\nBody.", "  Influx  plan ", "<p>Body.</p>\n"),
+        ("Influx plan\n===========\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# Influx plan #\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        # CR-only and CRLF line endings are line endings.
+        ("# Influx plan\r\rBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# Influx plan\r\n\r\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        # Compared by the text the H1 RENDERS: markup, entities, escapes, code
+        # spans and link labels all reduce to their text.
+        ("# **Influx plan**\n\nBody.", "Influx plan", "<p>Body.</p>\n"),
+        ("# R&amp;D\n\nBody.", "R&D", "<p>Body.</p>\n"),
+        ("# 1\\. Plan\n\nBody.", "1. Plan", "<p>Body.</p>\n"),
+        ("# The `ingest` path\n\nBody.", "The ingest path", "<p>Body.</p>\n"),
+        (
+            "# [Influx plan](https://x.example)\n\nBody.",
+            "Influx plan",
+            "<p>Body.</p>\n",
+        ),
+        # ...so an H1 whose SOURCE equals the title but renders differently is
+        # a different heading, and is kept.
+        (
+            "# **Influx plan**\n\nBody.",
+            "**Influx plan**",
+            "<h1><strong>Influx plan</strong></h1>\n<p>Body.</p>\n",
+        ),
+        # Case-sensitive: a differently-cased H1 is a different heading.
+        (
+            "# influx plan\n\nBody.",
+            "Influx plan",
+            "<h1>influx plan</h1>\n<p>Body.</p>\n",
+        ),
+        # A non-matching H1 is kept.
+        (
+            "# Something else\n\nBody.",
+            "Influx plan",
+            "<h1>Something else</h1>\n<p>Body.</p>\n",
+        ),
+        # An H2 is never collapsed, even when its text matches.
+        (
+            "## Influx plan\n\nBody.",
+            "Influx plan",
+            "<h2>Influx plan</h2>\n<p>Body.</p>\n",
+        ),
+        # An H1-shaped line inside a code fence is code, not a heading.
+        (
+            "```\n# Influx plan\n```",
+            "Influx plan",
+            "<pre><code># Influx plan\n</code></pre>\n",
+        ),
+        # A matching H1 that is not the first block is kept.
+        (
+            "Intro.\n\n# Influx plan",
+            "Influx plan",
+            "<p>Intro.</p>\n<h1>Influx plan</h1>\n",
+        ),
+        # Only the first block: a second matching H1 right after is kept.
+        ("# Influx plan\n\n# Influx plan", "Influx plan", "<h1>Influx plan</h1>\n"),
+        # An empty title differs from a non-empty H1, which is kept...
+        ("# Influx plan", "", "<h1>Influx plan</h1>\n"),
+        # ...but an empty H1 repeats an empty or whitespace-only title (the
+        # header shows an empty h1 too), so it is collapsed like any other.
+        ("#\n\nBody.", "", "<p>Body.</p>\n"),
+        ("#\n\nBody.", " \t ", "<p>Body.</p>\n"),
+        # A wiki-link renders as an anchor showing its display text, so the H1
+        # is compared by that text (with or without a ``|display`` alias)...
+        ("# [[Plan]]\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        ("# [[elsewhere|Plan]]\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        # ...and a title that IS the wiki source differs from what it renders.
+        (
+            "# [[Plan]]\n\nBody.",
+            "[[Plan]]",
+            '<h1><a href="/knowledge/resolve?target=Plan&amp;from=n" '
+            'class="wiki-link">Plan</a></h1>\n<p>Body.</p>\n',
+        ),
+        # An image counts as its rendered ``alt``, which drops code spans: this
+        # H1 renders as "Plan" plus an image with an empty alt.
+        ("# Plan ![`decoration`](/icon.svg)\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        (
+            "# Plan ![`decoration`](/icon.svg)\n\nBody.",
+            "Plan decoration",
+            '<h1>Plan <img src="/icon.svg" alt="" /></h1>\n<p>Body.</p>\n',
+        ),
+        # A non-empty alt does count toward the heading's text.
+        ("# Plan ![logo](/icon.svg)\n\nBody.", "Plan logo", "<p>Body.</p>\n"),
+        (
+            "# Plan ![logo](/icon.svg)\n\nBody.",
+            "Plan",
+            '<h1>Plan <img src="/icon.svg" alt="logo" /></h1>\n<p>Body.</p>\n',
+        ),
+        # Wiki syntax in a code span or a Markdown link label stays literal,
+        # so it is compared literally.
+        ("# `[[Plan]]`\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),
+        ("# [[[Plan]]](https://x.example)\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),
+        (
+            "# `[[Plan]]`\n\nBody.",
+            "Plan",
+            "<h1><code>[[Plan]]</code></h1>\n<p>Body.</p>\n",
+        ),
+    ],
+)
+def test_render_markdown_collapses_a_leading_h1_repeating_the_title(
+    body: str, title: str, expected: str
+) -> None:
+    assert render_markdown(body, "n", title=title) == expected
+
+
+def test_render_markdown_without_a_title_collapses_nothing() -> None:
+    # No title supplied is not an empty title: even an empty H1 is kept.
+    assert render_markdown("#\n\nBody.", "n") == "<h1></h1>\n<p>Body.</p>\n"
+
+
+def test_note_page_collapses_an_empty_body_h1_under_a_blank_title(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["blank-note"] = NoteRecord(
+        id="blank-note", title=" \t ", content="#\n\nBody."
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/blank-note")
+
+    assert response.status_code == 200
+    assert response.text.count("<h1") == 1
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == "<p>Body.</p>\n"
+
+
+def test_note_page_collapses_body_h1_that_repeats_the_title(
+    lithos_lens_config_env: Path,
+) -> None:
+    fake = TaskFakeLithosClient()
+    fake.notes["dup-note"] = NoteRecord(
+        id="dup-note",
+        title="Influx migration plan",
+        content="# Influx migration plan\n\nCut over the ingest path first.",
+    )
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get("/note/dup-note")
+
+    assert response.status_code == 200
+    # The header's title is the one h1; the body's repeat of it is gone —
+    # not demoted to some other element, but absent from the body entirely.
+    assert response.text.count("<h1") == 1
+    assert "<h1>Influx migration plan</h1>" in response.text
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == "<p>Cut over the ingest path first.</p>\n"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_body"),
+    [
+        # An empty frontmatter title is what the body's empty H1 repeats...
+        ("#\n\nBody.", "<p>Body.</p>\n"),
+        # ...and the header's "Untitled document" label is a display
+        # fallback, not the title, so a body H1 spelling it is kept.
+        (
+            "# Untitled document\n\nBody.",
+            "<h1>Untitled document</h1>\n<p>Body.</p>\n",
+        ),
+    ],
+)
+def test_note_page_compares_the_body_h1_with_the_frontmatter_title_not_its_fallback(
+    lithos_lens_config_env: Path, content: str, expected_body: str
+) -> None:
+    # Through the real read normalization: the vendored lithos_read success
+    # payload with an empty title, as normalize_note receives it.
+    payload = load_contract("lithos_read")["responses"]["success"]
+    raw = {
+        **payload,
+        "title": "",
+        "content": content,
+        "metadata": {**payload["metadata"], "title": ""},
+    }
+    record = normalize_note(raw)
+    assert record.title == "Untitled document"
+    fake = TaskFakeLithosClient()
+    fake.notes[record.id] = record
+
+    with _client(lithos_lens_config_env, fake) as client:
+        response = client.get(f"/note/{record.id}")
+
+    assert response.status_code == 200
+    assert "<h1>Untitled document</h1>" in response.text
+    body = re.search(
+        r'<div class="markdown-body">(.*?)</div>', response.text, re.DOTALL
+    )
+    assert body is not None
+    assert body.group(1) == expected_body
 
 
 # --- K1 slice 7: nav enablement + degraded states ---------------------------

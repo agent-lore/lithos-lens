@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
-from lithos_lens.knowledge import RelatedNeighborhood, SearchResult
+from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.logging import MAX_LOGGED_VALUE_CHARS, JsonFormatter
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
