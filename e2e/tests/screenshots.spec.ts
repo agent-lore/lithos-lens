@@ -761,7 +761,8 @@ const PAGES: ReadonlyArray<{
     // collapsed to two characters beside a full-row Search button (the
     // shared `width: 100%` on the button in a flex row), and no capture
     // covered the page, so nobody saw it. The proportion is asserted here,
-    // at every width, because this sandbox cannot read the PNG.
+    // at every width, because this sandbox cannot read the PNG. The header
+    // carries no nav search box here: the landing's form is its one search.
     slug: "knowledge",
     url: "/knowledge",
     ready: async (page) => {
@@ -785,9 +786,12 @@ const PAGES: ReadonlyArray<{
       expect(row!.x + row!.width).toBeLessThanOrEqual(
         page.viewportSize()!.width,
       );
-      // Scoped to the landing's form: the chrome carries a search box with
-      // the same accessible name.
-      const search = page.locator("form.knowledge-search");
+      // One search box on the landing: the page's own form, not the
+      // chrome's nav box beside it (§5.7). With no query it has the focus.
+      const search = page.getByRole("search");
+      await expect(search).toHaveCount(1);
+      await expect(search).toHaveClass("knowledge-search");
+      await expect(search.getByRole("searchbox")).toBeFocused();
       const form = await search.boundingBox();
       const input = await search.getByRole("searchbox").boundingBox();
       const button = await search
@@ -812,6 +816,10 @@ const PAGES: ReadonlyArray<{
       await expect(
         page.getByRole("heading", { level: 2, name: "Results for “influx”" }),
       ).toBeVisible();
+      // Still one search form; with a query the input does not take focus.
+      const search = page.getByRole("search");
+      await expect(search).toHaveCount(1);
+      await expect(search.getByRole("searchbox")).not.toBeFocused();
       await compactChipRowsAreWhole(page);
     },
   },
