@@ -109,6 +109,13 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
             "Influx plan deco",
             "# Influx plan ![`deco`](/i.svg)\nBody",
         ),
+        # A non-empty alt does count toward the heading's text.
+        ("# Influx plan ![logo](/i.svg)\nBody", "Influx plan logo", "Body"),
+        (
+            "# Influx plan ![logo](/i.svg)\nBody",
+            "Influx plan",
+            "# Influx plan ![logo](/i.svg)\nBody",
+        ),
         # A wiki-link heading compares by its display text, like the note page.
         ("# [[Influx plan]]\nBody", "Influx plan", "Body"),
         ("# [[Influx plan]]\nBody", "[[Influx plan]]", "# [[Influx plan]]\nBody"),

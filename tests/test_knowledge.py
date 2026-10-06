@@ -686,6 +686,13 @@ def test_note_page_renders_markdown_body_as_html(
             "Plan decoration",
             '<h1>Plan <img src="/icon.svg" alt="" /></h1>\n<p>Body.</p>\n',
         ),
+        # A non-empty alt does count toward the heading's text.
+        ("# Plan ![logo](/icon.svg)\n\nBody.", "Plan logo", "<p>Body.</p>\n"),
+        (
+            "# Plan ![logo](/icon.svg)\n\nBody.",
+            "Plan",
+            '<h1>Plan <img src="/icon.svg" alt="logo" /></h1>\n<p>Body.</p>\n',
+        ),
         # Wiki syntax in a code span or a Markdown link label stays literal,
         # so it is compared literally.
         ("# `[[Plan]]`\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),
