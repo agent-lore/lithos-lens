@@ -101,6 +101,14 @@ def test_normalize_search_result_accepts_updated_alias_and_missing_score() -> No
         ("# Influx plan", "Influx plan", ""),
         # No title to compare against: the snippet is untouched.
         ("# Influx plan\nBody", "", "# Influx plan\nBody"),
+        # An image counts as its rendered alt (code spans dropped), as on the
+        # note page.
+        ("# Influx plan ![`deco`](/i.svg)\nBody", "Influx plan", "Body"),
+        (
+            "# Influx plan ![`deco`](/i.svg)\nBody",
+            "Influx plan deco",
+            "# Influx plan ![`deco`](/i.svg)\nBody",
+        ),
         # A wiki-link heading compares by its display text, like the note page.
         ("# [[Influx plan]]\nBody", "Influx plan", "Body"),
         ("# [[Influx plan]]\nBody", "[[Influx plan]]", "# [[Influx plan]]\nBody"),

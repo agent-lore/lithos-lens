@@ -678,6 +678,14 @@ def test_note_page_renders_markdown_body_as_html(
             '<h1><a href="/knowledge/resolve?target=Plan&amp;from=n" '
             'class="wiki-link">Plan</a></h1>\n<p>Body.</p>\n',
         ),
+        # An image counts as its rendered ``alt``, which drops code spans: this
+        # H1 renders as "Plan" plus an image with an empty alt.
+        ("# Plan ![`decoration`](/icon.svg)\n\nBody.", "Plan", "<p>Body.</p>\n"),
+        (
+            "# Plan ![`decoration`](/icon.svg)\n\nBody.",
+            "Plan decoration",
+            '<h1>Plan <img src="/icon.svg" alt="" /></h1>\n<p>Body.</p>\n',
+        ),
         # Wiki syntax in a code span or a Markdown link label stays literal,
         # so it is compared literally.
         ("# `[[Plan]]`\n\nBody.", "[[Plan]]", "<p>Body.</p>\n"),

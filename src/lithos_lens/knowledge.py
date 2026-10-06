@@ -27,6 +27,7 @@ from typing import Any, Protocol
 from urllib.parse import urlencode, urlparse
 
 from markdown_it import MarkdownIt
+from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
 
 from lithos_lens.tasks import NoteRecord, SectionState
@@ -158,8 +159,9 @@ def _inline_text(children: list[Token]) -> str:
             parts.append(child.content)
         elif child.type in ("softbreak", "hardbreak"):
             parts.append(" ")
-        elif child.type == "image":
-            parts.append(_inline_text(child.children or []))
+        elif child.type == "image":  # its alt, built as the renderer builds it
+            r = RendererHTML()  # MARKDOWN's renderer class
+            parts.append(r.renderInlineAsText(child.children, MARKDOWN.options, {}))
     return "".join(parts)
 
 
