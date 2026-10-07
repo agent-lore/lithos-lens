@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -199,6 +200,10 @@ class NoteFactsCache:
         # Bumped by every patch, so a read that was in flight when an event
         # landed does not overwrite the event's staleness with what it read.
         self._versions: dict[str, int] = {}
+        # Reads in flight per id. An event on an id not yet cached still bumps
+        # its version while one is in flight: the answer it carries may
+        # predate the event, so it must not become a fresh entry.
+        self._reading: Counter[str] = Counter()
 
     async def lookup(
         self, ids: Iterable[str], *, cap: int | None = None
@@ -254,6 +259,7 @@ class NoteFactsCache:
 
     async def _read_one(self, node_id: str) -> tuple[NoteFactsAnswer, bool]:
         version = self._versions.get(node_id, 0)
+        self._reading[node_id] += 1
         try:
             async with self._gate():
                 note = await self._read(node_id)
@@ -262,6 +268,10 @@ class NoteFactsCache:
                 # Never cached: the next draw tries again.
                 return self._last_known(node_id), False
             note = None
+        finally:
+            self._reading[node_id] -= 1
+            if not self._reading[node_id]:
+                del self._reading[node_id]
         unpatched = self._versions.get(node_id, 0) == version
         expires_at = self._ticks() + self._ttl_s
         if note is None:
@@ -290,7 +300,9 @@ class NoteFactsCache:
 
         ``note.created`` / ``note.updated`` on a cached (or missing) id set its
         title, clear missing and mark the other facts stale; on an id not
-        cached they do nothing, since its next draw reads it anyway.
+        cached they change nothing visible (``False``), since its next draw
+        reads it anyway — but a read of that id already in flight may carry
+        an answer from before the event, so it is kept from being cached.
         ``note.deleted`` marks the id missing, cached or not. ``note.renamed``
         is a no-op: the graph draws no path. A payload without a string
         ``id`` (a watcher event naming only a path) is a no-op too.
@@ -305,6 +317,8 @@ class NoteFactsCache:
             return False
         entry = self._entries.get(node_id)
         if entry is None:
+            if node_id in self._reading:
+                self._bump(node_id)
             return False
         title = payload.get("title")
         facts = entry.facts or NoteFacts()

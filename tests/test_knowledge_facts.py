@@ -424,7 +424,84 @@ async def test_a_read_in_flight_does_not_unmark_an_event_that_landed_during_it(
     assert calls == [PLAN, PLAN, PLAN]
 
 
-# ── config ─────────────────────────────────────────────────────────────
+class HeldRead:
+    """A read that fetches its answer at once and returns it only on release:
+    the response Lithos sent before an event, still in flight after it."""
+
+    def __init__(self, fake: FakeLithosClient) -> None:
+        self.fake = fake
+        self.calls: list[str] = []
+        self.release = asyncio.Event()
+        self.hold_first = True
+
+    async def __call__(self, note_id: str) -> NoteRecord | None:
+        self.calls.append(note_id)
+        try:
+            answer = await self.fake.read_note(note_id, max_length=1)
+        except Exception as exc:
+            if self.hold_first:
+                self.hold_first = False
+                await self.release.wait()
+            raise exc
+        if self.hold_first:
+            self.hold_first = False
+            await self.release.wait()
+        return answer
+
+    async def started(self) -> None:
+        while not self.calls:
+            await asyncio.sleep(0)
+
+
+async def test_an_update_during_the_first_read_of_an_id_is_not_lost(
+    fake: FakeLithosClient, gate: CountingGate, ticks: Ticks
+) -> None:
+    """The quarantine lands while the id's FIRST read — answered before it —
+    is still in flight: that pre-quarantine answer must not become a fresh
+    entry, so the next draw re-reads it once and shows the quarantine."""
+    read = HeldRead(fake)
+    cache = NoteFactsCache(read, lambda: gate, ticks=ticks)
+
+    first = asyncio.create_task(cache.lookup([PLAN]))
+    await read.started()
+    title = fake.dataset.notes[PLAN].title
+    quarantine(fake, PLAN, "Quarantined while the first read was in flight.")
+    # Not cached yet: the event stays a public no-op...
+    assert cache.apply_note_event("note.updated", {"id": PLAN, "title": title}) is False
+    read.release.set()
+    stale_answer = (await first).for_id(PLAN)
+    assert stale_answer.facts is not None and stale_answer.facts.status == "active"
+
+    # ...but the answer read before it is not cached as fresh.
+    batch = await cache.lookup([PLAN])
+    assert read.calls == [PLAN, PLAN]
+    assert batch.tally.reads == 1
+    answer = batch.for_id(PLAN)
+    assert answer.facts is not None
+    assert answer.facts.status == "quarantined"
+    assert answer.facts.lede == "Quarantined while the first read was in flight."
+    # And now it is cached: a third draw is a hit.
+    assert (await cache.lookup([PLAN])).tally.hits == 1
+
+
+async def test_a_create_during_the_first_missing_read_is_not_lost(
+    fake: FakeLithosClient, gate: CountingGate, ticks: Ticks
+) -> None:
+    read = HeldRead(fake)
+    cache = NoteFactsCache(read, lambda: gate, ticks=ticks)
+
+    first = asyncio.create_task(cache.lookup([DANGLING_NOTE_ID]))
+    await read.started()
+    created = {"id": DANGLING_NOTE_ID, "title": "Archived sizing"}
+    assert cache.apply_note_event("note.created", created) is False
+    read.release.set()
+    assert (await first).for_id(DANGLING_NOTE_ID).state == "missing"
+
+    await cache.lookup([DANGLING_NOTE_ID])
+    assert read.calls == [DANGLING_NOTE_ID, DANGLING_NOTE_ID]
+
+
+# ── config─────────────────────────────────────────────────────────────
 
 _KNOBS = {
     "graph_focus_max_nodes": (250, 2000),

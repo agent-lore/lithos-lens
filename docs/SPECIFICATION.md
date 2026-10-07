@@ -1444,7 +1444,9 @@ node shows of its note — title, `note_type`, `status`, `namespace`,
 - `note.created` / `note.updated` set a cached (or missing) entry's title,
   clear missing and mark its other facts stale, so the next draw re-reads it
   once — a note quarantined behind an unchanged title shows its new status
-  and lede; on an id not cached they do nothing. `note.deleted` marks the id
+  and lede; on an id not cached they change nothing, except that a read of
+  that id already in flight is not cached (its answer may predate the event),
+  so the next draw reads it again. `note.deleted` marks the id
   missing. `note.renamed` changes nothing (no graph fact is the path). A
   payload without an `id` is ignored (the live wiring is S7's)
 

@@ -419,6 +419,107 @@ def test_the_payload_names_every_node_and_edge_the_view_model_holds() -> None:
     }
 
 
+def test_the_payload_serialises_every_fact_direction_and_conflict_state() -> None:
+    rows = (
+        edge("e1", "F", "A", "related_to", 0.5, provenance_type="consolidation"),
+        edge("e2", "B", "F", "contradicts", 0.7, conflict_state="superseded"),
+        edge("e3", "F", "C", "assesses", None, provenance_type=None, partial=True),
+    )
+    full = NoteFacts(
+        title="Focus note",
+        note_type="observation",
+        status="quarantined",
+        namespace="reports",
+        confidence="85%",
+        lede="What the focus says, in a line.",
+    )
+    facts = NoteFactsBatch(
+        answers={
+            "F": NoteFactsAnswer("F", "ok", full),
+            "A": NoteFactsAnswer("A", "pending", NoteFacts(title="Alpha")),
+            "B": NoteFactsAnswer("B", "missing"),
+        }
+    )
+    view = assemble_focus_view(snapshot(rows), "F", facts=facts)
+    payload = json.loads(json.dumps(graph_payload(view)))
+    nodes = {n["id"]: n for n in payload["nodes"]}
+    edges = {e["id"]: e for e in payload["edges"]}
+
+    assert nodes["F"] == {
+        "id": "F",
+        "label": "Focus note",
+        "facts_state": "ok",
+        "ghost": False,
+        "focus": True,
+        "layer_only": False,
+        "hop": 0,
+        "degree": 3,
+        "title": "Focus note",
+        "note_type": "observation",
+        "status": "quarantined",
+        "namespace": "reports",
+        "confidence": "85%",
+        "lede": "What the focus says, in a line.",
+    }
+    assert (nodes["A"]["facts_state"], nodes["A"]["title"]) == ("pending", "Alpha")
+    assert (nodes["B"]["ghost"], nodes["B"]["label"]) == (True, "B")
+    assert (nodes["C"]["facts_state"], nodes["C"]["label"]) == ("unread", "C")
+    assert edges["e1"] == {
+        "id": "e1",
+        "from": "F",
+        "to": "A",
+        "kind": "typed",
+        "type": "related_to",
+        "weight": 0.5,
+        "provenance": "consolidation",
+        "provenance_group": "reinforced",
+        "conflict_state": None,
+        "direction": "symmetric",
+        "partial": False,
+    }
+    assert edges["e2"] == {
+        "id": "e2",
+        "from": "B",
+        "to": "F",
+        "kind": "typed",
+        "type": "contradicts",
+        "weight": 0.7,
+        "provenance": "inferred",
+        "provenance_group": "inferred",
+        "conflict_state": "superseded",
+        "direction": "symmetric",
+        "partial": False,
+    }
+    assert edges["e3"] == {
+        "id": "e3",
+        "from": "F",
+        "to": "C",
+        "kind": "typed",
+        "type": "assesses",
+        "weight": None,
+        "provenance": None,
+        "provenance_group": "other",
+        "conflict_state": None,
+        "direction": "as_recorded",
+        "partial": True,
+    }
+    assert payload["legend"] == [
+        {
+            "type": line.type,
+            "class": line.css_class,
+            "line": line.line,
+            "known": line.known,
+        }
+        for line in view.legend
+    ]
+    assert [line["type"] for line in payload["legend"]] == [
+        "related_to",
+        "contradicts",
+        "assesses",
+    ]
+    assert payload["legend"][-1]["known"] is False
+
+
 def test_a_refused_view_has_no_nodes_and_its_payload_carries_the_refusal() -> None:
     view = assemble_focus_view(snapshot(), "F", depth=2, max_nodes=5)
     payload = graph_payload(view)
@@ -568,7 +669,15 @@ async def test_quarantine_behind_an_unchanged_title_renders_on_the_next_draw(
         "Quarantined after misleading feedback.",
     )
     payload_plan = next(n for n in graph_payload(view)["nodes"] if n["id"] == PLAN)
-    assert payload_plan["status"] == "quarantined"
+    assert (
+        payload_plan["status"],
+        payload_plan["lede"],
+        payload_plan["facts_state"],
+    ) == (
+        "quarantined",
+        "Quarantined after misleading feedback.",
+        "ok",
+    )
 
 
 async def test_a_table_over_its_bound_refuses_focus_and_serves_filtered_global() -> (
@@ -657,3 +766,146 @@ def fake_read(fake: FakeLithosClient) -> Any:
         return await fake.read_note(note_id, max_length=1)
 
     return read
+
+
+# ── orchestrators over hand-built rows ─────────────────────────────────
+
+
+class RowWiring:
+    """An edge table over fixed rows, a facts read answering any id with a
+    note titled after it (``None`` for the ids in ``missing``), and a
+    ``related`` read answering one neighbourhood — every call counted."""
+
+    def __init__(
+        self,
+        rows: tuple[KnowledgeEdge, ...],
+        neighborhood: RelatedNeighborhood | None = None,
+        missing: tuple[str, ...] = (),
+    ) -> None:
+        self.rows = rows
+        self.neighborhood = neighborhood or RelatedNeighborhood()
+        self.missing = set(missing)
+        self.reads: list[str] = []
+        self.related_calls: list[str] = []
+        self.table = EdgeTable(self._edge_list)
+        self.facts = NoteFactsCache(self._read, lambda: asyncio.Semaphore(8))
+
+    async def _edge_list(
+        self, edge_type: str | None, namespace: str | None
+    ) -> tuple[KnowledgeEdge, ...]:
+        return self.rows
+
+    async def _read(self, note_id: str) -> NoteRecord | None:
+        self.reads.append(note_id)
+        if note_id in self.missing:
+            return None
+        return NoteRecord(id=note_id, title=f"Title {note_id}", content="")
+
+    async def related(self, note_id: str) -> RelatedNeighborhood:
+        self.related_calls.append(note_id)
+        return self.neighborhood
+
+    async def scoped(self, **kwargs: Any) -> KnowledgeGraphView:
+        return await assemble_global_graph(self.table, self.facts, **kwargs)
+
+
+# Two types across two namespaces, every row with its own endpoints, so each
+# selector picks out exactly the nodes its rows name.
+MIXED_ROWS = (
+    edge("m1", "S1", "T1", "supports", namespace="influx"),
+    edge("m2", "S2", "T2", "supports", namespace="influx"),
+    edge("m3", "S3", "T3", "supports", namespace="research"),
+    edge("m4", "R1", "U1", "refines", namespace="influx"),
+    edge("m5", "R2", "U2", "refines", namespace="research"),
+    edge("m6", "R3", "U3", "contradicts", namespace="research"),
+)
+
+
+@pytest.mark.parametrize(
+    ("scope", "edge_ids"),
+    [
+        ({"type": "supports"}, {"m1", "m2", "m3"}),
+        ({"namespace": "influx"}, {"m1", "m2", "m4"}),
+        ({"type": "supports", "namespace": "research"}, {"m3"}),
+        ({"type": "refines", "namespace": "influx"}, {"m4"}),
+        ({"type": "contradicts", "namespace": "influx"}, set()),
+    ],
+)
+async def test_a_scope_draws_and_reads_only_its_own_rows(
+    scope: dict[str, str], edge_ids: set[str]
+) -> None:
+    wiring = RowWiring(MIXED_ROWS)
+    expected_nodes = {
+        end for row in MIXED_ROWS if row.edge_id in edge_ids for end in row.endpoints
+    }
+
+    # The cap is exactly the scope's own node count: the other rows' nodes
+    # must not count against it.
+    view = await wiring.scoped(max_nodes=max(len(expected_nodes), 1), **scope)
+
+    assert view.refusal is None
+    assert {e.id for e in view.edges} == edge_ids
+    assert ids(view) == expected_nodes
+    assert set(wiring.reads) == expected_nodes  # excluded rows spend no read
+    assert (view.scope_type, view.scope_namespace) == (
+        scope.get("type"),
+        scope.get("namespace"),
+    )
+
+
+async def test_a_scope_over_its_cap_is_refused_on_its_own_rows_only() -> None:
+    wiring = RowWiring(MIXED_ROWS)
+
+    view = await wiring.scoped(type="supports", max_nodes=5)
+
+    assert view.refusal is not None
+    assert (view.refusal.count, view.refusal.cap) == (6, 5)
+    assert wiring.reads == []
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+async def test_layer_only_neighbours_spend_no_read_and_do_not_count_to_the_cap(
+    depth: int,
+) -> None:
+    wiring = RowWiring(FIXTURE_ROWS, neighborhood=LAYERS, missing=("X",))
+    typed_nodes = set(ego_typed_graph(snapshot(), "F", depth=depth).hops)
+
+    # The cap is exactly the typed node count; four layer-only neighbours
+    # (L1, L2, S, DV) take the drawn view over it, and must not refuse it.
+    view = await assemble_focus_graph(
+        wiring.table,
+        wiring.related,
+        wiring.facts,
+        "F",
+        depth=depth,
+        max_nodes=len(typed_nodes),
+    )
+
+    assert view.refusal is None
+    assert len(view.nodes) == len(typed_nodes) + 4
+    assert wiring.related_calls == ["F"]
+    assert set(wiring.reads) == typed_nodes
+    assert len(wiring.reads) == len(typed_nodes)
+    layer_only = {n.id: n for n in view.nodes if n.layer_only}
+    assert {node_id: n.label for node_id, n in layer_only.items()} == {
+        "L1": "Linked note",
+        "L2": "Linking note",
+        "S": "Source note",
+        "DV": "Derived note",
+    }
+
+
+async def test_layer_titles_survive_an_exhausted_facts_cap() -> None:
+    wiring = RowWiring(FIXTURE_ROWS, neighborhood=LAYERS)
+
+    view = await assemble_focus_graph(
+        wiring.table, wiring.related, wiring.facts, "F", fanout_cap=1
+    )
+
+    assert wiring.reads == ["F"]
+    assert view.facts_capped_at == 1
+    labels = {n.id: (n.label, n.facts_state) for n in view.nodes}
+    assert labels["F"] == ("Title F", "ok")
+    assert labels["A"] == ("A", "unread")  # a typed node past the cap
+    assert labels["L1"] == ("Linked note", "unread")
+    assert labels["S"] == ("Source note", "unread")
