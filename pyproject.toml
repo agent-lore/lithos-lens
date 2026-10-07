@@ -107,6 +107,7 @@ source_modules = [
     "lithos_lens.knowledge_search",
     "lithos_lens.knowledge_edge_evidence",
     "lithos_lens.knowledge_landing",
+    "lithos_lens.knowledge_tags",
     "lithos_lens.config",
     "lithos_lens.config_env",
     "lithos_lens.config_fields",

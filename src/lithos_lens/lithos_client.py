@@ -23,6 +23,7 @@ import httpx
 from lithos_lens.config import LithosConfig
 from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
 from lithos_lens.knowledge_search import SearchResult, normalize_search_result
+from lithos_lens.knowledge_tags import TagCount, normalize_tag_counts
 from lithos_lens.lithos_writes import LithosWriteMethods, LithosWriteProtocol
 from lithos_lens.mcp_transport import (
     CALL_TIMEOUT_S,
@@ -175,6 +176,8 @@ class LithosClientProtocol(LithosWriteProtocol, Protocol):
         path_prefix: str | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]: ...
+
+    async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]: ...
 
     async def close(self) -> None: ...
 
@@ -724,6 +727,21 @@ class LithosClient(LithosWriteMethods):
         return [
             normalize_search_result(item) for item in rows if isinstance(item, dict)
         ]
+
+    async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
+        """Every tag with its note count via ``lithos_tags`` (``/knowledge/tags``).
+
+        ``prefix`` is sent only when given: upstream matches it
+        case-insensitively from the start of the tag, so a caller after ONE
+        tag's count reads the exact key back (:func:`knowledge_tags.tag_count`).
+        Rows come back most notes first, ties by name.
+        """
+        arguments: dict[str, Any] = {}
+        if prefix is not None:
+            arguments["prefix"] = prefix
+        payload = await self._call_tool("lithos_tags", arguments)
+        raise_for_error(payload)
+        return normalize_tag_counts(payload)
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Place one tool call on the transport, which bounds and decodes it.

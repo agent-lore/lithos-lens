@@ -42,6 +42,7 @@ from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
 from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore, write_error
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.knowledge_search import SearchResult, normalize_search_result
+from lithos_lens.knowledge_tags import TagCount, normalize_tag_counts
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -687,6 +688,28 @@ class FakeLithosClient:
                 )
             )
         return results[:limit] if limit is not None else results
+
+    async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
+        """Tag counts over the dataset's notes, as ``lithos_tags`` counts them.
+
+        Upstream (``CorpusIndex.all_tags``) adds one per cached document per
+        tag it carries, then keeps the tags whose lowercased name starts with
+        the lowercased ``prefix``. The fake counts the same way and hands the
+        vendored ``{"tags": {...}}`` shape to the real normalizer.
+        """
+        arguments: dict[str, Any] = {} if prefix is None else {"prefix": prefix}
+        self._record("lithos_tags", arguments)
+        counts: dict[str, int] = {}
+        for note in self.dataset.notes.values():
+            for tag in note.tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        if prefix is not None:
+            counts = {
+                tag: count
+                for tag, count in counts.items()
+                if tag.lower().startswith(prefix.lower())
+            }
+        return normalize_tag_counts({"tags": counts})
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         """Neighborhood lookup so the K1-S4 related panel lights up.

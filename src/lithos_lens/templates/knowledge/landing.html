@@ -57,11 +57,17 @@
         aria-label="Search knowledge"
         {%- if not query %} autofocus{% endif %}
       >
-      {% if tag %}
+      {% if tag is not none %}
         {# An active tag filter survives a search submitted from this page —
            without this, searching from /knowledge?tag=… silently drops the
            tag (PR #39 review). #}
-        <input type="hidden" name="tag" value="{{ tag }}">
+        {# A tag a browser would alter in transit (CR, LF, NUL) rides
+           percent-encoded instead (request_filters.form_unstable). #}
+        {% if tag | form_unstable %}
+          <input type="hidden" name="tag_enc" value="{{ tag | form_encode }}">
+        {% else %}
+          <input type="hidden" name="tag" value="{{ tag }}">
+        {% endif %}
       {% endif %}
       {% if namespace %}
         <input type="hidden" name="namespace" value="{{ namespace }}">
@@ -69,11 +75,14 @@
       <button type="submit">Search</button>
     </form>
 
-    {% if tag or namespace %}
+    {# `tag is not none`, never truthiness: "" is the empty tag, a filter. #}
+    {% if tag is not none or namespace %}
       <p class="knowledge-active-filter">
         Filtered by
-        {%- if tag %} {{ tag | format_tag }}{% endif %}
-        {%- if tag and namespace %} and{% endif %}
+        {%- if tag is not none %} {{ tag | filter_tag_label }}
+          {%- if tag_notes is not none %} <span class="knowledge-namespace-count">({{ tag_notes }} note{{ "" if tag_notes == 1 else "s" }})</span>{% endif %}
+        {%- endif %}
+        {%- if tag is not none and namespace %} and{% endif %}
         {%- if namespace %} namespace {{ namespace }}{% endif %}
         <a href="{{ knowledge_landing_url(query, section=section) }}">clear filter</a>
       </p>
@@ -123,6 +132,8 @@
         <p class="knowledge-empty">No matching notes.</p>
       {% endif %}
     {% elif browse is not none %}
+      {# Tag browse (§5.7): which tags exist, beside the newest notes. #}
+      <p class="knowledge-browse-links"><a href="/knowledge/tags">Browse tags</a></p>
       {% include "knowledge/chips_capped.html" %}
       {% if browse.notes is not none %}
         <section class="knowledge-section" id="your-notes">

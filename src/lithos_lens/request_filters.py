@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, quote, urlencode
+from urllib.parse import parse_qsl, quote, unquote, urlencode
 
 from fastapi import Request
 
@@ -592,25 +592,76 @@ def note_url(knowledge_id: str, task_id: str = "") -> str:
 
 
 def knowledge_landing_url(
-    query: str = "", tag: str = "", *, namespace: str = "", section: str = ""
+    query: str = "",
+    tag: str | None = None,
+    *,
+    namespace: str = "",
+    section: str = "",
 ) -> str:
     """The ``/knowledge`` landing as rendered: its search and filters, if any.
 
     The return address the landing hands to every note it links (see
     :func:`knowledge_note_url`), so a back link lands on the same results; and
-    the href of each namespace-row entry and section heading (§7.1).
+    the href of each namespace-row entry and section heading (§7.1). ``tag``
+    is ``None`` for no tag filter and is otherwise carried verbatim — ``""``
+    is the empty tag, which Lithos keeps like any other.
     """
     params = [
         (key, value)
-        for key, value in (
-            ("q", query),
-            ("tag", tag),
-            ("namespace", namespace),
-            ("section", section),
+        for key, value, present in (
+            ("q", query, bool(query)),
+            ("tag", tag or "", tag is not None),
+            ("namespace", namespace, bool(namespace)),
+            ("section", section, bool(section)),
         )
-        if value
+        if present
     ]
     return f"/knowledge?{urlencode(params)}" if params else "/knowledge"
+
+
+#: What a browser changes in a value carried by a hidden form input: the HTML
+#: parser folds CR (and CRLF) to LF and replaces NUL with U+FFFD, and GET form
+#: serialization turns every line break into CRLF. Escaping the attribute does
+#: not stop either. A tag or tag prefix holding one of these (Lithos stores tag
+#: names verbatim) rides the form percent-encoded, as ``<name>_enc``.
+_FORM_UNSTABLE_CHARS = frozenset("\r\n\x00")
+FORM_ENCODED_SUFFIX = "_enc"
+
+
+def form_unstable(value: str) -> bool:
+    """Whether a browser would alter ``value`` between a hidden input and the
+    request its form submits (see ``_FORM_UNSTABLE_CHARS``)."""
+    return not _FORM_UNSTABLE_CHARS.isdisjoint(value)
+
+
+def form_encode(value: str) -> str:
+    """``value`` percent-encoded to plain ASCII, which survives a form intact."""
+    return quote(value, safe="")
+
+
+def exact_query_param(request: Request, name: str) -> str | None:
+    """A tag-identity parameter exactly as the page that sent it held it.
+
+    ``<name>_enc`` (a form's carrier for a value the browser would alter, see
+    :func:`form_unstable`) wins and is decoded; otherwise ``<name>`` is taken
+    verbatim — the ordinary form input and every direct link. ``None`` only
+    when neither is present.
+    """
+    encoded = request.query_params.get(name + FORM_ENCODED_SUFFIX)
+    if encoded is not None:
+        return unquote(encoded)
+    return request.query_params.get(name)
+
+
+def knowledge_tags_url(query: str = "", prefix: str = "") -> str:
+    """The ``/knowledge/tags`` page with its substring and family filters.
+
+    The href of each family-row entry (``q`` kept) and of "clear filter".
+    """
+    params = [
+        (key, value) for key, value in (("q", query), ("prefix", prefix)) if value
+    ]
+    return f"/knowledge/tags?{urlencode(params)}" if params else "/knowledge/tags"
 
 
 def knowledge_note_url(knowledge_id: str, next_url: str) -> str:

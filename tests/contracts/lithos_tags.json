@@ -1,0 +1,43 @@
+{
+  "tool": "lithos_tags",
+  "lithos_version": "lithos 0.6.0 @ d2c49bb (source read 2026-10-06)",
+  "source": [
+    "lithos:src/lithos/tools/read_search.py::lithos_tags",
+    "lithos:src/lithos/knowledge.py::KnowledgeManager.get_all_tags",
+    "lithos:src/lithos/corpus_index.py::CorpusIndex.all_tags"
+  ],
+  "request": {
+    "canonical": {},
+    "variants": {
+      "prefix": {
+        "prefix": "project:influx"
+      }
+    },
+    "notes": "One optional argument, `prefix` (str | None, default None). Without it the tool answers every tag in the corpus (/knowledge/tags sends no arguments and filters Lens-side, because its family facet is derived from the whole set). With it, only tags whose lowercased name starts with the lowercased prefix are returned (case-INSENSITIVE startswith; the keys keep their stored case). The landing's \"Filtered by <tag>\" count sends the active tag as `prefix` and reads the EXACT key back — a prefix match also returns longer tags (`project:influx-old`)."
+  },
+  "responses": {
+    "success": {
+      "tags": {
+        "project:influx": 12,
+        "ingested-by:influx": 40,
+        "profile:researcher": 3,
+        "source:arxiv": 7,
+        "research": 12,
+        "draft": 1
+      }
+    },
+    "variants": {
+      "prefix_match": {
+        "tags": {
+          "project:influx": 12,
+          "project:influx-old": 2
+        }
+      },
+      "empty": {
+        "tags": {}
+      }
+    },
+    "errors": []
+  },
+  "observed_divergences": "The tool documents no error envelope: it returns {\"tags\": {tag: document_count}} from the in-memory corpus index (CorpusIndex.all_tags — one count per cached document carrying the tag), {} when nothing matches. A failure reaches Lens only as a transport/MCP error, which the client raises as a coded LithosToolError like any other tool."
+}

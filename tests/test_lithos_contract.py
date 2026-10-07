@@ -314,6 +314,26 @@ async def test_recent_notes_rows_are_newest_first(
     assert [row.id for row in limited] == [row.id for row in rows][:1]
 
 
+async def test_list_tags_ranks_counts_and_prefix_narrows_case_insensitively(
+    client: LithosClientProtocol,
+) -> None:
+    """lithos_tags answers every tag with a positive note count; the client
+    ranks them most notes first, ties by name. A ``prefix`` keeps exactly the
+    tags whose lowercased name starts with it, counts unchanged — so the
+    landing's exact-key read of the active tag sees the full map's figure."""
+    rows = await client.list_tags()
+    _require_rows_on_fake_leg(client, list(rows))
+    assert all(row.count > 0 for row in rows)
+    assert list(rows) == sorted(rows, key=lambda row: (-row.count, row.tag))
+    if not rows:
+        return  # an empty but healthy real server: nothing to narrow
+    head = rows[0].tag[:3].upper()
+    narrowed = await client.list_tags(prefix=head)
+    assert set(narrowed) == {
+        row for row in rows if row.tag.lower().startswith(head.lower())
+    }
+
+
 # ── vendored-contract verification (issue #31) ──────────────────────────
 
 

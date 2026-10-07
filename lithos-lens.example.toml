@@ -89,6 +89,7 @@ list_chip_fanout_cap = 40       # /knowledge rows given metadata chips, one lith
 # Paths that make a note intake on /knowledge (as does an ingested-by:* tag);
 # [] leaves only the tag.
 intake_path_prefixes = ["articles/", "papers/", "digests/"]
+tags_page_limit = 500           # /knowledge/tags rows before "N more — narrow the filter" (1-5000)
 
 [lithos-lens.events]
 enabled = true

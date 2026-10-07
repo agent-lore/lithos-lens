@@ -46,6 +46,7 @@ from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_edge_evidence import EdgeEvidence, EdgeWhy, provenance_label
 from lithos_lens.knowledge_search import SearchResult
+from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import (
     LithosClient,
     LithosClientProtocol,
@@ -339,7 +340,8 @@ REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
         "from_title",
         "to_task_id",
         "to_title",
-    },
+    },  # The one container key; a tag map is its only content.
+    "lithos_tags": {"tags"},
 }
 
 
@@ -679,6 +681,22 @@ def _check_search_results(result: Any, success: dict[str, Any]) -> None:
     ]
 
 
+def _expected_tags(payload: dict[str, Any]) -> tuple[TagCount, ...]:
+    # Most notes first, ties by name: the vendored map is deliberately in
+    # neither order and carries a tie (12/12), so passing the map through
+    # unsorted — or sorting by one key — fails.
+    return tuple(
+        TagCount(tag=tag, count=count)
+        for tag, count in sorted(
+            payload["tags"].items(), key=lambda item: (-item[1], item[0])
+        )
+    )
+
+
+def _check_tags(result: Any, success: dict[str, Any]) -> None:
+    assert result == _expected_tags(success)
+
+
 # ── write results ───────────────────────────────────────────────────────
 #
 # `unblocked` / `reblocked` / `depends_on` are lists of task IDS upstream, so
@@ -878,6 +896,7 @@ TOOL_SPECS: dict[
         lambda c: c.search_notes("influx", tags=["project:influx"], limit=20),
         _check_search_results,
     ),
+    "lithos_tags": (lambda c: c.list_tags(), _check_tags),
 }
 
 
@@ -1491,6 +1510,23 @@ def test_recent_notes_without_limit_returns_the_whole_walk_newest_first(
     result = asyncio.run(_driver())
 
     assert [row.id for row in result] == [newest["id"], middle["id"], oldest["id"]]
+
+
+def test_list_tags_prefix_sends_the_vendored_variant_request() -> None:
+    """The landing's "Filtered by <tag>" count is ``lithos_tags``'s second
+    request shape: the active tag as ``prefix`` (the ``prefix`` variant). The
+    prefix answer also carries longer tags, and normalizes like the full one."""
+    contract = load_contract("lithos_tags")
+    payload = contract["responses"]["variants"]["prefix_match"]
+    result, calls = _run(payload, lambda c: c.list_tags(prefix="project:influx"))
+    assert calls == [("lithos_tags", contract["request"]["variants"]["prefix"])]
+    assert result == _expected_tags(payload)
+
+
+def test_list_tags_empty_map_is_no_rows() -> None:
+    payload = load_contract("lithos_tags")["responses"]["variants"]["empty"]
+    result, _ = _run(payload, lambda c: c.list_tags())
+    assert result == ()
 
 
 def test_search_notes_namespace_sends_the_scoped_variant() -> None:

@@ -306,6 +306,9 @@ The current configuration model includes:
 - `knowledge.intake_path_prefixes` *(default `["articles/", "papers/",
   "digests/"]`: a note under one is intake on the landing, as is one tagged
   `ingested-by:*` — §5.7; `[]` leaves only the tag)*
+- `knowledge.tags_page_limit` *(default 500, 1-5000: how many tags
+  `/knowledge/tags` renders before "N more — narrow the filter" — §5.7; one
+  `lithos_tags` call answers every tag whatever the value)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1307,6 +1310,54 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   render chipless under a "Chips shown for the first N notes." line; a failed
   read leaves only its own row chipless, never the list. The number of reads
   is the landing span's `lens.chips.fanout`
+- a **"Browse tags"** link above the two sections to `/knowledge/tags`, and,
+  when `?tag=` is active, that tag's note count on the "Filtered by" line
+  ("project: influx (12 notes)"): `lithos_tags(prefix=<tag>)`, read back by
+  the EXACT key (the prefix answer also carries longer tags; an absent key is
+  0). A failed count read drops only the count
+- `?tag=` is taken **verbatim**, and only its absence means "no tag filter":
+  Lithos stores tag names as given — `""` and surrounding whitespace included —
+  and matches them exactly, so `?tag=` is the empty tag and `?tag=%20x%20` is
+  ` x `, not `x`. The value reaches the list/search `tags` argument, the count,
+  the hidden search input, every link the landing builds and the note page's
+  back link unchanged. A browser alters CR, LF and NUL in a hidden input on
+  the way to the request (the parser folds CR to LF and NUL to U+FFFD; GET
+  serialization sends every line break as CRLF), so a tag holding one rides
+  the search form percent-encoded as `tag_enc`, which wins over `tag` and is
+  decoded (`request_filters.form_unstable` / `exact_query_param`); any other
+  tag, and every link, keeps plain `tag=`. The "Filtered by" line names the
+  tag by the label rule below, `key: value` for an ordinary name
+
+`GET /knowledge/tags` is the tag browse page (`knowledge_tags`):
+
+- **every tag with its note count**, from ONE `lithos_tags` call with no
+  arguments (2,057 tags on 2026-10-05), most notes first, ties by name —
+  every string key, kept verbatim. **No two tags share a label**
+  (`knowledge_tags.tag_label`): an ordinary name — non-empty, no surrounding
+  whitespace, no control character, not opening with `“` and not spelling
+  "(empty tag)" — reads bare; the empty tag reads "(empty tag)"; any other
+  name is quoted with control characters and backslash backslash-escaped
+  (`“ x ”`, `“alpha\nbeta”`, `“(empty tag)”`), and labels render with
+  whitespace preserved. Each tag links to `/knowledge?tag=<tag>`
+  (url-encoded), and the line above the list reads "M tags, most notes
+  first" — "N of M" when filtered
+- **`?q=`** narrows the list to tags containing the substring
+  (case-insensitive), from a GET form; **`?prefix=`** to tags starting with a
+  family (case-insensitive, as `lithos_tags`'s own `prefix`). Both apply
+  Lens-side and compose; the form carries the family as a hidden input
+  (`prefix_enc`, percent-encoded, when it holds CR, LF or NUL — as the
+  landing's tag)
+- the **family row** ("all", then up to 12 `key:` families, most tags first,
+  the active one `aria-current`) is derived from the tags present — a family
+  is the text before a tag's first `:` plus the colon, never a fixed list —
+  and counts every tag, whichever filter is active; each entry keeps `q`.
+  Families differing only in case are one entry (the filter matching all of
+  them), counted together and spelled as most of its tags spell it, ties by
+  name; exactly one entry is current
+- the list is cut to `knowledge.tags_page_limit` (default 500) with "N more —
+  narrow the filter" under it
+- with Lithos offline or degraded, or on a failed `lithos_tags` read, the
+  landing's warning banner replaces the list
 
 ### 5.8 Live Updates
 
