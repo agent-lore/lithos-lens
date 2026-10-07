@@ -50,6 +50,7 @@ graph TD
   Events --> TaskGraph
   Events --> Telemetry
   Knowledge --> Tasks
+  Knowledge --> Telemetry
   LithosClient --> Config
   LithosClient --> Events
   LithosClient --> Knowledge
@@ -88,22 +89,23 @@ graph TD
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
-  linkStyle 15 stroke:#bbb
+  linkStyle 14 stroke:#bbb
   linkStyle 16 stroke:#bbb
   linkStyle 17 stroke:#bbb
   linkStyle 18 stroke:#bbb
   linkStyle 19 stroke:#bbb
   linkStyle 20 stroke:#bbb
-  linkStyle 23 stroke:#bbb
+  linkStyle 21 stroke:#bbb
   linkStyle 24 stroke:#bbb
   linkStyle 25 stroke:#bbb
   linkStyle 26 stroke:#bbb
-  linkStyle 27 stroke:#999,stroke-dasharray:4
+  linkStyle 27 stroke:#bbb
   linkStyle 28 stroke:#999,stroke-dasharray:4
-  linkStyle 30 stroke:#999,stroke-dasharray:4
-  linkStyle 33 stroke:#999,stroke-dasharray:4
+  linkStyle 29 stroke:#999,stroke-dasharray:4
+  linkStyle 31 stroke:#999,stroke-dasharray:4
   linkStyle 34 stroke:#999,stroke-dasharray:4
   linkStyle 35 stroke:#999,stroke-dasharray:4
   linkStyle 36 stroke:#999,stroke-dasharray:4
-  linkStyle 37 stroke:#bbb
+  linkStyle 37 stroke:#999,stroke-dasharray:4
+  linkStyle 38 stroke:#bbb
 ```

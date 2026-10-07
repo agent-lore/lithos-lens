@@ -39,8 +39,55 @@ classDiagram
     +confidence float | None
     +raw str
   }
+  class EdgeFacets {
+    +types Mapping[str, int]
+    +namespaces Mapping[str, int]
+    +unresolved_contradictions int
+  }
+  class EdgeStyle {
+    +css_class str
+    +stroke Stroke
+    +arrowhead bool
+    +label str
+  }
+  class EdgeTableRefusal {
+    +row_count int
+    +max_edges int
+    +as_of datetime
+  }
+  class EdgeTableSnapshot {
+    +as_of datetime
+    +stale bool
+  }
   class EdgeWhy {
     +provenance str
+  }
+  class KnowledgeEdge {
+    +edge_id str
+    +from_id str
+    +to_id str
+    +type str
+    +weight float | None
+    +namespace str
+    +created_at str | None
+    +updated_at str | None
+    +provenance_actor str | None
+    +provenance_type str | None
+    +evidence str | None
+    +conflict_state str | None
+    +partial bool
+  }
+  class KnownEdgeType {
+    +name str
+    +direction EdgeDirection
+    +stroke Stroke
+    +legend str
+  }
+  class LegendLine {
+    +type str
+    +css_class str
+    +line str
+    +known bool
   }
   class ListChips {
     +fanout int
@@ -131,6 +178,11 @@ classDiagram
   }
   class NoteSummary
   <<Tasks>> NoteSummary
+  EdgeTableSnapshot "1" --> "1" EdgeFacets : facets
+  EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_endpoint
+  EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_namespace
+  EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_type
+  EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : rows
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
   ListChips "1" --> "0..*" NoteMetadata : by_id
   RecentLanding "1" --> "0..*" NamespaceFacet : namespaces

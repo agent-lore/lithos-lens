@@ -8,8 +8,9 @@ reconnect, and the decode of a raw MCP result — belongs to
 ``health()`` is the exception that stays here: it probes the plain HTTP
 ``/health`` endpoint, not an MCP tool.
 
-The five write methods (T3) live in :mod:`lithos_lens.lithos_writes`, mixed in
-here and declared on the protocol through it.
+The five write methods (T3) live in :mod:`lithos_lens.lithos_writes`, and the
+knowledge-graph reads (K2) in :mod:`lithos_lens.lithos_graph_reads`, each mixed
+in here and declared on the protocol through it.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from lithos_lens.config import LithosConfig
 from lithos_lens.knowledge import RelatedNeighborhood, normalize_related
 from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.knowledge_tags import TagCount, normalize_tag_counts
+from lithos_lens.lithos_graph_reads import (
+    LithosGraphReadMethods,
+    LithosGraphReadProtocol,
+)
 from lithos_lens.lithos_writes import LithosWriteMethods, LithosWriteProtocol
 from lithos_lens.mcp_transport import (
     CALL_TIMEOUT_S,
@@ -76,7 +81,7 @@ RECENT_NOTES_FETCH_PAGE = 500
 _RECENT_NOTES_MAX_PAGES = 40
 
 
-class LithosClientProtocol(LithosWriteProtocol, Protocol):
+class LithosClientProtocol(LithosWriteProtocol, LithosGraphReadProtocol, Protocol):
     """Subset of Lithos operations required by the common core."""
 
     async def startup(self) -> None: ...
@@ -188,7 +193,7 @@ class RegistrationResult:
     message: str = ""
 
 
-class LithosClient(LithosWriteMethods):
+class LithosClient(LithosWriteMethods, LithosGraphReadMethods):
     """Best-effort Lithos client used by the web app.
 
     Owns one :class:`~lithos_lens.mcp_transport.MCPTransport` — a single,

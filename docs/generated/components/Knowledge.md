@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided.
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided; plus the knowledge graph's data layer — the edge-table snapshot (the whole Lithos edge table from one unfiltered read, its endpoint/type/namespace indexes and picker facets, held under a TTL with single-flight, refused over its row bound with filtered reads still served, served stale when a refetch fails, and patched from edge.upserted) and the known edge-type table (direction, symmetry, style, unknown types drawn as recorded, and the legend lines).
 
 **Tier:** Foundation
 
@@ -13,6 +13,8 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 7 | 7 |
 | `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
+| `lithos_lens.knowledge_edge_types` | S | 4 | 4 |
+| `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
@@ -45,6 +47,26 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `provenance_label` — The plain-language provenance line, e.g. "inferred by lithos-enrich".
 - def `edge_why` — The disclosure for one raw edge row; ``None`` when it would be empty.
 - def `number_or_none` — A finite JSON number (not a bool) as a float; anything else is ``None``.
+
+### `lithos_lens.knowledge_edge_types`
+- class `EdgeDirection` — How an edge's two endpoints relate.
+- class `KnownEdgeType` — One row of the known-type table (K2 PRD D5).
+- class `EdgeStyle` — How one edge row draws: the class, the stroke, the arrowhead, a label.
+- class `LegendLine` — One legend entry: a type present in the drawn graph and what it means.
+- def `known_edge_type` — The table row for ``name``, or ``None`` for a type Lens does not know.
+- def `direction_of` — The edge's direction: the table's for a known type, as recorded otherwise.
+- def `edge_style` — How ``edge`` draws (K2 PRD D5).
+- def `legend` — One line per type PRESENT, known types in table order, unknown after.
+
+### `lithos_lens.knowledge_edges`
+- class `KnowledgeEdge` — One row of the Lithos ``edges`` table, its twelve columns as sent.
+- def `normalize_knowledge_edge` — One ``lithos_edge_list`` row as a :class:`KnowledgeEdge`.
+- def `normalize_edge_list` — ``lithos_edge_list``'s ``{"results": [...]}`` as rows, in the order sent.
+- def `is_unresolved_contradiction` — A ``contradicts`` row whose ``conflict_state`` is still NULL.
+- class `EdgeFacets` — What the scope picker offers: rows per type and per namespace (most first, ties by name) and how many contradictions are still unresolved.
+- class `EdgeTableSnapshot` — The whole edge table at ``as_of``, with its indexes and facets.
+- class `EdgeTableRefusal` — The table was fetched, counted and NOT held: over the bound.
+- class `EdgeTable` — The process's edge-table snapshot: TTL, single-flight, bound, patches.
 
 ### `lithos_lens.knowledge_landing`
 - class `NamespaceFacet` — One entry of the namespace filter row: a namespace and its note count.
@@ -91,7 +113,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 
 ## Dependencies
 
-- Depends on: [Tasks](Tasks.md)
+- Depends on: [Tasks](Tasks.md), [Telemetry](Telemetry.md)
 - Used by: [LithosClient](LithosClient.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

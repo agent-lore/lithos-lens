@@ -3,7 +3,7 @@
     "components": {
       "Config": {
         "functions_over_10": 1,
-        "max_complexity": 39,
+        "max_complexity": 42,
         "max_function": "lithos_lens.config_env.apply_env_overrides"
       },
       "Entrypoint": {
@@ -70,12 +70,12 @@
     "functions_over_10": 50,
     "top_functions": [
       {
-        "complexity": 40,
-        "qualname": "lithos_lens.frontier.load_dashboard"
+        "complexity": 42,
+        "qualname": "lithos_lens.config_env.apply_env_overrides"
       },
       {
-        "complexity": 39,
-        "qualname": "lithos_lens.config_env.apply_env_overrides"
+        "complexity": 40,
+        "qualname": "lithos_lens.frontier.load_dashboard"
       },
       {
         "complexity": 24,
@@ -110,11 +110,11 @@
         "qualname": "lithos_lens.cancel_consequences.walk_downstream"
       }
     ],
-    "total_functions": 1022
+    "total_functions": 1060
   },
   "domain": {
-    "associations": 120,
-    "models": 119,
+    "associations": 125,
+    "models": 126,
     "models_without_docstrings": 16
   },
   "graph": {
@@ -142,8 +142,8 @@
       },
       "Knowledge": {
         "fan_in": 2,
-        "fan_out": 1,
-        "instability": 0.33
+        "fan_out": 2,
+        "instability": 0.5
       },
       "LithosClient": {
         "fan_in": 2,
@@ -171,9 +171,9 @@
         "instability": 0.0
       },
       "Telemetry": {
-        "fan_in": 4,
+        "fan_in": 5,
         "fan_out": 2,
-        "instability": 0.33
+        "instability": 0.29
       },
       "Web": {
         "fan_in": 1,
@@ -186,8 +186,8 @@
         "instability": 0.33
       }
     },
-    "cross_component_edges": 38,
-    "cross_component_module_edges": 194,
+    "cross_component_edges": 39,
+    "cross_component_module_edges": 198,
     "longest_component_chain": 9,
     "module_cycle_count": 0,
     "module_cycles": [],
@@ -223,11 +223,11 @@
         "classes": 13,
         "functions": 33,
         "largest_module": "lithos_lens.config",
-        "largest_module_lines": 643,
-        "lines": 1587,
+        "largest_module_lines": 669,
+        "lines": 1663,
         "modules": 4,
         "public_symbols": 27,
-        "sloc": 1255
+        "sloc": 1317
       },
       "Entrypoint": {
         "classes": 0,
@@ -260,24 +260,24 @@
         "sloc": 517
       },
       "Knowledge": {
-        "classes": 23,
-        "functions": 91,
+        "classes": 33,
+        "functions": 120,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 1982,
-        "modules": 8,
-        "public_symbols": 51,
-        "sloc": 1495
+        "lines": 2639,
+        "modules": 10,
+        "public_symbols": 67,
+        "sloc": 2021
       },
       "LithosClient": {
-        "classes": 15,
-        "functions": 164,
-        "largest_module": "lithos_lens.lithos_client",
-        "largest_module_lines": 782,
-        "lines": 4763,
-        "modules": 9,
-        "public_symbols": 24,
-        "sloc": 3831
+        "classes": 17,
+        "functions": 171,
+        "largest_module": "lithos_lens.fake_lithos",
+        "largest_module_lines": 794,
+        "lines": 5101,
+        "modules": 10,
+        "public_symbols": 27,
+        "sloc": 4135
       },
       "Logging": {
         "classes": 2,
@@ -321,13 +321,13 @@
       },
       "Telemetry": {
         "classes": 0,
-        "functions": 40,
+        "functions": 42,
         "largest_module": "lithos_lens.metrics",
-        "largest_module_lines": 591,
-        "lines": 1139,
+        "largest_module_lines": 629,
+        "lines": 1177,
         "modules": 2,
-        "public_symbols": 27,
-        "sloc": 833
+        "public_symbols": 29,
+        "sloc": 864
       },
       "Web": {
         "classes": 11,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 31808,
-    "total_modules": 79,
-    "total_sloc": 24535
+    "total_lines": 32917,
+    "total_modules": 82,
+    "total_sloc": 25458
   },
   "tests": {
-    "ratio": 1.96,
-    "src_lines": 31808,
-    "test_lines": 62458
+    "ratio": 1.93,
+    "src_lines": 32917,
+    "test_lines": 63506
   }
 }

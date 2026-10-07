@@ -309,6 +309,12 @@ The current configuration model includes:
 - `knowledge.tags_page_limit` *(default 500, 1-5000: how many tags
   `/knowledge/tags` renders before "N more — narrow the filter" — §5.7; one
   `lithos_tags` call answers every tag whatever the value)*
+- `knowledge.graph_edge_table_ttl_s` *(default 300, 1-3600: seconds the
+  knowledge edge-table snapshot is served before the next read refetches it —
+  §5.7, Knowledge edge table)*
+- `knowledge.graph_edge_table_max_edges` *(default 50000, 1-500000: a fetched
+  edge table with more rows is not held, and only `type=`/`namespace=`-filtered
+  reads are served — §5.7, Knowledge edge table)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1358,6 +1364,47 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   narrow the filter" under it
 - with Lithos offline or degraded, or on a failed `lithos_tags` read, the
   landing's warning banner replaces the list
+
+**Knowledge edge table** (K2 S1 — the graph view's data layer; no page reads
+it yet). `lithos_lens.knowledge_edges` holds the whole Lithos `edges` table as
+an `EdgeTableSnapshot`, fetched with ONE unfiltered `lithos_edge_list` call
+(the tool has no limit, offset, order or total):
+
+- each row is a `KnowledgeEdge` with the table's twelve columns as sent —
+  NULL columns stay `None`, so an unresolved `contradicts` (NULL
+  `conflict_state`) is told apart from a resolved one (`accepted_dual`,
+  `superseded`, `refuted` or `merged`); `evidence` stays the raw JSON string
+- the snapshot carries indexes by endpoint (a row under both of its ends),
+  by type and by namespace, and the facets the scope picker needs — rows per
+  type and per namespace, and the unresolved-contradictions count — all
+  derived from the rows at construction, so they cannot disagree with them
+- it is served for `knowledge.graph_edge_table_ttl_s` (300 s) on a monotonic
+  clock, its `as_of` on the wall clock; concurrent reads during a fetch share
+  that one fetch
+- a table with more rows than `knowledge.graph_edge_table_max_edges` (50,000)
+  is not held: an `EdgeTableRefusal` naming the count is kept for one TTL,
+  and only `type=`/`namespace=`-filtered reads are served, each a direct,
+  uncached `lithos_edge_list` call
+- a failed refetch is never cached: the previous snapshot is served marked
+  `stale` with its old `as_of`, and the next read tries again; with no
+  previous snapshot the failure reaches every waiter
+- an `edge.upserted` payload (`edge_id`, `from_id`, `to_id`, `type`,
+  `namespace`, `conflict_state`) patches the snapshot by `edge_id`: an
+  existing row takes those fields and keeps its weight, provenance and
+  evidence; a new row is inserted with them unknown. Either is marked
+  `partial` until the next full fetch. A patch is a no-op with nothing held
+  or the table refused
+
+`lithos_lens.knowledge_edge_types` is the known-type table, in this order:
+`supports`, `related_to`, `analogy_to`, `refines`, `is_example_of`,
+`depends_on`, `derived_from`, `contradicts`. `related_to`, `analogy_to` and
+`contradicts` are symmetric (stored `from_id <= to_id`, drawn without an
+arrowhead); the rest are directed, `derived_from` from the derived note to its
+source and dotted. `contradicts` is dashed — red while unresolved, muted and
+labelled with its resolution once resolved. Any other type is drawn as
+recorded: an arrowhead from `from_id` to `to_id`, neutral grey, labelled with
+the raw type. A legend lists exactly the types present, known ones in table
+order, unknown ones after by name, one plain-language line each.
 
 ### 5.8 Live Updates
 
@@ -2537,7 +2584,9 @@ provides:
 - **task-graph reads**: the computed ready and blocked frontiers with
   classified blockers, task types (`task`/`epic`/`gate`), typed task edges, and
   children — the Lithos 0.4 surface the whole graph-native dashboard rests on
-- note read, search, and neighborhood capability for the knowledge surface
+- note read, search, and neighborhood capability for the knowledge surface,
+  and the whole typed-edge table in one unfiltered `lithos_edge_list` call
+  (the knowledge graph's snapshot, §5.7)
 - agent registry/statistics endpoints used by the dashboard, including the
   exact single-agent lookup (`lithos_agent_info`) the operator-identity guard
   reads and the typed registration it writes
@@ -2626,6 +2675,12 @@ Lens's failure modes rather than its routes:
   `conflict` | `rejected` | `unknown` | `refused_origin` | `no_operator`), one
   per attempt (§5.15). The operator, the task and a rejection's code are span
   attributes, never labels.
+- **Knowledge edge table** — a `lens.knowledge.edge_table` span per fetch
+  (its duration, `lens.edge_table.rows` and `lens.edge_table.outcome`: `ok` |
+  `refused` | `failed` | `stale`), `lens_knowledge_edge_table_age_seconds`
+  (seconds since the last successful fetch), and
+  `lens_knowledge_edge_table_patches_total` by `event_type` and `outcome`
+  (`inserted` | `replaced` | `ignored`) (§5.7).
 - **Task graph** — page renders by scope kind and outcome (`rendered` |
   `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
   behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how

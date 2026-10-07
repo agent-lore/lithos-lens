@@ -238,6 +238,8 @@ LITHOS_LENS_KNOWLEDGE_SEARCH_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RECENT_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
 LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES=articles/,papers/,digests/   # comma-separated; empty = only the ingested-by:* tag
+LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S=300         # knowledge graph edge-table snapshot TTL (K2 §8.2)
+LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES=50000  # snapshot refused above this (K2 §8.2)
 
 # Optional LLM client — disabled by default
 LITHOS_LENS_LLM_ENABLED=false

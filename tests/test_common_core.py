@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import load_config
 from lithos_lens.errors import ConfigError
 from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_edges import KnowledgeEdge
 from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
@@ -164,6 +165,16 @@ class RecordingLithosClient(ReadOnlyWriteSurface):
         return []
 
     async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
+        return ()
+
+    async def edge_list(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        type: str | None = None,
+        namespace: str | None = None,
+    ) -> tuple[KnowledgeEdge, ...]:
         return ()
 
     async def close(self) -> None:

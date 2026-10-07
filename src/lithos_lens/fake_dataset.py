@@ -23,7 +23,11 @@ from types import MappingProxyType
 from typing import Any
 
 from lithos_lens.fake_graph_dataset import ROADMAP_TAG, graph_fixtures
-from lithos_lens.fake_knowledge_dataset import intake_fixtures, related_fixtures
+from lithos_lens.fake_knowledge_dataset import (
+    intake_fixtures,
+    knowledge_edge_rows,
+    related_fixtures,
+)
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.task_graph import BlockerRecord, EdgeRecord
 from lithos_lens.tasks import (
@@ -97,6 +101,10 @@ class FakeLithosDataset:
     related_neighborhoods: Mapping[str, RelatedNeighborhood] = field(
         default_factory=dict
     )
+    # The KNOWLEDGE edge table, as raw lithos_edge_list rows (12 keys each) —
+    # ``edges`` below is the task graph's. Raw so the fake serves them through
+    # the real normalizer, exactly as the client would receive them.
+    knowledge_edges: tuple[Mapping[str, Any], ...] = ()
     ready_ids: frozenset[str] = frozenset()
     blocked: Mapping[str, tuple[BlockerRecord, ...]] = field(default_factory=dict)
     edges: Mapping[str, tuple[EdgeRecord, ...]] = field(default_factory=dict)
@@ -556,6 +564,7 @@ def demo_dataset() -> FakeLithosDataset:
             **intake_paths,
         },
         related_neighborhoods=related_fixtures(),
+        knowledge_edges=knowledge_edge_rows(),
         # Graph oracle: every open workable task is placed on exactly one
         # frontier so none falls into the Not-classified tail (a healthy corpus
         # this small can never be limit-truncated). `influx-ingest-cutover` is

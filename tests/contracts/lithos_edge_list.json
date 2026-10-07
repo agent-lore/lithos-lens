@@ -1,0 +1,155 @@
+{
+  "tool": "lithos_edge_list",
+  "lithos_version": "lithos 0.6.0 @ d2c49bb (source read 2026-10-07)",
+  "source": [
+    "lithos:src/lithos/tools/memory_edges.py::lithos_edge_list (from_id, to_id, type, namespace — all optional, default None; from_id/to_id go through KnowledgeManager.resolve_id_lenient; returns {\"results\": edges})",
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.edge_list -> src/lithos/provenance.py::ProvenanceProjection.list_edges -> src/lithos/edge_store.py::EdgeStore.list_edges (one '=' clause per filter given, ANDed; SELECT of the twelve columns with no ORDER BY, LIMIT or OFFSET; each row a dict of those twelve keys, SQL NULL as null)",
+    "lithos:src/lithos/edge_store.py::EdgeStore.SCHEMA (type TEXT NOT NULL, unvalidated; weight REAL NOT NULL DEFAULT 1.0; namespace, created_at, updated_at NOT NULL; provenance_actor, provenance_type, evidence, conflict_state nullable TEXT; UNIQUE(from_id, to_id, type, namespace); no foreign key to notes) and ::_generate_edge_id ('edge_' + uuid4().hex[:12]); timestamps are datetime.now(UTC).isoformat()",
+    "lithos:src/lithos/knowledge.py::KnowledgeManager.resolve_id_lenient + src/lithos/id_resolution.py (MIN_PREFIX_LEN = 6, AMBIGUITY_CANDIDATE_CAP = 5) + src/lithos/tools/_seam.py::tool_span (AmbiguousIdPrefixError -> error_envelope('ambiguous_id_prefix', message, candidates=[{id, title}]))",
+    "lithos:src/lithos/lcma/edge_inference.py (SYMMETRIC_RELATIONS = {contradicts, analogy_to}: endpoints canonicalised from_id <= to_id; supports / refines / is_example_of / depends_on take the adjudicator's direction verdict via edge_endpoints; evidence = json.dumps({rationale, model, confidence}), weight = confidence, written at >= config confidence_floor 0.6, conflict_state NULL)",
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.reinforce_between + src/lithos/lcma/enrich.py + src/lithos/lcma/edge_reinforce.py (related_to stored symmetric, from_id <= to_id; citation reinforcement starts at 0.5 with provenance_type 'reinforcement', task consolidation at 0.03 with 'consolidation'; RELATED_TO_STRENGTHEN_DELTA = 0.03 per repeat)",
+    "lithos:src/lithos/provenance.py::ProvenanceProjection (derived_from from the derived note to its source: from_id = the note whose frontmatter lists derived_from_ids, to_id = the source; weight 1.0, provenance_type 'frontmatter', provenance_actor / evidence / conflict_state NULL)",
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.conflict_resolve + src/lithos/edge_store.py::EdgeStore.update_conflict_resolution (contradicts only; conflict_state set to one of accepted_dual / superseded / refuted / merged, provenance_actor to the resolver, updated_at bumped)"
+  ],
+  "request": {
+    "canonical": {},
+    "variants": {
+      "filtered": {
+        "type": "contradicts",
+        "namespace": "influx"
+      }
+    },
+    "notes": "All four filters are optional (string or null, default null; additionalProperties false) and each one given is an exact '=' match, ANDed. Lens sends only the filters it has: the edge-table snapshot's ONE unfiltered call sends {} and receives the WHOLE edges table — there is no limit, offset, order or total, so the row order is SQLite's and means nothing. The 'filtered' variant is the read a table over [knowledge].graph_edge_table_max_edges is still served by. from_id / to_id (never type or namespace) are resolved leniently: an exact note id passes, a value under 6 characters or matching no note filters literally (endpoints need not be notes), a unique >= 6-char prefix of a note id resolves to that id, and an AMBIGUOUS one is refused with ambiguous_id_prefix (at most 5 {id, title} candidates). Lens never sends a prefix. Direction facts, from the sources cited: contradicts, analogy_to and related_to are stored symmetric (from_id <= to_id); supports, refines, is_example_of and depends_on are directed by the adjudicator's verdict; derived_from runs derived -> source. type is unvalidated, so other values occur (live 2026-10-05: assesses, summarizes)."
+  },
+  "responses": {
+    "success": {
+      "results": [
+        {
+          "edge_id": "edge_3fa91c0b7d21",
+          "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+          "to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4",
+          "type": "supports",
+          "weight": 0.82,
+          "namespace": "influx",
+          "created_at": "2026-09-14T03:12:44.518230+00:00",
+          "updated_at": "2026-09-14T03:12:44.518230+00:00",
+          "provenance_actor": "lithos-enrich",
+          "provenance_type": "inferred",
+          "evidence": "{\"rationale\": \"The capacity report's measured write rate is the headroom the migration plan's cutover window assumes.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.82}",
+          "conflict_state": null
+        },
+        {
+          "edge_id": "edge_8c27e4a1f053",
+          "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+          "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+          "type": "contradicts",
+          "weight": 0.71,
+          "namespace": "influx",
+          "created_at": "2026-09-20T11:40:02.004917+00:00",
+          "updated_at": "2026-09-20T11:40:02.004917+00:00",
+          "provenance_actor": "lithos-enrich",
+          "provenance_type": "inferred",
+          "evidence": "{\"rationale\": \"The two notes size the same cluster for write rates a factor of two apart.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.71}",
+          "conflict_state": null
+        },
+        {
+          "edge_id": "edge_d4610b9e2a7c",
+          "from_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4",
+          "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+          "type": "contradicts",
+          "weight": 0.9,
+          "namespace": "influx",
+          "created_at": "2026-09-02T08:00:13.771020+00:00",
+          "updated_at": "2026-10-01T16:22:51.330408+00:00",
+          "provenance_actor": "dave",
+          "provenance_type": "inferred",
+          "evidence": "{\"rationale\": \"The legacy note keeps a single writer; the plan dual-writes.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.9}",
+          "conflict_state": "superseded"
+        },
+        {
+          "edge_id": "edge_5b0e93c7d148",
+          "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+          "to_id": "c3b81f05-6a2d-4e9c-b7f4-2d0e9a5c1b63",
+          "type": "related_to",
+          "weight": 0.06,
+          "namespace": "influx",
+          "created_at": "2026-09-28T02:05:31.902114+00:00",
+          "updated_at": "2026-10-03T02:05:29.118870+00:00",
+          "provenance_actor": null,
+          "provenance_type": "consolidation",
+          "evidence": null,
+          "conflict_state": null
+        },
+        {
+          "edge_id": "edge_7e1a6f2c09b5",
+          "from_id": "c3b81f05-6a2d-4e9c-b7f4-2d0e9a5c1b63",
+          "to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4",
+          "type": "derived_from",
+          "weight": 1.0,
+          "namespace": "user/planning",
+          "created_at": "2026-08-21T19:47:08.640512+00:00",
+          "updated_at": "2026-08-21T19:47:08.640512+00:00",
+          "provenance_actor": null,
+          "provenance_type": "frontmatter",
+          "evidence": null,
+          "conflict_state": null
+        }
+      ]
+    },
+    "variants": {
+      "filtered": {
+        "results": [
+          {
+            "edge_id": "edge_8c27e4a1f053",
+            "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+            "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+            "type": "contradicts",
+            "weight": 0.71,
+            "namespace": "influx",
+            "created_at": "2026-09-20T11:40:02.004917+00:00",
+            "updated_at": "2026-09-20T11:40:02.004917+00:00",
+            "provenance_actor": "lithos-enrich",
+            "provenance_type": "inferred",
+            "evidence": "{\"rationale\": \"The two notes size the same cluster for write rates a factor of two apart.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.71}",
+            "conflict_state": null
+          },
+          {
+            "edge_id": "edge_d4610b9e2a7c",
+            "from_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4",
+            "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+            "type": "contradicts",
+            "weight": 0.9,
+            "namespace": "influx",
+            "created_at": "2026-09-02T08:00:13.771020+00:00",
+            "updated_at": "2026-10-01T16:22:51.330408+00:00",
+            "provenance_actor": "dave",
+            "provenance_type": "inferred",
+            "evidence": "{\"rationale\": \"The legacy note keeps a single writer; the plan dual-writes.\", \"model\": \"claude-haiku-4-5\", \"confidence\": 0.9}",
+            "conflict_state": "superseded"
+          }
+        ]
+      },
+      "empty": {
+        "results": []
+      }
+    },
+    "errors": [
+      {
+        "status": "error",
+        "code": "ambiguous_id_prefix",
+        "message": "Note id prefix '1f0c2a' is ambiguous: 2 or more matches. Retry with a longer prefix or a full id from candidates.",
+        "candidates": [
+          {
+            "id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+            "title": "Influx capacity report"
+          },
+          {
+            "id": "1f0c2a41-93be-4d07-8c6a-5f2e0b7d9a38",
+            "title": "Influx write-path benchmark"
+          }
+        ]
+      }
+    ]
+  },
+  "observed_divergences": ""
+}

@@ -476,6 +476,44 @@ def knowledge_resolves() -> Any:
     )
 
 
+def knowledge_edge_table_patches() -> Any:
+    """Counter of event patches offered to the edge-table snapshot (K2 D2).
+
+    Labels: ``event_type`` (``edge.upserted`` today — the one knowledge event
+    that carries an edge) and ``outcome`` in ``inserted`` | ``replaced`` |
+    ``ignored`` (no snapshot loaded, the table refused over its bound, or a
+    payload missing an identity field).
+
+    The snapshot converges on its TTL for every change that emits no event
+    (reinforcement, projection, weight decay — ROADMAP ledger #15), so this
+    rate against the fetch rate says how much of the table's freshness the
+    events actually carry.
+    """
+    return _instrument(
+        "lens_knowledge_edge_table_patches_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_edge_table_patches_total",
+            description="Event patches offered to the knowledge edge-table snapshot.",
+        ),
+    )
+
+
+def register_knowledge_edge_table_age(read: Callable[[], float]) -> None:
+    """Gauge: seconds since the edge-table snapshot was last fetched.
+
+    No labels. ``read`` answers from the holder's monotonic clock, so a wall
+    clock step cannot make the snapshot look fresher than it is; 0 before the
+    first successful fetch. A stale-but-served snapshot (its refetch failed)
+    keeps ageing here, which is the point: the page states the same age.
+    Observable for the reason given on `register_lithos_session_up`.
+    """
+    _observable(
+        "lens_knowledge_edge_table_age_seconds",
+        "Seconds since the knowledge edge-table snapshot was last fetched.",
+        read,
+    )
+
+
 # ── Task graph (T2) ───────────────────────────────────────────────────
 
 

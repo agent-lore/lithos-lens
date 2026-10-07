@@ -25,6 +25,7 @@ from lithos_lens.knowledge import (
     normalize_related,
 )
 from lithos_lens.knowledge_edge_evidence import EdgeWhy, edge_why
+from lithos_lens.knowledge_edges import KnowledgeEdge
 from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import LithosClient, LithosHealth, LithosToolError
@@ -199,6 +200,16 @@ class KnowledgeFakeLithosClient(ReadOnlyWriteSurface):
     async def list_tags(self, *, prefix: str | None = None) -> tuple[TagCount, ...]:
         return ()
 
+    async def edge_list(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        type: str | None = None,
+        namespace: str | None = None,
+    ) -> tuple[KnowledgeEdge, ...]:
+        return ()
+
     async def close(self) -> None:
         self.closed = True
 
@@ -308,7 +319,11 @@ def test_normalize_related_preserves_direction_type_weight_conflict_state() -> N
         "supports",
         0.75,
     )
-    assert incoming.conflict_state == "unresolved"
+    # The contract's incoming contradicts is unresolved, which upstream stores
+    # as a NULL conflict_state (only a resolution writes one); the panel's
+    # field reads that as "".
+    assert incoming.edge_type == "contradicts"
+    assert incoming.conflict_state == ""
     assert incoming.direction == "incoming"
 
 
