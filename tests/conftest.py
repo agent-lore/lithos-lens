@@ -166,6 +166,8 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_TASKS_UNCLAIMED_READY_AGE_MINUTES", "")
     monkeypatch.setenv("LITHOS_LENS_TASKS_AGENT_INACTIVE_DAYS", "")
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP", "")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S", "")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")

@@ -3,7 +3,7 @@
 
 # LithosClient
 
-Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary.
+Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it (with the task writes and the knowledge-graph reads mixed in) plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary.
 
 **Tier:** Core
 
@@ -13,11 +13,12 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 |---|---|---:|---:|
 | `lithos_lens.fake_dataset` | L | 1 | 1 |
 | `lithos_lens.fake_graph_dataset` | M | 1 | 2 |
-| `lithos_lens.fake_knowledge_dataset` | S | 0 | 2 |
+| `lithos_lens.fake_knowledge_dataset` | M | 0 | 3 |
 | `lithos_lens.fake_lithos` | L | 2 | 1 |
 | `lithos_lens.fake_store` | M | 2 | 0 |
 | `lithos_lens.fake_writes` | M | 2 | 1 |
 | `lithos_lens.lithos_client` | L | 3 | 0 |
+| `lithos_lens.lithos_graph_reads` | XS | 2 | 0 |
 | `lithos_lens.lithos_writes` | S | 2 | 0 |
 | `lithos_lens.mcp_transport` | M | 2 | 2 |
 
@@ -35,6 +36,7 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 ### `lithos_lens.fake_knowledge_dataset`
 - def `related_fixtures` — Related-panel (K1-S4) neighborhoods over the influx notes.
 - def `intake_fixtures` — Intake notes (§7.1) and their paths, one per way a note becomes intake.
+- def `knowledge_edge_rows` — The demo's knowledge edge table, as ``lithos_edge_list`` answers it.
 
 ### `lithos_lens.fake_lithos`
 - def `fake_lithos_enabled` — Return whether the fake-Lithos app mode is switched on via the environment.
@@ -54,6 +56,10 @@ Lithos server clients — the MCP transport (one shared session, its reconnect, 
 - class `LithosClientProtocol` — Subset of Lithos operations required by the common core.
 - class `RegistrationResult`
 - class `LithosClient` — Best-effort Lithos client used by the web app.
+
+### `lithos_lens.lithos_graph_reads`
+- class `LithosGraphReadProtocol` — The reads the knowledge graph is assembled from.
+- class `LithosGraphReadMethods` — The graph reads, placed through the host client's ``_call_tool``.
 
 ### `lithos_lens.lithos_writes`
 - class `LithosWriteProtocol` — The writes (T3): called only by the write funnel, never by a read path.

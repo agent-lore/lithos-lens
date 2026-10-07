@@ -34,6 +34,8 @@ from lithos_lens.config_fields import (
 )
 from lithos_lens.config_schema import (
     MAX_GRAPH_INT_KNOBS,
+    MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES,
+    MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
     MAX_TASKS_INT_KNOBS,
     MIN_TASKS_INT_KNOBS,
@@ -85,6 +87,12 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     # No "" default, for ``trigger_prefixes_env``'s reason: blank is the
     # documented empty list (only the ``ingested-by:*`` tag marks intake).
     intake_prefixes_env = os.environ.get("LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES")
+    edge_table_ttl_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S", ""
+    )
+    edge_table_max_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES", ""
+    )
     graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     graph_concurrency_env = os.environ.get("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")
@@ -232,6 +240,30 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
                     "LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES", intake_prefixes_env
                 ),
             ),
+        )
+    # The edge-table snapshot's two knobs (K2 D2), same bounds as their TOML
+    # keys, collected and applied in one replace() like the [graph] ones.
+    edge_table_env_overrides = {
+        field: _parse_env_int(name, raw, maximum=maximum)
+        for field, name, raw, maximum in (
+            (
+                "graph_edge_table_ttl_s",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S",
+                edge_table_ttl_env,
+                MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S,
+            ),
+            (
+                "graph_edge_table_max_edges",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES",
+                edge_table_max_env,
+                MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES,
+            ),
+        )
+        if raw
+    }
+    if edge_table_env_overrides:
+        new_cfg = replace(
+            new_cfg, knowledge=replace(new_cfg.knowledge, **edge_table_env_overrides)
         )
     if writes_default_operator_env or writes_confirm_cancel_env:
         new_writes = new_cfg.writes

@@ -45,6 +45,8 @@ from lithos_lens.config import LithosConfig
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_edge_evidence import EdgeEvidence, EdgeWhy, provenance_label
+from lithos_lens.knowledge_edge_types import EdgeDirection, direction_of
+from lithos_lens.knowledge_edges import KnowledgeEdge
 from lithos_lens.knowledge_search import SearchResult
 from lithos_lens.knowledge_tags import TagCount
 from lithos_lens.lithos_client import (
@@ -74,10 +76,11 @@ from tests.conftest import CONTRACTS_DIR, load_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 #: Every module whose ``self._call_tool(...)`` calls make up the client's tool
-#: surface: the typed methods, and the five writes mixed into them (T3).
+#: surface: the typed methods, the five writes mixed into them (T3), and the
+#: knowledge-graph reads (K2).
 CLIENT_SOURCES = tuple(
     REPO_ROOT / "src" / "lithos_lens" / name
-    for name in ("lithos_client.py", "lithos_writes.py")
+    for name in ("lithos_client.py", "lithos_writes.py", "lithos_graph_reads.py")
 )
 
 #: The ONE ``(tool, response variant)`` whose vendored payload is a bare JSON
@@ -306,6 +309,9 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
     "lithos_task_edge_list": {("invalid_input", "")},
     "lithos_read": {("doc_not_found", "")},
     "lithos_related": {("doc_not_found", "")},
+    # The id filters resolve a note prefix leniently: an unmatched one filters
+    # literally, an AMBIGUOUS one is refused (resolve_id_lenient).
+    "lithos_edge_list": {("ambiguous_id_prefix", "is ambiguous")},
     "lithos_finding_list": {("invalid_input", "")},
 }
 
@@ -314,6 +320,8 @@ REQUIRED_ENVELOPES: dict[str, set[tuple[str, str]]] = {
 #: re-blocks nobody, a create with no links). Each is ROUND-TRIPPED below, not
 #: merely present.
 REQUIRED_RESPONSE_VARIANTS: dict[str, set[str]] = {
+    # The over-bound table's filtered read, and a filter matching nothing.
+    "lithos_edge_list": {"filtered", "empty"},
     "lithos_task_complete": {"nothing_released"},
     "lithos_task_reopen": {"cancelled_reopen"},
     "lithos_task_create": {"no_links"},
@@ -342,6 +350,8 @@ REQUIRED_SUCCESS_KEYS: dict[str, set[str]] = {
         "to_title",
     },  # The one container key; a tag map is its only content.
     "lithos_tags": {"tags"},
+    # The one container key: no limit, offset, order or total beside it.
+    "lithos_edge_list": {"results"},
 }
 
 
@@ -407,8 +417,11 @@ def _ambiguous_envelopes() -> list[tuple[str, dict[str, Any]]]:
 def test_every_tool_that_resolves_an_id_vendors_an_ambiguous_envelope() -> None:
     """All five writes share the resolver, so all five document its refusal —
     and so does ``lithos_task_get``, which the relation confirm step resolves
-    a typed prefix with (T3-W8, D8)."""
+    a typed prefix with (T3-W8, D8). ``lithos_edge_list`` resolves its
+    ``from_id`` / ``to_id`` filters through the note resolver, which refuses
+    an ambiguous prefix the same way (K2 S1)."""
     assert {tool for tool, _ in _ambiguous_envelopes()} == {
+        "lithos_edge_list",
         "lithos_task_get",
         "lithos_task_complete",
         "lithos_task_reopen",
@@ -654,6 +667,32 @@ def _check_related(result: Any, success: dict[str, Any]) -> None:
     )
 
 
+def _expected_knowledge_edges(payload: dict[str, Any]) -> tuple[KnowledgeEdge, ...]:
+    # Every one of the twelve columns, NULLs kept as None (not ""): a None
+    # conflict_state is how an unresolved contradiction is told apart.
+    return tuple(
+        KnowledgeEdge(
+            edge_id=raw["edge_id"],
+            from_id=raw["from_id"],
+            to_id=raw["to_id"],
+            type=raw["type"],
+            weight=raw["weight"],
+            namespace=raw["namespace"],
+            created_at=raw["created_at"],
+            updated_at=raw["updated_at"],
+            provenance_actor=raw["provenance_actor"],
+            provenance_type=raw["provenance_type"],
+            evidence=raw["evidence"],
+            conflict_state=raw["conflict_state"],
+        )
+        for raw in payload["results"]
+    )
+
+
+def _check_edge_list(result: Any, success: dict[str, Any]) -> None:
+    assert result == _expected_knowledge_edges(success)
+
+
 def _check_note_summaries(result: Any, success: dict[str, Any]) -> None:
     assert result == [
         NoteSummary(
@@ -897,6 +936,7 @@ TOOL_SPECS: dict[
         _check_search_results,
     ),
     "lithos_tags": (lambda c: c.list_tags(), _check_tags),
+    "lithos_edge_list": (lambda c: c.edge_list(), _check_edge_list),
 }
 
 
@@ -972,6 +1012,16 @@ RESPONSE_VARIANT_SPECS: dict[
         ),
     ),
 }
+
+
+RESPONSE_VARIANT_SPECS[("lithos_edge_list", "filtered")] = (
+    lambda c: c.edge_list(type="contradicts", namespace="influx"),
+    _check_edge_list,
+)
+RESPONSE_VARIANT_SPECS[("lithos_edge_list", "empty")] = (
+    lambda c: c.edge_list(type="no-such-type"),
+    lambda result, payload: _assert_equal(result, ()),
+)
 
 
 def _assert_equal(result: Any, expected: Any) -> None:
@@ -1684,3 +1734,90 @@ def test_an_error_lens_raises_itself_has_an_empty_envelope() -> None:
         _run({"task": {}}, lambda c: c.task_get("influx-ingest-cutover"))
     assert excinfo.value.code == "invalid_response"
     assert dict(excinfo.value.envelope) == {}
+
+
+# ── lithos_edge_list (K2 S1) ────────────────────────────────────────────
+
+
+def test_edge_list_filters_send_the_vendored_variant_request() -> None:
+    """The over-bound table's filtered read is ``lithos_edge_list``'s second
+    request shape: exactly the filters given, nothing for the ones not."""
+    contract = load_contract("lithos_edge_list")
+    payload = contract["responses"]["variants"]["filtered"]
+    result, calls = _run(
+        payload, lambda c: c.edge_list(type="contradicts", namespace="influx")
+    )
+    assert calls == [("lithos_edge_list", contract["request"]["variants"]["filtered"])]
+    assert result == _expected_knowledge_edges(payload)
+
+
+def test_edge_list_contract_rows_carry_nulls_and_both_contradiction_states() -> None:
+    """The canonical rows are the cases the snapshot reasons about: NULL
+    columns as null (never ""), an unresolved ``contradicts`` (NULL
+    ``conflict_state``) beside a resolved one, and ``edge_<12hex>`` ids."""
+    rows = load_contract("lithos_edge_list")["responses"]["success"]["results"]
+    assert all(len(row) == 12 for row in rows)
+    assert all(
+        row["edge_id"].startswith("edge_") and len(row["edge_id"]) == 17 for row in rows
+    )
+    assert "" not in {value for row in rows for value in row.values()}
+    states = {row["conflict_state"] for row in rows if row["type"] == "contradicts"}
+    assert None in states and states - {None}
+    assert any(row["evidence"] is None for row in rows)
+
+
+def test_edge_list_symmetry_comes_from_the_type_not_the_endpoint_order() -> None:
+    """Endpoint order is not a storage contract: the inference and
+    reinforcement writers canonicalise symmetric types ``from_id <= to_id``,
+    but ``lithos_edge_upsert`` stores a caller's endpoints as given. The
+    contract vendors both, and a reversed symmetric row round-trips through
+    the real client with its endpoints untouched and still reads symmetric —
+    no arrowhead, whichever way round it was stored."""
+    payload = load_contract("lithos_edge_list")["responses"]["success"]
+    result, _ = _run(payload, lambda c: c.edge_list())
+    symmetric = [row for row in result if direction_of(row) is EdgeDirection.SYMMETRIC]
+    assert any(row.from_id <= row.to_id for row in symmetric)
+    reversed_rows = [row for row in symmetric if row.from_id > row.to_id]
+    assert reversed_rows, "the contract should carry a reversed symmetric row"
+    raw = {row["edge_id"]: row for row in payload["results"]}
+    for row in reversed_rows:
+        assert (row.from_id, row.to_id) == (
+            raw[row.edge_id]["from_id"],
+            raw[row.edge_id]["to_id"],
+        )
+        assert not direction_of(row).has_arrowhead
+
+
+def test_edge_list_is_declared_alike_on_protocol_client_and_fake() -> None:
+    """The snapshot is handed the client's ``edge_list`` as its fetch; the
+    protocol, the real client and the fake must agree on its signature."""
+    declared = inspect.signature(LithosClientProtocol.edge_list)
+    assert declared == inspect.signature(LithosClient.edge_list)
+    assert declared == inspect.signature(FakeLithosClient.edge_list)
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11"},
+        {"to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4"},
+        {"to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4", "type": "supports"},
+        {
+            "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+            "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+            "type": "contradicts",
+            "namespace": "influx",
+        },
+    ],
+    ids=["from_id", "to_id", "to_id+type", "all_four"],
+)
+def test_edge_list_forwards_each_given_filter_and_omits_the_rest(
+    filters: dict[str, str],
+) -> None:
+    """The real client, not the fake: every filter given — endpoint filters
+    included — reaches ``lithos_edge_list`` under its own name, and no filter
+    left unset is sent (not even as ``null``)."""
+    payload = load_contract("lithos_edge_list")["responses"]["variants"]["empty"]
+    result, calls = _run(payload, lambda c: c.edge_list(**filters))
+    assert calls == [("lithos_edge_list", filters)]
+    assert result == ()

@@ -11,7 +11,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.metrics` | M | 0 | 21 |
+| `lithos_lens.metrics` | M | 0 | 23 |
 | `lithos_lens.telemetry` | M | 0 | 6 |
 
 ## Public API
@@ -33,6 +33,8 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `knowledge_related_fanout` — Histogram of `lithos_read` calls spent resolving related-panel titles.
 - def `knowledge_searches` — Counter of `/knowledge` landing requests by branch.
 - def `knowledge_resolves` — Counter of wiki-link resolutions by the arm that decided.
+- def `knowledge_edge_table_patches` — Counter of event patches offered to the edge-table snapshot (K2 D2).
+- def `register_knowledge_edge_table_age` — Gauge: seconds since the edge-table snapshot was last fetched.
 - def `tasks_graph_renders` — Counter of `/tasks/graph` renders by scope kind and terminal outcome.
 - def `tasks_graph_cycle_reads` — Counter of the graph page's scoped `lithos_task_blocked` reads.
 - def `tasks_minigraph_renders` — Counter of detail mini-graph fragment renders (§5.6, T2-A5).
@@ -50,6 +52,6 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 ## Dependencies
 
 - Depends on: [Config](Config.md), [Logging](Logging.md)
-- Used by: [Entrypoint](Entrypoint.md), [Events](Events.md), [LithosClient](LithosClient.md), [Web](Web.md)
+- Used by: [Entrypoint](Entrypoint.md), [Events](Events.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

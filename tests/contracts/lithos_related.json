@@ -1,16 +1,18 @@
 {
   "tool": "lithos_related",
-  "lithos_version": "lithos 0.4.0 @ 917cb5d; the edge rows re-read at lithos 0.6.0 @ d2c49bb (source read 2026-10-05)",
+  "lithos_version": "lithos 0.6.0 @ d2c49bb (source read 2026-10-07)",
   "source": [
-    "lithos:src/lithos/tools/read_search.py::lithos_related",
-    "lithos:src/lithos/lcma/edge_inference.py (inferred-edge evidence: json.dumps({rationale, model, confidence}), written at confidence >= 0.6, conflict_state NULL)"
+    "lithos:src/lithos/tools/read_search.py::lithos_related (id resolved through tools/_seam.py::resolve_note_id — an unambiguous >= 6-char prefix since 8ce96bd; edges both directions from edge_store.py::EdgeStore.list_edges, twelve columns, SQL NULL as null)",
+    "lithos:src/lithos/lcma/edge_inference.py (inferred-edge evidence: json.dumps({rationale, model, confidence}), written at confidence >= 0.6, conflict_state NULL)",
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.conflict_resolve (sets conflict_state to one of accepted_dual / superseded / refuted / merged; inferred contradicts rows carry NULL until then)",
+    "lithos:src/lithos/tools/memory_edges.py::lithos_edge_upsert -> src/lithos/intake.py::CorpusIntake.assert_edge -> src/lithos/edge_store.py::EdgeStore.upsert (conflict_state is a free-form 'Conflict state marker', stored as the caller supplies it with no enum validation — so a caller-authored row may carry 'unresolved', '' or any other string; only the four conflict_resolve values mean resolved)"
   ],
   "request": {
     "canonical": {
       "id": "root",
       "depth": 1
     },
-    "notes": "Only id/include/depth/namespace are accepted (FastMCP rejects unexpected arguments — a phantom agent_id arg was PR #26's bug). Lens pins depth=1 and takes the default include set."
+    "notes": "Only id/include/depth/namespace are accepted (FastMCP rejects unexpected arguments — a phantom agent_id arg was PR #26's bug). Lens pins depth=1 and takes the default include set. id accepts a full note id or, since 8ce96bd (lithos 0.5.0), an unambiguous prefix of 6 or more characters, resolved before the read; an ambiguous prefix is refused with ambiguous_id_prefix. Lens always sends a full id."
   },
   "responses": {
     "success": {
@@ -81,7 +83,7 @@
             "provenance_actor": "agent-x",
             "provenance_type": "asserted",
             "evidence": null,
-            "conflict_state": "unresolved"
+            "conflict_state": null
           }
         ]
       },

@@ -334,6 +334,29 @@ async def test_list_tags_ranks_counts_and_prefix_narrows_case_insensitively(
     }
 
 
+async def test_edge_list_rows_carry_their_identity_and_honour_filters(
+    client: LithosClientProtocol,
+) -> None:
+    """lithos_edge_list unfiltered answers the whole edge table (no limit);
+    each row keeps an ``edge_<12hex>`` id, and a type + namespace filter
+    answers only rows with exactly those values. Endpoint ORDER is not part
+    of the contract: the inference and reinforcement writers canonicalise
+    symmetric types ``from_id <= to_id``, but ``lithos_edge_upsert`` stores
+    the endpoints as given, so a valid symmetric row may arrive reversed."""
+    rows = await client.edge_list()
+    _require_rows_on_fake_leg(client, list(rows))
+    assert all(row.edge_id.startswith("edge_") for row in rows)
+    if not rows:
+        return  # an empty but healthy real server: nothing to filter
+    probe = rows[0]
+    narrowed = await client.edge_list(type=probe.type, namespace=probe.namespace)
+    assert narrowed
+    assert all(
+        (row.type, row.namespace) == (probe.type, probe.namespace) for row in narrowed
+    )
+    assert await client.edge_list(type=MISSING_ID) == ()
+
+
 # ── vendored-contract verification (issue #31) ──────────────────────────
 
 

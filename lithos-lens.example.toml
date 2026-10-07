@@ -90,6 +90,8 @@ list_chip_fanout_cap = 40       # /knowledge rows given metadata chips, one lith
 # [] leaves only the tag.
 intake_path_prefixes = ["articles/", "papers/", "digests/"]
 tags_page_limit = 500           # /knowledge/tags rows before "N more — narrow the filter" (1-5000)
+graph_edge_table_ttl_s = 300    # knowledge graph edge-table snapshot staleness bound, seconds (1-3600)
+graph_edge_table_max_edges = 50000  # edge table refused above this; filtered reads only (1-500000)
 
 [lithos-lens.events]
 enabled = true

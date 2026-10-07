@@ -126,6 +126,18 @@ MAX_KNOWLEDGE_LANDING_LIMIT = 200
 # ceiling bounds only the rendered page, not a Lithos read.
 DEFAULT_KNOWLEDGE_TAGS_PAGE_LIMIT = 500
 MAX_KNOWLEDGE_TAGS_PAGE_LIMIT = 5000
+# The knowledge graph's edge-table snapshot (K2 D2): one unfiltered
+# lithos_edge_list call, held for the TTL, refused above the edge bound. The
+# TTL is the staleness bound the page states — changes that emit no event
+# converge only on it — so its ceiling is an hour, past which "may be up to N
+# stale" stops being a bound worth stating. The edge bound is a memory and
+# parse-time bound on one unpaginated read (9,442 rows / 4.9 MB on
+# 2026-10-05); its ceiling is ten times the default, beyond which the answer
+# is a paginated upstream read (ROADMAP ledger #13), not a bigger number.
+DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S = 300
+MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S = 3600
+DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES = 50_000
+MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES = 500_000
 
 # ── [lithos-lens.graph] — task dependency graph pages (§5.7) ───────────
 DEFAULT_GRAPH_CACHE_TTL_S = 30
@@ -292,6 +304,12 @@ class KnowledgeConfig:
     intake_path_prefixes: tuple[str, ...] = DEFAULT_KNOWLEDGE_INTAKE_PATH_PREFIXES
     # How many tags /knowledge/tags renders before "N more — narrow the filter".
     tags_page_limit: int = DEFAULT_KNOWLEDGE_TAGS_PAGE_LIMIT
+    # Seconds the knowledge graph's edge-table snapshot is served before the
+    # next read refetches it (K2 D2).
+    graph_edge_table_ttl_s: int = DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S
+    # A fetched edge table with more rows than this is not held; only
+    # type=/namespace=-filtered reads are served (K2 D2).
+    graph_edge_table_max_edges: int = DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES
 
 
 @dataclass(frozen=True)

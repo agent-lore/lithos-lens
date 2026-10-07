@@ -41,6 +41,7 @@ from lithos_lens.fake_dataset import FakeLithosDataset, demo_dataset
 from lithos_lens.fake_store import NON_WORKABLE_TASK_TYPES
 from lithos_lens.fake_writes import FakeWriteOutcome, FakeWriteStore, write_error
 from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_edges import KnowledgeEdge, normalize_edge_list
 from lithos_lens.knowledge_search import SearchResult, normalize_search_result
 from lithos_lens.knowledge_tags import TagCount, normalize_tag_counts
 from lithos_lens.lithos_client import LithosHealth, LithosToolError
@@ -710,6 +711,36 @@ class FakeLithosClient:
                 if tag.lower().startswith(prefix.lower())
             }
         return normalize_tag_counts({"tags": counts})
+
+    async def edge_list(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        type: str | None = None,
+        namespace: str | None = None,
+    ) -> tuple[KnowledgeEdge, ...]:
+        """The dataset's knowledge edge rows, filtered by exact match.
+
+        Upstream ANDs one ``=`` clause per given filter (``EdgeStore.
+        list_edges``) and answers the rows unordered and unbounded; the fake
+        keeps the dataset's order and hands the vendored ``{"results": [...]}``
+        shape to the real normalizer. No prefix resolution: Lens sends none.
+        """
+        filters = {
+            "from_id": from_id,
+            "to_id": to_id,
+            "type": type,
+            "namespace": namespace,
+        }
+        arguments = {key: value for key, value in filters.items() if value is not None}
+        self._record("lithos_edge_list", arguments)
+        rows = [
+            dict(row)
+            for row in self.dataset.knowledge_edges
+            if all(row.get(key) == value for key, value in arguments.items())
+        ]
+        return normalize_edge_list({"results": rows})
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         """Neighborhood lookup so the K1-S4 related panel lights up.

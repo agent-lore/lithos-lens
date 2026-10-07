@@ -238,6 +238,8 @@ LITHOS_LENS_KNOWLEDGE_SEARCH_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RECENT_LIMIT=20
 LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
 LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES=articles/,papers/,digests/   # comma-separated; empty = only the ingested-by:* tag
+LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S=300         # knowledge graph edge-table snapshot TTL (K2 §8.2)
+LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES=50000  # snapshot refused above this (K2 §8.2)
 
 # Optional LLM client — disabled by default
 LITHOS_LENS_LLM_ENABLED=false
@@ -1229,9 +1231,9 @@ Interactive visualisation of the knowledge base as a typed, weighted graph, with
 | Edge | Direction | Style |
 |------|-----------|-------|
 | `supports`, `refines`, `is_example_of`, `depends_on` | directed (from → to) | solid, arrowhead, one fixed colour per type |
-| `related_to`, `analogy_to` | symmetric (stored `from_id <= to_id`) | solid, no arrowhead, one fixed colour per type |
+| `related_to`, `analogy_to` | symmetric (usually stored `from_id <= to_id`; `lithos_edge_upsert` keeps a caller's order, so symmetry comes from the type, not the endpoint order) | solid, no arrowhead, one fixed colour per type |
 | `derived_from` (provenance) | directed, derived → source | dotted grey, arrowhead |
-| `contradicts` | symmetric | **unresolved** (`conflict_state` null): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
+| `contradicts` | symmetric | **unresolved** (`conflict_state` null, or any marker other than the four resolutions — `lithos_edge_upsert` stores a caller's marker unvalidated): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
 | wiki-link | as written | thin grey |
 | *(unknown type)* | as stored | neutral grey, arrowhead, labelled with the raw type — forward-compatible |
 
