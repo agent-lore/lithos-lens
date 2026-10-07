@@ -171,7 +171,9 @@ def _provenance_facets(
     for edge in rows:
         group = provenance_group(edge.provenance_type)
         counts[group] += 1
-        values.setdefault(group, set()).add(edge.provenance_type or "null")
+        # Only NULL is "null": an empty string is a value as stored.
+        raw = "null" if edge.provenance_type is None else edge.provenance_type
+        values.setdefault(group, set()).add(raw)
     return tuple(
         ProvenanceFacet(
             group,

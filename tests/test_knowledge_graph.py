@@ -216,6 +216,27 @@ def test_provenance_groups_and_their_filter() -> None:
     assert facets["reinforced"].count == 2
 
 
+def test_provenance_facets_keep_an_empty_value_apart_from_null() -> None:
+    rows = (
+        edge("e1", "F", "A", provenance_type=""),
+        edge("e2", "F", "B", provenance_type=None),
+        edge("e3", "F", "C", provenance_type="authored"),
+    )
+    only_empty = (edge("e4", "F", "D", provenance_type=""),)
+    for typed in (
+        ego_typed_graph(snapshot(rows), "F"),
+        global_typed_graph(rows),
+    ):
+        other = {facet.group: facet for facet in typed.provenance_facets}["other"]
+        assert (other.count, other.values) == (3, ("", "authored", "null"))
+    for typed in (
+        ego_typed_graph(snapshot(only_empty), "F"),
+        global_typed_graph(only_empty),
+    ):
+        other = {facet.group: facet for facet in typed.provenance_facets}["other"]
+        assert (other.count, other.values) == (1, ("",))
+
+
 def test_filters_apply_before_the_cap() -> None:
     # Six nodes unfiltered, five once the 0.03 edge is hidden: the default
     # filter is a way under a cap of five.
