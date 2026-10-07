@@ -1399,8 +1399,9 @@ an `EdgeTableSnapshot`, fetched with ONE unfiltered `lithos_edge_list` call
 `lithos_lens.knowledge_edge_types` is the known-type table, in this order:
 `supports`, `related_to`, `analogy_to`, `refines`, `is_example_of`,
 `depends_on`, `derived_from`, `contradicts`. `related_to`, `analogy_to` and
-`contradicts` are symmetric (stored `from_id <= to_id`, drawn without an
-arrowhead); the rest are directed, `derived_from` from the derived note to its
+`contradicts` are symmetric (drawn without an arrowhead whichever way round
+the endpoints are stored — the Lithos writers usually store `from_id <=
+to_id`, but `lithos_edge_upsert` keeps a caller's order); the rest are directed, `derived_from` from the derived note to its
 source and dotted. `contradicts` is dashed — red while unresolved, muted and
 labelled with its resolution once resolved. Any other type is drawn as
 recorded: an arrowhead from `from_id` to `to_id`, neutral grey, labelled with

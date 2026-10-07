@@ -1231,7 +1231,7 @@ Interactive visualisation of the knowledge base as a typed, weighted graph, with
 | Edge | Direction | Style |
 |------|-----------|-------|
 | `supports`, `refines`, `is_example_of`, `depends_on` | directed (from → to) | solid, arrowhead, one fixed colour per type |
-| `related_to`, `analogy_to` | symmetric (stored `from_id <= to_id`) | solid, no arrowhead, one fixed colour per type |
+| `related_to`, `analogy_to` | symmetric (usually stored `from_id <= to_id`; `lithos_edge_upsert` keeps a caller's order, so symmetry comes from the type, not the endpoint order) | solid, no arrowhead, one fixed colour per type |
 | `derived_from` (provenance) | directed, derived → source | dotted grey, arrowhead |
 | `contradicts` | symmetric | **unresolved** (`conflict_state` null): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
 | wiki-link | as written | thin grey |

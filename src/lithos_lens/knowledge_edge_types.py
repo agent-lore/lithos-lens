@@ -6,11 +6,15 @@ draws anything else as stored. The table's direction and symmetry are facts
 read from the Lithos source and cited in ``tests/contracts/lithos_edge_list.json``,
 not re-derived here:
 
-- ``contradicts`` and ``analogy_to`` are stored symmetric, ``from_id <=
-  to_id`` (``lcma/edge_inference.py`` ``SYMMETRIC_RELATIONS``);
-- ``related_to`` is stored symmetric by citation reinforcement and task
-  consolidation alike (``cognitive_memory.reinforce_between``,
+- ``contradicts`` and ``analogy_to`` are symmetric; inference stores them
+  ``from_id <= to_id`` (``lcma/edge_inference.py`` ``SYMMETRIC_RELATIONS``);
+- ``related_to`` is symmetric; citation reinforcement and task consolidation
+  alike store it ``from_id <= to_id`` (``cognitive_memory.reinforce_between``,
   ``lcma/enrich.py``);
+- that ordering is a writer habit, not a storage rule: ``lithos_edge_upsert``
+  keeps a caller's endpoints as given, so a symmetric row may be stored
+  ``from_id > to_id``. Symmetry is read from the type alone, never from the
+  endpoint order;
 - ``supports``, ``refines``, ``is_example_of`` and ``depends_on`` take the
   adjudicator's direction verdict (``edge_inference.edge_endpoints``);
 - ``derived_from`` is the frontmatter provenance projection, derived → source
@@ -39,7 +43,8 @@ class EdgeDirection(Enum):
 
     #: ``from_id`` → ``to_id`` means something; drawn with an arrowhead.
     DIRECTED = "directed"
-    #: Stored ``from_id <= to_id`` only to dedupe; no arrowhead.
+    #: Endpoint order means nothing (usually ``from_id <= to_id``, but
+    #: ``lithos_edge_upsert`` keeps a caller's order); no arrowhead.
     SYMMETRIC = "symmetric"
     #: An unknown type: drawn as stored, arrowhead included, and its panel
     #: says "direction as recorded".

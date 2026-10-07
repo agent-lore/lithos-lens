@@ -339,16 +339,13 @@ async def test_edge_list_rows_carry_their_identity_and_honour_filters(
 ) -> None:
     """lithos_edge_list unfiltered answers the whole edge table (no limit);
     each row keeps an ``edge_<12hex>`` id, and a type + namespace filter
-    answers only rows with exactly those values. Symmetric types are stored
-    ``from_id <= to_id`` on both legs."""
+    answers only rows with exactly those values. Endpoint ORDER is not part
+    of the contract: the inference and reinforcement writers canonicalise
+    symmetric types ``from_id <= to_id``, but ``lithos_edge_upsert`` stores
+    the endpoints as given, so a valid symmetric row may arrive reversed."""
     rows = await client.edge_list()
     _require_rows_on_fake_leg(client, list(rows))
     assert all(row.edge_id.startswith("edge_") for row in rows)
-    assert all(
-        row.from_id <= row.to_id
-        for row in rows
-        if row.type in {"related_to", "analogy_to", "contradicts"}
-    )
     if not rows:
         return  # an empty but healthy real server: nothing to filter
     probe = rows[0]

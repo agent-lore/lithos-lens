@@ -9,6 +9,7 @@
     "lithos:src/lithos/lcma/edge_inference.py (SYMMETRIC_RELATIONS = {contradicts, analogy_to}: endpoints canonicalised from_id <= to_id; supports / refines / is_example_of / depends_on take the adjudicator's direction verdict via edge_endpoints; evidence = json.dumps({rationale, model, confidence}), weight = confidence, written at >= config confidence_floor 0.6, conflict_state NULL)",
     "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.reinforce_between + src/lithos/lcma/enrich.py + src/lithos/lcma/edge_reinforce.py (related_to stored symmetric, from_id <= to_id; citation reinforcement starts at 0.5 with provenance_type 'reinforcement', task consolidation at 0.03 with 'consolidation'; RELATED_TO_STRENGTHEN_DELTA = 0.03 per repeat)",
     "lithos:src/lithos/provenance.py::ProvenanceProjection (derived_from from the derived note to its source: from_id = the note whose frontmatter lists derived_from_ids, to_id = the source; weight 1.0, provenance_type 'frontmatter', provenance_actor / evidence / conflict_state NULL)",
+    "lithos:src/lithos/tools/memory_edges.py::lithos_edge_upsert -> CorpusIntake.assert_edge -> src/lithos/edge_store.py::EdgeStore.upsert (from_id / to_id resolved leniently, then stored AS GIVEN for every type — no canonical ordering on this path, so a caller-authored symmetric row may be stored from_id > to_id; weight, provenance_actor, provenance_type, evidence and conflict_state as the caller supplies them; upsert key (from_id, to_id, type, namespace))",
     "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.conflict_resolve + src/lithos/edge_store.py::EdgeStore.update_conflict_resolution (contradicts only; conflict_state set to one of accepted_dual / superseded / refuted / merged, provenance_actor to the resolver, updated_at bumped)"
   ],
   "request": {
@@ -19,7 +20,7 @@
         "namespace": "influx"
       }
     },
-    "notes": "All four filters are optional (string or null, default null; additionalProperties false) and each one given is an exact '=' match, ANDed. Lens sends only the filters it has: the edge-table snapshot's ONE unfiltered call sends {} and receives the WHOLE edges table — there is no limit, offset, order or total, so the row order is SQLite's and means nothing. The 'filtered' variant is the read a table over [knowledge].graph_edge_table_max_edges is still served by. from_id / to_id (never type or namespace) are resolved leniently: an exact note id passes, a value under 6 characters or matching no note filters literally (endpoints need not be notes), a unique >= 6-char prefix of a note id resolves to that id, and an AMBIGUOUS one is refused with ambiguous_id_prefix (at most 5 {id, title} candidates). Lens never sends a prefix. Direction facts, from the sources cited: contradicts, analogy_to and related_to are stored symmetric (from_id <= to_id); supports, refines, is_example_of and depends_on are directed by the adjudicator's verdict; derived_from runs derived -> source. type is unvalidated, so other values occur (live 2026-10-05: assesses, summarizes)."
+    "notes": "All four filters are optional (string or null, default null; additionalProperties false) and each one given is an exact '=' match, ANDed. Lens sends only the filters it has: the edge-table snapshot's ONE unfiltered call sends {} and receives the WHOLE edges table — there is no limit, offset, order or total, so the row order is SQLite's and means nothing. The 'filtered' variant is the read a table over [knowledge].graph_edge_table_max_edges is still served by. from_id / to_id (never type or namespace) are resolved leniently: an exact note id passes, a value under 6 characters or matching no note filters literally (endpoints need not be notes), a unique >= 6-char prefix of a note id resolves to that id, and an AMBIGUOUS one is refused with ambiguous_id_prefix (at most 5 {id, title} candidates). Lens never sends a prefix. Direction facts, from the sources cited: contradicts, analogy_to and related_to are symmetric — the inference and reinforcement writers canonicalise them from_id <= to_id, but lithos_edge_upsert stores endpoints as the caller gave them, so endpoint ORDER is not a contract: a symmetric row may arrive from_id > to_id (live 2026-10-07: 8 of 9,696 rows, manually authored related_to / contradicts) and its symmetry comes from its type alone; supports, refines, is_example_of and depends_on are directed by the adjudicator's verdict; derived_from runs derived -> source. type is unvalidated, so other values occur (live 2026-10-05: assesses, summarizes)."
   },
   "responses": {
     "success": {
@@ -91,6 +92,20 @@
           "updated_at": "2026-08-21T19:47:08.640512+00:00",
           "provenance_actor": null,
           "provenance_type": "frontmatter",
+          "evidence": null,
+          "conflict_state": null
+        },
+        {
+          "edge_id": "edge_b62d0f4e19a8",
+          "from_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+          "to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4",
+          "type": "related_to",
+          "weight": 1.0,
+          "namespace": "user/planning",
+          "created_at": "2026-09-30T14:08:55.204761+00:00",
+          "updated_at": "2026-09-30T14:08:55.204761+00:00",
+          "provenance_actor": "dave",
+          "provenance_type": "manual",
           "evidence": null,
           "conflict_state": null
         }

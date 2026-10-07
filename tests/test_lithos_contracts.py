@@ -1766,17 +1766,26 @@ def test_edge_list_contract_rows_carry_nulls_and_both_contradiction_states() -> 
     assert any(row["evidence"] is None for row in rows)
 
 
-def test_edge_list_contract_stores_symmetric_types_from_le_to() -> None:
-    """The known-type table's symmetry is the contract's storage fact: every
-    vendored row of a symmetric type has ``from_id <= to_id``."""
-    rows = load_contract("lithos_edge_list")["responses"]["success"]["results"]
-    symmetric = [
-        row
-        for row in _expected_knowledge_edges({"results": rows})
-        if direction_of(row) is EdgeDirection.SYMMETRIC
-    ]
-    assert symmetric, "the contract should carry a symmetric row"
-    assert all(row.from_id <= row.to_id for row in symmetric)
+def test_edge_list_symmetry_comes_from_the_type_not_the_endpoint_order() -> None:
+    """Endpoint order is not a storage contract: the inference and
+    reinforcement writers canonicalise symmetric types ``from_id <= to_id``,
+    but ``lithos_edge_upsert`` stores a caller's endpoints as given. The
+    contract vendors both, and a reversed symmetric row round-trips through
+    the real client with its endpoints untouched and still reads symmetric —
+    no arrowhead, whichever way round it was stored."""
+    payload = load_contract("lithos_edge_list")["responses"]["success"]
+    result, _ = _run(payload, lambda c: c.edge_list())
+    symmetric = [row for row in result if direction_of(row) is EdgeDirection.SYMMETRIC]
+    assert any(row.from_id <= row.to_id for row in symmetric)
+    reversed_rows = [row for row in symmetric if row.from_id > row.to_id]
+    assert reversed_rows, "the contract should carry a reversed symmetric row"
+    raw = {row["edge_id"]: row for row in payload["results"]}
+    for row in reversed_rows:
+        assert (row.from_id, row.to_id) == (
+            raw[row.edge_id]["from_id"],
+            raw[row.edge_id]["to_id"],
+        )
+        assert not direction_of(row).has_arrowhead
 
 
 def test_edge_list_is_declared_alike_on_protocol_client_and_fake() -> None:

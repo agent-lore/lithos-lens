@@ -260,13 +260,15 @@ def knowledge_edge_rows() -> tuple[dict[str, object], ...]:
     Raw rows in the vendored contract's shape
     (``tests/contracts/lithos_edge_list.json``), which the fake hands to the
     real normalizer. Symmetric types (``related_to``, ``analogy_to``,
-    ``contradicts``) are stored ``from_id <= to_id``, as upstream stores
-    them. Between them the rows carry every known type, one type Lens does
-    not know (``assesses``), a dangling endpoint, two unresolved
-    contradictions (``conflict_state`` NULL) and one resolved, and
-    consolidation-weight ``related_to`` rows (0.03 and one repeat). The typed
-    relations :func:`related_fixtures` shows are all here too, so the related
-    panel and the graph agree in fake mode.
+    ``contradicts``) are stored ``from_id <= to_id``, as upstream's
+    inference and reinforcement writers store them (a caller's
+    ``lithos_edge_upsert`` may store them reversed; the vendored contract
+    carries such a row). Between them the rows carry every known type, one
+    type Lens does not know (``assesses``), a dangling endpoint, two
+    unresolved contradictions (``conflict_state`` NULL) and one resolved,
+    and consolidation-weight ``related_to`` rows (0.03 and one repeat). The
+    typed relations :func:`related_fixtures` shows are all here too, so the
+    related panel and the graph agree in fake mode.
     """
     return (
         _inferred_row(

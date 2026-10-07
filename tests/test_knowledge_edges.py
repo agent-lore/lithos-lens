@@ -223,6 +223,26 @@ def test_indexes_agree_with_the_rows() -> None:
     assert snapshot.edges_of(DANGLING_NOTE_ID), "the dangling endpoint is indexed"
 
 
+def test_a_symmetric_row_stored_reversed_is_held_as_stored() -> None:
+    """``lithos_edge_upsert`` stores a caller's endpoints as given, so a
+    valid symmetric row can arrive ``from_id > to_id``: the snapshot keeps it
+    as stored, indexes it under both endpoints, counts it, and the type alone
+    says it has no arrowhead."""
+    reversed_related = edge("edge_rev0related", "note-z", "note-a", "related_to")
+    reversed_contradiction = edge(
+        "edge_rev0contra1", "note-z", "note-a", "contradicts", conflict_state=None
+    )
+    rows = (reversed_related, reversed_contradiction)
+    snapshot = EdgeTableSnapshot(rows=rows, as_of=_T0)
+
+    assert snapshot.rows == rows
+    assert all((row.from_id, row.to_id) == ("note-z", "note-a") for row in rows)
+    assert snapshot.edges_of("note-a") == snapshot.edges_of("note-z") == rows
+    assert snapshot.facets.unresolved_contradictions == 1
+    assert all(direction_of(row) is EdgeDirection.SYMMETRIC for row in rows)
+    assert not any(direction_of(row).has_arrowhead for row in rows)
+
+
 def test_facets_count_what_the_rows_contain() -> None:
     rows = _demo_rows()
     facets = EdgeTableSnapshot(rows=rows, as_of=_T0).facets
