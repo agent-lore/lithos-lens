@@ -1392,8 +1392,9 @@ an `EdgeTableSnapshot`, fetched with ONE unfiltered `lithos_edge_list` call
   `namespace`, `conflict_state`) patches the snapshot by `edge_id`: an
   existing row takes those fields and keeps its weight, provenance and
   evidence; a new row is inserted with them unknown. Either is marked
-  `partial` until the next full fetch. A patch is a no-op with nothing held
-  or the table refused
+  `partial` until the next full fetch. An insertion that takes the table
+  over the bound refuses it, as a fetch would, until the current TTL runs out.
+  A patch is a no-op with nothing held or the table refused
 
 `lithos_lens.knowledge_edge_types` is the known-type table, in this order:
 `supports`, `related_to`, `analogy_to`, `refines`, `is_example_of`,
@@ -2680,7 +2681,7 @@ Lens's failure modes rather than its routes:
   `refused` | `failed` | `stale`), `lens_knowledge_edge_table_age_seconds`
   (seconds since the last successful fetch), and
   `lens_knowledge_edge_table_patches_total` by `event_type` and `outcome`
-  (`inserted` | `replaced` | `ignored`) (§5.7).
+  (`inserted` | `replaced` | `refused` | `ignored`) (§5.7).
 - **Task graph** — page renders by scope kind and outcome (`rendered` |
   `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
   behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how

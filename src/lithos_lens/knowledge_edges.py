@@ -377,7 +377,10 @@ class EdgeTable:
         type, namespace and conflict state and keeps everything else; a new
         row is inserted with weight, provenance, evidence and timestamps
         unknown. Either way the row is ``partial`` until the next full fetch.
-        A no-op (``False``) with no snapshot held, with the table refused, or
+        An insertion that takes the table over the bound refuses it, as a
+        fetch over the bound would: the rows are dropped and an
+        :class:`EdgeTableRefusal` is held until the current TTL expires. A
+        no-op (``False``) with no snapshot held, with the table refused, or
         for a payload missing an identity field. A patch landing while a fetch
         is in flight may be overwritten by it; the TTL is the stated bound.
         """
@@ -425,6 +428,16 @@ class EdgeTable:
                 break
         else:
             rows.append(patched)
+            if len(rows) > self._max_edges:
+                # The insertion crossed the bound: the table is now one the
+                # bound says not to hold, whether it arrived by fetch or by
+                # event. Refuse it exactly as a fetch would — rows discarded,
+                # count named — until the current TTL runs out and the next
+                # read re-counts the table upstream.
+                self._state = EdgeTableRefusal(
+                    len(rows), self._max_edges, snapshot.as_of
+                )
+                return "refused"
             outcome = "inserted"
         self._state = replace(snapshot, rows=tuple(rows))
         return outcome

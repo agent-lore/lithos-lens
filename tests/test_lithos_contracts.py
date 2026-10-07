@@ -1785,3 +1785,30 @@ def test_edge_list_is_declared_alike_on_protocol_client_and_fake() -> None:
     declared = inspect.signature(LithosClientProtocol.edge_list)
     assert declared == inspect.signature(LithosClient.edge_list)
     assert declared == inspect.signature(FakeLithosClient.edge_list)
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11"},
+        {"to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4"},
+        {"to_id": "5e7d3b10-2c94-4f6a-8b1e-93c0d5a7e2f4", "type": "supports"},
+        {
+            "from_id": "1f0c2a9e-7b41-4c3d-9e58-0a6b2d4f8c11",
+            "to_id": "9a4e6c22-d815-4b7f-a3c0-6e2f1b8d4a97",
+            "type": "contradicts",
+            "namespace": "influx",
+        },
+    ],
+    ids=["from_id", "to_id", "to_id+type", "all_four"],
+)
+def test_edge_list_forwards_each_given_filter_and_omits_the_rest(
+    filters: dict[str, str],
+) -> None:
+    """The real client, not the fake: every filter given — endpoint filters
+    included — reaches ``lithos_edge_list`` under its own name, and no filter
+    left unset is sent (not even as ``null``)."""
+    payload = load_contract("lithos_edge_list")["responses"]["variants"]["empty"]
+    result, calls = _run(payload, lambda c: c.edge_list(**filters))
+    assert calls == [("lithos_edge_list", filters)]
+    assert result == ()

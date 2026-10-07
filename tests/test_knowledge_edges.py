@@ -396,19 +396,56 @@ async def test_an_upsert_replaces_conflict_state_on_an_existing_row() -> None:
 
 
 async def test_an_upsert_re_identifies_an_existing_row() -> None:
+    """Every identity field the payload carries replaces the row's own —
+    both endpoints, type, namespace, conflict state — and nothing else does:
+    weight, timestamps, provenance and evidence are kept as last known. The
+    indexes and facets move with the row."""
     clock = StepClock()
-    table = _table(Fetcher([edge("edge_move00000001", "a", "b")]), clock)
+    moved = edge("edge_move00000001", "a", "b", "supports", conflict_state="refuted")
+    kept = edge("edge_keep00000001", "a", "z", "supports")
+    table = _table(Fetcher([moved, kept]), clock)
     await table.read()
 
     table.apply_upsert(
-        _upsert(edge_id="edge_move00000001", from_id="a", to_id="c", namespace="ns2")
+        _upsert(
+            edge_id="edge_move00000001",
+            from_id="x",
+            to_id="y",
+            type="refines",
+            namespace="ns2",
+            conflict_state=None,
+        )
     )
     after = table.current
     assert isinstance(after, EdgeTableSnapshot)
 
+    expected = KnowledgeEdge(
+        edge_id="edge_move00000001",
+        from_id="x",
+        to_id="y",
+        type="refines",
+        weight=moved.weight,
+        namespace="ns2",
+        created_at=moved.created_at,
+        updated_at=moved.updated_at,
+        provenance_actor=moved.provenance_actor,
+        provenance_type=moved.provenance_type,
+        evidence=moved.evidence,
+        conflict_state=None,
+        partial=True,
+    )
+    assert after.rows == (expected, kept)
+    # Gone from every old identity's index ...
+    assert after.edges_of("a") == (kept,)
     assert after.edges_of("b") == ()
-    assert [row.edge_id for row in after.edges_of("c")] == ["edge_move00000001"]
-    assert dict(after.facets.namespaces) == {"ns2": 1}
+    assert after.of_type("supports") == (kept,)
+    assert after.in_namespace("influx") == (kept,)
+    # ... and present under every new one.
+    assert after.edges_of("x") == after.edges_of("y") == (expected,)
+    assert after.of_type("refines") == (expected,)
+    assert after.in_namespace("ns2") == (expected,)
+    assert dict(after.facets.types) == {"refines": 1, "supports": 1}
+    assert dict(after.facets.namespaces) == {"influx": 1, "ns2": 1}
 
 
 async def test_an_upsert_is_a_no_op_with_nothing_held_or_a_bad_payload() -> None:
@@ -484,6 +521,98 @@ async def test_a_filtered_read_needs_a_filter() -> None:
         await table.filtered()
 
 
+async def test_a_refusal_lasts_exactly_one_ttl_then_the_table_is_recounted() -> None:
+    """The refusal is cached for one TTL, not forever: at expiry the next
+    read re-fetches, refreshes the count and ``as_of`` while still over, and
+    holds a snapshot again once Lithos's table is back within the bound."""
+    clock = StepClock()
+    rows = list(_demo_rows())
+    fetcher = Fetcher(rows)
+    table = _table(fetcher, clock, ttl_s=300, max_edges=len(rows) - 1)
+
+    first = await table.read()
+    assert isinstance(first, EdgeTableRefusal)
+    clock.advance(seconds=299)
+    assert await table.read() is first
+    assert len(fetcher.calls) == 1
+
+    fetcher.rows.append(edge("edge_grown0000001", "a", "b"))
+    clock.advance(seconds=1)
+    second = await table.read()
+    assert len(fetcher.calls) == 2
+    assert second == EdgeTableRefusal(
+        row_count=len(rows) + 1,
+        max_edges=len(rows) - 1,
+        as_of=_T0 + timedelta(seconds=300),
+    )
+
+    fetcher.rows = rows[:3]
+    clock.advance(seconds=300)
+    recovered = await _snapshot(table)
+    assert len(fetcher.calls) == 3
+    assert recovered.rows == tuple(rows[:3])
+
+
+async def test_an_insertion_that_crosses_the_bound_refuses_the_table() -> None:
+    """The bound holds however the rows arrive. At the bound a replacement
+    patches as usual; one insertion more refuses the table — rows dropped,
+    count named — for the rest of the TTL, with filtered reads still served,
+    and the next fetch re-counts it upstream."""
+    clock = StepClock()
+    rows = list(_demo_rows())
+    fetcher = Fetcher(rows)
+    table = _table(fetcher, clock, ttl_s=300, max_edges=len(rows))
+    held = await _snapshot(table)
+
+    assert table.apply_upsert(_upsert(edge_id=rows[0].edge_id, conflict_state="merged"))
+    replaced = table.current
+    assert isinstance(replaced, EdgeTableSnapshot)
+    assert len(replaced.rows) == len(rows)
+
+    assert table.apply_upsert(_upsert(edge_id="edge_onetoomany01")) is True
+    refused = table.current
+    assert refused == EdgeTableRefusal(
+        row_count=len(rows) + 1, max_edges=len(rows), as_of=held.as_of
+    )
+    # Later reads within the TTL serve the refusal, without a fetch ...
+    clock.advance(seconds=299)
+    assert await table.read() is refused
+    assert len(fetcher.calls) == 1
+    # ... filtered reads still work, and further patches are no-ops.
+    assert len(await table.filtered(type="contradicts")) == 3
+    assert table.apply_upsert(_upsert(edge_id="edge_another00001")) is False
+    assert table.current is refused
+
+    clock.advance(seconds=1)
+    recounted = await _snapshot(table)
+    assert recounted.rows == tuple(rows)
+
+
+async def test_a_cancelled_reader_does_not_cancel_the_shared_fetch() -> None:
+    """A browser that goes away mid-read must not take the fetch the other
+    readers are waiting on down with it."""
+    gate = asyncio.Event()
+    clock = StepClock()
+    fetcher = Fetcher(_demo_rows(), gate=gate)
+    table = _table(fetcher, clock)
+
+    leaving = asyncio.create_task(table.read())
+    staying = asyncio.create_task(table.read())
+    while not fetcher.calls:
+        await asyncio.sleep(0)
+    leaving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leaving
+    gate.set()
+    result = await staying
+
+    assert isinstance(result, EdgeTableSnapshot)
+    assert fetcher.calls == [(None, None)]
+    assert table.current is result
+    assert await table.read() is result
+    assert len(fetcher.calls) == 1
+
+
 # ── failure ────────────────────────────────────────────────────────────
 
 
@@ -527,6 +656,23 @@ async def test_a_first_fetch_failure_reaches_every_waiter() -> None:
     assert all(isinstance(result, RuntimeError) for result in results)
     assert fetcher.calls == [(None, None)]
     assert table.current is None
+
+    # Not cached: an immediate second read asks Lithos again (no TTL passed).
+    with pytest.raises(RuntimeError):
+        await table.read()
+    assert len(fetcher.calls) == 2
+
+    # Lithos recovers: two concurrent readers share ONE new fetch.
+    fetcher.fail = False
+    fetcher.gate = asyncio.Event()
+    fetcher.rows = list(_demo_rows())
+    readers = [asyncio.create_task(table.read()) for _ in range(2)]
+    await asyncio.sleep(0)
+    fetcher.gate.set()
+    first, second = await asyncio.gather(*readers)
+    assert isinstance(first, EdgeTableSnapshot) and first is second
+    assert len(fetcher.calls) == 3
+    assert table.current is first and first.stale is False
 
 
 # ── telemetry ──────────────────────────────────────────────────────────

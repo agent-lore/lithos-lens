@@ -481,8 +481,9 @@ def knowledge_edge_table_patches() -> Any:
 
     Labels: ``event_type`` (``edge.upserted`` today — the one knowledge event
     that carries an edge) and ``outcome`` in ``inserted`` | ``replaced`` |
-    ``ignored`` (no snapshot loaded, the table refused over its bound, or a
-    payload missing an identity field).
+    ``refused`` (an insertion took the table over its bound, so it is no
+    longer held) | ``ignored`` (no snapshot loaded, the table already
+    refused, or a payload missing an identity field).
 
     The snapshot converges on its TTL for every change that emits no event
     (reinforcement, projection, weight decay — ROADMAP ledger #15), so this
