@@ -3,7 +3,7 @@
 
 # Knowledge
 
-Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided; plus the knowledge graph's data layer — the edge-table snapshot (the whole Lithos edge table from one unfiltered read, its endpoint/type/namespace indexes and picker facets, held under a TTL with single-flight, refused over its row bound with filtered reads still served, served stale when a refetch fails, and patched from edge.upserted) and the known edge-type table (direction, symmetry, style, unknown types drawn as recorded, and the legend lines).
+Safe server-side markdown and the knowledge-note surface built on it: the note renderer with its escaping and link-scheme rules, the task-description variant of it (soft breaks kept, wiki-links literal) with the block-boundary cut a board row shows, the related-panel neighborhood/view models with their backend fan-out count and each typed edge's parsed evidence and provenance (its "why?"), the frontmatter metadata chips + lede, the search-result view model, the browse landing's intake split and namespace filter row, the tag browse page's ranked counts and key: family facet, and wiki-link resolution recording which arm decided; plus the knowledge graph's data layer — the edge-table snapshot (the whole Lithos edge table from one unfiltered read, its endpoint/type/namespace indexes and picker facets, held under a TTL with single-flight, refused over its row bound with filtered reads still served, served stale when a refetch fails, and patched from edge.upserted) and the known edge-type table (direction, symmetry, style, unknown types drawn as recorded, and the legend lines); the note facts cache behind every graph node (title, type, status, namespace, confidence and lede from a gated, per-render-capped `lithos_read(max_length=1)` fan-out under a TTL, the missing-note ghost for `doc_not_found`, and the note-event patches that set a title and mark the rest stale); and the graph assembly over them — focus (ego) graphs at depth 1 or 2 and scoped-global graphs by type and/or namespace, the weight and provenance filters applied before expansion and the cap, the node cap as a refusal naming its remedy, the would-be node count per depth, hidden-edge counts, the one-hop wiki-link and provenance layers from one `lithos_related` read, degree in view, the facts read order — and the view model and JSON payload the page renders.
 
 **Tier:** Foundation
 
@@ -15,6 +15,9 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
 | `lithos_lens.knowledge_edge_types` | S | 4 | 5 |
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
+| `lithos_lens.knowledge_facts` | M | 5 | 2 |
+| `lithos_lens.knowledge_graph` | M | 1 | 8 |
+| `lithos_lens.knowledge_graph_view` | M | 8 | 2 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
@@ -68,6 +71,38 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `EdgeTableSnapshot` — The whole edge table at ``as_of``, with its indexes and facets.
 - class `EdgeTableRefusal` — The table was fetched, counted and NOT held: over the bound.
 - class `EdgeTable` — The process's edge-table snapshot: TTL, single-flight, bound, patches.
+
+### `lithos_lens.knowledge_facts`
+- def `is_doc_not_found` — Whether a Lithos read failed because the note does not exist.
+- class `NoteFacts` — What a graph node shows of its note: the title and five frontmatter facts.
+- def `note_facts` — A read note's facts.
+- class `NoteFactsAnswer` — One node's facts in one render, and the state they are in.
+- class `NoteFactsTally` — What one render's lookup cost and found (the request span reports it).
+- class `NoteFactsBatch` — Every asked-for node's answer, and what the lookup cost.
+- class `NoteFactsCache` — Process-wide note facts: gated reads, TTL, per-render cap, patches.
+
+### `lithos_lens.knowledge_graph`
+- class `KnowledgeTypedGraph` — The typed-edge half of a view, from the snapshot alone, before any read.
+- def `ego_typed_graph` — The focus's typed graph at ``depth``, filtered, with its cap verdict.
+- def `scoped_rows` — The snapshot rows of a ``type`` and/or ``namespace`` (both: their overlap).
+- def `global_typed_graph` — A scoped-global typed graph: the rows' endpoints, filtered, capped.
+- def `read_order` — The typed nodes in facts-read priority: hop, then degree in view desc, then id. The focus is hop 0, so it is first; in global mode every node is hop 0 and the order is degree, then id.
+- def `build_view` — The view model from a typed graph, the focus's layers and the facts.
+- def `assemble_focus_view` — The pure focus view: typed graph, cap, layers and facts in one call.
+- def `assemble_focus_graph` — The focus view: the snapshot, then ``related(focus)``, then the facts.
+- def `assemble_global_graph` — The scoped-global view: rows by ``type`` and/or ``namespace``, then facts.
+
+### `lithos_lens.knowledge_graph_view`
+- def `provenance_group` — The filter group a row's ``provenance_type`` falls in.
+- class `KnowledgeGraphFilters` — The weight and provenance filters, applied before expansion and the cap.
+- class `HiddenEdgeCounts` — Typed edges the filters hide, counted over the unfiltered assembly.
+- class `ProvenanceFacet` — One provenance group the filter offers: its rows and the raw values.
+- class `KnowledgeGraphRefusal` — Why the graph was not drawn, and — when one fits — what would draw it.
+- class `KnowledgeLayerRef` — One wiki-link or provenance neighbour of the focus, as K1 names it.
+- class `KnowledgeGraphNode` — One drawn note: its facts and their state, and its place in the view.
+- class `KnowledgeGraphEdge` — One drawn edge: a typed row from the snapshot, or a one-hop layer pair.
+- class `KnowledgeGraphView` — Everything the page renders for one scope, refused or drawn.
+- def `graph_payload` — The JSON-ready payload the canvas draws from: the view's nodes and edges, legend, hidden counts, refusal and ``as_of``, nothing more.
 
 ### `lithos_lens.knowledge_landing`
 - class `NamespaceFacet` — One entry of the namespace filter row: a namespace and its note count.

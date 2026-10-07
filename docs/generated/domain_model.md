@@ -62,6 +62,11 @@ classDiagram
   class EdgeWhy {
     +provenance str
   }
+  class HiddenEdgeCounts {
+    +by_weight int
+    +by_provenance int
+    +total int
+  }
   class KnowledgeEdge {
     +edge_id str
     +from_id str
@@ -76,6 +81,61 @@ classDiagram
     +evidence str | None
     +conflict_state str | None
     +partial bool
+  }
+  class KnowledgeGraphEdge {
+    +id str
+    +from_id str
+    +to_id str
+    +kind EdgeKind
+    +type str
+    +direction EdgeDirection
+    +weight float | None
+    +provenance str | None
+    +conflict_state str | None
+    +partial bool
+  }
+  class KnowledgeGraphFilters {
+    +min_weight float
+    +provenance frozenset[str]
+  }
+  class KnowledgeGraphNode {
+    +id str
+    +label str
+    +facts_state FactsState
+    +degree int
+    +hop int
+    +is_focus bool
+    +layer_only bool
+  }
+  class KnowledgeGraphRefusal {
+    +reason RefusalReason
+    +count int
+    +cap int
+    +remedy_depth int | None
+    +remedy_min_weight float | None
+    +remedy_count int
+  }
+  class KnowledgeGraphView {
+    +mode Literal['focus', 'global']
+    +focus_id str
+    +depth int
+    +scope_type str | None
+    +scope_namespace str | None
+    +layers_unavailable bool
+    +would_be_nodes Mapping[int, int]
+    +as_of datetime | None
+    +stale bool
+    +facts_capped_at int
+  }
+  class KnowledgeLayerRef {
+    +id str
+    +title str
+    +relation LayerRelation
+    +drawn_as_typed bool
+  }
+  class KnowledgeTypedGraph {
+    +hops Mapping[str, int]
+    +would_be_nodes Mapping[int, int]
   }
   class KnownEdgeType {
     +name str
@@ -97,6 +157,28 @@ classDiagram
     +namespace str
     +count int
   }
+  class NoteFacts {
+    +title str
+    +note_type str
+    +status str
+    +namespace str
+    +confidence str
+    +lede str
+  }
+  class NoteFactsAnswer {
+    +id str
+    +state FactsState
+  }
+  class NoteFactsBatch {
+    +capped_at int
+  }
+  class NoteFactsTally {
+    +hits int
+    +reads int
+    +missing int
+    +capped int
+    +failed int
+  }
   class NoteMetadata {
     +note_type str
     +status str
@@ -114,6 +196,12 @@ classDiagram
     +task_id str
     +title str
     +is_task_record bool
+  }
+  class ProvenanceFacet {
+    +group str
+    +count int
+    +values tuple[str, ...]
+    +shown bool
   }
   class RecentLanding
   class RelatedItem {
@@ -184,7 +272,27 @@ classDiagram
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_type
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : rows
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
+  KnowledgeGraphNode "1" --> "0..1" NoteFacts : facts
+  KnowledgeGraphView "1" --> "1" HiddenEdgeCounts : hidden
+  KnowledgeGraphView "1" --> "0..*" KnowledgeGraphEdge : edges
+  KnowledgeGraphView "1" --> "1" KnowledgeGraphFilters : filters
+  KnowledgeGraphView "1" --> "0..*" KnowledgeGraphNode : nodes
+  KnowledgeGraphView "1" --> "0..1" KnowledgeGraphRefusal : refusal
+  KnowledgeGraphView "1" --> "0..*" KnowledgeLayerRef : backlinks
+  KnowledgeGraphView "1" --> "0..*" KnowledgeLayerRef : derived
+  KnowledgeGraphView "1" --> "0..*" KnowledgeLayerRef : sources
+  KnowledgeGraphView "1" --> "0..*" KnowledgeLayerRef : wiki_links
+  KnowledgeGraphView "1" --> "0..*" LegendLine : legend
+  KnowledgeGraphView "1" --> "1" NoteFactsTally : facts_tally
+  KnowledgeGraphView "1" --> "0..*" ProvenanceFacet : provenance_facets
+  KnowledgeTypedGraph "1" --> "1" HiddenEdgeCounts : hidden
+  KnowledgeTypedGraph "1" --> "0..*" KnowledgeEdge : edges
+  KnowledgeTypedGraph "1" --> "0..1" KnowledgeGraphRefusal : refusal
+  KnowledgeTypedGraph "1" --> "0..*" ProvenanceFacet : provenance_facets
   ListChips "1" --> "0..*" NoteMetadata : by_id
+  NoteFactsAnswer "1" --> "0..1" NoteFacts : facts
+  NoteFactsBatch "1" --> "0..*" NoteFactsAnswer : answers
+  NoteFactsBatch "1" --> "1" NoteFactsTally : tally
   RecentLanding "1" --> "0..*" NamespaceFacet : namespaces
   RecentLanding "1" --> "0..*" NoteSummary : intake
   RecentLanding "1" --> "0..*" NoteSummary : notes

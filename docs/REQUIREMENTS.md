@@ -240,6 +240,10 @@ LITHOS_LENS_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP=30
 LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES=articles/,papers/,digests/   # comma-separated; empty = only the ingested-by:* tag
 LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S=300         # knowledge graph edge-table snapshot TTL (K2 §8.2)
 LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES=50000  # snapshot refused above this (K2 §8.2)
+LITHOS_LENS_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES=250          # focus graph refused above this (K2 §8.2)
+LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH=1              # 1 or 2
+LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S=3600        # note facts cache TTL (K2 §8.2)
+LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP=300         # facts reads per graph render (K2 §8.2)
 
 # Optional LLM client — disabled by default
 LITHOS_LENS_LLM_ENABLED=false

@@ -11,7 +11,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML load
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.config` | M | 0 | 2 |
+| `lithos_lens.config` | L | 0 | 2 |
 | `lithos_lens.config_env` | M | 0 | 1 |
 | `lithos_lens.config_fields` | S | 0 | 10 |
 | `lithos_lens.config_schema` | M | 13 | 1 |

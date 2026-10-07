@@ -34,8 +34,12 @@ from lithos_lens.config_fields import (
 )
 from lithos_lens.config_schema import (
     MAX_GRAPH_INT_KNOBS,
+    MAX_KNOWLEDGE_GRAPH_DEFAULT_DEPTH,
     MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES,
     MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S,
+    MAX_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES,
+    MAX_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S,
+    MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
     MAX_TASKS_INT_KNOBS,
     MIN_TASKS_INT_KNOBS,
@@ -92,6 +96,16 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     )
     edge_table_max_env = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES", ""
+    )
+    focus_max_nodes_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES", ""
+    )
+    default_depth_env = os.environ.get("LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH", "")
+    note_facts_ttl_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S", ""
+    )
+    title_fanout_cap_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP", ""
     )
     graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
@@ -241,9 +255,9 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
                 ),
             ),
         )
-    # The edge-table snapshot's two knobs (K2 D2), same bounds as their TOML
-    # keys, collected and applied in one replace() like the [graph] ones.
-    edge_table_env_overrides = {
+    # The knowledge graph's knobs (K2 D2-D4), same bounds as their TOML keys,
+    # collected and applied in one replace() like the [graph] ones.
+    knowledge_graph_env_overrides = {
         field: _parse_env_int(name, raw, maximum=maximum)
         for field, name, raw, maximum in (
             (
@@ -258,12 +272,37 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
                 edge_table_max_env,
                 MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES,
             ),
+            (
+                "graph_focus_max_nodes",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES",
+                focus_max_nodes_env,
+                MAX_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES,
+            ),
+            (
+                "graph_default_depth",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH",
+                default_depth_env,
+                MAX_KNOWLEDGE_GRAPH_DEFAULT_DEPTH,
+            ),
+            (
+                "graph_note_facts_ttl_s",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S",
+                note_facts_ttl_env,
+                MAX_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S,
+            ),
+            (
+                "graph_title_fanout_cap",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP",
+                title_fanout_cap_env,
+                MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP,
+            ),
         )
         if raw
     }
-    if edge_table_env_overrides:
+    if knowledge_graph_env_overrides:
         new_cfg = replace(
-            new_cfg, knowledge=replace(new_cfg.knowledge, **edge_table_env_overrides)
+            new_cfg,
+            knowledge=replace(new_cfg.knowledge, **knowledge_graph_env_overrides),
         )
     if writes_default_operator_env or writes_confirm_cancel_env:
         new_writes = new_cfg.writes

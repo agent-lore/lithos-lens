@@ -315,6 +315,17 @@ The current configuration model includes:
 - `knowledge.graph_edge_table_max_edges` *(default 50000, 1-500000: a fetched
   edge table with more rows is not held, and only `type=`/`namespace=`-filtered
   reads are served — §5.7, Knowledge edge table)*
+- `knowledge.graph_focus_max_nodes` *(default 250, 1-2000: a focus graph with
+  more nodes is refused, naming the depth or weight filter that would bring
+  it under — §5.7, Knowledge graph assembly)*
+- `knowledge.graph_default_depth` *(default 1, 1-2: the hops of typed edges a
+  focus graph opens at — §5.7, Knowledge graph assembly)*
+- `knowledge.graph_note_facts_ttl_s` *(default 3600, 1-86400: seconds a graph
+  node's note facts are served before the next draw re-reads them — §5.7,
+  Knowledge graph assembly)*
+- `knowledge.graph_title_fanout_cap` *(default 300, 1-2000: `lithos_read`
+  calls one graph render may spend on node facts — §5.7, Knowledge graph
+  assembly)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1411,6 +1422,67 @@ with its resolution once resolved. Any other type is drawn as
 recorded: an arrowhead from `from_id` to `to_id`, neutral grey, labelled with
 the raw type. A legend lists exactly the types present, known ones in table
 order, unknown ones after by name, one plain-language line each.
+
+**Knowledge graph assembly** (K2 S2 — no page renders it yet; S3 wires it).
+`lithos_lens.knowledge_facts` holds a `NoteFactsCache` of what each graph
+node shows of its note — title, `note_type`, `status`, `namespace`,
+`confidence` (the K1 chip's percentage) and lede (`summaries.short`):
+
+- each node is read with `lithos_read(id, max_length=1)` inside an injected
+  gate (the graph page passes the task graph's process-wide fan-out gate),
+  at most `knowledge.graph_title_fanout_cap` (300) reads per render, in the
+  order the assembly ranks the nodes; a cache hit costs no read
+- entries are served for `knowledge.graph_note_facts_ttl_s` (3600 s) on a
+  monotonic clock
+- every node has one facts state: `ok`; `pending` (last-known facts, a
+  re-read due but past the cap or failed); `unread` (no facts — past the cap
+  or a failed read — labelled by its full id); or `missing`
+- a read answering `doc_not_found` marks the id `missing` under the same TTL:
+  the **ghost**, labelled by its 8-character short id, drawn dashed, never
+  dropped, and listed under "edges to missing notes". Any other failure is
+  not cached and is logged once per render
+- `note.created` / `note.updated` set a cached (or missing) entry's title,
+  clear missing and mark its other facts stale, so the next draw re-reads it
+  once — a note quarantined behind an unchanged title shows its new status
+  and lede; on an id not cached they do nothing. `note.deleted` marks the id
+  missing. `note.renamed` changes nothing (no graph fact is the path). A
+  payload without an `id` is ignored (the live wiring is S7's)
+
+`lithos_lens.knowledge_graph` assembles the two modes from the edge-table
+snapshot; `lithos_lens.knowledge_graph_view` holds the view model and its
+JSON payload:
+
+- **focus** (`depth` 1 or 2): the focus's typed edges; at depth 2 each
+  neighbour's too. The **weight** (`min_weight`, default 0.1; an edge with
+  no known weight is never hidden by it) and **provenance** filters — groups
+  inferred (`inferred`), reinforced (`consolidation`), declared
+  (`frontmatter`) and other (everything else, NULL included) — apply before
+  depth 2 expands and before the cap, so a hidden edge pulls in nothing
+- **scoped global**: the snapshot rows of a `type` and/or `namespace`
+  (over the table's bound, a direct filtered `lithos_edge_list` read instead),
+  the same filters, capped at 500 nodes
+- the **cap** (`knowledge.graph_focus_max_nodes`, 250) counts the focus and
+  the typed endpoints, ghosts included, and is checked before any other
+  Lithos read. Over it the scope is refused with the count and the first
+  remedy that fits: `depth=1`, else the lowest `min_weight` in tenths, else
+  none. A table over its bound refuses focus mode; a table that cannot be
+  read refuses either mode as unavailable; a stale snapshot is served and
+  says so
+- the would-be node count at depth 1 and 2 under the current filters, the
+  weight- and provenance-hidden edge counts (each over the unfiltered
+  assembly) and the distinct hidden total, and each provenance group's count
+  and raw values
+- **wiki-links** and **provenance** from one `lithos_related(focus)`, one
+  hop at either depth, their nodes titled inline with no facts read; a
+  provenance pair already drawn as a `derived_from` edge is listed, not drawn
+  twice; a failed call drops both layers and says so; `doc_not_found` makes
+  the focus a ghost with its typed edges still drawn
+- facts are read focus first, then by hop, then by degree in view (typed,
+  wiki-link and provenance edges), then id; global mode by degree, then id
+- the payload carries every node (facts, state, ghost, degree, hop) and edge
+  (type, weight, provenance, conflict state, direction) the view model holds,
+  the legend (the typed types present, then one line per layer drawn), the
+  hidden counts, the refusal and `as_of`
 
 ### 5.8 Live Updates
 

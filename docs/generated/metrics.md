@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **39** (198 module-level)
+- Cross-component edges: **39** (200 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -34,11 +34,11 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Config | 4 | 1663 | 1317 | 7 | 3 | 0.30 | 42 (`lithos_lens.config_env.apply_env_overrides`) | 1 |
+| Config | 4 | 1780 | 1420 | 7 | 3 | 0.30 | 42 (`lithos_lens.config_env.apply_env_overrides`) | 1 |
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 713 | 517 | 3 | 4 | 0.57 | 14 (`lithos_lens.events._iter_sse_lines`) | 2 |
-| Knowledge | 10 | 2679 | 2047 | 2 | 2 | 0.50 | 13 (`lithos_lens.knowledge_resolver._gather_candidates`) | 2 |
+| Knowledge | 13 | 4045 | 3170 | 2 | 2 | 0.50 | 18 (`lithos_lens.knowledge_graph.build_view`) | 4 |
 | LithosClient | 10 | 5103 | 4137 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 88 | 62 | 1 | 4 | 0.80 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
@@ -50,7 +50,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **82**, lines: **32960**, SLOC: **25487**
+- Modules: **85**, lines: **34443**, SLOC: **26713**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -62,7 +62,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **1061**, cyclomatic > 10: **51**
+- Functions: **1111**, cyclomatic > 10: **53**
 
 Top 10 most complex functions:
 
@@ -89,5 +89,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **126** (125 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.93** (63753 test lines / 32960 source lines)
+- Domain models: **139** (145 associations, 16 without docstrings)
+- Test-to-source line ratio: **1.88** (64913 test lines / 34443 source lines)
