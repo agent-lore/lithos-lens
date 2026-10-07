@@ -13,7 +13,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 7 | 7 |
 | `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
-| `lithos_lens.knowledge_edge_types` | S | 4 | 4 |
+| `lithos_lens.knowledge_edge_types` | S | 4 | 5 |
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
@@ -49,6 +49,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `number_or_none` — A finite JSON number (not a bool) as a float; anything else is ``None``.
 
 ### `lithos_lens.knowledge_edge_types`
+- def `is_conflict_resolved` — Whether ``conflict_state`` records a completed resolution.
 - class `EdgeDirection` — How an edge's two endpoints relate.
 - class `KnownEdgeType` — One row of the known-type table (K2 PRD D5).
 - class `EdgeStyle` — How one edge row draws: the class, the stroke, the arrowhead, a label.
@@ -62,7 +63,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `KnowledgeEdge` — One row of the Lithos ``edges`` table, its twelve columns as sent.
 - def `normalize_knowledge_edge` — One ``lithos_edge_list`` row as a :class:`KnowledgeEdge`.
 - def `normalize_edge_list` — ``lithos_edge_list``'s ``{"results": [...]}`` as rows, in the order sent.
-- def `is_unresolved_contradiction` — A ``contradicts`` row whose ``conflict_state`` is still NULL.
+- def `is_unresolved_contradiction` — A ``contradicts`` row not yet settled by ``lithos_conflict_resolve``.
 - class `EdgeFacets` — What the scope picker offers: rows per type and per namespace (most first, ties by name) and how many contradictions are still unresolved.
 - class `EdgeTableSnapshot` — The whole edge table at ``as_of``, with its indexes and facets.
 - class `EdgeTableRefusal` — The table was fetched, counted and NOT held: over the bound.

@@ -33,9 +33,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeGuard
 
 Stroke = Literal["solid", "dotted", "dashed"]
+
+
+#: The values ``lithos_conflict_resolve`` writes to a ``contradicts`` row's
+#: ``conflict_state`` (``EdgeStore.update_conflict_resolution``). Only these
+#: mean resolved: ``lithos_edge_upsert`` stores a caller's marker unvalidated,
+#: so any other value (``"unresolved"``, ``""``, ``"pending"``) is not one.
+CONFLICT_RESOLUTIONS: frozenset[str] = frozenset(
+    {"accepted_dual", "superseded", "refuted", "merged"}
+)
+
+
+def is_conflict_resolved(conflict_state: str | None) -> TypeGuard[str]:
+    """Whether ``conflict_state`` records a completed resolution."""
+    return conflict_state in CONFLICT_RESOLUTIONS
 
 
 class EdgeDirection(Enum):
@@ -143,8 +157,9 @@ class EdgeStyle:
     """How one edge row draws: the class, the stroke, the arrowhead, a label.
 
     ``label`` is empty for a known type in its ordinary state. It carries the
-    raw type for an unknown one, and the resolution (``superseded`` …) for a
-    resolved ``contradicts``, which draws muted rather than red.
+    raw type for an unknown one, the resolution (``superseded`` …) for a
+    resolved ``contradicts``, which draws muted rather than red, and an
+    unresolved one's caller-authored marker (``pending`` …) as written.
     """
 
     css_class: str
@@ -177,11 +192,12 @@ def direction_of(edge: _TypedEdge) -> EdgeDirection:
 def edge_style(edge: _TypedEdge) -> EdgeStyle:
     """How ``edge`` draws (K2 PRD D5).
 
-    A ``contradicts`` row is unresolved while its ``conflict_state`` is NULL
-    — the column stays NULL until ``lithos_conflict_resolve`` writes one of
-    ``accepted_dual`` / ``superseded`` / ``refuted`` / ``merged`` — and only
-    then is it drawn dashed red; a resolved one is muted and labelled with
-    its resolution.
+    A ``contradicts`` row is resolved only once its ``conflict_state`` is
+    one of :data:`CONFLICT_RESOLUTIONS` — what ``lithos_conflict_resolve``
+    writes — and is then muted and labelled with its resolution. Until then
+    it is drawn dashed red: NULL (how inference writes it) unlabelled, and
+    any other marker a caller authored through ``lithos_edge_upsert``
+    labelled as written, never mistaken for a resolution.
     """
     known = _BY_NAME.get(edge.type)
     if known is None:
@@ -193,15 +209,16 @@ def edge_style(edge: _TypedEdge) -> EdgeStyle:
         )
     arrowhead = known.direction.has_arrowhead
     if known.name == "contradicts":
-        if edge.conflict_state is None:
+        state = edge.conflict_state
+        if not is_conflict_resolved(state):
             return EdgeStyle(
-                f"{known.css_class} kedge-unresolved", known.stroke, arrowhead
+                f"{known.css_class} kedge-unresolved",
+                known.stroke,
+                arrowhead,
+                label=state or "",
             )
         return EdgeStyle(
-            f"{known.css_class} kedge-resolved",
-            known.stroke,
-            arrowhead,
-            label=edge.conflict_state,
+            f"{known.css_class} kedge-resolved", known.stroke, arrowhead, label=state
         )
     return EdgeStyle(known.css_class, known.stroke, arrowhead)
 

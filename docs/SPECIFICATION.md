@@ -1371,9 +1371,11 @@ an `EdgeTableSnapshot`, fetched with ONE unfiltered `lithos_edge_list` call
 (the tool has no limit, offset, order or total):
 
 - each row is a `KnowledgeEdge` with the table's twelve columns as sent —
-  NULL columns stay `None`, so an unresolved `contradicts` (NULL
-  `conflict_state`) is told apart from a resolved one (`accepted_dual`,
-  `superseded`, `refuted` or `merged`); `evidence` stays the raw JSON string
+  NULL columns stay `None` and `conflict_state` is kept as stored; a
+  `contradicts` is resolved only by one of the four `lithos_conflict_resolve`
+  values (`accepted_dual`, `superseded`, `refuted` or `merged`) — NULL, as
+  inference writes it, and any other marker a caller stored through
+  `lithos_edge_upsert` read unresolved; `evidence` stays the raw JSON string
 - the snapshot carries indexes by endpoint (a row under both of its ends),
   by type and by namespace, and the facets the scope picker needs — rows per
   type and per namespace, and the unresolved-contradictions count — all
@@ -1401,9 +1403,11 @@ an `EdgeTableSnapshot`, fetched with ONE unfiltered `lithos_edge_list` call
 `depends_on`, `derived_from`, `contradicts`. `related_to`, `analogy_to` and
 `contradicts` are symmetric (drawn without an arrowhead whichever way round
 the endpoints are stored — the Lithos writers usually store `from_id <=
-to_id`, but `lithos_edge_upsert` keeps a caller's order); the rest are directed, `derived_from` from the derived note to its
-source and dotted. `contradicts` is dashed — red while unresolved, muted and
-labelled with its resolution once resolved. Any other type is drawn as
+to_id`, but `lithos_edge_upsert` keeps a caller's order); the rest are
+directed, `derived_from` from the derived note to its source and dotted.
+`contradicts` is dashed — red while unresolved (labelled with a
+caller-authored marker such as `pending` when it has one), muted and labelled
+with its resolution once resolved. Any other type is drawn as
 recorded: an arrowhead from `from_id` to `to_id`, neutral grey, labelled with
 the raw type. A legend lists exactly the types present, known ones in table
 order, unknown ones after by name, one plain-language line each.

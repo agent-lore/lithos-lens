@@ -1233,7 +1233,7 @@ Interactive visualisation of the knowledge base as a typed, weighted graph, with
 | `supports`, `refines`, `is_example_of`, `depends_on` | directed (from → to) | solid, arrowhead, one fixed colour per type |
 | `related_to`, `analogy_to` | symmetric (usually stored `from_id <= to_id`; `lithos_edge_upsert` keeps a caller's order, so symmetry comes from the type, not the endpoint order) | solid, no arrowhead, one fixed colour per type |
 | `derived_from` (provenance) | directed, derived → source | dotted grey, arrowhead |
-| `contradicts` | symmetric | **unresolved** (`conflict_state` null): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
+| `contradicts` | symmetric | **unresolved** (`conflict_state` null, or any marker other than the four resolutions — `lithos_edge_upsert` stores a caller's marker unvalidated): red, dashed, emphasised, counted in the toolbar; **resolved**: muted with its label (`accepted_dual` / `superseded` / `refuted` / `merged`) |
 | wiki-link | as written | thin grey |
 | *(unknown type)* | as stored | neutral grey, arrowhead, labelled with the raw type — forward-compatible |
 

@@ -269,6 +269,36 @@ def test_every_resolution_counts_as_resolved() -> None:
     assert facets.unresolved_contradictions == 1
 
 
+async def test_an_authored_marker_counts_as_unresolved_through_fetch_and_patch() -> (
+    None
+):
+    """``lithos_edge_upsert`` stores ``conflict_state`` as the caller gives it,
+    so a marker that is not one of the four resolutions (``"unresolved"``,
+    ``""``, ``"pending"``) is still an unresolved contradiction — on a fetch
+    and after an ``edge.upserted`` patch alike — and the marker is kept."""
+    markers = ("unresolved", "", "pending")
+    rows = tuple(
+        edge(f"edge_m{index}", "a", "b", "contradicts", conflict_state=marker)
+        for index, marker in enumerate(markers)
+    ) + (edge("edge_done", "a", "c", "contradicts", conflict_state="refuted"),)
+    table = _table(Fetcher(rows), StepClock())
+    snapshot = await _snapshot(table)
+    assert [row.conflict_state for row in snapshot.rows[:3]] == list(markers)
+    assert snapshot.facets.unresolved_contradictions == 3
+
+    table.apply_upsert(
+        _upsert(
+            edge_id="edge_done",
+            from_id="a",
+            to_id="c",
+            type="contradicts",
+            conflict_state="reopened",
+        )
+    )
+    patched = await _snapshot(table)
+    assert patched.facets.unresolved_contradictions == 4
+
+
 # ── single-flight and TTL ──────────────────────────────────────────────
 
 

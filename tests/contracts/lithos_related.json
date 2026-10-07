@@ -4,7 +4,8 @@
   "source": [
     "lithos:src/lithos/tools/read_search.py::lithos_related (id resolved through tools/_seam.py::resolve_note_id — an unambiguous >= 6-char prefix since 8ce96bd; edges both directions from edge_store.py::EdgeStore.list_edges, twelve columns, SQL NULL as null)",
     "lithos:src/lithos/lcma/edge_inference.py (inferred-edge evidence: json.dumps({rationale, model, confidence}), written at confidence >= 0.6, conflict_state NULL)",
-    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.conflict_resolve (conflict_state stays NULL until resolved, then one of accepted_dual / superseded / refuted / merged — nothing writes 'unresolved')"
+    "lithos:src/lithos/cognitive_memory.py::CognitiveMemory.conflict_resolve (sets conflict_state to one of accepted_dual / superseded / refuted / merged; inferred contradicts rows carry NULL until then)",
+    "lithos:src/lithos/tools/memory_edges.py::lithos_edge_upsert -> src/lithos/intake.py::CorpusIntake.assert_edge -> src/lithos/edge_store.py::EdgeStore.upsert (conflict_state is a free-form 'Conflict state marker', stored as the caller supplies it with no enum validation — so a caller-authored row may carry 'unresolved', '' or any other string; only the four conflict_resolve values mean resolved)"
   ],
   "request": {
     "canonical": {

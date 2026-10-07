@@ -92,6 +92,22 @@ def test_a_resolved_contradiction_is_muted_and_labelled_with_its_resolution(
     )
 
 
+@pytest.mark.parametrize("marker", ["unresolved", "pending", "Superseded", " "])
+def test_an_authored_marker_is_not_taken_for_a_resolution(marker: str) -> None:
+    """``lithos_edge_upsert`` stores a caller's ``conflict_state`` unvalidated,
+    so only the four ``lithos_conflict_resolve`` values mean resolved. Any
+    other marker stays unresolved (dashed red) and is shown as written."""
+    assert edge_style(Row("contradicts", marker)) == EdgeStyle(
+        "kedge-contradicts kedge-unresolved", "dashed", False, label=marker
+    )
+
+
+def test_an_empty_marker_is_unresolved_and_unlabelled() -> None:
+    assert edge_style(Row("contradicts", "")) == EdgeStyle(
+        "kedge-contradicts kedge-unresolved", "dashed", False
+    )
+
+
 @pytest.mark.parametrize(
     "edge_type",
     [known.name for known in KNOWN_KNOWLEDGE_EDGE_TYPES],

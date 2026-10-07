@@ -51,6 +51,7 @@ from typing import Any, Literal
 
 from lithos_lens import metrics
 from lithos_lens.knowledge_edge_evidence import number_or_none
+from lithos_lens.knowledge_edge_types import is_conflict_resolved
 from lithos_lens.telemetry import get_tracer
 
 # Mirror the ``[lithos-lens.knowledge]`` config defaults so a caller with no
@@ -87,9 +88,12 @@ def _utcnow() -> datetime:
 class KnowledgeEdge:
     """One row of the Lithos ``edges`` table, its twelve columns as sent.
 
-    NULL columns stay ``None`` rather than becoming ``""``: a ``None``
-    ``conflict_state`` is exactly how an unresolved contradiction is told
-    apart from a resolved one, and a ``None`` ``evidence`` from an empty one.
+    NULL columns stay ``None`` rather than becoming ``""``, and
+    ``conflict_state`` is kept as stored: a contradiction is resolved only
+    by one of the four ``lithos_conflict_resolve`` values
+    (:func:`is_unresolved_contradiction`), so NULL and any caller-authored
+    marker both read unresolved. A ``None`` ``evidence`` is told apart from
+    an empty one.
     ``evidence`` is kept as the raw JSON string; the panel that shows it
     parses it (``knowledge_edge_evidence.parse_edge_evidence``).
 
@@ -176,13 +180,14 @@ def _index(
 
 
 def is_unresolved_contradiction(edge: KnowledgeEdge) -> bool:
-    """A ``contradicts`` row whose ``conflict_state`` is still NULL.
+    """A ``contradicts`` row not yet settled by ``lithos_conflict_resolve``.
 
-    Lithos writes one of ``accepted_dual`` / ``superseded`` / ``refuted`` /
-    ``merged`` when ``lithos_conflict_resolve`` settles it; all four count as
-    resolved here.
+    That tool writes one of ``accepted_dual`` / ``superseded`` / ``refuted``
+    / ``merged``; only those count as resolved. NULL (as inference writes
+    it) and any marker a caller stored through ``lithos_edge_upsert``
+    (``"unresolved"``, ``""``, ``"pending"``) are unresolved.
     """
-    return edge.type == "contradicts" and edge.conflict_state is None
+    return edge.type == "contradicts" and not is_conflict_resolved(edge.conflict_state)
 
 
 @dataclass(frozen=True)
