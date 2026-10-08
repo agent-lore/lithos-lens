@@ -599,6 +599,28 @@ def test_a_resolved_contradiction_names_its_resolution(
     assert "data-kgraph-resolve-slot" in host
 
 
+def test_created_and_updated_are_each_shown_as_stored(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D7: an edge updated after it was created shows each stamp as stored —
+    the resolved contradiction's resolution came three days later."""
+    row = _row(RESOLVED)
+    assert row["created_at"] != row["updated_at"]
+    query = f"type=contradicts&edge={RESOLVED}"
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, f"{ROUTE}?{query}")
+        fragment = _fragment(client, query, page)
+
+    for panel in (_host(page), fragment):
+        assert f"<dt>Created</dt><dd>{row['created_at']}</dd>" in panel
+        assert f"<dt>Updated</dt><dd>{row['updated_at']}</dd>" in panel
+        provenance = _plain(_first(r"<div data-kgraph-provenance>(.*?)</div>", panel))
+        assert provenance == (
+            f"Provenance inferred by {row['provenance_actor']} · type inferred "
+            f"· actor {row['provenance_actor']}"
+        )
+
+
 def test_a_callers_marker_is_unresolved_shown_as_written(
     lithos_lens_config_env: Path,
 ) -> None:
