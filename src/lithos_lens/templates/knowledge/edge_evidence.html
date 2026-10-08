@@ -1,0 +1,25 @@
+{#-
+  A typed edge's stored evidence (an EdgeEvidence, or none), shared by the
+  note page's "why?" disclosure and the knowledge graph's edge panel: an
+  inference's rationale with its model and confidence chips (missing keys
+  omitted), or the raw string when it is not that JSON — autoescaped text,
+  never markup.
+-#}
+{% macro edge_evidence(evidence) %}
+    {% if evidence and evidence.rationale %}
+      <p class="edge-why-rationale" data-edge-rationale>{{ evidence.rationale }}</p>
+    {% endif %}
+    {% if evidence and (evidence.model or evidence.confidence is not none) %}
+      <div class="edge-why-chips">
+        {% if evidence.model %}
+          <span class="chip" data-edge-model>model {{ evidence.model }}</span>
+        {% endif %}
+        {% if evidence.confidence is not none %}
+          <span class="chip" data-edge-confidence>confidence {{ "%.2f"|format(evidence.confidence) }}</span>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if evidence and evidence.raw %}
+      <p class="edge-why-raw" data-edge-evidence-raw>{{ evidence.raw }}</p>
+    {% endif %}
+{%- endmacro %}

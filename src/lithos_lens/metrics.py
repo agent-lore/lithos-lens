@@ -537,6 +537,28 @@ def knowledge_graph_renders() -> Any:
     )
 
 
+def knowledge_graph_panel_opens() -> Any:
+    """Counter of `/knowledge/graph` node and edge panel renders (K2 D10).
+
+    Labels: ``kind`` in ``node`` | ``edge``, and ``source`` in ``url`` (the
+    page rendered with ``selected=`` / ``edge=``: a deep link, a shared URL,
+    a reload) | ``fragment`` (`/knowledge/graph/panel`, which is what a
+    click fetches). As for ``lens_tasks_panel_opens_total``, the click itself
+    is the client's knowledge; the request is what the server can count.
+
+    Counted once per panel rendered: a "not in this view" answer and an
+    offline fragment are not opens. The note or edge id is never a label —
+    one series per id is the cardinality this module's rule forbids.
+    """
+    return _instrument(
+        "lens_knowledge_graph_panel_opens_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_graph_panel_opens_total",
+            description="Knowledge-graph node and edge panel renders by source.",
+        ),
+    )
+
+
 # ── Task graph (T2) ───────────────────────────────────────────────────
 
 

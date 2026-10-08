@@ -1,4 +1,5 @@
-"""The `/knowledge/graph` page: picker, focus and scoped-global text (K2 S3).
+"""The `/knowledge/graph` page: picker, focus and scoped-global text (K2 S3),
+and its node and edge panels (S5).
 
 Its own module for the reason `graph_routes.py` is: the page's assembly — the
 edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives in
@@ -16,8 +17,13 @@ edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives i
   nothing degraded.
 - **The text is the page** (D12): the template renders the view in the PRD's
   order and embeds the same view as the JSON payload the canvas (S4) draws.
+- **One panel at a time** (D10): ``selected=`` a node's, ``edge=`` an edge's,
+  rendered in the page on a full request and as a fragment from
+  ``/knowledge/graph/panel`` — one assembly (:func:`load_knowledge_graph`)
+  and one partial behind both, so the two cannot differ.
 - **Telemetry**: ``lens.knowledge.graph.*`` attributes on the request span and
-  one counter by mode and outcome; the scope itself is never a label.
+  one counter by mode and outcome; panel opens by kind and source; the scope
+  and the selection are never labels.
 
 Registered as a closure over app, state and templates, the shape `create_app`
 already uses.
@@ -50,18 +56,21 @@ from lithos_lens.knowledge_graph_view import (
     MAX_DEPTH,
     PROVENANCE_GROUPS,
     HiddenEdgeCounts,
+    KnowledgeEdgePanel,
     KnowledgeGraphFilters,
     KnowledgeGraphView,
+    KnowledgeNodePanel,
     edge_entry,
     edge_sections,
+    graph_panel,
     graph_payload,
-    named_edge,
+    node_metadata,
 )
-from lithos_lens.knowledge_metadata import NoteMetadata
-from lithos_lens.state import AppState
+from lithos_lens.state import AppState, HealthSnapshot
 from lithos_lens.telemetry import get_current_span
 
 KNOWLEDGE_GRAPH_PATH = "/knowledge/graph"
+KNOWLEDGE_GRAPH_PANEL_PATH = "/knowledge/graph/panel"
 
 #: The picker's namespace table shows this many rows; the rest are behind a
 #: disclosure (PRD D11).
@@ -164,13 +173,17 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     none, the picker. ``depth`` is 1 or 2, anything else the default;
     ``min_weight`` is clamped to [0, 1], unreadable is the default;
     ``provenance`` is a comma list of known groups, unknown names dropped.
-    ``edge`` and ``selected`` are carried through links as given.
+    ``edge`` and ``selected`` are ids kept as given — one at a time: a
+    request carrying both is read as ``edge`` alone, whatever their order
+    (no link the page writes carries both; :func:`knowledge_graph_url`
+    clears one when it sets the other).
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
     namespace = _value(query, "namespace") or None
     if focus:
         edge_type = namespace = None
+    edge = _value(query, "edge")
     return KnowledgeGraphParams(
         focus=focus,
         type=edge_type,
@@ -178,8 +191,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         depth=_depth(_value(query, "depth").strip()),
         min_weight=_weight(_value(query, "min_weight").strip()),
         provenance=_provenance(_value(query, "provenance")),
-        edge=_value(query, "edge"),
-        selected=_value(query, "selected"),
+        edge=edge,
+        selected="" if edge else _value(query, "selected"),
     )
 
 
@@ -198,6 +211,20 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
     return value or ""
 
 
+def _graph_url(
+    path: str, params: KnowledgeGraphParams | None, changes: dict[str, Any]
+) -> str:
+    # One selection per link (D10): setting one clears the other.
+    if changes.get("edge"):
+        changes["selected"] = ""
+    elif changes.get("selected"):
+        changes["edge"] = ""
+    merged = replace(params or KnowledgeGraphParams(), **changes)
+    pairs = [(key, _url_value(key, merged)) for key in _URL_KEYS]
+    query = urlencode([(key, value) for key, value in pairs if value])
+    return f"{path}?{query}" if query else path
+
+
 def knowledge_graph_url(
     params: KnowledgeGraphParams | None = None, **changes: Any
 ) -> str:
@@ -207,12 +234,19 @@ def knowledge_graph_url(
     the refusal's remedies, every edge entry's ``edge=`` link, and the entry
     points S6 adds all come through here. Defaults are left out, so a link
     does not pin today's configured depth or weight; ``type``/``namespace``
-    are dropped from a focus link, as the parser drops them.
+    are dropped from a focus link, as the parser drops them. A change that
+    sets ``edge`` clears ``selected`` and one that sets ``selected`` clears
+    ``edge``, so a link carries one selection — the later click's.
     """
-    merged = replace(params or KnowledgeGraphParams(), **changes)
-    pairs = [(key, _url_value(key, merged)) for key in _URL_KEYS]
-    query = urlencode([(key, value) for key, value in pairs if value])
-    return f"{KNOWLEDGE_GRAPH_PATH}?{query}" if query else KNOWLEDGE_GRAPH_PATH
+    return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
+
+
+def knowledge_graph_panel_url(
+    params: KnowledgeGraphParams | None = None, **changes: Any
+) -> str:
+    """The same link to the panel fragment: what a click's ``hx-get`` fetches,
+    with the scope and filters carried so the panel's view is the page's."""
+    return _graph_url(KNOWLEDGE_GRAPH_PANEL_PATH, params, changes)
 
 
 def utc_minute(moment: datetime) -> str:
@@ -325,31 +359,86 @@ def _record(
     metrics.knowledge_graph_renders().add(1, {"mode": mode, "outcome": outcome})
 
 
-def focus_metadata(view: KnowledgeGraphView) -> NoteMetadata | None:
-    """The focus note's chips, through K1's ``NoteMetadata`` (S3 D7), so the
-    status slug the chip's class is built from has one definition."""
-    node = view.node(view.focus_id) if view.mode == "focus" else None
-    if node is None or node.facts is None:
-        return None
-    facts = node.facts
-    return NoteMetadata(
-        note_type=facts.note_type,
-        status=facts.status,
-        namespace=facts.namespace,
-        confidence=facts.confidence,
-        lede=facts.lede,
-    )
+def _record_panel(
+    panel: KnowledgeNodePanel | KnowledgeEdgePanel | None,
+    source: Literal["url", "fragment"],
+) -> None:
+    """One panel open by kind and source; nothing when no panel rendered."""
+    if panel is not None:
+        metrics.knowledge_graph_panel_opens().add(
+            1, {"kind": panel.kind, "source": source}
+        )
 
 
-# ── the route ──────────────────────────────────────────────────────────
+# ── the assembly ───────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class KnowledgeGraphLoad:
+    """What one request read: offline (nothing), the picker, or a view."""
+
+    health: HealthSnapshot
+    offline: bool = False
+    picker: KnowledgeGraphPicker | None = None
+    view: KnowledgeGraphView | None = None
+
+
+async def load_knowledge_graph(
+    state: AppState, params: KnowledgeGraphParams, *, picker: bool = True
+) -> KnowledgeGraphLoad:
+    """The page's reads for ``params``, shared by the page and its panel
+    fragment so the two draw the same view (S5 D1).
+
+    Offline, nothing is read. The picker reads only the snapshot (and not at
+    all with ``picker=False``: no panel opens on it). Focus and global modes
+    run the S2 orchestrators, which never raise for a table failure: they
+    answer a refused view instead.
+    """
+    health = await state.refresh_health()
+    if health.lithos != "ok":
+        return KnowledgeGraphLoad(health, offline=True)
+    table = state.edge_table
+    if params.mode == "picker":
+        return KnowledgeGraphLoad(
+            health, picker=await load_picker(table) if picker else None
+        )
+    knowledge = state.config.knowledge
+    filters = params.filters(knowledge.graph_min_weight_default)
+    if params.mode == "focus":
+        view = await assemble_focus_graph(
+            table,
+            state.lithos_client.related,
+            state.note_facts,
+            params.focus,
+            depth=params.depth_or(knowledge.graph_default_depth),
+            filters=filters,
+            max_nodes=knowledge.graph_focus_max_nodes,
+            fanout_cap=knowledge.graph_title_fanout_cap,
+        )
+    else:
+        view = await assemble_global_graph(
+            table,
+            state.note_facts,
+            type=params.type,
+            namespace=params.namespace,
+            filters=filters,
+            max_nodes=knowledge.graph_global_max_nodes,
+            fanout_cap=knowledge.graph_title_fanout_cap,
+        )
+    return KnowledgeGraphLoad(health, view=view)
+
+
+# ── the routes ─────────────────────────────────────────────────────────
 
 
 def register_knowledge_graph_routes(
     app: FastAPI, state: AppState, templates: Jinja2Templates
 ) -> None:
-    """Attach `GET /knowledge/graph` (the picker, focus and scoped-global)."""
+    """Attach `GET /knowledge/graph` (the picker, focus and scoped-global)
+    and `GET /knowledge/graph/panel` (its node and edge panels)."""
 
     templates.env.globals["knowledge_graph_url"] = knowledge_graph_url
+    templates.env.globals["knowledge_graph_panel_url"] = knowledge_graph_panel_url
     templates.env.globals["edge_entry"] = edge_entry
     templates.env.filters["utc_minute"] = utc_minute
     templates.env.filters["is_conflict_resolved"] = is_conflict_resolved
@@ -358,27 +447,28 @@ def register_knowledge_graph_routes(
     async def knowledge_graph(request: Request) -> HTMLResponse:
         """The knowledge graph as text, with its payload for the canvas.
 
-        Offline, the page says so and reads nothing. The picker reads only
-        the snapshot. Focus and global modes run the S2 orchestrators, which
-        never raise for a table failure: they answer a refused view instead,
-        and the page renders its message and remedy in place of the graph.
+        Offline, the page says so and reads nothing. A refused view renders
+        its message and remedy in place of the graph. A drawn view renders
+        the panel ``selected=`` / ``edge=`` names when it draws that node or
+        typed edge, and no panel otherwise.
         """
         params = parse_knowledge_graph_params(request.query_params)
         mode = params.mode
         knowledge = state.config.knowledge
-        health = await state.refresh_health()
+        load = await load_knowledge_graph(state, params)
         context: dict[str, Any] = {
             "config": state.config,
-            "health": health,
+            "health": load.health,
             "active_view": "knowledge",
             "params": params,
             "mode": mode,
-            "offline": health.lithos != "ok",
+            "offline": load.offline,
             "picker": None,
             "view": None,
+            "panel": None,
         }
         table = state.edge_table
-        if health.lithos != "ok":
+        if load.offline:
             # The age is the holder's own clock: no read is started for it.
             _record(
                 mode,
@@ -387,42 +477,23 @@ def register_knowledge_graph_routes(
                 depth=params.depth_or(knowledge.graph_default_depth),
             )
             return templates.TemplateResponse(request, "knowledge/graph.html", context)
-        if mode == "picker":
-            picker = await load_picker(table)
-            context["picker"] = picker
-            outcome, reason = _outcome(None, picker)
+        view = load.view
+        if view is None:  # the picker
+            context["picker"] = load.picker
+            outcome, reason = _outcome(None, load.picker)
             _record(mode, outcome, refusal=reason, snapshot_age_s=table.age_seconds())
             return templates.TemplateResponse(request, "knowledge/graph.html", context)
-        filters = params.filters(knowledge.graph_min_weight_default)
-        if mode == "focus":
-            view = await assemble_focus_graph(
-                table,
-                state.lithos_client.related,
-                state.note_facts,
-                params.focus,
-                depth=params.depth_or(knowledge.graph_default_depth),
-                filters=filters,
-                max_nodes=knowledge.graph_focus_max_nodes,
-                fanout_cap=knowledge.graph_title_fanout_cap,
-            )
-        else:
-            view = await assemble_global_graph(
-                table,
-                state.note_facts,
-                type=params.type,
-                namespace=params.namespace,
-                filters=filters,
-                max_nodes=knowledge.graph_global_max_nodes,
-                fanout_cap=knowledge.graph_title_fanout_cap,
-            )
+        focus_node = view.node(view.focus_id) if view.mode == "focus" else None
+        panel = graph_panel(view, selected=params.selected, edge=params.edge)
         context.update(
             view=view,
             sections=edge_sections(view),
-            named_edge=named_edge(view, params.edge),
-            focus_node=view.node(view.focus_id) if view.mode == "focus" else None,
-            focus_meta=focus_metadata(view),
+            focus_node=focus_node,
+            focus_meta=node_metadata(focus_node),
             payload=graph_payload(view),
+            panel=panel,
         )
+        _record_panel(panel, "url")
         outcome, reason = _outcome(view, None)
         _record(
             mode,
@@ -432,3 +503,34 @@ def register_knowledge_graph_routes(
             snapshot_age_s=table.age_seconds(),
         )
         return templates.TemplateResponse(request, "knowledge/graph.html", context)
+
+    @app.get(KNOWLEDGE_GRAPH_PANEL_PATH, response_class=HTMLResponse)
+    async def knowledge_graph_panel(request: Request) -> HTMLResponse:
+        """The panel ``selected=`` / ``edge=`` names, as a fragment.
+
+        The page's own reads for the same scope and filters (the view the
+        click was made on), rendered through the partial the page includes,
+        so the fragment equals the page's panel. Anything that is not a
+        drawn node or typed edge — the picker, a refused view, an id the
+        view does not draw — answers 200 with a one-line "Not in this view"
+        panel, and offline "Lithos is offline" with nothing read: htmx swaps
+        a 200 and would drop a 4xx. Not a page render: the renders counter
+        is not touched, and only a panel that renders counts as an open.
+        """
+        params = parse_knowledge_graph_params(request.query_params)
+        load = await load_knowledge_graph(state, params, picker=False)
+        panel = None
+        if load.view is not None:
+            panel = graph_panel(load.view, selected=params.selected, edge=params.edge)
+        _record_panel(panel, "fragment")
+        notice = "Lithos is offline." if load.offline else "Not in this view."
+        return templates.TemplateResponse(
+            request,
+            "knowledge/graph_panel.html",
+            {
+                "config": state.config,
+                "params": params,
+                "panel": panel,
+                "panel_notice": notice,
+            },
+        )

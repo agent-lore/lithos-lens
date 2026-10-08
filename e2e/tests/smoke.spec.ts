@@ -2134,3 +2134,36 @@ test("every fact in the Children table is on screen at 320px", async ({
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(width);
 });
+
+test("a knowledge graph edge click swaps its panel in and the URL carries it", async ({
+  page,
+}) => {
+  // K2 D10: the text baseline's edge link is a plain href that htmx turns
+  // into a fetch of the panel fragment, swapped into the panel host, with
+  // the address bar following — and a later click replaces the selection.
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  const host = page.locator("#kgraph-panel");
+  await expect(host.locator("[data-kgraph-panel]")).toHaveCount(0);
+  const fragment = page.waitForResponse((response) =>
+    response.url().includes("/knowledge/graph/panel?"),
+  );
+  await page
+    .locator('[data-kgraph-edge="edge_a07c5f3e18b2"] .kgraph-edge-link')
+    .click();
+  await fragment;
+  await expect(host.locator('[data-kgraph-panel="edge"]')).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_a07c5f3e18b2",
+  );
+  await expect(page).toHaveURL(/[?&]edge=edge_a07c5f3e18b2(&|$)/);
+  // A card's Node details: the node panel replaces the edge panel.
+  await host
+    .locator('[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]')
+    .click();
+  await expect(host.locator('[data-kgraph-panel="node"]')).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "note-influx-legacy-ingest",
+  );
+  await expect(page).toHaveURL(/[?&]selected=note-influx-legacy-ingest(&|$)/);
+  expect(page.url()).not.toContain("edge=");
+});

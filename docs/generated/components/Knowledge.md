@@ -13,11 +13,11 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 |---|---|---:|---:|
 | `lithos_lens.knowledge` | L | 7 | 7 |
 | `lithos_lens.knowledge_edge_evidence` | S | 2 | 4 |
-| `lithos_lens.knowledge_edge_types` | S | 4 | 5 |
+| `lithos_lens.knowledge_edge_types` | M | 5 | 7 |
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_facts` | M | 5 | 2 |
 | `lithos_lens.knowledge_graph` | M | 1 | 8 |
-| `lithos_lens.knowledge_graph_view` | M | 10 | 8 |
+| `lithos_lens.knowledge_graph_view` | L | 12 | 12 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
@@ -53,10 +53,13 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 
 ### `lithos_lens.knowledge_edge_types`
 - def `is_conflict_resolved` — Whether ``conflict_state`` records a completed resolution.
+- def `conflict_state_label` — A ``contradicts`` row's state in plain language: its resolution's label, else "Unresolved" — NULL and a caller's marker alike.
 - class `EdgeDirection` — How an edge's two endpoints relate.
 - class `KnownEdgeType` — One row of the known-type table (K2 PRD D5).
 - class `EdgeStyle` — How one edge row draws: the class, the stroke, the arrowhead, a label.
 - class `LegendLine` — One legend entry: a type present in the drawn graph and what it means.
+- class `RelationPhrase` — How one edge reads as a sentence: "A {joiner} B{tail}".
+- def `relation_phrase` — The sentence ``edge_type`` reads as (K2 PRD D10): directed types say who does what to whom, symmetric ones say it of both, and an unknown type is its raw name with "(direction as recorded)".
 - def `known_edge_type` — The table row for ``name``, or ``None`` for a type Lens does not know.
 - def `direction_of` — The edge's direction: the table's for a known type, as recorded otherwise.
 - def `edge_style` — How ``edge`` draws (K2 PRD D5).
@@ -110,6 +113,12 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `edge_entry` — How ``edge`` reads in ``view``'s text: arrow, ends, and — at the focus — the node at the other end.
 - def `edge_sections` — The typed edges, one section per type in legend (D5) order.
 - def `named_edge` — The typed edge ``edge=`` names when the view draws it, else ``None``.
+- def `node_metadata` — A node's chips and lede through K1's ``NoteMetadata`` (S3 D7), so the status slug the chip's class is built from has one definition. ``None`` for a node with no facts: a ghost, or a node not read for this view.
+- class `KnowledgeNodePanel` — The node panel: one drawn note, its chips, and its relations in view.
+- class `KnowledgeEdgePanel` — The edge panel: one drawn typed edge, its row, and both endpoints.
+- def `node_panel` — The panel for ``node_id`` when the view draws it, else ``None``.
+- def `edge_panel` — The panel for the typed edge ``edge_id`` names when drawn, else ``None``.
+- def `graph_panel` — The one panel a request selects: ``edge`` when given (it wins over ``selected``, S5 S1), else ``selected``; ``None`` when not drawn.
 - def `graph_payload` — The JSON-ready payload the canvas draws from: the view's nodes and edges, legend, hidden counts, refusal and ``as_of``, nothing more.
 
 ### `lithos_lens.knowledge_landing`

@@ -12,14 +12,17 @@ from dataclasses import dataclass
 import pytest
 
 from lithos_lens.knowledge_edge_types import (
+    CONFLICT_RESOLUTIONS,
     KNOWN_KNOWLEDGE_EDGE_TYPES,
     UNKNOWN_EDGE_CSS_CLASS,
     EdgeDirection,
     EdgeStyle,
+    conflict_state_label,
     direction_of,
     edge_style,
     known_edge_type,
     legend,
+    relation_phrase,
 )
 
 
@@ -157,3 +160,70 @@ def test_unknown_types_follow_the_known_ones_by_name_and_empty_is_empty() -> Non
         "zeta",
     ]
     assert legend([]) == ()
+
+
+# ── the edge panel's wording (K2 D10) ─────────────────────────────────
+
+# (type, "A … B" as the edge panel reads it) — directed types say who does
+# what to whom; symmetric ones say it of both.
+PHRASES = [
+    ("supports", "A supports B"),
+    ("related_to", "A and B are related"),
+    ("analogy_to", "A and B are analogous"),
+    ("refines", "A refines B"),
+    ("is_example_of", "A is an example of B"),
+    ("depends_on", "A depends on B"),
+    ("derived_from", "A is derived from B"),
+    ("contradicts", "A and B contradict each other"),
+]
+
+
+def _sentence(edge_type: str) -> str:
+    phrase = relation_phrase(edge_type)
+    return f"A {phrase.joiner} B{phrase.tail}"
+
+
+@pytest.mark.parametrize(("edge_type", "sentence"), PHRASES)
+def test_each_known_type_reads_as_its_sentence(edge_type: str, sentence: str) -> None:
+    assert _sentence(edge_type) == sentence
+
+
+def test_every_known_type_has_a_sentence_and_symmetric_ones_name_both() -> None:
+    assert [name for name, _ in PHRASES] == [
+        known.name for known in KNOWN_KNOWLEDGE_EDGE_TYPES
+    ]
+    for known in KNOWN_KNOWLEDGE_EDGE_TYPES:
+        symmetric = known.direction is EdgeDirection.SYMMETRIC
+        assert _sentence(known.name).startswith("A and B") is symmetric
+
+
+def test_an_unknown_type_reads_as_recorded() -> None:
+    assert _sentence("assesses") == "A assesses B (direction as recorded)"
+
+
+@pytest.mark.parametrize(
+    ("state", "label"),
+    [
+        (None, "Unresolved"),
+        ("", "Unresolved"),
+        ("pending", "Unresolved"),
+        ("unresolved", "Unresolved"),
+        ("accepted_dual", "Resolved: both notes accepted"),
+        ("superseded", "Resolved: one note supersedes the other"),
+        ("refuted", "Resolved: refuted"),
+        ("merged", "Resolved: merged"),
+    ],
+)
+def test_a_conflict_state_reads_in_plain_language(
+    state: str | None, label: str
+) -> None:
+    assert conflict_state_label(state) == label
+
+
+def test_every_resolution_has_a_label() -> None:
+    labelled = {
+        state
+        for state in CONFLICT_RESOLUTIONS
+        if conflict_state_label(state) != "Unresolved"
+    }
+    assert labelled == CONFLICT_RESOLUTIONS

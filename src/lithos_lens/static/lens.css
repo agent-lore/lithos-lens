@@ -2047,7 +2047,6 @@ button,
 }
 
 .kgraph-as-of,
-.kgraph-named-edge,
 .kgraph-count,
 .kgraph-weight,
 .kgraph-namespace,
@@ -2183,6 +2182,101 @@ button,
 
 .kgraph-rationale {
   font-style: italic;
+}
+
+/* --- /knowledge/graph panels (K2 D10) ------------------------------------ */
+
+/* The host takes no grid row while it holds nothing (no `selected=` /
+   `edge=`, or one the view does not draw). */
+.kgraph-panel-host:empty {
+  display: none;
+}
+
+.kgraph-panel h2 {
+  font-size: 1.1rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.kgraph-panel h4 {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
+.kgraph-panel ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+/* A contradiction's state leads the edge panel, in the queue's colours. */
+.kgraph-conflict-state {
+  margin: 0;
+}
+
+.kgraph-fields {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+
+.kgraph-fields div {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.kgraph-fields dt {
+  color: var(--muted);
+}
+
+.kgraph-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.kgraph-evidence h3 {
+  font-size: 0.95rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+/* The endpoint cards: stacked, and for a contradiction side by side from the
+   stylesheet's two-column breakpoint up (the note page's `min-width: 701px`). */
+.kgraph-cards {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 1rem;
+}
+
+@media (min-width: 701px) {
+  .kgraph-cards-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.kgraph-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.kgraph-card h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.kgraph-card-links {
+  margin: 0.5rem 0 0;
+}
+
+/* Where the deferred pool's "Resolve…" action will sit: reserved, and saying
+   so, with no form behind it. */
+.kgraph-resolve-slot {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  margin: 1rem 0 0;
+  padding: 0.75rem;
 }
 
 .resolve-panel {

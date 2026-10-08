@@ -560,9 +560,10 @@ def test_type_and_namespace_are_matched_as_stored_and_ids_carried_unchanged(
     assert _payload(page)["scope"]["namespace"] == " influx "
 
     params = parse_knowledge_graph_params(
-        {"type": " supports", "edge": " e ", "selected": "n ", "focus": ""}
+        {"type": " supports", "edge": " e ", "focus": ""}
     )
-    assert (params.type, params.edge, params.selected) == (" supports", " e ", "n ")
+    assert (params.type, params.edge) == (" supports", " e ")
+    assert parse_knowledge_graph_params({"selected": "n "}).selected == "n "
     blank = parse_knowledge_graph_params({"namespace": "  ", "depth": " 2 "})
     assert (blank.mode, blank.depth) == ("picker", 2)
 
