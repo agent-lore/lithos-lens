@@ -334,10 +334,10 @@
         "functions": 191,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 880,
-        "lines": 5973,
+        "lines": 5983,
         "modules": 11,
         "public_symbols": 77,
-        "sloc": 4832
+        "sloc": 4841
       },
       "Writes": {
         "classes": 25,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 35684,
+    "total_lines": 35694,
     "total_modules": 86,
-    "total_sloc": 27714
+    "total_sloc": 27723
   },
   "tests": {
     "ratio": 1.91,
-    "src_lines": 35684,
-    "test_lines": 68279
+    "src_lines": 35694,
+    "test_lines": 68348
   }
 }

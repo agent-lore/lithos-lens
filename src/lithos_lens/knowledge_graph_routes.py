@@ -174,7 +174,11 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     A blank value is absent. A non-blank ``focus`` is focus mode and the
     ``type``/``namespace`` scope is dropped; otherwise either of those (exact
     strings — a type or namespace is matched as stored) is global mode; with
-    none, the picker. ``depth`` is 1 or 2, anything else the default;
+    none, the picker. ``depth`` is 1 or 2, anything else the default, and
+    is kept in focus mode only — elsewhere it draws nothing, the URL builder
+    leaves it out, and so must every panel built from the request (a node
+    panel's "Centre on this" reads it), or a page and its own fragment would
+    word that link differently;
     ``min_weight`` is clamped to [0, 1], unreadable is the default;
     ``provenance`` is a comma list of known groups, unknown names dropped.
     ``edge`` and ``selected`` are ids kept as given — one at a time: a
@@ -192,7 +196,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         focus=focus,
         type=edge_type,
         namespace=namespace,
-        depth=_depth(_value(query, "depth").strip()),
+        depth=_depth(_value(query, "depth").strip()) if focus else None,
         min_weight=_weight(_value(query, "min_weight").strip()),
         provenance=_provenance(_value(query, "provenance")),
         edge=edge,
@@ -620,6 +624,12 @@ def register_knowledge_graph_routes(
                 return response
         else:
             load = await load_knowledge_graph(state, params, picker=False)
+            if load.offline:
+                # The assembly's own probe may be the one that saw the outage.
+                context["panel_notice"] = "Lithos is offline."
+                return templates.TemplateResponse(
+                    request, "knowledge/graph_panel.html", context
+                )
             view = load.view
             if view is not None and view.refusal is None:
                 context["render_id"] = views.keep(params, view)

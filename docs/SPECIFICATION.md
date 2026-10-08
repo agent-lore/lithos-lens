@@ -1518,7 +1518,8 @@ writes every link into it:
   picker's own links send it so). A non-blank `focus` is **focus mode**
   (`type` and `namespace` are then ignored); otherwise `type` and/or
   `namespace` is **scoped global** mode; with none, the **scope picker**
-- `depth` is 1 or 2, anything else `knowledge.graph_default_depth`;
+- `depth` is 1 or 2, anything else `knowledge.graph_default_depth`, and is
+  read in focus mode only (elsewhere it draws nothing and links leave it out);
   `min_weight` is clamped to [0, 1], unreadable is
   `knowledge.graph_min_weight_default`; `provenance` is a comma list of the
   groups `inferred`, `reinforced`, `declared`, `other`, unknown names dropped,
@@ -1618,7 +1619,8 @@ them — so a `depth` that means nothing outside focus mode cannot hide it),
 the page's panel host carries it (`data-kgraph-render`) and every panel
 link's `hx-get` ends with `render=<id>`; the `href` and the pushed URL never
 carry it. The fragment checks Lithos's health first, as the page does:
-offline it answers "Lithos is offline" with nothing read, whatever it names.
+offline it answers "Lithos is offline" with nothing read, whatever it names —
+and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
 since. A render id no longer held (evicted, or lost to a restart) is never

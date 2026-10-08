@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -856,6 +857,71 @@ def test_a_render_outside_focus_mode_is_found_whatever_depth_the_page_had(
 
     assert fake.data_reads == []
     assert fragment == _host(page)
+
+
+def test_a_global_node_panel_and_its_click_chain_word_centre_alike(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-002: depth draws nothing outside focus mode and the page's links leave
+    it out, so the parser drops it too: the full page's node panel and the
+    same panel reached by its own edge → Node details clicks are one panel,
+    "Centre on this" included."""
+    query = f"type=contradicts&depth=2&selected={PLAN}"
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, f"{ROUTE}?{query}")
+        edge_link = _link(
+            _first(rf'data-kgraph-edge="{RESOLVED}">(.*?)</li>', page),
+            'class="kgraph-edge-link"',
+        )
+        edge_fragment = _get(client, _attr(edge_link, "hx-get")).strip()
+        details = _link(_card(edge_fragment, PLAN), "data-kgraph-node-details")
+        node_fragment = _get(client, _attr(details, "hx-get")).strip()
+
+    centre = r'<a href="([^"]+)" data-kgraph-centre>Centre on this</a>'
+    assert _first(centre, _host(page)) == f"{ROUTE}?focus={PLAN}"
+    assert _first(centre, node_fragment) == f"{ROUTE}?focus={PLAN}"
+    assert node_fragment == _host(page)
+
+
+def test_depth_is_dropped_outside_focus_mode() -> None:
+    assert parse_knowledge_graph_params({"type": "x", "depth": "2"}).depth is None
+    assert parse_knowledge_graph_params({"focus": PLAN, "depth": "2"}).depth == 2
+
+
+class _FlakyHealth(_ReadRecorder):
+    """Healthy for ``ok_probes`` more probes once armed, then unreachable."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ok_probes: int | None = None
+
+    async def health(self) -> Any:
+        if self.ok_probes is None:
+            return "ok"
+        if self.ok_probes > 0:
+            self.ok_probes -= 1
+            return "ok"
+        return "unreachable"
+
+
+def test_an_outage_the_assemblys_own_probe_sees_is_offline(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """f-004: a fragment with no render id probes health, then the shared
+    assembly probes again; when only that second probe sees Lithos gone, the
+    answer is still "Lithos is offline", not "Not in this view"."""
+    fake = _FlakyHealth()
+    with _client(lithos_lens_config_env, fake) as client:
+        start = time.monotonic() + 100
+        clock = (start + 100 * step for step in range(1_000))  # every probe due
+        monkeypatch.setattr("lithos_lens.state.monotonic", lambda: next(clock))
+        fake.ok_probes = 1
+        fake.data_reads.clear()
+        fragment = _get(client, f"{PANEL}?focus={PLAN}&selected={PLAN}")
+
+    assert fake.ok_probes == 0  # the first probe was healthy
+    assert _plain(fragment) == "Lithos is offline."
+    assert fake.data_reads == []
 
 
 def _evicted(client: TestClient, page: str, query: str) -> Any:
