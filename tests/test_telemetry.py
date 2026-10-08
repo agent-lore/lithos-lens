@@ -258,16 +258,27 @@ def test_a_request_produces_no_incidental_spans(
     `GET /note/{knowledge_id} http send` was being tracked alongside the route
     itself. Found against the live stack, not in this suite.
 
-    Asserted by NAME rather than by count, because one deliberate child span
-    exists: `lens.knowledge.related` is a phase within the note render with its
-    own backend calls, so it earns a name (see `knowledge_routes`). A count
-    assertion could not tell that apart from the noise this guards against.
+    Asserted by NAME rather than by count, because deliberate child spans
+    exist: `lens.knowledge.related` is a phase within the note render with its
+    own backend calls, so it earns a name (see `knowledge_routes`), and so is
+    `lens.knowledge.edge_table` — the snapshot fetch the contradiction banner
+    reads (K2 D13) — on the render that finds the table cold, and only then:
+    a warm snapshot answers from memory. A count assertion could not tell
+    those apart from the noise this guards against.
     """
     with _client(lithos_lens_config_env) as client:
         assert client.get(f"/note/{DEMO_NOTE_ID}").status_code == 200
+        cold = sorted(span.name for span in spans.get_finished_spans())
+        spans.clear()
+        assert client.get(f"/note/{DEMO_NOTE_ID}").status_code == 200
+        warm = sorted(span.name for span in spans.get_finished_spans())
 
-    names = sorted(span.name for span in spans.get_finished_spans())
-    assert names == ["GET /note/{knowledge_id}", "lens.knowledge.related"], names
+    assert cold == [
+        "GET /note/{knowledge_id}",
+        "lens.knowledge.edge_table",
+        "lens.knowledge.related",
+    ], cold
+    assert warm == ["GET /note/{knowledge_id}", "lens.knowledge.related"], warm
 
 
 def test_health_and_static_are_not_traced(
