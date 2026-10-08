@@ -138,6 +138,22 @@ DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S = 300
 MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S = 3600
 DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES = 50_000
 MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES = 500_000
+# The focus (ego) graph (K2 D3, D4): its node cap — over it the scope is refused
+# with a remedy, never drawn unreadably — the depth a focus opens at (1 or 2;
+# there is no depth 3), and the note facts cache behind every node: its TTL,
+# and how many lithos_read(max_length=1) calls one render may spend. The cap's
+# ceiling matches the task graph's (MAX_GRAPH_INT_KNOBS["max_tasks"]); the
+# facts TTL's is a day, past which events alone would be keeping titles
+# honest; the read cap's is the node ceiling, since a render reads at most
+# one note per node.
+DEFAULT_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES = 250
+MAX_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES = 2000
+DEFAULT_KNOWLEDGE_GRAPH_DEFAULT_DEPTH = 1
+MAX_KNOWLEDGE_GRAPH_DEFAULT_DEPTH = 2
+DEFAULT_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S = 3600
+MAX_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S = 86_400
+DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP = 300
+MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP = 2000
 
 # ── [lithos-lens.graph] — task dependency graph pages (§5.7) ───────────
 DEFAULT_GRAPH_CACHE_TTL_S = 30
@@ -310,6 +326,16 @@ class KnowledgeConfig:
     # A fetched edge table with more rows than this is not held; only
     # type=/namespace=-filtered reads are served (K2 D2).
     graph_edge_table_max_edges: int = DEFAULT_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES
+    # A focus graph with more nodes than this is refused, naming the depth or
+    # weight filter that would bring it under (K2 D3).
+    graph_focus_max_nodes: int = DEFAULT_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES
+    # The depth a focus graph opens at: 1 or 2 hops of typed edges (K2 D3).
+    graph_default_depth: int = DEFAULT_KNOWLEDGE_GRAPH_DEFAULT_DEPTH
+    # Seconds a note's graph facts (title, type, status, namespace,
+    # confidence, lede) are served before the next draw re-reads them (K2 D4).
+    graph_note_facts_ttl_s: int = DEFAULT_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S
+    # lithos_read(max_length=1) calls one graph render may spend (K2 D4).
+    graph_title_fanout_cap: int = DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP
 
 
 @dataclass(frozen=True)

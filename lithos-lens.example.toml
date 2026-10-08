@@ -92,6 +92,10 @@ intake_path_prefixes = ["articles/", "papers/", "digests/"]
 tags_page_limit = 500           # /knowledge/tags rows before "N more — narrow the filter" (1-5000)
 graph_edge_table_ttl_s = 300    # knowledge graph edge-table snapshot staleness bound, seconds (1-3600)
 graph_edge_table_max_edges = 50000  # edge table refused above this; filtered reads only (1-500000)
+graph_focus_max_nodes = 250     # focus graph refused above this many notes, naming a remedy (1-2000)
+graph_default_depth = 1         # hops of typed edges a focus graph opens at (1-2)
+graph_note_facts_ttl_s = 3600   # graph node facts (title, type, status, lede…) cache TTL, seconds (1-86400)
+graph_title_fanout_cap = 300    # lithos_read calls per graph render for node facts (1-2000)
 
 [lithos-lens.events]
 enabled = true

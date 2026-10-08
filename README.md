@@ -181,6 +181,10 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_KNOWLEDGE_INTAKE_PATH_PREFIXES` | `lithos-lens.knowledge.intake_path_prefixes` | Comma-separated path prefixes, no blank entries. A note under one is intake on the `/knowledge` landing (as is one tagged `ingested-by:*`). Set it to the empty string for the empty list (only the tag marks intake). |
 | `LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S` | `lithos-lens.knowledge.graph_edge_table_ttl_s` | Integer 1-3600 (same bounds as the TOML key). Staleness bound on the knowledge graph's edge-table snapshot. |
 | `LITHOS_LENS_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES` | `lithos-lens.knowledge.graph_edge_table_max_edges` | Integer 1-500000 (same bounds as the TOML key). An edge table over it is not held; only `type=`/`namespace=`-filtered reads are served. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES` | `lithos-lens.knowledge.graph_focus_max_nodes` | Integer 1-2000 (same bounds as the TOML key). A focus graph with more nodes is refused, naming the depth or weight filter that would bring it under. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH` | `lithos-lens.knowledge.graph_default_depth` | Integer 1-2 (same bounds as the TOML key). Hops of typed edges a focus graph opens at. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S` | `lithos-lens.knowledge.graph_note_facts_ttl_s` | Integer 1-86400 (same bounds as the TOML key). Seconds a graph node's note facts are served before the next draw re-reads them. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.graph_title_fanout_cap` | Integer 1-2000 (same bounds as the TOML key). `lithos_read` calls one graph render may spend on node facts; nodes past it are labelled by id. |
 | `LITHOS_LENS_GRAPH_CACHE_TTL_S` | `lithos-lens.graph.cache_ttl_s` | Must be a positive integer. Staleness bound on the per-task edge cache. |
 | `LITHOS_LENS_GRAPH_MAX_TASKS` | `lithos-lens.graph.max_tasks` | Integer 1-2000 (same bounds as the TOML key). Ghosts count toward it. |
 | `LITHOS_LENS_GRAPH_FETCH_CONCURRENCY` | `lithos-lens.graph.fetch_concurrency` | Integer 1-64 (same bounds as the TOML key). |
