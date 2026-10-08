@@ -2029,6 +2029,162 @@ button,
   margin: 0;
 }
 
+/* --- /knowledge/graph (K2 D11, D12): the text baseline ------------------ */
+
+/* One column of panels, bounded like `.knowledge-landing` so a long title in
+   an edge entry wraps instead of widening the page. */
+.kgraph-page,
+.kgraph-picker {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.kgraph-scope p,
+.kgraph-as-of,
+.kgraph-contradictions {
+  margin: 0;
+}
+
+.kgraph-as-of,
+.kgraph-named-edge,
+.kgraph-count,
+.kgraph-weight,
+.kgraph-namespace,
+.kgraph-empty,
+.kgraph-note {
+  color: var(--muted);
+}
+
+.kgraph-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.kgraph-count {
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.kgraph-contradictions a {
+  font-weight: 700;
+}
+
+/* The picker's two facet tables, side by side when there is room. */
+.kgraph-facets {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.kgraph-facet-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.kgraph-facet-table th,
+.kgraph-facet-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  text-align: left;
+}
+
+.kgraph-facet-table td:last-child,
+.kgraph-facet-table th:last-child {
+  text-align: right;
+}
+
+.kgraph-more summary {
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+
+.kgraph-scope-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: end;
+}
+
+/* The "narrow your scope" panel: a refusal is a warning, not an error. */
+.kgraph-refusal {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.kgraph-legend dl {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.kgraph-legend-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.kgraph-legend-row dd {
+  margin: 0;
+}
+
+.kgraph-focus-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.kgraph-lede {
+  margin: 0.5rem 0 0;
+}
+
+.kgraph-edges ul,
+.kgraph-layers ul,
+.kgraph-missing ul,
+.kgraph-hidden ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.kgraph-type h3,
+.kgraph-layer-group h3 {
+  margin: 0.75rem 0 0;
+  font-size: 0.95rem;
+}
+
+.kgraph-edge-link {
+  text-decoration: none;
+  font-weight: 700;
+}
+
+/* A missing note: its short id, dashed like the canvas will draw it. */
+.kgraph-ghost {
+  border: 1px dashed var(--muted);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.kgraph-mark {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+/* The contradictions queue: unresolved in the accent, resolved muted. */
+.kgraph-unresolved {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.kgraph-resolution {
+  color: var(--muted);
+}
+
+.kgraph-rationale {
+  font-style: italic;
+}
+
 .resolve-panel {
   margin-top: 1rem;
   padding: 1.5rem;

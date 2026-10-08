@@ -154,6 +154,15 @@ DEFAULT_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S = 3600
 MAX_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S = 86_400
 DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP = 300
 MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP = 2000
+# The scoped-global graph (K2 D11): ``type=`` / ``namespace=`` scopes are
+# refused above this many notes, with the same ceiling as the focus cap; and
+# the weight below which typed edges are hidden by default (D6) — a weight is
+# in [0, 1], so those are its bounds.
+DEFAULT_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES = 500
+MAX_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES = 2000
+DEFAULT_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT = 0.1
+MIN_KNOWLEDGE_GRAPH_MIN_WEIGHT = 0.0
+MAX_KNOWLEDGE_GRAPH_MIN_WEIGHT = 1.0
 
 # ── [lithos-lens.graph] — task dependency graph pages (§5.7) ───────────
 DEFAULT_GRAPH_CACHE_TTL_S = 30
@@ -336,6 +345,12 @@ class KnowledgeConfig:
     graph_note_facts_ttl_s: int = DEFAULT_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S
     # lithos_read(max_length=1) calls one graph render may spend (K2 D4).
     graph_title_fanout_cap: int = DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP
+    # A type=/namespace= graph with more nodes than this is refused, naming
+    # the weight filter that would bring it under (K2 D11).
+    graph_global_max_nodes: int = DEFAULT_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES
+    # Typed edges below this weight are hidden unless min_weight= says
+    # otherwise; the page states how many (K2 D6).
+    graph_min_weight_default: float = DEFAULT_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT
 
 
 @dataclass(frozen=True)

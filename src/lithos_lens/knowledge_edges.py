@@ -272,8 +272,8 @@ EdgeTableState = EdgeTableSnapshot | EdgeTableRefusal
 class EdgeTable:
     """The process's edge-table snapshot: TTL, single-flight, bound, patches.
 
-    Not constructed on ``AppState`` yet — the first consumer (the graph page)
-    wires it in, with the hub's ``edge.upserted`` feed.
+    One per process, on ``AppState.edge_table``; the hub's ``edge.upserted``
+    feed is wired to :meth:`apply_upsert` with the knowledge events (S7).
     """
 
     def __init__(

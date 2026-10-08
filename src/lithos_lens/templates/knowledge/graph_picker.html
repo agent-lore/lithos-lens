@@ -1,0 +1,75 @@
+{#-
+  The scope picker (K2 D11, story 17): edge types and namespaces with their
+  counts from the snapshot's facets, and the unresolved contradictions as a
+  link to their queue. With no facets — the table over its bound, or not
+  readable — it says so and offers only a typed-in scope.
+-#}
+<section class="kgraph-picker" data-kgraph-picker>
+  {% if picker.unavailable %}
+    <section class="banner banner-warning" role="status" data-picker-unavailable>
+      <span>The knowledge edge table could not be read, so there are no counts to pick from. Type a scope instead; Lens will retry on refresh.</span>
+    </section>
+  {% elif picker.refused is not none %}
+    <section class="banner banner-warning" role="status" data-picker-refused>
+      <span>Graph too large to index: {{ picker.refused.row_count }} edges over the {{ picker.refused.max_edges }} bound. Only a typed-in edge type or namespace can be drawn.</span>
+    </section>
+  {% else %}
+    {% if picker.as_of is not none %}
+      <p class="kgraph-as-of" data-kgraph-as-of="{{ picker.as_of.isoformat() }}">
+        Edge table as of {{ picker.as_of | utc_minute }}; may be up to {{ config.knowledge.graph_edge_table_ttl_s }} s stale
+        {%- if picker.stale %} — the last refresh failed{% endif %}.
+      </p>
+    {% endif %}
+    <p class="kgraph-contradictions" data-picker-contradictions>
+      <a href="{{ knowledge_graph_url(type='contradicts') }}">{{ picker.facets.unresolved_contradictions }} unresolved contradiction{{ "" if picker.facets.unresolved_contradictions == 1 else "s" }}</a>
+    </p>
+    <div class="kgraph-facets">
+      <section class="panel" data-picker-types>
+        <h2>Edge types</h2>
+        {% if picker.facets.types %}
+          <table class="kgraph-facet-table">
+            <thead><tr><th scope="col">Type</th><th scope="col">Edges</th></tr></thead>
+            <tbody>
+              {% for name, count in picker.facets.types.items() %}
+                <tr><td><a href="{{ knowledge_graph_url(type=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="kgraph-empty">No edges yet.</p>
+        {% endif %}
+      </section>
+      <section class="panel" data-picker-namespaces>
+        <h2>Namespaces</h2>
+        {% if picker.top_namespaces %}
+          <table class="kgraph-facet-table">
+            <thead><tr><th scope="col">Namespace</th><th scope="col">Edges</th></tr></thead>
+            <tbody>
+              {% for name, count in picker.top_namespaces %}
+                <tr><td><a href="{{ knowledge_graph_url(namespace=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if picker.more_namespaces %}
+            <details class="kgraph-more" data-picker-more-namespaces>
+              <summary>{{ picker.more_namespaces | length }} more namespaces</summary>
+              <table class="kgraph-facet-table">
+                <tbody>
+                  {% for name, count in picker.more_namespaces %}
+                    <tr><td><a href="{{ knowledge_graph_url(namespace=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          {% endif %}
+        {% else %}
+          <p class="kgraph-empty">No edges yet.</p>
+        {% endif %}
+      </section>
+    </div>
+  {% endif %}
+  <section class="panel">
+    <h2>Type a scope</h2>
+    {% include "knowledge/graph_scope_form.html" %}
+  </section>
+</section>

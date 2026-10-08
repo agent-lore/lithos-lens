@@ -23,6 +23,8 @@ import pytest
 from lithos_lens.config import (
     DEFAULT_KNOWLEDGE_GRAPH_DEFAULT_DEPTH,
     DEFAULT_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES,
+    DEFAULT_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES,
+    DEFAULT_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT,
     DEFAULT_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S,
     DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP,
     load_config,
@@ -36,8 +38,11 @@ from lithos_lens.knowledge_facts import (
     NoteFacts,
     NoteFactsCache,
 )
-from lithos_lens.knowledge_graph import DEFAULT_FOCUS_MAX_NODES
-from lithos_lens.knowledge_graph_view import DEFAULT_DEPTH
+from lithos_lens.knowledge_graph import (
+    DEFAULT_FOCUS_MAX_NODES,
+    DEFAULT_GLOBAL_MAX_NODES,
+)
+from lithos_lens.knowledge_graph_view import DEFAULT_DEPTH, DEFAULT_MIN_WEIGHT
 from lithos_lens.tasks import NoteRecord
 
 pytestmark = pytest.mark.anyio
@@ -147,6 +152,8 @@ def test_module_defaults_mirror_the_config_defaults() -> None:
     assert DEFAULT_TITLE_FANOUT_CAP == DEFAULT_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP == 300
     assert DEFAULT_FOCUS_MAX_NODES == DEFAULT_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES == 250
     assert DEFAULT_DEPTH == DEFAULT_KNOWLEDGE_GRAPH_DEFAULT_DEPTH == 1
+    assert DEFAULT_GLOBAL_MAX_NODES == DEFAULT_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES == 500
+    assert DEFAULT_MIN_WEIGHT == DEFAULT_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT == 0.1
 
 
 # ── reads ──────────────────────────────────────────────────────────────
@@ -216,6 +223,35 @@ async def test_past_the_cap_nodes_are_id_labelled_and_the_batch_says_so(
         assert (answer.state, answer.facts, answer.label) == ("unread", None, node_id)
     # Under the cap nothing is said.
     assert (await cache.lookup([PLAN, CAPACITY], cap=2)).capped_at == 0
+
+
+async def test_capped_unread_counts_only_the_nodes_past_the_cap_with_no_facts(
+    cache: NoteFactsCache, reader: Reader, ticks: Ticks
+) -> None:
+    """A node past the cap with last-known facts is ``pending`` and keeps its
+    title; only the ones with none are labelled by id."""
+    await cache.lookup([PLAN, CAPACITY], cap=2)
+    ticks.now += DEFAULT_NOTE_FACTS_TTL_S  # both entries expire
+
+    batch = await cache.lookup([PLAN, CAPACITY, ROLLBACK, LEGACY], cap=1)
+
+    assert batch.for_id(CAPACITY).state == "pending"
+    assert (batch.tally.capped, batch.tally.capped_unread) == (3, 2)
+    assert batch.tally.capped_pending == 1
+
+
+async def test_an_expired_ghost_past_the_cap_is_counted_as_neither(
+    cache: NoteFactsCache, reader: Reader, ticks: Ticks
+) -> None:
+    """A last-known ``missing`` answer stays a ghost: not unread, not pending."""
+    cache.mark_missing(DANGLING_NOTE_ID)
+    ticks.now += DEFAULT_NOTE_FACTS_TTL_S
+
+    batch = await cache.lookup([PLAN, DANGLING_NOTE_ID, ROLLBACK], cap=1)
+
+    assert batch.for_id(DANGLING_NOTE_ID).state == "missing"
+    tally = batch.tally
+    assert (tally.capped, tally.capped_unread, tally.capped_pending) == (2, 1, 0)
 
 
 async def test_doc_not_found_is_a_ghost_cached_under_the_ttl(
@@ -508,6 +544,7 @@ _KNOBS = {
     "graph_default_depth": (1, 2),
     "graph_note_facts_ttl_s": (3600, 86_400),
     "graph_title_fanout_cap": (300, 2000),
+    "graph_global_max_nodes": (500, 2000),
 }
 
 
@@ -562,13 +599,59 @@ def test_the_graph_knobs_take_env_overrides(
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH", "2")
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S", "60")
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP", "150")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES", "90")
     assert _knobs(lithos_lens_config_env) == {
         "graph_focus_max_nodes": 120,
         "graph_default_depth": 2,
         "graph_note_facts_ttl_s": 60,
         "graph_title_fanout_cap": 150,
+        "graph_global_max_nodes": 90,
     }
 
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH", "3")
     with pytest.raises(ConfigError, match="DEFAULT_DEPTH must be <= 2"):
         load_config(lithos_lens_config_env)
+
+
+# ── graph_min_weight_default: the one float knob ──────────────────────
+
+
+def _min_weight(config_path: Path) -> float:
+    return load_config(config_path).knowledge.graph_min_weight_default
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("graph_min_weight_default = 0.0", 0.0),
+        ("graph_min_weight_default = 0.35", 0.35),
+        ("graph_min_weight_default = 1", 1.0),
+    ],
+)
+def test_min_weight_default_reads_a_number_from_toml(
+    lithos_lens_config_env: Path, line: str, expected: float
+) -> None:
+    assert _min_weight(lithos_lens_config_env) == 0.1
+    _set_knowledge(lithos_lens_config_env, line)
+    assert _min_weight(lithos_lens_config_env) == expected
+
+
+@pytest.mark.parametrize("value", ["-0.1", "1.5", "true", '"0.2"', "nan", "inf"])
+def test_min_weight_default_rejects_what_is_not_a_weight(
+    lithos_lens_config_env: Path, value: str
+) -> None:
+    _set_knowledge(lithos_lens_config_env, f"graph_min_weight_default = {value}")
+    with pytest.raises(ConfigError, match="graph_min_weight_default"):
+        load_config(lithos_lens_config_env)
+
+
+def test_min_weight_default_takes_an_env_override(
+    lithos_lens_config_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT", "0.25")
+    assert _min_weight(lithos_lens_config_env) == 0.25
+
+    for bad in ("1.01", "-1", "nan", "heavy"):
+        monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT", bad)
+        with pytest.raises(ConfigError, match="MIN_WEIGHT_DEFAULT"):
+            load_config(lithos_lens_config_env)

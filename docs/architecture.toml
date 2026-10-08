@@ -41,7 +41,7 @@ Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes", "lithos_lens.edge_routes"]
+Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.knowledge_graph_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes", "lithos_lens.edge_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_writes", "lithos_lens.lithos_graph_reads", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_writes", "lithos_lens.fake_store", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset", "lithos_lens.fake_knowledge_dataset"]
@@ -163,7 +163,18 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Writes", "Logging",
 # snapshot uses were mixed into the client from a new LithosClient module
 # (lithos_graph_reads.py, on the lithos_writes.py precedent), which adds no
 # edge: LithosClient -> Knowledge already exists.
-cross_component_edges  = 39   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); +1 edge-table snapshot telemetry (knowledge -> telemetry); direction: down
+# Raised 39 -> 40 for State -> Knowledge, on K2 S3 (the /knowledge/graph
+# page). The edge-table snapshot and the note facts cache are each ONE
+# process-wide instance: the graph page, its panels (S5), the note page's
+# contradiction banner (S6) and the hub's knowledge events (S7) must all see
+# the same snapshot and the same facts, and the events patch them. That is
+# exactly why the task graph's GraphCache already lives on AppState ("both
+# halves of its invalidation are process-wide"), so the knowledge caches are
+# constructed there beside it, from config.knowledge. The alternative — a
+# route-module global built at registration — would hide process state in the
+# Web tier, where the hub (Core) could not reach it without an upward import.
+# Core -> Foundation points down, like State -> TaskGraph.
+cross_component_edges  = 40   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); +1 edge-table snapshot telemetry (knowledge -> telemetry); +1 State -> Knowledge (the process-wide knowledge graph caches); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the
@@ -557,4 +568,9 @@ exclude_modules = [
     # page's back-link href and label — where this request came from, not a
     # model of anything in Lithos.
     "lithos_lens.knowledge_routes",
+    # The knowledge graph route: route plumbing. KnowledgeGraphParams is the
+    # page's parsed query and KnowledgeGraphPicker what the unscoped page
+    # offers from the snapshot's facets — request state, not a model of
+    # anything in Lithos (the graph's records are knowledge_graph_view's).
+    "lithos_lens.knowledge_graph_routes",
 ]

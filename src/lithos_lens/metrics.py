@@ -515,6 +515,28 @@ def register_knowledge_edge_table_age(read: Callable[[], float]) -> None:
     )
 
 
+def knowledge_graph_renders() -> Any:
+    """Counter of `/knowledge/graph` renders by mode and terminal outcome (K2).
+
+    Labels: ``mode`` in ``picker`` | ``focus`` | ``global``, and ``outcome``
+    in ``rendered`` | ``refused`` (over a cap, or the edge table over its
+    bound) | ``unavailable`` (the edge table could not be read) |
+    ``offline``.
+
+    The scope itself — a focus note id, a type, a namespace — is never a
+    label: each is operator input with one series per value, the unbounded
+    cardinality this module's rule forbids. The request span carries the
+    counts (``lens.knowledge.graph.*``) instead.
+    """
+    return _instrument(
+        "lens_knowledge_graph_renders_total",
+        lambda meter: meter.create_counter(
+            "lens_knowledge_graph_renders_total",
+            description="Knowledge-graph page renders by mode and outcome.",
+        ),
+    )
+
+
 # ── Task graph (T2) ───────────────────────────────────────────────────
 
 

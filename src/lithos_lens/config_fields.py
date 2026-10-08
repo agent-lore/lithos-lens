@@ -15,6 +15,7 @@ is state, which is better held in one place than scattered per knob.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, cast
 
@@ -189,6 +190,36 @@ def optional_int(
     if maximum is not None and value > maximum:
         raise ConfigError(f"{config_path}: [{section}].{key} must be <= {maximum}")
     return value
+
+
+def optional_float(
+    data: dict[str, Any],
+    key: str,
+    default: float,
+    config_path: Path,
+    section: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    """A number knob: TOML ``0.1`` or ``1`` alike, never a boolean.
+
+    ``bool`` is refused for :func:`optional_int`'s reason; a non-finite value
+    (``nan``, ``inf``) fails the bounds or names no weight an operator meant.
+    """
+    if key not in data:
+        return default
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{config_path}: [{section}].{key} must be a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ConfigError(f"{config_path}: [{section}].{key} must be finite")
+    if minimum is not None and number < minimum:
+        raise ConfigError(f"{config_path}: [{section}].{key} must be >= {minimum}")
+    if maximum is not None and number > maximum:
+        raise ConfigError(f"{config_path}: [{section}].{key} must be <= {maximum}")
+    return number
 
 
 def optional_bool(

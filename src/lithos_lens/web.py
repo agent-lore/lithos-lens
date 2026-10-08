@@ -47,6 +47,7 @@ from lithos_lens.knowledge import (
     description_preview,
     render_markdown,
 )
+from lithos_lens.knowledge_graph_routes import register_knowledge_graph_routes
 from lithos_lens.knowledge_routes import register_knowledge_routes
 from lithos_lens.lithos_client import (
     LithosClient,
@@ -591,6 +592,7 @@ def create_app(
         )
 
     register_knowledge_routes(app, state, templates)
+    register_knowledge_graph_routes(app, state, templates)
 
     return app
 

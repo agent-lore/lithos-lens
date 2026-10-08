@@ -145,6 +145,12 @@ class NoteFactsTally:
     missing: int = 0
     #: Nodes that needed a read and were past the cap.
     capped: int = 0
+    #: Of ``capped``, those with no last-known facts: ``unread``, labelled
+    #: by their full id.
+    capped_unread: int = 0
+    #: Of ``capped``, those drawn on their last-known facts: ``pending``. The
+    #: remainder are last known ``missing`` and stay ghosts.
+    capped_pending: int = 0
     #: Reads that failed for a reason other than ``doc_not_found``.
     failed: int = 0
 
@@ -177,9 +183,9 @@ class _Entry:
 class NoteFactsCache:
     """Process-wide note facts: gated reads, TTL, per-render cap, patches.
 
-    Not constructed on ``AppState`` yet — the graph page (S3) wires it with
-    ``graph_cache.graph_fanout_gate`` and the configured knobs, and S7 feeds
-    it the hub's note events.
+    One per process, on ``AppState.note_facts``, built with
+    ``graph_cache.graph_fanout_gate`` and the configured knobs; S7 feeds it
+    the hub's note events.
     """
 
     def __init__(
@@ -249,6 +255,12 @@ class NoteFactsCache:
             reads=len(reading),
             missing=sum(1 for answer in answers.values() if answer.is_missing),
             capped=len(past_cap),
+            capped_unread=sum(
+                1 for node_id in past_cap if answers[node_id].state == "unread"
+            ),
+            capped_pending=sum(
+                1 for node_id in past_cap if answers[node_id].state == "pending"
+            ),
             failed=failed,
         )
         return NoteFactsBatch(

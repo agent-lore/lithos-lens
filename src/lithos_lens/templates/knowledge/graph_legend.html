@@ -1,0 +1,23 @@
+{#- The legend (K2 D5): only the types drawn, in the known-type order, one
+    plain-language line each; then the wiki-link and provenance layers when
+    drawn — keyed apart from the typed lines, since a stored type may be
+    spelled like a layer. -#}
+{% if view.legend %}
+  <section class="panel kgraph-legend" data-kgraph-legend>
+    <h2>Legend</h2>
+    <dl>
+      {% for line in view.typed_legend %}
+        <div class="kgraph-legend-row" data-legend-type="{{ line.type }}">
+          <dt><code>{{ line.type }}</code></dt>
+          <dd>{{ line.line }}</dd>
+        </div>
+      {% endfor %}
+      {% for line in view.layer_legend %}
+        <div class="kgraph-legend-row" data-legend-layer="{{ line.type }}">
+          <dt>{{ "wiki-link" if line.type == "wiki_link" else "provenance" }} (layer)</dt>
+          <dd>{{ line.line }}</dd>
+        </div>
+      {% endfor %}
+    </dl>
+  </section>
+{% endif %}

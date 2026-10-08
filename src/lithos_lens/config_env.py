@@ -24,6 +24,7 @@ table it compares against.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -38,10 +39,13 @@ from lithos_lens.config_schema import (
     MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_MAX_EDGES,
     MAX_KNOWLEDGE_GRAPH_EDGE_TABLE_TTL_S,
     MAX_KNOWLEDGE_GRAPH_FOCUS_MAX_NODES,
+    MAX_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES,
+    MAX_KNOWLEDGE_GRAPH_MIN_WEIGHT,
     MAX_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S,
     MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP,
     MAX_KNOWLEDGE_RELATED_TITLE_FANOUT_CAP,
     MAX_TASKS_INT_KNOBS,
+    MIN_KNOWLEDGE_GRAPH_MIN_WEIGHT,
     MIN_TASKS_INT_KNOBS,
     LithosLensConfig,
     parse_log_level,
@@ -106,6 +110,12 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
     )
     title_fanout_cap_env = os.environ.get(
         "LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP", ""
+    )
+    global_max_nodes_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES", ""
+    )
+    min_weight_default_env = os.environ.get(
+        "LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT", ""
     )
     graph_cache_ttl_env = os.environ.get("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     graph_max_tasks_env = os.environ.get("LITHOS_LENS_GRAPH_MAX_TASKS", "")
@@ -257,7 +267,7 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
         )
     # The knowledge graph's knobs (K2 D2-D4), same bounds as their TOML keys,
     # collected and applied in one replace() like the [graph] ones.
-    knowledge_graph_env_overrides = {
+    knowledge_graph_env_overrides: dict[str, int | float] = {
         field: _parse_env_int(name, raw, maximum=maximum)
         for field, name, raw, maximum in (
             (
@@ -296,9 +306,22 @@ def apply_env_overrides(cfg: LithosLensConfig) -> LithosLensConfig:
                 title_fanout_cap_env,
                 MAX_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP,
             ),
+            (
+                "graph_global_max_nodes",
+                "LITHOS_LENS_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES",
+                global_max_nodes_env,
+                MAX_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES,
+            ),
         )
         if raw
     }
+    if min_weight_default_env:
+        knowledge_graph_env_overrides["graph_min_weight_default"] = _parse_env_float(
+            "LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT",
+            min_weight_default_env,
+            minimum=MIN_KNOWLEDGE_GRAPH_MIN_WEIGHT,
+            maximum=MAX_KNOWLEDGE_GRAPH_MIN_WEIGHT,
+        )
     if knowledge_graph_env_overrides:
         new_cfg = replace(
             new_cfg,
@@ -382,6 +405,21 @@ def _parse_env_int(
     if parsed < minimum:
         raise ConfigError(f"{name} must be >= {minimum}")
     if maximum is not None and parsed > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}")
+    return parsed
+
+
+def _parse_env_float(name: str, value: str, *, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number") from exc
+    # ``float`` reads "nan" and "inf"; neither is a bound an operator meant.
+    if not math.isfinite(parsed):
+        raise ConfigError(f"{name} must be finite")
+    if parsed < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}")
+    if parsed > maximum:
         raise ConfigError(f"{name} must be <= {maximum}")
     return parsed
 

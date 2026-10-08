@@ -82,6 +82,10 @@ classDiagram
     +conflict_state str | None
     +partial bool
   }
+  class KnowledgeEdgeEntry {
+    +arrow str
+  }
+  class KnowledgeEdgeSection
   class KnowledgeGraphEdge {
     +id str
     +from_id str
@@ -93,6 +97,9 @@ classDiagram
     +provenance str | None
     +conflict_state str | None
     +partial bool
+    +namespace str | None
+    +created_at str | None
+    +evidence str | None
   }
   class KnowledgeGraphFilters {
     +min_weight float
@@ -125,6 +132,7 @@ classDiagram
     +would_be_nodes Mapping[int, int]
     +as_of datetime | None
     +stale bool
+    +read_directly bool
     +facts_capped_at int
   }
   class KnowledgeLayerRef {
@@ -177,6 +185,8 @@ classDiagram
     +reads int
     +missing int
     +capped int
+    +capped_unread int
+    +capped_pending int
     +failed int
   }
   class NoteMetadata {
@@ -272,6 +282,12 @@ classDiagram
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_type
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : rows
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
+  KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphEdge : edge
+  KnowledgeEdgeEntry "1" --> "0..1" KnowledgeGraphNode : other
+  KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphNode : source
+  KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphNode : target
+  KnowledgeEdgeSection "1" --> "0..*" KnowledgeEdgeEntry : entries
+  KnowledgeEdgeSection "1" --> "1" LegendLine : line
   KnowledgeGraphNode "1" --> "0..1" NoteFacts : facts
   KnowledgeGraphView "1" --> "1" HiddenEdgeCounts : hidden
   KnowledgeGraphView "1" --> "0..*" KnowledgeGraphEdge : edges
