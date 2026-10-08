@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -27,9 +26,12 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from lithos_lens.config import load_config
 from lithos_lens.fake_knowledge_dataset import DANGLING_NOTE_ID, knowledge_edge_rows
 from lithos_lens.fake_lithos import FakeLithosClient
+from lithos_lens.graph_cache import graph_fanout_gate
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.knowledge_edges import KnowledgeEdge, normalize_edge_list
+from lithos_lens.knowledge_facts import NoteFactsCache
 from lithos_lens.knowledge_graph_routes import (
+    RENDERED_VIEWS_KEPT,
     KnowledgeGraphParams,
     RenderedViews,
     knowledge_graph_panel_url,
@@ -754,9 +756,8 @@ def test_a_click_reads_nothing_and_a_hand_made_fragment_reads_as_the_page(
 
     assert click_reads == []
     assert hand_made_reads == ["related"]
-    # Assembled afresh: the depth-2 view's related read, and the facts of the
-    # note only depth 2 draws.
-    assert other_scope_reads == ["related", f"read_note:{DANGLING_NOTE_ID}:1"]
+    # Not that view's scope: no panel from another view, and nothing read.
+    assert other_scope_reads == []
     assert queue_click_reads == []
 
 
@@ -789,21 +790,37 @@ def test_the_fragment_is_its_pages_panel_whatever_another_tab_read(
     assert "Facts not read for this view." not in fresh
 
 
+class _Ticks:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def test_the_fragment_is_its_pages_panel_after_the_facts_ttl(
     lithos_lens_config_env: Path,
 ) -> None:
     """A page left open past the facts TTL: its click still shows the facts
     the page showed, not the cache's expired entry marked pending."""
-    _set_knowledge(
-        lithos_lens_config_env,
-        "graph_note_facts_ttl_s = 1",
-        "graph_title_fanout_cap = 1",
-    )
+    _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
+    ticks = _Ticks()
     query = f"focus={ROLLBACK}&selected={PLAN}"
     with _client(lithos_lens_config_env) as client:
+        lens = client.app.state.lens  # type: ignore[attr-defined]
+        upstream = lens.lithos_client
+        lens.note_facts = NoteFactsCache(
+            lambda note_id: upstream.read_note(note_id, max_length=1),
+            graph_fanout_gate,
+            ttl_s=10,
+            fanout_cap=1,
+            ticks=ticks,
+        )
         _get(client, f"{ROUTE}?focus={PLAN}")  # caches the plan
         page = _get(client, f"{ROUTE}?{query}")  # reads the rollback; plan a hit
-        time.sleep(1.2)
+        ticks.now += 11  # both entries expire
         fragment = _fragment(client, query, page)
         fresh = _get(client, f"{PANEL}?{query}").strip()
 
@@ -813,6 +830,100 @@ def test_the_fragment_is_its_pages_panel_after_the_facts_ttl(
     # Drawn now, the plan's entry has expired and the cap re-reads the focus:
     # the plan is on its last-known facts. The click did not see that.
     assert "Facts pending a re-read." in fresh
+
+
+def test_a_render_outside_focus_mode_is_found_whatever_depth_the_page_had(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-002: depth means nothing outside focus mode, and the page's links
+    leave it out; the view is kept under the scope as those links spell it,
+    so the page's own hx-get still finds it."""
+    _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
+    fake = _ReadRecorder()
+    query = f"type=contradicts&depth=2&edge={BARE_CONTRADICTION}"
+    with _client(lithos_lens_config_env, fake) as client:
+        page = _get(client, f"{ROUTE}?{query}")
+        for _ in range(3):  # another tab reads the endpoints this page did not
+            _get(client, f"{ROUTE}?type=contradicts")
+        link = _link(
+            _first(rf'data-kgraph-edge="{BARE_CONTRADICTION}">(.*?)</li>', page),
+            'class="kgraph-edge-link"',
+        )
+        hx_get = _attr(link, "hx-get")
+        assert "depth" not in hx_get
+        fake.data_reads.clear()
+        fragment = _get(client, hx_get).strip()
+
+    assert fake.data_reads == []
+    assert fragment == _host(page)
+
+
+def _evicted(client: TestClient, page: str, query: str) -> Any:
+    return client.get(f"{PANEL}?{query}&render={_render_id(page)}")
+
+
+def test_a_render_no_longer_held_reloads_the_page_rather_than_mixing_views(
+    lithos_lens_config_env: Path, metric_reader: InMemoryMetricReader
+) -> None:
+    """f-002: tab A's view evicted by tab B's reloads (nothing concurrent,
+    the store never over its bound). A's click must not swap a panel drawn
+    from another view beside A's old graph: htmx is sent to the full page
+    with that selection, which draws graph and panel together."""
+    _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
+    fake = _ReadRecorder()
+    query = f"focus={PLAN}&selected={ROLLBACK}"
+    with _client(lithos_lens_config_env, fake) as client:
+        tab_a = _get(client, f"{ROUTE}?{query}")
+        for _ in range(RENDERED_VIEWS_KEPT):
+            _get(client, f"{ROUTE}?focus={PLAN}")
+        fake.data_reads.clear()
+        response = _evicted(client, tab_a, query)
+
+    assert response.status_code == 200
+    target = f"{ROUTE}?{query}"
+    assert response.headers["HX-Redirect"] == target
+    assert fake.data_reads == []
+    # No panel from another view; a client that does not follow the header
+    # gets the same way back.
+    assert 'data-kgraph-panel="none"' in response.text
+    assert f'href="{target.replace("&", "&amp;")}" data-kgraph-reload' in response.text
+    assert "Influx rollback route" not in response.text
+    assert _opens(metric_reader, "node", "fragment") == 0
+
+
+def test_a_render_lost_to_a_restart_reloads_the_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    query = f"focus={PLAN}&edge={REFINES}"
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, f"{ROUTE}?{query}")
+    with _client(lithos_lens_config_env) as restarted:
+        response = _evicted(restarted, page, query)
+
+    assert response.headers["HX-Redirect"] == f"{ROUTE}?{query}"
+    assert 'data-kgraph-panel="edge"' not in response.text
+
+
+def test_an_outage_after_the_page_answers_offline_even_for_a_held_view(
+    lithos_lens_config_env: Path, metric_reader: InMemoryMetricReader
+) -> None:
+    """f-004: the offline check comes before a held view, as on the page."""
+    fake = _ReadRecorder()
+    query = f"focus={PLAN}&selected={PLAN}"
+    with _client(lithos_lens_config_env, fake) as client:
+        page = _get(client, f"{ROUTE}?{query}")
+        # A full-page request has seen Lithos go away.
+        client.app.state.lens.health.lithos = "unreachable"  # type: ignore[attr-defined]
+        offline_page = _get(client, f"{ROUTE}?{query}")
+        fake.data_reads.clear()
+        fragment = _fragment(client, query, page)
+
+    assert "The knowledge graph is unavailable." in offline_page
+    assert _plain(fragment) == "Lithos is offline."
+    assert 'data-kgraph-panel="node"' not in fragment
+    assert fake.data_reads == []
+    assert _opens(metric_reader, "node", "fragment") == 0
+    assert _opens(metric_reader, "node", "url") == 1  # the healthy page only
 
 
 def test_a_cold_fragment_draws_what_a_full_request_draws(

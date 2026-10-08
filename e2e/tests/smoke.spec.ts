@@ -2270,3 +2270,37 @@ test("a later knowledge graph panel click wins over a slower earlier one", async
     "edge_e1f4a8c27b90",
   );
 });
+
+test("a knowledge graph panel click on a view no longer held reloads the page", async ({
+  page,
+}) => {
+  // A render id the server no longer holds (evicted, or lost to a restart —
+  // simulated by rewriting the id in flight): the click is not answered with
+  // a panel from a different view beside the old graph. HX-Redirect sends
+  // the browser to the full page with that selection, graph and panel drawn
+  // together.
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph/panel",
+    (route) => {
+      const url = new URL(route.request().url());
+      url.searchParams.set("render", "not-held");
+      return route.continue({ url: url.toString() });
+    },
+  );
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  const before = await page
+    .locator("[data-kgraph-panel-host]")
+    .getAttribute("data-kgraph-render");
+  await page
+    .locator('[data-kgraph-edge="edge_a07c5f3e18b2"] .kgraph-edge-link')
+    .click();
+  await page.waitForURL(/[?&]edge=edge_a07c5f3e18b2(&|$)/);
+  await expect(
+    page.locator('#kgraph-panel [data-kgraph-panel="edge"]'),
+  ).toHaveAttribute("data-kgraph-panel-id", "edge_a07c5f3e18b2");
+  // A new full render: a new view, under a new render id.
+  const after = await page
+    .locator("[data-kgraph-panel-host]")
+    .getAttribute("data-kgraph-render");
+  expect(after).not.toBe(before);
+});

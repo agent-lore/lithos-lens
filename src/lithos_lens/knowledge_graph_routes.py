@@ -268,8 +268,11 @@ RENDER_KEY = "render"
 RENDERED_VIEWS_KEPT = 32
 
 
-def _scope(params: KnowledgeGraphParams) -> KnowledgeGraphParams:
-    return replace(params, selected="", edge="")
+def _scope(params: KnowledgeGraphParams) -> str:
+    """The scope and filters a view is drawn for, as the URL builder writes
+    them: one canonical spelling, so what the page's own links leave out (a
+    ``depth`` outside focus mode) cannot make its view unfindable."""
+    return knowledge_graph_url(params, selected="", edge="")
 
 
 class RenderedViews:
@@ -285,9 +288,7 @@ class RenderedViews:
 
     def __init__(self, size: int = RENDERED_VIEWS_KEPT) -> None:
         self._size = size
-        self._views: OrderedDict[
-            str, tuple[KnowledgeGraphParams, KnowledgeGraphView]
-        ] = OrderedDict()
+        self._views: OrderedDict[str, tuple[str, KnowledgeGraphView]] = OrderedDict()
 
     def keep(self, params: KnowledgeGraphParams, view: KnowledgeGraphView) -> str:
         """Keep ``view``, drawn for ``params``; its new render id."""
@@ -570,42 +571,63 @@ def register_knowledge_graph_routes(
     async def knowledge_graph_panel(request: Request) -> HTMLResponse:
         """The panel ``selected=`` / ``edge=`` names, as a fragment.
 
-        ``render=`` names the view the page drew (:class:`RenderedViews`):
-        the panel is drawn from it, with nothing read and no health probe —
-        it is the graph the page is still showing, so it equals the page's
-        own panel whatever other tabs, the facts TTL or Lithos did since.
-        Without one (a hand-made or cold request, or a view no longer kept)
-        the page's own assembly runs — the same reads a full request makes,
-        so the fragment equals the page drawn now — and its view is kept for
-        the panel's own links. Anything that is not a drawn node or typed
-        edge — the picker, a refused view, an id the view does not draw —
-        answers 200 with a one-line "Not in this view" panel, and offline
-        "Lithos is offline" with nothing read: htmx swaps a 200 and would
+        Offline first, as the page: "Lithos is offline", nothing read, no
+        panel — whatever the request names. Then ``render=`` names the view
+        the page drew (:class:`RenderedViews`): the panel is drawn from it
+        with nothing read, so it equals the page's own panel whatever other
+        tabs or the facts TTL did since. A ``render=`` no longer held —
+        evicted, or lost to a restart — does not swap in a panel from a
+        different view beside the page's old graph: it answers
+        ``HX-Redirect`` to the full page with that selection, which draws
+        graph and panel afresh together (and, for a client that does not
+        follow it, a one-line notice linking there). With no ``render=`` at
+        all (a hand-made or cold request) the page's own assembly runs — the
+        reads a full request makes — and its view is kept for the panel's
+        own links. Anything that is not a drawn node or typed edge — the
+        picker, a refused view, an id the view does not draw — answers 200
+        with a one-line "Not in this view" panel: htmx swaps a 200 and would
         drop a 4xx. Not a page render: the renders counter is not touched,
         and only a panel that renders counts as an open.
         """
         params = parse_knowledge_graph_params(request.query_params)
         render_id = request.query_params.get(RENDER_KEY) or ""
-        view = views.get(render_id, params)
-        offline = False
-        if view is None:
+        context: dict[str, Any] = {
+            "config": state.config,
+            "params": params,
+            "panel": None,
+            "panel_notice": "Not in this view.",
+            "render_id": render_id,
+        }
+        health = await state.refresh_health()
+        if health.lithos != "ok":
+            context["panel_notice"] = "Lithos is offline."
+            return templates.TemplateResponse(
+                request, "knowledge/graph_panel.html", context
+            )
+        if render_id:
+            view = views.get(render_id, params)
+            if view is None:
+                page_url = knowledge_graph_url(params)
+                context.update(
+                    panel_notice="This view is no longer held.",
+                    panel_reload=page_url,
+                    render_id="",
+                )
+                response = templates.TemplateResponse(
+                    request, "knowledge/graph_panel.html", context
+                )
+                response.headers["HX-Redirect"] = page_url
+                return response
+        else:
             load = await load_knowledge_graph(state, params, picker=False)
-            view, offline = load.view, load.offline
-            drawn = view is not None and view.refusal is None
-            render_id = views.keep(params, view) if view is not None and drawn else ""
-        panel = None
+            view = load.view
+            if view is not None and view.refusal is None:
+                context["render_id"] = views.keep(params, view)
         if view is not None:
-            panel = graph_panel(view, selected=params.selected, edge=params.edge)
-        _record_panel(panel, "fragment")
-        notice = "Lithos is offline." if offline else "Not in this view."
+            context["panel"] = graph_panel(
+                view, selected=params.selected, edge=params.edge
+            )
+        _record_panel(context["panel"], "fragment")
         return templates.TemplateResponse(
-            request,
-            "knowledge/graph_panel.html",
-            {
-                "config": state.config,
-                "params": params,
-                "panel": panel,
-                "panel_notice": notice,
-                "render_id": render_id,
-            },
+            request, "knowledge/graph_panel.html", context
         )

@@ -45,12 +45,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | TaskGraph | 25 | 11373 | 8722 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 25 |
 | Tasks | 7 | 2233 | 1624 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1222 | 901 | 5 | 2 | 0.29 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
-| Web | 11 | 5951 | 4810 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 5 |
+| Web | 11 | 5973 | 4832 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 5 |
 | Writes | 7 | 2272 | 1659 | 2 | 1 | 0.33 | 12 (`lithos_lens.create_form.validate`) | 1 |
 
 ## Size
 
-- Modules: **86**, lines: **35662**, SLOC: **27692**
+- Modules: **86**, lines: **35684**, SLOC: **27714**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -90,4 +90,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **144** (157 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.91** (68168 test lines / 35662 source lines)
+- Test-to-source line ratio: **1.91** (68279 test lines / 35684 source lines)

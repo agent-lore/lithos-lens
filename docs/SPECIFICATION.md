@@ -1613,14 +1613,22 @@ own `graph_title_fanout_cap` from one process-wide cache that other tabs, the
 facts TTL and note events keep changing — so a click does not re-assemble the
 view: every drawn view (page or fragment) is kept under a fresh **render id**
 (`RenderedViews`: the 32 most recent, least recently used out, each found
-only for the scope and filters it was drawn under), the page's panel host
-carries it (`data-kgraph-render`) and every panel link's `hx-get` ends with
-`render=<id>`. A fragment naming a kept view is drawn from it with nothing
-read and no health probe, so it is that page's panel byte for byte whatever
-happened since; the `href` and the pushed URL never carry the id. A fragment
-without one — hand-made, cold, after a restart, or a view no longer kept —
-runs the page's assembly with its reads and draws what a full request for
-the same query draws now, under a new render id. The text baseline's edge links keep their `href`
+only for the scope and filters it was drawn under, as the URL builder spells
+them — so a `depth` that means nothing outside focus mode cannot hide it),
+the page's panel host carries it (`data-kgraph-render`) and every panel
+link's `hx-get` ends with `render=<id>`; the `href` and the pushed URL never
+carry it. The fragment checks Lithos's health first, as the page does:
+offline it answers "Lithos is offline" with nothing read, whatever it names.
+A fragment naming a held view is drawn from it with nothing read, so it is
+that page's panel byte for byte whatever other tabs or the facts TTL did
+since. A render id no longer held (evicted, or lost to a restart) is never
+answered with a panel from a different view beside the page's old graph: the
+response carries `HX-Redirect` to the full page with that selection, which
+htmx follows, drawing graph and panel afresh together (its body, for a client
+that does not follow the header, is a one-line notice linking there; not a
+panel open). A fragment with no render id at all — hand-made or cold — runs
+the page's assembly with its reads and draws what a full request for the
+same query draws now, under a new render id. The text baseline's edge links keep their `href`
 and add `hx-get` (the fragment), `hx-target="#kgraph-panel"`,
 `hx-sync="#kgraph-panel:replace"` and `hx-push-url` (the `href`), so a click
 swaps the panel and the address bar carries the one selection. Every panel

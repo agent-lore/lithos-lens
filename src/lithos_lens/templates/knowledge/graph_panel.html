@@ -37,7 +37,7 @@
 
 {% if panel is none %}
   <section class="panel kgraph-panel" data-kgraph-panel="none" role="status">
-    <p class="kgraph-note">{{ panel_notice }}</p>
+    <p class="kgraph-note">{{ panel_notice }}{% if panel_reload %} <a href="{{ panel_reload }}" data-kgraph-reload>Reload the page with this panel</a>{% endif %}</p>
   </section>
 {% elif panel.kind == "node" %}
   {% set node = panel.node %}
