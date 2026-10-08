@@ -1,0 +1,31 @@
+{#-
+  The knowledge graph's shared macros: imported by the page and by its panel
+  partial, which `/knowledge/graph/panel` renders alone (K2 D10), so a node and
+  a panel link read the same in both.
+-#}
+
+{#- A node as the text names it: a ghost by its short id, never a link; any
+    other node by its label (its title, or its full id when unread), linked
+    to its note, marked when its facts are pending a re-read. -#}
+{% macro node_ref(node) -%}
+  {%- if node.is_ghost -%}
+    <span class="kgraph-ghost" data-kgraph-node="{{ node.id }}">{{ node.label }}</span> <span class="kgraph-mark">note not found</span>
+  {%- else -%}
+    <a href="{{ note_url(node.id) }}" data-kgraph-node="{{ node.id }}">{{ node.label }}</a>
+    {%- if node.facts_state == "pending" %} <span class="kgraph-mark">facts pending</span>{% endif %}
+  {%- endif -%}
+{%- endmacro %}
+
+{#- The attributes of a link that opens a panel (`edge=` or `selected=`): a
+    plain href to the page with that one selection — the no-JS baseline —
+    and, with htmx, the panel fragment for the same scope fetched into the
+    page's panel host, the address bar following the href. Every panel link
+    syncs on the host with `replace`: a click aborts the panel request still
+    in flight from any other link, so the later click wins both the swap and
+    the URL, whichever response would have arrived first. `render_id` names
+    the view the page drew, so the fragment is drawn from it; the href and
+    the pushed URL never carry it. -#}
+{% macro panel_attrs(params, render_id, edge="", selected="") -%}
+  {%- set href = knowledge_graph_url(params, edge=edge, selected=selected) -%}
+  href="{{ href }}" hx-get="{{ knowledge_graph_panel_url(params, render=render_id, edge=edge, selected=selected) }}" hx-target="#kgraph-panel" hx-swap="innerHTML" hx-sync="#kgraph-panel:replace" hx-push-url="{{ href }}"
+{%- endmacro %}

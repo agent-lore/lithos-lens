@@ -1,0 +1,122 @@
+{#-
+  The knowledge graph's node and edge panels (K2 D10). One partial, two
+  hosts: the page includes it in its panel host on a full request
+  (`?selected=` / `?edge=`, the no-JS baseline) and `/knowledge/graph/panel`
+  renders it alone for an htmx click, so the two are the same markup. It
+  extends no layout. `panel` is a KnowledgeNodePanel, a KnowledgeEdgePanel,
+  or none — the fragment's one-line answer, `panel_notice`, which the page
+  never renders (it shows no panel instead).
+-#}
+{% from "knowledge/graph_macros.html" import node_ref, panel_attrs %}
+{% from "knowledge/edge_evidence.html" import edge_evidence %}
+
+{#- A node's chips and lede when its facts were read; otherwise its full id
+    and why there is nothing more to show. -#}
+{% macro node_facts(node, meta) %}
+  {% if node.is_ghost %}
+    <p class="kgraph-id" data-kgraph-full-id>{{ node.id }}</p>
+  {% elif meta is none %}
+    <p class="kgraph-id" data-kgraph-full-id>{{ node.id }}</p>
+    <p class="kgraph-note" data-kgraph-facts-unread>Facts not read for this view.</p>
+  {% else %}
+    {% if meta.has_chips %}{% with compact = false %}{% include "knowledge/note_chips.html" %}{% endwith %}{% endif %}
+    {% if meta.lede %}<p class="kgraph-lede">{{ meta.lede }}</p>{% endif %}
+    {% if node.facts_state == "pending" %}<p class="kgraph-note" data-kgraph-facts-pending>Facts pending a re-read.</p>{% endif %}
+  {% endif %}
+{% endmacro %}
+
+{#- One endpoint of an edge: its title, chips and lede, and the links to its
+    own panel and its note. -#}
+{% macro endpoint_card(node, meta) %}
+  <article class="kgraph-card" data-kgraph-card="{{ node.id }}">
+    <h3>{{ node_ref(node) }}</h3>
+    {{ node_facts(node, meta) }}
+    <p class="kgraph-card-links"><a {{ panel_attrs(params, render_id, selected=node.id) }} data-kgraph-node-details>Node details</a>{% if not node.is_ghost %} · <a href="{{ note_url(node.id) }}">Open note</a>{% endif %}</p>
+  </article>
+{% endmacro %}
+
+{% if panel is none %}
+  <section class="panel kgraph-panel" data-kgraph-panel="none" role="status">
+    <p class="kgraph-note">{{ panel_notice }}{% if panel_reload %} <a href="{{ panel_reload }}" data-kgraph-reload>Reload the page with this panel</a>{% endif %}</p>
+  </section>
+{% elif panel.kind == "node" %}
+  {% set node = panel.node %}
+  <section class="panel kgraph-panel" data-kgraph-panel="node" data-kgraph-panel-id="{{ node.id }}" aria-label="Node details">
+    <p class="eyebrow">Node</p>
+    <h2>{{ node_ref(node) }}</h2>
+    {{ node_facts(node, panel.meta) }}
+    <p data-kgraph-degree>Degree in this view: {{ node.degree }}</p>
+    <p><a href="{{ knowledge_graph_url(params, focus=node.id, selected='', edge='') }}" data-kgraph-centre>Centre on this</a></p>
+    <h3>Relations in this view</h3>
+    {% for group in panel.relations %}
+      <section class="kgraph-type" data-kgraph-panel-type="{{ group.line.type }}">
+        <h4>{{ group.line.type }} <span class="kgraph-count">{{ group.entries | length }}</span></h4>
+        <ul>
+          {% for entry in group.entries %}
+            <li data-kgraph-panel-edge="{{ entry.edge.id }}">
+              {%- if entry.edge.kind == "typed" -%}
+                <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }} <span class="kgraph-weight">({{ entry.weight_label }})</span>
+              {%- else -%}
+                {{ entry.arrow }} {{ node_ref(entry.other) }}
+              {%- endif -%}
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% else %}
+      <p class="kgraph-empty">No relations drawn in this view.</p>
+    {% endfor %}
+  </section>
+{% else %}
+  {% set edge = panel.edge %}
+  {% set entry = panel.entry %}
+  <section class="panel kgraph-panel" data-kgraph-panel="edge" data-kgraph-panel-id="{{ edge.id }}" aria-label="Edge details">
+    <p class="eyebrow">Edge</p>
+    {% if panel.is_contradiction %}
+      {% if panel.conflict_resolved %}
+        <p class="kgraph-conflict-state kgraph-resolution" data-kgraph-conflict-state="resolved">{{ panel.conflict_label }} <code>{{ edge.conflict_state }}</code></p>
+      {% else %}
+        <p class="kgraph-conflict-state kgraph-unresolved" data-kgraph-conflict-state="unresolved">{{ panel.conflict_label }}{% if edge.conflict_state %} <code>{{ edge.conflict_state }}</code>{% endif %}</p>
+      {% endif %}
+    {% endif %}
+    <h2 data-kgraph-sentence>{{ node_ref(entry.source) }} {{ panel.phrase.joiner }} {{ node_ref(entry.target) }}{{ panel.phrase.tail }}</h2>
+    <dl class="kgraph-fields">
+      <div><dt>Type</dt><dd><code>{{ edge.type }}</code></dd></div>
+      <div><dt>Weight</dt><dd>{{ entry.weight_label }}</dd></div>
+      {% if edge.namespace %}<div><dt>Namespace</dt><dd>{{ edge.namespace }}</dd></div>{% endif %}
+      {% if panel.provenance %}
+        <div data-kgraph-provenance><dt>Provenance</dt><dd>{{ panel.provenance }}
+          {%- if edge.provenance %} · type <code>{{ edge.provenance }}</code>{% endif %}
+          {%- if edge.provenance_actor %} · actor <code>{{ edge.provenance_actor }}</code>{% endif %}</dd></div>
+      {% endif %}
+      {% if edge.created_at %}<div><dt>Created</dt><dd>{{ edge.created_at }}</dd></div>{% endif %}
+      {% if edge.updated_at %}<div><dt>Updated</dt><dd>{{ edge.updated_at }}</dd></div>{% endif %}
+    </dl>
+    <section class="kgraph-evidence" data-kgraph-evidence>
+      <h3>Evidence</h3>
+      {% if edge.partial %}
+        <p class="kgraph-note" data-kgraph-evidence-pending>Rationale pending the next edge-table fetch.</p>
+      {% else %}
+        {% set evidence = panel.evidence %}
+        {% if not (evidence and (evidence.rationale or evidence.raw)) %}
+          <p class="kgraph-note" data-kgraph-no-rationale>No rationale recorded.</p>
+        {% endif %}
+        {{ edge_evidence(evidence) }}
+      {% endif %}
+    </section>
+    {#- A contradiction's two notes side by side at wide widths (stacked
+        below the breakpoint), with the place its resolve action will take
+        once the deferred pool ships it; any other edge stacks its cards. -#}
+    {% if panel.is_contradiction %}
+      <div class="kgraph-cards kgraph-cards-pair" data-kgraph-cards="pair">
+    {% else %}
+      <div class="kgraph-cards" data-kgraph-cards="stack">
+    {% endif %}
+      {{ endpoint_card(entry.source, panel.source_meta) }}
+      {{ endpoint_card(entry.target, panel.target_meta) }}
+    </div>
+    {% if panel.is_contradiction %}
+      <p class="kgraph-resolve-slot" data-kgraph-resolve-slot>Resolving a contradiction is not yet a Lens action.</p>
+    {% endif %}
+  </section>
+{% endif %}

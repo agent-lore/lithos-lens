@@ -6,28 +6,19 @@
   /knowledge/graph (K2 D11, D12). The text IS the page: the scope line, the
   refusal, the legend, the focus note, the edges by relation, the layers, the
   hidden counts, then the payload the canvas (S4) draws from — the same view,
-  so the two cannot disagree. The picker renders when no scope is given.
+  so the two cannot disagree. The picker renders when no scope is given. The
+  node or edge panel (S5) sits in its host after the scope line.
 -#}
 
-{#- A node as the text names it: a ghost by its short id, never a link; any
-    other node by its label (its title, or its full id when unread), linked
-    to its note, marked when its facts are pending a re-read. -#}
-{% macro node_ref(node) -%}
-  {%- if node.is_ghost -%}
-    <span class="kgraph-ghost" data-kgraph-node="{{ node.id }}">{{ node.label }}</span> <span class="kgraph-mark">note not found</span>
-  {%- else -%}
-    <a href="{{ note_url(node.id) }}" data-kgraph-node="{{ node.id }}">{{ node.label }}</a>
-    {%- if node.facts_state == "pending" %} <span class="kgraph-mark">facts pending</span>{% endif %}
-  {%- endif -%}
-{%- endmacro %}
+{% from "knowledge/graph_macros.html" import node_ref, panel_attrs %}
 
 {#- One typed edge: at the focus "→ title (weight)", elsewhere "A → B (weight)",
     linked to its edge panel (S5) by `edge=`. -#}
 {% macro edge_line(entry) -%}
   {%- if entry.other is not none -%}
-    <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}" aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }}
+    <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }}
   {%- else -%}
-    {{ node_ref(entry.source) }} <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}" aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.target) }}
+    {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.target) }}
   {%- endif %}
   <span class="kgraph-weight">({{ entry.weight_label }})</span>
   {%- if entry.edge.type == "contradicts" and entry.edge.conflict_state %} <span class="kgraph-mark">{{ entry.edge.conflict_state }}</span>{% endif %}
@@ -37,7 +28,7 @@
 {#- The contradictions queue's line (D11): "A contradicts B · ns · weight ·
     first sentence of the rationale", the resolution named when resolved. -#}
 {% macro queue_line(entry) -%}
-  {{ node_ref(entry.source) }} <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}">contradicts</a> {{ node_ref(entry.target) }}
+  {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }}>contradicts</a> {{ node_ref(entry.target) }}
   {%- if entry.edge.namespace %} · <span class="kgraph-namespace">{{ entry.edge.namespace }}</span>{% endif %}
   · <span class="kgraph-weight">{{ entry.weight_label }}</span>
   {%- if entry.edge.conflict_state | is_conflict_resolved %} · <span class="kgraph-resolution">resolved: {{ entry.edge.conflict_state }}</span>
@@ -78,6 +69,13 @@
       {% include "knowledge/graph_picker.html" %}
     {% elif view is not none %}
       {% include "knowledge/graph_scope.html" %}
+
+      {#- The panel host: the page's panel on a full request, the fragment
+          an edge or node link fetches on a click. Full width until the
+          canvas (S4) gives it a place beside the graph. -#}
+      <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
+        {%- if panel is not none %}{% include "knowledge/graph_panel.html" %}{% endif -%}
+      </div>
 
       {% if view.refusal is not none %}
         {% include "knowledge/graph_refusal.html" %}

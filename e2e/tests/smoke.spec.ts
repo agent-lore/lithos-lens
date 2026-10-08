@@ -2134,3 +2134,173 @@ test("every fact in the Children table is on screen at 320px", async ({
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(width);
 });
+
+test("a knowledge graph edge click swaps its panel in and the URL carries it", async ({
+  page,
+}) => {
+  // K2 D10: the text baseline's edge link is a plain href that htmx turns
+  // into a fetch of the panel fragment, swapped into the panel host, with
+  // the address bar following — and a later click replaces the selection.
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  const host = page.locator("#kgraph-panel");
+  await expect(host.locator("[data-kgraph-panel]")).toHaveCount(0);
+  const fragment = page.waitForResponse((response) =>
+    response.url().includes("/knowledge/graph/panel?"),
+  );
+  await page
+    .locator('[data-kgraph-edge="edge_a07c5f3e18b2"] .kgraph-edge-link')
+    .click();
+  await fragment;
+  await expect(host.locator('[data-kgraph-panel="edge"]')).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_a07c5f3e18b2",
+  );
+  await expect(page).toHaveURL(/[?&]edge=edge_a07c5f3e18b2(&|$)/);
+  // A card's Node details: the node panel replaces the edge panel.
+  await host
+    .locator('[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]')
+    .click();
+  await expect(host.locator('[data-kgraph-panel="node"]')).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "note-influx-legacy-ingest",
+  );
+  await expect(page).toHaveURL(/[?&]selected=note-influx-legacy-ingest(&|$)/);
+  expect(page.url()).not.toContain("edge=");
+});
+
+test("a later knowledge graph panel click wins over a slower earlier one", async ({
+  page,
+}) => {
+  // Every panel link syncs on the panel host with `replace`, so a click
+  // aborts the panel request still in flight from ANY other link: the
+  // earlier response can neither swap its panel in nor push its URL after
+  // the later one landed. No elapsed-time assumption: the earlier request is
+  // held at the network until the later panel has swapped, then released,
+  // and the final state is read only once the browser has ENDED that earlier
+  // XHR (`loadend` — after its load handler's swap and push, or its abort).
+  await page.addInitScript(() => {
+    const ended: string[] = [];
+    (window as any).__panelXhrEnded = ended;
+    const open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      ...rest: any[]
+    ) {
+      this.addEventListener("loadend", () => ended.push(String(url)));
+      return (open as any).call(this, method, url, ...rest);
+    } as typeof XMLHttpRequest.prototype.open;
+  });
+
+  // Hold the next panel request whose query names `marker`, until released.
+  const hold = async (marker: string) => {
+    let intercepted!: () => void;
+    let release!: () => void;
+    const seen = new Promise<void>((resolve) => (intercepted = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let handled: Promise<void> = Promise.resolve();
+    await page.route(
+      (url) =>
+        url.pathname === "/knowledge/graph/panel" && url.search.includes(marker),
+      (route) => {
+        handled = (async () => {
+          intercepted();
+          await released;
+          // Aborted in the page meanwhile: it can no longer be continued.
+          await route.continue().catch(() => undefined);
+        })();
+        return handled;
+      },
+      { times: 1 },
+    );
+    const ended = () =>
+      page.waitForFunction(
+        (m) =>
+          ((window as any).__panelXhrEnded as string[]).some((u) => u.includes(m)),
+        marker,
+      );
+    return { seen, release: () => release(), ended, handled: () => handled };
+  };
+
+  const host = page.locator("#kgraph-panel");
+  const panel = host.locator("[data-kgraph-panel]");
+  const edgeLink = (id: string) =>
+    page.locator(`[data-kgraph-edge="${id}"] .kgraph-edge-link`);
+  const race = async (
+    held: Awaited<ReturnType<typeof hold>>,
+    first: () => Promise<void>,
+    second: () => Promise<void>,
+    winner: string,
+  ) => {
+    await first();
+    await held.seen; // the earlier request is in flight, held
+    await second();
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", winner);
+    held.release();
+    await held.ended(); // the earlier XHR is over: loaded and handled, or aborted
+    await held.handled();
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", winner);
+    await expect(page).toHaveURL(new RegExp(`[?&]edge=${winner}(&|$)`));
+    expect(page.url()).not.toContain("selected=");
+  };
+
+  // Two text-baseline links: refines (held), then supports.
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  const refines = await hold("edge=edge_a07c5f3e18b2");
+  await race(
+    refines,
+    () => edgeLink("edge_a07c5f3e18b2").click(),
+    () => edgeLink("edge_4c1e9a7b20d3").click(),
+    "edge_4c1e9a7b20d3",
+  );
+
+  // A link inside the panel (Node details, held), then a queue link.
+  await page.goto("/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7");
+  const details = await hold("selected=note-influx-legacy-ingest");
+  await race(
+    details,
+    () =>
+      host
+        .locator(
+          '[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]',
+        )
+        .click(),
+    () => edgeLink("edge_e1f4a8c27b90").click(),
+    "edge_e1f4a8c27b90",
+  );
+});
+
+test("a knowledge graph panel click on a view no longer held reloads the page", async ({
+  page,
+}) => {
+  // A render id the server no longer holds (evicted, or lost to a restart —
+  // simulated by rewriting the id in flight): the click is not answered with
+  // a panel from a different view beside the old graph. HX-Redirect sends
+  // the browser to the full page with that selection, graph and panel drawn
+  // together.
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph/panel",
+    (route) => {
+      const url = new URL(route.request().url());
+      url.searchParams.set("render", "not-held");
+      return route.continue({ url: url.toString() });
+    },
+  );
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  const before = await page
+    .locator("[data-kgraph-panel-host]")
+    .getAttribute("data-kgraph-render");
+  await page
+    .locator('[data-kgraph-edge="edge_a07c5f3e18b2"] .kgraph-edge-link')
+    .click();
+  await page.waitForURL(/[?&]edge=edge_a07c5f3e18b2(&|$)/);
+  await expect(
+    page.locator('#kgraph-panel [data-kgraph-panel="edge"]'),
+  ).toHaveAttribute("data-kgraph-panel-id", "edge_a07c5f3e18b2");
+  // A new full render: a new view, under a new render id.
+  const after = await page
+    .locator("[data-kgraph-panel-host]")
+    .getAttribute("data-kgraph-render");
+  expect(after).not.toBe(before);
+});

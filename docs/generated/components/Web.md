@@ -16,7 +16,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_graph_routes` | M | 2 | 6 |
+| `lithos_lens.knowledge_graph_routes` | M | 4 | 7 |
 | `lithos_lens.knowledge_routes` | M | 1 | 4 |
 | `lithos_lens.request_filters` | L | 0 | 26 |
 | `lithos_lens.web` | L | 0 | 1 |
@@ -56,11 +56,14 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `KnowledgeGraphParams` — The page's query, parsed. ``None`` and ``""`` mean "not given".
 - def `parse_knowledge_graph_params` — The page's query grammar (S3 D3), in one place.
 - def `knowledge_graph_url` — A link into the knowledge graph: ``params`` with ``changes`` applied.
+- def `knowledge_graph_panel_url` — The same link to the panel fragment: what a click's ``hx-get`` fetches, with the scope and filters carried, and ``render`` — the id of the view the page drew (:class:`RenderedViews`) — last when there is one.
+- class `RenderedViews` — The views recent renders drew, each under a fresh render id (S5).
 - def `utc_minute` — ``as_of`` as the scope line states it: UTC, to the minute.
 - class `KnowledgeGraphPicker` — What the unscoped page offers (PRD D11, story 17).
 - def `load_picker` — The picker from the snapshot: its facets, or why there are none.
-- def `focus_metadata` — The focus note's chips, through K1's ``NoteMetadata`` (S3 D7), so the status slug the chip's class is built from has one definition.
-- def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global).
+- class `KnowledgeGraphLoad` — What one request read: offline (nothing), the picker, or a view.
+- def `load_knowledge_graph` — The page's reads for ``params``, shared by the page and its panel fragment so the two draw the same view (S5 D1).
+- def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global) and `GET /knowledge/graph/panel` (its node and edge panels).
 
 ### `lithos_lens.knowledge_routes`
 - class `NoteBackLink` — Where a note page's back link goes, and what it calls that place.

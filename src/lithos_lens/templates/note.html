@@ -2,6 +2,8 @@
 
 {% block title %}Note | Lithos Lens{% endblock %}
 
+{% from "knowledge/edge_evidence.html" import edge_evidence %}
+
 {% macro related_link(item) %}
   <a href="/note/{{ item.id }}">{{ item.label }}</a>
 {%- endmacro %}
@@ -17,23 +19,7 @@
     {% if why.provenance %}
       <p class="edge-why-provenance" data-edge-provenance>{{ why.provenance }}</p>
     {% endif %}
-    {% set evidence = why.evidence %}
-    {% if evidence and evidence.rationale %}
-      <p class="edge-why-rationale" data-edge-rationale>{{ evidence.rationale }}</p>
-    {% endif %}
-    {% if evidence and (evidence.model or evidence.confidence is not none) %}
-      <div class="edge-why-chips">
-        {% if evidence.model %}
-          <span class="chip" data-edge-model>model {{ evidence.model }}</span>
-        {% endif %}
-        {% if evidence.confidence is not none %}
-          <span class="chip" data-edge-confidence>confidence {{ "%.2f"|format(evidence.confidence) }}</span>
-        {% endif %}
-      </div>
-    {% endif %}
-    {% if evidence and evidence.raw %}
-      <p class="edge-why-raw" data-edge-evidence-raw>{{ evidence.raw }}</p>
-    {% endif %}
+    {{ edge_evidence(why.evidence) }}
   </details>
 {%- endmacro %}
 

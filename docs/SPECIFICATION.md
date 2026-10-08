@@ -216,7 +216,13 @@ The current application exposes these routes:
   Renders the knowledge graph as text (§5.7, Knowledge graph page): the scope
   picker with no scope; a focus graph with `?focus=<id>&depth=1|2`; a scoped
   global graph with `?type=` and/or `?namespace=`; filters `min_weight=` and
-  `provenance=`; `edge=` and `selected=` carried through links.
+  `provenance=`; the node panel with `selected=<note-id>` or the edge panel
+  with `edge=<edge_id>` (one at a time; `edge` wins when both are given).
+- `GET /knowledge/graph/panel`
+  The node or edge panel alone (§5.7, Knowledge graph panels), for the same
+  query as the page, plus `render=<id>` naming the view that page drew: the
+  fragment an htmx click swaps into the page's panel host. Always 200, "Not in this view" or "Lithos is offline" when there is
+  no panel to show.
 - `GET /note/{knowledge_id}`
   Renders a note: server-side markdown, frontmatter metadata chips, the
   related panel, and provenance.
@@ -1501,8 +1507,9 @@ JSON payload:
   hidden counts, the refusal and `as_of`
 
 **Knowledge graph page** (K2 S3). `GET /knowledge/graph`
-(`knowledge_graph_routes`) is the graph as text — the canvas (S4) and the
-node and edge panels (S5) are drawn from this page's payload. One parser reads
+(`knowledge_graph_routes`) is the graph as text — the canvas (S4) is drawn
+from this page's payload and the node and edge panels (S5) from the same
+view. One parser reads
 its query and one URL builder (`knowledge_graph_url`, a template global)
 writes every link into it:
 
@@ -1511,13 +1518,17 @@ writes every link into it:
   picker's own links send it so). A non-blank `focus` is **focus mode**
   (`type` and `namespace` are then ignored); otherwise `type` and/or
   `namespace` is **scoped global** mode; with none, the **scope picker**
-- `depth` is 1 or 2, anything else `knowledge.graph_default_depth`;
+- `depth` is 1 or 2, anything else `knowledge.graph_default_depth`, and is
+  read in focus mode only (elsewhere it draws nothing and links leave it out);
   `min_weight` is clamped to [0, 1], unreadable is
   `knowledge.graph_min_weight_default`; `provenance` is a comma list of the
   groups `inferred`, `reinforced`, `declared`, `other`, unknown names dropped,
-  all groups when it names none; `edge` and `selected` are carried through
-  links unchanged. Links write `min_weight` in its round-trip form, so a link
-  names the very threshold the page drew with
+  all groups when it names none; `edge` and `selected` are ids kept as sent,
+  **one at a time**: a request carrying both is read as `edge` alone,
+  whatever their order in the URL, and the builder clears one when a link
+  sets the other, so no link the page writes carries both. Links write
+  `min_weight` in its round-trip form, so a link names the very threshold the
+  page drew with
 - offline (the Lithos health probe), the page says so and reads nothing
 
 The **picker** reads only the snapshot: a table of edge types and a table of
@@ -1539,42 +1550,42 @@ way it shows no counts and offers only the typed-in form.
    time the table was counted; "Edge table as of YYYY-MM-DD HH:MM UTC; may be up to
    `graph_edge_table_ttl_s` s stale" (plus "the last refresh failed" for a
    stale snapshot), or "read directly from Lithos" for an over-bound global
-   read, and no time at all when the table could not be read; and, when
-   `edge=` names a drawn typed edge, "Edge: A type B" (otherwise `edge=` is
-   ignored)
-2. a **refusal** in place of everything below but the payload — "narrow your
+   read, and no time at all when the table could not be read
+2. the **panel host**: the node or edge panel below, when `selected=` names
+   a drawn node or `edge=` a drawn typed edge; empty otherwise
+3. a **refusal** in place of everything below but the payload — "narrow your
    scope" with the count, the cap and a link to the remedy (`depth=1` or
    `min_weight=0.N`), the typed-in scope form when the table is over its
    bound or no remedy fits, "Graph unavailable" when the table could not be
    read; never a degraded or truncated graph
-3. the **legend**: only the types drawn, in the known-type order, one
+4. the **legend**: only the types drawn, in the known-type order, one
    plain-language line each, then the wiki-link and provenance layer lines
    when drawn — kept apart from the typed lines, so a stored type spelled
    `wiki_link` is still one typed list
-4. the **focus note** with its K1 chips (built through `NoteMetadata`, so a
+5. the **focus note** with its K1 chips (built through `NoteMetadata`, so a
    status is slugged as on the note page) and lede
-5. the **edges**, one list per type in legend order. An edge at the focus
+6. the **edges**, one list per type in legend order. An edge at the focus
    reads `→ title` (outgoing), `← title` (incoming) or `↔ title` (symmetric;
    a type drawn as recorded reads as directed); any other edge reads
    `A → B` or `A ↔ B`; each with its weight to two places, or "weight
    unknown". A ghost is its short id and "note not found", never a link; an
    unread node is its full id, linked; a node whose facts are pending is
-   marked so. Every title links to its note; every typed edge links to
-   `?…&edge=<edge_id>`
-6. the **wiki-links and provenance** as K1 names them — Outgoing links,
+   marked so. Every title links to its note; every typed edge links to its
+   edge panel, `?…&edge=<edge_id>`, which htmx fetches as the panel fragment
+7. the **wiki-links and provenance** as K1 names them — Outgoing links,
    Back-links, Sources, Derived from — each note named as everywhere else on
    the page (the view's label and facts state, not the related read's inline
    title), or "Wiki-links and provenance could not be loaded" when
    `lithos_related` failed
-7. "Edges to missing notes", when any endpoint is a ghost
-8. **not shown**: the edges below the minimum weight and those hidden by the
+8. "Edges to missing notes", when any endpoint is a ghost
+9. **not shown**: the edges below the minimum weight and those hidden by the
    provenance filter (each with a link that lifts the filter), the other
    depth's would-be node count (focus mode), and when the facts cap was
    reached "N notes labelled by id (facts cap M)" for the ones with no facts
    and "N notes shown with last-known facts, re-read pending" for those drawn
    on last-known facts (a note last known missing stays a ghost and is in
    neither count)
-9. the payload, as `<script type="application/json"
+10. the payload, as `<script type="application/json"
    data-knowledge-graph-payload>` through Jinja's `tojson` (which escapes
    `<`, `>`, `&` and `'`, so a note title cannot close the element). A refused
    view embeds its payload too, with `refusal` set; the picker embeds none
@@ -1589,6 +1600,79 @@ resolved: <resolution> · the first sentence of the rationale". The rationale
 is the evidence JSON's `rationale`, else non-JSON evidence as stored, and the
 segment is omitted when there is neither; its first sentence runs to the
 first `.`, `!` or `?` followed by whitespace or the end.
+
+**Knowledge graph panels** (K2 S5). `selected=<note-id>` opens the **node
+panel** and `edge=<edge_id>` the **edge panel**, one at a time (`edge` wins).
+Both are rendered in the page's panel host on a full request — the no-JS
+baseline — and by `GET /knowledge/graph/panel` with the same query as a
+fragment: one assembly (the page's own reads for that scope and filters — the
+snapshot, the one `lithos_related` of a focus draw, the direct filtered read
+of an over-bound global scope, and the facts cache under its per-render cap;
+nothing more) and one partial (`knowledge/graph_panel.html`, extending no
+layout). A page's facts depend on when it was drawn — each render spends its
+own `graph_title_fanout_cap` from one process-wide cache that other tabs, the
+facts TTL and note events keep changing — so a click does not re-assemble the
+view: every drawn view (page or fragment) is kept under a fresh **render id**
+(`RenderedViews`: the 32 most recent, least recently used out, each found
+only for the scope and filters it was drawn under, as the URL builder spells
+them — so a `depth` that means nothing outside focus mode cannot hide it),
+the page's panel host carries it (`data-kgraph-render`) and every panel
+link's `hx-get` ends with `render=<id>`; the `href` and the pushed URL never
+carry it. The fragment checks Lithos's health first, as the page does:
+offline it answers "Lithos is offline" with nothing read, whatever it names —
+and so when it is the assembly's own probe that sees the outage.
+A fragment naming a held view is drawn from it with nothing read, so it is
+that page's panel byte for byte whatever other tabs or the facts TTL did
+since. A render id no longer held (evicted, or lost to a restart) is never
+answered with a panel from a different view beside the page's old graph: the
+response carries `HX-Redirect` to the full page with that selection, which
+htmx follows, drawing graph and panel afresh together (its body, for a client
+that does not follow the header, is a one-line notice linking there; not a
+panel open). A fragment with no render id at all — hand-made or cold — runs
+the page's assembly with its reads and draws what a full request for the
+same query draws now, under a new render id. The text baseline's edge links keep their `href`
+and add `hx-get` (the fragment), `hx-target="#kgraph-panel"`,
+`hx-sync="#kgraph-panel:replace"` and `hx-push-url` (the `href`), so a click
+swaps the panel and the address bar carries the one selection. Every panel
+link — the text baseline's and the panel's own — syncs on the host, so a
+click aborts any panel request still in flight and the later click wins both
+the swap and the URL. A panel renders only for what the view draws: a
+node in it, or a typed edge (a wiki-link or provenance pair has no panel).
+The picker, a refused view, an offline page or an id not drawn render no
+panel on the page; the fragment answers them 200 with "Not in this view", or
+"Lithos is offline" with nothing read.
+
+The **node panel**: the note's title linking to `/note/{id}` (a ghost its
+short id, "note not found" and its full id; an unread node its full id and
+"Facts not read for this view"), its K1 chips and lede from the facts
+(a `pending` node's last-known ones, marked "Facts pending a re-read"), its
+degree in this view, **Centre on this** (`?focus=<id>`, depth and filters
+kept, the selection cleared), and its **relations in this view**: every
+drawn edge at the note — typed rows and the wiki-link and provenance pairs,
+so they add up to the degree — grouped by legend line in legend order, each
+read from the note (`→` / `←` / `↔` and the other end), typed ones with their
+weight and a link to their edge panel.
+
+The **edge panel**: for `contradicts`, the conflict state first —
+"Unresolved" for anything `lithos_conflict_resolve` did not write (a
+caller's marker shown as written), else "Resolved: both notes accepted" /
+"one note supersedes the other" / "refuted" / "merged" with the value
+itself; then the **relation sentence** from the type table — "A supports B",
+"A refines B", "A is an example of B", "A depends on B", "A is derived from
+B"; symmetric types "A and B are related" / "are analogous" / "contradict
+each other", `from_id` first; an unknown type "A *type* B (direction as
+recorded)"; then type, weight, namespace, provenance (the K1 "why?" sentence
+with the raw type and actor), created and updated, each omitted when null.
+The **evidence** is K1's "why?" body: `rationale` as a paragraph, `model` and
+`confidence` as chips, non-JSON evidence as escaped text; "No rationale
+recorded" when there is no rationale or raw text (chips still shown); a
+`partial` row (event-patched) shows only "Rationale pending the next
+edge-table fetch". Below, both endpoints as cards — title, chips, lede, a
+**Node details** link to that note's panel and its note link. A
+`contradicts` edge sets the two cards side by side from the stylesheet's
+701px breakpoint (stacked below it) and reserves the place of the deferred
+pool's resolve action: "Resolving a contradiction is not yet a Lens action."
+— no form, no button, no write. Any other edge stacks its cards.
 
 ### 5.8 Live Updates
 
@@ -2874,7 +2958,11 @@ Lens's failure modes rather than its routes:
   for the picker and an offline page, `depth` in focus mode only; and
   `lens_knowledge_graph_renders_total` by `mode` and `outcome` (`rendered` |
   `refused` | `unavailable` | `offline`). The focus id, type and namespace
-  are never labels (§5.7).
+  are never labels (§5.7). `lens_knowledge_graph_panel_opens_total` counts
+  node and edge panels rendered, by `kind` (`node` | `edge`) and `source`
+  (`url`: the page with `selected=` / `edge=`; `fragment`: the panel route a
+  click fetches); a "Not in this view" or offline answer is not an open, the
+  fragment is not a page render, and no note or edge id is a label.
 - **Task graph** — page renders by scope kind and outcome (`rendered` |
   `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
   behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how

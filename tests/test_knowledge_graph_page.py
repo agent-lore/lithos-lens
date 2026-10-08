@@ -162,15 +162,20 @@ def test_the_url_builder_round_trips_through_the_parser() -> None:
         min_weight=0.35,
         provenance=("inferred",),
         edge="edge_x",
-        selected="n",
     )
     url = knowledge_graph_url(params)
     assert url == (
         "/knowledge/graph?focus=note-influx-plan&depth=2&min_weight=0.35"
-        "&provenance=inferred&selected=n&edge=edge_x"
+        "&provenance=inferred&edge=edge_x"
     )
     query = dict(re.findall(r"([a-z_]+)=([^&]*)", url.split("?", 1)[1]))
     assert parse_knowledge_graph_params(query) == params
+    # One selection per URL (S5): selected= round-trips the same way.
+    node = replace(params, edge="", selected="n")
+    node_url = knowledge_graph_url(node)
+    assert node_url.endswith("&provenance=inferred&selected=n")
+    node_query = dict(re.findall(r"([a-z_]+)=([^&]*)", node_url.split("?", 1)[1]))
+    assert parse_knowledge_graph_params(node_query) == node
     assert knowledge_graph_url() == "/knowledge/graph"
     assert (
         knowledge_graph_url(type="contradicts") == "/knowledge/graph?type=contradicts"
@@ -329,17 +334,18 @@ def test_a_failed_related_read_costs_only_the_layers(
     assert "edge_a07c5f3e18b2" in html  # the typed edges are still there
 
 
-def test_an_edge_param_names_a_drawn_edge_in_the_scope_line_else_is_ignored(
+def test_an_edge_param_opens_a_drawn_edges_panel_else_is_ignored(
     lithos_lens_config_env: Path,
 ) -> None:
     named = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_a07c5f3e18b2")
-    line = re.search(r"data-kgraph-named-edge=.*?</p>", named, re.S)
+    assert 'data-kgraph-panel="edge" data-kgraph-panel-id="edge_a07c5f3e18b2"' in named
+    line = re.search(r"<h2 data-kgraph-sentence>(.*?)</h2>", named, re.S)
     assert line is not None
-    text = " ".join(re.sub(r"<[^>]+>", "", line.group(0)).split())
-    assert text.endswith("Edge: Influx migration plan refines Legacy ingest approach")
+    text = " ".join(re.sub(r"<[^>]+>", "", line.group(1)).split())
+    assert text == "Influx migration plan refines Legacy ingest approach"
 
     ignored = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_nope")
-    assert "data-kgraph-named-edge" not in ignored
+    assert "data-kgraph-panel=" not in ignored
 
 
 def test_untrusted_titles_cannot_close_the_payload_script(

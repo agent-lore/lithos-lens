@@ -47,9 +47,26 @@ CONFLICT_RESOLUTIONS: frozenset[str] = frozenset(
 )
 
 
+#: How the edge panel words each resolution (REQUIREMENTS §11's values).
+CONFLICT_RESOLUTION_LABELS: dict[str, str] = {
+    "accepted_dual": "Resolved: both notes accepted",
+    "superseded": "Resolved: one note supersedes the other",
+    "refuted": "Resolved: refuted",
+    "merged": "Resolved: merged",
+}
+
+
 def is_conflict_resolved(conflict_state: str | None) -> TypeGuard[str]:
     """Whether ``conflict_state`` records a completed resolution."""
     return conflict_state in CONFLICT_RESOLUTIONS
+
+
+def conflict_state_label(conflict_state: str | None) -> str:
+    """A ``contradicts`` row's state in plain language: its resolution's
+    label, else "Unresolved" — NULL and a caller's marker alike."""
+    if is_conflict_resolved(conflict_state):
+        return CONFLICT_RESOLUTION_LABELS[conflict_state]
+    return "Unresolved"
 
 
 class EdgeDirection(Enum):
@@ -176,6 +193,43 @@ class LegendLine:
     css_class: str
     line: str
     known: bool = True
+
+
+@dataclass(frozen=True)
+class RelationPhrase:
+    """How one edge reads as a sentence: "A {joiner} B{tail}".
+
+    The edge panel fills A and B with its endpoints, ``from_id`` first —
+    for a symmetric type too, where the order means nothing and the wording
+    says so ("A and B are related").
+    """
+
+    joiner: str
+    tail: str = ""
+
+    def sentence(self, source: str, target: str) -> str:
+        return f"{source} {self.joiner} {target}{self.tail}"
+
+
+_PHRASES: dict[str, RelationPhrase] = {
+    "supports": RelationPhrase("supports"),
+    "related_to": RelationPhrase("and", " are related"),
+    "analogy_to": RelationPhrase("and", " are analogous"),
+    "refines": RelationPhrase("refines"),
+    "is_example_of": RelationPhrase("is an example of"),
+    "depends_on": RelationPhrase("depends on"),
+    "derived_from": RelationPhrase("is derived from"),
+    "contradicts": RelationPhrase("and", " contradict each other"),
+}
+
+
+def relation_phrase(edge_type: str) -> RelationPhrase:
+    """The sentence ``edge_type`` reads as (K2 PRD D10): directed types say
+    who does what to whom, symmetric ones say it of both, and an unknown
+    type is its raw name with "(direction as recorded)"."""
+    return _PHRASES.get(edge_type) or RelationPhrase(
+        edge_type, " (direction as recorded)"
+    )
 
 
 def known_edge_type(name: str) -> KnownEdgeType | None:

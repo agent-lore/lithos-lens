@@ -25,9 +25,4 @@
       {% endif %}
     </p>
   {% endif %}
-  {% if named_edge is not none %}
-    <p class="kgraph-named-edge" data-kgraph-named-edge="{{ named_edge.edge.id }}">
-      Edge: {{ node_ref(named_edge.source) }} {{ named_edge.edge.type }} {{ node_ref(named_edge.target) }}
-    </p>
-  {% endif %}
 </section>

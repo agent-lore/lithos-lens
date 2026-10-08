@@ -824,6 +824,67 @@ const PAGES: ReadonlyArray<{
     },
   },
   {
+    // The knowledge graph's node panel (K2 D10), server-rendered from
+    // `selected=` in the host after the scope line: the note's chips, its
+    // degree, and its relations in this view grouped by type.
+    slug: "knowledge-graph-node",
+    url: "/knowledge/graph?focus=note-influx-plan&selected=note-influx-plan",
+    ready: async (page) => {
+      const panel = page.locator('[data-kgraph-panel="node"]');
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-kgraph-degree]")).toContainText(
+        "Degree in this view:",
+      );
+      await expect(
+        panel.locator('[data-kgraph-panel-type="contradicts"]'),
+      ).toBeVisible();
+    },
+  },
+  {
+    // The edge panel: the relation sentence, the row, and the inferred
+    // rationale with its model and confidence chips, then both endpoints.
+    slug: "knowledge-graph-edge",
+    url: "/knowledge/graph?focus=note-influx-plan&edge=edge_4c1e9a7b20d3",
+    ready: async (page) => {
+      const panel = page.locator('[data-kgraph-panel="edge"]');
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-kgraph-sentence]")).toHaveText(
+        /Influx capacity report\s+supports\s+Influx migration plan/,
+      );
+      await expect(panel.locator("[data-edge-rationale]")).toBeVisible();
+      await expect(panel.locator("[data-edge-model]")).toBeVisible();
+      await expect(panel.locator("[data-kgraph-card]")).toHaveCount(2);
+    },
+  },
+  {
+    // A contradiction from the queue: its state leads, the two notes sit side
+    // by side from the 701px breakpoint and stack below it, and the resolve
+    // action's place is reserved and says so. Placement is asserted because
+    // this sandbox cannot read the PNG.
+    slug: "knowledge-graph-contradiction",
+    url: "/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7",
+    ready: async (page) => {
+      const panel = page.locator('[data-kgraph-panel="edge"]');
+      await expect(panel).toBeVisible();
+      await expect(
+        panel.locator('[data-kgraph-conflict-state="unresolved"]'),
+      ).toHaveText(/Unresolved/);
+      await expect(panel.locator("[data-kgraph-resolve-slot]")).toHaveText(
+        "Resolving a contradiction is not yet a Lens action.",
+      );
+      const cards = panel.locator("[data-kgraph-card]");
+      await expect(cards).toHaveCount(2);
+      const first = (await cards.nth(0).boundingBox())!;
+      const second = (await cards.nth(1).boundingBox())!;
+      if (page.viewportSize()!.width >= SIDEBAR_MIN_WIDTH) {
+        expect(second.y).toBe(first.y);
+        expect(second.x).toBeGreaterThan(first.x + first.width - 1);
+      } else {
+        expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+      }
+    },
+  },
+  {
     slug: "note",
     url: "/note/note-influx-plan",
     ready: async (page) => {

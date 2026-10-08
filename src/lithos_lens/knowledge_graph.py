@@ -380,6 +380,8 @@ def _typed_edge(edge: KnowledgeEdge) -> KnowledgeGraphEdge:
         partial=edge.partial,
         namespace=edge.namespace,
         created_at=edge.created_at,
+        updated_at=edge.updated_at,
+        provenance_actor=edge.provenance_actor,
         evidence=edge.evidence,
     )
 

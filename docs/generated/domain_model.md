@@ -85,6 +85,7 @@ classDiagram
   class KnowledgeEdgeEntry {
     +arrow str
   }
+  class KnowledgeEdgePanel
   class KnowledgeEdgeSection
   class KnowledgeGraphEdge {
     +id str
@@ -99,6 +100,8 @@ classDiagram
     +partial bool
     +namespace str | None
     +created_at str | None
+    +updated_at str | None
+    +provenance_actor str | None
     +evidence str | None
   }
   class KnowledgeGraphFilters {
@@ -141,6 +144,7 @@ classDiagram
     +relation LayerRelation
     +drawn_as_typed bool
   }
+  class KnowledgeNodePanel
   class KnowledgeTypedGraph {
     +hops Mapping[str, int]
     +would_be_nodes Mapping[int, int]
@@ -241,6 +245,10 @@ classDiagram
   class RelatedSection {
     +overflow int
   }
+  class RelationPhrase {
+    +joiner str
+    +tail str
+  }
   class ResolveCandidate {
     +id str
     +title str
@@ -286,6 +294,9 @@ classDiagram
   KnowledgeEdgeEntry "1" --> "0..1" KnowledgeGraphNode : other
   KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphNode : source
   KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphNode : target
+  KnowledgeEdgePanel "1" --> "1" KnowledgeEdgeEntry : entry
+  KnowledgeEdgePanel "1" --> "0..1" NoteMetadata : source_meta
+  KnowledgeEdgePanel "1" --> "0..1" NoteMetadata : target_meta
   KnowledgeEdgeSection "1" --> "0..*" KnowledgeEdgeEntry : entries
   KnowledgeEdgeSection "1" --> "1" LegendLine : line
   KnowledgeGraphNode "1" --> "0..1" NoteFacts : facts
@@ -301,6 +312,9 @@ classDiagram
   KnowledgeGraphView "1" --> "0..*" LegendLine : legend
   KnowledgeGraphView "1" --> "1" NoteFactsTally : facts_tally
   KnowledgeGraphView "1" --> "0..*" ProvenanceFacet : provenance_facets
+  KnowledgeNodePanel "1" --> "0..*" KnowledgeEdgeSection : relations
+  KnowledgeNodePanel "1" --> "1" KnowledgeGraphNode : node
+  KnowledgeNodePanel "1" --> "0..1" NoteMetadata : meta
   KnowledgeTypedGraph "1" --> "1" HiddenEdgeCounts : hidden
   KnowledgeTypedGraph "1" --> "0..*" KnowledgeEdge : edges
   KnowledgeTypedGraph "1" --> "0..1" KnowledgeGraphRefusal : refusal
