@@ -146,8 +146,11 @@ class NoteFactsTally:
     #: Nodes that needed a read and were past the cap.
     capped: int = 0
     #: Of ``capped``, those with no last-known facts: ``unread``, labelled
-    #: by their full id. The rest keep their last facts as ``pending``.
+    #: by their full id.
     capped_unread: int = 0
+    #: Of ``capped``, those drawn on their last-known facts: ``pending``. The
+    #: remainder are last known ``missing`` and stay ghosts.
+    capped_pending: int = 0
     #: Reads that failed for a reason other than ``doc_not_found``.
     failed: int = 0
 
@@ -254,6 +257,9 @@ class NoteFactsCache:
             capped=len(past_cap),
             capped_unread=sum(
                 1 for node_id in past_cap if answers[node_id].state == "unread"
+            ),
+            capped_pending=sum(
+                1 for node_id in past_cap if answers[node_id].state == "pending"
             ),
             failed=failed,
         )

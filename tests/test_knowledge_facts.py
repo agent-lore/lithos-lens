@@ -237,6 +237,21 @@ async def test_capped_unread_counts_only_the_nodes_past_the_cap_with_no_facts(
 
     assert batch.for_id(CAPACITY).state == "pending"
     assert (batch.tally.capped, batch.tally.capped_unread) == (3, 2)
+    assert batch.tally.capped_pending == 1
+
+
+async def test_an_expired_ghost_past_the_cap_is_counted_as_neither(
+    cache: NoteFactsCache, reader: Reader, ticks: Ticks
+) -> None:
+    """A last-known ``missing`` answer stays a ghost: not unread, not pending."""
+    cache.mark_missing(DANGLING_NOTE_ID)
+    ticks.now += DEFAULT_NOTE_FACTS_TTL_S
+
+    batch = await cache.lookup([PLAN, DANGLING_NOTE_ID, ROLLBACK], cap=1)
+
+    assert batch.for_id(DANGLING_NOTE_ID).state == "missing"
+    tally = batch.tally
+    assert (tally.capped, tally.capped_unread, tally.capped_pending) == (2, 1, 0)
 
 
 async def test_doc_not_found_is_a_ghost_cached_under_the_ttl(

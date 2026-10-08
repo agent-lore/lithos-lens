@@ -106,7 +106,7 @@
                 <ul>
                   {% for entry in section.entries %}
                     <li data-kgraph-edge="{{ entry.edge.id }}">
-                      {%- if view.mode == "global" and section.line.type == "contradicts" %}{{ queue_line(entry) }}{% else %}{{ edge_line(entry) }}{% endif -%}
+                      {%- if view.scope_type == "contradicts" %}{{ queue_line(entry) }}{% else %}{{ edge_line(entry) }}{% endif -%}
                     </li>
                   {% endfor %}
                 </ul>
@@ -158,7 +158,7 @@
             {% endif %}
             {% if view.facts_capped_at %}
               {% set by_id = view.facts_tally.capped_unread %}
-              {% set kept = view.facts_tally.capped - by_id %}
+              {% set kept = view.facts_tally.capped_pending %}
               {% if by_id %}
                 <li data-facts-capped>{{ by_id }} note{{ "" if by_id == 1 else "s" }} labelled by id (facts cap {{ view.facts_capped_at }})</li>
               {% endif %}

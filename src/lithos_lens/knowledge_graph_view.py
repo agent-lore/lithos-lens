@@ -559,6 +559,7 @@ def graph_payload(view: KnowledgeGraphView) -> dict[str, Any]:
             "missing": tally.missing,
             "capped": tally.capped,
             "capped_unread": tally.capped_unread,
+            "capped_pending": tally.capped_pending,
             "failed": tally.failed,
             "capped_at": view.facts_capped_at,
         },

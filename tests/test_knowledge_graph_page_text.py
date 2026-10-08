@@ -23,7 +23,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,10 +31,12 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from lithos_lens.config import load_config
-from lithos_lens.fake_knowledge_dataset import knowledge_edge_rows
+from lithos_lens.fake_knowledge_dataset import DANGLING_NOTE_ID, knowledge_edge_rows
 from lithos_lens.fake_lithos import FakeLithosClient
+from lithos_lens.graph_cache import graph_fanout_gate
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_edges import EdgeTable, KnowledgeEdge
+from lithos_lens.knowledge_facts import NoteFactsCache
 from lithos_lens.knowledge_graph_routes import (
     KnowledgeGraphParams,
     knowledge_graph_url,
@@ -112,20 +114,45 @@ def _plain(fragment: str) -> str:
     return " ".join(html_lib.unescape(re.sub(r"<[^>]+>", "", fragment)).split())
 
 
-def _entry_text(page: str, edge_id: str) -> str:
+def _entry_html(page: str, edge_id: str) -> str:
     match = re.search(
         rf'<li data-kgraph-edge="{re.escape(edge_id)}">(.*?)</li>', page, re.S
     )
     assert match is not None, f"no text entry for {edge_id}"
-    return _plain(match.group(1))
+    return match.group(1)
 
 
-def _node_mentions(page: str, node_id: str) -> list[tuple[str, str]]:
-    """Every (tag, label) the text names ``node_id`` with."""
+def _entry_text(page: str, edge_id: str) -> str:
+    return _plain(_entry_html(page, edge_id))
+
+
+def _node_mentions(page: str, node_id: str) -> list[tuple[str, str | None, str]]:
+    """Every (tag, href, label) the text names ``node_id`` with — the href
+    read off THAT element, so a link pointing at another note is caught."""
     pattern = (
-        rf'<(a|span)\b[^>]*data-kgraph-node="{re.escape(node_id)}"[^>]*>(.*?)</\1>'
+        rf'<(a|span)\b([^>]*)data-kgraph-node="{re.escape(node_id)}"[^>]*>(.*?)</\1>'
     )
-    return [(tag, html_lib.unescape(label)) for tag, label in re.findall(pattern, page)]
+    mentions = []
+    for tag, attrs, label in re.findall(pattern, page):
+        href = re.search(r'href="([^"]*)"', attrs)
+        mentions.append(
+            (
+                tag,
+                html_lib.unescape(href.group(1)) if href else None,
+                html_lib.unescape(label),
+            )
+        )
+    return mentions
+
+
+def _graph_query(url: str) -> dict[str, Any]:
+    """A graph URL's query, with ``min_weight`` compared as the number it is."""
+    path, _, query = url.partition("?")
+    assert path == ROUTE, url
+    parsed: dict[str, Any] = {k: v[0] for k, v in parse_qs(query).items()}
+    if "min_weight" in parsed:
+        parsed["min_weight"] = float(parsed["min_weight"])
+    return parsed
 
 
 def _weight(edge: dict[str, Any]) -> str:
@@ -142,9 +169,15 @@ def _shown(node: dict[str, Any]) -> str:
     return node["label"]
 
 
-def assert_text_agrees(page: str) -> dict[str, Any]:
-    """The text names exactly what the payload carries, the way it carries it."""
+def assert_text_agrees(page: str, path: str) -> dict[str, Any]:
+    """The text names exactly what the payload carries, the way it carries it.
+
+    ``path`` is the request the page answered: every edge link must keep its
+    scope and filters and name its own entry's edge.
+    """
     payload = _payload(page)
+    request_scope = _graph_query(path)
+    request_scope.pop("edge", None)
     nodes = {node["id"]: node for node in payload["nodes"]}
     focus = payload["focus"] if payload["mode"] == "focus" else None
 
@@ -153,11 +186,13 @@ def assert_text_agrees(page: str) -> dict[str, Any]:
     for node_id, node in nodes.items():
         mentions = _node_mentions(page, node_id)
         assert mentions, f"{node_id} is not named in the text"
-        for tag, label in mentions:
+        for tag, href, label in mentions:
             assert label == node["label"], (node_id, label, node["label"])
             assert tag == ("span" if node["ghost"] else "a"), (node_id, tag)
-        if not node["ghost"]:
-            assert f'href="/note/{quote(node_id, safe="")}"' in page
+            expected_href = (
+                None if node["ghost"] else f"/note/{quote(node_id, safe='')}"
+            )
+            assert href == expected_href, (node_id, href)
         if node["facts_state"] == "pending":
             assert re.search(
                 rf'data-kgraph-node="{re.escape(node_id)}"[^>]*>[^<]*</a> '
@@ -175,7 +210,8 @@ def assert_text_agrees(page: str) -> dict[str, Any]:
         text = _entry_text(page, edge["id"])
         symmetric = edge["direction"] == "symmetric"
         source, target = _shown(nodes[edge["from"]]), _shown(nodes[edge["to"]])
-        if payload["mode"] == "global" and edge["type"] == "contradicts":
+        queue = payload["scope"]["type"] == "contradicts"
+        if queue:
             expected = f"{source} contradicts {target} · "
         elif focus is not None and edge["from"] == focus:
             expected = f"{'↔' if symmetric else '→'} {target} ({_weight(edge)})"
@@ -186,9 +222,16 @@ def assert_text_agrees(page: str) -> dict[str, Any]:
                 f"{source} {'↔' if symmetric else '→'} {target} ({_weight(edge)})"
             )
         assert text.startswith(expected), (edge["id"], text, expected)
-        if payload["mode"] == "global" and edge["type"] == "contradicts":
+        if queue:
             assert f" · {_weight(edge)} · " in text
-        assert re.search(rf'href="[^"]*edge={re.escape(edge["id"])}"', page)
+        # The entry's OWN edge link: names this edge, keeps the page's scope.
+        (link,) = re.findall(
+            r'class="kgraph-edge-link" href="([^"]+)"', _entry_html(page, edge["id"])
+        )
+        assert _graph_query(html_lib.unescape(link)) == {
+            **request_scope,
+            "edge": edge["id"],
+        }, (edge["id"], link)
 
     # Layer pairs: under the section K1 names them by, from the focus.
     relation = {
@@ -277,7 +320,7 @@ def test_the_text_agrees_with_the_payload_label_for_label(
     lithos_lens_config_env: Path, path: str
 ) -> None:
     with _client(lithos_lens_config_env, _layered_fake()) as client:
-        assert_text_agrees(_get(client, path))
+        assert_text_agrees(_get(client, path), path)
 
 
 def test_layers_layer_only_nodes_and_an_unknown_weight_agree(
@@ -285,7 +328,7 @@ def test_layers_layer_only_nodes_and_an_unknown_weight_agree(
 ) -> None:
     with _client(lithos_lens_config_env, _layered_fake()) as client:
         page = _get(client, f"{ROUTE}?focus={PLAN}")
-    payload = assert_text_agrees(page)
+    payload = assert_text_agrees(page, f"{ROUTE}?focus={PLAN}")
 
     layer_only = {n["id"] for n in payload["nodes"] if n["layer_only"]}
     assert layer_only == {LAYER_LINK, LAYER_BACKLINK, LAYER_SOURCE}
@@ -314,7 +357,7 @@ def test_unread_and_pending_nodes_read_the_same_everywhere(
     _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
     with _client(lithos_lens_config_env, _layered_fake()) as client:
         first = _get(client, f"{ROUTE}?focus={PLAN}")
-        payload = assert_text_agrees(first)
+        payload = assert_text_agrees(first, f"{ROUTE}?focus={PLAN}")
         rollback = next(n for n in payload["nodes"] if n["id"] == ROLLBACK)
         assert (rollback["facts_state"], rollback["label"]) == ("unread", ROLLBACK)
         assert f'data-kgraph-node="{ROLLBACK}">{ROLLBACK}</a>' in first
@@ -338,7 +381,7 @@ def test_unread_and_pending_nodes_read_the_same_everywhere(
         )
         third = _get(client, f"{ROUTE}?focus={PLAN}")
 
-    payload = assert_text_agrees(third)
+    payload = assert_text_agrees(third, f"{ROUTE}?focus={PLAN}")
     states = {
         n["id"]: n["facts_state"] for n in payload["nodes"] if not n["layer_only"]
     }
@@ -354,6 +397,97 @@ def test_unread_and_pending_nodes_read_the_same_everywhere(
     assert 'Renamed neighbour</a> <span class="kgraph-mark">facts pending' in third
 
 
+def _swap(page: str, first: str, second: str) -> str:
+    """``page`` with every ``first`` and ``second`` exchanged."""
+    marker = "\x00swap\x00"
+    return page.replace(first, marker).replace(second, first).replace(marker, second)
+
+
+def test_the_agreement_check_catches_links_that_point_at_the_wrong_entry(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A guard on the guard: the same set of URLs, attached to the wrong
+    elements, must not pass as agreement."""
+    path = f"{ROUTE}?namespace=influx"
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, path)
+    assert_text_agrees(page, path)
+
+    swapped_notes = _swap(page, f'href="/note/{PLAN}"', f'href="/note/{ROLLBACK}"')
+    with pytest.raises(AssertionError):
+        assert_text_agrees(swapped_notes, path)
+
+    swapped_edges = _swap(page, "edge=edge_a07c5f3e18b2", "edge=edge_4c1e9a7b20d3")
+    with pytest.raises(AssertionError):
+        assert_text_agrees(swapped_edges, path)
+
+    lost_scope = page.replace(
+        "?namespace=influx&amp;edge=edge_a07c5f3e18b2", "?edge=edge_a07c5f3e18b2"
+    )
+    with pytest.raises(AssertionError):
+        assert_text_agrees(lost_scope, path)
+
+
+def test_contradicts_edges_read_as_ordinary_edges_outside_the_queue(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-008: only the ``type=contradicts`` scope is the queue; under a
+    namespace alone a contradiction reads like any symmetric edge."""
+    with _client(lithos_lens_config_env) as client:
+        namespace = _get(client, f"{ROUTE}?namespace=influx")
+        queue = _get(client, f"{ROUTE}?type=contradicts&namespace=influx")
+
+    assert "Edges by type" in namespace
+    assert _entry_text(namespace, "edge_e1f4a8c27b90") == (
+        "Influx migration plan ↔ Influx rollback route (0.80)"
+    )
+    assert _entry_text(namespace, "edge_b6e0f27d4c18") == (
+        "Legacy ingest approach ↔ Influx migration plan (0.90) superseded"
+    )
+    assert "Contradictions queue" in queue
+    assert _entry_text(queue, "edge_e1f4a8c27b90") == (
+        "Influx migration plan contradicts Influx rollback route · influx · 0.80 "
+        "· unresolved"
+    )
+
+
+def test_a_ghost_past_the_cap_is_neither_id_labelled_nor_pending(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-005: an expired ghost past the cap stays a ghost; the cap lines count
+    only the unread notes and the pending ones, each by its own state."""
+    _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
+    ticks = _Ticks()
+    with _client(lithos_lens_config_env) as client:
+        lens = _lens(client)
+        upstream = lens.lithos_client
+        lens.note_facts = NoteFactsCache(
+            lambda note_id: upstream.read_note(note_id, max_length=1),
+            graph_fanout_gate,
+            ttl_s=10,
+            fanout_cap=1,
+            ticks=ticks,
+        )
+        _get(client, f"{ROUTE}?focus={DANGLING_NOTE_ID}")  # caches the ghost
+        ticks.now += 11
+        path = f"{ROUTE}?focus={CAPACITY}"
+        page = _get(client, path)
+
+    payload = assert_text_agrees(page, path)
+    states = sorted(n["facts_state"] for n in payload["nodes"] if not n["layer_only"])
+    assert states == ["missing", "ok", "unread", "unread", "unread"]
+    facts = payload["facts"]
+    assert (facts["capped"], facts["capped_unread"], facts["capped_pending"]) == (
+        4,
+        3,
+        0,
+    )
+    assert _plain(_first(r"<li data-facts-capped>(.*?)</li>", page)) == (
+        "3 notes labelled by id (facts cap 1)"
+    )
+    assert "data-facts-pending" not in page
+
+
 def test_a_typed_edge_spelled_like_a_layer_is_listed_once(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -366,7 +500,7 @@ def test_a_typed_edge_spelled_like_a_layer_is_listed_once(
     with _client(lithos_lens_config_env, fake) as client:
         page = _get(client, f"{ROUTE}?focus={PLAN}")
 
-    assert_text_agrees(page)
+    assert_text_agrees(page, f"{ROUTE}?focus={PLAN}")
     assert re.findall(r'data-kgraph-edge="([^"]+)"', page).count(first["edge_id"]) == 1
     assert page.count('data-kgraph-type="wiki_link"') == 1
     assert "wiki_link" in re.findall(r'data-legend-type="([^"]+)"', page)

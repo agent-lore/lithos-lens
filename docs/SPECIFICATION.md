@@ -1571,14 +1571,17 @@ way it shows no counts and offers only the typed-in form.
    provenance filter (each with a link that lifts the filter), the other
    depth's would-be node count (focus mode), and when the facts cap was
    reached "N notes labelled by id (facts cap M)" for the ones with no facts
-   and "N notes shown with last-known facts, re-read pending" for the rest
+   and "N notes shown with last-known facts, re-read pending" for those drawn
+   on last-known facts (a note last known missing stays a ghost and is in
+   neither count)
 9. the payload, as `<script type="application/json"
    data-knowledge-graph-payload>` through Jinja's `tojson` (which escapes
    `<`, `>`, `&` and `'`, so a note title cannot close the element). A refused
    view embeds its payload too, with `refusal` set; the picker embeds none
 
 The **contradictions queue** is `?type=contradicts` (with a `namespace`, that
-overlap): every `contradicts` edge, unresolved first — anything
+overlap) — under a `namespace` alone a `contradicts` edge reads like any other
+symmetric edge, `A ↔ B (weight)`: every `contradicts` edge, unresolved first — anything
 `lithos_conflict_resolve` did not write, NULL and a caller's `pending` alike —
 newest `created_at` first within each state (missing timestamps last, then by
 `edge_id`), each as "A contradicts B · namespace · weight · unresolved |

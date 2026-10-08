@@ -24,7 +24,7 @@
       "Knowledge": {
         "functions_over_10": 4,
         "max_complexity": 18,
-        "max_function": "lithos_lens.knowledge_graph.build_view"
+        "max_function": "lithos_lens.knowledge_facts.NoteFactsCache.lookup"
       },
       "LithosClient": {
         "functions_over_10": 9,
@@ -264,10 +264,10 @@
         "functions": 186,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 4275,
+        "lines": 4282,
         "modules": 13,
         "public_symbols": 102,
-        "sloc": 3344
+        "sloc": 3349
       },
       "LithosClient": {
         "classes": 17,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 35265,
+    "total_lines": 35272,
     "total_modules": 86,
-    "total_sloc": 27378
+    "total_sloc": 27383
   },
   "tests": {
     "ratio": 1.9,
-    "src_lines": 35265,
-    "test_lines": 66934
+    "src_lines": 35272,
+    "test_lines": 67083
   }
 }
