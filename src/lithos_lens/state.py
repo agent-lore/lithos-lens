@@ -10,7 +10,9 @@ from typing import Literal
 from lithos_lens.config import LithosLensConfig
 from lithos_lens.events import EventHub, EventStatus
 from lithos_lens.fake_lithos import FakeLithosClient
-from lithos_lens.graph_cache import GraphCache
+from lithos_lens.graph_cache import GraphCache, graph_fanout_gate
+from lithos_lens.knowledge_edges import EdgeTable
+from lithos_lens.knowledge_facts import NoteFactsCache
 from lithos_lens.lithos_client import LithosClientProtocol, LithosHealth
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,28 @@ class AppState:
         # FakeEventHub) gets the same treatment as the real one.
         self.graph_cache = GraphCache(ttl_s=config.graph.cache_ttl_s)
         self.events.graph_cache = self.graph_cache
+        # The knowledge graph's two caches (K2 D2, D4), here beside the task
+        # graph's for the same reason: each is one process-wide instance —
+        # the edge-table snapshot every graph page, panel and note banner
+        # reads, and the note facts every node draws with — that the hub's
+        # knowledge events will patch (S7). The facts reads share the task
+        # graph's fan-out gate, so the two graphs together hold one share of
+        # the Lithos session.
+        knowledge = config.knowledge
+        client = lithos_client
+        self.edge_table = EdgeTable(
+            lambda edge_type, namespace: client.edge_list(
+                type=edge_type, namespace=namespace
+            ),
+            ttl_s=knowledge.graph_edge_table_ttl_s,
+            max_edges=knowledge.graph_edge_table_max_edges,
+        )
+        self.note_facts = NoteFactsCache(
+            lambda note_id: client.read_note(note_id, max_length=1),
+            graph_fanout_gate,
+            ttl_s=knowledge.graph_note_facts_ttl_s,
+            fanout_cap=knowledge.graph_title_fanout_cap,
+        )
         # Fake-Lithos app mode's writes announce themselves the way the real
         # server does, so that mode exercises write -> event -> SSE -> board
         # end to end. Wired HERE, with the graph cache, for the same reason:

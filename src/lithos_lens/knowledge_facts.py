@@ -177,9 +177,9 @@ class _Entry:
 class NoteFactsCache:
     """Process-wide note facts: gated reads, TTL, per-render cap, patches.
 
-    Not constructed on ``AppState`` yet — the graph page (S3) wires it with
-    ``graph_cache.graph_fanout_gate`` and the configured knobs, and S7 feeds
-    it the hub's note events.
+    One per process, on ``AppState.note_facts``, built with
+    ``graph_cache.graph_fanout_gate`` and the configured knobs; S7 feeds it
+    the hub's note events.
     """
 
     def __init__(

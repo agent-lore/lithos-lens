@@ -212,6 +212,11 @@ The current application exposes these routes:
 - `GET /knowledge/resolve`
   Resolves a wiki-link target to a note, or renders the disambiguation /
   not-found page when it cannot.
+- `GET /knowledge/graph`
+  Renders the knowledge graph as text (§5.7, Knowledge graph page): the scope
+  picker with no scope; a focus graph with `?focus=<id>&depth=1|2`; a scoped
+  global graph with `?type=` and/or `?namespace=`; filters `min_weight=` and
+  `provenance=`; `edge=` and `selected=` carried through links.
 - `GET /note/{knowledge_id}`
   Renders a note: server-side markdown, frontmatter metadata chips, the
   related panel, and provenance.
@@ -326,6 +331,12 @@ The current configuration model includes:
 - `knowledge.graph_title_fanout_cap` *(default 300, 1-2000: `lithos_read`
   calls one graph render may spend on node facts — §5.7, Knowledge graph
   assembly)*
+- `knowledge.graph_global_max_nodes` *(default 500, 1-2000: a `type=` /
+  `namespace=` graph with more nodes is refused, naming the weight filter
+  that would bring it under — §5.7, Knowledge graph assembly)*
+- `knowledge.graph_min_weight_default` *(default 0.1, a number 0.0-1.0: typed
+  edges below it are hidden unless `min_weight=` says otherwise, and the page
+  counts them — §5.7, Knowledge graph page)*
 - `events.enabled`
 - `events.reconnect_backoff_ms`
 - `llm.enabled`
@@ -1423,7 +1434,10 @@ recorded: an arrowhead from `from_id` to `to_id`, neutral grey, labelled with
 the raw type. A legend lists exactly the types present, known ones in table
 order, unknown ones after by name, one plain-language line each.
 
-**Knowledge graph assembly** (K2 S2 — no page renders it yet; S3 wires it).
+**Knowledge graph assembly** (K2 S2; `GET /knowledge/graph` renders it —
+Knowledge graph page, below). Both caches are one process-wide instance each,
+on `AppState` beside the task graph's edge cache: `state.edge_table` and
+`state.note_facts`, built from the `[knowledge]` knobs.
 `lithos_lens.knowledge_facts` holds a `NoteFactsCache` of what each graph
 node shows of its note — title, `note_type`, `status`, `namespace`,
 `confidence` (the K1 chip's percentage) and lede (`summaries.short`):
@@ -1485,6 +1499,85 @@ JSON payload:
   (type, weight, provenance, conflict state, direction) the view model holds,
   the legend (the typed types present, then one line per layer drawn), the
   hidden counts, the refusal and `as_of`
+
+**Knowledge graph page** (K2 S3). `GET /knowledge/graph`
+(`knowledge_graph_routes`) is the graph as text — the canvas (S4) and the
+node and edge panels (S5) are drawn from this page's payload. One parser reads
+its query and one URL builder (`knowledge_graph_url`, a template global)
+writes every link into it:
+
+- a blank value is absent. A non-blank `focus` is **focus mode** (`type` and
+  `namespace` are then ignored); otherwise `type` and/or `namespace` (exact
+  strings) is **scoped global** mode; with none, the **scope picker**
+- `depth` is 1 or 2, anything else `knowledge.graph_default_depth`;
+  `min_weight` is clamped to [0, 1], unreadable is
+  `knowledge.graph_min_weight_default`; `provenance` is a comma list of the
+  groups `inferred`, `reinforced`, `declared`, `other`, unknown names dropped,
+  all groups when it names none; `edge` and `selected` are carried through
+  links unchanged
+- offline (the Lithos health probe), the page says so and reads nothing
+
+The **picker** reads only the snapshot: a table of edge types and a table of
+namespaces with their edge counts (most first; namespaces past the top 20 in
+a disclosure), each a link to that scope; the unresolved-contradictions count
+as a link to `?type=contradicts`; the snapshot's `as_of`; and a typed-in
+`type=` / `namespace=` form. It has no search box of its own (the nav's
+searches knowledge). With the table over its bound it says "Graph too large to
+index: N edges over the M bound"; with the table unreadable it says so; either
+way it shows no counts and offers only the typed-in form.
+
+**Focus** and **scoped global** run the assembly above with
+`knowledge.graph_focus_max_nodes` / `knowledge.graph_global_max_nodes` and
+`knowledge.graph_title_fanout_cap`, and render, in order:
+
+1. the **scope line**: the focus (its title; its id on a refusal) and depth,
+   or the type/namespace filters; the minimum weight and any provenance
+   narrowing; "Edge table as of YYYY-MM-DD HH:MM UTC; may be up to
+   `graph_edge_table_ttl_s` s stale" (plus "the last refresh failed" for a
+   stale snapshot), or "read directly from Lithos" for an over-bound global
+   read, and no time at all when the table could not be read; and, when
+   `edge=` names a drawn typed edge, "Edge: A type B" (otherwise `edge=` is
+   ignored)
+2. a **refusal** in place of everything below but the payload — "narrow your
+   scope" with the count, the cap and a link to the remedy (`depth=1` or
+   `min_weight=0.N`), the typed-in scope form when the table is over its
+   bound or no remedy fits, "Graph unavailable" when the table could not be
+   read; never a degraded or truncated graph
+3. the **legend**: only the types drawn, in the known-type order, one
+   plain-language line each, then the wiki-link and provenance lines when
+   drawn
+4. the **focus note** with its K1 chips (built through `NoteMetadata`, so a
+   status is slugged as on the note page) and lede
+5. the **edges**, one list per type in legend order. An edge at the focus
+   reads `→ title` (outgoing), `← title` (incoming) or `↔ title` (symmetric;
+   a type drawn as recorded reads as directed); any other edge reads
+   `A → B` or `A ↔ B`; each with its weight to two places, or "weight
+   unknown". A ghost is its short id and "note not found", never a link; an
+   unread node is its full id, linked; a node whose facts are pending is
+   marked so. Every title links to its note; every typed edge links to
+   `?…&edge=<edge_id>`
+6. the **wiki-links and provenance** as K1 names them — Outgoing links,
+   Back-links, Sources, Derived from — or "Wiki-links and provenance could
+   not be loaded" when `lithos_related` failed
+7. "Edges to missing notes", when any endpoint is a ghost
+8. **not shown**: the edges below the minimum weight and those hidden by the
+   provenance filter (each with a link that lifts the filter), the other
+   depth's would-be node count (focus mode), and "N notes labelled by id
+   (facts cap M)" when the facts cap was reached
+9. the payload, as `<script type="application/json"
+   data-knowledge-graph-payload>` through Jinja's `tojson` (which escapes
+   `<`, `>`, `&` and `'`, so a note title cannot close the element). A refused
+   view embeds its payload too, with `refusal` set; the picker embeds none
+
+The **contradictions queue** is `?type=contradicts` (with a `namespace`, that
+overlap): every `contradicts` edge, unresolved first — anything
+`lithos_conflict_resolve` did not write, NULL and a caller's `pending` alike —
+newest `created_at` first within each state (missing timestamps last, then by
+`edge_id`), each as "A contradicts B · namespace · weight · unresolved |
+resolved: <resolution> · the first sentence of the rationale". The rationale
+is the evidence JSON's `rationale`, else non-JSON evidence as stored, and the
+segment is omitted when there is neither; its first sentence runs to the
+first `.`, `!` or `?` followed by whitespace or the end.
 
 ### 5.8 Live Updates
 
@@ -2761,6 +2854,15 @@ Lens's failure modes rather than its routes:
   (seconds since the last successful fetch), and
   `lens_knowledge_edge_table_patches_total` by `event_type` and `outcome`
   (`inserted` | `replaced` | `refused` | `ignored`) (§5.7).
+- **Knowledge graph page** — `lens.knowledge.graph.*` attributes on the
+  `/knowledge/graph` request span: `mode` (`picker` | `focus` | `global`),
+  `outcome`, `depth` (focus mode), `nodes`, `edges`, `hidden_by_weight`,
+  `hidden_by_provenance`, `hidden_total`, `refusal` (the reason, on a
+  refusal), `snapshot_age_s`, and the facts lookup's `facts.hits`, `.reads`,
+  `.missing`, `.capped` and `.failed`; and
+  `lens_knowledge_graph_renders_total` by `mode` and `outcome` (`rendered` |
+  `refused` | `unavailable` | `offline`). The focus id, type and namespace
+  are never labels (§5.7).
 - **Task graph** — page renders by scope kind and outcome (`rendered` |
   `refused` | `picker` | `offline` | `error`), and the scoped blocked reads
   behind the cycle signal by outcome (`ok` | `truncated` | `failed`), so "how

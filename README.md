@@ -185,6 +185,8 @@ Loaded via `python-dotenv` at startup. **Precedence: env var → config file →
 | `LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH` | `lithos-lens.knowledge.graph_default_depth` | Integer 1-2 (same bounds as the TOML key). Hops of typed edges a focus graph opens at. |
 | `LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S` | `lithos-lens.knowledge.graph_note_facts_ttl_s` | Integer 1-86400 (same bounds as the TOML key). Seconds a graph node's note facts are served before the next draw re-reads them. |
 | `LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP` | `lithos-lens.knowledge.graph_title_fanout_cap` | Integer 1-2000 (same bounds as the TOML key). `lithos_read` calls one graph render may spend on node facts; nodes past it are labelled by id. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES` | `lithos-lens.knowledge.graph_global_max_nodes` | Integer 1-2000 (same bounds as the TOML key). A `type=`/`namespace=` graph with more notes is refused, naming the weight filter that would bring it under. |
+| `LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT` | `lithos-lens.knowledge.graph_min_weight_default` | Number 0.0-1.0 (same bounds as the TOML key). Typed edges below it are hidden unless `min_weight=` says otherwise; the page counts them. |
 | `LITHOS_LENS_GRAPH_CACHE_TTL_S` | `lithos-lens.graph.cache_ttl_s` | Must be a positive integer. Staleness bound on the per-task edge cache. |
 | `LITHOS_LENS_GRAPH_MAX_TASKS` | `lithos-lens.graph.max_tasks` | Integer 1-2000 (same bounds as the TOML key). Ghosts count toward it. |
 | `LITHOS_LENS_GRAPH_FETCH_CONCURRENCY` | `lithos-lens.graph.fetch_concurrency` | Integer 1-64 (same bounds as the TOML key). |

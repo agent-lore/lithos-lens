@@ -720,6 +720,7 @@ async def test_a_table_over_its_bound_refuses_focus_and_serves_filtered_global()
         "edge_e1f4a8c27b90", "edge_38c9d1f5e6a7", "edge_b6e0f27d4c18",
     }  # fmt: skip
     assert scoped.as_of == _T0
+    assert scoped.read_directly is True and scoped.stale is False
     assert ("lithos_edge_list", {"type": "contradicts"}) in wiring.fake.tool_calls
 
 
@@ -752,6 +753,7 @@ async def test_global_graph_reads_facts_by_degree_and_has_no_layers(
     view = await assemble_global_graph(wiring.table, wiring.facts, namespace="influx")
 
     assert view.mode == "global" and view.refusal is None
+    assert view.read_directly is False
     assert wiring.related_calls == []
     assert all(e.kind == "typed" for e in view.edges)
     degrees = {node.id: node.degree for node in view.nodes}

@@ -13,7 +13,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML load
 |---|---|---:|---:|
 | `lithos_lens.config` | L | 0 | 2 |
 | `lithos_lens.config_env` | M | 0 | 1 |
-| `lithos_lens.config_fields` | S | 0 | 10 |
+| `lithos_lens.config_fields` | S | 0 | 11 |
 | `lithos_lens.config_schema` | M | 13 | 1 |
 
 ## Public API
@@ -33,6 +33,7 @@ Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML load
 - def `optional_str`
 - def `optional_path`
 - def `optional_int`
+- def `optional_float` — A number knob: TOML ``0.1`` or ``1`` alike, never a boolean.
 - def `optional_bool`
 - def `optional_status_groups`
 - def `optional_str_list` — A list-of-strings knob, EMPTY-LIST-permitting but not blank-permitting.

@@ -172,6 +172,8 @@ def lithos_lens_config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_DEFAULT_DEPTH", "")
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_NOTE_FACTS_TTL_S", "")
     monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_TITLE_FANOUT_CAP", "")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_GLOBAL_MAX_NODES", "")
+    monkeypatch.setenv("LITHOS_LENS_KNOWLEDGE_GRAPH_MIN_WEIGHT_DEFAULT", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_CACHE_TTL_S", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_MAX_TASKS", "")
     monkeypatch.setenv("LITHOS_LENS_GRAPH_FETCH_CONCURRENCY", "")

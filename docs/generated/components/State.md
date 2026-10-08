@@ -11,7 +11,7 @@ Application state and startup/shutdown orchestration (AppState, HealthSnapshot).
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.state` | XS | 2 | 0 |
+| `lithos_lens.state` | S | 2 | 0 |
 
 ## Public API
 
@@ -21,7 +21,7 @@ Application state and startup/shutdown orchestration (AppState, HealthSnapshot).
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Events](Events.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md)
+- Depends on: [Config](Config.md), [Events](Events.md), [Knowledge](Knowledge.md), [LithosClient](LithosClient.md), [TaskGraph](TaskGraph.md)
 - Used by: [Web](Web.md)
 
 [← all generated docs](../README.md)

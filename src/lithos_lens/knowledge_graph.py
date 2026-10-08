@@ -77,9 +77,8 @@ from lithos_lens.knowledge_graph_view import (
 logger = logging.getLogger(__name__)
 
 # Mirror the ``[lithos-lens.knowledge]`` config defaults, as knowledge_edges
-# does; ``tests/test_knowledge_facts.py`` pins the one Config carries.
-# ``graph_global_max_nodes`` becomes a config knob with the page (S3), which
-# passes it in.
+# does; ``tests/test_knowledge_facts.py`` pins both to the ones Config carries.
+# The page passes the configured caps in.
 DEFAULT_FOCUS_MAX_NODES = 250
 DEFAULT_GLOBAL_MAX_NODES = 500
 
@@ -379,6 +378,9 @@ def _typed_edge(edge: KnowledgeEdge) -> KnowledgeGraphEdge:
         provenance=edge.provenance_type,
         conflict_state=edge.conflict_state,
         partial=edge.partial,
+        namespace=edge.namespace,
+        created_at=edge.created_at,
+        evidence=edge.evidence,
     )
 
 
@@ -668,8 +670,11 @@ async def assemble_global_graph(
         "stale": stale,
         **scope,
     }
+    read_directly = isinstance(state, EdgeTableRefusal)
     if typed.refusal is not None:
-        return build_view(typed, **view_args)
+        return replace(build_view(typed, **view_args), read_directly=read_directly)
     drawn = tuple(_typed_edge(edge) for edge in typed.edges)
     batch = await facts.lookup(read_order(typed, drawn), cap=fanout_cap)
-    return build_view(typed, facts=batch, **view_args)
+    return replace(
+        build_view(typed, facts=batch, **view_args), read_directly=read_directly
+    )

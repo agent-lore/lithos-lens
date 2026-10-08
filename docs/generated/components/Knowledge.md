@@ -17,7 +17,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_facts` | M | 5 | 2 |
 | `lithos_lens.knowledge_graph` | M | 1 | 8 |
-| `lithos_lens.knowledge_graph_view` | M | 8 | 2 |
+| `lithos_lens.knowledge_graph_view` | M | 10 | 8 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
 | `lithos_lens.knowledge_produced_by` | S | 2 | 1 |
@@ -102,6 +102,14 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - class `KnowledgeGraphNode` — One drawn note: its facts and their state, and its place in the view.
 - class `KnowledgeGraphEdge` — One drawn edge: a typed row from the snapshot, or a one-hop layer pair.
 - class `KnowledgeGraphView` — Everything the page renders for one scope, refused or drawn.
+- def `first_sentence` — ``text`` up to and including its first ``.``, ``!`` or ``?`` that is followed by whitespace or the end; the whole (stripped) text without one.
+- def `edge_rationale` — The first sentence of an edge's rationale, for the queue's line.
+- def `contradictions_queue` — The ``contradicts`` edges as the queue lists them (PRD story 13).
+- class `KnowledgeEdgeEntry` — One typed edge as the text baseline lists it.
+- class `KnowledgeEdgeSection` — One edge type's entries, under its legend line.
+- def `edge_entry` — How ``edge`` reads in ``view``'s text: arrow, ends, and — at the focus — the node at the other end.
+- def `edge_sections` — The typed edges, one section per type in legend (D5) order.
+- def `named_edge` — The typed edge ``edge=`` names when the view draws it, else ``None``.
 - def `graph_payload` — The JSON-ready payload the canvas draws from: the view's nodes and edges, legend, hidden counts, refusal and ``as_of``, nothing more.
 
 ### `lithos_lens.knowledge_landing`
@@ -150,6 +158,6 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 ## Dependencies
 
 - Depends on: [Tasks](Tasks.md), [Telemetry](Telemetry.md)
-- Used by: [LithosClient](LithosClient.md), [Web](Web.md)
+- Used by: [LithosClient](LithosClient.md), [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

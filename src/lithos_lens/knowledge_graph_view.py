@@ -14,19 +14,25 @@ the task graph: records here, the work that fills them there.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Final, Literal
 
-from lithos_lens.knowledge_edge_types import EdgeDirection, LegendLine
+from lithos_lens.knowledge_edge_evidence import parse_edge_evidence
+from lithos_lens.knowledge_edge_types import (
+    EdgeDirection,
+    LegendLine,
+    is_conflict_resolved,
+)
 from lithos_lens.knowledge_edges import KnowledgeEdge
 from lithos_lens.knowledge_facts import FactsState, NoteFacts, NoteFactsTally
 
 # Mirror the ``[lithos-lens.knowledge]`` config defaults, as knowledge_edges
-# does; ``tests/test_knowledge_facts.py`` pins the one Config carries.
-# ``graph_min_weight_default`` becomes a config knob with the page (S3).
+# does; ``tests/test_knowledge_facts.py`` pins them to the ones Config
+# carries. The page passes the configured ``graph_min_weight_default`` in.
 DEFAULT_DEPTH = 1
 MAX_DEPTH = 2
 DEFAULT_MIN_WEIGHT = 0.1
@@ -214,6 +220,11 @@ class KnowledgeGraphEdge:
     provenance: str | None = None
     conflict_state: str | None = None
     partial: bool = False
+    #: The row's columns the text baseline prints and the payload leaves out
+    #: (the contradictions queue, D11); ``None`` on a layer pair.
+    namespace: str | None = None
+    created_at: str | None = None
+    evidence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +255,9 @@ class KnowledgeGraphView:
     as_of: datetime | None = None
     #: The snapshot is the last good one; its refetch failed.
     stale: bool = False
+    #: Global mode over the table's bound: the rows came from a direct
+    #: filtered read stamped now, so no snapshot TTL applies to them.
+    read_directly: bool = False
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.
     facts_capped_at: int = 0
@@ -264,6 +278,177 @@ class KnowledgeGraphView:
             for edge in self.edges
             if edge.kind == "typed" and {edge.from_id, edge.to_id} & missing
         )
+
+
+# ── the contradictions queue (D11) ─────────────────────────────────────
+
+# Up to and including the first sentence mark followed by whitespace or the end.
+_FIRST_SENTENCE = re.compile(r"^(.*?[.!?])(?=\s|$)", re.DOTALL)
+
+
+def first_sentence(text: str) -> str:
+    """``text`` up to and including its first ``.``, ``!`` or ``?`` that is
+    followed by whitespace or the end; the whole (stripped) text without one.
+
+    So "v1.2 is out. More" is "v1.2 is out." — a mark inside a token is not
+    a sentence end.
+    """
+    text = text.strip()
+    match = _FIRST_SENTENCE.match(text)
+    return match.group(1) if match else text
+
+
+def edge_rationale(evidence: str | None) -> str:
+    """The first sentence of an edge's rationale, for the queue's line.
+
+    The ``rationale`` of the parsed evidence JSON when it has one, else the
+    raw text of evidence that is not a JSON object; ``""`` when there is
+    neither (null evidence, or an object with no rationale).
+    """
+    parsed = parse_edge_evidence(evidence)
+    if parsed is None:
+        return ""
+    return first_sentence(parsed.rationale or parsed.raw)
+
+
+def _created_desc(created_at: str | None) -> tuple[int, float]:
+    """A sort key putting the newest ``created_at`` first, missing last."""
+    if not created_at:
+        return (1, 0.0)
+    try:
+        stamp = datetime.fromisoformat(created_at)
+    except ValueError:
+        return (1, 0.0)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return (0, -stamp.timestamp())
+
+
+def contradictions_queue(
+    edges: Iterable[KnowledgeGraphEdge],
+) -> tuple[KnowledgeGraphEdge, ...]:
+    """The ``contradicts`` edges as the queue lists them (PRD story 13).
+
+    Unresolved first — anything ``lithos_conflict_resolve`` did not write,
+    NULL and a caller's ``"pending"`` alike (``is_conflict_resolved``) — then
+    newest ``created_at`` first within each state, rows with no (or an
+    unreadable) timestamp last, then by ``edge_id`` so the order is total.
+    """
+    return tuple(
+        sorted(
+            (edge for edge in edges if edge.type == "contradicts"),
+            key=lambda edge: (
+                is_conflict_resolved(edge.conflict_state),
+                _created_desc(edge.created_at),
+                edge.id,
+            ),
+        )
+    )
+
+
+# ── the text baseline (D12) ────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class KnowledgeEdgeEntry:
+    """One typed edge as the text baseline lists it.
+
+    An edge at the focus reads from the focus: ``→`` (outgoing), ``←``
+    (incoming) or ``↔`` (symmetric) and the node at the other end, ``other``.
+    Any other edge — depth 2's neighbour-to-neighbour edges, every edge in
+    global mode — reads ``source → target`` or ``source ↔ target``. A type
+    drawn as recorded reads as directed.
+    """
+
+    edge: KnowledgeGraphEdge
+    arrow: str
+    source: KnowledgeGraphNode
+    target: KnowledgeGraphNode
+    other: KnowledgeGraphNode | None = None
+
+    @property
+    def weight_label(self) -> str:
+        weight = self.edge.weight
+        return "weight unknown" if weight is None else f"{weight:.2f}"
+
+    @property
+    def rationale(self) -> str:
+        """The first sentence of the edge's rationale (the queue's segment)."""
+        return edge_rationale(self.edge.evidence)
+
+
+@dataclass(frozen=True)
+class KnowledgeEdgeSection:
+    """One edge type's entries, under its legend line."""
+
+    line: LegendLine
+    entries: tuple[KnowledgeEdgeEntry, ...]
+
+
+def _placeholder(node_id: str) -> KnowledgeGraphNode:
+    return KnowledgeGraphNode(id=node_id, label=node_id, facts_state="unread")
+
+
+def _entry(
+    nodes: Mapping[str, KnowledgeGraphNode], focus: str, edge: KnowledgeGraphEdge
+) -> KnowledgeEdgeEntry:
+    source = nodes.get(edge.from_id) or _placeholder(edge.from_id)
+    target = nodes.get(edge.to_id) or _placeholder(edge.to_id)
+    symmetric = edge.direction is EdgeDirection.SYMMETRIC
+    if focus and edge.from_id == focus:
+        arrow = "↔" if symmetric else "→"
+        return KnowledgeEdgeEntry(edge, arrow, source, target, target)
+    if focus and edge.to_id == focus:
+        arrow = "↔" if symmetric else "←"
+        return KnowledgeEdgeEntry(edge, arrow, source, target, source)
+    return KnowledgeEdgeEntry(edge, "↔" if symmetric else "→", source, target)
+
+
+def _node_index(view: KnowledgeGraphView) -> dict[str, KnowledgeGraphNode]:
+    return {node.id: node for node in view.nodes}
+
+
+def _focus_of(view: KnowledgeGraphView) -> str:
+    return view.focus_id if view.mode == "focus" else ""
+
+
+def edge_entry(
+    view: KnowledgeGraphView, edge: KnowledgeGraphEdge
+) -> KnowledgeEdgeEntry:
+    """How ``edge`` reads in ``view``'s text: arrow, ends, and — at the
+    focus — the node at the other end."""
+    return _entry(_node_index(view), _focus_of(view), edge)
+
+
+def edge_sections(view: KnowledgeGraphView) -> tuple[KnowledgeEdgeSection, ...]:
+    """The typed edges, one section per type in legend (D5) order.
+
+    Within a type, the snapshot's order — except ``contradicts``, which is
+    always the queue's: unresolved first, newest first
+    (:func:`contradictions_queue`).
+    """
+    nodes, focus = _node_index(view), _focus_of(view)
+    sections: list[KnowledgeEdgeSection] = []
+    for line in view.legend:
+        edges = [e for e in view.edges if e.kind == "typed" and e.type == line.type]
+        if not edges:
+            continue
+        if line.type == "contradicts":
+            edges = list(contradictions_queue(edges))
+        sections.append(
+            KnowledgeEdgeSection(
+                line, tuple(_entry(nodes, focus, edge) for edge in edges)
+            )
+        )
+    return tuple(sections)
+
+
+def named_edge(view: KnowledgeGraphView, edge_id: str) -> KnowledgeEdgeEntry | None:
+    """The typed edge ``edge=`` names when the view draws it, else ``None``."""
+    if not edge_id:
+        return None
+    edge = next((e for e in view.edges if e.kind == "typed" and e.id == edge_id), None)
+    return None if edge is None else edge_entry(view, edge)
 
 
 # ── the payload ────────────────────────────────────────────────────────

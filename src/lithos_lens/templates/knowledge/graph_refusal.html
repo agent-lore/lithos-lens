@@ -1,0 +1,19 @@
+{#- The "narrow your scope" panel (K2 story 18): the count, the cap and the
+    remedy that fits — never a degraded or truncated graph. -#}
+{% set refusal = view.refusal %}
+<section class="panel kgraph-refusal" role="status" data-kgraph-refusal="{{ refusal.reason }}">
+  <h2>{% if refusal.reason == "unavailable" %}Graph unavailable{% else %}Narrow your scope{% endif %}</h2>
+  <p>{{ refusal.message }}</p>
+  {% if refusal.reason == "too_many_nodes" %}
+    {% if refusal.remedy_depth is not none %}
+      <p><a href="{{ knowledge_graph_url(params, depth=refusal.remedy_depth) }}" data-kgraph-remedy>Show depth={{ refusal.remedy_depth }} ({{ refusal.remedy_count }} notes)</a></p>
+    {% elif refusal.remedy_min_weight is not none %}
+      <p><a href="{{ knowledge_graph_url(params, min_weight=refusal.remedy_min_weight) }}" data-kgraph-remedy>Show min_weight={{ "%.1f" | format(refusal.remedy_min_weight) }} ({{ refusal.remedy_count }} notes)</a></p>
+    {% endif %}
+  {% elif refusal.reason == "unavailable" %}
+    <p>Lens will retry on refresh.</p>
+  {% endif %}
+  {% if refusal.reason == "table_refused" or (refusal.reason == "too_many_nodes" and not refusal.has_remedy) %}
+    {% include "knowledge/graph_scope_form.html" %}
+  {% endif %}
+</section>

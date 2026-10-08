@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Graph | Knowledge | Lithos Lens{% endblock %}
+
+{#-
+  /knowledge/graph (K2 D11, D12). The text IS the page: the scope line, the
+  refusal, the legend, the focus note, the edges by relation, the layers, the
+  hidden counts, then the payload the canvas (S4) draws from — the same view,
+  so the two cannot disagree. The picker renders when no scope is given.
+-#}
+
+{#- A node as the text names it: a ghost by its short id, never a link; any
+    other node by its label (its title, or its full id when unread), linked
+    to its note, marked when its facts are pending a re-read. -#}
+{% macro node_ref(node) -%}
+  {%- if node.is_ghost -%}
+    <span class="kgraph-ghost" data-kgraph-node="{{ node.id }}">{{ node.label }}</span> <span class="kgraph-mark">note not found</span>
+  {%- else -%}
+    <a href="{{ note_url(node.id) }}" data-kgraph-node="{{ node.id }}">{{ node.label }}</a>
+    {%- if node.facts_state == "pending" %} <span class="kgraph-mark">facts pending</span>{% endif %}
+  {%- endif -%}
+{%- endmacro %}
+
+{#- One typed edge: at the focus "→ title (weight)", elsewhere "A → B (weight)",
+    linked to its edge panel (S5) by `edge=`. -#}
+{% macro edge_line(entry) -%}
+  {%- if entry.other is not none -%}
+    <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}" aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }}
+  {%- else -%}
+    {{ node_ref(entry.source) }} <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}" aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.target) }}
+  {%- endif %}
+  <span class="kgraph-weight">({{ entry.weight_label }})</span>
+  {%- if entry.edge.type == "contradicts" and entry.edge.conflict_state %} <span class="kgraph-mark">{{ entry.edge.conflict_state }}</span>{% endif %}
+  {%- if entry.edge.partial %} <span class="kgraph-mark">updated by event; details pending</span>{% endif %}
+{%- endmacro %}
+
+{#- The contradictions queue's line (D11): "A contradicts B · ns · weight ·
+    first sentence of the rationale", the resolution named when resolved. -#}
+{% macro queue_line(entry) -%}
+  {{ node_ref(entry.source) }} <a class="kgraph-edge-link" href="{{ knowledge_graph_url(params, edge=entry.edge.id) }}">contradicts</a> {{ node_ref(entry.target) }}
+  {%- if entry.edge.namespace %} · <span class="kgraph-namespace">{{ entry.edge.namespace }}</span>{% endif %}
+  · <span class="kgraph-weight">{{ entry.weight_label }}</span>
+  {%- if entry.edge.conflict_state | is_conflict_resolved %} · <span class="kgraph-resolution">resolved: {{ entry.edge.conflict_state }}</span>
+  {%- else %} · <span class="kgraph-unresolved">unresolved{% if entry.edge.conflict_state %} ({{ entry.edge.conflict_state }}){% endif %}</span>
+  {%- endif %}
+  {%- if entry.rationale %} · <span class="kgraph-rationale">{{ entry.rationale }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro layer_list(heading, refs) %}
+  {% if refs %}
+    <div class="kgraph-layer-group">
+      <h3>{{ heading }}</h3>
+      <ul>
+        {% for ref in refs %}
+          <li><a href="{{ note_url(ref.id) }}" data-kgraph-node="{{ ref.id }}">{{ ref.title or ref.id }}</a>{% if ref.drawn_as_typed %} <span class="kgraph-mark">also a derived_from edge</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+  <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}">
+    <header>
+      <p class="eyebrow"><a href="/knowledge">Knowledge</a></p>
+      <h1>{% if mode == "picker" %}Knowledge graph{% elif mode == "focus" %}Graph around a note{% else %}Graph by scope{% endif %}</h1>
+    </header>
+
+    {% if offline %}
+      <section class="banner banner-warning" role="status">
+        <span>Lithos is offline or degraded. The knowledge graph is unavailable.</span>
+      </section>
+    {% elif picker is not none %}
+      {% include "knowledge/graph_picker.html" %}
+    {% elif view is not none %}
+      {% include "knowledge/graph_scope.html" %}
+
+      {% if view.refusal is not none %}
+        {% include "knowledge/graph_refusal.html" %}
+      {% else %}
+        {% include "knowledge/graph_legend.html" %}
+
+        {% if focus_node is not none %}
+          <section class="panel" data-kgraph-focus>
+            <h2>Focus note</h2>
+            <p class="kgraph-focus-title">{{ node_ref(focus_node) }}</p>
+            {% if focus_meta is not none %}
+              {% with meta = focus_meta, compact = false %}
+                {% if meta.has_chips %}{% include "knowledge/note_chips.html" %}{% endif %}
+              {% endwith %}
+              {% if focus_meta.lede %}<p class="kgraph-lede">{{ focus_meta.lede }}</p>{% endif %}
+            {% endif %}
+          </section>
+        {% endif %}
+
+        <section class="panel kgraph-edges" data-kgraph-edges>
+          <h2>{% if view.mode == "focus" %}Neighbours by relation{% elif view.scope_type == "contradicts" %}Contradictions queue{% else %}Edges by type{% endif %}</h2>
+          {% if sections %}
+            {% for section in sections %}
+              <section class="kgraph-type" data-kgraph-type="{{ section.line.type }}">
+                <h3>{{ section.line.type }} <span class="kgraph-count">{{ section.entries | length }}</span></h3>
+                <ul>
+                  {% for entry in section.entries %}
+                    <li data-kgraph-edge="{{ entry.edge.id }}">
+                      {%- if view.mode == "global" and section.line.type == "contradicts" %}{{ queue_line(entry) }}{% else %}{{ edge_line(entry) }}{% endif -%}
+                    </li>
+                  {% endfor %}
+                </ul>
+              </section>
+            {% endfor %}
+          {% else %}
+            <p class="kgraph-empty">No typed edges in this scope under the current filters.</p>
+          {% endif %}
+        </section>
+
+        {% if view.mode == "focus" %}
+          <section class="panel kgraph-layers" data-kgraph-layers>
+            <h2>Wiki-links and provenance</h2>
+            {% if view.layers_unavailable %}
+              <p class="kgraph-note" role="status">Wiki-links and provenance could not be loaded.</p>
+            {% elif view.wiki_links or view.backlinks or view.sources or view.derived %}
+              {{ layer_list("Outgoing links", view.wiki_links) }}
+              {{ layer_list("Back-links", view.backlinks) }}
+              {{ layer_list("Sources", view.sources) }}
+              {{ layer_list("Derived from", view.derived) }}
+            {% else %}
+              <p class="kgraph-empty">No wiki-links or provenance.</p>
+            {% endif %}
+          </section>
+        {% endif %}
+
+        {% if view.edges_to_missing %}
+          <section class="panel kgraph-missing" data-kgraph-missing>
+            <h2>Edges to missing notes</h2>
+            <ul>
+              {% for edge in view.edges_to_missing %}
+                {% with entry = edge_entry(view, edge) %}
+                  <li>{{ node_ref(entry.source) }} {{ edge.type }} {{ node_ref(entry.target) }}</li>
+                {% endwith %}
+              {% endfor %}
+            </ul>
+          </section>
+        {% endif %}
+
+        <section class="panel kgraph-hidden" data-kgraph-hidden>
+          <h2>Not shown</h2>
+          <ul>
+            <li data-hidden-weight>{{ view.hidden.by_weight }} edge{{ "" if view.hidden.by_weight == 1 else "s" }} below {{ "%g" | format(view.filters.min_weight) }} hidden{% if view.hidden.by_weight %} — <a href="{{ knowledge_graph_url(params, min_weight=0.0) }}">show all weights</a>{% endif %}</li>
+            <li data-hidden-provenance>{{ view.hidden.by_provenance }} edge{{ "" if view.hidden.by_provenance == 1 else "s" }} hidden by the provenance filter{% if view.hidden.by_provenance %} — <a href="{{ knowledge_graph_url(params, provenance=()) }}">show every provenance</a>{% endif %}</li>
+            {% if view.mode == "focus" %}
+              {% for level, count in view.would_be_nodes.items() if level != view.depth %}
+                <li data-would-be="{{ level }}">depth {{ level }} would draw {{ count }} note{{ "" if count == 1 else "s" }} — <a href="{{ knowledge_graph_url(params, depth=level) }}">depth={{ level }}</a></li>
+              {% endfor %}
+            {% endif %}
+            {% if view.facts_capped_at %}
+              <li data-facts-capped>{{ view.facts_tally.capped }} note{{ "" if view.facts_tally.capped == 1 else "s" }} labelled by id (facts cap {{ view.facts_capped_at }})</li>
+            {% endif %}
+          </ul>
+        </section>
+      {% endif %}
+
+      {# S4 draws from exactly this. tojson escapes <, >, & and ' so a note
+         title cannot close the script element. #}
+      <script type="application/json" data-knowledge-graph-payload>{{ payload | tojson }}</script>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -1,0 +1,33 @@
+{#-
+  The scope line (K2 D12, story 19): what is drawn — the focus or the
+  filters, the depth — and when the edge table behind it was fetched.
+-#}
+<section class="kgraph-scope" data-kgraph-scope>
+  <p>
+    {% if view.mode == "focus" %}
+      Focus: {% if focus_node is not none %}{{ node_ref(focus_node) }}{% else %}<span class="kgraph-id">{{ view.focus_id }}</span>{% endif %}
+      · depth {{ view.depth }}
+    {% else %}
+      Edges
+      {%- if view.scope_type is not none %} of type <code>{{ view.scope_type }}</code>{% endif %}
+      {%- if view.scope_namespace is not none %} in namespace <code>{{ view.scope_namespace }}</code>{% endif %}
+    {% endif %}
+    · min weight {{ "%g" | format(view.filters.min_weight) }}
+    {%- if params.provenance %} · provenance {{ params.provenance | join(", ") }}{% endif %}
+  </p>
+  {% if view.as_of is not none %}
+    <p class="kgraph-as-of" data-kgraph-as-of="{{ view.as_of.isoformat() }}">
+      {% if view.read_directly %}
+        Edges read directly from Lithos at {{ view.as_of | utc_minute }} (the edge table is too large to hold).
+      {% else %}
+        Edge table as of {{ view.as_of | utc_minute }}; may be up to {{ config.knowledge.graph_edge_table_ttl_s }} s stale
+        {%- if view.stale %} — the last refresh failed{% endif %}.
+      {% endif %}
+    </p>
+  {% endif %}
+  {% if named_edge is not none %}
+    <p class="kgraph-named-edge" data-kgraph-named-edge="{{ named_edge.edge.id }}">
+      Edge: {{ node_ref(named_edge.source) }} {{ named_edge.edge.type }} {{ node_ref(named_edge.target) }}
+    </p>
+  {% endif %}
+</section>
