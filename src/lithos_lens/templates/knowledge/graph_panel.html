@@ -46,9 +46,7 @@
     <h2>{{ node_ref(node) }}</h2>
     {{ node_facts(node, panel.meta) }}
     <p data-kgraph-degree>Degree in this view: {{ node.degree }}</p>
-    {% if not node.is_focus %}
-      <p><a href="{{ knowledge_graph_url(params, focus=node.id, selected='', edge='') }}" data-kgraph-centre>Centre on this</a></p>
-    {% endif %}
+    <p><a href="{{ knowledge_graph_url(params, focus=node.id, selected='', edge='') }}" data-kgraph-centre>Centre on this</a></p>
     <h3>Relations in this view</h3>
     {% for group in panel.relations %}
       <section class="kgraph-type" data-kgraph-panel-type="{{ group.line.type }}">

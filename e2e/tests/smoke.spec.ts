@@ -2167,3 +2167,61 @@ test("a knowledge graph edge click swaps its panel in and the URL carries it", a
   await expect(page).toHaveURL(/[?&]selected=note-influx-legacy-ingest(&|$)/);
   expect(page.url()).not.toContain("edge=");
 });
+
+test("a later knowledge graph panel click wins over a slower earlier one", async ({
+  page,
+}) => {
+  // Every panel link syncs on the panel host with `replace`, so a click
+  // aborts the panel request still in flight from ANY other link: the
+  // earlier response can neither swap its panel in nor push its URL after
+  // the later one landed. The first request is held back to force the race.
+  await page.route(
+    (url) =>
+      url.pathname === "/knowledge/graph/panel" &&
+      (url.searchParams.get("edge") === "edge_a07c5f3e18b2" ||
+        url.searchParams.get("selected") === "note-influx-legacy-ingest"),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // An aborted request can no longer be continued; that is the point.
+      await route.continue().catch(() => undefined);
+    },
+  );
+  const host = page.locator("#kgraph-panel");
+  const edgeLink = (id: string) =>
+    page.locator(`[data-kgraph-edge="${id}"] .kgraph-edge-link`);
+
+  // Two text-baseline links: refines (held) then supports.
+  await page.goto("/knowledge/graph?focus=note-influx-plan");
+  await edgeLink("edge_a07c5f3e18b2").click();
+  await edgeLink("edge_4c1e9a7b20d3").click();
+  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_4c1e9a7b20d3",
+  );
+  await page.waitForTimeout(2500); // past the held response
+  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_4c1e9a7b20d3",
+  );
+  await expect(page).toHaveURL(/[?&]edge=edge_4c1e9a7b20d3(&|$)/);
+
+  // A link inside the panel (Node details, held) then a queue link.
+  await page.goto("/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7");
+  await host
+    .locator(
+      '[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]',
+    )
+    .click();
+  await edgeLink("edge_e1f4a8c27b90").click();
+  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_e1f4a8c27b90",
+  );
+  await page.waitForTimeout(2500);
+  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
+    "data-kgraph-panel-id",
+    "edge_e1f4a8c27b90",
+  );
+  await expect(page).toHaveURL(/[?&]edge=edge_e1f4a8c27b90(&|$)/);
+  expect(page.url()).not.toContain("selected=");
+});

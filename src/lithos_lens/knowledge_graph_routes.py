@@ -384,7 +384,11 @@ class KnowledgeGraphLoad:
 
 
 async def load_knowledge_graph(
-    state: AppState, params: KnowledgeGraphParams, *, picker: bool = True
+    state: AppState,
+    params: KnowledgeGraphParams,
+    *,
+    picker: bool = True,
+    read_facts: bool = True,
 ) -> KnowledgeGraphLoad:
     """The page's reads for ``params``, shared by the page and its panel
     fragment so the two draw the same view (S5 D1).
@@ -393,6 +397,13 @@ async def load_knowledge_graph(
     all with ``picker=False``: no panel opens on it). Focus and global modes
     run the S2 orchestrators, which never raise for a table failure: they
     answer a refused view instead.
+
+    ``read_facts=False`` spends no facts reads: every node is answered from
+    the cache as it stands — fresh entries ``ok``, stale or expired ones on
+    their last-known facts (``pending``), unknown ones ``unread``. That is
+    exactly what the page that offered the click left behind, so the panel
+    fragment shows the facts the page showed rather than spending a second
+    per-render cap and drawing nodes the page never read.
     """
     health = await state.refresh_health()
     if health.lithos != "ok":
@@ -404,6 +415,7 @@ async def load_knowledge_graph(
         )
     knowledge = state.config.knowledge
     filters = params.filters(knowledge.graph_min_weight_default)
+    fanout_cap = knowledge.graph_title_fanout_cap if read_facts else 0
     if params.mode == "focus":
         view = await assemble_focus_graph(
             table,
@@ -413,7 +425,7 @@ async def load_knowledge_graph(
             depth=params.depth_or(knowledge.graph_default_depth),
             filters=filters,
             max_nodes=knowledge.graph_focus_max_nodes,
-            fanout_cap=knowledge.graph_title_fanout_cap,
+            fanout_cap=fanout_cap,
         )
     else:
         view = await assemble_global_graph(
@@ -423,7 +435,7 @@ async def load_knowledge_graph(
             namespace=params.namespace,
             filters=filters,
             max_nodes=knowledge.graph_global_max_nodes,
-            fanout_cap=knowledge.graph_title_fanout_cap,
+            fanout_cap=fanout_cap,
         )
     return KnowledgeGraphLoad(health, view=view)
 
@@ -509,8 +521,9 @@ def register_knowledge_graph_routes(
         """The panel ``selected=`` / ``edge=`` names, as a fragment.
 
         The page's own reads for the same scope and filters (the view the
-        click was made on), rendered through the partial the page includes,
-        so the fragment equals the page's panel. Anything that is not a
+        click was made on), with no facts read of its own — the facts are the
+        cache the page's render left — rendered through the partial the page
+        includes, so the fragment equals the page's panel. Anything that is not a
         drawn node or typed edge — the picker, a refused view, an id the
         view does not draw — answers 200 with a one-line "Not in this view"
         panel, and offline "Lithos is offline" with nothing read: htmx swaps
@@ -518,7 +531,7 @@ def register_knowledge_graph_routes(
         is not touched, and only a panel that renders counts as an open.
         """
         params = parse_knowledge_graph_params(request.query_params)
-        load = await load_knowledge_graph(state, params, picker=False)
+        load = await load_knowledge_graph(state, params, picker=False, read_facts=False)
         panel = None
         if load.view is not None:
             panel = graph_panel(load.view, selected=params.selected, edge=params.edge)

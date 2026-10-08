@@ -19,8 +19,11 @@
 {#- The attributes of a link that opens a panel (`edge=` or `selected=`): a
     plain href to the page with that one selection — the no-JS baseline —
     and, with htmx, the panel fragment for the same scope fetched into the
-    page's panel host, the address bar following the href. -#}
+    page's panel host, the address bar following the href. Every panel link
+    syncs on the host with `replace`: a click aborts the panel request still
+    in flight from any other link, so the later click wins both the swap and
+    the URL, whichever response would have arrived first. -#}
 {% macro panel_attrs(params, edge="", selected="") -%}
   {%- set href = knowledge_graph_url(params, edge=edge, selected=selected) -%}
-  href="{{ href }}" hx-get="{{ knowledge_graph_panel_url(params, edge=edge, selected=selected) }}" hx-target="#kgraph-panel" hx-swap="innerHTML" hx-push-url="{{ href }}"
+  href="{{ href }}" hx-get="{{ knowledge_graph_panel_url(params, edge=edge, selected=selected) }}" hx-target="#kgraph-panel" hx-swap="innerHTML" hx-sync="#kgraph-panel:replace" hx-push-url="{{ href }}"
 {%- endmacro %}

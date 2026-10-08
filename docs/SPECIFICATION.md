@@ -1606,12 +1606,21 @@ Both are rendered in the page's panel host on a full request — the no-JS
 baseline — and by `GET /knowledge/graph/panel` with the same query as a
 fragment: one assembly (the page's own reads for that scope and filters — the
 snapshot, the one `lithos_related` of a focus draw, the direct filtered read
-of an over-bound global scope, and the facts cache; nothing more) and one
-partial (`knowledge/graph_panel.html`, extending no layout), so the fragment
-is the page's panel byte for byte. The text baseline's edge links keep their
-`href` and add `hx-get` (the fragment), `hx-target="#kgraph-panel"` and
-`hx-push-url` (the `href`), so a click swaps the panel and the address bar
-carries the one selection. A panel renders only for what the view draws: a
+of an over-bound global scope; nothing more) and one partial
+(`knowledge/graph_panel.html`, extending no layout). The fragment spends **no
+facts reads**: every node is answered from the facts cache as the page's
+render left it (fresh entries as read, stale or expired ones on their
+last-known facts as pending, unknown ones unread), because each render spends
+its own `graph_title_fanout_cap` and a second spend would draw nodes the page
+left unread. So the fragment is the panel of the page the click was made on,
+byte for byte, under the cap as well; with no page rendered first (a cold
+cache) its nodes are unread. The text baseline's edge links keep their `href`
+and add `hx-get` (the fragment), `hx-target="#kgraph-panel"`,
+`hx-sync="#kgraph-panel:replace"` and `hx-push-url` (the `href`), so a click
+swaps the panel and the address bar carries the one selection. Every panel
+link — the text baseline's and the panel's own — syncs on the host, so a
+click aborts any panel request still in flight and the later click wins both
+the swap and the URL. A panel renders only for what the view draws: a
 node in it, or a typed edge (a wiki-link or provenance pair has no panel).
 The picker, a refused view, an offline page or an id not drawn render no
 panel on the page; the fragment answers them 200 with "Not in this view", or
@@ -1622,7 +1631,7 @@ short id, "note not found" and its full id; an unread node its full id and
 "Facts not read for this view"), its K1 chips and lede from the facts
 (a `pending` node's last-known ones, marked "Facts pending a re-read"), its
 degree in this view, **Centre on this** (`?focus=<id>`, depth and filters
-kept; absent on the focus itself), and its **relations in this view**: every
+kept, the selection cleared), and its **relations in this view**: every
 drawn edge at the note — typed rows and the wiki-link and provenance pairs,
 so they add up to the degree — grouped by legend line in legend order, each
 read from the note (`→` / `←` / `↔` and the other end), typed ones with their
