@@ -654,6 +654,7 @@ def _check_related(result: Any, success: dict[str, Any]) -> None:
             direction=direction,
             conflict_state=raw["conflict_state"] or "",
             why=_why(raw),
+            edge_id=raw["edge_id"],
         )
 
     assert result == RelatedNeighborhood(

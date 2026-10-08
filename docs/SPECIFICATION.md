@@ -1274,7 +1274,25 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   as escaped text, and never fails the rest of the panel. A row with nothing
   to show (null or empty evidence, no provenance) has no disclosure; a
   reinforcement or frontmatter edge (null evidence) shows its provenance line
-  and no rationale
+  and no rationale. The panel's heading carries **Open in graph** →
+  `/knowledge/graph?focus=<id>`, and each typed-edge row whose
+  `lithos_related` row carried an `edge_id` an **"in graph"** link →
+  `/knowledge/graph?focus=<id>&edge=<edge_id>`, which opens that edge's panel.
+  A focus hides edges under `knowledge.graph_min_weight_default`, so a row (or
+  banner line) for an edge known to weigh less also carries
+  `min_weight=<its weight>` and the page it lands on draws it
+- an **unresolved-contradiction banner** above the lede and body when the note
+  is an endpoint of a `contradicts` edge whose `conflict_state` is not one of
+  the four `lithos_conflict_resolve` values: "This note is contradicted by
+  *B* — view", *B* linking to its note and "view" to the edge's panel
+  (`?focus=<id>&edge=<edge_id>`, as above). Several are one banner, one line
+  each. Read from the knowledge graph's edge-table snapshot alone — no Lithos
+  call per note; within its TTL the snapshot answers from memory, and a stale
+  one still serves. *B* is named by the title the related panel already
+  resolved (typed edges, then links and back-links), else its bare id —
+  nothing is read to name it. When the snapshot is unreadable or over its
+  bound there is no banner (REQUIREMENTS §6.5); a resolved contradiction has
+  none
 - a **related summary line** directly under the metadata chips, from the
   panel's already-loaded data (no extra Lithos call): "Related: 2 outgoing
   links · 1 source · 3 typed edges" — one item per non-empty group, in the
@@ -1282,8 +1300,9 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   derived from, unresolved, typed edge(s)), each count the group's full size
   including its "+N more" overflow and each an in-page link to that group's id.
   A note with no relations reads "Related: none"; a failed related read reads
-  "Related: could not be loaded". K2's "open in graph" link joins this line
-  after the counts
+  "Related: could not be loaded". Either way the line ends with an **"open
+  in graph"** link (`/knowledge/graph?focus=<id>`) as one more " · " item —
+  the graph reads the edge-table snapshot, not `lithos_related`
 - a **produced-by chip** when the note came from a task and that task reads
   back successfully
 - a **back link** naming where it returns to: with `?task=` (a finding's
@@ -1309,7 +1328,8 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   A snippet drops a leading `# <title>` line that repeats the card's title
   (the note page's rule, found by parsing the snippet); it otherwise stays
   escaped text, never rendered, and is shown whole as Lithos windowed it —
-  Lens adds no truncation
+  Lens adds no truncation. Each card carries an **"in graph"** link →
+  `/knowledge/graph?focus=<id>`
 - with no query, **two sections** — title, path, updated date — newest first
   over the whole corpus: **"Your notes"** (non-intake), then **"Recent
   intake"**, each cut to `knowledge.recent_limit`. A note is intake when it
@@ -1344,7 +1364,12 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   render chipless under a "Chips shown for the first N notes." line; a failed
   read leaves only its own row chipless, never the list. The number of reads
   is the landing span's `lens.chips.fanout`
-- a **"Browse tags"** link above the two sections to `/knowledge/tags`, and,
+- a **"Browse tags"** link above the two sections to `/knowledge/tags`, beside
+  it **"Browse the graph"** → `/knowledge/graph` (the scope picker) and the
+  edge-table snapshot's unresolved-contradiction count ("2 unresolved
+  contradictions") → `/knowledge/graph?type=contradicts` — the count absent
+  when the snapshot is unreadable or over its bound, and read only on the
+  browse branch (not with search results, offline or on error); and,
   when `?tag=` is active, that tag's note count on the "Filtered by" line
   ("project: influx (12 notes)"): `lithos_tags(prefix=<tag>)`, read back by
   the EXACT key (the prefix answer also carries longer tags; an absent key is

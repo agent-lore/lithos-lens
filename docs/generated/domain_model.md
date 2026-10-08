@@ -225,6 +225,7 @@ classDiagram
     +weight float | None
     +direction str
     +conflict_state str
+    +edge_id str
   }
   class RelatedNeighborhood {
     +unresolved tuple[str, ...]
@@ -241,6 +242,7 @@ classDiagram
     +weight float | None
     +direction str
     +conflict_state str
+    +edge_id str
   }
   class RelatedSection {
     +overflow int

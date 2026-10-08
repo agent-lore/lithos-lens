@@ -25,6 +25,12 @@ from fastapi.templating import Jinja2Templates
 
 from lithos_lens import metrics
 from lithos_lens.knowledge import RelatedPanel, load_related_panel
+from lithos_lens.knowledge_edges import (
+    EdgeTable,
+    EdgeTableSnapshot,
+    is_unresolved_contradiction,
+)
+from lithos_lens.knowledge_graph_routes import knowledge_graph_edge_url, load_picker
 from lithos_lens.knowledge_landing import (
     SECTIONS,
     NamespaceFacet,
@@ -127,6 +133,67 @@ async def active_tag_count(client: LithosClientProtocol, tag: str) -> int | None
     return 0 if count is None else count
 
 
+@dataclass(frozen=True)
+class NoteContradiction:
+    """One line of the note page's unresolved-contradiction banner."""
+
+    edge_id: str
+    other_id: str
+    other_label: str
+    #: The graph focused on the note with this edge's panel open.
+    edge_url: str
+
+
+def _related_titles(related: RelatedPanel | None) -> dict[str, str]:
+    """Titles the related panel already resolved: typed edges, then links."""
+    titles: dict[str, str] = {}
+    if related is not None:
+        for section in (related.edges, related.links, related.backlinks):
+            for item in section.items:
+                if item.title:
+                    titles.setdefault(item.id, item.title)
+    return titles
+
+
+async def load_contradictions(
+    table: EdgeTable,
+    knowledge_id: str,
+    related: RelatedPanel | None,
+    *,
+    min_weight_floor: float,
+) -> tuple[NoteContradiction, ...]:
+    """The unresolved ``contradicts`` rows ``knowledge_id`` is an endpoint of.
+
+    Read from the edge-table snapshot alone (PRD K2 D13) — no call per note:
+    within its TTL ``read()`` answers from memory, and a stale snapshot still
+    serves. Unreadable or over its bound, there is no banner (§6.5). The
+    other note is named by the title the related panel already holds, else
+    its id; nothing is read to name it.
+    """
+    try:
+        snapshot = await table.read()
+    except Exception:
+        logger.info(
+            "edge table unavailable for the contradiction banner", exc_info=True
+        )
+        return ()
+    if not isinstance(snapshot, EdgeTableSnapshot):
+        return ()
+    titles = _related_titles(related)
+    lines: list[NoteContradiction] = []
+    for edge in snapshot.edges_of(knowledge_id):
+        if not is_unresolved_contradiction(edge):
+            continue
+        other = edge.to_id if edge.from_id == knowledge_id else edge.from_id
+        url = knowledge_graph_edge_url(
+            knowledge_id, edge.edge_id, edge.weight, floor=min_weight_floor
+        )
+        lines.append(
+            NoteContradiction(edge.edge_id, other, titles.get(other, other), url)
+        )
+    return tuple(lines)
+
+
 async def _traced_related_panel(
     client: LithosClientProtocol, knowledge_id: str, *, cap: int
 ) -> RelatedPanel:
@@ -191,6 +258,7 @@ def register_knowledge_routes(
         snapshot = await state.refresh_health()
         search_results = None
         browse: RecentLanding | None = None
+        graph_picker = None
         facets: tuple[NamespaceFacet, ...] = ()
         error = ""
         mode = "search" if query else "browse"
@@ -226,6 +294,8 @@ def register_knowledge_routes(
                         limit=knowledge_config.recent_limit,
                     )
                     facets = browse.namespaces
+                    # The "Browse the graph" line's unresolved count (K2 D13).
+                    graph_picker = await load_picker(state.edge_table)
             except Exception:
                 mode = "error"
                 error = "Knowledge search is currently unavailable."
@@ -278,6 +348,7 @@ def register_knowledge_routes(
                 "search_results": search_results,
                 "browse": browse,
                 "namespace_facets": facets,
+                "graph_picker": graph_picker,
                 "chips": chips,
                 "error": error,
             },
@@ -386,6 +457,7 @@ def register_knowledge_routes(
         task = None
         related = None
         produced_by = None
+        contradictions: tuple[NoteContradiction, ...] = ()
         error = ""
         outcome = "rendered"
         related_seconds = 0.0
@@ -421,6 +493,12 @@ def register_knowledge_routes(
                 )
                 related_seconds = time.perf_counter() - started
                 produced_by = await load_produced_by(state.lithos_client, note_record)
+                contradictions = await load_contradictions(
+                    state.edge_table,
+                    knowledge_id,
+                    related,
+                    min_weight_floor=state.config.knowledge.graph_min_weight_default,
+                )
             task_id = request.query_params.get("task", "")
             if task_id:
                 try:
@@ -456,6 +534,7 @@ def register_knowledge_routes(
                 "back_link": note_back_link(request.query_params.get("next")),
                 "related": related,
                 "produced_by": produced_by,
+                "contradictions": contradictions,
                 "error": error,
             },
         )

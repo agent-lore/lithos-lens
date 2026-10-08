@@ -39,6 +39,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, Literal
 from urllib.parse import urlencode
 
@@ -247,6 +248,21 @@ def knowledge_graph_url(
     ``edge``, so a link carries one selection — the later click's.
     """
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
+
+
+def knowledge_graph_edge_url(
+    focus: str, edge: str, weight: float | None = None, *, floor: float
+) -> str:
+    """An entry point's link to ``edge``'s panel, focused on ``focus``.
+
+    ``edge=`` opens a panel only for an edge the page draws, and a focus
+    hides edges below the weight ``floor`` (``graph_min_weight_default``) —
+    so an edge known to weigh less carries its own weight as ``min_weight``,
+    and the page it lands on draws it.
+    """
+    if weight is not None and weight < floor:
+        return knowledge_graph_url(focus=focus, edge=edge, min_weight=weight)
+    return knowledge_graph_url(focus=focus, edge=edge)
 
 
 def knowledge_graph_panel_url(
@@ -502,6 +518,9 @@ def register_knowledge_graph_routes(
     and `GET /knowledge/graph/panel` (its node and edge panels)."""
 
     templates.env.globals["knowledge_graph_url"] = knowledge_graph_url
+    templates.env.globals["knowledge_graph_edge_url"] = partial(
+        knowledge_graph_edge_url, floor=state.config.knowledge.graph_min_weight_default
+    )
     templates.env.globals["knowledge_graph_panel_url"] = knowledge_graph_panel_url
     templates.env.globals["edge_entry"] = edge_entry
     templates.env.filters["utc_minute"] = utc_minute

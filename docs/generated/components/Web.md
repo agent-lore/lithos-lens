@@ -16,8 +16,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.edge_routes` | M | 0 | 4 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_graph_routes` | M | 4 | 7 |
-| `lithos_lens.knowledge_routes` | M | 1 | 4 |
+| `lithos_lens.knowledge_graph_routes` | M | 4 | 8 |
+| `lithos_lens.knowledge_routes` | M | 2 | 5 |
 | `lithos_lens.request_filters` | L | 0 | 26 |
 | `lithos_lens.web` | L | 0 | 1 |
 | `lithos_lens.write_funnel` | L | 5 | 1 |
@@ -56,6 +56,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `KnowledgeGraphParams` — The page's query, parsed. ``None`` and ``""`` mean "not given".
 - def `parse_knowledge_graph_params` — The page's query grammar (S3 D3), in one place.
 - def `knowledge_graph_url` — A link into the knowledge graph: ``params`` with ``changes`` applied.
+- def `knowledge_graph_edge_url` — An entry point's link to ``edge``'s panel, focused on ``focus``.
 - def `knowledge_graph_panel_url` — The same link to the panel fragment: what a click's ``hx-get`` fetches, with the scope and filters carried, and ``render`` — the id of the view the page drew (:class:`RenderedViews`) — last when there is one.
 - class `RenderedViews` — The views recent renders drew, each under a fresh render id (S5).
 - def `utc_minute` — ``as_of`` as the scope line states it: UTC, to the minute.
@@ -70,6 +71,8 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `note_back_link` — The note page's back link when it was not opened from a task.
 - def `filter_tag_label` — The active tag as the landing names it: ``key: value``, as everywhere, unless that would hide which tag it is — the empty tag and a padded one take :func:`knowledge_tags.tag_label`'s spelling instead.
 - def `active_tag_count` — How many notes carry ``tag``, for the landing's "Filtered by" line.
+- class `NoteContradiction` — One line of the note page's unresolved-contradiction banner.
+- def `load_contradictions` — The unresolved ``contradicts`` rows ``knowledge_id`` is an endpoint of.
 - def `register_knowledge_routes` — Attach the knowledge landing, wiki-link resolver and note routes.
 
 ### `lithos_lens.request_filters`
