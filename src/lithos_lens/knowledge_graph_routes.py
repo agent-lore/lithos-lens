@@ -44,10 +44,12 @@ from lithos_lens.knowledge_edges import (
     EdgeTableRefusal,
     EdgeTableSnapshot,
 )
+from lithos_lens.knowledge_facts import NoteFactsTally
 from lithos_lens.knowledge_graph import assemble_focus_graph, assemble_global_graph
 from lithos_lens.knowledge_graph_view import (
     MAX_DEPTH,
     PROVENANCE_GROUPS,
+    HiddenEdgeCounts,
     KnowledgeGraphFilters,
     KnowledgeGraphView,
     edge_entry,
@@ -119,8 +121,16 @@ class KnowledgeGraphParams:
 
 
 def _value(query: Mapping[str, str], key: str) -> str:
-    """A query value with surrounding whitespace dropped; blank is absent."""
-    return (query.get(key) or "").strip()
+    """A query value exactly as sent; ``""`` when absent or wholly blank.
+
+    Not trimmed: a type or namespace is matched as stored upstream (a
+    namespace ``" influx "`` is a different namespace from ``"influx"``, and
+    the picker's own facet links send it so), and ``focus`` / ``edge`` /
+    ``selected`` are ids carried unchanged. Only the numeric and provenance
+    grammar below strips what it parses.
+    """
+    value = query.get(key) or ""
+    return value if value.strip() else ""
 
 
 _DEPTHS = {str(level): level for level in range(1, MAX_DEPTH + 1)}
@@ -165,8 +175,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         focus=focus,
         type=edge_type,
         namespace=namespace,
-        depth=_depth(_value(query, "depth")),
-        min_weight=_weight(_value(query, "min_weight")),
+        depth=_depth(_value(query, "depth").strip()),
+        min_weight=_weight(_value(query, "min_weight").strip()),
         provenance=_provenance(_value(query, "provenance")),
         edge=_value(query, "edge"),
         selected=_value(query, "selected"),
@@ -177,7 +187,9 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
     if key == "depth":
         return "" if params.depth is None or not params.focus else str(params.depth)
     if key == "min_weight":
-        return "" if params.min_weight is None else f"{params.min_weight:g}"
+        # repr round-trips: a link must name the very threshold the page drew
+        # with, or following it changes the scope (0.7000001 is not 0.7).
+        return "" if params.min_weight is None else repr(params.min_weight)
     if key == "provenance":
         return ",".join(params.provenance)
     if key in ("type", "namespace") and params.focus:
@@ -271,14 +283,19 @@ def _record(
     mode: GraphMode,
     outcome: RenderOutcome,
     *,
+    snapshot_age_s: float,
     refusal: str = "",
     view: KnowledgeGraphView | None = None,
-    snapshot_age_s: float | None = None,
+    depth: int | None = None,
 ) -> None:
     """``lens.knowledge.graph``: attributes on the request span, one counter.
 
     Counts and the refusal reason go on the span, where a per-request value
-    costs no series; the counter carries only the two bounded enums. The
+    costs no series; the counter carries only the two bounded enums. Every
+    mode sets every count — zero where nothing was drawn (the picker, an
+    offline page) — so a query over the span never mistakes absent for 0;
+    ``depth`` is set in focus mode only (the drawn one, else the requested
+    or configured one), ``refusal`` only on a refusal. The
     focus id, type and namespace are on neither: ``http.target`` already
     carries the query on the span, bounded (``telemetry.py``).
     """
@@ -288,22 +305,23 @@ def _record(
     span.set_attribute(f"{prefix}.outcome", outcome)
     if refusal:
         span.set_attribute(f"{prefix}.refusal", refusal)
-    if snapshot_age_s is not None:
-        span.set_attribute(f"{prefix}.snapshot_age_s", snapshot_age_s)
-    if view is not None:
-        if view.mode == "focus":
-            span.set_attribute(f"{prefix}.depth", view.depth)
-        span.set_attribute(f"{prefix}.nodes", len(view.nodes))
-        span.set_attribute(f"{prefix}.edges", len(view.edges))
-        span.set_attribute(f"{prefix}.hidden_by_weight", view.hidden.by_weight)
-        span.set_attribute(f"{prefix}.hidden_by_provenance", view.hidden.by_provenance)
-        span.set_attribute(f"{prefix}.hidden_total", view.hidden.total)
-        tally = view.facts_tally
-        span.set_attribute(f"{prefix}.facts.hits", tally.hits)
-        span.set_attribute(f"{prefix}.facts.reads", tally.reads)
-        span.set_attribute(f"{prefix}.facts.missing", tally.missing)
-        span.set_attribute(f"{prefix}.facts.capped", tally.capped)
-        span.set_attribute(f"{prefix}.facts.failed", tally.failed)
+    span.set_attribute(f"{prefix}.snapshot_age_s", snapshot_age_s)
+    if view is not None and view.mode == "focus":
+        depth = view.depth
+    if mode == "focus" and depth is not None:
+        span.set_attribute(f"{prefix}.depth", depth)
+    hidden = view.hidden if view is not None else HiddenEdgeCounts()
+    tally = view.facts_tally if view is not None else NoteFactsTally()
+    span.set_attribute(f"{prefix}.nodes", len(view.nodes) if view else 0)
+    span.set_attribute(f"{prefix}.edges", len(view.edges) if view else 0)
+    span.set_attribute(f"{prefix}.hidden_by_weight", hidden.by_weight)
+    span.set_attribute(f"{prefix}.hidden_by_provenance", hidden.by_provenance)
+    span.set_attribute(f"{prefix}.hidden_total", hidden.total)
+    span.set_attribute(f"{prefix}.facts.hits", tally.hits)
+    span.set_attribute(f"{prefix}.facts.reads", tally.reads)
+    span.set_attribute(f"{prefix}.facts.missing", tally.missing)
+    span.set_attribute(f"{prefix}.facts.capped", tally.capped)
+    span.set_attribute(f"{prefix}.facts.failed", tally.failed)
     metrics.knowledge_graph_renders().add(1, {"mode": mode, "outcome": outcome})
 
 
@@ -359,10 +377,16 @@ def register_knowledge_graph_routes(
             "picker": None,
             "view": None,
         }
-        if health.lithos != "ok":
-            _record(mode, "offline")
-            return templates.TemplateResponse(request, "knowledge/graph.html", context)
         table = state.edge_table
+        if health.lithos != "ok":
+            # The age is the holder's own clock: no read is started for it.
+            _record(
+                mode,
+                "offline",
+                snapshot_age_s=table.age_seconds(),
+                depth=params.depth_or(knowledge.graph_default_depth),
+            )
+            return templates.TemplateResponse(request, "knowledge/graph.html", context)
         if mode == "picker":
             picker = await load_picker(table)
             context["picker"] = picker

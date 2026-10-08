@@ -46,13 +46,17 @@
   {%- if entry.rationale %} · <span class="kgraph-rationale">{{ entry.rationale }}</span>{% endif %}
 {%- endmacro %}
 
-{% macro layer_list(heading, refs) %}
+{% macro layer_list(heading, relation, refs) %}
   {% if refs %}
     <div class="kgraph-layer-group">
       <h3>{{ heading }}</h3>
       <ul>
         {% for ref in refs %}
-          <li><a href="{{ note_url(ref.id) }}" data-kgraph-node="{{ ref.id }}">{{ ref.title or ref.id }}</a>{% if ref.drawn_as_typed %} <span class="kgraph-mark">also a derived_from edge</span>{% endif %}</li>
+          {# The view's node, not the ref's inline title: one node, one label
+             and one facts state everywhere on the page (a ghost unlinked, an
+             unread node by its id, a pending one marked). #}
+          {% set node = view.node(ref.id) %}
+          <li data-kgraph-layer="{{ relation }}">{% if node is not none %}{{ node_ref(node) }}{% else %}<a href="{{ note_url(ref.id) }}" data-kgraph-node="{{ ref.id }}">{{ ref.title or ref.id }}</a>{% endif %}{% if ref.drawn_as_typed %} <span class="kgraph-mark">also a derived_from edge</span>{% endif %}</li>
         {% endfor %}
       </ul>
     </div>
@@ -119,10 +123,10 @@
             {% if view.layers_unavailable %}
               <p class="kgraph-note" role="status">Wiki-links and provenance could not be loaded.</p>
             {% elif view.wiki_links or view.backlinks or view.sources or view.derived %}
-              {{ layer_list("Outgoing links", view.wiki_links) }}
-              {{ layer_list("Back-links", view.backlinks) }}
-              {{ layer_list("Sources", view.sources) }}
-              {{ layer_list("Derived from", view.derived) }}
+              {{ layer_list("Outgoing links", "links_to", view.wiki_links) }}
+              {{ layer_list("Back-links", "linked_from", view.backlinks) }}
+              {{ layer_list("Sources", "source", view.sources) }}
+              {{ layer_list("Derived from", "derived", view.derived) }}
             {% else %}
               <p class="kgraph-empty">No wiki-links or provenance.</p>
             {% endif %}
@@ -145,7 +149,7 @@
         <section class="panel kgraph-hidden" data-kgraph-hidden>
           <h2>Not shown</h2>
           <ul>
-            <li data-hidden-weight>{{ view.hidden.by_weight }} edge{{ "" if view.hidden.by_weight == 1 else "s" }} below {{ "%g" | format(view.filters.min_weight) }} hidden{% if view.hidden.by_weight %} — <a href="{{ knowledge_graph_url(params, min_weight=0.0) }}">show all weights</a>{% endif %}</li>
+            <li data-hidden-weight>{{ view.hidden.by_weight }} edge{{ "" if view.hidden.by_weight == 1 else "s" }} below {{ view.filters.min_weight }} hidden{% if view.hidden.by_weight %} — <a href="{{ knowledge_graph_url(params, min_weight=0.0) }}">show all weights</a>{% endif %}</li>
             <li data-hidden-provenance>{{ view.hidden.by_provenance }} edge{{ "" if view.hidden.by_provenance == 1 else "s" }} hidden by the provenance filter{% if view.hidden.by_provenance %} — <a href="{{ knowledge_graph_url(params, provenance=()) }}">show every provenance</a>{% endif %}</li>
             {% if view.mode == "focus" %}
               {% for level, count in view.would_be_nodes.items() if level != view.depth %}
@@ -153,7 +157,14 @@
               {% endfor %}
             {% endif %}
             {% if view.facts_capped_at %}
-              <li data-facts-capped>{{ view.facts_tally.capped }} note{{ "" if view.facts_tally.capped == 1 else "s" }} labelled by id (facts cap {{ view.facts_capped_at }})</li>
+              {% set by_id = view.facts_tally.capped_unread %}
+              {% set kept = view.facts_tally.capped - by_id %}
+              {% if by_id %}
+                <li data-facts-capped>{{ by_id }} note{{ "" if by_id == 1 else "s" }} labelled by id (facts cap {{ view.facts_capped_at }})</li>
+              {% endif %}
+              {% if kept %}
+                <li data-facts-pending>{{ kept }} note{{ "" if kept == 1 else "s" }} shown with last-known facts, re-read pending (facts cap {{ view.facts_capped_at }})</li>
+              {% endif %}
             {% endif %}
           </ul>
         </section>

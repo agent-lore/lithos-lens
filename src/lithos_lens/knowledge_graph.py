@@ -582,12 +582,15 @@ async def assemble_focus_graph(
     if state is None:
         return _refused("unavailable", mode="focus", filters=filters, **scope)
     if isinstance(state, EdgeTableRefusal):
+        # The table WAS read and counted: the refusal carries when, so the
+        # page can state it and its TTL (the refusal is held for one TTL).
         return _refused(
             "table_refused",
             mode="focus",
             filters=filters,
             count=state.row_count,
             cap=state.max_edges,
+            as_of=state.as_of,
             **scope,
         )
     typed = ego_typed_graph(

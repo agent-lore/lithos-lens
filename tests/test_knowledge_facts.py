@@ -225,6 +225,20 @@ async def test_past_the_cap_nodes_are_id_labelled_and_the_batch_says_so(
     assert (await cache.lookup([PLAN, CAPACITY], cap=2)).capped_at == 0
 
 
+async def test_capped_unread_counts_only_the_nodes_past_the_cap_with_no_facts(
+    cache: NoteFactsCache, reader: Reader, ticks: Ticks
+) -> None:
+    """A node past the cap with last-known facts is ``pending`` and keeps its
+    title; only the ones with none are labelled by id."""
+    await cache.lookup([PLAN, CAPACITY], cap=2)
+    ticks.now += DEFAULT_NOTE_FACTS_TTL_S  # both entries expire
+
+    batch = await cache.lookup([PLAN, CAPACITY, ROLLBACK, LEGACY], cap=1)
+
+    assert batch.for_id(CAPACITY).state == "pending"
+    assert (batch.tally.capped, batch.tally.capped_unread) == (3, 2)
+
+
 async def test_doc_not_found_is_a_ghost_cached_under_the_ttl(
     cache: NoteFactsCache, reader: Reader, ticks: Ticks
 ) -> None:

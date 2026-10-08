@@ -12,7 +12,7 @@
       {%- if view.scope_type is not none %} of type <code>{{ view.scope_type }}</code>{% endif %}
       {%- if view.scope_namespace is not none %} in namespace <code>{{ view.scope_namespace }}</code>{% endif %}
     {% endif %}
-    · min weight {{ "%g" | format(view.filters.min_weight) }}
+    · min weight {{ view.filters.min_weight }}
     {%- if params.provenance %} · provenance {{ params.provenance | join(", ") }}{% endif %}
   </p>
   {% if view.as_of is not none %}

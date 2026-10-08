@@ -1506,15 +1506,18 @@ node and edge panels (S5) are drawn from this page's payload. One parser reads
 its query and one URL builder (`knowledge_graph_url`, a template global)
 writes every link into it:
 
-- a blank value is absent. A non-blank `focus` is **focus mode** (`type` and
-  `namespace` are then ignored); otherwise `type` and/or `namespace` (exact
-  strings) is **scoped global** mode; with none, the **scope picker**
+- a wholly blank value is absent; any other value is kept exactly as sent
+  (not trimmed — a namespace `" influx "` is matched as stored, and the
+  picker's own links send it so). A non-blank `focus` is **focus mode**
+  (`type` and `namespace` are then ignored); otherwise `type` and/or
+  `namespace` is **scoped global** mode; with none, the **scope picker**
 - `depth` is 1 or 2, anything else `knowledge.graph_default_depth`;
   `min_weight` is clamped to [0, 1], unreadable is
   `knowledge.graph_min_weight_default`; `provenance` is a comma list of the
   groups `inferred`, `reinforced`, `declared`, `other`, unknown names dropped,
   all groups when it names none; `edge` and `selected` are carried through
-  links unchanged
+  links unchanged. Links write `min_weight` in its round-trip form, so a link
+  names the very threshold the page drew with
 - offline (the Lithos health probe), the page says so and reads nothing
 
 The **picker** reads only the snapshot: a table of edge types and a table of
@@ -1532,7 +1535,8 @@ way it shows no counts and offers only the typed-in form.
 
 1. the **scope line**: the focus (its title; its id on a refusal) and depth,
    or the type/namespace filters; the minimum weight and any provenance
-   narrowing; "Edge table as of YYYY-MM-DD HH:MM UTC; may be up to
+   narrowing; for a focus refused because the table is over its bound, the
+   time the table was counted; "Edge table as of YYYY-MM-DD HH:MM UTC; may be up to
    `graph_edge_table_ttl_s` s stale" (plus "the last refresh failed" for a
    stale snapshot), or "read directly from Lithos" for an over-bound global
    read, and no time at all when the table could not be read; and, when
@@ -1544,8 +1548,9 @@ way it shows no counts and offers only the typed-in form.
    bound or no remedy fits, "Graph unavailable" when the table could not be
    read; never a degraded or truncated graph
 3. the **legend**: only the types drawn, in the known-type order, one
-   plain-language line each, then the wiki-link and provenance lines when
-   drawn
+   plain-language line each, then the wiki-link and provenance layer lines
+   when drawn — kept apart from the typed lines, so a stored type spelled
+   `wiki_link` is still one typed list
 4. the **focus note** with its K1 chips (built through `NoteMetadata`, so a
    status is slugged as on the note page) and lede
 5. the **edges**, one list per type in legend order. An edge at the focus
@@ -1557,13 +1562,16 @@ way it shows no counts and offers only the typed-in form.
    marked so. Every title links to its note; every typed edge links to
    `?…&edge=<edge_id>`
 6. the **wiki-links and provenance** as K1 names them — Outgoing links,
-   Back-links, Sources, Derived from — or "Wiki-links and provenance could
-   not be loaded" when `lithos_related` failed
+   Back-links, Sources, Derived from — each note named as everywhere else on
+   the page (the view's label and facts state, not the related read's inline
+   title), or "Wiki-links and provenance could not be loaded" when
+   `lithos_related` failed
 7. "Edges to missing notes", when any endpoint is a ghost
 8. **not shown**: the edges below the minimum weight and those hidden by the
    provenance filter (each with a link that lifts the filter), the other
-   depth's would-be node count (focus mode), and "N notes labelled by id
-   (facts cap M)" when the facts cap was reached
+   depth's would-be node count (focus mode), and when the facts cap was
+   reached "N notes labelled by id (facts cap M)" for the ones with no facts
+   and "N notes shown with last-known facts, re-read pending" for the rest
 9. the payload, as `<script type="application/json"
    data-knowledge-graph-payload>` through Jinja's `tojson` (which escapes
    `<`, `>`, `&` and `'`, so a note title cannot close the element). A refused
@@ -2859,7 +2867,8 @@ Lens's failure modes rather than its routes:
   `outcome`, `depth` (focus mode), `nodes`, `edges`, `hidden_by_weight`,
   `hidden_by_provenance`, `hidden_total`, `refusal` (the reason, on a
   refusal), `snapshot_age_s`, and the facts lookup's `facts.hits`, `.reads`,
-  `.missing`, `.capped` and `.failed`; and
+  `.missing`, `.capped` and `.failed` — every count set in every mode, zero
+  for the picker and an offline page, `depth` in focus mode only; and
   `lens_knowledge_graph_renders_total` by `mode` and `outcome` (`rendered` |
   `refused` | `unavailable` | `offline`). The focus id, type and namespace
   are never labels (§5.7).

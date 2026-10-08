@@ -185,6 +185,7 @@ classDiagram
     +reads int
     +missing int
     +capped int
+    +capped_unread int
     +failed int
   }
   class NoteMetadata {

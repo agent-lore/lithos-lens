@@ -266,6 +266,20 @@ class KnowledgeGraphView:
         return next((node for node in self.nodes if node.id == node_id), None)
 
     @property
+    def typed_legend(self) -> tuple[LegendLine, ...]:
+        """The legend's typed-edge lines. A stored type may be spelled like a
+        layer (``wiki_link``), so a line is told apart by what it is, not by
+        its ``type`` string."""
+        layers = tuple(LAYER_LEGEND.values())
+        return tuple(line for line in self.legend if line not in layers)
+
+    @property
+    def layer_legend(self) -> tuple[LegendLine, ...]:
+        """The legend's wiki-link and provenance layer lines, when drawn."""
+        layers = tuple(LAYER_LEGEND.values())
+        return tuple(line for line in self.legend if line in layers)
+
+    @property
     def ghosts(self) -> tuple[KnowledgeGraphNode, ...]:
         return tuple(node for node in self.nodes if node.is_ghost)
 
@@ -429,7 +443,7 @@ def edge_sections(view: KnowledgeGraphView) -> tuple[KnowledgeEdgeSection, ...]:
     """
     nodes, focus = _node_index(view), _focus_of(view)
     sections: list[KnowledgeEdgeSection] = []
-    for line in view.legend:
+    for line in view.typed_legend:
         edges = [e for e in view.edges if e.kind == "typed" and e.type == line.type]
         if not edges:
             continue
@@ -544,6 +558,7 @@ def graph_payload(view: KnowledgeGraphView) -> dict[str, Any]:
             "reads": tally.reads,
             "missing": tally.missing,
             "capped": tally.capped,
+            "capped_unread": tally.capped_unread,
             "failed": tally.failed,
             "capped_at": view.facts_capped_at,
         },

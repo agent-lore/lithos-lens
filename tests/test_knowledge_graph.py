@@ -710,6 +710,8 @@ async def test_a_table_over_its_bound_refuses_focus_and_serves_filtered_global()
     assert focus.refusal is not None
     assert (focus.refusal.reason, focus.refusal.cap) == ("table_refused", 3)
     assert focus.refusal.count == 14
+    # The table was read and counted: the refusal says when.
+    assert focus.as_of is not None
     assert wiring.related_calls == [] and wiring.reads == []
 
     scoped = await assemble_global_graph(

@@ -495,7 +495,7 @@ def test_hidden_counts_match_the_filters(
         if groups is not None and provenance_group(row["provenance_type"]) not in groups
     )
     assert _hidden_line(html, "weight").startswith(
-        f"{by_weight} edge{'' if by_weight == 1 else 's'} below {min_weight:g} hidden"
+        f"{by_weight} edge{'' if by_weight == 1 else 's'} below {min_weight} hidden"
     )
     assert _hidden_line(html, "provenance").startswith(
         f"{by_provenance} edge{'' if by_provenance == 1 else 's'} hidden by the "
@@ -527,9 +527,13 @@ def test_the_legend_lists_only_present_types_in_table_order(
         "derived_from",
         "contradicts",
         "assesses",
+    ]
+    # The wiki-link layer is drawn too: its line follows, keyed as a layer.
+    assert re.findall(r'data-legend-layer="([^"]+)"', html) == ["wiki_link"]
+    assert [line["type"] for line in _payload(html)["legend"]] == [
+        *legend,
         "wiki_link",
     ]
-    assert [line["type"] for line in _payload(html)["legend"]] == legend
 
 
 def test_the_scope_line_states_as_of_and_the_ttl(lithos_lens_config_env: Path) -> None:
@@ -552,19 +556,64 @@ def test_an_over_bound_global_read_is_stated_as_read_directly(
     assert len(_text_edges(html)) == 3
 
 
+class _OfflineRecorder(FakeLithosClient):
+    """Offline, and recording every graph data read it is asked for."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.data_reads: list[str] = []
+
+    async def health(self) -> Any:
+        return "unreachable"
+
+    async def edge_list(self, **filters: Any) -> tuple[KnowledgeEdge, ...]:
+        self.data_reads.append("edge_list")
+        return await super().edge_list(**filters)
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        self.data_reads.append("read_note")
+        return await super().read_note(knowledge_id, max_length=max_length)
+
+    async def related(self, knowledge_id: str) -> RelatedNeighborhood:
+        self.data_reads.append("related")
+        return await super().related(knowledge_id)
+
+
+@pytest.mark.parametrize(
+    ("query", "mode"),
+    [("", "picker"), (f"?focus={PLAN}", "focus"), ("?namespace=influx", "global")],
+)
 def test_offline_the_page_says_so_and_reads_nothing(
     lithos_lens_config_env: Path,
+    spans: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    query: str,
+    mode: str,
 ) -> None:
-    class Offline(FakeLithosClient):
-        async def health(self) -> Any:
-            return "unreachable"
-
-    fake = Offline()
-    html = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}", fake)
+    fake = _OfflineRecorder()
+    html = _get(lithos_lens_config_env, f"{ROUTE}{query}", fake)
 
     assert "The knowledge graph is unavailable." in html
-    assert not [call for call in fake.tool_calls if call[0] == "lithos_edge_list"]
+    assert fake.data_reads == []
+    assert not [call for call in fake.tool_calls if call[0] != "lithos_agent_register"]
     assert _PAYLOAD.search(html) is None
+    attrs = _graph_attrs(_route_span(spans))
+    assert (attrs["mode"], attrs["outcome"]) == (mode, "offline")
+    assert {key: attrs[key] for key in _COUNT_ATTRS} == dict.fromkeys(_COUNT_ATTRS, 0)
+    assert attrs["snapshot_age_s"] == 0
+    # Focus mode states the depth it would have drawn: the configured default.
+    assert attrs.get("depth") == (1 if mode == "focus" else None)
+    assert (
+        snapshot_value(
+            metric_snapshot(metric_reader),
+            "lens_knowledge_graph_renders_total",
+            mode=mode,
+            outcome="offline",
+        ).value
+        == 1
+    )
 
 
 # ── telemetry ──────────────────────────────────────────────────────────
@@ -578,6 +627,20 @@ def _route_span(exporter: InMemorySpanExporter) -> ReadableSpan:
     ]
     assert len(matching) == 1
     return matching[0]
+
+
+_COUNT_ATTRS = (
+    "nodes",
+    "edges",
+    "hidden_by_weight",
+    "hidden_by_provenance",
+    "hidden_total",
+    "facts.hits",
+    "facts.reads",
+    "facts.missing",
+    "facts.capped",
+    "facts.failed",
+)
 
 
 def _graph_attrs(span: ReadableSpan) -> dict[str, Any]:
@@ -655,7 +718,10 @@ def test_the_picker_reports_its_mode(
         client.get(ROUTE)
 
     attrs = _graph_attrs(_route_span(spans))
-    assert attrs["mode"] == "picker" and "nodes" not in attrs
+    assert attrs["mode"] == "picker" and "depth" not in attrs
+    assert "refusal" not in attrs
+    # Every count is set, zero: the picker draws nothing.
+    assert {key: attrs[key] for key in _COUNT_ATTRS} == dict.fromkeys(_COUNT_ATTRS, 0)
     assert attrs["snapshot_age_s"] >= 0
     snapshot = metric_snapshot(metric_reader)
     assert (
