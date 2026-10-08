@@ -20,7 +20,9 @@ edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives i
 - **One panel at a time** (D10): ``selected=`` a node's, ``edge=`` an edge's,
   rendered in the page on a full request and as a fragment from
   ``/knowledge/graph/panel`` — one assembly (:func:`load_knowledge_graph`)
-  and one partial behind both, so the two cannot differ.
+  and one partial behind both. Every drawn view is kept under a render id
+  (:class:`RenderedViews`) that the page's panel links carry, so a click's
+  fragment is drawn from the very view its page showed.
 - **Telemetry**: ``lens.knowledge.graph.*`` attributes on the request span and
   one counter by mode and outcome; panel opens by kind and source; the scope
   and the selection are never labels.
@@ -32,6 +34,8 @@ already uses.
 from __future__ import annotations
 
 import math
+import secrets
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -242,11 +246,66 @@ def knowledge_graph_url(
 
 
 def knowledge_graph_panel_url(
-    params: KnowledgeGraphParams | None = None, **changes: Any
+    params: KnowledgeGraphParams | None = None, render: str = "", **changes: Any
 ) -> str:
     """The same link to the panel fragment: what a click's ``hx-get`` fetches,
-    with the scope and filters carried so the panel's view is the page's."""
-    return _graph_url(KNOWLEDGE_GRAPH_PANEL_PATH, params, changes)
+    with the scope and filters carried, and ``render`` — the id of the view
+    the page drew (:class:`RenderedViews`) — last when there is one."""
+    url = _graph_url(KNOWLEDGE_GRAPH_PANEL_PATH, params, changes)
+    if not render:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{urlencode([(RENDER_KEY, render)])}"
+
+
+# ── the views a click answers from ─────────────────────────────────────
+
+#: The panel fragment's query key naming the view its page drew.
+RENDER_KEY = "render"
+
+#: How many drawn views are kept for their panel clicks (most recent first).
+#: A view past it — or after a restart — is assembled afresh, as a reload of
+#: the page would be.
+RENDERED_VIEWS_KEPT = 32
+
+
+def _scope(params: KnowledgeGraphParams) -> KnowledgeGraphParams:
+    return replace(params, selected="", edge="")
+
+
+class RenderedViews:
+    """The views recent renders drew, each under a fresh render id (S5).
+
+    A page's facts depend on when it was drawn: each render spends its own
+    facts cap from a process-wide cache that other tabs, the TTL and note
+    events keep changing. So a panel click does not re-assemble its page's
+    view — it names it, by the render id the page's panel links carry, and
+    its fragment is drawn from the view the page showed, facts and all. A
+    view is found only for the scope and filters it was drawn under.
+    """
+
+    def __init__(self, size: int = RENDERED_VIEWS_KEPT) -> None:
+        self._size = size
+        self._views: OrderedDict[
+            str, tuple[KnowledgeGraphParams, KnowledgeGraphView]
+        ] = OrderedDict()
+
+    def keep(self, params: KnowledgeGraphParams, view: KnowledgeGraphView) -> str:
+        """Keep ``view``, drawn for ``params``; its new render id."""
+        render_id = secrets.token_urlsafe(9)
+        self._views[render_id] = (_scope(params), view)
+        while len(self._views) > self._size:
+            self._views.popitem(last=False)
+        return render_id
+
+    def get(
+        self, render_id: str, params: KnowledgeGraphParams
+    ) -> KnowledgeGraphView | None:
+        """The view kept under ``render_id`` for ``params``' scope, if any."""
+        kept = self._views.get(render_id) if render_id else None
+        if kept is None or kept[0] != _scope(params):
+            return None
+        self._views.move_to_end(render_id)
+        return kept[1]
 
 
 def utc_minute(moment: datetime) -> str:
@@ -384,11 +443,7 @@ class KnowledgeGraphLoad:
 
 
 async def load_knowledge_graph(
-    state: AppState,
-    params: KnowledgeGraphParams,
-    *,
-    picker: bool = True,
-    read_facts: bool = True,
+    state: AppState, params: KnowledgeGraphParams, *, picker: bool = True
 ) -> KnowledgeGraphLoad:
     """The page's reads for ``params``, shared by the page and its panel
     fragment so the two draw the same view (S5 D1).
@@ -397,13 +452,6 @@ async def load_knowledge_graph(
     all with ``picker=False``: no panel opens on it). Focus and global modes
     run the S2 orchestrators, which never raise for a table failure: they
     answer a refused view instead.
-
-    ``read_facts=False`` spends no facts reads: every node is answered from
-    the cache as it stands — fresh entries ``ok``, stale or expired ones on
-    their last-known facts (``pending``), unknown ones ``unread``. That is
-    exactly what the page that offered the click left behind, so the panel
-    fragment shows the facts the page showed rather than spending a second
-    per-render cap and drawing nodes the page never read.
     """
     health = await state.refresh_health()
     if health.lithos != "ok":
@@ -415,7 +463,6 @@ async def load_knowledge_graph(
         )
     knowledge = state.config.knowledge
     filters = params.filters(knowledge.graph_min_weight_default)
-    fanout_cap = knowledge.graph_title_fanout_cap if read_facts else 0
     if params.mode == "focus":
         view = await assemble_focus_graph(
             table,
@@ -425,7 +472,7 @@ async def load_knowledge_graph(
             depth=params.depth_or(knowledge.graph_default_depth),
             filters=filters,
             max_nodes=knowledge.graph_focus_max_nodes,
-            fanout_cap=fanout_cap,
+            fanout_cap=knowledge.graph_title_fanout_cap,
         )
     else:
         view = await assemble_global_graph(
@@ -435,7 +482,7 @@ async def load_knowledge_graph(
             namespace=params.namespace,
             filters=filters,
             max_nodes=knowledge.graph_global_max_nodes,
-            fanout_cap=fanout_cap,
+            fanout_cap=knowledge.graph_title_fanout_cap,
         )
     return KnowledgeGraphLoad(health, view=view)
 
@@ -454,6 +501,7 @@ def register_knowledge_graph_routes(
     templates.env.globals["edge_entry"] = edge_entry
     templates.env.filters["utc_minute"] = utc_minute
     templates.env.filters["is_conflict_resolved"] = is_conflict_resolved
+    views = RenderedViews()
 
     @app.get(KNOWLEDGE_GRAPH_PATH, response_class=HTMLResponse)
     async def knowledge_graph(request: Request) -> HTMLResponse:
@@ -478,6 +526,7 @@ def register_knowledge_graph_routes(
             "picker": None,
             "view": None,
             "panel": None,
+            "render_id": "",
         }
         table = state.edge_table
         if load.offline:
@@ -504,6 +553,7 @@ def register_knowledge_graph_routes(
             focus_meta=node_metadata(focus_node),
             payload=graph_payload(view),
             panel=panel,
+            render_id=views.keep(params, view) if view.refusal is None else "",
         )
         _record_panel(panel, "url")
         outcome, reason = _outcome(view, None)
@@ -520,23 +570,34 @@ def register_knowledge_graph_routes(
     async def knowledge_graph_panel(request: Request) -> HTMLResponse:
         """The panel ``selected=`` / ``edge=`` names, as a fragment.
 
-        The page's own reads for the same scope and filters (the view the
-        click was made on), with no facts read of its own — the facts are the
-        cache the page's render left — rendered through the partial the page
-        includes, so the fragment equals the page's panel. Anything that is not a
-        drawn node or typed edge — the picker, a refused view, an id the
-        view does not draw — answers 200 with a one-line "Not in this view"
-        panel, and offline "Lithos is offline" with nothing read: htmx swaps
-        a 200 and would drop a 4xx. Not a page render: the renders counter
-        is not touched, and only a panel that renders counts as an open.
+        ``render=`` names the view the page drew (:class:`RenderedViews`):
+        the panel is drawn from it, with nothing read and no health probe —
+        it is the graph the page is still showing, so it equals the page's
+        own panel whatever other tabs, the facts TTL or Lithos did since.
+        Without one (a hand-made or cold request, or a view no longer kept)
+        the page's own assembly runs — the same reads a full request makes,
+        so the fragment equals the page drawn now — and its view is kept for
+        the panel's own links. Anything that is not a drawn node or typed
+        edge — the picker, a refused view, an id the view does not draw —
+        answers 200 with a one-line "Not in this view" panel, and offline
+        "Lithos is offline" with nothing read: htmx swaps a 200 and would
+        drop a 4xx. Not a page render: the renders counter is not touched,
+        and only a panel that renders counts as an open.
         """
         params = parse_knowledge_graph_params(request.query_params)
-        load = await load_knowledge_graph(state, params, picker=False, read_facts=False)
+        render_id = request.query_params.get(RENDER_KEY) or ""
+        view = views.get(render_id, params)
+        offline = False
+        if view is None:
+            load = await load_knowledge_graph(state, params, picker=False)
+            view, offline = load.view, load.offline
+            drawn = view is not None and view.refusal is None
+            render_id = views.keep(params, view) if view is not None and drawn else ""
         panel = None
-        if load.view is not None:
-            panel = graph_panel(load.view, selected=params.selected, edge=params.edge)
+        if view is not None:
+            panel = graph_panel(view, selected=params.selected, edge=params.edge)
         _record_panel(panel, "fragment")
-        notice = "Lithos is offline." if load.offline else "Not in this view."
+        notice = "Lithos is offline." if offline else "Not in this view."
         return templates.TemplateResponse(
             request,
             "knowledge/graph_panel.html",
@@ -545,5 +606,6 @@ def register_knowledge_graph_routes(
                 "params": params,
                 "panel": panel,
                 "panel_notice": notice,
+                "render_id": render_id,
             },
         )

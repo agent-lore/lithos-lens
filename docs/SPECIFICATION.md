@@ -220,8 +220,8 @@ The current application exposes these routes:
   with `edge=<edge_id>` (one at a time; `edge` wins when both are given).
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
-  query as the page: the fragment an htmx click swaps into the page's panel
-  host. Always 200, "Not in this view" or "Lithos is offline" when there is
+  query as the page, plus `render=<id>` naming the view that page drew: the
+  fragment an htmx click swaps into the page's panel host. Always 200, "Not in this view" or "Lithos is offline" when there is
   no panel to show.
 - `GET /note/{knowledge_id}`
   Renders a note: server-side markdown, frontmatter metadata chips, the
@@ -1606,15 +1606,21 @@ Both are rendered in the page's panel host on a full request — the no-JS
 baseline — and by `GET /knowledge/graph/panel` with the same query as a
 fragment: one assembly (the page's own reads for that scope and filters — the
 snapshot, the one `lithos_related` of a focus draw, the direct filtered read
-of an over-bound global scope; nothing more) and one partial
-(`knowledge/graph_panel.html`, extending no layout). The fragment spends **no
-facts reads**: every node is answered from the facts cache as the page's
-render left it (fresh entries as read, stale or expired ones on their
-last-known facts as pending, unknown ones unread), because each render spends
-its own `graph_title_fanout_cap` and a second spend would draw nodes the page
-left unread. So the fragment is the panel of the page the click was made on,
-byte for byte, under the cap as well; with no page rendered first (a cold
-cache) its nodes are unread. The text baseline's edge links keep their `href`
+of an over-bound global scope, and the facts cache under its per-render cap;
+nothing more) and one partial (`knowledge/graph_panel.html`, extending no
+layout). A page's facts depend on when it was drawn — each render spends its
+own `graph_title_fanout_cap` from one process-wide cache that other tabs, the
+facts TTL and note events keep changing — so a click does not re-assemble the
+view: every drawn view (page or fragment) is kept under a fresh **render id**
+(`RenderedViews`: the 32 most recent, least recently used out, each found
+only for the scope and filters it was drawn under), the page's panel host
+carries it (`data-kgraph-render`) and every panel link's `hx-get` ends with
+`render=<id>`. A fragment naming a kept view is drawn from it with nothing
+read and no health probe, so it is that page's panel byte for byte whatever
+happened since; the `href` and the pushed URL never carry the id. A fragment
+without one — hand-made, cold, after a restart, or a view no longer kept —
+runs the page's assembly with its reads and draws what a full request for
+the same query draws now, under a new render id. The text baseline's edge links keep their `href`
 and add `hx-get` (the fragment), `hx-target="#kgraph-panel"`,
 `hx-sync="#kgraph-panel:replace"` and `hx-push-url` (the `href`), so a click
 swaps the panel and the address bar carries the one selection. Every panel

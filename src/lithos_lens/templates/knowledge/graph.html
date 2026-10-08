@@ -16,9 +16,9 @@
     linked to its edge panel (S5) by `edge=`. -#}
 {% macro edge_line(entry) -%}
   {%- if entry.other is not none -%}
-    <a class="kgraph-edge-link" {{ panel_attrs(params, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }}
+    <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }}
   {%- else -%}
-    {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.target) }}
+    {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.target) }}
   {%- endif %}
   <span class="kgraph-weight">({{ entry.weight_label }})</span>
   {%- if entry.edge.type == "contradicts" and entry.edge.conflict_state %} <span class="kgraph-mark">{{ entry.edge.conflict_state }}</span>{% endif %}
@@ -28,7 +28,7 @@
 {#- The contradictions queue's line (D11): "A contradicts B · ns · weight ·
     first sentence of the rationale", the resolution named when resolved. -#}
 {% macro queue_line(entry) -%}
-  {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, edge=entry.edge.id) }}>contradicts</a> {{ node_ref(entry.target) }}
+  {{ node_ref(entry.source) }} <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }}>contradicts</a> {{ node_ref(entry.target) }}
   {%- if entry.edge.namespace %} · <span class="kgraph-namespace">{{ entry.edge.namespace }}</span>{% endif %}
   · <span class="kgraph-weight">{{ entry.weight_label }}</span>
   {%- if entry.edge.conflict_state | is_conflict_resolved %} · <span class="kgraph-resolution">resolved: {{ entry.edge.conflict_state }}</span>
@@ -73,7 +73,7 @@
       {#- The panel host: the page's panel on a full request, the fragment
           an edge or node link fetches on a click. Full width until the
           canvas (S4) gives it a place beside the graph. -#}
-      <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host>
+      <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
         {%- if panel is not none %}{% include "knowledge/graph_panel.html" %}{% endif -%}
       </div>
 

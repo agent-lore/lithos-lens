@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +31,12 @@ from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.knowledge_edges import KnowledgeEdge, normalize_edge_list
 from lithos_lens.knowledge_graph_routes import (
     KnowledgeGraphParams,
+    RenderedViews,
     knowledge_graph_panel_url,
     knowledge_graph_url,
     parse_knowledge_graph_params,
 )
+from lithos_lens.knowledge_graph_view import KnowledgeGraphFilters, KnowledgeGraphView
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.template_vocabulary import short_id
 from lithos_lens.web import create_app
@@ -54,7 +58,8 @@ RESOLVED = "edge_b6e0f27d4c18"  # legacy/plan, superseded
 UNKNOWN_TYPE = "edge_f29d84a6130c"  # capacity assesses plan
 
 _HOST = re.compile(
-    r'<div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host>'
+    r'<div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host'
+    r' data-kgraph-render="([^"]*)">'
     r"(.*?)</div>\s*<section class=\"panel kgraph-legend\"",
     re.S,
 )
@@ -95,7 +100,27 @@ def _host(html: str) -> str:
     """The page's panel host, as rendered (``""`` when it holds no panel)."""
     match = _HOST.search(html)
     assert match is not None, "no panel host before the legend"
-    return match.group(1).strip()
+    return match.group(2).strip()
+
+
+def _render_id(html: str) -> str:
+    """The render id the page drew its view under (its panel links carry it)."""
+    match = _HOST.search(html)
+    assert match is not None, "no panel host before the legend"
+    return match.group(1)
+
+
+def _fragment(client: TestClient, query: str, page: str) -> str:
+    """The panel fragment a click on ``page`` fetches for ``query``."""
+    return _get(client, f"{PANEL}?{query}&render={_render_id(page)}").strip()
+
+
+_RENDER = re.compile(r"(render=)[A-Za-z0-9_-]+")
+
+
+def _unrendered(html: str) -> str:
+    """``html`` with its render ids blanked: two renders' panels compared."""
+    return _RENDER.sub(r"\1-", html)
 
 
 def _payload(html: str) -> dict[str, Any]:
@@ -276,7 +301,7 @@ def test_selected_renders_the_node_panel_with_its_relations_in_view(
     # Each entry reads from the selected note, typed ones linked to their panel.
     assert _panel_entry(host, REFINES) == "→ Legacy ingest approach (0.74)"
     assert _panel_entry(host, SUPPORTS) == "← Influx capacity report (0.82)"
-    assert f'hx-get="{PANEL}?focus={PLAN}&amp;edge={SUPPORTS}"' in host
+    assert f'hx-get="{PANEL}?focus={PLAN}&amp;edge={SUPPORTS}&amp;render=' in host
 
 
 def test_a_neighbours_panel_reads_from_it_and_centres_on_it(
@@ -354,8 +379,9 @@ def test_a_pending_nodes_panel_shows_last_known_facts_marked_pending(
         assert facts.apply_note_event("note.updated", {"id": PLAN, "title": "v2"})
         # The cap re-reads the focus first: the plan stays pending.
         query = f"focus={ROLLBACK}&selected={PLAN}"
-        host = _host(_get(client, f"{ROUTE}?{query}"))
-        fragment = _get(client, f"{PANEL}?{query}")
+        page = _get(client, f"{ROUTE}?{query}")
+        host = _host(page)
+        fragment = _fragment(client, query, page)
 
     assert "Facts pending a re-read." in host
     # Its last-known facts: the title the event set, marked, and the chips and
@@ -364,7 +390,7 @@ def test_a_pending_nodes_panel_shows_last_known_facts_marked_pending(
     assert _facts(_node_head(host)) == PLAN_FACTS
     assert "data-kgraph-full-id" not in host
     assert "Facts not read for this view." not in host
-    assert fragment.strip() == host
+    assert fragment == host
 
 
 # ── the edge panel ─────────────────────────────────────────────────────
@@ -407,7 +433,7 @@ def test_edge_renders_the_edge_panel_with_the_rationale_from_evidence_json(
     assert re.findall(r'data-kgraph-card="([^"]+)"', host) == [PLAN, LEGACY]
     assert _facts(_card(host, PLAN)) == PLAN_FACTS
     assert _facts(_card(host, LEGACY)) == LEGACY_FACTS
-    assert f'hx-get="{PANEL}?focus={PLAN}&amp;selected={LEGACY}"' in host
+    assert f'hx-get="{PANEL}?focus={PLAN}&amp;selected={LEGACY}&amp;render=' in host
 
 
 @pytest.mark.parametrize(
@@ -688,87 +714,166 @@ def test_the_fragment_equals_the_server_rendered_panel(
 ) -> None:
     with _client(lithos_lens_config_env) as client:
         page = _get(client, f"{ROUTE}?{query}")
-        fragment = _get(client, f"{PANEL}?{query}")
+        fragment = _fragment(client, query, page)
+        hand_made = _get(client, f"{PANEL}?{query}").strip()
 
     assert "data-kgraph-panel=" in fragment
     assert "<html" not in fragment  # extends no layout
-    assert _host(page) == fragment.strip()
+    # The page's own view, byte for byte: render id included.
+    assert fragment == _host(page)
+    # Without a render id the fragment draws the view afresh, as a full
+    # request would now: the same panel under its own render id.
+    assert _render_id(page) not in hand_made
+    assert _unrendered(hand_made) == _unrendered(_host(page))
 
 
-def test_the_fragment_reads_nothing_the_page_does_not(
+def test_a_click_reads_nothing_and_a_hand_made_fragment_reads_as_the_page(
     lithos_lens_config_env: Path,
 ) -> None:
-    """On a warm cache the fragment's reads are the view's own: the one
-    ``lithos_related`` a focus draw makes, and no facts or table read."""
+    """A click names its page's view: no read at all. A fragment without one
+    (or one drawn for another scope) makes the page's own reads — on a warm
+    cache the one ``lithos_related`` a focus draw makes."""
     fake = _ReadRecorder()
+    query = f"focus={PLAN}&edge={REFINES}"
     with _client(lithos_lens_config_env, fake) as client:
-        _get(client, f"{ROUTE}?focus={PLAN}")
-        before = len(fake.data_reads)
-        _get(client, f"{PANEL}?focus={PLAN}&edge={REFINES}")
-        focus_reads = fake.data_reads[before:]
-        _get(client, f"{ROUTE}?type=contradicts")
-        before = len(fake.data_reads)
-        _get(client, f"{PANEL}?type=contradicts&edge={CONTRADICTION}")
-        global_reads = fake.data_reads[before:]
+        focus_page = _get(client, f"{ROUTE}?focus={PLAN}")
+        fake.data_reads.clear()
+        _fragment(client, query, focus_page)
+        click_reads = list(fake.data_reads)
+        fake.data_reads.clear()
+        _get(client, f"{PANEL}?{query}")
+        hand_made_reads = list(fake.data_reads)
+        fake.data_reads.clear()
+        # The render id of a depth-1 view, sent with a depth-2 scope.
+        _fragment(client, f"focus={PLAN}&depth=2&edge={REFINES}", focus_page)
+        other_scope_reads = list(fake.data_reads)
+        queue_page = _get(client, f"{ROUTE}?type=contradicts")
+        fake.data_reads.clear()
+        _fragment(client, f"type=contradicts&edge={CONTRADICTION}", queue_page)
+        queue_click_reads = list(fake.data_reads)
 
-    assert focus_reads == ["related"]
-    assert global_reads == []
+    assert click_reads == []
+    assert hand_made_reads == ["related"]
+    # Assembled afresh: the depth-2 view's related read, and the facts of the
+    # note only depth 2 draws.
+    assert other_scope_reads == ["related", f"read_note:{DANGLING_NOTE_ID}:1"]
+    assert queue_click_reads == []
 
 
-def test_the_fragment_equals_the_page_under_the_facts_cap(
+def test_the_fragment_is_its_pages_panel_whatever_another_tab_read(
     lithos_lens_config_env: Path,
 ) -> None:
-    """f-002: each render spends its own facts cap, so a fragment that read
-    facts again would draw a node the page left unread. The fragment reads no
-    facts: it shows what the page's render left in the cache."""
+    """f-002: each render spends its own facts cap from one shared cache, so
+    another tab's render can read a node this page left unread. The click's
+    fragment is drawn from this page's view, not from the cache as it is."""
     _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
     query = f"focus={PLAN}&selected={ROLLBACK}"
-    edge_query = f"focus={PLAN}&edge={BARE_CONTRADICTION}"  # plan ↔ rollback
+    with _client(lithos_lens_config_env) as client:
+        tab_a = _get(client, f"{ROUTE}?{query}")  # reads the focus only
+        tab_b = _get(client, f"{ROUTE}?focus={PLAN}")  # reads the next node
+        fragment = _fragment(client, query, tab_a)
+        edge_query = f"focus={PLAN}&edge={BARE_CONTRADICTION}"  # plan ↔ rollback
+        edge_fragment = _fragment(client, edge_query, tab_a)
+        fresh = _get(client, f"{PANEL}?{query}").strip()
+
+    # Tab B read the rollback: the cache now has its facts.
+    assert any(
+        n["id"] == ROLLBACK and n["facts_state"] == "ok"
+        for n in _payload(tab_b)["nodes"]
+    )
+    # Tab A's click still shows tab A's rollback: unread, by its id.
+    assert "Facts not read for this view." in _host(tab_a)
+    assert fragment == _host(tab_a)
+    assert "Facts not read for this view." in _card(edge_fragment, ROLLBACK)
+    # A fragment with no page behind it draws now, as a reload would.
+    assert "Facts not read for this view." not in fresh
+
+
+def test_the_fragment_is_its_pages_panel_after_the_facts_ttl(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A page left open past the facts TTL: its click still shows the facts
+    the page showed, not the cache's expired entry marked pending."""
+    _set_knowledge(
+        lithos_lens_config_env,
+        "graph_note_facts_ttl_s = 1",
+        "graph_title_fanout_cap = 1",
+    )
+    query = f"focus={ROLLBACK}&selected={PLAN}"
+    with _client(lithos_lens_config_env) as client:
+        _get(client, f"{ROUTE}?focus={PLAN}")  # caches the plan
+        page = _get(client, f"{ROUTE}?{query}")  # reads the rollback; plan a hit
+        time.sleep(1.2)
+        fragment = _fragment(client, query, page)
+        fresh = _get(client, f"{PANEL}?{query}").strip()
+
+    assert _facts(_node_head(_host(page))) == PLAN_FACTS
+    assert "Facts pending a re-read." not in _host(page)
+    assert fragment == _host(page)
+    # Drawn now, the plan's entry has expired and the cap re-reads the focus:
+    # the plan is on its last-known facts. The click did not see that.
+    assert "Facts pending a re-read." in fresh
+
+
+def test_a_cold_fragment_draws_what_a_full_request_draws(
+    lithos_lens_config_env: Path,
+) -> None:
+    """No page behind it (a restart, a hand-made URL): the fragment makes the
+    page's reads, facts included, and shows what a full request shows."""
+    query = f"focus={PLAN}&selected={PLAN}"
+    with _client(lithos_lens_config_env) as client:
+        cold = _get(client, f"{PANEL}?{query}").strip()
     with _client(lithos_lens_config_env) as client:
         page = _host(_get(client, f"{ROUTE}?{query}"))
-        fragment = _get(client, f"{PANEL}?{query}").strip()
-        edge_fragment = _get(client, f"{PANEL}?{edge_query}").strip()
-        edge_page = _host(_get(client, f"{ROUTE}?{edge_query}"))
 
-    # The page read only the focus: the rollback is unread, in both.
-    assert "Facts not read for this view." in page
-    assert f"data-kgraph-full-id>{ROLLBACK}</p>" in page
-    assert fragment == page
-    # The edge fragment, before the page's own next render reads the next
-    # node, still shows the rollback card unread, as the page last drew it.
-    assert "Facts not read for this view." in _card(edge_fragment, ROLLBACK)
-    # That next render reads it (the cap's next read): page and fragment for
-    # one render are compared, not two different renders.
-    assert "Facts not read for this view." not in _card(edge_page, ROLLBACK)
+    assert _facts(_node_head(cold)) == PLAN_FACTS
+    assert _unrendered(cold) == _unrendered(page)
 
 
 def test_an_unread_selection_costs_no_read_on_the_page_or_the_fragment(
     lithos_lens_config_env: Path,
 ) -> None:
     """D1: no facts lookup for an unread node. From a cold, capped cache the
-    page reads exactly its cap (the focus) and the fragment reads no note."""
+    page — and a fragment with no page behind it — reads exactly its cap
+    (the focus); a click on the page reads nothing at all."""
     _set_knowledge(lithos_lens_config_env, "graph_title_fanout_cap = 1")
     fake = _ReadRecorder()
     query = f"focus={PLAN}&selected={CAPACITY}"
     with _client(lithos_lens_config_env, fake) as client:
-        cold_fragment = _get(client, f"{PANEL}?{query}")
-        cold_fragment_reads = list(fake.data_reads)
-        fake.data_reads.clear()
-        page = _host(_get(client, f"{ROUTE}?{query}"))
+        page = _get(client, f"{ROUTE}?{query}")
         page_reads = list(fake.data_reads)
         fake.data_reads.clear()
-        fragment = _get(client, f"{PANEL}?{query}")
-        fragment_reads = list(fake.data_reads)
+        fragment = _fragment(client, query, page)
+        click_reads = list(fake.data_reads)
+    cold_fake = _ReadRecorder()
+    with _client(lithos_lens_config_env, cold_fake) as client:
+        cold_fragment = _get(client, f"{PANEL}?{query}")
 
-    # Cold: the snapshot and the focus's related read, and no note at all.
-    assert cold_fragment_reads == ["edge_list", "related"]
+    cap_read = ["edge_list", "related", f"read_note:{PLAN}:1"]
+    assert page_reads == cap_read
+    assert "Facts not read for this view." in _host(page)
+    assert click_reads == []
+    assert fragment == _host(page)
+    assert cold_fake.data_reads == cap_read
     assert "Facts not read for this view." in cold_fragment
-    # The page: the cap's one read, the focus, by lithos_read(max_length=1).
-    assert page_reads == ["related", f"read_note:{PLAN}:1"]
-    assert "Facts not read for this view." in page
-    # The fragment after it: the view's related read only.
-    assert fragment_reads == ["related"]
-    assert fragment.strip() == page
+
+
+def test_rendered_views_are_kept_per_scope_and_bounded() -> None:
+    views = RenderedViews(size=2)
+    focus = KnowledgeGraphParams(focus=PLAN)
+    view = KnowledgeGraphView(mode="focus", filters=KnowledgeGraphFilters())
+    first = views.keep(replace(focus, selected=PLAN), view)
+    second = views.keep(focus, view)
+
+    # Found for the same scope whatever the selection; not for another scope.
+    assert views.get(first, replace(focus, edge=REFINES)) is view
+    assert views.get(first, replace(focus, depth=2)) is None
+    assert views.get("", focus) is None and views.get("nope", focus) is None
+    # Bounded, least recently used out: first was just used, second goes.
+    third = views.keep(focus, view)
+    assert views.get(second, focus) is None
+    assert views.get(first, focus) is view and views.get(third, focus) is view
+    assert len({first, second, third}) == 3
 
 
 def _attr(tag: str, name: str) -> str:
@@ -800,19 +905,20 @@ def test_the_links_the_page_emits_carry_its_scope_and_filters(
             _first(rf'data-kgraph-edge="{edge_id}">(.*?)</li>', page),
             'class="kgraph-edge-link"',
         )
+        render_id = _render_id(page)
         href, hx_get = _attr(edge_link, "href"), _attr(edge_link, "hx-get")
         assert href == f"{ROUTE}?{query}&edge={edge_id}"
-        assert hx_get == f"{PANEL}?{query}&edge={edge_id}"
+        assert hx_get == f"{PANEL}?{query}&edge={edge_id}&render={render_id}"
         assert _attr(edge_link, "hx-push-url") == href
         edge_fragment = _get(client, hx_get).strip()
-        assert edge_fragment == _host(_get(client, href))
+        assert _unrendered(edge_fragment) == _unrendered(_host(_get(client, href)))
 
         details = _link(_card(edge_fragment, endpoint), "data-kgraph-node-details")
         node_href, node_get = _attr(details, "href"), _attr(details, "hx-get")
         assert node_href == f"{ROUTE}?{query}&selected={endpoint}"
-        assert node_get == f"{PANEL}?{query}&selected={endpoint}"
+        assert node_get == f"{PANEL}?{query}&selected={endpoint}&render={render_id}"
         node_fragment = _get(client, node_get).strip()
-        assert node_fragment == _host(_get(client, node_href))
+        assert _unrendered(node_fragment) == _unrendered(_host(_get(client, node_href)))
         unfiltered = _get(
             client, f"{PANEL}?focus={endpoint}&depth=2&min_weight=0&selected={endpoint}"
         )
@@ -830,7 +936,11 @@ def test_text_baseline_edge_links_fetch_their_panel_with_htmx(
     entry = _first(rf'data-kgraph-edge="{REFINES}">(.*?)</li>', html)
     # The href stays the no-JS baseline; edge= replaces the page's selected=.
     assert f'href="{ROUTE}?focus={PLAN}&amp;edge={REFINES}"' in entry
-    assert f'hx-get="{PANEL}?focus={PLAN}&amp;edge={REFINES}"' in entry
+    render_id = _render_id(html)
+    assert (
+        f'hx-get="{PANEL}?focus={PLAN}&amp;edge={REFINES}&amp;render={render_id}"'
+        in (entry)
+    )
     assert 'hx-target="#kgraph-panel" hx-swap="innerHTML"' in entry
     # One sync owner for every panel link: a later click aborts the request
     # still in flight from any other link (f-001).
@@ -838,7 +948,8 @@ def test_text_baseline_edge_links_fetch_their_panel_with_htmx(
     assert f'hx-push-url="{ROUTE}?focus={PLAN}&amp;edge={REFINES}"' in entry
     queue = _page(lithos_lens_config_env, f"{ROUTE}?type=contradicts")
     queue_entry = _first(rf'data-kgraph-edge="{CONTRADICTION}">(.*?)</li>', queue)
-    assert f'hx-get="{PANEL}?type=contradicts&amp;edge={CONTRADICTION}"' in queue_entry
+    queue_get = f"{PANEL}?type=contradicts&amp;edge={CONTRADICTION}"
+    assert f'hx-get="{queue_get}&amp;render={_render_id(queue)}"' in queue_entry
 
 
 # ── telemetry ──────────────────────────────────────────────────────────

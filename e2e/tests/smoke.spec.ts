@@ -2174,54 +2174,99 @@ test("a later knowledge graph panel click wins over a slower earlier one", async
   // Every panel link syncs on the panel host with `replace`, so a click
   // aborts the panel request still in flight from ANY other link: the
   // earlier response can neither swap its panel in nor push its URL after
-  // the later one landed. The first request is held back to force the race.
-  await page.route(
-    (url) =>
-      url.pathname === "/knowledge/graph/panel" &&
-      (url.searchParams.get("edge") === "edge_a07c5f3e18b2" ||
-        url.searchParams.get("selected") === "note-influx-legacy-ingest"),
-    async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      // An aborted request can no longer be continued; that is the point.
-      await route.continue().catch(() => undefined);
-    },
-  );
+  // the later one landed. No elapsed-time assumption: the earlier request is
+  // held at the network until the later panel has swapped, then released,
+  // and the final state is read only once the browser has ENDED that earlier
+  // XHR (`loadend` — after its load handler's swap and push, or its abort).
+  await page.addInitScript(() => {
+    const ended: string[] = [];
+    (window as any).__panelXhrEnded = ended;
+    const open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      ...rest: any[]
+    ) {
+      this.addEventListener("loadend", () => ended.push(String(url)));
+      return (open as any).call(this, method, url, ...rest);
+    } as typeof XMLHttpRequest.prototype.open;
+  });
+
+  // Hold the next panel request whose query names `marker`, until released.
+  const hold = async (marker: string) => {
+    let intercepted!: () => void;
+    let release!: () => void;
+    const seen = new Promise<void>((resolve) => (intercepted = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let handled: Promise<void> = Promise.resolve();
+    await page.route(
+      (url) =>
+        url.pathname === "/knowledge/graph/panel" && url.search.includes(marker),
+      (route) => {
+        handled = (async () => {
+          intercepted();
+          await released;
+          // Aborted in the page meanwhile: it can no longer be continued.
+          await route.continue().catch(() => undefined);
+        })();
+        return handled;
+      },
+      { times: 1 },
+    );
+    const ended = () =>
+      page.waitForFunction(
+        (m) =>
+          ((window as any).__panelXhrEnded as string[]).some((u) => u.includes(m)),
+        marker,
+      );
+    return { seen, release: () => release(), ended, handled: () => handled };
+  };
+
   const host = page.locator("#kgraph-panel");
+  const panel = host.locator("[data-kgraph-panel]");
   const edgeLink = (id: string) =>
     page.locator(`[data-kgraph-edge="${id}"] .kgraph-edge-link`);
+  const race = async (
+    held: Awaited<ReturnType<typeof hold>>,
+    first: () => Promise<void>,
+    second: () => Promise<void>,
+    winner: string,
+  ) => {
+    await first();
+    await held.seen; // the earlier request is in flight, held
+    await second();
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", winner);
+    held.release();
+    await held.ended(); // the earlier XHR is over: loaded and handled, or aborted
+    await held.handled();
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", winner);
+    await expect(page).toHaveURL(new RegExp(`[?&]edge=${winner}(&|$)`));
+    expect(page.url()).not.toContain("selected=");
+  };
 
-  // Two text-baseline links: refines (held) then supports.
+  // Two text-baseline links: refines (held), then supports.
   await page.goto("/knowledge/graph?focus=note-influx-plan");
-  await edgeLink("edge_a07c5f3e18b2").click();
-  await edgeLink("edge_4c1e9a7b20d3").click();
-  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
-    "data-kgraph-panel-id",
+  const refines = await hold("edge=edge_a07c5f3e18b2");
+  await race(
+    refines,
+    () => edgeLink("edge_a07c5f3e18b2").click(),
+    () => edgeLink("edge_4c1e9a7b20d3").click(),
     "edge_4c1e9a7b20d3",
   );
-  await page.waitForTimeout(2500); // past the held response
-  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
-    "data-kgraph-panel-id",
-    "edge_4c1e9a7b20d3",
-  );
-  await expect(page).toHaveURL(/[?&]edge=edge_4c1e9a7b20d3(&|$)/);
 
-  // A link inside the panel (Node details, held) then a queue link.
+  // A link inside the panel (Node details, held), then a queue link.
   await page.goto("/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7");
-  await host
-    .locator(
-      '[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]',
-    )
-    .click();
-  await edgeLink("edge_e1f4a8c27b90").click();
-  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
-    "data-kgraph-panel-id",
+  const details = await hold("selected=note-influx-legacy-ingest");
+  await race(
+    details,
+    () =>
+      host
+        .locator(
+          '[data-kgraph-card="note-influx-legacy-ingest"] [data-kgraph-node-details]',
+        )
+        .click(),
+    () => edgeLink("edge_e1f4a8c27b90").click(),
     "edge_e1f4a8c27b90",
   );
-  await page.waitForTimeout(2500);
-  await expect(host.locator("[data-kgraph-panel]")).toHaveAttribute(
-    "data-kgraph-panel-id",
-    "edge_e1f4a8c27b90",
-  );
-  await expect(page).toHaveURL(/[?&]edge=edge_e1f4a8c27b90(&|$)/);
-  expect(page.url()).not.toContain("selected=");
 });

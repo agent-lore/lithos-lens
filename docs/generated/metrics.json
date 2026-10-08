@@ -110,7 +110,7 @@
         "qualname": "lithos_lens.cancel_consequences.walk_downstream"
       }
     ],
-    "total_functions": 1169
+    "total_functions": 1173
   },
   "domain": {
     "associations": 157,
@@ -330,14 +330,14 @@
         "sloc": 901
       },
       "Web": {
-        "classes": 14,
-        "functions": 187,
+        "classes": 15,
+        "functions": 191,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 880,
-        "lines": 5889,
+        "lines": 5951,
         "modules": 11,
-        "public_symbols": 76,
-        "sloc": 4764
+        "public_symbols": 77,
+        "sloc": 4810
       },
       "Writes": {
         "classes": 25,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 35600,
+    "total_lines": 35662,
     "total_modules": 86,
-    "total_sloc": 27646
+    "total_sloc": 27692
   },
   "tests": {
     "ratio": 1.91,
-    "src_lines": 35600,
-    "test_lines": 68057
+    "src_lines": 35662,
+    "test_lines": 68168
   }
 }

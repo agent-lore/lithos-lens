@@ -31,7 +31,7 @@
   <article class="kgraph-card" data-kgraph-card="{{ node.id }}">
     <h3>{{ node_ref(node) }}</h3>
     {{ node_facts(node, meta) }}
-    <p class="kgraph-card-links"><a {{ panel_attrs(params, selected=node.id) }} data-kgraph-node-details>Node details</a>{% if not node.is_ghost %} · <a href="{{ note_url(node.id) }}">Open note</a>{% endif %}</p>
+    <p class="kgraph-card-links"><a {{ panel_attrs(params, render_id, selected=node.id) }} data-kgraph-node-details>Node details</a>{% if not node.is_ghost %} · <a href="{{ note_url(node.id) }}">Open note</a>{% endif %}</p>
   </article>
 {% endmacro %}
 
@@ -55,7 +55,7 @@
           {% for entry in group.entries %}
             <li data-kgraph-panel-edge="{{ entry.edge.id }}">
               {%- if entry.edge.kind == "typed" -%}
-                <a class="kgraph-edge-link" {{ panel_attrs(params, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }} <span class="kgraph-weight">({{ entry.weight_label }})</span>
+                <a class="kgraph-edge-link" {{ panel_attrs(params, render_id, edge=entry.edge.id) }} aria-label="Edge {{ entry.edge.id }}">{{ entry.arrow }}</a> {{ node_ref(entry.other) }} <span class="kgraph-weight">({{ entry.weight_label }})</span>
               {%- else -%}
                 {{ entry.arrow }} {{ node_ref(entry.other) }}
               {%- endif -%}
