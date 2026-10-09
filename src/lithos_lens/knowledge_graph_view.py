@@ -286,6 +286,19 @@ class KnowledgeGraphView:
     #: ``edge=`` names an edge the snapshot does not hold (created after
     #: ``as_of``, or since deleted): the panel host says so.
     selected_edge_missing: bool = False
+    #: The selected edge only its filter exemption draws (D13): a panel
+    #: link on this view keeps the drawing only while it pins that edge.
+    pinned: str = ""
+
+    def keeps_drawing_for(self, pin: str) -> bool:
+        """A request pinning ``pin`` (its ``edge=``, else its ``pin=``) draws
+        this very view: the same pin, or — on a view no exemption changed —
+        none, or an edge it draws anyway. Anything else may draw differently
+        (an exemption lost or gained), so it is not answered from this view."""
+        if pin == self.pinned:
+            return True
+        return not self.pinned and named_edge(self, pin) is not None
+
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.
     facts_capped_at: int = 0

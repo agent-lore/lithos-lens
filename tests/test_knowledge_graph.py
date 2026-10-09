@@ -239,6 +239,33 @@ def test_a_selected_edge_behind_a_hidden_one_is_still_drawn_at_depth_two() -> No
     assert "e-fb" not in {e.edge_id for e in typed.edges}
 
 
+def test_pinned_names_a_selection_only_its_exemption_draws() -> None:
+    """``pinned`` is set when the selection changes the drawing (hidden by
+    the filters, or behind a hidden edge), and empty when it is drawn anyway
+    — so a kept view knows which clicks would draw it the same."""
+
+    def pinned(edge_id: str, depth: int = 1) -> str:
+        filters = KnowledgeGraphFilters(selected_edge=edge_id)
+        return ego_typed_graph(snapshot(), "F", depth=depth, filters=filters).pinned
+
+    assert pinned("e-fc") == "e-fc"  # faint
+    assert pinned("e-cg", depth=2) == "e-cg"  # behind the faint e-fc
+    assert pinned("e-fa") == ""  # drawn anyway
+    assert pinned("e-cg") == ""  # out of reach at depth 1: not drawn at all
+    assert (
+        global_typed_graph(
+            FIXTURE_ROWS, filters=KnowledgeGraphFilters(selected_edge="e-fc")
+        ).pinned
+        == "e-fc"
+    )
+    assert (
+        global_typed_graph(
+            FIXTURE_ROWS, filters=KnowledgeGraphFilters(selected_edge="e-fa")
+        ).pinned
+        == ""
+    )
+
+
 def test_the_selected_edge_counts_towards_the_cap() -> None:
     # Five nodes under the default filter; the faint e-fc brings C in.
     assert ego_typed_graph(snapshot(), "F", max_nodes=5).refusal is None

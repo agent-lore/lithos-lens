@@ -138,6 +138,7 @@ classDiagram
     +stale bool
     +read_directly bool
     +selected_edge_missing bool
+    +pinned str
     +facts_capped_at int
   }
   class KnowledgeLayerRef {
@@ -150,6 +151,7 @@ classDiagram
   class KnowledgeTypedGraph {
     +hops Mapping[str, int]
     +would_be_nodes Mapping[int, int]
+    +pinned str
   }
   class KnownEdgeType {
     +name str

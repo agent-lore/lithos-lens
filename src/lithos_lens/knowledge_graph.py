@@ -117,6 +117,9 @@ class KnowledgeTypedGraph:
     )
     provenance_facets: tuple[ProvenanceFacet, ...] = ()
     refusal: KnowledgeGraphRefusal | None = None
+    #: The ``edge=`` / ``pin=`` selection when only its exemption draws it:
+    #: the drawing differs from the plain filters'. ``""`` otherwise.
+    pinned: str = ""
 
 
 # ── typed assembly (pure, snapshot only) ───────────────────────────────
@@ -240,6 +243,14 @@ def ego_typed_graph(
     depth = min(max(depth, 1), MAX_DEPTH)
     hops, edges = _ego(snapshot.edges_of, focus, depth, filters)
     _, unfiltered = _expand(snapshot.edges_of, focus, depth, _SHOW_ALL)
+    selected = filters.selected_edge
+    plain = replace(filters, selected_edge="")
+    pinned = (
+        selected
+        if selected in edges
+        and selected not in _expand(snapshot.edges_of, focus, depth, plain)[1]
+        else ""
+    )
 
     def count_at(candidate: KnowledgeGraphFilters, at_depth: int = depth) -> int:
         return len(_ego(snapshot.edges_of, focus, at_depth, candidate)[0])
@@ -264,6 +275,7 @@ def ego_typed_graph(
         would_be_nodes=MappingProxyType(would_be),
         provenance_facets=_provenance_facets(unfiltered.values(), filters),
         refusal=refusal,
+        pinned=pinned,
     )
 
 
@@ -293,6 +305,9 @@ def global_typed_graph(
     unfiltered = {row.edge_id: row for row in rows}
     edges = {key: row for key, row in unfiltered.items() if filters.shows(row)}
     hops = _scoped_nodes(edges.values())
+    selected = edges.get(filters.selected_edge)
+    plain = replace(filters, selected_edge="")
+    pinned = "" if selected is None or plain.shows(selected) else selected.edge_id
 
     def count_at(candidate: KnowledgeGraphFilters) -> int:
         return len(_scoped_nodes(row for row in rows if candidate.shows(row)))
@@ -310,6 +325,7 @@ def global_typed_graph(
         hidden=_hidden(edges, unfiltered, filters),
         provenance_facets=_provenance_facets(unfiltered.values(), filters),
         refusal=refusal,
+        pinned=pinned,
     )
 
 
@@ -457,6 +473,7 @@ def build_view(
         would_be_nodes=typed.would_be_nodes,
         provenance_facets=typed.provenance_facets,
         refusal=typed.refusal,
+        pinned=typed.pinned,
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,

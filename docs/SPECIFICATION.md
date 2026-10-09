@@ -1657,7 +1657,11 @@ offline it answers "Lithos is offline" with nothing read, whatever it names —
 and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
-since. A render id no longer held (evicted, or lost to a restart) is never
+since. A held view answers only a selection that would draw it the same: the
+edge its `edge=` exemption alone drew (pinned) or, on a view no exemption
+changed, no edge or one it draws. A selection that would gain or lose an
+exemption is treated as a view not held. A render id no longer held (evicted,
+or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the
 response carries `HX-Redirect` to the full page with that selection, which
 htmx follows, drawing graph and panel afresh together (its body, for a client

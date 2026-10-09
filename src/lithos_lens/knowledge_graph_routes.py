@@ -303,7 +303,9 @@ class RenderedViews:
     events keep changing. So a panel click does not re-assemble its page's
     view — it names it, by the render id the page's panel links carry, and
     its fragment is drawn from the view the page showed, facts and all. A
-    view is found only for the scope and filters it was drawn under.
+    view is found only for the scope and filters it was drawn under, and for
+    a selection that would draw it the same (``keeps_drawing_for``): one
+    that gains or loses an ``edge=`` exemption reloads the page instead.
     """
 
     def __init__(self, size: int = RENDERED_VIEWS_KEPT) -> None:
@@ -324,6 +326,9 @@ class RenderedViews:
         """The view kept under ``render_id`` for ``params``' scope, if any."""
         kept = self._views.get(render_id) if render_id else None
         if kept is None or kept[0] != _scope(params):
+            return None
+        # A selection whose pin would draw otherwise reloads the page (D13).
+        if not kept[1].keeps_drawing_for(params.edge or params.pin):
             return None
         self._views.move_to_end(render_id)
         return kept[1]

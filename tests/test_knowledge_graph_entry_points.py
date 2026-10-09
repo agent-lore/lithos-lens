@@ -375,6 +375,49 @@ def test_a_faint_edges_node_details_reload_to_the_same_view(
     assert opened in fragment
 
 
+def _attrs(tag: str) -> dict[str, str]:
+    return {
+        key: html_lib.unescape(value)
+        for key, value in re.findall(r'(?:^|\s)([\w-]+)="([^"]*)"', tag)
+    }
+
+
+def test_a_click_that_would_lose_the_exemption_reloads_the_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Review f-004: on the view drawn for the faint legacy → plan edge,
+    clicking the strong capacity → plan edge would draw without the faint
+    one, so its fragment is not answered from the kept view: it reloads the
+    page for that edge. There, the plan's Node details href and its hx-get
+    open the same node panel, without the faint edge."""
+    strong = "edge_4c1e9a7b20d3"
+    fake = _with_edges(_row(FAINT_LEGACY_PLAN), _row(strong))
+    with _client(lithos_lens_config_env, fake) as client:
+        faint_page = client.get(
+            f"/knowledge/graph?focus={PLAN}&edge={FAINT_LEGACY_PLAN}"
+        ).text
+        row = faint_page.split(f'data-kgraph-edge="{strong}"', 1)[1]
+        click = _attrs(re.search(r"<a ([^>]*kgraph-edge-link[^>]*)>", row).group(1))  # type: ignore[union-attr]
+
+        fragment = client.get(click["hx-get"])
+        assert fragment.headers["HX-Redirect"] == click["href"]
+        assert click["href"] == f"/knowledge/graph?focus={PLAN}&edge={strong}"
+
+        strong_page = client.get(click["href"]).text
+        card = strong_page.split(f'data-kgraph-card="{PLAN}"', 1)[1]
+        details = _attrs(
+            re.search(r"<a ([^>]*data-kgraph-node-details[^>]*)>", card).group(1)  # type: ignore[union-attr]
+        )
+        full = client.get(details["href"]).text
+        panel = client.get(details["hx-get"]).text
+
+    opened = f'data-kgraph-panel="node" data-kgraph-panel-id="{PLAN}"'
+    assert opened in full and opened in panel
+    for html in (full, panel):
+        assert f'data-kgraph-panel-edge="{FAINT_LEGACY_PLAN}"' not in html
+        assert f'data-kgraph-panel-edge="{strong}"' in html
+
+
 def test_an_edge_the_snapshot_lacks_renders_a_notice_and_fetches_nothing(
     lithos_lens_config_env: Path,
 ) -> None:

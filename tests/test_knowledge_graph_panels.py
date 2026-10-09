@@ -30,6 +30,7 @@ from lithos_lens.fake_knowledge_dataset import DANGLING_NOTE_ID, knowledge_edge_
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.graph_cache import graph_fanout_gate
 from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge_edge_types import EdgeDirection
 from lithos_lens.knowledge_edges import KnowledgeEdge, normalize_edge_list
 from lithos_lens.knowledge_facts import NoteFactsCache
 from lithos_lens.knowledge_graph_routes import (
@@ -40,7 +41,11 @@ from lithos_lens.knowledge_graph_routes import (
     knowledge_graph_url,
     parse_knowledge_graph_params,
 )
-from lithos_lens.knowledge_graph_view import KnowledgeGraphFilters, KnowledgeGraphView
+from lithos_lens.knowledge_graph_view import (
+    KnowledgeGraphEdge,
+    KnowledgeGraphFilters,
+    KnowledgeGraphView,
+)
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.template_vocabulary import short_id
 from lithos_lens.web import create_app
@@ -1102,11 +1107,16 @@ def test_an_unread_selection_costs_no_read_on_the_page_or_the_fragment(
 def test_rendered_views_are_kept_per_scope_and_bounded() -> None:
     views = RenderedViews(size=2)
     focus = KnowledgeGraphParams(focus=PLAN)
-    view = KnowledgeGraphView(mode="focus", filters=KnowledgeGraphFilters())
+    refines = KnowledgeGraphEdge(
+        REFINES, PLAN, LEGACY, "typed", "refines", EdgeDirection.DIRECTED
+    )
+    view = KnowledgeGraphView(
+        mode="focus", filters=KnowledgeGraphFilters(), edges=(refines,)
+    )
     first = views.keep(replace(focus, selected=PLAN), view)
     second = views.keep(focus, view)
 
-    # Found for the same scope whatever the selection; not for another scope.
+    # Found for the same scope whatever drawn selection; not for another scope.
     assert views.get(first, replace(focus, edge=REFINES)) is view
     assert views.get(first, replace(focus, depth=2)) is None
     assert views.get("", focus) is None and views.get("nope", focus) is None
@@ -1115,6 +1125,37 @@ def test_rendered_views_are_kept_per_scope_and_bounded() -> None:
     assert views.get(second, focus) is None
     assert views.get(first, focus) is view and views.get(third, focus) is view
     assert len({first, second, third}) == 3
+
+
+def test_a_kept_view_answers_only_selections_that_keep_its_drawing() -> None:
+    """Review f-004: a view whose ``edge=`` was drawn only by its exemption
+    answers clicks that pin that edge; a click pinning another edge (or none)
+    would draw without it, so it reloads the page instead. A view no
+    exemption changed answers no pin and edges it draws, not an edge it
+    does not (which might gain an exemption)."""
+    views = RenderedViews()
+    focus = KnowledgeGraphParams(focus=PLAN)
+    refines = KnowledgeGraphEdge(
+        REFINES, PLAN, LEGACY, "typed", "refines", EdgeDirection.DIRECTED
+    )
+    faint = replace(refines, id="edge_faint")
+    plain = KnowledgeGraphView(
+        mode="focus", filters=KnowledgeGraphFilters(), edges=(refines,)
+    )
+    pinned = replace(plain, edges=(refines, faint), pinned="edge_faint")
+    on_plain = views.keep(replace(focus, edge=REFINES), plain)
+    on_pinned = views.keep(replace(focus, edge="edge_faint"), pinned)
+
+    assert views.get(on_plain, focus) is plain
+    assert views.get(on_plain, replace(focus, selected=PLAN, pin=REFINES)) is plain
+    assert views.get(on_plain, replace(focus, edge="edge_faint")) is None
+
+    assert views.get(on_pinned, replace(focus, edge="edge_faint")) is pinned
+    assert views.get(on_pinned, replace(focus, selected=PLAN, pin="edge_faint")) is (
+        pinned
+    )
+    assert views.get(on_pinned, replace(focus, edge=REFINES)) is None
+    assert views.get(on_pinned, replace(focus, selected=PLAN)) is None
 
 
 def _attr(tag: str, name: str) -> str:
