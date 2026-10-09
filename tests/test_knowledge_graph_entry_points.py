@@ -28,7 +28,6 @@ from lithos_lens.fake_knowledge_dataset import knowledge_edge_rows
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedRef
 from lithos_lens.knowledge_edges import EdgeTable, EdgeTableSnapshot, KnowledgeEdge
-from lithos_lens.knowledge_graph_routes import knowledge_graph_edge_url
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
 
@@ -126,9 +125,7 @@ def _with_edges(*rows: dict[str, object]) -> FakeLithosClient:
     return FakeLithosClient(dataset=replace(demo_dataset(), knowledge_edges=rows))
 
 
-def _with_plan_edges(
-    rows: list[dict[str, object]], *extra: RelatedRef, cls: type = FakeLithosClient
-) -> Any:
+def _plan_dataset(rows: list[dict[str, object]], *extra: RelatedRef) -> Any:
     """The demo with ``rows`` as its edge table and ``extra`` typed refs on
     the plan's related panel, after its own."""
     dataset = demo_dataset()
@@ -137,11 +134,34 @@ def _with_plan_edges(
         **dataset.related_neighborhoods,
         PLAN: replace(plan, edges=plan.edges + extra),
     }
-    return cls(
-        dataset=replace(
-            dataset, knowledge_edges=tuple(rows), related_neighborhoods=neighborhoods
-        )
+    return replace(
+        dataset, knowledge_edges=tuple(rows), related_neighborhoods=neighborhoods
     )
+
+
+def _with_plan_edges(
+    rows: list[dict[str, object]], *extra: RelatedRef, cls: type = FakeLithosClient
+) -> Any:
+    return cls(dataset=_plan_dataset(rows, *extra))
+
+
+def _faint_ref(weight: float, edge_id: str = FAINT_LEGACY_PLAN) -> RelatedRef:
+    """The plan's related-panel row for legacy → plan ``related_to``."""
+    return RelatedRef(
+        id=LEGACY,
+        edge_type="related_to",
+        weight=weight,
+        direction="incoming",
+        edge_id=edge_id,
+    )
+
+
+def _with_faint_weight(weight: float) -> list[dict[str, object]]:
+    """The demo table with legacy → plan ``related_to`` at ``weight``."""
+    return [
+        {**row, "weight": weight} if row["edge_id"] == FAINT_LEGACY_PLAN else dict(row)
+        for row in knowledge_edge_rows()
+    ]
 
 
 def _row(edge_id: str, **changes: object) -> dict[str, object]:
@@ -226,64 +246,113 @@ def test_a_row_link_lands_on_the_edges_panel(lithos_lens_config_env: Path) -> No
     assert 'data-kgraph-panel="edge" data-kgraph-panel-id="edge_9b2f61c0a4e8"' in html
 
 
-def test_an_edge_link_below_the_weight_floor_carries_its_own_weight() -> None:
-    """A focus hides edges under ``graph_min_weight_default``; the link to
-    one names its weight so the page draws it and opens the panel."""
-    assert (
-        knowledge_graph_edge_url("n", "e", 0.03, floor=0.1)
-        == "/knowledge/graph?focus=n&min_weight=0.03&edge=e"
-    )
-    assert knowledge_graph_edge_url("n", "e", 0.1, floor=0.1) == (
-        "/knowledge/graph?focus=n&edge=e"
-    )
-    assert knowledge_graph_edge_url("n", "e", None, floor=0.1) == (
-        "/knowledge/graph?focus=n&edge=e"
-    )
-
-
-def test_a_faint_typed_rows_link_carries_its_weight_and_opens_the_panel(
+def test_a_faint_typed_rows_link_is_bare_and_opens_the_panel(
     lithos_lens_config_env: Path,
 ) -> None:
-    """F7: the focus hides a 0.03 row under the default 0.1 floor, so the
-    row's link must name its weight for the page to draw it."""
-    fake = _with_plan_edges(
-        list(knowledge_edge_rows()),
-        RelatedRef(
-            id=LEGACY,
-            edge_type="related_to",
-            weight=0.03,
-            direction="incoming",
-            edge_id=FAINT_LEGACY_PLAN,
-        ),
-    )
+    """F7 / f-002: the focus hides a 0.03 row under the default 0.1 floor,
+    but the page draws the edge ``edge=`` names whatever the filters say, so
+    the row's link carries no ``min_weight=``."""
+    fake = _with_plan_edges(list(knowledge_edge_rows()), _faint_ref(0.03))
     with _client(lithos_lens_config_env, fake) as client:
         href = _row_links(client.get(f"/note/{PLAN}").text)[FAINT_LEGACY_PLAN]
-        assert href == (
-            f"/knowledge/graph?focus={PLAN}&min_weight=0.03&edge={FAINT_LEGACY_PLAN}"
-        )
+        assert href == f"/knowledge/graph?focus={PLAN}&edge={FAINT_LEGACY_PLAN}"
         assert _panel_opened(client.get(href).text, FAINT_LEGACY_PLAN)
-        # Without its weight the same link would open nothing.
-        bare = f"/knowledge/graph?focus={PLAN}&edge={FAINT_LEGACY_PLAN}"
-        assert not _panel_opened(client.get(bare).text, FAINT_LEGACY_PLAN)
+        # Unselected, the same focus still hides it.
+        plain = client.get(f"/knowledge/graph?focus={PLAN}").text
+        assert FAINT_LEGACY_PLAN not in plain
 
 
-def test_row_links_follow_the_configured_weight_floor(
+def test_row_links_carry_no_weight_whatever_the_configured_floor(
     lithos_lens_config_env: Path,
 ) -> None:
-    """The template global binds ``graph_min_weight_default`` from config:
-    at 0.6 the capacity note's 0.5 ``related_to`` row carries its weight and
-    its 0.82 and 0.7 rows do not."""
+    """At a 0.6 floor the capacity note's 0.5 ``related_to`` row's link is
+    as bare as its 0.82 and 0.7 rows', and each opens its panel."""
     _set_knowledge(lithos_lens_config_env, "graph_min_weight_default = 0.6")
     with _client(lithos_lens_config_env) as client:
         links = _row_links(client.get(f"/note/{CAPACITY}").text)
         focus = f"/knowledge/graph?focus={CAPACITY}"
         assert links == {
-            "edge_4c1e9a7b20d3": f"{focus}&edge=edge_4c1e9a7b20d3",
-            "edge_9b2f61c0a4e8": f"{focus}&min_weight=0.5&edge=edge_9b2f61c0a4e8",
-            "edge_38c9d1f5e6a7": f"{focus}&edge=edge_38c9d1f5e6a7",
+            edge_id: f"{focus}&edge={edge_id}"
+            for edge_id in (
+                "edge_4c1e9a7b20d3",
+                "edge_9b2f61c0a4e8",
+                "edge_38c9d1f5e6a7",
+            )
         }
         for edge_id, href in links.items():
             assert _panel_opened(client.get(href).text, edge_id), edge_id
+
+
+@pytest.mark.parametrize(
+    ("warm", "upstream"),
+    [(0.03, 0.06), (0.06, 0.03), (0.03, 0.5), (0.5, 0.03), (0.5, -0.2), (-0.2, 0.5)],
+    ids=[
+        "reinforced",
+        "decayed",
+        "up-across-floor",
+        "down-across-floor",
+        "to-negative",
+        "from-negative",
+    ],  # fmt: skip
+)
+def test_an_entry_link_opens_its_panel_whatever_the_weight_did_since_warming(
+    lithos_lens_config_env: Path, warm: float, upstream: float
+) -> None:
+    """f-001 / f-002: the snapshot is warmed at ``warm``; upstream then moves
+    the edge to ``upstream`` (reinforcement, decay, across the 0.1 floor, to
+    or from a negative weight) and the note page's ``lithos_related`` reports
+    the new weight. The row's link opens the panel from the warm snapshot,
+    and neither the note nor the graph page fetches the table again."""
+    fake = _with_plan_edges(_with_faint_weight(warm), _faint_ref(warm))
+    with _client(lithos_lens_config_env, fake) as client:
+        client.get("/knowledge/graph")  # warms the snapshot
+        table = _lens(client).edge_table
+        fetches, edge_lists = table.fetches, _edge_lists(fake)
+        fake.dataset = _plan_dataset(_with_faint_weight(upstream), _faint_ref(upstream))
+
+        href = _row_links(client.get(f"/note/{PLAN}").text)[FAINT_LEGACY_PLAN]
+        assert href == f"/knowledge/graph?focus={PLAN}&edge={FAINT_LEGACY_PLAN}"
+        assert _panel_opened(client.get(href).text, FAINT_LEGACY_PLAN)
+        assert (table.fetches, _edge_lists(fake)) == (fetches, edge_lists)
+
+
+def test_an_edge_the_snapshot_lacks_renders_a_notice_and_fetches_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """f-002: an edge created after the snapshot was taken is not refetched
+    for: the panel host says it is not in the snapshot, as of when, and that
+    the snapshot refreshes every TTL — page and fragment alike."""
+    new_edge = "edge_created_since"
+    fake = _with_plan_edges(list(knowledge_edge_rows()))
+    with _client(lithos_lens_config_env, fake) as client:
+        client.get("/knowledge/graph")  # warms the snapshot
+        table = _lens(client).edge_table
+        fetches, edge_lists = table.fetches, _edge_lists(fake)
+        snapshot = table.current
+        assert isinstance(snapshot, EdgeTableSnapshot)
+        fake.dataset = _plan_dataset(
+            [*knowledge_edge_rows(), {**_row(FAINT_LEGACY_PLAN), "edge_id": new_edge}],
+            _faint_ref(0.5, new_edge),
+        )
+
+        href = _row_links(client.get(f"/note/{PLAN}").text)[new_edge]
+        page = client.get(href).text
+        fragment = client.get(
+            href.replace("/knowledge/graph?", "/knowledge/graph/panel?")
+        )
+        assert (table.fetches, _edge_lists(fake)) == (fetches, edge_lists)
+
+    as_of = snapshot.as_of.strftime("%Y-%m-%d %H:%M UTC")
+    notice = (
+        f"Edge {new_edge} is not in the current edge snapshot (as of {as_of}). "
+        "The snapshot refreshes every 300 s, so a new edge appears within that "
+        "window."
+    )
+    host = page.split("data-kgraph-panel-host", 1)[1].split("</div>", 1)[0]
+    assert 'data-kgraph-panel="none"' in host
+    assert notice in " ".join(re.sub(r"<[^>]+>", " ", host).split())
+    assert notice in " ".join(re.sub(r"<[^>]+>", " ", fragment.text).split())
+    assert not _panel_opened(page, new_edge)
 
 
 # ── the unresolved-contradiction banner ────────────────────────────────
@@ -371,26 +440,26 @@ def test_several_contradictions_share_one_banner_one_line_each(
     assert f"edge={RESOLVED_LEGACY_PLAN}" in html
 
 
-def test_a_faint_contradictions_view_link_keeps_it_drawn(
-    lithos_lens_config_env: Path,
+@pytest.mark.parametrize("weight", [0.05, -0.3, 0.9])
+def test_a_contradictions_view_link_is_bare_and_keeps_it_drawn(
+    lithos_lens_config_env: Path, weight: float
 ) -> None:
+    """Faint, negative or strong, the banner's link names only the focus and
+    the edge, and the graph draws that edge with its panel open."""
     rows = [
-        {**row, "weight": 0.05} if row["edge_id"] == UNRESOLVED_PLAN_ROLLBACK else row
+        {**row, "weight": weight} if row["edge_id"] == UNRESOLVED_PLAN_ROLLBACK else row
         for row in _demo_rows_except_contradictions(UNRESOLVED_PLAN_ROLLBACK)
     ]
     fake = _with_edges(*rows)
 
     with _client(lithos_lens_config_env, fake) as client:
         note = client.get(f"/note/{PLAN}").text
-        url = (
-            f"/knowledge/graph?focus={PLAN}&min_weight=0.05"
-            f"&edge={UNRESOLVED_PLAN_ROLLBACK}"
-        )
+        fetches = _lens(client).edge_table.fetches
+        url = f"/knowledge/graph?focus={PLAN}&edge={UNRESOLVED_PLAN_ROLLBACK}"
         assert f'<a href="{url.replace("&", "&amp;")}">view</a>' in note
         graph = client.get(url).text
-    assert (
-        f'data-kgraph-panel="edge" data-kgraph-panel-id="{UNRESOLVED_PLAN_ROLLBACK}"'
-    ) in graph
+        assert _lens(client).edge_table.fetches == fetches
+    assert _panel_opened(graph, UNRESOLVED_PLAN_ROLLBACK)
 
 
 def test_a_stale_snapshot_still_serves_the_banner(

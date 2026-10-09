@@ -16,7 +16,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_edge_types` | M | 5 | 7 |
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_facts` | M | 5 | 2 |
-| `lithos_lens.knowledge_graph` | M | 1 | 8 |
+| `lithos_lens.knowledge_graph` | L | 1 | 9 |
 | `lithos_lens.knowledge_graph_view` | L | 12 | 12 |
 | `lithos_lens.knowledge_landing` | S | 2 | 6 |
 | `lithos_lens.knowledge_metadata` | S | 3 | 2 |
@@ -92,6 +92,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `read_order` — The typed nodes in facts-read priority: hop, then degree in view desc, then id. The focus is hop 0, so it is first; in global mode every node is hop 0 and the order is degree, then id.
 - def `build_view` — The view model from a typed graph, the focus's layers and the facts.
 - def `assemble_focus_view` — The pure focus view: typed graph, cap, layers and facts in one call.
+- def `selection_missing` — ``edge=`` names an edge the snapshot does not hold: one created after its ``as_of``, or since deleted. The next TTL fetch brings it; nothing is fetched for it here.
 - def `assemble_focus_graph` — The focus view: the snapshot, then ``related(focus)``, then the facts.
 - def `assemble_global_graph` — The scoped-global view: rows by ``type`` and/or ``namespace``, then facts.
 

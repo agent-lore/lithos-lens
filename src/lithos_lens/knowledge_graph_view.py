@@ -94,17 +94,31 @@ def provenance_group(provenance_type: str | None) -> str:
 
 @dataclass(frozen=True)
 class KnowledgeGraphFilters:
-    """The weight and provenance filters, applied before expansion and the cap."""
+    """The weight and provenance filters, applied before expansion and the cap.
+
+    The edge ``edge=`` selects is exempt from both (D13): a link to its panel
+    draws it whatever its weight is now and whatever the filters say, and it
+    is not counted hidden. It still counts towards the cap like any drawn edge.
+    """
 
     min_weight: float = DEFAULT_MIN_WEIGHT
     #: Groups shown; all of :data:`PROVENANCE_GROUPS` by default.
     provenance: frozenset[str] = frozenset(PROVENANCE_GROUPS)
+    #: The ``edge=`` selection, never hidden; ``""`` for none.
+    selected_edge: str = ""
 
     def hides_by_weight(self, edge: KnowledgeEdge) -> bool:
-        return edge.weight is not None and edge.weight < self.min_weight
+        return (
+            edge.weight is not None
+            and edge.weight < self.min_weight
+            and edge.edge_id != self.selected_edge
+        )
 
     def hides_by_provenance(self, edge: KnowledgeEdge) -> bool:
-        return provenance_group(edge.provenance_type) not in self.provenance
+        return (
+            provenance_group(edge.provenance_type) not in self.provenance
+            and edge.edge_id != self.selected_edge
+        )
 
     def shows(self, edge: KnowledgeEdge) -> bool:
         return not (self.hides_by_weight(edge) or self.hides_by_provenance(edge))
@@ -269,6 +283,9 @@ class KnowledgeGraphView:
     #: Global mode over the table's bound: the rows came from a direct
     #: filtered read stamped now, so no snapshot TTL applies to them.
     read_directly: bool = False
+    #: ``edge=`` names an edge the snapshot does not hold (created after
+    #: ``as_of``, or since deleted): the panel host says so.
+    selected_edge_missing: bool = False
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.
     facts_capped_at: int = 0

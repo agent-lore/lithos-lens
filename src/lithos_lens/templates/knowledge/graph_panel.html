@@ -4,8 +4,8 @@
   (`?selected=` / `?edge=`, the no-JS baseline) and `/knowledge/graph/panel`
   renders it alone for an htmx click, so the two are the same markup. It
   extends no layout. `panel` is a KnowledgeNodePanel, a KnowledgeEdgePanel,
-  or none — the fragment's one-line answer, `panel_notice`, which the page
-  never renders (it shows no panel instead).
+  or none — the one-line answer, `panel_notice`. The page renders that only
+  for an `edge=` the snapshot does not hold; otherwise it shows no panel.
 -#}
 {% from "knowledge/graph_macros.html" import node_ref, panel_attrs %}
 {% from "knowledge/edge_evidence.html" import edge_evidence %}

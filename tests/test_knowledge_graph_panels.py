@@ -13,12 +13,13 @@ patching the snapshot after a first read, as an ``edge.upserted`` event does.
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import re
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -647,12 +648,12 @@ def test_a_callers_marker_is_unresolved_shown_as_written(
 @pytest.mark.parametrize(
     "query",
     [
-        f"focus={PLAN}&edge=edge_nope",
         f"focus={PLAN}&selected=note-not-drawn",
-        # A layer pair's synthetic id is not a typed edge.
-        f"focus={PLAN}&edge=wiki_link:{PLAN}->note-influx-runbook",
-        # The weight filter hides it: not in this view.
-        f"focus={PLAN}&edge=edge_15d0c3e8f972",
+        # In the snapshot, but not one of the focus's edges at depth 1.
+        f"focus={PLAN}&edge=edge_9b2f61c0a4e8",
+        # The weight filter hides it from a node selection (an ``edge=``
+        # selection of it is drawn: see the entry-point tests).
+        f"focus={PLAN}&selected={LEGACY}&min_weight=0.95",
     ],
 )
 def test_a_selection_not_drawn_renders_no_panel(
@@ -665,6 +666,32 @@ def test_a_selection_not_drawn_renders_no_panel(
     assert _host(page) == ""
     assert 'data-kgraph-panel="none"' in fragment
     assert _plain(fragment) == "Not in this view."
+
+
+@pytest.mark.parametrize(
+    "edge_id",
+    # Not a row of the snapshot; nor is a layer pair's synthetic id.
+    ["edge_nope", f"wiki_link:{PLAN}->note-influx-runbook"],
+)
+def test_an_edge_the_snapshot_lacks_says_so_and_fetches_nothing(
+    lithos_lens_config_env: Path, edge_id: str
+) -> None:
+    """f-002: no panel, and the host says the edge is not in the current
+    snapshot and when that refreshes — with no fetch spent looking."""
+    query = f"focus={PLAN}&edge={edge_id}"
+    with _client(lithos_lens_config_env) as client:
+        _get(client, f"{ROUTE}?focus={PLAN}")
+        table = cast(Any, client.app).state.lens.edge_table
+        fetches = table.fetches
+        page = _get(client, f"{ROUTE}?{query}")
+        fragment = _get(client, f"{PANEL}?{query}")
+        assert table.fetches == fetches
+
+    for text in map(html_lib.unescape, (_plain(_host(page)), _plain(fragment))):
+        assert text.startswith(f"Edge {edge_id} is not in the current edge snapshot")
+        assert text.endswith(
+            "refreshes every 300 s, so a new edge appears within that window."
+        )
 
 
 def test_a_refused_view_or_the_picker_has_no_panel(

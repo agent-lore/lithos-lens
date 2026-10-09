@@ -30,7 +30,7 @@ from lithos_lens.knowledge_edges import (
     EdgeTableSnapshot,
     is_unresolved_contradiction,
 )
-from lithos_lens.knowledge_graph_routes import knowledge_graph_edge_url, load_picker
+from lithos_lens.knowledge_graph_routes import knowledge_graph_url, load_picker
 from lithos_lens.knowledge_landing import (
     SECTIONS,
     NamespaceFacet,
@@ -159,8 +159,6 @@ async def load_contradictions(
     table: EdgeTable,
     knowledge_id: str,
     related: RelatedPanel | None,
-    *,
-    min_weight_floor: float,
 ) -> tuple[NoteContradiction, ...]:
     """The unresolved ``contradicts`` rows ``knowledge_id`` is an endpoint of.
 
@@ -185,9 +183,8 @@ async def load_contradictions(
         if not is_unresolved_contradiction(edge):
             continue
         other = edge.to_id if edge.from_id == knowledge_id else edge.from_id
-        url = knowledge_graph_edge_url(
-            knowledge_id, edge.edge_id, edge.weight, floor=min_weight_floor
-        )
+        # The page draws the edge it is linked to whatever the filters say.
+        url = knowledge_graph_url(focus=knowledge_id, edge=edge.edge_id)
         lines.append(
             NoteContradiction(edge.edge_id, other, titles.get(other, other), url)
         )
@@ -494,10 +491,7 @@ def register_knowledge_routes(
                 related_seconds = time.perf_counter() - started
                 produced_by = await load_produced_by(state.lithos_client, note_record)
                 contradictions = await load_contradictions(
-                    state.edge_table,
-                    knowledge_id,
-                    related,
-                    min_weight_floor=state.config.knowledge.graph_min_weight_default,
+                    state.edge_table, knowledge_id, related
                 )
             task_id = request.query_params.get("task", "")
             if task_id:

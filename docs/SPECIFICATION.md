@@ -1277,10 +1277,9 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   and no rationale. The panel's heading carries **Open in graph** →
   `/knowledge/graph?focus=<id>`, and each typed-edge row whose
   `lithos_related` row carried an `edge_id` an **"in graph"** link →
-  `/knowledge/graph?focus=<id>&edge=<edge_id>`, which opens that edge's panel.
-  A focus hides edges under `knowledge.graph_min_weight_default`, so a row (or
-  banner line) for an edge known to weigh less also carries
-  `min_weight=<its weight>` and the page it lands on draws it
+  `/knowledge/graph?focus=<id>&edge=<edge_id>`, which opens that edge's panel:
+  the graph draws the edge `edge=` names whatever the weight and provenance
+  filters say, so the link carries no `min_weight=`
 - an **unresolved-contradiction banner** above the lede and body when the note
   is an endpoint of a `contradicts` edge whose `conflict_state` is not one of
   the four `lithos_conflict_resolve` values: "This note is contradicted by
@@ -1504,7 +1503,10 @@ JSON payload:
   no known weight is never hidden by it) and **provenance** filters — groups
   inferred (`inferred`), reinforced (`consolidation`), declared
   (`frontmatter`) and other (everything else, NULL included) — apply before
-  depth 2 expands and before the cap, so a hidden edge pulls in nothing
+  depth 2 expands and before the cap, so a hidden edge pulls in nothing. The
+  edge `edge=` names is exempt from both: it and its endpoints are drawn and
+  it is not counted hidden, though it counts towards the cap like any drawn
+  edge
 - **scoped global**: the snapshot rows of a `type` and/or `namespace`
   (over the table's bound, a direct filtered `lithos_edge_list` read instead),
   the same filters, capped at 500 nodes
@@ -1577,7 +1579,10 @@ way it shows no counts and offers only the typed-in form.
    stale snapshot), or "read directly from Lithos" for an over-bound global
    read, and no time at all when the table could not be read
 2. the **panel host**: the node or edge panel below, when `selected=` names
-   a drawn node or `edge=` a drawn typed edge; empty otherwise
+   a drawn node or `edge=` a drawn typed edge; when `edge=` names an edge the
+   snapshot does not hold (created after its `as_of`, or since deleted), a
+   notice saying so, with the `as_of` and that the snapshot refreshes every
+   `graph_edge_table_ttl_s` s — nothing is fetched for it; empty otherwise
 3. a **refusal** in place of everything below but the payload — "narrow your
    scope" with the count, the cap and a link to the remedy (`depth=1` or
    `min_weight=0.N`), the typed-in scope form when the table is over its

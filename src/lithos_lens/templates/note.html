@@ -44,7 +44,7 @@
               <span class="edge-conflict">conflict: {{ item.conflict_state }}</span>
             {% endif %}
             {% if edges and item.edge_id %}
-              <a href="{{ knowledge_graph_edge_url(note_id, item.edge_id, item.weight) }}" data-edge-graph-link>in graph</a>
+              <a href="{{ knowledge_graph_url(focus=note_id, edge=item.edge_id) }}" data-edge-graph-link>in graph</a>
             {% endif %}
             {% if edges and item.why %}
               {{ edge_why(item.why) }}

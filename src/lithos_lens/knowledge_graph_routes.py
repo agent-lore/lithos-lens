@@ -39,7 +39,6 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from functools import partial
 from typing import Any, Literal
 from urllib.parse import urlencode
 
@@ -131,7 +130,9 @@ class KnowledgeGraphParams:
     def filters(self, default_min_weight: float) -> KnowledgeGraphFilters:
         weight = self.min_weight if self.min_weight is not None else default_min_weight
         groups = frozenset(self.provenance or PROVENANCE_GROUPS)
-        return KnowledgeGraphFilters(min_weight=weight, provenance=groups)
+        return KnowledgeGraphFilters(
+            min_weight=weight, provenance=groups, selected_edge=self.edge
+        )
 
 
 def _value(query: Mapping[str, str], key: str) -> str:
@@ -250,21 +251,6 @@ def knowledge_graph_url(
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
 
 
-def knowledge_graph_edge_url(
-    focus: str, edge: str, weight: float | None = None, *, floor: float
-) -> str:
-    """An entry point's link to ``edge``'s panel, focused on ``focus``.
-
-    ``edge=`` opens a panel only for an edge the page draws, and a focus
-    hides edges below the weight ``floor`` (``graph_min_weight_default``) —
-    so an edge known to weigh less carries its own weight as ``min_weight``,
-    and the page it lands on draws it.
-    """
-    if weight is not None and weight < floor:
-        return knowledge_graph_url(focus=focus, edge=edge, min_weight=weight)
-    return knowledge_graph_url(focus=focus, edge=edge)
-
-
 def knowledge_graph_panel_url(
     params: KnowledgeGraphParams | None = None, render: str = "", **changes: Any
 ) -> str:
@@ -332,6 +318,24 @@ class RenderedViews:
 def utc_minute(moment: datetime) -> str:
     """``as_of`` as the scope line states it: UTC, to the minute."""
     return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def missing_edge_notice(view: KnowledgeGraphView | None, edge: str, ttl_s: int) -> str:
+    """The panel host's line when ``edge`` is the ``edge=`` ``view`` was drawn
+    for and its snapshot does not hold it; ``""`` otherwise.
+
+    Not a refetch (D2): the snapshot is up to one TTL old by design, and the
+    next TTL fetch brings an edge created since.
+    """
+    if view is None or not view.selected_edge_missing:
+        return ""
+    if not edge or view.filters.selected_edge != edge:
+        return ""
+    as_of = f" (as of {utc_minute(view.as_of)})" if view.as_of is not None else ""
+    return (
+        f"Edge {edge} is not in the current edge snapshot{as_of}. The snapshot "
+        f"refreshes every {ttl_s} s, so a new edge appears within that window."
+    )
 
 
 # ── the picker ─────────────────────────────────────────────────────────
@@ -518,9 +522,6 @@ def register_knowledge_graph_routes(
     and `GET /knowledge/graph/panel` (its node and edge panels)."""
 
     templates.env.globals["knowledge_graph_url"] = knowledge_graph_url
-    templates.env.globals["knowledge_graph_edge_url"] = partial(
-        knowledge_graph_edge_url, floor=state.config.knowledge.graph_min_weight_default
-    )
     templates.env.globals["knowledge_graph_panel_url"] = knowledge_graph_panel_url
     templates.env.globals["edge_entry"] = edge_entry
     templates.env.filters["utc_minute"] = utc_minute
@@ -550,6 +551,7 @@ def register_knowledge_graph_routes(
             "picker": None,
             "view": None,
             "panel": None,
+            "panel_notice": "",
             "render_id": "",
         }
         table = state.edge_table
@@ -577,6 +579,9 @@ def register_knowledge_graph_routes(
             focus_meta=node_metadata(focus_node),
             payload=graph_payload(view),
             panel=panel,
+            panel_notice=missing_edge_notice(
+                view, params.edge, knowledge.graph_edge_table_ttl_s
+            ),
             render_id=views.keep(params, view) if view.refusal is None else "",
         )
         _record_panel(panel, "url")
@@ -656,6 +661,9 @@ def register_knowledge_graph_routes(
             context["panel"] = graph_panel(
                 view, selected=params.selected, edge=params.edge
             )
+            ttl_s = state.config.knowledge.graph_edge_table_ttl_s
+            if notice := missing_edge_notice(view, params.edge, ttl_s):
+                context["panel_notice"] = notice
         _record_panel(context["panel"], "fragment")
         return templates.TemplateResponse(
             request, "knowledge/graph_panel.html", context

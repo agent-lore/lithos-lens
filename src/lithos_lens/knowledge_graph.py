@@ -14,7 +14,8 @@ only renders:
   and before the cap, so a hidden 0.03 consolidation edge pulls in nothing and
   "hide faint edges" is a way under the cap. An edge with no known weight
   (NULL upstream, or a ``partial`` row) is never hidden by weight: unknown is
-  not faint.
+  not faint. The edge ``edge=`` selects is exempt from both filters, so an
+  entry link to its panel always draws it; it still counts towards the cap.
 - **The cap is a refusal**, checked before any ``lithos_related`` call or facts
   read so a refused scope spends nothing. It counts the focus and the typed
   endpoints (ghosts included) and names the first remedy that fits: depth 1,
@@ -414,6 +415,7 @@ def build_view(
     focus_missing: bool = False,
     as_of: datetime | None = None,
     stale: bool = False,
+    selected_edge_missing: bool = False,
 ) -> KnowledgeGraphView:
     """The view model from a typed graph, the focus's layers and the facts.
 
@@ -436,6 +438,7 @@ def build_view(
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,
+        selected_edge_missing=selected_edge_missing,
     )
     if typed.refusal is not None:
         return base
@@ -554,6 +557,16 @@ def _refused(
     )
 
 
+def selection_missing(
+    snapshot: EdgeTableSnapshot, filters: KnowledgeGraphFilters
+) -> bool:
+    """``edge=`` names an edge the snapshot does not hold: one created after
+    its ``as_of``, or since deleted. The next TTL fetch brings it; nothing
+    is fetched for it here."""
+    selected = filters.selected_edge
+    return bool(selected) and all(row.edge_id != selected for row in snapshot.rows)
+
+
 async def _read_table(table: EdgeTable) -> EdgeTableSnapshot | EdgeTableRefusal | None:
     try:
         return await table.read()
@@ -603,6 +616,7 @@ async def assemble_focus_graph(
         "filters": filters,
         "as_of": state.as_of,
         "stale": state.stale,
+        "selected_edge_missing": selection_missing(state, filters),
         **scope,
     }
     if typed.refusal is not None:
@@ -657,9 +671,11 @@ async def assemble_global_graph(
     if state is None:
         return _refused("unavailable", mode="global", filters=filters, **scope)
     as_of: datetime | None
+    missing = False
     if isinstance(state, EdgeTableSnapshot):
         rows = scoped_rows(state, type=type, namespace=namespace)
         as_of, stale = state.as_of, state.stale
+        missing = selection_missing(state, filters)
     else:
         try:
             rows = await table.filtered(type=type, namespace=namespace)
@@ -673,6 +689,7 @@ async def assemble_global_graph(
         "filters": filters,
         "as_of": as_of,
         "stale": stale,
+        "selected_edge_missing": missing,
         **scope,
     }
     read_directly = isinstance(state, EdgeTableRefusal)

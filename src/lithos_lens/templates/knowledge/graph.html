@@ -70,11 +70,12 @@
     {% elif view is not none %}
       {% include "knowledge/graph_scope.html" %}
 
-      {#- The panel host: the page's panel on a full request, the fragment
-          an edge or node link fetches on a click. Full width until the
+      {#- The panel host: the page's panel on a full request (or why an
+          `edge=` the snapshot lacks has none), the fragment an edge or node
+          link fetches on a click. Full width until the
           canvas (S4) gives it a place beside the graph. -#}
       <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
-        {%- if panel is not none %}{% include "knowledge/graph_panel.html" %}{% endif -%}
+        {%- if panel is not none or panel_notice %}{% include "knowledge/graph_panel.html" %}{% endif -%}
       </div>
 
       {% if view.refusal is not none %}

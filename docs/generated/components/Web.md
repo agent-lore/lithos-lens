@@ -56,10 +56,10 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `KnowledgeGraphParams` — The page's query, parsed. ``None`` and ``""`` mean "not given".
 - def `parse_knowledge_graph_params` — The page's query grammar (S3 D3), in one place.
 - def `knowledge_graph_url` — A link into the knowledge graph: ``params`` with ``changes`` applied.
-- def `knowledge_graph_edge_url` — An entry point's link to ``edge``'s panel, focused on ``focus``.
 - def `knowledge_graph_panel_url` — The same link to the panel fragment: what a click's ``hx-get`` fetches, with the scope and filters carried, and ``render`` — the id of the view the page drew (:class:`RenderedViews`) — last when there is one.
 - class `RenderedViews` — The views recent renders drew, each under a fresh render id (S5).
 - def `utc_minute` — ``as_of`` as the scope line states it: UTC, to the minute.
+- def `missing_edge_notice` — The panel host's line when ``edge`` is the ``edge=`` ``view`` was drawn for and its snapshot does not hold it; ``""`` otherwise.
 - class `KnowledgeGraphPicker` — What the unscoped page offers (PRD D11, story 17).
 - def `load_picker` — The picker from the snapshot: its facets, or why there are none.
 - class `KnowledgeGraphLoad` — What one request read: offline (nothing), the picker, or a view.

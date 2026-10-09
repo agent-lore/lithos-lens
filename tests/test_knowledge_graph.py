@@ -182,6 +182,46 @@ def test_a_hidden_edge_pulls_in_nothing_at_depth_two() -> None:
     assert typed.hidden.total == 3  # those two and e-cg behind e-fc
 
 
+def test_the_selected_edge_is_drawn_whatever_the_filters_say() -> None:
+    """f-002: ``edge=`` exempts its edge from the weight and provenance
+    filters — it and its endpoint are drawn, it is not counted hidden, and
+    at depth 2 the endpoint it brings in expands like any other."""
+    faint = KnowledgeGraphFilters(selected_edge="e-fc")
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=faint)
+    assert "e-fc" in {e.edge_id for e in typed.edges}
+    assert {"C", "G"} <= set(typed.hops)
+    assert typed.hidden.by_weight == 1  # e-aw only
+    assert typed.hidden.total == 1
+
+    no_other = KnowledgeGraphFilters(
+        provenance=frozenset({"inferred"}), selected_edge="e-fp"
+    )
+    typed = ego_typed_graph(snapshot(), "F", filters=no_other)
+    assert "P" in typed.hops
+    assert "e-fp" in {e.edge_id for e in typed.edges}
+    assert typed.hidden.by_provenance == 2  # e-fb, e-fc; e-fp is exempt
+    assert typed.hidden.by_weight == 1  # e-fc
+
+    rows = FIXTURE_ROWS + (edge("e-neg", "F", "N", weight=-0.4),)
+    negative = KnowledgeGraphFilters(selected_edge="e-neg")
+    assert "N" in ego_typed_graph(snapshot(rows), "F", filters=negative).hops
+    assert {e.edge_id for e in global_typed_graph(rows, filters=negative).edges} >= {
+        "e-neg"
+    }
+
+
+def test_the_selected_edge_counts_towards_the_cap() -> None:
+    # Five nodes under the default filter; the faint e-fc brings C in.
+    assert ego_typed_graph(snapshot(), "F", max_nodes=5).refusal is None
+    refused = ego_typed_graph(
+        snapshot(),
+        "F",
+        filters=KnowledgeGraphFilters(selected_edge="e-fc"),
+        max_nodes=5,
+    )
+    assert refused.refusal is not None and refused.refusal.count == 6
+
+
 def test_weight_filter_never_hides_an_unknown_weight() -> None:
     rows = (
         edge("e1", "F", "N", weight=None, partial=True),

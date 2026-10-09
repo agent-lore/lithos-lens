@@ -344,8 +344,15 @@ def test_an_edge_param_opens_a_drawn_edges_panel_else_is_ignored(
     text = " ".join(re.sub(r"<[^>]+>", "", line.group(1)).split())
     assert text == "Influx migration plan refines Legacy ingest approach"
 
-    ignored = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_nope")
+    # In the snapshot but not drawn at depth 1 (capacity → rollback): no panel.
+    ignored = _get(
+        lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_9b2f61c0a4e8"
+    )
     assert "data-kgraph-panel=" not in ignored
+    # Not in the snapshot at all: the host says so (f-002), still no panel.
+    unknown = _get(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge=edge_nope")
+    assert 'data-kgraph-panel="none"' in unknown
+    assert "Edge edge_nope is not in the current edge snapshot" in unknown
 
 
 def test_untrusted_titles_cannot_close_the_payload_script(
