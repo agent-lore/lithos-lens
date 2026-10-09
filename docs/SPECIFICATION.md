@@ -1752,7 +1752,8 @@ draws stays drawn whatever the slider says):
 - **controls**, each navigating to the page's own query with one key
   changed (selection and `pin` kept) so text, payload and canvas re-render
   together: the min-weight slider (0–1 in 0.05 steps, starting at the
-  applied threshold even off that grid, showing its value while dragged,
+  applied threshold even off that grid — when the browser would round the
+  value it is given, the slider takes any value until it is moved — showing its value while dragged,
   navigating on release) beside the server's "N edges below W
   hidden"; one checkbox per provenance group present with its count (the
   last one on cannot be turned off; all on writes no `provenance=`); in
@@ -1763,14 +1764,19 @@ draws stays drawn whatever the slider says):
 - **clicks**: a node opens its panel and a typed edge its panel through
   `GET /knowledge/graph/panel` with the page's `render=` (htmx, synced on the
   host like the text's links), building `selected`/`edge`/`pin` as
-  `knowledge_graph_url` does; the page URL is pushed only once that request's
-  fragment is swapped in (not for a request a later click aborted or the
-  server answered with `HX-Redirect`), and Back or Forward onto such an entry
-  reloads it. A wiki-link or provenance pair has no panel. The selection lights
-  itself and its neighbours (an edge: itself and its two endpoints) and dims
-  the rest — on load too, from `edge=` or else `selected=`, never `pin=`; a
-  background tap clears it and leaves the URL. A page htmx restores from its
-  history is drawn again
+  `knowledge_graph_url` does. A wiki-link or provenance pair has no panel.
+  The selection lights itself and its neighbours (an edge: itself and its
+  two endpoints) and dims the rest — on load too, from `edge=` or else
+  `selected=`, never `pin=`; a background tap clears it and leaves the URL
+- **the panel's history**, one policy for every panel request on a drawn
+  page, the text's links and the canvas's clicks alike: htmx pushes nothing
+  (each panel link's `hx-push-url` is switched off as its request leaves, so
+  htmx neither pushes before the swap nor snapshots the page); the page URL
+  is pushed once that request's own fragment is swapped into the host — not
+  for a request a later click aborted, one the server answered with
+  `HX-Redirect`, or one still in flight when the page is left; and Back or
+  Forward onto any of the page's entries reloads it, aborting a request in
+  flight, so the server renders that URL's panel, text and picture together
 
 ### 5.8 Live Updates
 

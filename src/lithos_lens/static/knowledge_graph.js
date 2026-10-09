@@ -158,11 +158,6 @@
     return Number.isInteger(weight) ? weight.toFixed(1) : String(weight);
   }
 
-  function onSliderGrid(weight) {
-    const steps = weight / SLIDER_STEP;
-    return Math.abs(steps - Math.round(steps)) < 1e-9;
-  }
-
   function snapToSlider(value) {
     return Math.round(Number(value) / SLIDER_STEP) / Math.round(1 / SLIDER_STEP);
   }
@@ -234,16 +229,80 @@
     return item;
   }
 
+  // ── The panel's history ─────────────────────────────────────────────
+  //
+  // ONE policy for every panel request on this page, the text's links and
+  // the canvas's clicks alike, because two would disagree (htmx keeps its
+  // own idea of the current URL and snapshots the page under it).
+  //
+  // - htmx pushes nothing here: a panel link's `hx-push-url` is read off it
+  //   and set to "false" as its request leaves (htmx reads the attribute when
+  //   the response lands), so htmx neither pushes before the swap nor
+  //   snapshots the page into its history cache.
+  // - This file pushes the request's page URL once THAT request's fragment
+  //   is swapped into the live host. A request a later click aborted (the
+  //   host's `hx-sync` replace), one the server answered with `HX-Redirect`,
+  //   or one still in flight when the page is left, pushes nothing.
+  // - Back or Forward onto any entry of this page reloads it: the server
+  //   renders that URL's panel, text and picture together. Nothing in flight
+  //   may push after that.
+
   //: The address the picture on screen was drawn or last pushed for.
   let shownHref = "";
+  //: The live panel host and the canvas's htmx source element.
+  let panelHost = null;
+  let canvasSource = null;
+  //: The page URL the canvas click being issued pushes.
+  let canvasPage = "";
+  //: The panel request whose swap pushes: `{ page, xhr, elt }`.
+  let pendingPush = null;
+  //: Set once Back or Forward has started a reload: nothing pushes after.
+  let retired = false;
+
+  function pushUrlOf(elt) {
+    if (elt === canvasSource) return canvasPage;
+    if (!elt || !elt.getAttribute) return "";
+    const own = elt.getAttribute("hx-push-url");
+    if (own && own !== "false") {
+      elt.setAttribute("data-kgraph-push-url", own);
+      elt.setAttribute("hx-push-url", "false");
+    }
+    return elt.getAttribute("data-kgraph-push-url") || "";
+  }
+
+  function trackPanel(event) {
+    const detail = event.detail || {};
+    if (retired || !panelHost || detail.target !== panelHost) return;
+    const page = pushUrlOf(detail.elt);
+    pendingPush = page ? { page: page, xhr: detail.xhr, elt: detail.elt } : null;
+  }
+
+  function pushAfterSwap(event) {
+    const detail = event.detail || {};
+    if (retired || !pendingPush || detail.xhr !== pendingPush.xhr) return;
+    if (detail.target !== panelHost || panelHost.isConnected === false) return;
+    const page = pendingPush.page;
+    pendingPush = null;
+    window.history.pushState({ kgraph: true }, "", page);
+    shownHref = window.location.href;
+  }
+
+  function reloadOnTravel() {
+    if (!panelHost || window.location.href === shownHref) return;
+    retired = true;
+    if (pendingPush && window.htmx && pendingPush.elt) {
+      window.htmx.trigger(pendingPush.elt, "htmx:abort");
+    }
+    pendingPush = null;
+    window.location.reload();
+  }
 
   // ── Drawing ─────────────────────────────────────────────────────────────
 
   function draw() {
     const container = document.querySelector("[data-kgraph-canvas]");
     // Drawn already — by this load, or by a second run of this file over the
-    // same element. A page htmx restored from its history cache is a fresh
-    // element carrying the old picture's markup, and is drawn again.
+    // same element.
     if (!container || container.kgraphDrawn || !window.cytoscape) return;
     const payload = readPayload();
     if (!payload || !Array.isArray(payload.nodes) || !payload.nodes.length) return;
@@ -408,8 +467,7 @@
       { selector: ".picked", style: { "overlay-color": INK, "overlay-opacity": 0.12, "overlay-padding": 5 } }
     );
 
-    // Revealed before Cytoscape is built: it measures its container. A page
-    // htmx restored from history carries the old picture's markup in it.
+    // Revealed before Cytoscape is built: it measures its container.
     container.hidden = false;
     if (container.replaceChildren) container.replaceChildren();
     const cy = window.cytoscape({
@@ -488,23 +546,8 @@
     // ── Clicks open the S5 panel ────────────────────────────────────────
     const host = document.querySelector("#kgraph-panel");
     const panelSource = document.querySelector("[data-kgraph-panel-source]");
-    //: The canvas click whose fragment is awaited: its page URL and, once
-    //: htmx has issued it, its request.
-    let pendingPush = null;
-    if (panelSource) {
-      panelSource.addEventListener("htmx:beforeRequest", function (event) {
-        if (pendingPush && !pendingPush.xhr) pendingPush.xhr = event.detail.xhr;
-      });
-    }
-    if (host) {
-      host.addEventListener("htmx:afterSwap", function (event) {
-        if (!pendingPush || !event.detail || event.detail.xhr !== pendingPush.xhr) return;
-        const page = pendingPush.page;
-        pendingPush = null;
-        window.history.pushState({ kgraph: true }, "", page);
-        shownHref = window.location.href;
-      });
-    }
+    panelHost = host;
+    canvasSource = panelSource;
 
     function openPanel(changes) {
       const pageQuery = queryWith(changes);
@@ -516,12 +559,8 @@
         window.location.assign(page);
         return;
       }
-      // The page URL is pushed once THIS request's fragment is in the host
-      // (below) — not by `hx-push-url`, which htmx pushes before it swaps.
-      // A request the server answers with `HX-Redirect`, or that a later
-      // click (the host's `hx-sync` replace) aborts, never swaps: nothing is
-      // pushed for it.
-      pendingPush = { page: page, xhr: null };
+      // Pushed once this request's fragment is in the host (`trackPanel`).
+      canvasPage = page;
       window.htmx.ajax("GET", PANEL_PATH + "?" + panelParams.toString(), {
         source: panelSource,
         target: "#kgraph-panel",
@@ -559,10 +598,15 @@
     if (slider) {
       // A threshold off the slider's grid (a hand-typed `min_weight=0.123`,
       // a configured default) is shown as applied, not rounded to a
-      // neighbour: the slider takes any value until it is moved, and the
-      // first move puts it back on the grid.
-      if (!onSliderGrid(minWeight)) slider.step = "any";
+      // neighbour. Whether it is on the grid is the browser's answer — the
+      // value it kept — not a tolerance of ours: when it rounded, the slider
+      // takes any value until it is moved, and the first move puts it back
+      // on the grid.
       slider.value = weightText(minWeight);
+      if (Number(slider.value) !== minWeight) {
+        slider.step = "any";
+        slider.value = weightText(minWeight);
+      }
       if (sliderValue) sliderValue.textContent = weightText(minWeight);
       slider.addEventListener("input", function () {
         if (slider.step === "any") {
@@ -638,8 +682,8 @@
       if (searchCount) searchCount.textContent = plural(hits.length, "match", "matches");
     }
     if (search) search.addEventListener("input", applySearch);
-    // From the field as it stands: a page htmx restored from its history
-    // cache brings back the count text but not the field's value.
+    // From the field as it stands: a page the browser restored (a reload
+    // after Back) may bring the field's value back with it.
     applySearch();
 
     // ── The canvas's key: the text legend's lines, the colours present ──
@@ -713,22 +757,10 @@
   } else {
     draw();
   }
-  // Back or Forward onto an entry a text panel link pushed: htmx restores
-  // the page's markup from its history cache, and the picture with it is
-  // gone — so it is drawn again.
-  //
-  // An entry a CANVAS click pushed is not htmx's (it is pushed after the
-  // swap, which htmx's own history cannot snapshot), nor is the entry the
-  // page loaded on until htmx first pushes: Back or Forward onto one of
-  // those reloads it, so the server renders that URL's panel and picture.
   if (!window.LithosLensKnowledgeGraphBound) {
     window.LithosLensKnowledgeGraphBound = true;
-    document.addEventListener("htmx:historyRestore", draw);
-    window.addEventListener("popstate", function (event) {
-      if (event.state && event.state.htmx) return;
-      if (!document.querySelector("[data-kgraph-canvas]")) return;
-      if (window.location.href === shownHref) return;
-      window.location.reload();
-    });
+    document.addEventListener("htmx:beforeRequest", trackPanel);
+    document.addEventListener("htmx:afterSwap", pushAfterSwap);
+    window.addEventListener("popstate", reloadOnTravel);
   }
 })();

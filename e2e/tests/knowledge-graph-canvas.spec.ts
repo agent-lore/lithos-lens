@@ -19,6 +19,7 @@ const LEGACY = "note-influx-legacy-ingest";
 const ROLLBACK = "note-influx-rollback";
 const FAINT_EDGE = "edge_15d0c3e8f972";
 const RESOLVED = "edge_b6e0f27d4c18";
+const SUPPORTS = "edge_4c1e9a7b20d3";
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
@@ -37,8 +38,56 @@ test.beforeEach(async ({ page }) => {
       });
       return push(state, title, url);
     };
+    // Every XHR the page ENDS (`loadend`: after its load handler's swap and
+    // push, or its abort) — the barrier a race is read behind, rather than
+    // an elapsed time.
+    const ended: string[] = [];
+    (window as any).__panelXhrEnded = ended;
+    const open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      ...rest: any[]
+    ) {
+      this.addEventListener("loadend", () => ended.push(String(url)));
+      return (open as any).call(this, method, url, ...rest);
+    } as typeof XMLHttpRequest.prototype.open;
   });
 });
+
+/** Hold the next panel request whose query names `marker`, until released. */
+async function hold(page: Page, marker: string) {
+  let intercepted!: () => void;
+  let release!: () => void;
+  const seen = new Promise<void>((resolve) => (intercepted = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let handled: Promise<void> = Promise.resolve();
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph/panel" && url.search.includes(marker),
+    (route) => {
+      handled = (async () => {
+        intercepted();
+        await released;
+        // Aborted in the page meanwhile: it can no longer be continued.
+        await route.continue().catch(() => undefined);
+      })();
+      return handled;
+    },
+    { times: 1 },
+  );
+  const ended = () =>
+    page.waitForFunction(
+      (m) => ((window as any).__panelXhrEnded as string[]).some((u) => u.includes(m)),
+      marker,
+    );
+  return { seen, release: () => release(), ended, handled: () => handled };
+}
+
+/** A text baseline edge link (`panel_attrs`) on the page. */
+function textEdge(page: Page, id: string) {
+  return page.locator(`[data-kgraph-edge="${id}"] .kgraph-edge-link`);
+}
 
 async function canvasReady(page: Page) {
   await expect(
@@ -49,6 +98,12 @@ async function canvasReady(page: Page) {
 /** Click a node where the canvas draws it: a real pointer event. */
 async function clickNode(page: Page, id: string) {
   await page.locator("[data-kgraph-canvas]").scrollIntoViewIfNeeded();
+  // Cytoscape re-reads its container's position on the `scroll` event,
+  // which the browser fires on the next frame: a click before it lands
+  // where the canvas WAS (a person cannot click that fast).
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
   const point = await page.evaluate((pid) => {
     const cy = (window as any).LithosLensKnowledgeGraph.cy;
     const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
@@ -148,35 +203,52 @@ test("on a view an exempted edge drew, node after node keeps the pin and the vie
   ]);
 });
 
-test("a later click wins over an earlier panel request still in flight", async ({
-  page,
-}) => {
-  await page.goto(`/knowledge/graph?focus=${PLAN}`);
-  await canvasReady(page);
+for (const race of [
+  {
+    name: "canvas, then canvas",
+    held: `selected=${CAPACITY}`,
+    first: (page: Page) => clickNode(page, CAPACITY),
+    second: (page: Page) => clickNode(page, ROLLBACK),
+    winner: { selected: ROLLBACK },
+  },
+  {
+    name: "canvas, then a text link",
+    held: `selected=${CAPACITY}`,
+    first: (page: Page) => clickNode(page, CAPACITY),
+    second: (page: Page) => textEdge(page, SUPPORTS).click(),
+    winner: { edge: SUPPORTS },
+  },
+  {
+    name: "a text link, then canvas",
+    held: `edge=${SUPPORTS}`,
+    first: (page: Page) => textEdge(page, SUPPORTS).click(),
+    second: (page: Page) => clickNode(page, CAPACITY),
+    winner: { selected: CAPACITY },
+  },
+]) {
+  test(`a later click wins over an earlier panel request still in flight (${race.name})`, async ({
+    page,
+  }) => {
+    await page.goto(`/knowledge/graph?focus=${PLAN}`);
+    await canvasReady(page);
+    const held = await hold(page, race.held);
 
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
+    await race.first(page);
+    await held.seen; // the earlier request is in flight, held
+    await race.second(page);
+    const [kind, id] = Object.entries(race.winner)[0];
+    const panel = page.locator(`#kgraph-panel [data-kgraph-panel="${kind === "edge" ? "edge" : "node"}"]`);
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", id);
+    held.release();
+    await held.ended(); // the earlier XHR is over: loaded and handled, or aborted
+    await held.handled();
+
+    await expect(panel).toHaveAttribute("data-kgraph-panel-id", id);
+    expect(query(page)).toEqual({ focus: PLAN, ...race.winner });
+    const winnerUrl = `/knowledge/graph?${new URLSearchParams({ focus: PLAN, ...race.winner })}`;
+    expect((await pushes(page)).map((p) => p.url)).toEqual([winnerUrl]);
   });
-  await page.route(`**/knowledge/graph/panel?*selected=${CAPACITY}*`, async (route) => {
-    await held;
-    // The browser aborted it when the later click's request replaced it.
-    await route.continue().catch(() => {});
-  });
-
-  await clickNode(page, CAPACITY);
-  await clickNode(page, ROLLBACK);
-  await nodePanel(page, ROLLBACK);
-  release();
-  // Give the held response every chance to land, then check it did not.
-  await page.waitForTimeout(500);
-
-  await nodePanel(page, ROLLBACK);
-  expect(query(page)).toEqual({ focus: PLAN, selected: ROLLBACK });
-  expect((await pushes(page)).map((p) => p.url)).toEqual([
-    `/knowledge/graph?focus=${PLAN}&selected=${ROLLBACK}`,
-  ]);
-});
+}
 
 test("a render id no longer held sends the browser to the full page", async ({
   page,
@@ -222,7 +294,7 @@ test("Back and Forward over canvas clicks land on a live canvas with that URL's 
   await canvasReady(page);
 });
 
-test("Back over a text panel link restores a live canvas and an honest search count", async ({
+test("Back over a text panel link reloads to a live canvas and an honest search count", async ({
   page,
 }) => {
   await page.goto(`/knowledge/graph?focus=${PLAN}`);
@@ -230,8 +302,8 @@ test("Back over a text panel link restores a live canvas and an honest search co
   await page.locator("[data-kgraph-search]").fill("capacity");
   await expect(page.locator("[data-kgraph-search-count]")).toHaveText("1 match");
 
-  // A text edge link: htmx pushes it and snapshots this page first.
-  await page.locator(`[data-kgraph-edge="edge_4c1e9a7b20d3"] .kgraph-edge-link`).click();
+  // A text edge link: pushed after its swap, as a canvas click is.
+  await textEdge(page, SUPPORTS).click();
   await expect(page.locator('#kgraph-panel [data-kgraph-panel="edge"]')).toBeVisible();
 
   await page.goBack();
@@ -272,3 +344,74 @@ test("the slider shows a threshold off its grid as the server applied it", async
   await canvasReady(page);
   await expect(page.locator("[data-kgraph-min-weight]")).toHaveValue(String(moved));
 });
+
+test("Back over text, canvas and text entries shows each URL's own panel", async ({
+  page,
+}) => {
+  await page.goto(`/knowledge/graph?focus=${PLAN}`);
+  await canvasReady(page);
+  const edgePanel = (id: string) =>
+    expect(
+      page.locator(`#kgraph-panel [data-kgraph-panel="edge"][data-kgraph-panel-id="${id}"]`),
+    ).toBeVisible();
+
+  await textEdge(page, SUPPORTS).click();
+  await edgePanel(SUPPORTS);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await expect
+    .poll(() => query(page))
+    .toEqual({ focus: PLAN, selected: CAPACITY, pin: SUPPORTS });
+  await textEdge(page, RESOLVED).click();
+  await edgePanel(RESOLVED);
+
+  await page.goBack();
+  await expect
+    .poll(() => query(page))
+    .toEqual({ focus: PLAN, selected: CAPACITY, pin: SUPPORTS });
+  await nodePanel(page, CAPACITY);
+  await canvasReady(page);
+
+  await page.goBack();
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN, edge: SUPPORTS });
+  await edgePanel(SUPPORTS);
+  await expect(page.locator('#kgraph-panel [data-kgraph-panel="node"]')).toHaveCount(0);
+  await canvasReady(page);
+});
+
+test("Back while a canvas panel request is in flight is not undone by its response", async ({
+  page,
+}) => {
+  await page.goto(`/knowledge/graph?focus=${PLAN}`);
+  await canvasReady(page);
+  await textEdge(page, SUPPORTS).click();
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN, edge: SUPPORTS });
+  const held = await hold(page, `selected=${CAPACITY}`);
+
+  await clickNode(page, CAPACITY);
+  await held.seen;
+  await page.goBack();
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN });
+  await canvasReady(page);
+  held.release();
+  await held.handled();
+
+  // The Back stands: the address, the empty host, and no push since the reload.
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN });
+  await expect(page.locator("#kgraph-panel [data-kgraph-panel]")).toHaveCount(0);
+  expect(await pushes(page)).toEqual([]);
+});
+
+for (const weight of ["0.10000000001", "0.09999999999", "0.99999999999"]) {
+  test(`the slider keeps ${weight} as applied, not its grid neighbour`, async ({ page }) => {
+    await page.goto(`/knowledge/graph?focus=${PLAN}&min_weight=${weight}`);
+    await canvasReady(page);
+
+    const slider = page.locator("[data-kgraph-min-weight]");
+    expect(Number(await slider.inputValue())).toBe(Number(weight));
+    await expect(page.locator("[data-kgraph-min-weight-value]")).toHaveText(weight);
+    await expect(page.locator("[data-kgraph-weight-hidden]")).toContainText(
+      `below ${weight} hidden`,
+    );
+  });
+}

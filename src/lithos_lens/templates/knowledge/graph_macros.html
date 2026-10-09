@@ -24,7 +24,9 @@
     in flight from any other link, so the later click wins both the swap and
     the URL, whichever response would have arrived first. `render_id` names
     the view the page drew, so the fragment is drawn from it; the href and
-    the pushed URL never carry it. -#}
+    the pushed URL never carry it. On a page the canvas draws,
+    `knowledge_graph.js` pushes the href itself once the fragment is in, in
+    place of htmx (S4: one history policy for text and canvas). -#}
 {% macro panel_attrs(params, render_id, edge="", selected="") -%}
   {%- set href = knowledge_graph_url(params, edge=edge, selected=selected) -%}
   href="{{ href }}" hx-get="{{ knowledge_graph_panel_url(params, render=render_id, edge=edge, selected=selected) }}" hx-target="#kgraph-panel" hx-swap="innerHTML" hx-sync="#kgraph-panel:replace" hx-push-url="{{ href }}"

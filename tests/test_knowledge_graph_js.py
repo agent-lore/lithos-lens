@@ -109,6 +109,26 @@ function el(extra) {
   }, extra || {});
 }
 
+// A range input as the browser keeps one: a value set is clamped to [0, 1]
+// and, unless `step` is "any", rounded to the step grid — which is exactly
+// how a threshold the server applied can be lost on its way into the slider.
+function rangeInput(step) {
+  let kept = "";
+  const input = el({ step });
+  Object.defineProperty(input, "value", {
+    get() { return kept; },
+    set(raw) {
+      let number = Math.min(Math.max(Number(raw), 0), 1);
+      if (input.step !== "any") {
+        const size = Number(input.step);
+        number = Number((Math.round(number / size) * size).toFixed(10));
+      }
+      kept = number === Number(raw) ? String(raw) : String(number);
+    },
+  });
+  return input;
+}
+
 // The toolbar as the TEMPLATE rendered it: which provenance groups, depth
 // levels and colour modes it offers comes from the page's own HTML.
 const provenance = dom.provenance.map((group) =>
@@ -125,7 +145,7 @@ const single = {
   "[data-kgraph-key-edges]": el(),
   "[data-kgraph-key-nodes]": el(),
   "[data-kgraph-key-marks]": el(),
-  "[data-kgraph-min-weight]": el({ step: dom.step }),
+  "[data-kgraph-min-weight]": rangeInput(dom.step),
   "[data-kgraph-min-weight-value]": el(),
   "[data-kgraph-weight-hidden]": el(),
   // What a page htmx restored from its history cache holds: the count text
@@ -141,13 +161,21 @@ const many = {
   "[data-kgraph-depth-count]": depthCounts,
   "[data-kgraph-colour]": colours,
 };
+const documentListeners = {};
 const document = {
   readyState: "interactive",
   querySelector(selector) { return single[selector] || null; },
   querySelectorAll(selector) { return many[selector] || []; },
   createElement(tag) { return el({ tagName: tag }); },
-  addEventListener() {},
+  addEventListener(type, fn) {
+    (documentListeners[type] = documentListeners[type] || []).push(fn);
+  },
 };
+// An htmx event, triggered on its element and bubbling to the document.
+function htmxEvent(elt, type, detail) {
+  elt.fire(type, detail);
+  (documentListeners[type] || []).forEach((fn) => fn({ target: elt, detail }));
+}
 
 // Timers never fire: the headless renderer's animation loop asks for one,
 // and nothing this file does waits on a timer.
@@ -156,11 +184,12 @@ const sandbox = {
   setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
 };
 const host = single["#kgraph-panel"];
-// htmx as the page sees it: `ajax` ISSUES a request — `htmx:beforeRequest`
-// on its source, carrying the request — and nothing more. Its fragment lands
-// only when a `swap` action says so, as `htmx:afterSwap` on the host with
-// that same request; a request that is never swapped is one the server
-// redirected or a later click aborted.
+// htmx as the page sees it: `ajax` (or a text link's click) ISSUES a request
+// — `htmx:beforeRequest` on its element, carrying the request and its
+// target — and nothing more. Its fragment lands only when a `swap` action
+// says so, as `htmx:afterSwap` on the host with that same request; a request
+// that is never swapped is one the server redirected or a later click
+// aborted. `trigger(elt, "htmx:abort")` is recorded.
 sandbox.window = {
   location: {
     get pathname() { return url.pathname; },
@@ -183,7 +212,7 @@ sandbox.window = {
   },
   htmx: {
     ajax(verb, path, context) {
-      const xhr = { request: ajax.length };
+      const xhr = { request: xhrs.length, path };
       ajax.push({
         verb,
         path,
@@ -192,13 +221,24 @@ sandbox.window = {
         sync: context.source.getAttribute("hx-sync"),
         pushUrlAttribute: context.source.getAttribute("hx-push-url"),
       });
-      xhrs.push(xhr);
-      context.source.fire("htmx:beforeRequest", { xhr, elt: context.source });
+      issue(context.source, xhr);
       return Promise.resolve();
+    },
+    trigger(elt, type) {
+      triggered.push({ type, elt: elt === panelSource ? "canvas" : elt.href });
     },
   },
 };
 const xhrs = [];
+const textLinks = [];
+const issued = [];
+const triggered = [];
+const panelSource = single["[data-kgraph-panel-source]"];
+function issue(elt, xhr) {
+  xhrs.push(xhr);
+  issued.push(elt);
+  htmxEvent(elt, "htmx:beforeRequest", { xhr, elt, target: host });
+}
 function travel(step) {
   cursor += step;
   url = new URL(entries[cursor].href);
@@ -255,13 +295,14 @@ for (const action of actions) {
   } else if (kind === "swap") {
     // The fragment of request N (default: the latest) lands in the host.
     const index = arg === "" ? xhrs.length - 1 : Number(arg);
-    if (!ajax[index]) continue;  // nothing was requested: nothing lands
-    host.innerHTML = "panel:" + ajax[index].path;
-    host.fire("htmx:afterSwap", { xhr: xhrs[index] });
-  } else if (kind === "swap-text") {
-    // A text panel link's own request lands in the host (htmx pushed it).
-    host.innerHTML = "panel:text";
-    host.fire("htmx:afterSwap", { xhr: { request: "text" } });
+    if (!xhrs[index]) continue;  // nothing was requested: nothing lands
+    host.innerHTML = "panel:" + xhrs[index].path;
+    htmxEvent(host, "htmx:afterSwap", { xhr: xhrs[index], target: host });
+  } else if (kind === "text-click") {
+    // A text panel link (`panel_attrs`): its href, and htmx's `hx-push-url`.
+    const link = el({ href: arg, attributes: { "hx-push-url": arg } });
+    textLinks.push(link);
+    issue(link, { request: xhrs.length, path: "text:" + arg });
   } else if (kind === "back") {
     travel(-1);
   } else if (kind === "forward") {
@@ -305,6 +346,8 @@ console.log(JSON.stringify({
   ajax,
   pushes,
   reloads,
+  triggered,
+  textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
   canvas: { hidden: canvas.hidden, dataset: canvas.dataset },
   toolbarHidden: single["[data-kgraph-toolbar]"].hidden,
@@ -950,6 +993,17 @@ def test_an_edge_click_selects_the_edge_and_drops_the_node_and_pin(
     assert unswapped["pushes"] == []
 
 
+SUPPORTS = "edge_4c1e9a7b20d3"
+#: The text baseline's panel links on ``?focus=PLAN``, as ``panel_attrs``
+#: writes their href (and htmx's ``hx-push-url``).
+TEXT_SUPPORTS = f"{ROUTE}?focus={PLAN}&edge={SUPPORTS}"
+TEXT_RESOLVED = f"{ROUTE}?focus={PLAN}&edge={RESOLVED}"
+
+
+def _node_url(node: str, extra: str = "") -> str:
+    return f"{ROUTE}?focus={PLAN}&selected={node}{extra}"
+
+
 @pytest.mark.parametrize(
     ("actions", "pushed"),
     [
@@ -959,45 +1013,125 @@ def test_an_edge_click_selects_the_edge_and_drops_the_node_and_pin(
         # rather than been aborted) pushes nothing; the later one's does.
         (
             [f"tap-node:{CAPACITY}", f"tap-node:{ROLLBACK}", "swap:0", "swap:1"],
-            [ROLLBACK],
+            [_node_url(ROLLBACK)],
         ),
         (
             [f"tap-node:{CAPACITY}", f"tap-node:{ROLLBACK}", "swap:1", "swap:0"],
-            [ROLLBACK],
+            [_node_url(ROLLBACK)],
         ),
-        # A text panel link's swap is htmx's own (it pushed its href).
-        ([f"tap-node:{CAPACITY}", "swap-text"], []),
+        # A text panel link is pushed by the same rule, after its own swap.
+        ([f"text-click:{TEXT_SUPPORTS}"], []),
+        ([f"text-click:{TEXT_SUPPORTS}", "swap"], [TEXT_SUPPORTS]),
+        # Canvas and text race on the one host: the later request wins.
+        (
+            [f"tap-node:{CAPACITY}", f"text-click:{TEXT_SUPPORTS}", "swap:0", "swap:1"],
+            [TEXT_SUPPORTS],
+        ),
+        (
+            [f"text-click:{TEXT_SUPPORTS}", f"tap-node:{CAPACITY}", "swap:1", "swap:0"],
+            [_node_url(CAPACITY)],
+        ),
         # One swap, one push: the same fragment again pushes nothing more.
-        ([f"tap-node:{CAPACITY}", "swap", "swap:0"], [CAPACITY]),
+        ([f"tap-node:{CAPACITY}", "swap", "swap:0"], [_node_url(CAPACITY)]),
     ],
-    ids=["unswapped", "later-wins", "later-wins-out-of-order", "text-link", "once"],
+    ids=[
+        "unswapped",
+        "later-wins",
+        "later-wins-out-of-order",
+        "text-unswapped",
+        "text-link",
+        "canvas-then-text",
+        "text-then-canvas",
+        "once",
+    ],
 )
-def test_the_page_url_is_pushed_only_after_that_clicks_fragment_is_swapped(
+def test_the_page_url_is_pushed_only_after_that_requests_fragment_is_swapped(
     lithos_lens_config_env: Path, actions: list[str], pushed: list[str]
 ) -> None:
     with _lens(lithos_lens_config_env) as client:
         page = _page(client, f"{ROUTE}?focus={PLAN}")
     result = _run(page, actions)
 
-    assert [_query(push["url"])["selected"] for push in result["pushes"]] == pushed
+    assert [push["url"] for push in result["pushes"]] == pushed
     for push in result["pushes"]:
-        assert push["panel"].startswith("panel:/knowledge/graph/panel?")
-        assert f"selected={_query(push['url'])['selected']}" in push["panel"]
+        # The fragment already in the host is that same request's.
+        query = _query(push["url"])
+        marker = (
+            f"edge={query['edge']}"
+            if "edge" in query
+            else f"selected={query['selected']}"
+        )
+        assert marker in push["panel"]
+    # htmx is left nothing to push: each text link's `hx-push-url` is off.
+    assert all(url == "false" for url in result["textLinkPushUrls"])
     assert result["assigns"] == [] and result["reloads"] == []
 
 
 def test_back_over_a_canvas_entry_reloads_the_url_it_lands_on(
     lithos_lens_config_env: Path,
 ) -> None:
-    """A canvas-pushed entry is not one htmx can restore, so Back onto the
-    page's own entry reloads it: the server draws that URL's panel and
-    picture. (Forward, after a real reload, is the e2e suite's: this harness
-    cannot reload.)"""
+    """Back onto the page's own entry reloads it: the server draws that URL's
+    panel and picture. (Forward, after a real reload, is the e2e suite's:
+    this harness cannot reload.)"""
     with _lens(lithos_lens_config_env) as client:
         page = _page(client, f"{ROUTE}?focus={PLAN}")
     result = _run(page, [f"tap-node:{CAPACITY}", "swap", "back"])
 
     assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
+
+
+def test_back_over_mixed_text_and_canvas_entries_reloads_each(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Text link, canvas node, text link, then Back twice: every entry is
+    this page's own, pushed after its swap, and each Back reloads the URL it
+    lands on — no entry is restored from a snapshot taken under another
+    URL."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page,
+        [
+            f"text-click:{TEXT_SUPPORTS}",
+            "swap",
+            f"tap-node:{CAPACITY}",
+            "swap",
+            f"text-click:{TEXT_RESOLVED}",
+            "swap",
+            "back",
+            "back",
+        ],
+    )
+    capacity = _node_url(CAPACITY, f"&pin={SUPPORTS}")
+
+    assert [push["url"] for push in result["pushes"]] == [
+        TEXT_SUPPORTS,
+        capacity,
+        TEXT_RESOLVED,
+    ]
+    assert result["reloads"] == [
+        f"http://lens.test{capacity}",
+        f"http://lens.test{TEXT_SUPPORTS}",
+    ]
+
+
+def test_a_response_landing_after_back_pushes_nothing(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A canvas request still in flight when the operator goes Back is
+    aborted, and should its fragment land anyway, it pushes nothing: the
+    completed Back is never undone."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page,
+        [f"text-click:{TEXT_SUPPORTS}", "swap", f"tap-node:{CAPACITY}", "back", "swap"],
+    )
+
+    assert [push["url"] for push in result["pushes"]] == [TEXT_SUPPORTS]
+    assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
+    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]
+    assert result["href"] == f"http://lens.test{ROUTE}?focus={PLAN}"
 
 
 def test_a_layer_edge_has_no_panel_and_its_click_does_nothing(
@@ -1102,6 +1236,12 @@ def test_a_quarantined_node_whose_facts_are_pending_wears_both_marks(
         ("0.123", "any"),
         ("0.125", "any"),
         ("0.01", "any"),
+        # Within any tolerance of a grid point, and still not on it.
+        ("0.10000000001", "any"),
+        ("0.09999999999", "any"),
+        ("0.00000000001", "any"),
+        ("0.99999999999", "any"),
+        ("1", "0.05"),
         ("0.1", "0.05"),
         ("0", "0.05"),
     ],
