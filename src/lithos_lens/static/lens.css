@@ -2337,11 +2337,19 @@ button,
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 0.9rem;
-  height: clamp(18rem, 60vh, 32rem);
+  /* Tall enough for a depth-2 focus graph's rings, titles clear of one
+     another, at a readable zoom (knowledge_graph.js). */
+  height: clamp(20rem, 70vh, 36rem);
   margin: 0.5rem 0;
   min-width: 0;
   overflow: hidden;
   width: 100%;
+}
+
+.kgraph-pan-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
 }
 
 .kgraph-key {

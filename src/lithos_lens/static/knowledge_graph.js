@@ -97,6 +97,22 @@
 
   const MAX_FIT_ZOOM = 1.4;
   const FIT_PADDING = 24;
+  // Labels are the canvas's content: the fit that opens it may not shrink
+  // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
+  // opened at that zoom on its focus (or its centre), and the pan hint says
+  // the rest is a drag away; the operator's own zoom is not bounded by this.
+  const NODE_FONT = 13;
+  const EDGE_FONT = 12;
+  const MIN_RENDERED_FONT = 11;
+  const MIN_READABLE_ZOOM = MIN_RENDERED_FONT / Math.min(NODE_FONT, EDGE_FONT);
+  //: The nearest a label at the focus sits to its edge's far end, and the
+  //: step its place is searched in.
+  const END_LABEL_MIN = 12;
+  //: The clearance kept around a title: an end label is placed along the
+  //: curve, which the straight-line search only approximates.
+  const LABEL_CLEARANCE = 6;
+  //: The widest a focus graph's rings are stretched to fill a wide canvas.
+  const MAX_STRETCH = 2;
 
   // A plain `{}` inherits `__proto__` and friends, and a note id is any
   // string; every id-keyed map here is prototype-free.
@@ -349,6 +365,100 @@
     window.location.reload();
   }
 
+  // ── Labels at the focus ─────────────────────────────────────────────
+  //
+  // A titled node's title hangs under it, so a label at an edge's middle can
+  // land on the focus's title, and one by the far end on that end's title.
+  // Each label on an edge at the focus goes to the first place along it,
+  // from its far end, whose box is clear of both titles; with none, it stays
+  // at the middle.
+
+  function labelBox(element) {
+    return element.boundingBox({
+      includeNodes: false,
+      includeEdges: false,
+      includeLabels: true,
+      includeOverlays: false
+    });
+  }
+
+  function apart(a, b) {
+    return a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1;
+  }
+
+  function placeEndLabels(cy) {
+    // Places are measured on the rendered curve: none without a renderer.
+    if (cy.headless()) return;
+    cy.edges().forEach(function (edge) {
+      const end = edge.data("labelEnd");
+      if (!end) return;
+      const own = labelBox(edge);
+      const halfW = (own.x2 - own.x1) / 2;
+      const halfH = (own.y2 - own.y1) / 2;
+      // Every note's body and title: a label clear of its own two ends but
+      // under a third note's circle is no more readable.
+      const titles = cy.nodes().map(function (node) {
+        const box = node.boundingBox({ includeLabels: true, includeOverlays: false });
+        return {
+          x1: box.x1 - LABEL_CLEARANCE,
+          x2: box.x2 + LABEL_CLEARANCE,
+          y1: box.y1 - LABEL_CLEARANCE,
+          y2: box.y2 + LABEL_CLEARANCE
+        };
+      });
+      // Along the curve as drawn — a parallel edge bows away from the
+      // straight line — measured by arc length from the far end, which is
+      // how the end label's offset is laid off.
+      const from = edge.sourceEndpoint();
+      const to = edge.targetEndpoint();
+      const controls = edge.controlPoints ? edge.controlPoints() : null;
+      const bend = controls && controls.length === 1 ? controls[0] : null;
+      const at = function (t) {
+        if (!bend) return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+        const u = 1 - t;
+        return {
+          x: u * u * from.x + 2 * u * t * bend.x + t * t * to.x,
+          y: u * u * from.y + 2 * u * t * bend.y + t * t * to.y
+        };
+      };
+      // Measured from the far end (a label at the focus) or the source.
+      const fromEnd = end === "target" ? "target" : "source";
+      const candidates = [];
+      let travelled = 0;
+      let previous = null;
+      for (let i = 0; i <= 64; i += 1) {
+        const t = i / 64;
+        const point = at(fromEnd === "source" ? t : 1 - t);
+        if (previous) travelled += Math.hypot(point.x - previous.x, point.y - previous.y);
+        candidates.push({ point: point, travelled: travelled });
+        previous = point;
+      }
+      const length = travelled;
+      // Nearest the far end first; for a "middle" label, nearest the middle.
+      if (end === "middle") {
+        candidates.sort(function (a, b) {
+          return Math.abs(a.travelled - length / 2) - Math.abs(b.travelled - length / 2);
+        });
+      }
+      for (let index = 0; index < candidates.length; index += 1) {
+        const point = candidates[index].point;
+        const offset = candidates[index].travelled;
+        if (offset < END_LABEL_MIN || offset > length - END_LABEL_MIN) continue;
+        const box = {
+          x1: point.x - halfW,
+          x2: point.x + halfW,
+          y1: point.y - halfH,
+          y2: point.y + halfH
+        };
+        if (titles.every(function (title) { return apart(box, title); })) {
+          edge.data("labelOffset", offset);
+          edge.addClass(fromEnd === "source" ? "label-at-source" : "label-at-target");
+          return;
+        }
+      }
+    });
+  }
+
   // ── Drawing ─────────────────────────────────────────────────────────────
 
   function draw() {
@@ -406,7 +516,16 @@
       classes.push("stroke-" + (style.stroke || "solid"));
       if (style.arrowhead) classes.push("arrow");
       if (edge.partial) classes.push("partial");
+      if (style.label) classes.push("labelled");
       classes.push(edge.kind === "typed" ? "typed" : "layer");
+      // A label on an edge at the focus may move toward the OTHER end once
+      // laid out (`placeEndLabels`): the middle of such an edge is often
+      // where the focus's own title is.
+      // Anywhere else a label prefers the middle, moved along its edge only
+      // when the middle is not clear.
+      let labelEnd = style.label ? "middle" : "";
+      if (style.label && payload.focus && edge.from === payload.focus) labelEnd = "target";
+      else if (style.label && payload.focus && edge.to === payload.focus) labelEnd = "source";
       const unresolved = classes.indexOf("kedge-unresolved") !== -1;
       elements.push({
         group: "edges",
@@ -416,7 +535,9 @@
           source: source,
           target: target,
           width: edgeWidth(edge.weight) + (unresolved ? EMPHASIS : 0),
-          label: style.label || ""
+          label: style.label || "",
+          labelEnd: labelEnd,
+          labelOffset: END_LABEL_MIN
         },
         classes: classes.join(" ")
       });
@@ -433,12 +554,18 @@
           "border-width": 1,
           "border-color": MUTED,
           color: INK,
-          "font-size": 12,
+          "font-size": NODE_FONT,
           "font-family": "ui-sans-serif, system-ui, sans-serif",
           "text-valign": "bottom",
           "text-margin-y": 4,
           "text-wrap": "wrap",
-          "text-max-width": 140
+          "text-max-width": 140,
+          // On its own ground: an edge passing under a title does not cross
+          // its letters.
+          "text-background-color": PANEL,
+          "text-background-opacity": 0.9,
+          "text-background-padding": 2,
+          "text-background-shape": "roundrectangle"
         }
       },
       { selector: "node.focus", style: { "border-width": 3, "border-color": INK } },
@@ -475,15 +602,28 @@
           "target-arrow-color": EDGE_COLOURS["kedge-unknown"],
           "target-arrow-shape": "none",
           label: "data(label)",
-          "font-size": 10,
+          "font-size": EDGE_FONT,
           color: MUTED,
-          "text-rotation": "autorotate",
+          // Level, not along the curve: a rotated word across a title reads
+          // as neither.
+          "text-rotation": "none",
           "text-background-color": PANEL,
-          "text-background-opacity": 0.85,
-          "text-background-padding": 2
+          "text-background-opacity": 0.9,
+          "text-background-padding": 2,
+          "text-background-shape": "roundrectangle"
         }
       },
       { selector: "edge.arrow", style: { "target-arrow-shape": "triangle" } },
+      // Drawn after the unlabelled edges, so no stroke crosses its words.
+      { selector: "edge.labelled", style: { "z-index": 1 } },
+      {
+        selector: "edge.label-at-target",
+        style: { label: "", "target-label": "data(label)", "target-text-offset": "data(labelOffset)" }
+      },
+      {
+        selector: "edge.label-at-source",
+        style: { label: "", "source-label": "data(label)", "source-text-offset": "data(labelOffset)" }
+      },
       { selector: "edge.stroke-dotted", style: { "line-style": "dotted" } },
       { selector: "edge.stroke-dashed", style: { "line-style": "dashed" } }
     ];
@@ -544,10 +684,26 @@
         name: "concentric",
         concentric: function (element) { return maxHop + 1 - element.data("hop"); },
         levelWidth: function () { return 1; },
-        minNodeSpacing: 36,
+        // Room between rings for the titles under each ring's notes.
+        avoidOverlap: true,
+        minNodeSpacing: 140,
         padding: FIT_PADDING,
         animate: false
       }).run();
+      // Rings into ellipses as wide as the canvas is wide (up to a limit):
+      // the room a wide box has goes between the notes, not to its margins.
+      const stretch = cy.height() > 0
+        ? Math.min(MAX_STRETCH, Math.max(1, cy.width() / cy.height()))
+        : 1;
+      const centre = cy.nodes(".focus").length
+        ? cy.nodes(".focus").position()
+        : { x: 0, y: 0 };
+      if (stretch > 1) {
+        cy.nodes().positions(function (node) {
+          const at = node.position();
+          return { x: centre.x + (at.x - centre.x) * stretch, y: at.y };
+        });
+      }
     } else {
       // A circle first, so the force-directed pass starts from the same
       // place on every load and draws the same picture.
@@ -557,14 +713,37 @@
         animate: false,
         randomize: false,
         padding: FIT_PADDING,
-        nodeRepulsion: function () { return 9000; },
-        idealEdgeLength: function () { return 90; }
+        nodeDimensionsIncludeLabels: true,
+        nodeRepulsion: function () { return 400000; },
+        idealEdgeLength: function () { return 140; }
       }).run();
+      // Its long side along the canvas's long side: a chain laid out down a
+      // wide box (or across a narrow one) is mirrored on its diagonal.
+      const laid = cy.nodes().boundingBox();
+      const tall = laid.h > laid.w;
+      if (cy.width() > 0 && cy.height() > 0 && tall !== cy.height() > cy.width()) {
+        cy.nodes().positions(function (node) {
+          const at = node.position();
+          return { x: at.y, y: at.x };
+        });
+      }
     }
+    placeEndLabels(cy);
     cy.fit(undefined, FIT_PADDING);
     if (cy.zoom() > MAX_FIT_ZOOM) {
       cy.zoom(MAX_FIT_ZOOM);
       cy.center();
+    } else if (cy.zoom() < MIN_READABLE_ZOOM) {
+      cy.zoom(MIN_READABLE_ZOOM);
+      const focus = cy.nodes(".focus");
+      cy.center(focus.length ? focus : undefined);
+    }
+    const panHint = document.querySelector("[data-kgraph-pan-hint]");
+    if (panHint) {
+      const drawn = cy.elements().renderedBoundingBox();
+      panHint.hidden = !(
+        drawn.x1 < 0 || drawn.y1 < 0 || drawn.x2 > cy.width() || drawn.y2 > cy.height()
+      );
     }
 
     // ── Lit and dimmed: the selection and its neighbours ────────────────

@@ -376,6 +376,8 @@ console.log(JSON.stringify({
     borderWidth: n.pstyle("border-width").pfValue,
     opacity: n.pstyle("opacity").value,
     position: n.position(),
+    font: n.pstyle("font-size").pfValue,
+    labelGround: n.pstyle("text-background-opacity").value,
   })),
   edges: cy.edges().map((e) => ({
     id: e.data("pid"),
@@ -384,6 +386,9 @@ console.log(JSON.stringify({
     arrow: style(e, "target-arrow-shape"),
     width: e.pstyle("width").pfValue,
     label: style(e, "label"),
+    font: e.pstyle("font-size").pfValue,
+    rotation: style(e, "text-rotation"),
+    labelGround: e.pstyle("text-background-opacity").value,
     opacity: e.pstyle("opacity").value,
   })),
   lit: pidsWith("lit"),
@@ -1802,3 +1807,23 @@ def test_a_node_click_under_a_blank_edge_pins_as_the_server_would(
         # Blank to the server: the real pin stands and the view answers.
         assert expected["pin"] == FAINT_EDGE
         assert "HX-Redirect" not in fragment.headers
+
+
+def test_labels_sit_on_their_own_ground_level_and_large_enough(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Round-6 review (readability): titles and edge labels are drawn on an
+    opaque ground, edge labels level rather than along the curve, at sizes
+    the opening zoom keeps at 11px or more (asserted on the rendered canvas
+    at every width by the e2e screenshot check)."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&depth=2")
+    result = _run(page)
+
+    for node in result["nodes"]:
+        assert node["font"] >= 12 and node["labelGround"] >= 0.85
+    labelled = [edge for edge in result["edges"] if edge["label"]]
+    assert labelled
+    for edge in labelled:
+        assert edge["font"] >= 12 and edge["labelGround"] >= 0.85
+        assert edge["rotation"] == "none"

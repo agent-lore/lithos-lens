@@ -1747,6 +1747,14 @@ draws stays drawn whatever the slider says):
   the note page's red ring, `archived` greyed
 - the **key** under the canvas: the text legend's lines in its order, the
   node colours present, and the marks present
+- **readable as opened**: titles and edge labels on an opaque ground, edge
+  labels level; focus rings spaced for the titles under them and stretched
+  to a wide canvas's shape, a scoped picture turned to the canvas's long
+  side; a label on an edge goes to the place along it (by its far end at the
+  focus, else its middle) clear of every note's circle and title; the fit
+  that opens the canvas never shrinks a label below 11px — a graph that
+  then does not fit opens on its focus (or centre) with "Part of the graph
+  is outside this view: drag to pan, or zoom out." under the canvas
 - **layout** once per load: concentric by hop around the focus, or a
   force-directed `cose` from a circle in scoped mode; nothing re-lays out
 - **controls**, each navigating to the page's own query with one key

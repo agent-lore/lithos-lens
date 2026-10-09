@@ -214,6 +214,65 @@ async function relatedPanelPlacement(page: Page) {
  * too, because this sandbox cannot read the PNG: toolbar, canvas, key, then
  * the panel host and the text, the canvas within the viewport's width.
  */
+/**
+ * The canvas's labels read as drawn, at the zoom it opens with (K2 S4,
+ * round-6 review): every node title and edge label renders at 10px or more,
+ * and no two labels — titles, the unknown type's raw name, a resolution —
+ * share any of the canvas, nor does any label sit under another note's
+ * circle. Measured on the rendered elements rather than
+ * the PNG, which this sandbox cannot read: model-space label boxes (the
+ * layout decides those) and the font size times the zoom it opened at.
+ * When the whole graph is then wider or taller than the box, the pan hint
+ * says so.
+ */
+async function knowledgeCanvasLabelsAreReadable(page: Page) {
+  const labels = await page.evaluate(() => {
+    const cy = (window as any).LithosLensKnowledgeGraph.cy;
+    const zoom = cy.zoom();
+    const boxes: Array<{ id: string; x1: number; x2: number; y1: number; y2: number }> = [];
+    const small: Array<[string, number]> = [];
+    cy.elements().forEach((element: any) => {
+      if (!element.data("label")) return;
+      const rendered = element.pstyle("font-size").pfValue * zoom;
+      if (rendered < 10) small.push([element.data("pid"), rendered]);
+      const box = element.boundingBox({
+        includeNodes: false,
+        includeEdges: false,
+        includeLabels: true,
+        includeOverlays: false,
+      });
+      boxes.push({ id: element.data("pid"), x1: box.x1, x2: box.x2, y1: box.y1, y2: box.y2 });
+    });
+    type Box = { id: string; x1: number; x2: number; y1: number; y2: number };
+    const apart = (a: Box, b: Box) =>
+      a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1;
+    const overlaps: string[] = [];
+    boxes.forEach((a, i) => {
+      boxes.slice(i + 1).forEach((b) => {
+        if (!apart(a, b)) overlaps.push(`${a.id} × ${b.id}`);
+      });
+    });
+    // …nor under a note's circle: any label but a note's own title.
+    cy.nodes().forEach((node: any) => {
+      const body = node.boundingBox({ includeLabels: false, includeOverlays: false });
+      const circle = { id: node.data("pid"), x1: body.x1, x2: body.x2, y1: body.y1, y2: body.y2 };
+      boxes.forEach((label) => {
+        if (label.id !== circle.id && !apart(label, circle)) {
+          overlaps.push(`${label.id} × body of ${circle.id}`);
+        }
+      });
+    });
+    const drawn = cy.elements().renderedBoundingBox();
+    const clipped =
+      drawn.x1 < -1 || drawn.y1 < -1 || drawn.x2 > cy.width() + 1 || drawn.y2 > cy.height() + 1;
+    const hint = document.querySelector("[data-kgraph-pan-hint]") as HTMLElement;
+    return { small, overlaps, clipped, hinted: !!hint && !hint.hidden };
+  });
+  expect(labels.small).toEqual([]);
+  expect(labels.overlaps).toEqual([]);
+  expect(labels.hinted).toBe(labels.clipped);
+}
+
 async function knowledgeCanvasIsDrawn(page: Page, colour: string) {
   const canvas = page.locator('[data-kgraph-canvas][data-canvas-state="ready"]');
   await expect(canvas).toBeVisible();
@@ -264,6 +323,7 @@ async function knowledgeCanvasIsDrawn(page: Page, colour: string) {
   await expect(page.locator("[data-kgraph-key-nodes]")).toContainText(
     colour === "type" ? "Colour: note type" : "Colour: namespace",
   );
+  await knowledgeCanvasLabelsAreReadable(page);
 }
 
 const WIDTHS = [320, 768, 1024, 1440] as const;
@@ -890,6 +950,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-node",
     url: "/knowledge/graph?focus=note-influx-plan&selected=note-influx-plan",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="node"]');
       await expect(panel).toBeVisible();
       await expect(panel.locator("[data-kgraph-degree]")).toContainText(
@@ -906,6 +970,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-edge",
     url: "/knowledge/graph?focus=note-influx-plan&edge=edge_4c1e9a7b20d3",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="edge"]');
       await expect(panel).toBeVisible();
       await expect(panel.locator("[data-kgraph-sentence]")).toHaveText(
@@ -924,6 +992,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-contradiction",
     url: "/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="edge"]');
       await expect(panel).toBeVisible();
       await expect(
