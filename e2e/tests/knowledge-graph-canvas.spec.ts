@@ -532,3 +532,22 @@ test("the canvas lights the selection the server reads from a repeated or blank 
   );
   expect(picked).toEqual([ROLLBACK]);
 });
+
+for (const [blank, picked] of [
+  ["%C2%85", [CAPACITY]], // blank to the server: `selected` stands
+  ["%EF%BB%BF", []], // not blank to the server: an `edge=` it does not draw
+] as const) {
+  test(`a selection beside edge=${blank} lights what the server selects`, async ({ page }) => {
+    await page.goto(`/knowledge/graph?focus=${PLAN}&selected=${CAPACITY}&edge=${blank}`);
+    await canvasReady(page);
+    const lit = await page.evaluate(() =>
+      (window as any).LithosLensKnowledgeGraph.cy
+        .elements(".picked")
+        .map((e: any) => e.data("pid")),
+    );
+    expect(lit).toEqual([...picked]);
+    await expect(
+      page.locator('#kgraph-panel [data-kgraph-panel="node"]'),
+    ).toHaveCount(picked.length);
+  });
+}

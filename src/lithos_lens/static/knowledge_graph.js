@@ -184,7 +184,16 @@
   function queryValue(params, key) {
     const values = params.getAll(key);
     const value = values.length ? values[values.length - 1] : "";
-    return value.trim() ? value : "";
+    return blank(value) ? "" : value;
+  }
+
+  //: Python's whitespace (`str.isspace`, what the parser's `.strip()`
+  //: removes) — not JavaScript's `trim`, which differs: it leaves U+001C–
+  //: U+001F and U+0085 but strips U+FEFF.
+  const PYTHON_BLANK = /^[\t\n\v\f\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
+
+  function blank(value) {
+    return PYTHON_BLANK.test(value);
   }
 
   function pageUrl(query) {
@@ -796,7 +805,8 @@
       resolvedColour: RESOLVED,
       nodePalette: NODE_PALETTE,
       nodeNeutral: NODE_NEUTRAL,
-      edgeWidth: edgeWidth
+      edgeWidth: edgeWidth,
+      blank: blank
     };
   }
 

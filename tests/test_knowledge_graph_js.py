@@ -35,6 +35,11 @@ from fastapi.testclient import TestClient
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
+from lithos_lens.knowledge_graph_routes import (
+    knowledge_graph_panel_url,
+    knowledge_graph_url,
+    parse_knowledge_graph_params,
+)
 from lithos_lens.web import create_app
 
 NODE = shutil.which("node")
@@ -393,6 +398,10 @@ console.log(JSON.stringify({
   aborted,
   redirects,
   picked: pidsWith("picked"),
+  // The script's own blank test, over strings a test hands in by file.
+  blankProbe: dom.blankProbeFile
+    ? JSON.parse(fs.readFileSync(dom.blankProbeFile, "utf8")).map(graph.blank)
+    : [],
   textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
   panel: host.innerHTML,
@@ -1231,6 +1240,10 @@ def test_the_url_selection_lights_on_load_and_a_background_tap_clears_it(
         assert set(loaded["dimmed"]) == every - expected
     assert cleared["lit"] == [] and cleared["dimmed"] == []
     assert cleared["assigns"] == [] and cleared["ajax"] == []
+    # …and leaves the URL alone: the same address, the selection, edge and
+    # pin keys as loaded, no history entry added, no reload.
+    assert cleared["href"] == loaded["href"] == f"http://lens.test{page.url}"
+    assert cleared["pushes"] == [] and cleared["reloads"] == []
 
 
 def test_search_highlights_the_titles_it_matches_and_clears(
@@ -1716,3 +1729,76 @@ def test_a_node_click_pins_the_edge_the_server_reads(
     assert _query(call["path"])["pin"] == FAINT_EDGE
     assert "HX-Redirect" not in fragment.headers
     assert 'data-kgraph-panel="node"' in fragment.text
+
+
+#: The characters where Python's ``str.isspace`` (the parser's ``.strip()``)
+#: and JavaScript's ``trim`` disagree, percent-encoded: U+001C–U+001F and
+#: U+0085 are blank to the server only; U+FEFF is blank to ``trim`` only.
+DIVERGENT_BLANKS = ["%1C", "%1D", "%1E", "%1F", "%C2%85", "%EF%BB%BF", "%20%C2%85%09"]
+
+
+def test_the_scripts_blank_test_is_pythons_over_every_bmp_character(
+    lithos_lens_config_env: Path, tmp_path: Path
+) -> None:
+    """Exhaustive over the BMP (Python has no whitespace beyond it), and
+    over mixtures: a value is blank exactly when ``not value.strip()``."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    probe = [chr(code) for code in range(0x10000)]
+    probe += ["", " \x85\t", "\x1c\u3000", "\ufeff", " a ", "a\x85", "\ufeff "]
+    probe_file = tmp_path / "probe.json"
+    probe_file.write_text(json.dumps(probe), encoding="ascii")
+    result = _run(page, dom={"blankProbeFile": str(probe_file)})
+
+    expected = [not value.strip() for value in probe]
+    wrong = [
+        hex(ord(value)) if len(value) == 1 else repr(value)
+        for value, got, want in zip(probe, result["blankProbe"], expected, strict=True)
+        if got != want
+    ]
+    assert wrong == []
+
+
+@pytest.mark.parametrize("blank", DIVERGENT_BLANKS)
+def test_a_blank_edge_lights_what_the_server_selects(
+    lithos_lens_config_env: Path, blank: str
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&selected={CAPACITY}&edge={blank}")
+    result = _run(page)
+    served = re.findall(
+        r'data-kgraph-panel="(?:node|edge)" data-kgraph-panel-id="([^"]+)"', page.html
+    )
+
+    assert result["picked"] == served
+
+
+@pytest.mark.parametrize("blank", DIVERGENT_BLANKS)
+def test_a_node_click_under_a_blank_edge_pins_as_the_server_would(
+    lithos_lens_config_env: Path, blank: str
+) -> None:
+    """The click's ``pin`` is the one ``knowledge_graph_url`` writes for the
+    same address read by the server's parser, and its fragment answers as
+    the server's own link to that panel does (no ``HX-Redirect`` where the
+    view keeps drawing for that pin)."""
+    query = f"focus={PLAN}&selected={CAPACITY}&pin={FAINT_EDGE}&edge={blank}"
+    params = parse_knowledge_graph_params(
+        dict(parse_qsl(query, keep_blank_values=True))
+    )
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?{query}")
+        [call] = _run(page, [f"tap-node:{CAPACITY}"])["ajax"]
+        own = client.get(
+            knowledge_graph_panel_url(
+                params, render=page.dom["render"], selected=CAPACITY
+            )
+        )
+        fragment = client.get(call["path"])
+    expected = _query(knowledge_graph_url(params, selected=CAPACITY))
+
+    assert _query(call["path"]).get("pin") == expected.get("pin")
+    assert ("HX-Redirect" in fragment.headers) == ("HX-Redirect" in own.headers)
+    if params.edge == "":
+        # Blank to the server: the real pin stands and the view answers.
+        assert expected["pin"] == FAINT_EDGE
+        assert "HX-Redirect" not in fragment.headers

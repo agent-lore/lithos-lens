@@ -1768,8 +1768,9 @@ draws stays drawn whatever the slider says):
   The selection lights itself and its neighbours (an edge: itself and its
   two endpoints) and dims the rest — on load too, from `edge=` or else
   `selected=`, never `pin=`, each read as the server reads it (a repeated
-  key's last value, a wholly blank value absent), as is the `pin` a node
-  click carries; a background tap clears it and leaves the URL
+  key's last value, a value of nothing but Python whitespace absent), as is
+  the `pin` a node click carries; a background tap clears it and leaves the
+  URL
 - **the panel's history**, one policy for every panel request on a drawn
   page, the text's links and the canvas's clicks alike: htmx pushes nothing
   (each panel link's `hx-push-url` is switched off as its request leaves, so
