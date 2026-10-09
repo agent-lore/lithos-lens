@@ -415,3 +415,70 @@ for (const weight of ["0.10000000001", "0.09999999999", "0.99999999999"]) {
     );
   });
 }
+
+test("re-selecting a node then Back with another request in flight keeps the Back", async ({
+  page,
+}) => {
+  // The reviewer's sequence (round 3, f-007): capacity twice — one entry,
+  // not two — a rollback request held in flight, Back, then its release.
+  await page.goto(`/knowledge/graph?focus=${PLAN}`);
+  await canvasReady(page);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  expect((await pushes(page)).map((p) => p.url)).toEqual([
+    `/knowledge/graph?focus=${PLAN}&selected=${CAPACITY}`,
+  ]);
+  const held = await hold(page, `selected=${ROLLBACK}`);
+
+  await clickNode(page, ROLLBACK);
+  await held.seen;
+  await page.goBack();
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN });
+  await canvasReady(page);
+  held.release();
+  await held.handled();
+
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN });
+  await expect(page.locator("#kgraph-panel [data-kgraph-panel]")).toHaveCount(0);
+  expect(await pushes(page)).toEqual([]);
+});
+
+test("Back onto an entry with the same address still abandons the request in flight", async ({
+  page,
+}) => {
+  await page.goto(`/knowledge/graph?focus=${PLAN}`);
+  await canvasReady(page);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await markDocument(page);
+  // A same-document `#` entry: Back from it lands on the capacity address.
+  await page.evaluate(() => {
+    location.hash = "top";
+  });
+  await expect.poll(() => new URL(page.url()).hash).toBe("#top");
+  const held = await hold(page, `selected=${ROLLBACK}`);
+
+  await clickNode(page, ROLLBACK);
+  await held.seen;
+  await page.goBack();
+  await expect.poll(() => new URL(page.url()).hash).toBe("");
+  held.release();
+  await held.ended(); // the abandoned XHR is over: aborted, or landed and dropped
+  await held.handled();
+
+  expect(query(page)).toEqual({ focus: PLAN, selected: CAPACITY });
+  await nodePanel(page, CAPACITY);
+  expect((await pushes(page)).map((p) => p.url)).toEqual([
+    `/knowledge/graph?focus=${PLAN}&selected=${CAPACITY}`,
+  ]);
+  // No reload was needed: the capacity panel already is this entry's.
+  expect(await sameDocument(page)).toBe(true);
+  const lit = await page.evaluate(() =>
+    (window as any).LithosLensKnowledgeGraph.cy
+      .nodes(".picked")
+      .map((n: any) => n.data("pid")),
+  );
+  expect(lit).toEqual([CAPACITY]);
+});

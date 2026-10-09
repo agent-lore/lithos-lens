@@ -243,9 +243,15 @@
   //   is swapped into the live host. A request a later click aborted (the
   //   host's `hx-sync` replace), one the server answered with `HX-Redirect`,
   //   or one still in flight when the page is left, pushes nothing.
-  // - Back or Forward onto any entry of this page reloads it: the server
-  //   renders that URL's panel, text and picture together. Nothing in flight
-  //   may push after that.
+  // - Re-selecting what is already shown pushes nothing: no two entries of
+  //   this page carry one URL.
+  // - Any Back or Forward first ABANDONS the panel request in flight,
+  //   whatever entry it lands on: the request is aborted, and should its
+  //   response land anyway its swap is cancelled, so it can neither replace
+  //   the panel nor push. Then, onto an entry whose address (the fragment
+  //   aside) differs from the one shown, it reloads: the server renders that
+  //   URL's panel, text and picture together. Onto one with the same address
+  //   (a `#` move) the panel on screen already is that entry's.
 
   //: The address the picture on screen was drawn or last pushed for.
   let shownHref = "";
@@ -258,6 +264,15 @@
   let pendingPush = null;
   //: Set once Back or Forward has started a reload: nothing pushes after.
   let retired = false;
+  //: The requests a Back or Forward abandoned: their swaps are cancelled.
+  const abandoned = [];
+  //: Re-lights the canvas from the address (set by `draw`).
+  let lightFromUrl = function () {};
+
+  function withoutFragment(href) {
+    const hash = href.indexOf("#");
+    return hash === -1 ? href : href.slice(0, hash);
+  }
 
   function pushUrlOf(elt) {
     if (elt === canvasSource) return canvasPage;
@@ -283,17 +298,33 @@
     if (detail.target !== panelHost || panelHost.isConnected === false) return;
     const page = pendingPush.page;
     pendingPush = null;
-    window.history.pushState({ kgraph: true }, "", page);
+    const target = new URL(page, window.location.href).href;
+    if (withoutFragment(target) !== withoutFragment(window.location.href)) {
+      window.history.pushState({ kgraph: true }, "", page);
+    }
     shownHref = window.location.href;
   }
 
-  function reloadOnTravel() {
-    if (!panelHost || window.location.href === shownHref) return;
-    retired = true;
-    if (pendingPush && window.htmx && pendingPush.elt) {
-      window.htmx.trigger(pendingPush.elt, "htmx:abort");
+  function dropAbandoned(event) {
+    const detail = event.detail || {};
+    if (detail.xhr && abandoned.indexOf(detail.xhr) !== -1) detail.shouldSwap = false;
+  }
+
+  function onTravel() {
+    if (!panelHost) return;
+    if (pendingPush) {
+      abandoned.push(pendingPush.xhr);
+      if (window.htmx && pendingPush.elt) {
+        window.htmx.trigger(pendingPush.elt, "htmx:abort");
+      }
+      pendingPush = null;
     }
-    pendingPush = null;
+    if (withoutFragment(window.location.href) === withoutFragment(shownHref)) {
+      // The entry's panel is the one on screen; the canvas lights it again.
+      lightFromUrl();
+      return;
+    }
+    retired = true;
     window.location.reload();
   }
 
@@ -531,17 +562,22 @@
       return collection.filter(function (element) { return element.data("pid") === pid; });
     }
 
-    // On load from the URL: `edge=` wins over `selected=`, as the parser
-    // reads them; `pin=` is never a selection. An id the payload does not
-    // draw lights nothing.
-    const query = new URLSearchParams(window.location.search);
-    const selectedEdge = query.get("edge") || "";
-    const selectedNode = selectedEdge ? "" : query.get("selected") || "";
-    if (selectedEdge) {
-      light(byPid(cy.edges(".typed"), selectedEdge));
-    } else if (selectedNode) {
-      light(byPid(cy.nodes(), selectedNode));
-    }
+    // From the URL, on load and after a Back onto the same address: `edge=`
+    // wins over `selected=`, as the parser reads them; `pin=` is never a
+    // selection. An id the payload does not draw lights nothing.
+    lightFromUrl = function () {
+      const query = new URLSearchParams(window.location.search);
+      const selectedEdge = query.get("edge") || "";
+      const selectedNode = selectedEdge ? "" : query.get("selected") || "";
+      if (selectedEdge) {
+        light(byPid(cy.edges(".typed"), selectedEdge));
+      } else if (selectedNode) {
+        light(byPid(cy.nodes(), selectedNode));
+      } else {
+        light(null);
+      }
+    };
+    lightFromUrl();
 
     // ── Clicks open the S5 panel ────────────────────────────────────────
     const host = document.querySelector("#kgraph-panel");
@@ -760,7 +796,8 @@
   if (!window.LithosLensKnowledgeGraphBound) {
     window.LithosLensKnowledgeGraphBound = true;
     document.addEventListener("htmx:beforeRequest", trackPanel);
+    document.addEventListener("htmx:beforeSwap", dropAbandoned);
     document.addEventListener("htmx:afterSwap", pushAfterSwap);
-    window.addEventListener("popstate", reloadOnTravel);
+    window.addEventListener("popstate", onTravel);
   }
 })();

@@ -293,9 +293,13 @@ for (const action of actions) {
   } else if (kind === "tap-background") {
     cy.emit("tap");
   } else if (kind === "swap") {
-    // The fragment of request N (default: the latest) lands in the host.
+    // The response of request N (default: the latest) lands: htmx asks
+    // `htmx:beforeSwap` first, and a listener may cancel the swap.
     const index = arg === "" ? xhrs.length - 1 : Number(arg);
     if (!xhrs[index]) continue;  // nothing was requested: nothing lands
+    const before = { xhr: xhrs[index], target: host, shouldSwap: true };
+    htmxEvent(host, "htmx:beforeSwap", before);
+    if (!before.shouldSwap) continue;
     host.innerHTML = "panel:" + xhrs[index].path;
     htmxEvent(host, "htmx:afterSwap", { xhr: xhrs[index], target: host });
   } else if (kind === "text-click") {
@@ -303,6 +307,14 @@ for (const action of actions) {
     const link = el({ href: arg, attributes: { "hx-push-url": arg } });
     textLinks.push(link);
     issue(link, { request: xhrs.length, path: "text:" + arg });
+  } else if (kind === "hash") {
+    // A same-document `#` navigation: a new entry with the same address
+    // and a fragment, announced by `popstate` as the browser does.
+    url = new URL("#" + arg, url.href);
+    entries.splice(cursor + 1);
+    entries.push({ href: url.href, state: null });
+    cursor = entries.length - 1;
+    (windowListeners.popstate || []).forEach((fn) => fn({ state: null }));
   } else if (kind === "back") {
     travel(-1);
   } else if (kind === "forward") {
@@ -349,6 +361,7 @@ console.log(JSON.stringify({
   triggered,
   textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
+  panel: host.innerHTML,
   canvas: { hidden: canvas.hidden, dataset: canvas.dataset },
   toolbarHidden: single["[data-kgraph-toolbar]"].hidden,
   keyHidden: single["[data-kgraph-key]"].hidden,
@@ -1470,3 +1483,100 @@ def test_a_typed_row_spelled_like_a_layer_is_drawn_and_clicked_as_typed(
             "solid" if by_id[edge_id]["kind"] == "wiki_link" else "dotted"
         )
         assert clicks[edge_id]["ajax"] == [] and clicks[edge_id]["pushes"] == []
+
+
+def test_reselecting_the_shown_selection_pushes_no_second_entry(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page,
+        [f"tap-node:{CAPACITY}", "swap", f"tap-node:{CAPACITY}", "swap"],
+    )
+
+    assert [push["url"] for push in result["pushes"]] == [_node_url(CAPACITY)]
+    assert result["href"] == f"http://lens.test{_node_url(CAPACITY)}"
+
+
+def test_back_abandons_the_request_in_flight_whatever_entry_it_lands_on(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Back onto an entry with the SAME address as the one shown (here the
+    capacity entry before a ``#`` move): no reload is needed for its panel,
+    but the rollback request still in flight is abandoned — aborted, and its
+    late response neither swaps nor pushes — and the canvas lights capacity
+    again."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page,
+        [
+            f"tap-node:{CAPACITY}",
+            "swap",
+            "hash:top",
+            f"tap-node:{ROLLBACK}",
+            "back",
+            "swap",
+        ],
+    )
+    capacity_panel = next(c["path"] for c in result["ajax"] if CAPACITY in c["path"])
+
+    assert [push["url"] for push in result["pushes"]] == [_node_url(CAPACITY)]
+    assert result["href"] == f"http://lens.test{_node_url(CAPACITY)}"
+    assert result["panel"] == f"panel:{capacity_panel}"
+    assert result["reloads"] == []
+    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]
+    # Capacity's neighbourhood again, not the abandoned rollback click's.
+    at = [e for e in page.payload["edges"] if CAPACITY in (e["from"], e["to"])]
+    assert set(result["lit"]) == (
+        {CAPACITY}
+        | {e["id"] for e in at}
+        | {n for e in at for n in (e["from"], e["to"])}
+    )
+    assert ROLLBACK not in result["lit"]
+
+
+def test_a_fragment_move_neither_reloads_nor_retires_the_page(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A ``#`` link (the nav's disabled Settings is ``href="#"``) is a
+    same-document entry: no reload, and later clicks still push."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page, [f"tap-node:{CAPACITY}", "swap", "hash:", f"tap-node:{ROLLBACK}", "swap"]
+    )
+
+    assert result["reloads"] == []
+    assert [push["url"] for push in result["pushes"]] == [
+        _node_url(CAPACITY),
+        _node_url(ROLLBACK),
+    ]
+
+
+def test_back_onto_another_address_with_a_request_in_flight_reloads_and_drops_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The reviewer's sequence: capacity selected twice (one entry), a
+    rollback request in flight, Back — onto the page's own entry, which
+    reloads; the late rollback response neither swaps nor pushes."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(
+        page,
+        [
+            f"tap-node:{CAPACITY}",
+            "swap",
+            f"tap-node:{CAPACITY}",
+            "swap",
+            f"tap-node:{ROLLBACK}",
+            "back",
+            "swap",
+        ],
+    )
+
+    assert [push["url"] for push in result["pushes"]] == [_node_url(CAPACITY)]
+    assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
+    assert ROLLBACK not in result["panel"]
+    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]

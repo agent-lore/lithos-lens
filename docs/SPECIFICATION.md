@@ -1774,9 +1774,11 @@ draws stays drawn whatever the slider says):
   htmx neither pushes before the swap nor snapshots the page); the page URL
   is pushed once that request's own fragment is swapped into the host — not
   for a request a later click aborted, one the server answered with
-  `HX-Redirect`, or one still in flight when the page is left; and Back or
-  Forward onto any of the page's entries reloads it, aborting a request in
-  flight, so the server renders that URL's panel, text and picture together
+  `HX-Redirect`, or one still in flight when the page is left; re-selecting
+  what is shown pushes nothing; any Back or Forward first abandons the panel
+  request in flight (aborted, and its swap cancelled should it land), then,
+  onto an entry whose address differs (the fragment aside), reloads it so
+  the server renders that URL's panel, text and picture together
 
 ### 5.8 Live Updates
 
