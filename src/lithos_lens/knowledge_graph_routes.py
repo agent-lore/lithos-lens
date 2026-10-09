@@ -95,6 +95,7 @@ _URL_KEYS = (
     "provenance",
     "selected",
     "edge",
+    "pin",
 )
 
 
@@ -115,6 +116,9 @@ class KnowledgeGraphParams:
     provenance: tuple[str, ...] = ()
     edge: str = ""
     selected: str = ""
+    #: The edge a ``selected=`` node's view keeps drawn: the ``edge=`` of the
+    #: view its Node details link was on, so a reload draws that same view.
+    pin: str = ""
 
     @property
     def mode(self) -> GraphMode:
@@ -130,7 +134,9 @@ class KnowledgeGraphParams:
     def filters(self, default_min_weight: float) -> KnowledgeGraphFilters:
         weight = self.min_weight if self.min_weight is not None else default_min_weight
         groups = frozenset(self.provenance or PROVENANCE_GROUPS)
-        return KnowledgeGraphFilters(min_weight=weight, provenance=groups)
+        return KnowledgeGraphFilters(
+            min_weight=weight, provenance=groups, selected_edge=self.edge or self.pin
+        )
 
 
 def _value(query: Mapping[str, str], key: str) -> str:
@@ -184,7 +190,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     ``edge`` and ``selected`` are ids kept as given — one at a time: a
     request carrying both is read as ``edge`` alone, whatever their order
     (no link the page writes carries both; :func:`knowledge_graph_url`
-    clears one when it sets the other).
+    clears one when it sets the other). ``pin`` is read beside ``selected``
+    only: an ``edge=`` is its own pin.
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
@@ -201,6 +208,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         provenance=_provenance(_value(query, "provenance")),
         edge=edge,
         selected="" if edge else _value(query, "selected"),
+        pin="" if edge else _value(query, "pin"),
     )
 
 
@@ -222,11 +230,18 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
 def _graph_url(
     path: str, params: KnowledgeGraphParams | None, changes: dict[str, Any]
 ) -> str:
-    # One selection per link (D10): setting one clears the other.
+    # A new scope keeps no pin; an edge selection is its own.
+    if changes.keys() & {"focus", "type", "namespace"} or changes.get("edge"):
+        changes.setdefault("pin", "")
+    # One selection per link (D10): setting one clears the other. A node
+    # opened from a view drawn for an edge pins that edge, so the page the
+    # link loads draws the view the click came from (D13).
     if changes.get("edge"):
         changes["selected"] = ""
     elif changes.get("selected"):
         changes["edge"] = ""
+        if params is not None:
+            changes.setdefault("pin", params.edge or params.pin)
     merged = replace(params or KnowledgeGraphParams(), **changes)
     pairs = [(key, _url_value(key, merged)) for key in _URL_KEYS]
     query = urlencode([(key, value) for key, value in pairs if value])
@@ -244,7 +259,8 @@ def knowledge_graph_url(
     does not pin today's configured depth or weight; ``type``/``namespace``
     are dropped from a focus link, as the parser drops them. A change that
     sets ``edge`` clears ``selected`` and one that sets ``selected`` clears
-    ``edge``, so a link carries one selection — the later click's.
+    ``edge``, so a link carries one selection — the later click's; a
+    ``selected`` set on a view drawn for an edge carries it as ``pin``.
     """
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
 
@@ -276,7 +292,7 @@ def _scope(params: KnowledgeGraphParams) -> str:
     """The scope and filters a view is drawn for, as the URL builder writes
     them: one canonical spelling, so what the page's own links leave out (a
     ``depth`` outside focus mode) cannot make its view unfindable."""
-    return knowledge_graph_url(params, selected="", edge="")
+    return knowledge_graph_url(params, selected="", edge="", pin="")
 
 
 class RenderedViews:
@@ -287,7 +303,9 @@ class RenderedViews:
     events keep changing. So a panel click does not re-assemble its page's
     view — it names it, by the render id the page's panel links carry, and
     its fragment is drawn from the view the page showed, facts and all. A
-    view is found only for the scope and filters it was drawn under.
+    view is found only for the scope and filters it was drawn under, and for
+    a selection that would draw it the same (``keeps_drawing_for``): one
+    that gains or loses an ``edge=`` exemption reloads the page instead.
     """
 
     def __init__(self, size: int = RENDERED_VIEWS_KEPT) -> None:
@@ -309,6 +327,9 @@ class RenderedViews:
         kept = self._views.get(render_id) if render_id else None
         if kept is None or kept[0] != _scope(params):
             return None
+        # A selection whose pin would draw otherwise reloads the page (D13).
+        if not kept[1].keeps_drawing_for(params.edge or params.pin):
+            return None
         self._views.move_to_end(render_id)
         return kept[1]
 
@@ -316,6 +337,24 @@ class RenderedViews:
 def utc_minute(moment: datetime) -> str:
     """``as_of`` as the scope line states it: UTC, to the minute."""
     return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def missing_edge_notice(view: KnowledgeGraphView | None, edge: str, ttl_s: int) -> str:
+    """The panel host's line when ``edge`` is the ``edge=`` ``view`` was drawn
+    for and its snapshot does not hold it; ``""`` otherwise.
+
+    Not a refetch (D2): the snapshot is up to one TTL old by design, and the
+    next TTL fetch brings an edge created since.
+    """
+    if view is None or not view.selected_edge_missing:
+        return ""
+    if not edge or view.filters.selected_edge != edge:
+        return ""
+    as_of = f" (as of {utc_minute(view.as_of)})" if view.as_of is not None else ""
+    return (
+        f"Edge {edge} is not in the current edge snapshot{as_of}. The snapshot "
+        f"refreshes every {ttl_s} s, so a new edge appears within that window."
+    )
 
 
 # ── the picker ─────────────────────────────────────────────────────────
@@ -531,6 +570,7 @@ def register_knowledge_graph_routes(
             "picker": None,
             "view": None,
             "panel": None,
+            "panel_notice": "",
             "render_id": "",
         }
         table = state.edge_table
@@ -558,6 +598,9 @@ def register_knowledge_graph_routes(
             focus_meta=node_metadata(focus_node),
             payload=graph_payload(view),
             panel=panel,
+            panel_notice=missing_edge_notice(
+                view, params.edge, knowledge.graph_edge_table_ttl_s
+            ),
             render_id=views.keep(params, view) if view.refusal is None else "",
         )
         _record_panel(panel, "url")
@@ -637,6 +680,9 @@ def register_knowledge_graph_routes(
             context["panel"] = graph_panel(
                 view, selected=params.selected, edge=params.edge
             )
+            ttl_s = state.config.knowledge.graph_edge_table_ttl_s
+            if notice := missing_edge_notice(view, params.edge, ttl_s):
+                context["panel_notice"] = notice
         _record_panel(context["panel"], "fragment")
         return templates.TemplateResponse(
             request, "knowledge/graph_panel.html", context

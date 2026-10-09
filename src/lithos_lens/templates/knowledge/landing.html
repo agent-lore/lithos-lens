@@ -125,6 +125,7 @@
               {% if result.updated %}
                 <span class="knowledge-card-updated">Updated {{ result.updated | display_date }}</span>
               {% endif %}
+              <a href="{{ knowledge_graph_url(focus=result.id) }}" data-card-graph-link>in graph</a>
             </li>
           {% endfor %}
         </ul>
@@ -133,7 +134,13 @@
       {% endif %}
     {% elif browse is not none %}
       {# Tag browse (§5.7): which tags exist, beside the newest notes. #}
-      <p class="knowledge-browse-links"><a href="/knowledge/tags">Browse tags</a></p>
+      <p class="knowledge-browse-links"><a href="/knowledge/tags">Browse tags</a>
+        · <a href="{{ knowledge_graph_url() }}" data-browse-graph>Browse the graph</a>
+        {%- if graph_picker and graph_picker.facets is not none %}
+          {%- set unresolved = graph_picker.facets.unresolved_contradictions %}
+          · <a href="{{ knowledge_graph_url(type='contradicts') }}" data-unresolved-contradictions>{{ unresolved }} unresolved contradiction{{ "" if unresolved == 1 else "s" }}</a>
+        {%- endif %}
+      </p>
       {% include "knowledge/chips_capped.html" %}
       {% if browse.notes is not none %}
         <section class="knowledge-section" id="your-notes">

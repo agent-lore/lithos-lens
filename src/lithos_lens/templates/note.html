@@ -23,7 +23,7 @@
   </details>
 {%- endmacro %}
 
-{% macro related_section(heading, anchor, section, edges=False) %}
+{% macro related_section(heading, anchor, section, edges=False, note_id="") %}
   {% if section.items or section.overflow %}
     <section class="related-section" id="{{ anchor }}">
       <h3>{{ heading }}</h3>
@@ -42,6 +42,9 @@
             {% endif %}
             {% if edges and item.conflict_state %}
               <span class="edge-conflict">conflict: {{ item.conflict_state }}</span>
+            {% endif %}
+            {% if edges and item.edge_id %}
+              <a href="{{ knowledge_graph_url(focus=note_id, edge=item.edge_id) }}" data-edge-graph-link>in graph</a>
             {% endif %}
             {% if edges and item.why %}
               {{ edge_why(item.why) }}
@@ -76,8 +79,9 @@
     itself can sit thousands of pixels down a long body (below the sidebar
     breakpoint). Counts are the panel's own group sizes (rows plus "+N more"),
     in the panel's order and wording, each an in-page link to its section;
-    an empty group is left out. -#}
-{% macro related_summary(related) %}
+    an empty group is left out. "open in graph" closes the line in both
+    states: the graph reads the edge-table snapshot, not `lithos_related`. -#}
+{% macro related_summary(related, note_id) %}
   <p class="related-summary" data-related-summary>
     Related:
     {% if related.state == "error" %}
@@ -105,8 +109,7 @@
         {%- endfor -%}
       </span>
     {% endif %}
-    {#- K2: "open in graph" joins this line here, after the counts, as one
-        more " · "-separated item. -#}
+    · <a href="{{ knowledge_graph_url(focus=note_id) }}" data-open-in-graph>open in graph</a>
   </p>
 {%- endmacro %}
 
@@ -147,7 +150,7 @@
           {% if note_meta and note_meta.has_chips %}
             {% with meta = note_meta, compact = false %}{% include "knowledge/note_chips.html" %}{% endwith %}
           {% endif %}
-          {% if related %}{{ related_summary(related) }}{% endif %}
+          {% if related %}{{ related_summary(related, note.id) }}{% endif %}
           {% if note_meta and note_meta.has_authorship %}
             <div class="note-authorship detail-meta">
               {% if note_meta.author %}<span>By {{ note_meta.author }}</span>{% endif %}
@@ -157,6 +160,17 @@
             </div>
           {% endif %}
         </header>
+        {#- Unresolved contradictions from the edge-table snapshot (K2 D13),
+            one line each; absent when the snapshot is unreadable or refused. -#}
+        {% if contradictions %}
+          <section class="banner banner-warning" role="status" data-contradiction-banner>
+            {% for line in contradictions %}
+              <p data-contradiction="{{ line.edge_id }}">This note is contradicted by
+                <a href="/note/{{ line.other_id }}"><em>{{ line.other_label }}</em></a>
+                — <a href="{{ line.edge_url }}">view</a></p>
+            {% endfor %}
+          </section>
+        {% endif %}
         {% if note_meta and note_meta.lede %}
           <p class="note-lede">{{ note_meta.lede }}</p>
         {% endif %}
@@ -179,7 +193,7 @@
 
       {% if related %}
         <aside class="related-panel" id="related" aria-label="Related notes">
-          <h2>Related</h2>
+          <h2>Related <a href="{{ knowledge_graph_url(focus=note.id) }}" data-open-in-graph>Open in graph</a></h2>
           {% if related.state == "error" %}
             <p class="related-error" role="status">
               The related panel could not be loaded.
@@ -206,7 +220,7 @@
                 {% endif %}
               </section>
             {% endif %}
-            {{ related_section("Typed edges", "related-edges", related.edges, edges=True) }}
+            {{ related_section("Typed edges", "related-edges", related.edges, edges=True, note_id=note.id) }}
           {% endif %}
         </aside>
       {% endif %}

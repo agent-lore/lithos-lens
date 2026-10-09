@@ -77,6 +77,7 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
                     weight=0.8,
                     direction="incoming",
                     conflict_state="unresolved",
+                    edge_id="edge_e1f4a8c27b90",
                 ),
             ),
         ),
@@ -92,6 +93,7 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
                     edge_type="supports",
                     weight=0.82,
                     direction="outgoing",
+                    edge_id="edge_4c1e9a7b20d3",
                     why=_inferred(
                         "The capacity report's measured write rate is the headroom "
                         "the migration plan's cutover window assumes.",
@@ -103,6 +105,7 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
                     edge_type="related_to",
                     weight=0.5,
                     direction="outgoing",
+                    edge_id="edge_9b2f61c0a4e8",
                     why=_declared("consolidation"),
                 ),
                 RelatedRef(
@@ -110,6 +113,7 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
                     edge_type="contradicts",
                     weight=0.7,
                     direction="incoming",
+                    edge_id="edge_38c9d1f5e6a7",
                     why=_inferred(
                         "The legacy ingest note sizes the cluster for half the "
                         "write rate this report measured.",
@@ -129,12 +133,14 @@ def related_fixtures() -> dict[str, RelatedNeighborhood]:
                     weight=0.8,
                     direction="outgoing",
                     conflict_state="unresolved",
+                    edge_id="edge_e1f4a8c27b90",
                 ),
                 RelatedRef(
                     id="note-influx-plan",
                     edge_type="derived_from",
                     weight=1.0,
                     direction="outgoing",
+                    edge_id="edge_7d2c0e95b463",
                     why=_declared("frontmatter"),
                 ),
             ),

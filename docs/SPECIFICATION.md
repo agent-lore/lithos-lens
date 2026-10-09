@@ -218,6 +218,9 @@ The current application exposes these routes:
   global graph with `?type=` and/or `?namespace=`; filters `min_weight=` and
   `provenance=`; the node panel with `selected=<note-id>` or the edge panel
   with `edge=<edge_id>` (one at a time; `edge` wins when both are given).
+  `pin=<edge_id>` beside `selected=` keeps that edge drawn as `edge=` would:
+  a Node details link on an edge's view carries it, so the page it loads is
+  the view the link was on.
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
   query as the page, plus `render=<id>` naming the view that page drew: the
@@ -1274,7 +1277,24 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   as escaped text, and never fails the rest of the panel. A row with nothing
   to show (null or empty evidence, no provenance) has no disclosure; a
   reinforcement or frontmatter edge (null evidence) shows its provenance line
-  and no rationale
+  and no rationale. The panel's heading carries **Open in graph** →
+  `/knowledge/graph?focus=<id>`, and each typed-edge row whose
+  `lithos_related` row carried an `edge_id` an **"in graph"** link →
+  `/knowledge/graph?focus=<id>&edge=<edge_id>`, which opens that edge's panel:
+  the graph draws the edge `edge=` names whatever the weight and provenance
+  filters say, so the link carries no `min_weight=`
+- an **unresolved-contradiction banner** above the lede and body when the note
+  is an endpoint of a `contradicts` edge whose `conflict_state` is not one of
+  the four `lithos_conflict_resolve` values: "This note is contradicted by
+  *B* — view", *B* linking to its note and "view" to the edge's panel
+  (`?focus=<id>&edge=<edge_id>`, as above). Several are one banner, one line
+  each. Read from the knowledge graph's edge-table snapshot alone — no Lithos
+  call per note; within its TTL the snapshot answers from memory, and a stale
+  one still serves. *B* is named by the title the related panel already
+  resolved (typed edges, then links and back-links), else its bare id —
+  nothing is read to name it. When the snapshot is unreadable or over its
+  bound there is no banner (REQUIREMENTS §6.5); a resolved contradiction has
+  none
 - a **related summary line** directly under the metadata chips, from the
   panel's already-loaded data (no extra Lithos call): "Related: 2 outgoing
   links · 1 source · 3 typed edges" — one item per non-empty group, in the
@@ -1282,8 +1302,9 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   derived from, unresolved, typed edge(s)), each count the group's full size
   including its "+N more" overflow and each an in-page link to that group's id.
   A note with no relations reads "Related: none"; a failed related read reads
-  "Related: could not be loaded". K2's "open in graph" link joins this line
-  after the counts
+  "Related: could not be loaded". Either way the line ends with an **"open
+  in graph"** link (`/knowledge/graph?focus=<id>`) as one more " · " item —
+  the graph reads the edge-table snapshot, not `lithos_related`
 - a **produced-by chip** when the note came from a task and that task reads
   back successfully
 - a **back link** naming where it returns to: with `?task=` (a finding's
@@ -1309,7 +1330,8 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   A snippet drops a leading `# <title>` line that repeats the card's title
   (the note page's rule, found by parsing the snippet); it otherwise stays
   escaped text, never rendered, and is shown whole as Lithos windowed it —
-  Lens adds no truncation
+  Lens adds no truncation. Each card carries an **"in graph"** link →
+  `/knowledge/graph?focus=<id>`
 - with no query, **two sections** — title, path, updated date — newest first
   over the whole corpus: **"Your notes"** (non-intake), then **"Recent
   intake"**, each cut to `knowledge.recent_limit`. A note is intake when it
@@ -1344,7 +1366,12 @@ K1 replaced the minimal note path with a browsable knowledge surface.
   render chipless under a "Chips shown for the first N notes." line; a failed
   read leaves only its own row chipless, never the list. The number of reads
   is the landing span's `lens.chips.fanout`
-- a **"Browse tags"** link above the two sections to `/knowledge/tags`, and,
+- a **"Browse tags"** link above the two sections to `/knowledge/tags`, beside
+  it **"Browse the graph"** → `/knowledge/graph` (the scope picker) and the
+  edge-table snapshot's unresolved-contradiction count ("2 unresolved
+  contradictions") → `/knowledge/graph?type=contradicts` — the count absent
+  when the snapshot is unreadable or over its bound, and read only on the
+  browse branch (not with search results, offline or on error); and,
   when `?tag=` is active, that tag's note count on the "Filtered by" line
   ("project: influx (12 notes)"): `lithos_tags(prefix=<tag>)`, read back by
   the EXACT key (the prefix answer also carries longer tags; an absent key is
@@ -1479,7 +1506,11 @@ JSON payload:
   no known weight is never hidden by it) and **provenance** filters — groups
   inferred (`inferred`), reinforced (`consolidation`), declared
   (`frontmatter`) and other (everything else, NULL included) — apply before
-  depth 2 expands and before the cap, so a hidden edge pulls in nothing
+  depth 2 expands and before the cap, so a hidden edge pulls in nothing. The
+  edge `edge=` (or `pin=`) names is exempt from both: within `depth` hops of
+  the focus it and its endpoints are drawn even when a hidden edge is the only
+  way to it, and it is not counted hidden, though it counts towards the cap
+  (and its remedies) like any drawn edge
 - **scoped global**: the snapshot rows of a `type` and/or `namespace`
   (over the table's bound, a direct filtered `lithos_edge_list` read instead),
   the same filters, capped at 500 nodes
@@ -1552,7 +1583,10 @@ way it shows no counts and offers only the typed-in form.
    stale snapshot), or "read directly from Lithos" for an over-bound global
    read, and no time at all when the table could not be read
 2. the **panel host**: the node or edge panel below, when `selected=` names
-   a drawn node or `edge=` a drawn typed edge; empty otherwise
+   a drawn node or `edge=` a drawn typed edge; when `edge=` names an edge the
+   snapshot does not hold (created after its `as_of`, or since deleted), a
+   notice saying so, with the `as_of` and that the snapshot refreshes every
+   `graph_edge_table_ttl_s` s — nothing is fetched for it; empty otherwise
 3. a **refusal** in place of everything below but the payload — "narrow your
    scope" with the count, the cap and a link to the remedy (`depth=1` or
    `min_weight=0.N`), the typed-in scope form when the table is over its
@@ -1623,7 +1657,11 @@ offline it answers "Lithos is offline" with nothing read, whatever it names —
 and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
-since. A render id no longer held (evicted, or lost to a restart) is never
+since. A held view answers only a selection that would draw it the same: the
+edge its `edge=` exemption alone drew (pinned) or, on a view no exemption
+changed, no edge or one it draws. A selection that would gain or lose an
+exemption is treated as a view not held. A render id no longer held (evicted,
+or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the
 response carries `HX-Redirect` to the full page with that selection, which
 htmx follows, drawing graph and panel afresh together (its body, for a client

@@ -275,6 +275,7 @@ def test_normalize_related_outgoing_edge_selects_to_id_endpoint() -> None:
             direction="outgoing",
             conflict_state="",
             why=EdgeWhy(provenance="asserted by agent-x"),
+            edge_id="edge-row",
         ),
     )
 
@@ -304,8 +305,27 @@ def test_normalize_related_incoming_edge_selects_from_id_endpoint() -> None:
             direction="incoming",
             conflict_state="unresolved",
             why=EdgeWhy(provenance="asserted by agent-x"),
+            edge_id="edge-row",
         ),
     )
+
+
+def test_normalize_related_keeps_a_string_edge_id_else_blank() -> None:
+    """K2 D13: the row's edge id is what its "in graph" link names; a row
+    without a string one gets no link rather than a guessed id."""
+    neighborhood = normalize_related(
+        {
+            "edges": {
+                "outgoing": [
+                    _edge_row(to_id="a"),
+                    _edge_row(to_id="b", edge_id=7),
+                    {k: v for k, v in _edge_row(to_id="c").items() if k != "edge_id"},
+                ]
+            }
+        }
+    )
+
+    assert [ref.edge_id for ref in neighborhood.edges] == ["edge-row", "", ""]
 
 
 def test_normalize_related_preserves_direction_type_weight_conflict_state() -> None:
@@ -368,7 +388,9 @@ def test_related_panel_resolves_titles_and_lists_backlinks() -> None:
         links=(RelatedRef(id="out-1"),),
         backlinks=(RelatedRef(id="in-1"), RelatedRef(id="in-2")),
         sources=(RelatedRef(id="src-1"),),
-        edges=(RelatedRef(id="edge-1", edge_type="supports", weight=0.5),),
+        edges=(
+            RelatedRef(id="edge-1", edge_type="supports", weight=0.5, edge_id="e-1"),
+        ),
     )
     titles = {
         "out-1": "Outgoing Note",
@@ -390,6 +412,7 @@ def test_related_panel_resolves_titles_and_lists_backlinks() -> None:
     assert panel.sources.items[0].label == "Source Note"
     assert panel.edges.items[0].edge_type == "supports"
     assert panel.edges.items[0].weight == 0.5
+    assert panel.edges.items[0].edge_id == "e-1"
     # Title fan-out uses the cheap max_length=1 read.
     assert all(max_length == 1 for _, max_length in fake.read_calls)
 
@@ -692,7 +715,13 @@ def test_summary_line_names_every_group_and_counts_overflow(
     assert {anchor: n for anchor, (n, _) in counts.items()} == _panel_group_sizes(html)
     # Panel order, separated by middots.
     assert list(counts) == list(_PANEL_GROUP_IDS)
-    assert _summary(html).count(" · ") == 5
+    counts_span = (
+        _summary(html).split("related-summary-counts", 1)[1].split("</span>")[0]
+    )
+    assert counts_span.count(" · ") == 5
+    # K2 D13: "open in graph" closes the line, after the counts.
+    link = '<a href="/knowledge/graph?focus=root" data-open-in-graph>'
+    assert _summary(html).rstrip().endswith(f"· {link}open in graph</a>")
 
 
 def test_summary_line_reports_a_failed_related_read(
@@ -708,6 +737,8 @@ def test_summary_line_reports_a_failed_related_read(
     assert "could not be loaded" in line
     assert _summary_counts(html) == {}
     assert "related-summary-counts" not in line
+    # The graph reads the snapshot, not lithos_related: its link stays.
+    assert '<a href="/knowledge/graph?focus=root" data-open-in-graph>' in line
 
 
 def test_summary_line_for_a_note_with_no_relations_says_none(

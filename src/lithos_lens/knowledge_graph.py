@@ -14,7 +14,9 @@ only renders:
   and before the cap, so a hidden 0.03 consolidation edge pulls in nothing and
   "hide faint edges" is a way under the cap. An edge with no known weight
   (NULL upstream, or a ``partial`` row) is never hidden by weight: unknown is
-  not faint.
+  not faint. The edge ``edge=`` selects is exempt from both filters, so an
+  entry link to its panel always draws it — within ``depth`` hops, even when
+  a hidden edge is the only way to it; it still counts towards the cap.
 - **The cap is a refusal**, checked before any ``lithos_related`` call or facts
   read so a refused scope spends nothing. It counts the focus and the typed
   endpoints (ghosts included) and names the first remedy that fits: depth 1,
@@ -115,6 +117,9 @@ class KnowledgeTypedGraph:
     )
     provenance_facets: tuple[ProvenanceFacet, ...] = ()
     refusal: KnowledgeGraphRefusal | None = None
+    #: The ``edge=`` / ``pin=`` selection when only its exemption draws it:
+    #: the drawing differs from the plain filters'. ``""`` otherwise.
+    pinned: str = ""
 
 
 # ── typed assembly (pure, snapshot only) ───────────────────────────────
@@ -142,6 +147,27 @@ def _expand(
                         hops[end] = hop
                         reached.append(end)
         frontier = reached
+    return hops, edges
+
+
+def _ego(
+    edges_of: Callable[[str], Sequence[KnowledgeEdge]],
+    focus: str,
+    depth: int,
+    filters: KnowledgeGraphFilters,
+) -> tuple[dict[str, int], dict[str, KnowledgeEdge]]:
+    """:func:`_expand`, plus the ``edge=`` selection when the filters hid the
+    path to it: a selected edge within ``depth`` hops of the focus is drawn
+    with its endpoints (at their unfiltered hop) whatever hides the way in."""
+    hops, edges = _expand(edges_of, focus, depth, filters)
+    selected = filters.selected_edge
+    if selected and selected not in edges:
+        reach, unfiltered = _expand(edges_of, focus, depth, _SHOW_ALL)
+        edge = unfiltered.get(selected)
+        if edge is not None:
+            edges[selected] = edge
+            for end in edge.endpoints:
+                hops.setdefault(end, reach[end])
     return hops, edges
 
 
@@ -215,11 +241,19 @@ def ego_typed_graph(
     count per depth is the same lookup at depth 1 and 2.
     """
     depth = min(max(depth, 1), MAX_DEPTH)
-    hops, edges = _expand(snapshot.edges_of, focus, depth, filters)
+    hops, edges = _ego(snapshot.edges_of, focus, depth, filters)
     _, unfiltered = _expand(snapshot.edges_of, focus, depth, _SHOW_ALL)
+    selected = filters.selected_edge
+    plain = replace(filters, selected_edge="")
+    pinned = (
+        selected
+        if selected in edges
+        and selected not in _expand(snapshot.edges_of, focus, depth, plain)[1]
+        else ""
+    )
 
     def count_at(candidate: KnowledgeGraphFilters, at_depth: int = depth) -> int:
-        return len(_expand(snapshot.edges_of, focus, at_depth, candidate)[0])
+        return len(_ego(snapshot.edges_of, focus, at_depth, candidate)[0])
 
     would_be = {
         level: (len(hops) if level == depth else count_at(filters, level))
@@ -241,6 +275,7 @@ def ego_typed_graph(
         would_be_nodes=MappingProxyType(would_be),
         provenance_facets=_provenance_facets(unfiltered.values(), filters),
         refusal=refusal,
+        pinned=pinned,
     )
 
 
@@ -270,6 +305,9 @@ def global_typed_graph(
     unfiltered = {row.edge_id: row for row in rows}
     edges = {key: row for key, row in unfiltered.items() if filters.shows(row)}
     hops = _scoped_nodes(edges.values())
+    selected = edges.get(filters.selected_edge)
+    plain = replace(filters, selected_edge="")
+    pinned = "" if selected is None or plain.shows(selected) else selected.edge_id
 
     def count_at(candidate: KnowledgeGraphFilters) -> int:
         return len(_scoped_nodes(row for row in rows if candidate.shows(row)))
@@ -287,6 +325,7 @@ def global_typed_graph(
         hidden=_hidden(edges, unfiltered, filters),
         provenance_facets=_provenance_facets(unfiltered.values(), filters),
         refusal=refusal,
+        pinned=pinned,
     )
 
 
@@ -414,6 +453,7 @@ def build_view(
     focus_missing: bool = False,
     as_of: datetime | None = None,
     stale: bool = False,
+    selected_edge_missing: bool = False,
 ) -> KnowledgeGraphView:
     """The view model from a typed graph, the focus's layers and the facts.
 
@@ -433,9 +473,11 @@ def build_view(
         would_be_nodes=typed.would_be_nodes,
         provenance_facets=typed.provenance_facets,
         refusal=typed.refusal,
+        pinned=typed.pinned,
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,
+        selected_edge_missing=selected_edge_missing,
     )
     if typed.refusal is not None:
         return base
@@ -554,6 +596,16 @@ def _refused(
     )
 
 
+def selection_missing(
+    snapshot: EdgeTableSnapshot, filters: KnowledgeGraphFilters
+) -> bool:
+    """``edge=`` names an edge the snapshot does not hold: one created after
+    its ``as_of``, or since deleted. The next TTL fetch brings it; nothing
+    is fetched for it here."""
+    selected = filters.selected_edge
+    return bool(selected) and all(row.edge_id != selected for row in snapshot.rows)
+
+
 async def _read_table(table: EdgeTable) -> EdgeTableSnapshot | EdgeTableRefusal | None:
     try:
         return await table.read()
@@ -603,6 +655,7 @@ async def assemble_focus_graph(
         "filters": filters,
         "as_of": state.as_of,
         "stale": state.stale,
+        "selected_edge_missing": selection_missing(state, filters),
         **scope,
     }
     if typed.refusal is not None:
@@ -657,9 +710,11 @@ async def assemble_global_graph(
     if state is None:
         return _refused("unavailable", mode="global", filters=filters, **scope)
     as_of: datetime | None
+    missing = False
     if isinstance(state, EdgeTableSnapshot):
         rows = scoped_rows(state, type=type, namespace=namespace)
         as_of, stale = state.as_of, state.stale
+        missing = selection_missing(state, filters)
     else:
         try:
             rows = await table.filtered(type=type, namespace=namespace)
@@ -673,6 +728,7 @@ async def assemble_global_graph(
         "filters": filters,
         "as_of": as_of,
         "stale": stale,
+        "selected_edge_missing": missing,
         **scope,
     }
     read_directly = isinstance(state, EdgeTableRefusal)

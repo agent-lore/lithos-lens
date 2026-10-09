@@ -107,6 +107,7 @@ classDiagram
   class KnowledgeGraphFilters {
     +min_weight float
     +provenance frozenset[str]
+    +selected_edge str
   }
   class KnowledgeGraphNode {
     +id str
@@ -136,6 +137,8 @@ classDiagram
     +as_of datetime | None
     +stale bool
     +read_directly bool
+    +selected_edge_missing bool
+    +pinned str
     +facts_capped_at int
   }
   class KnowledgeLayerRef {
@@ -148,6 +151,7 @@ classDiagram
   class KnowledgeTypedGraph {
     +hops Mapping[str, int]
     +would_be_nodes Mapping[int, int]
+    +pinned str
   }
   class KnownEdgeType {
     +name str
@@ -225,6 +229,7 @@ classDiagram
     +weight float | None
     +direction str
     +conflict_state str
+    +edge_id str
   }
   class RelatedNeighborhood {
     +unresolved tuple[str, ...]
@@ -241,6 +246,7 @@ classDiagram
     +weight float | None
     +direction str
     +conflict_state str
+    +edge_id str
   }
   class RelatedSection {
     +overflow int

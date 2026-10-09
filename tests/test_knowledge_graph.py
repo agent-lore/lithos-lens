@@ -182,6 +182,102 @@ def test_a_hidden_edge_pulls_in_nothing_at_depth_two() -> None:
     assert typed.hidden.total == 3  # those two and e-cg behind e-fc
 
 
+def test_the_selected_edge_is_drawn_whatever_the_filters_say() -> None:
+    """f-002: ``edge=`` exempts its edge from the weight and provenance
+    filters — it and its endpoint are drawn, it is not counted hidden, and
+    at depth 2 the endpoint it brings in expands like any other."""
+    faint = KnowledgeGraphFilters(selected_edge="e-fc")
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=faint)
+    assert "e-fc" in {e.edge_id for e in typed.edges}
+    assert {"C", "G"} <= set(typed.hops)
+    assert typed.hidden.by_weight == 1  # e-aw only
+    assert typed.hidden.total == 1
+
+    no_other = KnowledgeGraphFilters(
+        provenance=frozenset({"inferred"}), selected_edge="e-fp"
+    )
+    typed = ego_typed_graph(snapshot(), "F", filters=no_other)
+    assert "P" in typed.hops
+    assert "e-fp" in {e.edge_id for e in typed.edges}
+    assert typed.hidden.by_provenance == 2  # e-fb, e-fc; e-fp is exempt
+    assert typed.hidden.by_weight == 1  # e-fc
+
+    rows = FIXTURE_ROWS + (edge("e-neg", "F", "N", weight=-0.4),)
+    negative = KnowledgeGraphFilters(selected_edge="e-neg")
+    assert "N" in ego_typed_graph(snapshot(rows), "F", filters=negative).hops
+    assert {e.edge_id for e in global_typed_graph(rows, filters=negative).edges} >= {
+        "e-neg"
+    }
+
+
+def test_a_selected_edge_behind_a_hidden_one_is_still_drawn_at_depth_two() -> None:
+    """Review f-001: C is reached only by the faint e-fc, so e-cg (C → G)
+    is two hops out behind a hidden edge. Selected, it is drawn with C and G
+    at their unfiltered hops; e-fc stays hidden; e-cg is not counted hidden;
+    and both count towards the cap, whose remedy (depth 1, out of reach of
+    e-cg) is counted the same way."""
+    selected = KnowledgeGraphFilters(selected_edge="e-cg")
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=selected)
+    assert "e-cg" in {e.edge_id for e in typed.edges}
+    assert "e-fc" not in {e.edge_id for e in typed.edges}
+    assert (typed.hops["C"], typed.hops["G"]) == (1, 2)
+    assert typed.hidden.by_weight == 2  # e-fc, e-aw
+    assert typed.hidden.total == 2  # not e-cg
+    # Out of reach at depth 1: not drawn there.
+    assert "G" not in ego_typed_graph(snapshot(), "F", filters=selected).hops
+
+    refused = ego_typed_graph(snapshot(), "F", depth=2, filters=selected, max_nodes=8)
+    assert refused.refusal is not None
+    assert (refused.refusal.count, refused.refusal.remedy_depth) == (9, 1)
+    assert refused.refusal.remedy_count == 5
+
+    no_other = KnowledgeGraphFilters(
+        provenance=frozenset({"inferred"}), selected_edge="e-be"
+    )
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=no_other)
+    assert {"B", "E"} <= set(typed.hops)  # behind e-fb, hidden by provenance
+    assert "e-fb" not in {e.edge_id for e in typed.edges}
+
+
+def test_pinned_names_a_selection_only_its_exemption_draws() -> None:
+    """``pinned`` is set when the selection changes the drawing (hidden by
+    the filters, or behind a hidden edge), and empty when it is drawn anyway
+    — so a kept view knows which clicks would draw it the same."""
+
+    def pinned(edge_id: str, depth: int = 1) -> str:
+        filters = KnowledgeGraphFilters(selected_edge=edge_id)
+        return ego_typed_graph(snapshot(), "F", depth=depth, filters=filters).pinned
+
+    assert pinned("e-fc") == "e-fc"  # faint
+    assert pinned("e-cg", depth=2) == "e-cg"  # behind the faint e-fc
+    assert pinned("e-fa") == ""  # drawn anyway
+    assert pinned("e-cg") == ""  # out of reach at depth 1: not drawn at all
+    assert (
+        global_typed_graph(
+            FIXTURE_ROWS, filters=KnowledgeGraphFilters(selected_edge="e-fc")
+        ).pinned
+        == "e-fc"
+    )
+    assert (
+        global_typed_graph(
+            FIXTURE_ROWS, filters=KnowledgeGraphFilters(selected_edge="e-fa")
+        ).pinned
+        == ""
+    )
+
+
+def test_the_selected_edge_counts_towards_the_cap() -> None:
+    # Five nodes under the default filter; the faint e-fc brings C in.
+    assert ego_typed_graph(snapshot(), "F", max_nodes=5).refusal is None
+    refused = ego_typed_graph(
+        snapshot(),
+        "F",
+        filters=KnowledgeGraphFilters(selected_edge="e-fc"),
+        max_nodes=5,
+    )
+    assert refused.refusal is not None and refused.refusal.count == 6
+
+
 def test_weight_filter_never_hides_an_unknown_weight() -> None:
     rows = (
         edge("e1", "F", "N", weight=None, partial=True),

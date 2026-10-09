@@ -474,8 +474,8 @@ class RelatedRef:
     capped ``lithos_read`` fan-out. For an edge ref, ``id`` is the OPPOSITE
     endpoint of the edge (``to_id`` for an outgoing edge, ``from_id`` for an
     incoming one) and ``direction`` / ``edge_type`` / ``weight`` /
-    ``conflict_state`` are carried through from the raw edge row per
-    REQUIREMENTS.md §6.5, with ``why`` parsed from its evidence/provenance.
+    ``conflict_state`` / ``edge_id`` are carried through from the raw edge
+    row per REQUIREMENTS.md §6.5, with ``why`` parsed from its evidence.
     """
 
     id: str
@@ -485,6 +485,7 @@ class RelatedRef:
     direction: str = ""
     conflict_state: str = ""
     why: EdgeWhy | None = None
+    edge_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -506,7 +507,7 @@ class RelatedItem:
     For typed-edge items, ``direction`` (``outgoing`` / ``incoming``) and a
     non-empty ``conflict_state`` carry through from the transport ref so the
     panel can show which way an edge points and flag unresolved conflicts
-    (REQUIREMENTS.md §6.5), with ``why`` for the row's "why?" disclosure.
+    (REQUIREMENTS.md §6.5), with ``why`` for the "why?" and ``edge_id``.
     """
 
     id: str
@@ -516,6 +517,7 @@ class RelatedItem:
     direction: str = ""
     conflict_state: str = ""
     why: EdgeWhy | None = None
+    edge_id: str = ""
 
     @property
     def label(self) -> str:
@@ -542,10 +544,8 @@ class RelatedPanel:
     unresolved: tuple[str, ...] = ()
     edges: RelatedSection = field(default_factory=RelatedSection)
     state: SectionState = SectionState.OK
-    #: `lithos_read` calls spent resolving titles, capped by
-    #: `related_title_fanout_cap`. Already computed to build the panel and
-    #: previously discarded; surfaced so the route can report backend cost
-    #: without the domain needing to know telemetry exists.
+    #: `lithos_read` calls spent resolving titles (`related_title_fanout_cap`),
+    #: so the route can report backend cost without the domain knowing telemetry.
     fanout: int = 0
 
     @property
@@ -592,17 +592,15 @@ async def load_related_panel(
     bounding backend *call* count. ``render_cap`` (internal constant
     ``RELATED_RENDER_CAP``; parameterized only for tests) limits how many
     items each section *emits*, bounding response *size* even for a hub note
-    whose neighbors arrive with inline titles (which need no fan-out). Anything past
-    either bound collapses into the section's ``overflow`` count. A failed
-    ``lithos_related`` call degrades to ``SectionState.ERROR`` so the note body
-    still renders.
+    whose neighbors arrive with inline titles (which need no fan-out). Past
+    either bound is the section's ``overflow`` count. A failed ``lithos_related``
+    call degrades to ``SectionState.ERROR`` so the note body still renders.
     """
 
     try:
         neighborhood = await lithos.related(knowledge_id)
     except Exception as exc:
-        # Note id + error type give the operator a scent trail; the full
-        # timing/fan-out telemetry the PRD sketches is deferred.
+        # Note id + error type give the operator a scent trail.
         logger.warning(
             "related panel load failed for note %s: %s",
             knowledge_id,
@@ -746,6 +744,7 @@ def _build_section(
                     direction=ref.direction,
                     conflict_state=ref.conflict_state,
                     why=ref.why,
+                    edge_id=ref.edge_id,
                 )
             )
         else:
@@ -787,6 +786,7 @@ def _normalize_edges(items: Any, *, direction: str) -> tuple[RelatedRef, ...]:
                 direction=direction,
                 conflict_state=str(item.get("conflict_state") or ""),
                 why=edge_why(item),
+                edge_id=item["edge_id"] if isinstance(item.get("edge_id"), str) else "",
             )
         )
     return tuple(refs)
