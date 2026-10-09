@@ -178,6 +178,15 @@
     return params.toString();
   }
 
+  // One key of the address as the server's parser reads it: the LAST value
+  // of a repeated key (a query mapping keeps the last), and a wholly blank
+  // value is absent; any other value exactly as sent.
+  function queryValue(params, key) {
+    const values = params.getAll(key);
+    const value = values.length ? values[values.length - 1] : "";
+    return value.trim() ? value : "";
+  }
+
   function pageUrl(query) {
     return window.location.pathname + (query ? "?" + query : "");
   }
@@ -246,8 +255,10 @@
   // - Re-selecting what is already shown pushes nothing: no two entries of
   //   this page carry one URL.
   // - Any Back or Forward first ABANDONS the panel request in flight,
-  //   whatever entry it lands on: the request is aborted, and should its
-  //   response land anyway its swap is cancelled, so it can neither replace
+  //   whatever entry it lands on: the request itself is aborted, and should
+  //   its response land anyway htmx is stopped before it reads it
+  //   (`htmx:beforeOnLoad`, ahead of `HX-Redirect` and the swap), so it can
+  //   neither redirect, replace
   //   the panel nor push. Then, onto an entry whose address (the fragment
   //   aside) differs from the one shown, it reloads: the server renders that
   //   URL's panel, text and picture together. Onto one with the same address
@@ -307,16 +318,17 @@
 
   function dropAbandoned(event) {
     const detail = event.detail || {};
-    if (detail.xhr && abandoned.indexOf(detail.xhr) !== -1) detail.shouldSwap = false;
+    if (detail.xhr && abandoned.indexOf(detail.xhr) !== -1) event.preventDefault();
   }
 
   function onTravel() {
     if (!panelHost) return;
     if (pendingPush) {
-      abandoned.push(pendingPush.xhr);
-      if (window.htmx && pendingPush.elt) {
-        window.htmx.trigger(pendingPush.elt, "htmx:abort");
-      }
+      const xhr = pendingPush.xhr;
+      abandoned.push(xhr);
+      // The request itself: `hx-sync` keeps it on the host, not on the
+      // element that issued it, so an `htmx:abort` event would miss it.
+      if (xhr && typeof xhr.abort === "function") xhr.abort();
       pendingPush = null;
     }
     if (withoutFragment(window.location.href) === withoutFragment(shownHref)) {
@@ -567,8 +579,8 @@
     // selection. An id the payload does not draw lights nothing.
     lightFromUrl = function () {
       const query = new URLSearchParams(window.location.search);
-      const selectedEdge = query.get("edge") || "";
-      const selectedNode = selectedEdge ? "" : query.get("selected") || "";
+      const selectedEdge = queryValue(query, "edge");
+      const selectedNode = selectedEdge ? "" : queryValue(query, "selected");
       if (selectedEdge) {
         light(byPid(cy.edges(".typed"), selectedEdge));
       } else if (selectedNode) {
@@ -610,7 +622,7 @@
       // A node opened from a view drawn for an edge pins that edge, as the
       // text's node links do (`knowledge_graph_url`), so the panel is drawn
       // from the very view on screen.
-      const pin = now.get("edge") || now.get("pin") || null;
+      const pin = queryValue(now, "edge") || queryValue(now, "pin") || null;
       light(event.target);
       openPanel({ selected: pid, edge: null, pin: pin });
     });
@@ -796,7 +808,7 @@
   if (!window.LithosLensKnowledgeGraphBound) {
     window.LithosLensKnowledgeGraphBound = true;
     document.addEventListener("htmx:beforeRequest", trackPanel);
-    document.addEventListener("htmx:beforeSwap", dropAbandoned);
+    document.addEventListener("htmx:beforeOnLoad", dropAbandoned);
     document.addEventListener("htmx:afterSwap", pushAfterSwap);
     window.addEventListener("popstate", onTravel);
   }

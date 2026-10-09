@@ -482,3 +482,53 @@ test("Back onto an entry with the same address still abandons the request in fli
   );
   expect(lit).toEqual([CAPACITY]);
 });
+
+test("Back onto the same address drops an abandoned request's HX-Redirect", async ({
+  page,
+}) => {
+  // The reviewer's sequence (round 4, f-007): on the view an exempted edge
+  // drew, capacity selected (pinned); a `#` entry; a supports-edge request
+  // held in flight — the server answers it with HX-Redirect, since the
+  // edge's own view draws without the pin — then Back, then its release.
+  await page.goto(`/knowledge/graph?focus=${PLAN}&edge=${FAINT_EDGE}`);
+  await canvasReady(page);
+  await clickNode(page, CAPACITY);
+  await nodePanel(page, CAPACITY);
+  await markDocument(page);
+  await page.evaluate(() => {
+    location.hash = "top";
+  });
+  await expect.poll(() => new URL(page.url()).hash).toBe("#top");
+  const held = await hold(page, `edge=${SUPPORTS}`);
+
+  await tapEdge(page, SUPPORTS);
+  await held.seen;
+  await page.goBack();
+  await expect.poll(() => new URL(page.url()).hash).toBe("");
+  held.release();
+  await held.ended(); // aborted, or landed and stopped before htmx read it
+  await held.handled();
+
+  expect(await sameDocument(page)).toBe(true);
+  expect(query(page)).toEqual({ focus: PLAN, selected: CAPACITY, pin: FAINT_EDGE });
+  await nodePanel(page, CAPACITY);
+  expect((await pushes(page)).map((p) => new URL(p.url, page.url()).search)).toEqual([
+    `?focus=${PLAN}&selected=${CAPACITY}&pin=${FAINT_EDGE}`,
+  ]);
+});
+
+test("the canvas lights the selection the server reads from a repeated or blank key", async ({
+  page,
+}) => {
+  await page.goto(
+    `/knowledge/graph?focus=${PLAN}&selected=${CAPACITY}&selected=${ROLLBACK}&edge=%20`,
+  );
+  await canvasReady(page);
+  await nodePanel(page, ROLLBACK);
+  const picked = await page.evaluate(() =>
+    (window as any).LithosLensKnowledgeGraph.cy
+      .elements(".picked")
+      .map((e: any) => e.data("pid")),
+  );
+  expect(picked).toEqual([ROLLBACK]);
+});

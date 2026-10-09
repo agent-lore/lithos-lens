@@ -171,10 +171,18 @@ const document = {
     (documentListeners[type] = documentListeners[type] || []).push(fn);
   },
 };
-// An htmx event, triggered on its element and bubbling to the document.
+// An htmx event, triggered on its element and bubbling to the document;
+// like htmx's own, it answers whether no listener cancelled it.
 function htmxEvent(elt, type, detail) {
-  elt.fire(type, detail);
-  (documentListeners[type] || []).forEach((fn) => fn({ target: elt, detail }));
+  const event = {
+    target: elt,
+    detail,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+  };
+  (elt.listeners[type] || []).forEach((fn) => fn(event));
+  (documentListeners[type] || []).forEach((fn) => fn(event));
+  return !event.defaultPrevented;
 }
 
 // Timers never fire: the headless renderer's animation loop asks for one,
@@ -212,7 +220,7 @@ sandbox.window = {
   },
   htmx: {
     ajax(verb, path, context) {
-      const xhr = { request: xhrs.length, path };
+      const xhr = request(path);
       ajax.push({
         verb,
         path,
@@ -230,9 +238,23 @@ sandbox.window = {
   },
 };
 const xhrs = [];
+const aborted = [];
+// A request as htmx holds it: its `abort()` is recorded. Its response may
+// still be landed by a `swap` or `redirect` action — the race an abort can
+// lose — so the page's own guard is what keeps it out.
+function request(path) {
+  const index = xhrs.length;
+  return { request: index, path, abort() { aborted.push(index); } };
+}
+// Whether htmx goes on to read request N's response (`htmx:beforeOnLoad`).
+function loads(index) {
+  const detail = { xhr: xhrs[index], target: host };
+  return htmxEvent(issued[index], "htmx:beforeOnLoad", detail);
+}
 const textLinks = [];
 const issued = [];
 const triggered = [];
+const redirects = [];
 const panelSource = single["[data-kgraph-panel-source]"];
 function issue(elt, xhr) {
   xhrs.push(xhr);
@@ -294,19 +316,28 @@ for (const action of actions) {
     cy.emit("tap");
   } else if (kind === "swap") {
     // The response of request N (default: the latest) lands: htmx asks
-    // `htmx:beforeSwap` first, and a listener may cancel the swap.
+    // `htmx:beforeOnLoad` on the issuing element first — a listener that
+    // cancels it stops everything — then `htmx:beforeSwap`.
     const index = arg === "" ? xhrs.length - 1 : Number(arg);
     if (!xhrs[index]) continue;  // nothing was requested: nothing lands
+    if (!loads(index)) continue;
     const before = { xhr: xhrs[index], target: host, shouldSwap: true };
     htmxEvent(host, "htmx:beforeSwap", before);
     if (!before.shouldSwap) continue;
     host.innerHTML = "panel:" + xhrs[index].path;
     htmxEvent(host, "htmx:afterSwap", { xhr: xhrs[index], target: host });
+  } else if (kind === "redirect") {
+    // The response of request N answers `HX-Redirect`: htmx handles it after
+    // `htmx:beforeOnLoad` and before any swap, by navigating.
+    const index = arg === "" ? xhrs.length - 1 : Number(arg);
+    if (!xhrs[index]) continue;
+    if (!loads(index)) continue;
+    redirects.push(xhrs[index].path);
   } else if (kind === "text-click") {
     // A text panel link (`panel_attrs`): its href, and htmx's `hx-push-url`.
     const link = el({ href: arg, attributes: { "hx-push-url": arg } });
     textLinks.push(link);
-    issue(link, { request: xhrs.length, path: "text:" + arg });
+    issue(link, request("text:" + arg));
   } else if (kind === "hash") {
     // A same-document `#` navigation: a new entry with the same address
     // and a fragment, announced by `popstate` as the browser does.
@@ -359,6 +390,9 @@ console.log(JSON.stringify({
   pushes,
   reloads,
   triggered,
+  aborted,
+  redirects,
+  picked: pidsWith("picked"),
   textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
   panel: host.innerHTML,
@@ -1143,7 +1177,7 @@ def test_a_response_landing_after_back_pushes_nothing(
 
     assert [push["url"] for push in result["pushes"]] == [TEXT_SUPPORTS]
     assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
-    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]
+    assert result["aborted"] == [1]
     assert result["href"] == f"http://lens.test{ROUTE}?focus={PLAN}"
 
 
@@ -1526,7 +1560,7 @@ def test_back_abandons_the_request_in_flight_whatever_entry_it_lands_on(
     assert result["href"] == f"http://lens.test{_node_url(CAPACITY)}"
     assert result["panel"] == f"panel:{capacity_panel}"
     assert result["reloads"] == []
-    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]
+    assert result["aborted"] == [1]  # the rollback request itself
     # Capacity's neighbourhood again, not the abandoned rollback click's.
     at = [e for e in page.payload["edges"] if CAPACITY in (e["from"], e["to"])]
     assert set(result["lit"]) == (
@@ -1579,4 +1613,106 @@ def test_back_onto_another_address_with_a_request_in_flight_reloads_and_drops_it
     assert [push["url"] for push in result["pushes"]] == [_node_url(CAPACITY)]
     assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
     assert ROLLBACK not in result["panel"]
-    assert result["triggered"] == [{"type": "htmx:abort", "elt": "canvas"}]
+    assert result["aborted"] == [2]  # the rollback request itself
+
+
+def test_an_abandoned_requests_redirect_is_not_followed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The reviewer's sequence (round 4): on the view an exempted edge drew,
+    capacity selected (pinned), a ``#`` entry, a supports-edge request in
+    flight — one the server answers with ``HX-Redirect``, since the edge's
+    own view draws without the pin — then Back onto the capacity address.
+    The request is aborted, and its redirect, should it land anyway, is
+    stopped before htmx reads it (``htmx:beforeOnLoad``)."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&edge={FAINT_EDGE}")
+        pinned = _run(
+            page, [f"tap-node:{CAPACITY}", "swap", "hash:top", f"tap-edge:{SUPPORTS}"]
+        )
+        answered = client.get(pinned["ajax"][1]["path"])
+    abandoned = _run(
+        page,
+        [
+            f"tap-node:{CAPACITY}",
+            "swap",
+            "hash:top",
+            f"tap-edge:{SUPPORTS}",
+            "back",
+            "redirect",
+        ],
+    )
+    followed = _run(
+        page, [f"tap-node:{CAPACITY}", "swap", f"tap-edge:{SUPPORTS}", "redirect"]
+    )
+
+    # The server really does answer that request with a redirect.
+    assert "HX-Redirect" in answered.headers
+    capacity = _node_url(CAPACITY, f"&pin={FAINT_EDGE}")
+    assert abandoned["aborted"] == [1]
+    assert abandoned["redirects"] == []
+    assert abandoned["href"] == f"http://lens.test{capacity}"
+    assert abandoned["reloads"] == [] and abandoned["picked"] == [CAPACITY]
+    assert [push["url"] for push in abandoned["pushes"]] == [capacity]
+    # Not abandoned, the same redirect is htmx's to follow.
+    assert len(followed["redirects"]) == 1 and followed["aborted"] == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        f"selected={CAPACITY}&edge=%20",
+        f"selected={CAPACITY}&selected={ROLLBACK}",
+        f"selected={CAPACITY}&selected=%20",
+        f"edge={SUPPORTS}&edge={UNRESOLVED}",
+        f"edge={UNRESOLVED}&edge=%20&selected={ROLLBACK}",
+        f"selected=%20&selected={LEGACY}",
+    ],
+    ids=[
+        "blank-edge",
+        "repeated-selected",
+        "blank-last-selected",
+        "repeated-edge",
+        "blank-last-edge",
+        "blank-first-selected",
+    ],
+)
+def test_the_selection_lit_on_load_is_the_one_the_server_reads(
+    lithos_lens_config_env: Path, query: str
+) -> None:
+    """A repeated key reads its LAST value and a wholly blank value is
+    absent, as the server's parser has it: the canvas picks the very node or
+    edge whose panel the server rendered, and nothing when it rendered none."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&{query}")
+    result = _run(page)
+    served = re.findall(
+        r'data-kgraph-panel="(?:node|edge)" data-kgraph-panel-id="([^"]+)"', page.html
+    )
+
+    assert result["picked"] == served
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        f"selected={CAPACITY}&pin={FAINT_EDGE}&edge=%20",
+        f"selected={CAPACITY}&pin=%20&pin={FAINT_EDGE}",
+        f"edge={SUPPORTS}&edge={FAINT_EDGE}",
+    ],
+    ids=["blank-edge-keeps-pin", "last-pin", "last-edge-pins"],
+)
+def test_a_node_click_pins_the_edge_the_server_reads(
+    lithos_lens_config_env: Path, query: str
+) -> None:
+    """The pin a node click carries is the one the server's own reading of
+    the address gives (``knowledge_graph_url``): the view the exempted edge
+    drew answers the fragment, with no ``HX-Redirect``."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&{query}")
+        [call] = _run(page, [f"tap-node:{CAPACITY}"])["ajax"]
+        fragment = client.get(call["path"])
+
+    assert _query(call["path"])["pin"] == FAINT_EDGE
+    assert "HX-Redirect" not in fragment.headers
+    assert 'data-kgraph-panel="node"' in fragment.text

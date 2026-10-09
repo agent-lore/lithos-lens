@@ -1767,7 +1767,9 @@ draws stays drawn whatever the slider says):
   `knowledge_graph_url` does. A wiki-link or provenance pair has no panel.
   The selection lights itself and its neighbours (an edge: itself and its
   two endpoints) and dims the rest — on load too, from `edge=` or else
-  `selected=`, never `pin=`; a background tap clears it and leaves the URL
+  `selected=`, never `pin=`, each read as the server reads it (a repeated
+  key's last value, a wholly blank value absent), as is the `pin` a node
+  click carries; a background tap clears it and leaves the URL
 - **the panel's history**, one policy for every panel request on a drawn
   page, the text's links and the canvas's clicks alike: htmx pushes nothing
   (each panel link's `hx-push-url` is switched off as its request leaves, so
@@ -1776,7 +1778,9 @@ draws stays drawn whatever the slider says):
   for a request a later click aborted, one the server answered with
   `HX-Redirect`, or one still in flight when the page is left; re-selecting
   what is shown pushes nothing; any Back or Forward first abandons the panel
-  request in flight (aborted, and its swap cancelled should it land), then,
+  request in flight (the request aborted, and should its response land htmx
+  is stopped before reading it, so it neither redirects, swaps nor pushes),
+  then,
   onto an entry whose address differs (the fragment aside), reloads it so
   the server renders that URL's panel, text and picture together
 
