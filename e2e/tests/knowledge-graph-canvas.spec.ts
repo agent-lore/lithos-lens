@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { knowledgeCanvasLabelsAreReadable } from "./knowledge-graph-checks";
 
 /**
  * The knowledge graph's canvas in a real browser (K2 S4): a click on the
@@ -551,3 +552,80 @@ for (const [blank, picked] of [
     ).toHaveCount(picked.length);
   });
 }
+
+
+/**
+ * Serve `/knowledge/graph?focus=…&depth=2` with two more `assesses`-like
+ * rows beside the fixture's capacity → plan `assesses`: distinct unknown
+ * types (`measures`, `estimates`), so three parallel edges each carry a raw
+ * type label — ordinary data under Lithos's UNIQUE(from, to, type,
+ * namespace). The canvas draws from the embedded payload, which is what is
+ * extended here; the rows are copies of the fixture's own canonical one.
+ */
+async function withParallelLabels(page: Page) {
+  await page.route(
+    (url) => url.pathname === "/knowledge/graph" && url.search.includes("depth=2"),
+    async (route) => {
+      const response = await route.fetch();
+      const html = await response.text();
+      const marker = /(<script type="application\/json" data-knowledge-graph-payload>)(.*?)(<\/script>)/s;
+      const found = html.match(marker)!;
+      const payload = JSON.parse(found[2]);
+      const assesses = payload.edges.find((edge: any) => edge.id === "edge_f29d84a6130c");
+      ["measures", "estimates"].forEach((type, index) => {
+        payload.edges.push({
+          ...assesses,
+          id: `edge_00000000000${index}`,
+          type,
+          style: { ...assesses.style, label: type },
+        });
+      });
+      const body = html.replace(
+        marker,
+        (_, open, _old, close) => open + JSON.stringify(payload).replace(/</g, "\\u003c") + close,
+      );
+      await route.fulfill({ response, body });
+    },
+  );
+}
+
+for (const width of [320, 768, 1440]) {
+  test(`parallel edges' raw-type labels each get their own place at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await withParallelLabels(page);
+    await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2`);
+    await canvasReady(page);
+    const labels = await page.evaluate(() =>
+      (window as any).LithosLensKnowledgeGraph.cy
+        .edges()
+        .filter((edge: any) => edge.data("label"))
+        .map((edge: any) => edge.data("label"))
+        .sort(),
+    );
+    expect(labels).toEqual(["assesses", "estimates", "measures", "superseded"]);
+    await knowledgeCanvasLabelsAreReadable(page);
+  });
+}
+
+test("the pan hint follows the view as the operator zooms", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2`);
+  await canvasReady(page);
+  const hint = page.locator("[data-kgraph-pan-hint]");
+  await expect(hint).toBeVisible(); // opened at a readable zoom: part is outside
+
+  // Zoomed out until the whole graph fits: the hint goes…
+  await page.evaluate(() => (window as any).LithosLensKnowledgeGraph.cy.fit(undefined, 10));
+  await expect(hint).toBeHidden();
+  // …and zoomed back in past the edges, it returns.
+  await page.evaluate(() => {
+    const cy = (window as any).LithosLensKnowledgeGraph.cy;
+    cy.zoom({ level: 3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  });
+  await expect(hint).toBeVisible();
+  // A pan that brings it all back into view (after fitting again) hides it.
+  await page.evaluate(() => (window as any).LithosLensKnowledgeGraph.cy.fit(undefined, 10));
+  await expect(hint).toBeHidden();
+});

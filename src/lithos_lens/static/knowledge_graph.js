@@ -389,6 +389,18 @@
   function placeEndLabels(cy) {
     // Places are measured on the rendered curve: none without a renderer.
     if (cy.headless()) return;
+    // The labels placed so far, with their clearance: parallel edges with a
+    // raw type or a resolution each would otherwise pick one spot and hide
+    // each other's words under their grounds.
+    const placed = [];
+    const keep = function (box) {
+      placed.push({
+        x1: box.x1 - LABEL_CLEARANCE,
+        x2: box.x2 + LABEL_CLEARANCE,
+        y1: box.y1 - LABEL_CLEARANCE,
+        y2: box.y2 + LABEL_CLEARANCE
+      });
+    };
     cy.edges().forEach(function (edge) {
       const end = edge.data("labelEnd");
       if (!end) return;
@@ -450,12 +462,16 @@
           y1: point.y - halfH,
           y2: point.y + halfH
         };
-        if (titles.every(function (title) { return apart(box, title); })) {
+        const clear = function (other) { return apart(box, other); };
+        if (titles.every(clear) && placed.every(clear)) {
           edge.data("labelOffset", offset);
           edge.addClass(fromEnd === "source" ? "label-at-source" : "label-at-target");
+          keep(box);
           return;
         }
       }
+      // Nowhere clear: it stays at the middle, which later labels avoid.
+      keep(own);
     });
   }
 
@@ -738,12 +754,18 @@
       const focus = cy.nodes(".focus");
       cy.center(focus.length ? focus : undefined);
     }
+    // Says so while — and only while — part of the graph is outside the
+    // view: on opening, and after every pan, zoom or resize.
     const panHint = document.querySelector("[data-kgraph-pan-hint]");
-    if (panHint) {
+    const showPanHint = function () {
       const drawn = cy.elements().renderedBoundingBox();
       panHint.hidden = !(
         drawn.x1 < 0 || drawn.y1 < 0 || drawn.x2 > cy.width() || drawn.y2 > cy.height()
       );
+    };
+    if (panHint) {
+      showPanHint();
+      cy.on("viewport resize", showPanHint);
     }
 
     // ── Lit and dimmed: the selection and its neighbours ────────────────

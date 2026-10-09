@@ -1751,10 +1751,13 @@ draws stays drawn whatever the slider says):
   labels level; focus rings spaced for the titles under them and stretched
   to a wide canvas's shape, a scoped picture turned to the canvas's long
   side; a label on an edge goes to the place along it (by its far end at the
-  focus, else its middle) clear of every note's circle and title; the fit
+  focus, else its middle) clear of every note's circle and title and of
+  the labels already placed; the fit
   that opens the canvas never shrinks a label below 11px — a graph that
   then does not fit opens on its focus (or centre) with "Part of the graph
-  is outside this view: drag to pan, or zoom out." under the canvas
+  is outside this view: drag to pan, or zoom out." under the canvas, shown
+  while — and only while — part of the graph is outside the view, after
+  every pan, zoom or resize
 - **layout** once per load: concentric by hop around the focus, or a
   force-directed `cose` from a circle in scoped mode; nothing re-lays out
 - **controls**, each navigating to the page's own query with one key
