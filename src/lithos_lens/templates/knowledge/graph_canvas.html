@@ -49,7 +49,8 @@
 
   {#- What a canvas click opens the panel through: htmx reads this element's
       `hx-sync` (one panel request at a time, the later click wins, as the
-      text's panel links do) and the `hx-push-url` the script sets per click. -#}
+      text's panel links do); the script pushes the page URL itself once that
+      request's fragment is swapped in. -#}
   <span data-kgraph-panel-source hx-sync="#kgraph-panel:replace" hidden></span>
 </div>
 

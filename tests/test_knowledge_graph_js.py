@@ -24,7 +24,7 @@ import shutil
 import subprocess
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.web import create_app
 
 NODE = shutil.which("node")
@@ -67,10 +68,18 @@ const [scriptPath, cytoscapePath, href, payloadRaw, domRaw, actionsRaw] =
   process.argv.slice(1);
 const dom = JSON.parse(domRaw);
 const actions = JSON.parse(actionsRaw);
-const url = new URL(href, "http://lens.test");
+let url = new URL(href, "http://lens.test");
 const assigns = [];
 const ajax = [];
 const layouts = [];
+const pushes = [];
+const reloads = [];
+// The tab's history: one entry per page URL, each with its state, so Back
+// and Forward can be driven the way the browser does — a `popstate` carrying
+// the entry's state, after the address has already changed.
+const entries = [{ href: url.href, state: null }];
+let cursor = 0;
+const windowListeners = {};
 
 function el(extra) {
   return Object.assign({
@@ -88,8 +97,8 @@ function el(extra) {
     addEventListener(type, fn) {
       (this.listeners[type] = this.listeners[type] || []).push(fn);
     },
-    fire(type) {
-      (this.listeners[type] || []).forEach((fn) => fn({ target: this }));
+    fire(type, detail) {
+      (this.listeners[type] || []).forEach((fn) => fn({ target: this, detail }));
     },
     setAttribute(name, value) { this.attributes[name] = String(value); },
     getAttribute(name) {
@@ -116,13 +125,15 @@ const single = {
   "[data-kgraph-key-edges]": el(),
   "[data-kgraph-key-nodes]": el(),
   "[data-kgraph-key-marks]": el(),
-  "[data-kgraph-min-weight]": el(),
+  "[data-kgraph-min-weight]": el({ step: dom.step }),
   "[data-kgraph-min-weight-value]": el(),
   "[data-kgraph-weight-hidden]": el(),
-  "[data-kgraph-search]": el(),
-  "[data-kgraph-search-count]": el(),
+  // What a page htmx restored from its history cache holds: the count text
+  // as it was serialised, the field's value not (a property, not markup).
+  "[data-kgraph-search]": el({ value: dom.searchValue || "" }),
+  "[data-kgraph-search-count]": el({ textContent: dom.searchCount || "" }),
   "[data-kgraph-panel-source]": el({ attributes: { "hx-sync": dom.sync } }),
-  "#kgraph-panel": el({ dataset: { kgraphRender: dom.render } }),
+  "#kgraph-panel": el({ dataset: { kgraphRender: dom.render }, innerHTML: "" }),
 };
 const many = {
   "[data-kgraph-provenance]": provenance,
@@ -144,27 +155,56 @@ const sandbox = {
   document, console, URL, URLSearchParams,
   setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
 };
+const host = single["#kgraph-panel"];
+// htmx as the page sees it: `ajax` ISSUES a request — `htmx:beforeRequest`
+// on its source, carrying the request — and nothing more. Its fragment lands
+// only when a `swap` action says so, as `htmx:afterSwap` on the host with
+// that same request; a request that is never swapped is one the server
+// redirected or a later click aborted.
 sandbox.window = {
   location: {
-    pathname: url.pathname,
-    search: url.search,
-    href: url.href,
+    get pathname() { return url.pathname; },
+    get search() { return url.search; },
+    get href() { return url.href; },
     assign(target) { assigns.push(target); },
+    reload() { reloads.push(url.href); },
+  },
+  history: {
+    pushState(state, title, target) {
+      url = new URL(target, url.href);
+      entries.splice(cursor + 1);
+      entries.push({ href: url.href, state });
+      cursor = entries.length - 1;
+      pushes.push({ url: target, panel: host.innerHTML });
+    },
+  },
+  addEventListener(type, fn) {
+    (windowListeners[type] = windowListeners[type] || []).push(fn);
   },
   htmx: {
     ajax(verb, path, context) {
+      const xhr = { request: ajax.length };
       ajax.push({
         verb,
         path,
         target: context.target,
         swap: context.swap,
-        push: context.source.getAttribute("hx-push-url"),
         sync: context.source.getAttribute("hx-sync"),
+        pushUrlAttribute: context.source.getAttribute("hx-push-url"),
       });
+      xhrs.push(xhr);
+      context.source.fire("htmx:beforeRequest", { xhr, elt: context.source });
       return Promise.resolve();
     },
   },
 };
+const xhrs = [];
+function travel(step) {
+  cursor += step;
+  url = new URL(entries[cursor].href);
+  const state = entries[cursor].state;
+  (windowListeners.popstate || []).forEach((fn) => fn({ state }));
+}
 sandbox.window.window = sandbox.window;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
@@ -212,6 +252,20 @@ for (const action of actions) {
     byPid(cy.edges(), arg).emit("tap");
   } else if (kind === "tap-background") {
     cy.emit("tap");
+  } else if (kind === "swap") {
+    // The fragment of request N (default: the latest) lands in the host.
+    const index = arg === "" ? xhrs.length - 1 : Number(arg);
+    if (!ajax[index]) continue;  // nothing was requested: nothing lands
+    host.innerHTML = "panel:" + ajax[index].path;
+    host.fire("htmx:afterSwap", { xhr: xhrs[index] });
+  } else if (kind === "swap-text") {
+    // A text panel link's own request lands in the host (htmx pushed it).
+    host.innerHTML = "panel:text";
+    host.fire("htmx:afterSwap", { xhr: { request: "text" } });
+  } else if (kind === "back") {
+    travel(-1);
+  } else if (kind === "forward") {
+    travel(1);
   } else {
     throw new Error("unknown action " + action);
   }
@@ -249,10 +303,14 @@ console.log(JSON.stringify({
   layouts,
   assigns,
   ajax,
+  pushes,
+  reloads,
+  href: url.href,
   canvas: { hidden: canvas.hidden, dataset: canvas.dataset },
   toolbarHidden: single["[data-kgraph-toolbar]"].hidden,
   keyHidden: single["[data-kgraph-key]"].hidden,
   slider: single["[data-kgraph-min-weight]"].value,
+  sliderStep: single["[data-kgraph-min-weight]"].step,
   sliderValue: single["[data-kgraph-min-weight-value]"].textContent,
   hiddenCount: single["[data-kgraph-weight-hidden]"].textContent,
   searchCount: single["[data-kgraph-search-count]"].textContent,
@@ -303,22 +361,33 @@ def _page(client: TestClient, url: str) -> Page:
         "colours": re.findall(r'value="([a-z]+)" data-kgraph-colour', html),
         "render": render.group(1),
         "sync": sync.group(1),
+        "step": _only(re.findall(r'<input type="range"[^>]*step="([^"]+)"', html)),
     }
     return Page(url, html, json.loads(match.group(1)), dom)
 
 
+def _only(values: list[str]) -> str:
+    assert len(values) == 1, values
+    return values[0]
+
+
 @contextmanager
-def _lens(config_path: Path) -> Iterator[TestClient]:
+def _lens(config_path: Path, fake: Any = None) -> Iterator[TestClient]:
     with TestClient(
         create_app(
             load_config(config_path),
-            lithos_client_factory=lambda _: FakeLithosClient(),
+            lithos_client_factory=lambda _: fake or FakeLithosClient(),
         )
     ) as client:
         yield client
 
 
-def _run(page: Page, actions: Sequence[str] = (), payload: dict | None = None) -> dict:
+def _run(
+    page: Page,
+    actions: Sequence[str] = (),
+    payload: dict | None = None,
+    dom: dict | None = None,
+) -> dict:
     assert NODE is not None
     result = subprocess.run(
         [
@@ -330,7 +399,7 @@ def _run(page: Page, actions: Sequence[str] = (), payload: dict | None = None) -
             str(CYTOSCAPE_JS),
             page.url,
             json.dumps(payload or page.payload),
-            json.dumps(page.dom),
+            json.dumps({**page.dom, **(dom or {})}),
             json.dumps(list(actions)),
         ],
         capture_output=True,
@@ -774,7 +843,7 @@ def test_a_node_click_opens_its_panel_through_htmx_and_pushes_the_page_url(
 ) -> None:
     with _lens(lithos_lens_config_env) as client:
         page = _page(client, f"{ROUTE}?focus={PLAN}&colour=type")
-        result = _run(page, [f"tap-node:{CAPACITY}"])
+        result = _run(page, [f"tap-node:{CAPACITY}", "swap"])
 
         assert result["assigns"] == []
         [call] = result["ajax"]
@@ -788,7 +857,15 @@ def test_a_node_click_opens_its_panel_through_htmx_and_pushes_the_page_url(
         assert call["path"] == (
             f"{ROUTE}/panel?focus={PLAN}&colour=type&selected={CAPACITY}&render={render}"
         )
-        assert call["push"] == f"{ROUTE}?focus={PLAN}&colour=type&selected={CAPACITY}"
+        # Pushed by the page once the fragment is in — not by htmx's
+        # `hx-push-url`, which pushes before the swap.
+        assert call["pushUrlAttribute"] is None
+        assert result["pushes"] == [
+            {
+                "url": f"{ROUTE}?focus={PLAN}&colour=type&selected={CAPACITY}",
+                "panel": f"panel:{call['path']}",
+            }
+        ]
         fragment = client.get(call["path"])
 
     assert "HX-Redirect" not in fragment.headers
@@ -814,18 +891,26 @@ def test_a_node_click_on_a_view_drawn_for_an_edge_pins_it(
     ``HX-Redirect`` to a page that would draw something else."""
     with _lens(lithos_lens_config_env) as client:
         page = _page(client, f"{ROUTE}?focus={PLAN}&edge={FAINT_EDGE}")
-        [call] = _run(page, [f"tap-node:{LEGACY}"])["ajax"]
-        query = _query(call["path"])
+        # …and a second click, from the URL the first one pushed, keeps it.
+        result = _run(
+            page, [f"tap-node:{LEGACY}", "swap", f"tap-node:{CAPACITY}", "swap"]
+        )
+        first, second = result["ajax"]
+        fragments = [client.get(call["path"]) for call in (first, second)]
 
+    for call, node in ((first, LEGACY), (second, CAPACITY)):
+        query = _query(call["path"])
         assert query["pin"] == FAINT_EDGE
         assert "edge" not in query
-        assert query["selected"] == LEGACY
-        assert _query(call["push"]) == {k: v for k, v in query.items() if k != "render"}
-        fragment = client.get(call["path"])
-
-    assert fragment.status_code == 200
-    assert "HX-Redirect" not in fragment.headers
-    assert 'data-kgraph-panel="node"' in fragment.text
+        assert query["selected"] == node
+    assert [_query(push["url"]) for push in result["pushes"]] == [
+        {k: v for k, v in _query(call["path"]).items() if k != "render"}
+        for call in (first, second)
+    ]
+    for fragment in fragments:
+        assert fragment.status_code == 200
+        assert "HX-Redirect" not in fragment.headers
+        assert 'data-kgraph-panel="node"' in fragment.text
 
 
 def test_an_edge_click_selects_the_edge_and_drops_the_node_and_pin(
@@ -837,19 +922,82 @@ def test_an_edge_click_selects_the_edge_and_drops_the_node_and_pin(
     sends the browser to that page (S6 D13) — exactly as for a text link."""
     with _lens(lithos_lens_config_env) as client:
         plain = _page(client, f"{ROUTE}?focus={PLAN}&selected={LEGACY}")
-        [call] = _run(plain, [f"tap-edge:{RESOLVED}"])["ajax"]
+        swapped = _run(plain, [f"tap-edge:{RESOLVED}", "swap"])
+        [call] = swapped["ajax"]
         fragment = client.get(call["path"])
         pinned = _page(
             client, f"{ROUTE}?focus={PLAN}&selected={LEGACY}&pin={FAINT_EDGE}"
         )
-        [from_pinned] = _run(pinned, [f"tap-edge:{RESOLVED}"])["ajax"]
+        # The server redirects this one: htmx follows it and never swaps.
+        unswapped = _run(pinned, [f"tap-edge:{RESOLVED}"])
+        [from_pinned] = unswapped["ajax"]
         redirected = client.get(from_pinned["path"])
 
-    assert _query(call["push"]) == {"focus": PLAN, "edge": RESOLVED}
+    assert [_query(push["url"]) for push in swapped["pushes"]] == [
+        {"focus": PLAN, "edge": RESOLVED}
+    ]
     assert 'data-kgraph-panel="edge"' in fragment.text
     assert "HX-Redirect" not in fragment.headers
-    assert _query(from_pinned["push"]) == {"focus": PLAN, "edge": RESOLVED}
-    assert redirected.headers["HX-Redirect"] == from_pinned["push"]
+    assert _query(from_pinned["path"]) == {
+        "focus": PLAN,
+        "edge": RESOLVED,
+        "render": pinned.dom["render"],
+    }
+    assert _query(redirected.headers["HX-Redirect"]) == {
+        "focus": PLAN,
+        "edge": RESOLVED,
+    }
+    assert unswapped["pushes"] == []
+
+
+@pytest.mark.parametrize(
+    ("actions", "pushed"),
+    [
+        # In flight, or answered with HX-Redirect: never swapped, never pushed.
+        ([f"tap-node:{CAPACITY}"], []),
+        # A later click wins: the earlier request's fragment (had it landed
+        # rather than been aborted) pushes nothing; the later one's does.
+        (
+            [f"tap-node:{CAPACITY}", f"tap-node:{ROLLBACK}", "swap:0", "swap:1"],
+            [ROLLBACK],
+        ),
+        (
+            [f"tap-node:{CAPACITY}", f"tap-node:{ROLLBACK}", "swap:1", "swap:0"],
+            [ROLLBACK],
+        ),
+        # A text panel link's swap is htmx's own (it pushed its href).
+        ([f"tap-node:{CAPACITY}", "swap-text"], []),
+        # One swap, one push: the same fragment again pushes nothing more.
+        ([f"tap-node:{CAPACITY}", "swap", "swap:0"], [CAPACITY]),
+    ],
+    ids=["unswapped", "later-wins", "later-wins-out-of-order", "text-link", "once"],
+)
+def test_the_page_url_is_pushed_only_after_that_clicks_fragment_is_swapped(
+    lithos_lens_config_env: Path, actions: list[str], pushed: list[str]
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(page, actions)
+
+    assert [_query(push["url"])["selected"] for push in result["pushes"]] == pushed
+    for push in result["pushes"]:
+        assert push["panel"].startswith("panel:/knowledge/graph/panel?")
+        assert f"selected={_query(push['url'])['selected']}" in push["panel"]
+    assert result["assigns"] == [] and result["reloads"] == []
+
+
+def test_back_over_a_canvas_entry_reloads_the_url_it_lands_on(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A canvas-pushed entry is not one htmx can restore, so Back onto the
+    page's own entry reloads it: the server draws that URL's panel and
+    picture. (Forward, after a real reload, is the e2e suite's: this harness
+    cannot reload.)"""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(page, [f"tap-node:{CAPACITY}", "swap", "back"])
+
+    assert result["reloads"] == [f"http://lens.test{ROUTE}?focus={PLAN}"]
 
 
 def test_a_layer_edge_has_no_panel_and_its_click_does_nothing(
@@ -922,3 +1070,263 @@ def test_search_highlights_the_titles_it_matches_and_clears(
     assert cleared["matched"] == [] and cleared["searchCount"] == ""
     # Search is not a URL key (S4 D11).
     assert found["assigns"] == [] and found["ajax"] == []
+
+
+# ── Round-2 regressions ────────────────────────────────────────────────
+
+
+def test_a_quarantined_node_whose_facts_are_pending_wears_both_marks(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A quarantined note re-read during an outage keeps its last-known
+    status with ``facts_state`` pending: its ring stays the quarantined red
+    and is still the pending double ring."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    nodes = [
+        {**node, "facts_state": "pending"} if node["id"] in (LEGACY, CAPACITY) else node
+        for node in page.payload["nodes"]
+    ]
+    drawn = _by_id(_run(page, payload={**page.payload, "nodes": nodes})["nodes"])
+
+    assert drawn[LEGACY]["borderStyle"] == "double"
+    assert drawn[LEGACY]["borderColour"] == _rgb("#bd4f2b")
+    # Pending alone: double and amber, apart from the quarantined red.
+    assert drawn[CAPACITY]["borderStyle"] == "double"
+    assert drawn[CAPACITY]["borderColour"] == _rgb("#d58a1f")
+
+
+@pytest.mark.parametrize(
+    ("weight", "step"),
+    [
+        ("0.123", "any"),
+        ("0.125", "any"),
+        ("0.01", "any"),
+        ("0.1", "0.05"),
+        ("0", "0.05"),
+    ],
+)
+def test_the_slider_starts_at_the_applied_threshold_even_off_its_grid(
+    lithos_lens_config_env: Path, weight: str, step: str
+) -> None:
+    """A range input snaps its value to its step: off the grid it takes any
+    value, so it shows the threshold the server applied, not a neighbour."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&min_weight={weight}")
+    result = _run(page)
+    applied = page.payload["filters"]["min_weight"]
+
+    assert page.dom["step"] == "0.05"
+    assert float(result["slider"]) == applied
+    assert result["sliderStep"] == step
+    assert result["sliderValue"] == result["hiddenCount"].split(" below ")[1].split()[0]
+    assert float(result["sliderValue"]) == applied
+
+
+def test_moving_an_off_grid_slider_puts_it_back_on_the_grid(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&min_weight=0.123")
+    result = _run(page, ["slider-input:0.13", "slider-change:0.15"])
+
+    assert result["sliderStep"] == "0.05"
+    assert result["sliderValue"] == "0.15"
+    assert result["assigns"] == [f"{ROUTE}?focus={PLAN}&min_weight=0.15"]
+
+
+def _nodes_with_values(page: Page, values: list[str | None]) -> dict:
+    """``page``'s payload with one node per value (the namespace), linked in
+    a chain so every node has a degree; ``None`` is a node with no value."""
+    base = page.payload["nodes"][1]
+    nodes = [
+        {
+            **base,
+            "id": f"n{i}",
+            "label": f"Note {i}",
+            "focus": False,
+            "namespace": value,
+        }
+        for i, value in enumerate(values)
+    ]
+    edge = page.payload["edges"][0]
+    edges = [
+        {**edge, "id": f"e{i}", "from": f"n{i}", "to": f"n{i + 1}"}
+        for i in range(len(nodes) - 1)
+    ]
+    return {**page.payload, "colour": "namespace", "nodes": nodes, "edges": edges}
+
+
+def test_values_past_the_palette_share_the_neutral_and_are_still_named(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Ten namespaces with unequal counts and a tie: the eight with the most
+    nodes (ties by name) take the slots; the other two and the node with no
+    namespace share the neutral; the key names all ten, in that order, each
+    with the fill its nodes are drawn with."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    counts = {
+        "alpha": 3,
+        "beta": 1,
+        "gamma": 2,
+        "delta": 1,
+        "epsilon": 1,
+        "zeta": 1,
+        "eta": 1,
+        "theta": 1,
+        "iota": 1,
+        "kappa": 1,
+    }
+    values: list[str | None] = [v for v, n in counts.items() for _ in range(n)]
+    values.append(None)
+    payload = _nodes_with_values(page, values)
+    result = _run(page, payload=payload)
+    drawn = _by_id(result["nodes"])
+    neutral = "#e4dfd5"
+
+    ranked = sorted(counts, key=lambda value: (-counts[value], value))
+    assert ranked[:3] == ["alpha", "gamma", "beta"]
+    fill = {}
+    for node in payload["nodes"]:
+        fill.setdefault(node["namespace"], set()).add(drawn[node["id"]]["colour"])
+    assert all(len(fills) == 1 for fills in fill.values())
+    in_slots, overflow = ranked[:8], ranked[8:]
+    assert overflow == ["theta", "zeta"]
+    slot_fills = [fill[value].copy().pop() for value in in_slots]
+    assert len(set(slot_fills)) == 8 and _rgb(neutral) not in slot_fills
+    for value in [*overflow, None]:
+        assert fill[value] == {_rgb(neutral)}
+    # Named, every one, with the swatch its nodes wear; then the no-value row.
+    assert [value for value, _ in result["keyNodes"]] == [*ranked, ""]
+    for value, swatch in result["keyNodes"]:
+        assert _rgb(swatch) == fill[value or None].copy().pop()
+
+
+def test_a_restored_page_recounts_its_search_from_the_field(
+    lithos_lens_config_env: Path,
+) -> None:
+    """htmx's history cache brings back the count's text but not the field's
+    value: the count follows the field, not the stale text."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    emptied = _run(page, dom={"searchValue": "", "searchCount": "1 match"})
+    kept = _run(page, dom={"searchValue": "rollback", "searchCount": "7 matches"})
+
+    assert emptied["searchCount"] == "" and emptied["matched"] == []
+    assert kept["searchCount"] == "1 match" and kept["matched"] == [ROLLBACK]
+
+
+def test_a_partial_edge_is_faint_and_keeps_its_stroke_arrow_and_label(
+    lithos_lens_config_env: Path,
+) -> None:
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    partial = {UNRESOLVED, RESOLVED, "edge_7d2c0e95b463", "edge_4c1e9a7b20d3"}
+    marked = {
+        **page.payload,
+        "edges": [
+            {**edge, "partial": edge["id"] in partial} for edge in page.payload["edges"]
+        ],
+    }
+    whole = _by_id(_run(page)["edges"])
+    result = _run(page, payload=marked)
+    faint = _by_id(result["edges"])
+
+    for edge_id in partial:
+        assert faint[edge_id]["opacity"] < whole[edge_id]["opacity"] == 1
+        for key in ("lineStyle", "arrow", "label", "colour", "width"):
+            assert faint[edge_id][key] == whole[edge_id][key], (edge_id, key)
+    assert faint["edge_7d2c0e95b463"]["lineStyle"] == "dotted"  # derived_from
+    assert faint[UNRESOLVED]["lineStyle"] == "dashed"
+    assert faint[RESOLVED]["label"] == "superseded"
+    for edge_id in set(faint) - partial:
+        assert faint[edge_id]["opacity"] == 1
+    assert "partial" in result["keyMarks"]
+    assert "partial" not in _run(page)["keyMarks"]
+
+
+def test_the_muted_and_neutral_edges_are_grey(lithos_lens_config_env: Path) -> None:
+    """The colours the brief names, pinned here rather than read back from
+    the script's palette: resolved contradiction muted grey, unknown type
+    neutral grey, wiki-link light grey — each a grey (r, g, b within a few
+    steps of one another)."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    edges = _by_id(_run(page)["edges"])
+    wiki = next(e["id"] for e in page.payload["edges"] if e["kind"] == "wiki_link")
+    expected = {
+        RESOLVED: "#a3a8a4",
+        "edge_f29d84a6130c": "#8d8d8d",  # assesses: unknown
+        wiki: "#b8b3aa",
+    }
+
+    for edge_id, colour in expected.items():
+        drawn = edges[edge_id]["colour"]
+        assert drawn == _rgb(colour), edge_id
+        rgb = [int(part) for part in drawn[4:-1].split(",")]
+        assert max(rgb) - min(rgb) <= 14, (edge_id, drawn)
+
+
+def _typed_like_layers() -> FakeLithosClient:
+    """The demo graph with two typed rows stored as ``wiki_link`` and
+    ``provenance`` — legitimate unvalidated types — beside a genuine wiki-link
+    (plan → rollback) and a genuine provenance pair (plan → legacy)."""
+    fake = FakeLithosClient()
+    renamed = {"edge_4c1e9a7b20d3": "wiki_link", "edge_a07c5f3e18b2": "provenance"}
+    edges = tuple(
+        {**row, "type": renamed[row["edge_id"]]} if row["edge_id"] in renamed else row
+        for row in fake.dataset.knowledge_edges
+    )
+    neighbourhoods = dict(fake.dataset.related_neighborhoods)
+    neighbourhoods[PLAN] = RelatedNeighborhood(
+        links=(RelatedRef(id=ROLLBACK, title="Influx rollback route"),),
+        sources=(RelatedRef(id=LEGACY, title="Legacy ingest approach"),),
+    )
+    fake.dataset = replace(
+        fake.dataset, knowledge_edges=edges, related_neighborhoods=neighbourhoods
+    )
+    return fake
+
+
+def test_a_typed_row_spelled_like_a_layer_is_drawn_and_clicked_as_typed(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Typed or layer is ``kind``, never ``type``: a stored ``wiki_link`` or
+    ``provenance`` row is an unknown typed edge — its raw label, its weight's
+    width, an edge panel on click — while the genuine layer pairs keep their
+    layer style and open nothing."""
+    with _lens(lithos_lens_config_env, _typed_like_layers()) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+        by_id = _by_id(page.payload["edges"])
+        typed = ["edge_4c1e9a7b20d3", "edge_a07c5f3e18b2"]
+        layers = [e["id"] for e in page.payload["edges"] if e["kind"] != "typed"]
+        result = _run(page)
+        clicks = {
+            edge_id: _run(page, [f"tap-edge:{edge_id}", "swap"])
+            for edge_id in [*typed, *layers]
+        }
+        fragments = {
+            edge_id: client.get(clicks[edge_id]["ajax"][0]["path"]) for edge_id in typed
+        }
+    drawn = _by_id(result["edges"])
+
+    assert sorted(by_id[e]["kind"] for e in layers) == ["provenance", "wiki_link"]
+    for edge_id in typed:
+        edge = by_id[edge_id]
+        assert edge["kind"] == "typed"
+        assert edge["style"]["class"] == "kedge-unknown"
+        assert drawn[edge_id]["label"] == edge["type"]
+        assert drawn[edge_id]["colour"] == _rgb("#8d8d8d")
+        assert drawn[edge_id]["width"] == pytest.approx(
+            1 + 5 * (edge["weight"] - 0.1) / 0.9
+        )
+        assert drawn[edge_id]["arrow"] == "triangle"
+        assert _query(clicks[edge_id]["pushes"][0]["url"])["edge"] == edge_id
+        assert 'data-kgraph-panel="edge"' in fragments[edge_id].text
+    for edge_id in layers:
+        assert drawn[edge_id]["width"] == 1 and drawn[edge_id]["label"] == ""
+        assert drawn[edge_id]["lineStyle"] == (
+            "solid" if by_id[edge_id]["kind"] == "wiki_link" else "dotted"
+        )
+        assert clicks[edge_id]["ajax"] == [] and clicks[edge_id]["pushes"] == []

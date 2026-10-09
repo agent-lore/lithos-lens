@@ -84,6 +84,8 @@
   // Weight → width, linear over [0.1, 1.0] (PRD D6); a weight the row does
   // not carry (a layer pair, a row an event inserted) draws at the thin end.
   const WEIGHT_FLOOR = 0.1;
+  //: The min-weight slider's increment (S4 D4).
+  const SLIDER_STEP = 0.05;
   const WIDTH_MIN = 1;
   const WIDTH_MAX = 6;
   //: An unresolved contradiction is drawn wider than its weight alone says.
@@ -156,6 +158,15 @@
     return Number.isInteger(weight) ? weight.toFixed(1) : String(weight);
   }
 
+  function onSliderGrid(weight) {
+    const steps = weight / SLIDER_STEP;
+    return Math.abs(steps - Math.round(steps)) < 1e-9;
+  }
+
+  function snapToSlider(value) {
+    return Math.round(Number(value) / SLIDER_STEP) / Math.round(1 / SLIDER_STEP);
+  }
+
   function plural(count, one, many) {
     return count + " " + (count === 1 ? one : many);
   }
@@ -222,6 +233,9 @@
     Object.keys(data || {}).forEach(function (key) { item.dataset[key] = data[key]; });
     return item;
   }
+
+  //: The address the picture on screen was drawn or last pushed for.
+  let shownHref = "";
 
   // ── Drawing ─────────────────────────────────────────────────────────────
 
@@ -319,12 +333,6 @@
       { selector: "node.focus", style: { "border-width": 3, "border-color": INK } },
       // A missing note: dashed, its short id as its label, never dropped.
       { selector: "node.ghost", style: { "border-style": "dashed", "border-width": 2 } },
-      // Last-known facts, re-read pending: a double ring, apart from the
-      // ghost's dashed outline.
-      {
-        selector: "node.pending",
-        style: { "border-style": "double", "border-width": 4, "border-color": WARNING }
-      },
       {
         selector: "node.archived",
         style: { "background-color": ARCHIVED, color: MUTED, opacity: 0.6 }
@@ -333,6 +341,19 @@
       {
         selector: "node.quarantined",
         style: { "border-width": 3, "border-color": ACCENT, "border-style": "solid" }
+      },
+      // Last-known facts, re-read pending: a double ring, apart from the
+      // ghost's dashed outline.
+      {
+        selector: "node.pending",
+        style: { "border-style": "double", "border-width": 4, "border-color": WARNING }
+      },
+      // Both at once — a quarantined note whose re-read is pending keeps its
+      // last-known status: the ring stays red AND double, so neither mark
+      // hides the other.
+      {
+        selector: "node.pending.quarantined",
+        style: { "border-style": "double", "border-width": 5, "border-color": ACCENT }
       },
       {
         selector: "edge",
@@ -467,6 +488,23 @@
     // ── Clicks open the S5 panel ────────────────────────────────────────
     const host = document.querySelector("#kgraph-panel");
     const panelSource = document.querySelector("[data-kgraph-panel-source]");
+    //: The canvas click whose fragment is awaited: its page URL and, once
+    //: htmx has issued it, its request.
+    let pendingPush = null;
+    if (panelSource) {
+      panelSource.addEventListener("htmx:beforeRequest", function (event) {
+        if (pendingPush && !pendingPush.xhr) pendingPush.xhr = event.detail.xhr;
+      });
+    }
+    if (host) {
+      host.addEventListener("htmx:afterSwap", function (event) {
+        if (!pendingPush || !event.detail || event.detail.xhr !== pendingPush.xhr) return;
+        const page = pendingPush.page;
+        pendingPush = null;
+        window.history.pushState({ kgraph: true }, "", page);
+        shownHref = window.location.href;
+      });
+    }
 
     function openPanel(changes) {
       const pageQuery = queryWith(changes);
@@ -478,9 +516,12 @@
         window.location.assign(page);
         return;
       }
-      // htmx pushes the page URL once the fragment is swapped in — and not
-      // at all when the server answers `HX-Redirect` instead.
-      panelSource.setAttribute("hx-push-url", page);
+      // The page URL is pushed once THIS request's fragment is in the host
+      // (below) — not by `hx-push-url`, which htmx pushes before it swaps.
+      // A request the server answers with `HX-Redirect`, or that a later
+      // click (the host's `hx-sync` replace) aborts, never swaps: nothing is
+      // pushed for it.
+      pendingPush = { page: page, xhr: null };
       window.htmx.ajax("GET", PANEL_PATH + "?" + panelParams.toString(), {
         source: panelSource,
         target: "#kgraph-panel",
@@ -516,9 +557,19 @@
     const slider = document.querySelector("[data-kgraph-min-weight]");
     const sliderValue = document.querySelector("[data-kgraph-min-weight-value]");
     if (slider) {
+      // A threshold off the slider's grid (a hand-typed `min_weight=0.123`,
+      // a configured default) is shown as applied, not rounded to a
+      // neighbour: the slider takes any value until it is moved, and the
+      // first move puts it back on the grid.
+      if (!onSliderGrid(minWeight)) slider.step = "any";
       slider.value = weightText(minWeight);
       if (sliderValue) sliderValue.textContent = weightText(minWeight);
       slider.addEventListener("input", function () {
+        if (slider.step === "any") {
+          const snapped = snapToSlider(slider.value);
+          slider.step = String(SLIDER_STEP);
+          slider.value = weightText(snapped);
+        }
         if (sliderValue) sliderValue.textContent = slider.value;
       });
       slider.addEventListener("change", function () {
@@ -573,21 +624,23 @@
 
     const search = document.querySelector("[data-kgraph-search]");
     const searchCount = document.querySelector("[data-kgraph-search-count]");
-    if (search) {
-      search.addEventListener("input", function () {
-        const needle = String(search.value || "").trim().toLowerCase();
-        cy.nodes().removeClass("match");
-        if (!needle) {
-          if (searchCount) searchCount.textContent = "";
-          return;
-        }
-        const hits = cy.nodes().filter(function (element) {
-          return String(element.data("label") || "").toLowerCase().indexOf(needle) !== -1;
-        });
-        hits.addClass("match");
-        if (searchCount) searchCount.textContent = plural(hits.length, "match", "matches");
+    function applySearch() {
+      const needle = String((search && search.value) || "").trim().toLowerCase();
+      cy.nodes().removeClass("match");
+      if (!needle) {
+        if (searchCount) searchCount.textContent = "";
+        return;
+      }
+      const hits = cy.nodes().filter(function (element) {
+        return String(element.data("label") || "").toLowerCase().indexOf(needle) !== -1;
       });
+      hits.addClass("match");
+      if (searchCount) searchCount.textContent = plural(hits.length, "match", "matches");
     }
+    if (search) search.addEventListener("input", applySearch);
+    // From the field as it stands: a page htmx restored from its history
+    // cache brings back the count text but not the field's value.
+    applySearch();
 
     // ── The canvas's key: the text legend's lines, the colours present ──
     const edgeKey = document.querySelector("[data-kgraph-key-edges]");
@@ -606,14 +659,17 @@
     if (nodeKey) {
       const items = [element("li", "kgraph-key-heading",
         "Colour: " + (mode === "type" ? "note type" : "namespace"))];
-      colours.values.slice(0, NODE_PALETTE.length).forEach(function (value) {
-        items.push(keyItem(swatch(colours.slots[value]), value, { keyValue: value }));
+      // Every value present, most nodes first; one past the palette's slots
+      // is named with the neutral it shares.
+      colours.values.forEach(function (value) {
+        items.push(keyItem(swatch(colours.slots[value] || NODE_NEUTRAL), value, { keyValue: value }));
       });
-      const neutral = payload.nodes.some(function (node) {
-        const value = colourValue(node, mode);
-        return value === null || !colours.slots[value];
+      const unvalued = payload.nodes.some(function (node) {
+        return colourValue(node, mode) === null;
       });
-      if (neutral) items.push(keyItem(swatch(NODE_NEUTRAL), "other or unknown", { keyValue: "" }));
+      if (unvalued) {
+        items.push(keyItem(swatch(NODE_NEUTRAL), "none (not found or not read)", { keyValue: "" }));
+      }
       items.push(element("li", "kgraph-key-heading", "Size: connections in this view"));
       nodeKey.replaceChildren.apply(nodeKey, items);
     }
@@ -636,6 +692,7 @@
     const key = document.querySelector("[data-kgraph-key]");
     if (key) key.hidden = false;
 
+    shownHref = window.location.href;
     container.dataset.canvasState = "ready";
     container.dataset.canvasNodes = String(cy.nodes().length);
     container.dataset.canvasEdges = String(cy.edges().length);
@@ -656,10 +713,22 @@
   } else {
     draw();
   }
-  // Back or Forward onto an entry a panel click pushed: htmx restores the
-  // page's markup from its history cache, and the picture with it is gone.
+  // Back or Forward onto an entry a text panel link pushed: htmx restores
+  // the page's markup from its history cache, and the picture with it is
+  // gone — so it is drawn again.
+  //
+  // An entry a CANVAS click pushed is not htmx's (it is pushed after the
+  // swap, which htmx's own history cannot snapshot), nor is the entry the
+  // page loaded on until htmx first pushes: Back or Forward onto one of
+  // those reloads it, so the server renders that URL's panel and picture.
   if (!window.LithosLensKnowledgeGraphBound) {
     window.LithosLensKnowledgeGraphBound = true;
     document.addEventListener("htmx:historyRestore", draw);
+    window.addEventListener("popstate", function (event) {
+      if (event.state && event.state.htmx) return;
+      if (!document.querySelector("[data-kgraph-canvas]")) return;
+      if (window.location.href === shownHref) return;
+      window.location.reload();
+    });
   }
 })();

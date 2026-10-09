@@ -1740,17 +1740,20 @@ draws stays drawn whatever the slider says):
   connections in this view"), filled by namespace — or by `note_type` with
   `colour=type` — from a fixed slot palette that shares no colour with the
   edges: the values present take slots by node count (ties by name), and
-  overflow and missing values (a ghost, an unread node) share one neutral; a
+  overflow and missing values (a ghost, an unread node) share one neutral —
+  the key still names every value present; a
   ghost dashed with its short id, a node whose facts are pending a double
-  amber ring, `quarantined` the note page's red ring, `archived` greyed
+  amber ring (double and red when it is also quarantined), `quarantined`
+  the note page's red ring, `archived` greyed
 - the **key** under the canvas: the text legend's lines in its order, the
   node colours present, and the marks present
 - **layout** once per load: concentric by hop around the focus, or a
   force-directed `cose` from a circle in scoped mode; nothing re-lays out
 - **controls**, each navigating to the page's own query with one key
   changed (selection and `pin` kept) so text, payload and canvas re-render
-  together: the min-weight slider (0–1 in 0.05 steps, showing its value
-  while dragged, navigating on release) beside the server's "N edges below W
+  together: the min-weight slider (0–1 in 0.05 steps, starting at the
+  applied threshold even off that grid, showing its value while dragged,
+  navigating on release) beside the server's "N edges below W
   hidden"; one checkbox per provenance group present with its count (the
   last one on cannot be turned off; all on writes no `provenance=`); in
   focus mode the depth (the level not drawn states its would-be node count);
@@ -1760,8 +1763,10 @@ draws stays drawn whatever the slider says):
 - **clicks**: a node opens its panel and a typed edge its panel through
   `GET /knowledge/graph/panel` with the page's `render=` (htmx, synced on the
   host like the text's links), building `selected`/`edge`/`pin` as
-  `knowledge_graph_url` does; the page URL is pushed once the fragment is
-  swapped. A wiki-link or provenance pair has no panel. The selection lights
+  `knowledge_graph_url` does; the page URL is pushed only once that request's
+  fragment is swapped in (not for a request a later click aborted or the
+  server answered with `HX-Redirect`), and Back or Forward onto such an entry
+  reloads it. A wiki-link or provenance pair has no panel. The selection lights
   itself and its neighbours (an edge: itself and its two endpoints) and dims
   the rest — on load too, from `edge=` or else `selected=`, never `pin=`; a
   background tap clears it and leaves the URL. A page htmx restores from its
