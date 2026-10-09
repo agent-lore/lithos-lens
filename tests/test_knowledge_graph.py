@@ -210,6 +210,35 @@ def test_the_selected_edge_is_drawn_whatever_the_filters_say() -> None:
     }
 
 
+def test_a_selected_edge_behind_a_hidden_one_is_still_drawn_at_depth_two() -> None:
+    """Review f-001: C is reached only by the faint e-fc, so e-cg (C → G)
+    is two hops out behind a hidden edge. Selected, it is drawn with C and G
+    at their unfiltered hops; e-fc stays hidden; e-cg is not counted hidden;
+    and both count towards the cap, whose remedy (depth 1, out of reach of
+    e-cg) is counted the same way."""
+    selected = KnowledgeGraphFilters(selected_edge="e-cg")
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=selected)
+    assert "e-cg" in {e.edge_id for e in typed.edges}
+    assert "e-fc" not in {e.edge_id for e in typed.edges}
+    assert (typed.hops["C"], typed.hops["G"]) == (1, 2)
+    assert typed.hidden.by_weight == 2  # e-fc, e-aw
+    assert typed.hidden.total == 2  # not e-cg
+    # Out of reach at depth 1: not drawn there.
+    assert "G" not in ego_typed_graph(snapshot(), "F", filters=selected).hops
+
+    refused = ego_typed_graph(snapshot(), "F", depth=2, filters=selected, max_nodes=8)
+    assert refused.refusal is not None
+    assert (refused.refusal.count, refused.refusal.remedy_depth) == (9, 1)
+    assert refused.refusal.remedy_count == 5
+
+    no_other = KnowledgeGraphFilters(
+        provenance=frozenset({"inferred"}), selected_edge="e-be"
+    )
+    typed = ego_typed_graph(snapshot(), "F", depth=2, filters=no_other)
+    assert {"B", "E"} <= set(typed.hops)  # behind e-fb, hidden by provenance
+    assert "e-fb" not in {e.edge_id for e in typed.edges}
+
+
 def test_the_selected_edge_counts_towards_the_cap() -> None:
     # Five nodes under the default filter; the faint e-fc brings C in.
     assert ego_typed_graph(snapshot(), "F", max_nodes=5).refusal is None

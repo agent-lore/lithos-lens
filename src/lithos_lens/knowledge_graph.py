@@ -15,7 +15,8 @@ only renders:
   "hide faint edges" is a way under the cap. An edge with no known weight
   (NULL upstream, or a ``partial`` row) is never hidden by weight: unknown is
   not faint. The edge ``edge=`` selects is exempt from both filters, so an
-  entry link to its panel always draws it; it still counts towards the cap.
+  entry link to its panel always draws it — within ``depth`` hops, even when
+  a hidden edge is the only way to it; it still counts towards the cap.
 - **The cap is a refusal**, checked before any ``lithos_related`` call or facts
   read so a refused scope spends nothing. It counts the focus and the typed
   endpoints (ghosts included) and names the first remedy that fits: depth 1,
@@ -146,6 +147,27 @@ def _expand(
     return hops, edges
 
 
+def _ego(
+    edges_of: Callable[[str], Sequence[KnowledgeEdge]],
+    focus: str,
+    depth: int,
+    filters: KnowledgeGraphFilters,
+) -> tuple[dict[str, int], dict[str, KnowledgeEdge]]:
+    """:func:`_expand`, plus the ``edge=`` selection when the filters hid the
+    path to it: a selected edge within ``depth`` hops of the focus is drawn
+    with its endpoints (at their unfiltered hop) whatever hides the way in."""
+    hops, edges = _expand(edges_of, focus, depth, filters)
+    selected = filters.selected_edge
+    if selected and selected not in edges:
+        reach, unfiltered = _expand(edges_of, focus, depth, _SHOW_ALL)
+        edge = unfiltered.get(selected)
+        if edge is not None:
+            edges[selected] = edge
+            for end in edge.endpoints:
+                hops.setdefault(end, reach[end])
+    return hops, edges
+
+
 def _scoped_nodes(edges: Iterable[KnowledgeEdge]) -> dict[str, int]:
     return {end: 0 for edge in edges for end in edge.endpoints}
 
@@ -216,11 +238,11 @@ def ego_typed_graph(
     count per depth is the same lookup at depth 1 and 2.
     """
     depth = min(max(depth, 1), MAX_DEPTH)
-    hops, edges = _expand(snapshot.edges_of, focus, depth, filters)
+    hops, edges = _ego(snapshot.edges_of, focus, depth, filters)
     _, unfiltered = _expand(snapshot.edges_of, focus, depth, _SHOW_ALL)
 
     def count_at(candidate: KnowledgeGraphFilters, at_depth: int = depth) -> int:
-        return len(_expand(snapshot.edges_of, focus, at_depth, candidate)[0])
+        return len(_ego(snapshot.edges_of, focus, at_depth, candidate)[0])
 
     would_be = {
         level: (len(hops) if level == depth else count_at(filters, level))

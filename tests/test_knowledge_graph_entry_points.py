@@ -316,6 +316,65 @@ def test_an_entry_link_opens_its_panel_whatever_the_weight_did_since_warming(
         assert (table.fetches, _edge_lists(fake)) == (fetches, edge_lists)
 
 
+@pytest.mark.parametrize(
+    "connector",
+    [{"weight": 0.03}, {"provenance_type": "frontmatter"}],
+    ids=["decayed", "provenance-filtered"],
+)
+def test_a_selected_edge_behind_a_hidden_connector_still_opens_at_depth_two(
+    lithos_lens_config_env: Path, connector: dict[str, object]
+) -> None:
+    """Review f-001: capacity ↔ legacy is two hops from the plan, reached only
+    through capacity → plan. With that connector decayed under the floor (or
+    filtered out by provenance) the selected edge is still drawn, with its
+    panel, and the connector stays hidden."""
+    selected = "edge_38c9d1f5e6a7"
+    connector_id = "edge_4c1e9a7b20d3"
+    fake = _with_edges(_row(connector_id, **connector), _row(selected))
+    url = f"/knowledge/graph?focus={PLAN}&depth=2&edge={selected}&provenance=inferred"
+
+    html = _get(lithos_lens_config_env, url, fake)
+
+    assert _panel_opened(html, selected)
+    assert f'aria-label="Edge {connector_id}"' not in html
+    assert f'aria-label="Edge {selected}"' in html
+
+
+def test_a_faint_edges_node_details_reload_to_the_same_view(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Review f-003: legacy is reached only by the faint 0.03 legacy → plan
+    row. From that edge's panel, the legacy card's Node details link pins
+    the edge, so following it as a full page (or reloading the URL a click
+    pushed) draws legacy and opens its node panel — the panel the click's
+    fragment draws from the kept view."""
+    fake = _with_edges(_row(FAINT_LEGACY_PLAN))
+    with _client(lithos_lens_config_env, fake) as client:
+        edge_page = client.get(
+            f"/knowledge/graph?focus={PLAN}&edge={FAINT_LEGACY_PLAN}"
+        ).text
+        assert _panel_opened(edge_page, FAINT_LEGACY_PLAN)
+        card = edge_page.split(f'data-kgraph-card="{LEGACY}"', 1)[1]
+        details = re.search(r"<a ([^>]*data-kgraph-node-details)", card)
+        assert details is not None
+        href, hx_get = (
+            html_lib.unescape(value)
+            for value in re.findall(
+                r'(?:^|\s)(?:href|hx-get)="([^"]+)"', details.group(1)
+            )
+        )
+        assert href == (
+            f"/knowledge/graph?focus={PLAN}&selected={LEGACY}&pin={FAINT_LEGACY_PLAN}"
+        )
+
+        full = client.get(href).text
+        fragment = client.get(hx_get).text
+
+    opened = f'data-kgraph-panel="node" data-kgraph-panel-id="{LEGACY}"'
+    assert opened in full
+    assert opened in fragment
+
+
 def test_an_edge_the_snapshot_lacks_renders_a_notice_and_fetches_nothing(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -616,6 +675,33 @@ def test_the_landing_links_the_graph_with_the_unresolved_count(
         '<a href="/knowledge/graph?type=contradicts" data-unresolved-contradictions>'
         "2 unresolved contradictions</a>"
     ) in line.group(1)
+
+
+@pytest.mark.parametrize(
+    ("unresolved", "text"),
+    [
+        (0, "0 unresolved contradictions"),
+        (1, "1 unresolved contradiction"),
+        (3, "3 unresolved contradictions"),
+    ],
+)
+def test_the_landing_count_follows_the_snapshots_unresolved_rows(
+    lithos_lens_config_env: Path, unresolved: int, text: str
+) -> None:
+    """The count is the snapshot's facet, not the demo's 2: ``unresolved``
+    NULL-state rows beside the resolved one, worded singular or plural."""
+    rows = _demo_rows_except_contradictions(RESOLVED_LEGACY_PLAN)
+    rows += [
+        {**_row(UNRESOLVED_PLAN_ROLLBACK), "edge_id": f"edge_unresolved_{n}"}
+        for n in range(unresolved)
+    ]
+
+    html = _get(lithos_lens_config_env, "/knowledge", _with_edges(*rows))
+
+    assert (
+        '<a href="/knowledge/graph?type=contradicts" data-unresolved-contradictions>'
+        f"{text}</a>"
+    ) in html
 
 
 def test_the_landing_count_is_absent_when_the_snapshot_is_unavailable(

@@ -218,6 +218,9 @@ The current application exposes these routes:
   global graph with `?type=` and/or `?namespace=`; filters `min_weight=` and
   `provenance=`; the node panel with `selected=<note-id>` or the edge panel
   with `edge=<edge_id>` (one at a time; `edge` wins when both are given).
+  `pin=<edge_id>` beside `selected=` keeps that edge drawn as `edge=` would:
+  a Node details link on an edge's view carries it, so the page it loads is
+  the view the link was on.
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
   query as the page, plus `render=<id>` naming the view that page drew: the
@@ -1504,9 +1507,10 @@ JSON payload:
   inferred (`inferred`), reinforced (`consolidation`), declared
   (`frontmatter`) and other (everything else, NULL included) — apply before
   depth 2 expands and before the cap, so a hidden edge pulls in nothing. The
-  edge `edge=` names is exempt from both: it and its endpoints are drawn and
-  it is not counted hidden, though it counts towards the cap like any drawn
-  edge
+  edge `edge=` (or `pin=`) names is exempt from both: within `depth` hops of
+  the focus it and its endpoints are drawn even when a hidden edge is the only
+  way to it, and it is not counted hidden, though it counts towards the cap
+  (and its remedies) like any drawn edge
 - **scoped global**: the snapshot rows of a `type` and/or `namespace`
   (over the table's bound, a direct filtered `lithos_edge_list` read instead),
   the same filters, capped at 500 nodes

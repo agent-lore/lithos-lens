@@ -227,8 +227,20 @@ def test_a_link_carries_one_selection_the_later_one() -> None:
     assert knowledge_graph_url(on_node, edge=REFINES) == (
         f"{ROUTE}?focus={PLAN}&edge={REFINES}"
     )
+    # A node opened from an edge's view keeps that edge drawn (pin=).
     assert knowledge_graph_url(on_edge, selected=CAPACITY) == (
-        f"{ROUTE}?focus={PLAN}&selected={CAPACITY}"
+        f"{ROUTE}?focus={PLAN}&selected={CAPACITY}&pin={REFINES}"
+    )
+    pinned = KnowledgeGraphParams(focus=PLAN, selected=CAPACITY, pin=REFINES)
+    assert knowledge_graph_url(pinned, selected=LEGACY) == (
+        f"{ROUTE}?focus={PLAN}&selected={LEGACY}&pin={REFINES}"
+    )
+    # A new edge is its own pin; a new scope keeps none.
+    assert knowledge_graph_url(pinned, edge=SUPPORTS) == (
+        f"{ROUTE}?focus={PLAN}&edge={SUPPORTS}"
+    )
+    assert knowledge_graph_url(pinned, focus=LEGACY, selected="", edge="") == (
+        f"{ROUTE}?focus={LEGACY}"
     )
     # A change that sets neither keeps the selection the page carries.
     assert knowledge_graph_url(on_edge, depth=2) == (
@@ -437,7 +449,10 @@ def test_edge_renders_the_edge_panel_with_the_rationale_from_evidence_json(
     assert re.findall(r'data-kgraph-card="([^"]+)"', host) == [PLAN, LEGACY]
     assert _facts(_card(host, PLAN)) == PLAN_FACTS
     assert _facts(_card(host, LEGACY)) == LEGACY_FACTS
-    assert f'hx-get="{PANEL}?focus={PLAN}&amp;selected={LEGACY}&amp;render=' in host
+    assert (
+        f'hx-get="{PANEL}?focus={PLAN}&amp;selected={LEGACY}&amp;pin={REFINES}'
+        "&amp;render="
+    ) in host
 
 
 @pytest.mark.parametrize(
@@ -1141,8 +1156,9 @@ def test_the_links_the_page_emits_carry_its_scope_and_filters(
 
         details = _link(_card(edge_fragment, endpoint), "data-kgraph-node-details")
         node_href, node_get = _attr(details, "href"), _attr(details, "hx-get")
-        assert node_href == f"{ROUTE}?{query}&selected={endpoint}"
-        assert node_get == f"{PANEL}?{query}&selected={endpoint}&render={render_id}"
+        node_query = f"{query}&selected={endpoint}&pin={edge_id}"
+        assert node_href == f"{ROUTE}?{node_query}"
+        assert node_get == f"{PANEL}?{node_query}&render={render_id}"
         node_fragment = _get(client, node_get).strip()
         assert _unrendered(node_fragment) == _unrendered(_host(_get(client, node_href)))
         unfiltered = _get(

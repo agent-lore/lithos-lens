@@ -95,6 +95,7 @@ _URL_KEYS = (
     "provenance",
     "selected",
     "edge",
+    "pin",
 )
 
 
@@ -115,6 +116,9 @@ class KnowledgeGraphParams:
     provenance: tuple[str, ...] = ()
     edge: str = ""
     selected: str = ""
+    #: The edge a ``selected=`` node's view keeps drawn: the ``edge=`` of the
+    #: view its Node details link was on, so a reload draws that same view.
+    pin: str = ""
 
     @property
     def mode(self) -> GraphMode:
@@ -131,7 +135,7 @@ class KnowledgeGraphParams:
         weight = self.min_weight if self.min_weight is not None else default_min_weight
         groups = frozenset(self.provenance or PROVENANCE_GROUPS)
         return KnowledgeGraphFilters(
-            min_weight=weight, provenance=groups, selected_edge=self.edge
+            min_weight=weight, provenance=groups, selected_edge=self.edge or self.pin
         )
 
 
@@ -186,7 +190,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     ``edge`` and ``selected`` are ids kept as given — one at a time: a
     request carrying both is read as ``edge`` alone, whatever their order
     (no link the page writes carries both; :func:`knowledge_graph_url`
-    clears one when it sets the other).
+    clears one when it sets the other). ``pin`` is read beside ``selected``
+    only: an ``edge=`` is its own pin.
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
@@ -203,6 +208,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         provenance=_provenance(_value(query, "provenance")),
         edge=edge,
         selected="" if edge else _value(query, "selected"),
+        pin="" if edge else _value(query, "pin"),
     )
 
 
@@ -224,11 +230,18 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
 def _graph_url(
     path: str, params: KnowledgeGraphParams | None, changes: dict[str, Any]
 ) -> str:
-    # One selection per link (D10): setting one clears the other.
+    # A new scope keeps no pin; an edge selection is its own.
+    if changes.keys() & {"focus", "type", "namespace"} or changes.get("edge"):
+        changes.setdefault("pin", "")
+    # One selection per link (D10): setting one clears the other. A node
+    # opened from a view drawn for an edge pins that edge, so the page the
+    # link loads draws the view the click came from (D13).
     if changes.get("edge"):
         changes["selected"] = ""
     elif changes.get("selected"):
         changes["edge"] = ""
+        if params is not None:
+            changes.setdefault("pin", params.edge or params.pin)
     merged = replace(params or KnowledgeGraphParams(), **changes)
     pairs = [(key, _url_value(key, merged)) for key in _URL_KEYS]
     query = urlencode([(key, value) for key, value in pairs if value])
@@ -246,7 +259,8 @@ def knowledge_graph_url(
     does not pin today's configured depth or weight; ``type``/``namespace``
     are dropped from a focus link, as the parser drops them. A change that
     sets ``edge`` clears ``selected`` and one that sets ``selected`` clears
-    ``edge``, so a link carries one selection — the later click's.
+    ``edge``, so a link carries one selection — the later click's; a
+    ``selected`` set on a view drawn for an edge carries it as ``pin``.
     """
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
 
@@ -278,7 +292,7 @@ def _scope(params: KnowledgeGraphParams) -> str:
     """The scope and filters a view is drawn for, as the URL builder writes
     them: one canonical spelling, so what the page's own links leave out (a
     ``depth`` outside focus mode) cannot make its view unfindable."""
-    return knowledge_graph_url(params, selected="", edge="")
+    return knowledge_graph_url(params, selected="", edge="", pin="")
 
 
 class RenderedViews:
