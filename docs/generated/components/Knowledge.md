@@ -120,7 +120,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 - def `node_panel` — The panel for ``node_id`` when the view draws it, else ``None``.
 - def `edge_panel` — The panel for the typed edge ``edge_id`` names when drawn, else ``None``.
 - def `graph_panel` — The one panel a request selects: ``edge`` when given (it wins over ``selected``, S5 S1), else ``selected``; ``None`` when not drawn.
-- def `graph_payload` — The JSON-ready payload the canvas draws from: the view's nodes and edges, legend, hidden counts, refusal and ``as_of``, nothing more.
+- def `graph_payload` — The JSON-ready payload the canvas draws from: the view's nodes and edges with each edge's style, legend, hidden counts, provenance facets, unresolved-contradictions count, refusal and ``as_of`` — and the node ``colour`` mode the request asked for, nothing more.
 
 ### `lithos_lens.knowledge_landing`
 - class `NamespaceFacet` — One entry of the namespace filter row: a namespace and its note count.

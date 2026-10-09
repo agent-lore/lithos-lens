@@ -518,6 +518,12 @@ def test_the_payload_names_every_node_and_edge_the_view_model_holds() -> None:
         "conflict_state": None,
         "direction": "directed",
         "partial": False,
+        "style": {
+            "class": "kedge-supports",
+            "stroke": "solid",
+            "arrowhead": True,
+            "label": "",
+        },
     }
     x = next(n for n in payload["nodes"] if n["id"] == "X")
     assert (x["ghost"], x["facts_state"], x["label"]) == (True, "missing", "X")
@@ -593,6 +599,12 @@ def test_the_payload_serialises_every_fact_direction_and_conflict_state() -> Non
         "conflict_state": None,
         "direction": "symmetric",
         "partial": False,
+        "style": {
+            "class": "kedge-related-to",
+            "stroke": "solid",
+            "arrowhead": False,
+            "label": "",
+        },
     }
     assert edges["e2"] == {
         "id": "e2",
@@ -606,6 +618,12 @@ def test_the_payload_serialises_every_fact_direction_and_conflict_state() -> Non
         "conflict_state": "superseded",
         "direction": "symmetric",
         "partial": False,
+        "style": {
+            "class": "kedge-contradicts kedge-resolved",
+            "stroke": "dashed",
+            "arrowhead": False,
+            "label": "superseded",
+        },
     }
     assert edges["e3"] == {
         "id": "e3",
@@ -619,6 +637,12 @@ def test_the_payload_serialises_every_fact_direction_and_conflict_state() -> Non
         "conflict_state": None,
         "direction": "as_recorded",
         "partial": True,
+        "style": {
+            "class": "kedge-unknown",
+            "stroke": "solid",
+            "arrowhead": True,
+            "label": "assesses",
+        },
     }
     assert payload["legend"] == [
         {

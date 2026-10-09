@@ -220,7 +220,8 @@ The current application exposes these routes:
   with `edge=<edge_id>` (one at a time; `edge` wins when both are given).
   `pin=<edge_id>` beside `selected=` keeps that edge drawn as `edge=` would:
   a Node details link on an edge's view carries it, so the page it loads is
-  the view the link was on.
+  the view the link was on. `colour=type` colours the canvas's nodes by note
+  type instead of namespace (§5.7, Knowledge graph canvas).
 - `GET /knowledge/graph/panel`
   The node or edge panel alone (§5.7, Knowledge graph panels), for the same
   query as the page, plus `render=<id>` naming the view that page drew: the
@@ -1582,7 +1583,8 @@ way it shows no counts and offers only the typed-in form.
    `graph_edge_table_ttl_s` s stale" (plus "the last refresh failed" for a
    stale snapshot), or "read directly from Lithos" for an over-bound global
    read, and no time at all when the table could not be read
-2. the **panel host**: the node or edge panel below, when `selected=` names
+2. the **canvas** and its toolbar (below) when the view draws any node;
+   then the **panel host**: the node or edge panel below, when `selected=` names
    a drawn node or `edge=` a drawn typed edge; when `edge=` names an edge the
    snapshot does not hold (created after its `as_of`, or since deleted), a
    notice saying so, with the `as_of` and that the snapshot refreshes every
@@ -1711,6 +1713,59 @@ edge-table fetch". Below, both endpoints as cards — title, chips, lede, a
 701px breakpoint (stacked below it) and reserves the place of the deferred
 pool's resolve action: "Resolving a contradiction is not yet a Lens action."
 — no form, no button, no write. Any other edge stacks its cards.
+
+**Knowledge graph canvas** (K2 S4) — an enhancement: the page is complete
+without it. A view that draws any node (not the picker, a refusal, an
+offline page or an empty scope) loads the vendored Cytoscape and
+`knowledge_graph.js` (not the task graph's `graph.js`: the two share
+Cytoscape and the stylesheet's conventions, no code), and renders a toolbar,
+the canvas and the canvas's key between the scope line and the panel host,
+all `hidden` until the script has drawn. The panel host stays full width
+under the canvas at every width. The canvas draws exactly the payload's
+nodes and edges — the server filtered them before its cap, so nothing is
+hidden or revealed client-side (an edge only its `edge=`/`pin=` exemption
+draws stays drawn whatever the slider says):
+
+- **edges** by the `style` each payload edge carries (`edge_style` for a
+  typed row; a layer pair's legend class, told apart by `kind`): one fixed
+  colour per known type, neutral grey labelled with the raw type for an
+  unknown one; arrowheads only where the style says (the directed types,
+  wiki-links, an unknown type as stored; never `related_to`, `analogy_to` or
+  `contradicts`); `derived_from` and provenance pairs dotted; wiki-links
+  thin grey; an unresolved `contradicts` red, dashed and drawn wider, a
+  resolved one muted, dashed and labelled with its resolution; width linear
+  in weight over [0.1, 1.0], a missing weight at the thin end; a `partial`
+  edge faint
+- **nodes** sized by degree in this view on a small range ("Size:
+  connections in this view"), filled by namespace — or by `note_type` with
+  `colour=type` — from a fixed slot palette that shares no colour with the
+  edges: the values present take slots by node count (ties by name), and
+  overflow and missing values (a ghost, an unread node) share one neutral; a
+  ghost dashed with its short id, a node whose facts are pending a double
+  amber ring, `quarantined` the note page's red ring, `archived` greyed
+- the **key** under the canvas: the text legend's lines in its order, the
+  node colours present, and the marks present
+- **layout** once per load: concentric by hop around the focus, or a
+  force-directed `cose` from a circle in scoped mode; nothing re-lays out
+- **controls**, each navigating to the page's own query with one key
+  changed (selection and `pin` kept) so text, payload and canvas re-render
+  together: the min-weight slider (0–1 in 0.05 steps, showing its value
+  while dragged, navigating on release) beside the server's "N edges below W
+  hidden"; one checkbox per provenance group present with its count (the
+  last one on cannot be turned off; all on writes no `provenance=`); in
+  focus mode the depth (the level not drawn states its would-be node count);
+  the node colour mode (`colour=type`, or no key for namespace); a search
+  that highlights the nodes whose label contains the text (no URL key); and
+  the unresolved-contradictions count drawn, when any
+- **clicks**: a node opens its panel and a typed edge its panel through
+  `GET /knowledge/graph/panel` with the page's `render=` (htmx, synced on the
+  host like the text's links), building `selected`/`edge`/`pin` as
+  `knowledge_graph_url` does; the page URL is pushed once the fragment is
+  swapped. A wiki-link or provenance pair has no panel. The selection lights
+  itself and its neighbours (an edge: itself and its two endpoints) and dims
+  the rest — on load too, from `edge=` or else `selected=`, never `pin=`; a
+  background tap clears it and leaves the URL. A page htmx restores from its
+  history is drawn again
 
 ### 5.8 Live Updates
 

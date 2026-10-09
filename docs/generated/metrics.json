@@ -22,7 +22,7 @@
         "max_function": "lithos_lens.events._iter_sse_lines"
       },
       "Knowledge": {
-        "functions_over_10": 5,
+        "functions_over_10": 6,
         "max_complexity": 18,
         "max_function": "lithos_lens.knowledge_facts.NoteFactsCache.lookup"
       },
@@ -57,7 +57,7 @@
         "max_function": "lithos_lens.telemetry.setup_telemetry"
       },
       "Web": {
-        "functions_over_10": 6,
+        "functions_over_10": 7,
         "max_complexity": 18,
         "max_function": "lithos_lens.knowledge_routes.register_knowledge_routes.knowledge"
       },
@@ -67,7 +67,7 @@
         "max_function": "lithos_lens.create_form.validate"
       }
     },
-    "functions_over_10": 55,
+    "functions_over_10": 57,
     "top_functions": [
       {
         "complexity": 43,
@@ -110,7 +110,7 @@
         "qualname": "lithos_lens.cancel_consequences.walk_downstream"
       }
     ],
-    "total_functions": 1179
+    "total_functions": 1181
   },
   "domain": {
     "associations": 157,
@@ -261,13 +261,13 @@
       },
       "Knowledge": {
         "classes": 54,
-        "functions": 205,
+        "functions": 207,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 4559,
+        "lines": 4602,
         "modules": 13,
         "public_symbols": 112,
-        "sloc": 3571
+        "sloc": 3611
       },
       "LithosClient": {
         "classes": 17,
@@ -334,10 +334,10 @@
         "functions": 194,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 880,
-        "lines": 6102,
+        "lines": 6113,
         "modules": 11,
         "public_symbols": 80,
-        "sloc": 4940
+        "sloc": 4947
       },
       "Writes": {
         "classes": 25,
@@ -360,13 +360,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 35905,
+    "total_lines": 35959,
     "total_modules": 86,
-    "total_sloc": 27903
+    "total_sloc": 27950
   },
   "tests": {
-    "ratio": 1.93,
-    "src_lines": 35905,
-    "test_lines": 69372
+    "ratio": 1.96,
+    "src_lines": 35959,
+    "test_lines": 70633
   }
 }

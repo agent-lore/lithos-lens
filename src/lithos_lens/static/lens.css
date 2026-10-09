@@ -2279,6 +2279,119 @@ button,
   padding: 0.75rem;
 }
 
+/* --- /knowledge/graph canvas (K2 S4) -------------------------------------
+
+   The toolbar, the Cytoscape box and its key, between the scope line and the
+   panel host, all full width. Every control wraps onto its own line at a
+   narrow viewport rather than widening the page. `knowledge_graph.js` owns
+   the colours drawn on the canvas and in the key's swatches. */
+.kgraph-toolbar {
+  margin: 0.75rem 0 0.25rem;
+}
+
+.kgraph-toolbar input[type="checkbox"],
+.kgraph-toolbar input[type="radio"] {
+  margin: 0 0.2rem 0 0;
+  padding: 0;
+  width: auto;
+}
+
+.kgraph-control {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.kgraph-control input[type="range"] {
+  padding: 0;
+  width: 8rem;
+}
+
+.kgraph-control input[type="search"] {
+  padding: 0.3rem 0.5rem;
+  width: 12rem;
+}
+
+.kgraph-control-group {
+  border: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.kgraph-control-group legend {
+  float: left;
+  font-weight: 600;
+  margin-right: 0.5rem;
+  padding: 0;
+}
+
+.kgraph-count-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.kgraph-canvas {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  height: clamp(18rem, 60vh, 32rem);
+  margin: 0.5rem 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.kgraph-key {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  gap: 0.5rem 1.5rem;
+  margin: 0 0 1rem;
+}
+
+.kgraph-key-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kgraph-key-list:empty {
+  display: none;
+}
+
+.kgraph-key-item {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.kgraph-key-heading {
+  font-weight: 600;
+}
+
+.kgraph-swatch {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-block;
+  height: 0.8rem;
+  width: 0.8rem;
+}
+
+.kgraph-swatch-line {
+  border: 0;
+  border-radius: 0;
+  border-top-width: 3px;
+  height: 0;
+  width: 1.4rem;
+}
+
 .resolve-panel {
   margin-top: 1rem;
   padding: 1.5rem;
