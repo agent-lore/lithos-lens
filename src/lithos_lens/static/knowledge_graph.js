@@ -345,6 +345,7 @@
     if (withoutFragment(target) !== withoutFragment(window.location.href)) {
       window.history.pushState({ kgraph: true }, "", page);
     }
+    syncRefresh();
     shownHref = window.location.href;
     lightFromUrl();
   }
@@ -355,6 +356,7 @@
   }
 
   function onTravel() {
+    syncRefresh();
     if (!panelHost) return;
     if (pendingPush) {
       const xhr = pendingPush.xhr;
@@ -371,6 +373,82 @@
     }
     retired = true;
     window.location.reload();
+  }
+
+  // ── "Graph changed — refresh" (D14): never an auto re-layout ────────────
+  //
+  // One `/knowledge/events` subscription per page load. A frame naming a
+  // node or edge this page drew — any frame, in a scoped-global view, where
+  // a new edge can bring in a note the page never drew — reveals the pill,
+  // and so do a `lens.refresh` and a stream that reopens after an error:
+  // either way frames may have been missed. The pill is an ordinary link to
+  // the page's current address (`syncRefresh`, below); the server
+  // re-renders from facts the event marked stale, so nothing is redrawn
+  // here.
+
+  const EVENTS_PATH = "/knowledge/events";
+  const KNOWLEDGE_EVENTS = [
+    "note.created",
+    "note.updated",
+    "note.deleted",
+    "note.renamed",
+    "edge.upserted"
+  ];
+
+  function namesDrawn(type, data) {
+    const payload = readPayload();
+    if (!payload || !Array.isArray(payload.nodes)) return false;
+    if (payload.mode === "global") return true;
+    const nodes = dict();
+    payload.nodes.forEach(function (node) { nodes[node.id] = true; });
+    const drawn = function (id) { return typeof id === "string" && nodes[id] === true; };
+    if (type !== "edge.upserted") return drawn(data.id);
+    const edges = dict();
+    (payload.edges || []).forEach(function (edge) { edges[edge.id] = true; });
+    const edgeId = data.edge_id;
+    return (typeof edgeId === "string" && edges[edgeId] === true) ||
+      drawn(data.from_id) || drawn(data.to_id);
+  }
+
+  // The anchor's own href, kept on the page's address at every history move
+  // (a panel's push, Back, Forward, a fragment), so every way of following
+  // it — a click, a middle click, the context menu — lands there. Without
+  // the fragment: a link that differs from the page only by one scrolls.
+  function syncRefresh() {
+    const pill = document.querySelector("[data-kgraph-refresh-pill]");
+    if (pill) pill.setAttribute("href", withoutFragment(window.location.href));
+    return pill;
+  }
+
+  function showRefresh() {
+    const pill = syncRefresh();
+    if (pill) pill.hidden = false;
+  }
+
+  function onKnowledgeFrame(event) {
+    let message = null;
+    try {
+      message = JSON.parse(event.data);
+    } catch (error) {
+      return;
+    }
+    const data = message && message.payload;
+    if (data && typeof data === "object" && namesDrawn(event.type, data)) showRefresh();
+  }
+
+  function listen() {
+    if (typeof window.EventSource !== "function") return;
+    const source = new window.EventSource(EVENTS_PATH);
+    let lost = false;
+    KNOWLEDGE_EVENTS.forEach(function (type) {
+      source.addEventListener(type, onKnowledgeFrame);
+    });
+    source.addEventListener("lens.refresh", showRefresh);
+    source.addEventListener("error", function () { lost = true; });
+    source.addEventListener("open", function () {
+      if (lost) showRefresh();
+      lost = false;
+    });
   }
 
   // ── Labels at the focus ─────────────────────────────────────────────
@@ -1058,5 +1136,6 @@
     document.addEventListener("htmx:beforeOnLoad", dropAbandoned);
     document.addEventListener("htmx:afterSwap", pushAfterSwap);
     window.addEventListener("popstate", onTravel);
+    listen();
   }
 })();

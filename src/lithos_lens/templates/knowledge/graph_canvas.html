@@ -12,6 +12,12 @@
     <span class="kgraph-unresolved" data-kgraph-unresolved-count>{{ view.unresolved_contradictions }} unresolved contradiction{{ "" if view.unresolved_contradictions == 1 else "s" }}</span>
   {% endif %}
 
+  {#- Never an auto re-layout (D14): a knowledge event naming a node or edge
+      drawn here (any one, in a scoped-global view) raises this and waits for
+      the operator. The script points it at the page's current URL, so the
+      click is an ordinary reload — the server re-reads what went stale. -#}
+  <a class="graph-refresh-pill" data-kgraph-refresh-pill href="{{ knowledge_graph_url(params) }}" hidden>graph changed — refresh</a>
+
   <label class="kgraph-control">Min weight
     <input type="range" min="0" max="1" step="0.05" value="{{ view.filters.min_weight }}" data-kgraph-min-weight aria-describedby="kgraph-weight-hidden">
     <output data-kgraph-min-weight-value>{{ view.filters.min_weight }}</output>

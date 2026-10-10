@@ -20,6 +20,8 @@ from lithos_lens import metrics
 from lithos_lens.config import EventsConfig, LithosConfig
 from lithos_lens.errors import EventSubscriberLimit, UnsupportedEventEncoding
 from lithos_lens.graph_cache import GraphCache
+from lithos_lens.knowledge_edges import EDGE_UPSERTED, EdgeTable
+from lithos_lens.knowledge_facts import NoteFactsCache
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,19 @@ TASK_EVENT_TYPES = {
 # `task_id=""` and `requires_refresh=False` because they invalidate the
 # agent-dropdown data only and must not move the board under the operator.
 SYSTEM_EVENT_TYPES = {"agent.registered"}
-CONSUMED_EVENT_TYPES = TASK_EVENT_TYPES | SYSTEM_EVENT_TYPES
+# Knowledge-scoped upstream types (K2 D14): no task scope, never a dashboard
+# refresh, and never on `/tasks/events` — they feed the edge-table snapshot,
+# the note facts cache and `/knowledge/events`. `edge.upserted` carries EMPTY
+# tags, which is why the subscription below filters by `types=` and never by
+# `tags=`: a tag filter would drop every edge event.
+KNOWLEDGE_EVENT_TYPES = {
+    "note.created",
+    "note.updated",
+    "note.deleted",
+    "note.renamed",
+    "edge.upserted",
+}
+CONSUMED_EVENT_TYPES = TASK_EVENT_TYPES | SYSTEM_EVENT_TYPES | KNOWLEDGE_EVENT_TYPES
 
 # `lens.*` is the reserved namespace for Lens-internal synthetic events; it
 # never collides with an upstream type and is never sent upstream. That
@@ -66,6 +80,32 @@ UNKNOWN_EVENT_TYPE_LABEL = "other"
 def metric_event_type(event_type: str) -> str:
     """``event_type`` if it is one Lens recognizes, else ``other``."""
     return event_type if event_type in METRIC_EVENT_TYPES else UNKNOWN_EVENT_TYPE_LABEL
+
+
+#: What an event is about. Derived from the type alone (:func:`event_scope`),
+#: so every way a LensEvent is built — normalization, the hub's own refresh,
+#: fake mode's publish seam — is scoped the same way.
+EventScope = Literal["task", "system", "knowledge"]
+#: The browser stream a subscriber queue is on: `/tasks/events` takes task and
+#: system frames, `/knowledge/events` knowledge frames; `lens.refresh` both.
+EventStream = Literal["tasks", "knowledge"]
+
+
+def event_scope(event_type: str) -> EventScope:
+    """The scope of ``event_type``; ``lens.refresh`` counts as system."""
+    if event_type in KNOWLEDGE_EVENT_TYPES:
+        return "knowledge"
+    if event_type in SYSTEM_EVENT_TYPES or event_type == LENS_REFRESH_EVENT:
+        return "system"
+    return "task"
+
+
+def reaches(event_type: str, stream: EventStream) -> bool:
+    """Whether a frame of ``event_type`` is delivered on ``stream``. Only
+    `lens.refresh` is on both: Lens missed events, of a scope it cannot know."""
+    if event_type == LENS_REFRESH_EVENT:
+        return True
+    return (event_scope(event_type) == "knowledge") == (stream == "knowledge")
 
 
 # Shortest gap between two synthetic reconnect refreshes. Each one costs every
@@ -231,6 +271,10 @@ class LensEvent:
     #: from the payload — only a real upstream id is a replay cursor.
     upstream_id: str = ""
 
+    @property
+    def scope(self) -> EventScope:
+        return event_scope(self.type)
+
     def as_sse(self) -> str:
         # Both interpolated fields are sanitized at this sink, so no
         # LensEvent — however it was constructed — can emit a second frame.
@@ -243,6 +287,7 @@ class LensEvent:
                 "task_id": self.task_id,
                 "payload": self.payload,
                 "requires_refresh": self.requires_refresh,
+                "scope": self.scope,
             },
             separators=(",", ":"),
         )
@@ -260,13 +305,21 @@ class EventHub:
     #: `AppState`. Optional so a hub can be constructed without one (the
     #: event tests, and fake mode before the graph surfaces exist).
     graph_cache: GraphCache | None = None
+    #: The knowledge graph's process-wide caches, patched from knowledge
+    #: events before each fan-out the same way (K2 D2, D4); wired by
+    #: `AppState`, optional for the same reason.
+    edge_table: EdgeTable | None = None
+    note_facts: NoteFactsCache | None = None
 
     def __post_init__(self) -> None:
-        self._subscribers: set[asyncio.Queue[LensEvent]] = set()
+        # Every browser queue, and the stream it is on. One map under one cap:
+        # the cap bounds queues and publish cost, whichever stream they serve.
+        self._subscribers: dict[asyncio.Queue[LensEvent], EventStream] = {}
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._gap_since_last_open = False
         self._reconnects = 0
+        self._overflows = 0
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
@@ -277,6 +330,9 @@ class EventHub:
         # consulted for.
         metrics.register_event_stream_up(lambda: 1.0 if self.status == "live" else 0.0)
         metrics.register_event_subscribers(lambda: float(len(self._subscribers)))
+        metrics.register_knowledge_event_subscribers(
+            lambda: float(list(self._subscribers.values()).count("knowledge"))
+        )
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -301,8 +357,7 @@ class EventHub:
                 await self._pending_refresh
             self._pending_refresh = None
         self._set_status("disabled")
-        for queue in list(self._subscribers):
-            self._subscribers.discard(queue)
+        self._subscribers.clear()
 
     def _set_status(self, status: EventStatus) -> None:
         """Move the hub's status through one place.
@@ -315,8 +370,11 @@ class EventHub:
         """
         self.status = status
 
-    def subscribe(self, *, maxsize: int = 100) -> asyncio.Queue[LensEvent]:
-        """Register a browser queue, refusing past :data:`MAX_EVENT_SUBSCRIBERS`.
+    def subscribe(
+        self, *, maxsize: int = 100, stream: EventStream = "tasks"
+    ) -> asyncio.Queue[LensEvent]:
+        """Register a browser queue on ``stream``, refusing past
+        :data:`MAX_EVENT_SUBSCRIBERS` (both streams' queues together).
 
         Refusing is the point. The caller turns this into a 503, the browser's
         EventSource fails over to polling, and the board is degraded rather
@@ -331,32 +389,39 @@ class EventHub:
                 f"event subscriber limit reached ({MAX_EVENT_SUBSCRIBERS})"
             )
         queue: asyncio.Queue[LensEvent] = asyncio.Queue(maxsize=maxsize)
-        self._subscribers.add(queue)
+        self._subscribers[queue] = stream
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[LensEvent]) -> None:
-        self._subscribers.discard(queue)
+        self._subscribers.pop(queue, None)
 
     async def publish(self, event: LensEvent) -> None:
         self._invalidate_graph_cache(event)
+        self._patch_knowledge_caches(event)
         metrics.events_published().add(1, {"type": metric_event_type(event.type)})
-        for queue in list(self._subscribers):
+        for queue, stream in list(self._subscribers.items()):
+            if not reaches(event.type, stream):
+                continue
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Rate-limited: a subscriber that stops draining turns every
-                # upstream event into a record, at an upstream-chosen rate
-                # times a client-chosen number of stalled tabs.
-                #
-                # The counter alongside is not redundant. Rate limiting is
-                # right for the log and it costs the RATE: `occurrences` is a
-                # running total, not something to graph or alert on. A counter
-                # is cheap per occurrence, so the log keeps the readable detail
-                # and this carries how often it is happening.
+                # Rate-limited log; the counter keeps the rate the log gives up.
                 UNDELIVERED_EVENTS.record(event_type=event.type, event_id=event.id)
                 metrics.events_dropped().add(1, {"reason": "subscriber_queue_full"})
+                self._resync(queue)
             else:
                 metrics.events_delivered().add(1)
+
+    def _resync(self, queue: asyncio.Queue[LensEvent]) -> None:
+        """Swap a full queue's backlog for one `lens.refresh`: the dropped frame
+        may be the only one naming what the page shows, and a healthy stream
+        tells the browser nothing else. The caches were patched; just this queue."""
+        while not queue.empty():
+            queue.get_nowait()
+        self._overflows += 1
+        refresh_id = f"{LENS_REFRESH_EVENT}:overflow:{self._overflows}"
+        payload = {"reason": "overflow"}
+        queue.put_nowait(LensEvent(refresh_id, LENS_REFRESH_EVENT, "", payload))
 
     def _invalidate_graph_cache(self, event: LensEvent) -> None:
         """Evict what this event invalidated, BEFORE browsers hear about it.
@@ -377,6 +442,25 @@ class EventHub:
             self.graph_cache.flush()
         elif event.task_id:
             self.graph_cache.evict(event.task_id)
+
+    def _patch_knowledge_caches(self, event: LensEvent) -> None:
+        """Patch the knowledge caches BEFORE browsers hear, as above: the
+        graph page's pill sends the operator to a re-render that must draw
+        what the event changed. On `lens.refresh` (events were missed) the
+        snapshot is expired — the next read refetches, served stale if that
+        fails — and every facts entry marked stale, or a gap wider than the
+        replay buffer could draw a quarantined note active for a whole TTL.
+        """
+        if event.type == LENS_REFRESH_EVENT:
+            if self.edge_table is not None:
+                self.edge_table.expire()
+            if self.note_facts is not None:
+                self.note_facts.mark_all_stale()
+        elif event.type == EDGE_UPSERTED:
+            if self.edge_table is not None:
+                self.edge_table.apply_upsert(event.payload)
+        elif event.scope == "knowledge" and self.note_facts is not None:
+            self.note_facts.apply_note_event(event.type, event.payload)
 
     async def _on_stream_open(self) -> None:
         """Called once the upstream stream is established.
@@ -674,28 +758,31 @@ def normalize_lithos_event(
 ) -> LensEvent | None:
     """Normalize one upstream event, scope-aware.
 
-    Task-scoped types keep the drop-if-no-`task_id` rule; system-scoped types
-    carry no task at all and pass through with an empty `task_id` and no
-    refresh. A future `task_edge.upserted` maps to `to_task_id` here (the
-    knowledge `edge.upserted` is deliberately not consumed).
+    Task-scoped types keep the drop-if-no-`task_id` rule. System and
+    knowledge types carry no task and pass with an empty `task_id` and no
+    refresh — a knowledge frame naming no note or edge too: the caches no-op
+    on it. A future `task_edge.upserted` would map `to_task_id` here.
     """
-    system_scoped = event_type in SYSTEM_EVENT_TYPES
-    task_id = "" if system_scoped else str(payload.get("task_id") or "")
-    if not system_scoped and not task_id:
+    task_scoped = event_scope(event_type) == "task"
+    task_id = str(payload.get("task_id") or "") if task_scoped else ""
+    if task_scoped and not task_id:
         DROPPED_EVENTS.record(event_type=event_type, event_id=event_id)
         metrics.events_dropped().add(1, {"reason": "no_task_id"})
         return None
     # The synthesized fallback is a dedupe key made of payload data (a
-    # caller-chosen agent id, say) — never a replay position, and never trusted
-    # raw on the wire. `wire_safe` guards the wire only: an id it had to rewrite
-    # is not the position Lithos sent, so it is not carried as a cursor either.
-    fallback = task_id or str(payload.get("agent_id") or "")
+    # caller-chosen agent id, a note or edge id) — never a replay position,
+    # and never trusted raw on the wire. `wire_safe` guards the wire only: an
+    # id it had to rewrite is not the position Lithos sent, so it is not
+    # carried as a cursor either.
+    fallback = task_id or str(
+        payload.get("agent_id") or payload.get("id") or payload.get("edge_id") or ""
+    )
     return LensEvent(
         id=wire_safe(event_id) or wire_safe(f"{event_type}:{fallback}"),
         type=event_type,
         task_id=task_id,
         payload=payload,
-        requires_refresh=not system_scoped,
+        requires_refresh=task_scoped,
         upstream_id=event_id if is_replay_cursor(event_id) else "",
     )
 

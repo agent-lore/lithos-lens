@@ -3,7 +3,7 @@
 
 # Web
 
-FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or "already exists") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it.
+FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets) and the two browser SSE streams (`/tasks/events`, `/knowledge/events`) over one shared stream body, plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the "not visible yet" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or "already exists") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it.
 
 **Tier:** Entrypoints
 
@@ -14,6 +14,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.cancel_routes` | M | 0 | 5 |
 | `lithos_lens.create_routes` | S | 0 | 3 |
 | `lithos_lens.edge_routes` | M | 0 | 4 |
+| `lithos_lens.event_streams` | XS | 0 | 1 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
 | `lithos_lens.knowledge_graph_routes` | L | 4 | 8 |
@@ -43,6 +44,9 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `offers_relation` — Whether a page showing ``task`` offers Add dependency: an OPEN task.
 - def `register_edge_routes` — Attach the add-dependency routes and their template globals.
 
+### `lithos_lens.event_streams`
+- def `event_stream_response` — The open stream for one browser on ``stream``, or a 503 at capacity.
+
 ### `lithos_lens.gate_override`
 - class `GateOverride` — One open machine-owned gate, as its Proceed anyway page states it.
 - def `load_gate_override` — Read what the confirm page states about ``task``, an open gate.
@@ -64,7 +68,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - def `load_picker` — The picker from the snapshot: its facets, or why there are none.
 - class `KnowledgeGraphLoad` — What one request read: offline (nothing), the picker, or a view.
 - def `load_knowledge_graph` — The page's reads for ``params``, shared by the page and its panel fragment so the two draw the same view (S5 D1).
-- def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global) and `GET /knowledge/graph/panel` (its node and edge panels).
+- def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global), `GET /knowledge/graph/panel` (its node and edge panels) and `GET /knowledge/events` (the knowledge-scope event stream it listens on).
 
 ### `lithos_lens.knowledge_routes`
 - class `NoteBackLink` — Where a note page's back link goes, and what it calls that place.

@@ -22,7 +22,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lithos_lens import events, web
+from lithos_lens import event_streams, events, web
 from lithos_lens.config import load_config
 from lithos_lens.web import create_app
 
@@ -201,7 +201,7 @@ async def test_a_quiet_stream_still_writes_so_a_departed_client_is_noticed(
     frame is that write. It carries no data, so no client behaviour depends on
     it; what depends on it is the server noticing.
     """
-    monkeypatch.setattr(web, "SSE_KEEPALIVE_S", 0.05)
+    monkeypatch.setattr(event_streams, "SSE_KEEPALIVE_S", 0.05)
     app = create_app(load_config(lithos_lens_config_env))
 
     frames = await _stream_frames(app, "/tasks/events", 2)

@@ -11,7 +11,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.metrics` | M | 0 | 25 |
+| `lithos_lens.metrics` | M | 0 | 26 |
 | `lithos_lens.telemetry` | M | 0 | 6 |
 
 ## Public API
@@ -27,6 +27,7 @@ OpenTelemetry setup and the named metric-instrument catalogue: providers, export
 - def `events_delivered` — Counter of per-subscriber event deliveries.
 - def `events_dropped` — Counter of events Lens refused or discarded, by reason.
 - def `register_event_subscribers` — Gauge: SSE subscribers currently attached to the hub.
+- def `register_knowledge_event_subscribers` — Gauge: of ``lens_event_subscribers``, those on ``/knowledge/events``.
 - def `render_admissions` — Counter of metered requests by admission outcome.
 - def `knowledge_note_renders` — Counter of note-page renders by terminal outcome.
 - def `knowledge_related_duration` — Histogram of seconds spent loading a note's related panel.

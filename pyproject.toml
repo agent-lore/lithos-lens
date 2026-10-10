@@ -142,6 +142,7 @@ forbidden_modules = [
     "lithos_lens.fake_knowledge_dataset",
     "lithos_lens.state",
     "lithos_lens.web",
+    "lithos_lens.event_streams",
     "lithos_lens.request_filters",
     "lithos_lens.knowledge_routes",
     "lithos_lens.knowledge_graph_routes",
@@ -175,6 +176,7 @@ source_modules = [
 ]
 forbidden_modules = [
     "lithos_lens.web",
+    "lithos_lens.event_streams",
     "lithos_lens.request_filters",
     "lithos_lens.knowledge_routes",
     "lithos_lens.knowledge_graph_routes",

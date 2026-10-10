@@ -18,6 +18,8 @@ Node is the same runtime the ``e2e/`` suite needs; the tests skip without it.
 
 from __future__ import annotations
 
+import asyncio
+import html as html_lib
 import json
 import re
 import shutil
@@ -32,7 +34,8 @@ from urllib.parse import parse_qsl, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import load_config
+from lithos_lens.config import EventsConfig, LithosConfig, load_config
+from lithos_lens.events import EventHub, LensEvent, parse_lithos_sse_frame
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_graph_routes import (
@@ -160,6 +163,11 @@ const single = {
   "[data-kgraph-panel-source]": el({ attributes: { "hx-sync": dom.sync } }),
   "#kgraph-panel": el({ dataset: { kgraphRender: dom.render }, innerHTML: "" }),
 };
+// The refresh pill, when the page rendered one: hidden, linking to itself.
+if (dom.pillHref !== undefined) {
+  single["[data-kgraph-refresh-pill]"] = el({
+    hidden: true, attributes: { href: dom.pillHref } });
+}
 const many = {
   "[data-kgraph-provenance]": provenance,
   "[data-kgraph-depth]": depths,
@@ -288,6 +296,26 @@ function travel(step) {
   const state = entries[cursor].state;
   (windowListeners.popstate || []).forEach((fn) => fn({ state }));
 }
+// `EventSource`, when a case asks for it (`dom.events`): each one opened is
+// recorded with its listeners, and `sse(type, data)` delivers a frame — or
+// an `open` / `error` — to every one, as the browser's would.
+const eventSources = [];
+class EventSource {
+  constructor(path) {
+    this.url = path;
+    this.listeners = {};
+    eventSources.push(this);
+  }
+  addEventListener(type, fn) {
+    (this.listeners[type] = this.listeners[type] || []).push(fn);
+  }
+  close() {}
+}
+if (dom.events) sandbox.window.EventSource = EventSource;
+function sse(type, data) {
+  eventSources.forEach((source) => (source.listeners[type] || []).forEach((fn) =>
+    fn({ type, data: typeof data === "string" ? data : JSON.stringify(data) })));
+}
 sandbox.window.window = sandbox.window;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(cytoscapePath, "utf8"), sandbox);
@@ -313,6 +341,7 @@ const cy = graph.cy;
 const byPid = (collection, pid) => collection.filter((e) => e.data("pid") === pid);
 const pidsWith = (name) => cy.elements("." + name).map((e) => e.data("pid")).sort();
 
+const marks = [];
 for (const action of actions) {
   const [kind, ...rest] = action.split(":");
   const arg = rest.join(":");
@@ -371,6 +400,24 @@ for (const action of actions) {
     entries.push({ href: url.href, state: null });
     cursor = entries.length - 1;
     (windowListeners.popstate || []).forEach((fn) => fn({ state: null }));
+  } else if (kind === "frame") {
+    // A knowledge frame as `/knowledge/events` sends it (`LensEvent.as_sse`).
+    const frame = JSON.parse(arg);
+    sse(frame.type, { id: "evt", type: frame.type, task_id: "",
+      payload: frame.payload, requires_refresh: false, scope: "knowledge" });
+  } else if (kind === "raw-frame") {
+    const [type, ...data] = arg.split(":");
+    sse(type, data.join(":"));
+  } else if (kind === "sse") {
+    sse(arg, arg === "lens.refresh" ? { reason: "reconnect" } : {});
+  } else if (kind === "mark") {
+    // What the canvas looks like now: every node's position, and how many
+    // layouts have run.
+    marks.push({ layouts: layouts.length,
+      positions: cy.nodes().map((n) => [n.data("pid"), n.position()]) });
+  } else if (kind === "rerun") {
+    // A second run of the file over the same page.
+    vm.runInContext(fs.readFileSync(scriptPath, "utf8"), sandbox);
   } else if (kind === "back") {
     travel(-1);
   } else if (kind === "forward") {
@@ -433,6 +480,12 @@ console.log(JSON.stringify({
     : [],
   textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
+  eventSources: eventSources.map((source) => source.url),
+  marks,
+  pill: single["[data-kgraph-refresh-pill]"]
+    ? { hidden: single["[data-kgraph-refresh-pill]"].hidden,
+        href: single["[data-kgraph-refresh-pill]"].getAttribute("href") }
+    : null,
   panel: host.innerHTML,
   canvas: { hidden: canvas.hidden, dataset: canvas.dataset },
   toolbarHidden: single["[data-kgraph-toolbar]"].hidden,
@@ -511,6 +564,9 @@ def _page(client: TestClient, url: str) -> Page:
         "sync": sync.group(1),
         "step": _only(re.findall(r'<input type="range"[^>]*step="([^"]+)"', html)),
     }
+    pill = re.search(r'data-kgraph-refresh-pill href="([^"]*)" hidden', html)
+    if pill is not None:
+        dom["pillHref"] = html_lib.unescape(pill.group(1))
     return Page(url, html, json.loads(match.group(1)), dom)
 
 
@@ -2015,3 +2071,221 @@ def test_the_canvas_is_drawn_only_once_its_face_has_settled(
     loads = result["fontLoads"]
     assert loads and all(CANVAS_FONT in load for load in loads)
     assert sorted("bold" in load for load in loads) == [False, True]
+
+
+# ── "Graph changed — refresh" (S7, PRD D14) ────────────────────────────
+
+#: A note no demo graph draws.
+UNDRAWN = "note-nowhere-on-this-page"
+EVENTS = {"events": True}
+
+
+def _frame(event_type: str, **payload: Any) -> str:
+    return "frame:" + json.dumps({"type": event_type, "payload": payload})
+
+
+def _pill(result: dict) -> tuple[bool, str]:
+    pill = result["pill"]
+    assert pill is not None
+    return pill["hidden"], pill["href"]
+
+
+@pytest.fixture
+def focus_page(lithos_lens_config_env: Path) -> Page:
+    with _lens(lithos_lens_config_env) as client:
+        return _page(client, f"{ROUTE}?focus={PLAN}")
+
+
+def test_the_page_subscribes_to_the_knowledge_stream_once_per_load(
+    focus_page: Page,
+) -> None:
+    result = _run(focus_page, ["rerun"], dom=EVENTS)
+
+    assert result["eventSources"] == ["/knowledge/events"]
+    assert _pill(result) == (True, focus_page.dom["pillHref"])
+
+
+@pytest.mark.parametrize(
+    "event_type", ["note.created", "note.updated", "note.deleted", "note.renamed"]
+)
+def test_a_note_event_naming_a_drawn_node_raises_the_pill(
+    focus_page: Page, event_type: str
+) -> None:
+    drawn = next(n["id"] for n in focus_page.payload["nodes"] if n["id"] != PLAN)
+    result = _run(focus_page, [_frame(event_type, id=drawn)], dom=EVENTS)
+
+    assert _pill(result) == (False, result["href"])
+
+
+@pytest.mark.parametrize(
+    "event_type", ["note.created", "note.updated", "note.deleted", "note.renamed"]
+)
+def test_a_note_event_naming_an_undrawn_node_leaves_the_pill_down(
+    focus_page: Page, event_type: str
+) -> None:
+    assert focus_page.payload["mode"] == "focus"
+    assert UNDRAWN not in {n["id"] for n in focus_page.payload["nodes"]}
+    result = _run(
+        focus_page,
+        [
+            _frame(event_type, id=UNDRAWN, title=PLAN, path=PLAN),
+            _frame(event_type, src_path=PLAN, dest_path=PLAN),
+            "raw-frame:" + event_type + ":not json",
+        ],
+        dom=EVENTS,
+    )
+
+    assert _pill(result)[0] is True
+
+
+def test_an_edge_event_raises_the_pill_by_its_id_or_either_drawn_end(
+    focus_page: Page,
+) -> None:
+    typed = next(e for e in focus_page.payload["edges"] if e["kind"] == "typed")
+    upsert = {"type": "supports", "namespace": "influx", "conflict_state": None}
+    cases = {
+        "its id": {"edge_id": typed["id"], "from_id": UNDRAWN, "to_id": UNDRAWN},
+        "its from end": {"edge_id": "edge_new", "from_id": PLAN, "to_id": UNDRAWN},
+        "its to end": {"edge_id": "edge_new", "from_id": UNDRAWN, "to_id": PLAN},
+    }
+    for case, ids in cases.items():
+        result = _run(
+            focus_page, [_frame("edge.upserted", **upsert, **ids)], dom=EVENTS
+        )
+        assert _pill(result)[0] is False, case
+
+    elsewhere = {"edge_id": "edge_new", "from_id": UNDRAWN, "to_id": "note-other"}
+    result = _run(
+        focus_page, [_frame("edge.upserted", **upsert, **elsewhere)], dom=EVENTS
+    )
+    assert _pill(result)[0] is True
+
+
+def test_in_a_scoped_global_view_any_knowledge_frame_raises_the_pill(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A new edge can bring in a note the scope now covers and the page
+    never drew, so a global view cannot tell a frame that matters from one
+    that does not."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?type=contradicts")
+    assert page.payload["mode"] == "global"
+
+    for frame in (
+        _frame("note.updated", id=UNDRAWN),
+        _frame("edge.upserted", edge_id="edge_new", from_id=UNDRAWN, to_id=UNDRAWN),
+    ):
+        assert _pill(_run(page, [frame], dom=EVENTS))[0] is False
+
+
+@pytest.mark.parametrize(
+    ("actions", "raised"),
+    [
+        (["sse:lens.refresh"], True),
+        (["sse:error", "sse:open"], True),
+        (["sse:open"], False),
+        (["sse:error"], False),
+    ],
+)
+def test_a_missed_frame_raises_the_pill_and_a_first_open_does_not(
+    focus_page: Page, actions: list[str], raised: bool
+) -> None:
+    """``lens.refresh`` and a stream reopened after an error both mean frames
+    may have been missed; the first open means nothing yet."""
+    assert _pill(_run(focus_page, actions, dom=EVENTS))[0] is (not raised)
+
+
+def test_an_overflow_dropping_the_only_frame_naming_the_graph_raises_the_pill(
+    focus_page: Page,
+) -> None:
+    """One upstream chunk outruns the page's 100-entry queue twice: updates
+    to notes it never drew, with its focus's update the 201st frame — the
+    one the second overflow drops. What reaches the page — read off the real
+    parser and hub — must still raise the pill."""
+    hub = EventHub(EventsConfig(enabled=False), LithosConfig())
+    queue = hub.subscribe(stream="knowledge")
+
+    async def flood() -> None:
+        for index in range(250):
+            note = PLAN if index == 200 else f"{UNDRAWN}-{index}"
+            await hub.publish(_upstream("note.updated", id=note))
+
+    asyncio.run(flood())
+    delivered = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert PLAN not in {event.payload.get("id") for event in delivered}
+    assert [event.type for event in delivered].count("lens.refresh") == 1
+    actions = [
+        f"raw-frame:{event.type}:{event.as_sse().split('data: ', 1)[1].strip()}"
+        for event in delivered
+    ]
+
+    assert _pill(_run(focus_page, actions, dom=EVENTS))[0] is False
+
+
+def _upstream(event_type: str, **payload: Any) -> LensEvent:
+    lines = [f"event: {event_type}", f"data: {json.dumps(payload)}"]
+    event = parse_lithos_sse_frame(lines)
+    assert event is not None
+    return event
+
+
+def test_the_pill_links_to_the_address_the_page_is_on_however_it_is_followed(
+    focus_page: Page,
+) -> None:
+    """A panel open pushes its URL after the pill went up. The anchor's own
+    href follows it — no click handler in between — so a middle click or the
+    context menu open the address the operator is on, too. Never with a
+    fragment: a link differing from the page only by one scrolls, not reloads.
+    """
+    drawn = next(n["id"] for n in focus_page.payload["nodes"] if n["id"] != PLAN)
+    raise_pill = _frame("note.updated", id=PLAN)
+    raised = _run(focus_page, [raise_pill], dom=EVENTS)
+    pushed = _run(focus_page, [raise_pill, f"tap-node:{drawn}", "swap:"], dom=EVENTS)
+    scrolled = _run(focus_page, [raise_pill, "hash:text"], dom=EVENTS)
+    back = _run(
+        focus_page, [f"tap-node:{drawn}", "swap:", raise_pill, "back"], dom=EVENTS
+    )
+
+    assert _pill(raised) == (False, raised["href"])
+    assert _query(pushed["href"])["selected"] == drawn
+    assert _pill(pushed) == (False, pushed["href"])
+    assert pushed["href"] != raised["href"]
+    assert scrolled["href"].endswith("#text")
+    assert _pill(scrolled) == (False, scrolled["href"].split("#")[0])
+    assert "selected" not in _query(back["href"])
+    assert _pill(back) == (False, back["href"])
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        [_frame("note.updated", id=PLAN)],
+        [_frame("note.deleted", id=PLAN, path="plan.md")],
+        [_frame("edge.upserted", edge_id="edge_new", from_id=PLAN, to_id=UNDRAWN)],
+        ["sse:lens.refresh"],
+        ["sse:error", "sse:open"],
+    ],
+)
+def test_raising_the_pill_never_moves_or_re_lays_out_the_canvas(
+    focus_page: Page, actions: list[str]
+) -> None:
+    baseline = _run(focus_page, dom=EVENTS)
+    result = _run(focus_page, ["mark", *actions, "mark"], dom=EVENTS)
+
+    assert _pill(result)[0] is False
+    before, after = result["marks"]
+    assert after == before
+    assert result["layouts"] == baseline["layouts"]
+    assert [n["position"] for n in result["nodes"]] == [
+        n["position"] for n in baseline["nodes"]
+    ]
+
+
+def test_a_page_with_no_event_source_still_draws_and_keeps_its_pill_down(
+    focus_page: Page,
+) -> None:
+    result = _run(focus_page)
+
+    assert result["eventSources"] == []
+    assert result["canvas"]["dataset"]["canvasState"] == "ready"
+    assert _pill(result)[0] is True

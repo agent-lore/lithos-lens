@@ -345,6 +345,21 @@ def register_event_subscribers(read: Callable[[], float]) -> None:
     )
 
 
+def register_knowledge_event_subscribers(read: Callable[[], float]) -> None:
+    """Gauge: of ``lens_event_subscribers``, those on ``/knowledge/events``.
+
+    No labels: an observable gauge here is one unlabelled observation, so the
+    knowledge stream's share is its own series rather than a ``stream`` label
+    on the total. Both streams' queues count against the one
+    ``MAX_EVENT_SUBSCRIBERS``; the total is still what to graph against it.
+    """
+    _observable(
+        "lens_knowledge_event_subscribers",
+        "Knowledge-graph SSE subscribers currently attached to the event hub.",
+        read,
+    )
+
+
 # ── Saturation ────────────────────────────────────────────────────────
 
 
@@ -480,10 +495,11 @@ def knowledge_edge_table_patches() -> Any:
     """Counter of event patches offered to the edge-table snapshot (K2 D2).
 
     Labels: ``event_type`` (``edge.upserted`` today — the one knowledge event
-    that carries an edge) and ``outcome`` in ``inserted`` | ``replaced`` |
-    ``refused`` (an insertion took the table over its bound, so it is no
-    longer held) | ``ignored`` (no snapshot loaded, the table already
-    refused, or a payload missing an identity field).
+    that carries an edge, fed by the hub from the live stream) and
+    ``outcome`` in ``inserted`` | ``replaced`` | ``refused`` (an insertion
+    took the table over its bound, so it is no longer held) | ``ignored`` (no
+    snapshot loaded, the table already refused, or a payload missing an
+    identity field).
 
     The snapshot converges on its TTL for every change that emits no event
     (reinforcement, projection, weight decay — ROADMAP ledger #15), so this

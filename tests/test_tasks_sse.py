@@ -21,6 +21,7 @@ from lithos_lens.errors import EventSubscriberLimit
 from lithos_lens.events import (
     CONSUMED_EVENT_TYPES,
     EVENT_ID_MAX_LENGTH,
+    KNOWLEDGE_EVENT_TYPES,
     LENS_REFRESH_EVENT,
     EventHub,
     LensEvent,
@@ -29,6 +30,7 @@ from lithos_lens.events import (
     parse_lithos_sse_frame,
 )
 from tests.conftest import metric_value
+from tests.test_knowledge_events import KNOWLEDGE_FRAMES
 
 
 class _FakeClock:
@@ -245,19 +247,64 @@ def test_is_replay_cursor_matches_what_the_wire_accepts(
     assert is_replay_cursor(value) is usable
 
 
-@pytest.mark.parametrize("event_type", ["note.created", "edge.upserted"])
-def test_non_task_events_are_ignored(event_type: str) -> None:
-    # edge.upserted is the KNOWLEDGE graph event (note uuids in the payload) —
-    # there is no upstream task-edge event, so it must not reach task surfaces.
+@pytest.mark.parametrize("event_type", sorted(KNOWLEDGE_FRAMES))
+def test_knowledge_events_are_consumed_in_the_knowledge_scope(
+    event_type: str,
+) -> None:
+    # Consumed (no longer dropped), but never a dashboard refresh and never a
+    # task: edge.upserted is the KNOWLEDGE graph's event, note uuids in its
+    # payload, and the hub keeps every one of them off /tasks/events.
     event = parse_lithos_sse_frame(
         [
             "id: evt-5",
             f"event: {event_type}",
-            'data: {"id":"note-1","from_id":"note-1","to_id":"note-2"}',
+            f"data: {json.dumps(KNOWLEDGE_FRAMES[event_type])}",
         ]
     )
 
-    assert event is None
+    assert event is not None
+    assert event.type == event_type
+    assert event.id == "evt-5"
+    assert event.task_id == ""
+    assert event.requires_refresh is False
+    assert event.scope == "knowledge"
+    assert event.payload == KNOWLEDGE_FRAMES[event_type]
+    assert json.loads(event.as_sse().split("data: ", 1)[1])["scope"] == "knowledge"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "fallback"),
+    [
+        ("note.updated", "note.updated:note-1"),
+        ("edge.upserted", "edge.upserted:edge_0123456789ab"),
+    ],
+)
+def test_a_knowledge_frame_without_an_id_is_keyed_by_what_it_names(
+    event_type: str, fallback: str
+) -> None:
+    event = parse_lithos_sse_frame(
+        [f"event: {event_type}", f"data: {json.dumps(KNOWLEDGE_FRAMES[event_type])}"]
+    )
+
+    assert event is not None
+    assert event.id == fallback
+    assert event.upstream_id == ""
+
+
+def test_a_knowledge_frame_naming_nothing_is_forwarded_not_dropped(
+    caplog: pytest.LogCaptureFixture,
+    fresh_drop_log: RateLimitedWarning,
+) -> None:
+    """The ``no_task_id`` rule is the task scope's; the caches no-op on it."""
+    with caplog.at_level(logging.WARNING, logger=events_module.__name__):
+        event = parse_lithos_sse_frame(
+            ["event: note.renamed", 'data: {"src_path":"a.md","dest_path":"b.md"}']
+        )
+
+    assert event is not None
+    assert event.scope == "knowledge"
+    assert event.id == "note.renamed:"
+    assert "task_id" not in caplog.text
 
 
 @pytest.mark.anyio
@@ -523,13 +570,17 @@ async def test_upstream_subscription_filters_the_consumed_types(
     finally:
         await hub.stop()
 
-    # The nine consumed types are pushed upstream as the server-side filter;
-    # edge.upserted is the knowledge-graph event and is never subscribed to.
+    # The consumed types are pushed upstream as the server-side filter — the
+    # five knowledge types among them — and NO tag filter: edge.upserted
+    # carries empty tags, so a `tags=` would drop every edge event.
     url, headers = requests[0]
-    types = parse_qs(urlparse(url).query)["types"][0].split(",")
+    query = parse_qs(urlparse(url).query)
+    types = query["types"][0].split(",")
     assert set(types) == CONSUMED_EVENT_TYPES
     assert "agent.registered" in types
-    assert "edge.upserted" not in types
+    assert set(types) >= KNOWLEDGE_EVENT_TYPES
+    assert set(query) == {"types"}
+    assert "tags" not in url
     # Nothing to replay on a first connect.
     assert headers is not None
     # Nothing to replay on a first connect, and identity is asked for on every
@@ -573,6 +624,49 @@ async def test_reconnect_replays_from_last_event_id_and_broadcasts_a_refresh(
     assert refresh.task_id == ""
     assert refresh.requires_refresh is True
     assert subscriber.empty()
+
+
+@pytest.mark.anyio
+async def test_a_reconnect_replays_and_refreshes_the_knowledge_stream_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/knowledge/events` rides the same upstream subscription, so it gets
+    the same reconnect semantics: a knowledge frame's id is a replay cursor
+    like any other, and the `lens.refresh` backstop reaches both streams."""
+    requests: list[tuple[str, dict[str, str] | None]] = []
+    upserted = KNOWLEDGE_FRAMES["edge.upserted"]
+    frames = [
+        *_reopened_frame("evt-10"),
+        "id: evt-11",
+        "event: edge.upserted",
+        f"data: {json.dumps(upserted)}",
+        "",
+    ]
+    monkeypatch.setattr(
+        events_module.httpx,
+        "AsyncClient",
+        _recording_httpx_client(requests, [frames]),
+    )
+    hub = EventHub(
+        EventsConfig(enabled=True, reconnect_backoff_ms=(1,)), LithosConfig()
+    )
+    tasks = hub.subscribe()
+    knowledge = hub.subscribe(stream="knowledge")
+
+    await hub.start()
+    try:
+        task_frames = [await asyncio.wait_for(tasks.get(), timeout=2) for _ in range(2)]
+        knowledge_frames = [
+            await asyncio.wait_for(knowledge.get(), timeout=2) for _ in range(2)
+        ]
+    finally:
+        await hub.stop()
+
+    assert [e.type for e in task_frames] == ["task.reopened", LENS_REFRESH_EVENT]
+    assert [e.type for e in knowledge_frames] == ["edge.upserted", LENS_REFRESH_EVENT]
+    assert knowledge_frames[0].payload == upserted
+    assert _cursor(requests[1][1]) == "evt-11"
+    assert tasks.empty() and knowledge.empty()
 
 
 @pytest.mark.parametrize(

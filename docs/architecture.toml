@@ -26,9 +26,9 @@ src_layout   = "src"
 # for every component in [components].
 [component_docs]
 Entrypoint   = "Command-line entry point for the Lithos Lens web app (`python -m lithos_lens`)."
-Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets), plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the \"not visible yet\" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or \"already exists\") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it."
+Web          = "FastAPI application factory serving the server-rendered dashboard UI (Jinja2 templates + static assets) and the two browser SSE streams (`/tasks/events`, `/knowledge/events`) over one shared stream body, plus the request-scoped filter parsing and the URL builders that carry those filters across navigation, and the knowledge, task-graph and curated-write route groups extracted from it — the last with the write funnel every curated write goes through (Origin check, operator, pre-check, the single Lithos call, classification, audit line + span + counter, receipt, and the dual-mode 303 / HTMX answer), and the Proceed anyway confirm page's reads for a machine-owned gate (what would resolve it, and the waiters completing it releases), and the cancel action's routes — its consequence confirm page and the funnel action that, with `confirm_cancel` off, reads the consequences just before the cancel and carries them on the receipt — and the create action's routes: the one create form with its project datalist and pre-fill, the POST through the funnel's task-less entry point, and the \"not visible yet\" page with Start again; and the add-dependency routes: the relation confirm step (the other task resolved by prefix, the focal task's edges read fresh, the relation restated with both titles and its readiness meaning, or \"already exists\") and the edge write through the funnel, whose action re-reads before its one upsert and evicts both endpoints after it."
 State        = "Application state and startup/shutdown orchestration (AppState, HealthSnapshot)."
-Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub)."
+Events       = "Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub): the task, system and knowledge scopes, the two browser streams each subscriber queue is on, and the caches patched before each fan-out (the task graph's edge cache, and the knowledge graph's edge-table snapshot and note facts)."
 LithosClient = "Lithos server clients — the MCP transport (one shared session, its reconnect, the per-call deadline and process-wide gate, result decoding), the typed method surface over it (with the task writes and the knowledge-graph reads mixed in) plus the HTTP health probe, and the in-memory fake that backs fake-Lithos app mode: its frozen fixture bundle, the effective store over it (the per-instance write overlay and the readiness oracle that makes a write change what later reads return), and the five writes with upstream's refusal vocabulary."
 Config       = "Configuration: the typed schema (dataclasses, defaults, ceilings), the TOML loading over it, and the environment-override pass applied on top (env beats file beats default)."
 Writes       = "Curated write actions (REQUIREMENTS §5C), minus their routes: the operator identity a write is attributed to — the id rule, the cookie/default resolution, the impersonation guard over the exact agent lookup, and the register-once ledger — plus the request-level hygiene every write POST goes through (the Origin/Referer check and the same-origin relative-path rule for a `next` destination), and the pure error mapper that turns a Lithos write refusal — or no answer at all — into operator copy, a change claim and an HTTP status, with the pages it feeds; plus the write receipts (the bounded, shown-once store a write's outcome waits in for the page its redirect lands on) and the complete-a-gate rules (which gates carry the direct Complete action and which the Proceed anyway confirmation, the not-a-gate refusal, the default outcome of a direct completion and of an override); plus the create-form model (form → validated create request, the project under both conventions, the gate types a person may create, and where an upstream refusal lands on the form) and the create coordinator (the in-process, bounded map from request id to outcome that makes a double submit create one task)."
@@ -41,7 +41,7 @@ Errors       = "Exception hierarchy rooted at LithosLensError."
 
 [components]
 Entrypoint   = ["lithos_lens.main", "lithos_lens.__main__"]
-Web          = ["lithos_lens.web", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.knowledge_graph_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes", "lithos_lens.edge_routes"]
+Web          = ["lithos_lens.web", "lithos_lens.event_streams", "lithos_lens.request_filters", "lithos_lens.knowledge_routes", "lithos_lens.knowledge_graph_routes", "lithos_lens.graph_routes", "lithos_lens.write_routes", "lithos_lens.write_funnel", "lithos_lens.gate_override", "lithos_lens.cancel_routes", "lithos_lens.create_routes", "lithos_lens.edge_routes"]
 State        = ["lithos_lens.state"]
 Events       = ["lithos_lens.events"]
 LithosClient = ["lithos_lens.lithos_client", "lithos_lens.lithos_writes", "lithos_lens.lithos_graph_reads", "lithos_lens.mcp_transport", "lithos_lens.fake_lithos", "lithos_lens.fake_writes", "lithos_lens.fake_store", "lithos_lens.fake_dataset", "lithos_lens.fake_graph_dataset", "lithos_lens.fake_knowledge_dataset"]
@@ -174,7 +174,23 @@ Foundation  = ["Config", "Tasks", "TaskGraph", "Knowledge", "Writes", "Logging",
 # route-module global built at registration — would hide process state in the
 # Web tier, where the hub (Core) could not reach it without an upward import.
 # Core -> Foundation points down, like State -> TaskGraph.
-cross_component_edges  = 40   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); +1 edge-table snapshot telemetry (knowledge -> telemetry); +1 State -> Knowledge (the process-wide knowledge graph caches); direction: down
+# Raised 40 -> 41 for Events -> Knowledge, on K2 S7 (knowledge events). The
+# hub patches the edge-table snapshot from each `edge.upserted` and the note
+# facts cache from each `note.*` frame, and expires both on `lens.refresh`,
+# BEFORE it fans the frame out — the ordering the graph cache's eviction
+# already argues (Events -> TaskGraph): the graph page's refresh pill sends
+# the operator to a re-render, which must not draw from what the event just
+# changed. So the hook lives in `EventHub.publish` beside the graph cache's,
+# typed against `EdgeTable` and `NoteFactsCache`, and both caches already
+# name the hub as their caller. The alternative — an untyped callback list
+# on the hub, or a subscriber queue that patches after the fan-out — would
+# dodge this counter while making the cache's one live-update path
+# unfindable from either end, or racing the very re-render it feeds. Core ->
+# Foundation points down, like Events -> TaskGraph. The new
+# `/knowledge/events` route and the stream body it shares with
+# `/tasks/events` (event_streams.py, Web) add no edge: Web -> Events and
+# Web -> Errors already exist.
+cross_component_edges  = 41   # +1 fake-mode event hub (fake_lithos -> events); +1 Web -> TaskGraph (frontier dashboard assembly); +1 Web -> Events (fake-mode publish seam constructs LensEvent); +2 refusal exception (events -> errors, web -> errors); +1 Entrypoint -> Telemetry (process-lifecycle OTEL setup); +1 Telemetry -> Logging (shared log-size bound); +2 failure-mode metrics (lithos_client -> telemetry, events -> telemetry); +1 edge-table snapshot telemetry (knowledge -> telemetry); +1 State -> Knowledge (the process-wide knowledge graph caches); +1 Events -> Knowledge (the hub patches the knowledge caches before fan-out); direction: down
 component_cycles       = 0    # no component-level cycles today; keep it that way
 module_cycles          = 0    # no module-level cycles today; keep it that way
 # The god-module exception is RETIRED. lithos_client was the one module the
@@ -445,7 +461,13 @@ module_cycles          = 0    # no module-level cycles today; keep it that way
 # set to Needs attention, the Gates section and the strip, with the two
 # flag_attention calls folded into one. No budget moves; the count stays 6
 # and frontier.py is now 17 lines under the 880 stop-loss.
-modules_over_800_lines = 6    # write_funnel.py (880), tasks.py (849), frontier.py (863), web.py (830), graph_layout.py (830), write_errors.py (825)
+#
+# Lowered 6 -> 5 on K2 S7: web.py LEFT the >800 set (832 -> 779). The
+# `/tasks/events` stream body moved to event_streams.py so `/knowledge/events`
+# could share it rather than copy it — a real seam (one browser-stream body,
+# two routes in two modules), taken for that reason and not for the number.
+# The gain is locked in here, as this section asks.
+modules_over_800_lines = 5    # write_funnel.py (880), tasks.py (854), frontier.py (863), graph_layout.py (830), write_errors.py (825)
 max_module_lines       = 880  # stop-loss over those exceptions, fully spent; the threshold stays 800
 cross_module_private_refs = 0  # no cross-module private reaches today; keep it that way
 tests_private_imports     = 0  # tests use only the public surface; keep it that way
