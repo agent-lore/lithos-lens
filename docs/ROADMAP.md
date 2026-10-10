@@ -277,6 +277,10 @@ contradiction, both notes side by side, with the place for the pool's
 resolve action reserved. A knowledge event scope and `/knowledge/events`
 stream feed a "graph changed" pill. Seven slices; `lithos_edge_list` gets
 its contract in the first. No write, no salience, no centrality overlay.
+Amended 2026-10-10 after first use (PRD D16–D17, slices S8–S10): expand a
+note in place — its neighbours join the picture beside it, nothing drawn
+moves, the URL carries the expansions — and a full-page canvas for walking
+the graph; still no unscoped render.
 
 ### K3 — Cognitive Search + Node Stats
 

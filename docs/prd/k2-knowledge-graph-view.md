@@ -13,12 +13,23 @@ references:
 tracked_in: lithos
 task_tags: [project:lithos-lens, milestone:k2]
 labels: [milestone-k2, knowledge-browser]
-epic: (created when this draft is accepted)
+epic: 9754a9ad (Lithos)
+amended: 2026-10-10 — D16 expand in place, D17 full-page canvas; stories 24–31; slices S8–S10
 depends_on: [K1, T2]
 upstream: []   # nothing gates a slice; four asks are recorded in the ledger
 ---
 
 # K2 — Knowledge Graph View
+
+> **Amended 2026-10-10**, after Dave used the shipped page: walking the
+> graph should not mean starting again at every step. The amendment adds
+> **D16** (expand a note in place), **D17** (a full-page canvas), stories
+> 24–31 and slices S8–S10. It changes three earlier things, each named where
+> it happens: D10's node panel gains Show its neighbours / Collapse; the S4
+> canvas's rules that every control navigates and that the layout runs once
+> give way, for expansion only, to "nothing already drawn moves"; and
+> REQUIREMENTS §8.4's double-click → note page (never built) becomes
+> double-click → expand.
 
 ## Problem Statement
 
@@ -205,6 +216,31 @@ redesign.
     section** — a title fan-out that times out leaves nodes labelled by id,
     a `lithos_related` failure drops the wiki-link layer with a note — so
     that one slow backend never blanks the graph.
+
+### Exploring in place (amendment, 2026-10-10)
+
+24. As a reader walking the graph, I want to **expand** a note — double-click
+    it, or "Show its neighbours" in its panel — so that its neighbours join
+    the picture beside it and I keep my place, instead of "Centre on this"
+    starting a new picture around it.
+25. As a reader, I want a note with neighbours not yet drawn to say **how
+    many** on the canvas ("+5"), so that I can see which notes lead
+    somewhere before I click.
+26. As a reader, I want the notes already on screen **never to move** when I
+    expand another, so that what I have read stays where I left it.
+27. As a reader, I want to **collapse** an expansion I no longer need, and
+    Back to undo the last one, so that the picture stays readable.
+28. As a reader, I want an expansion that would exceed the node cap
+    **refused on its own**, with its count, so that one large hub does not
+    cost me the view I have built.
+29. As a reader, I want the **URL to carry my expansions**, so that a reload
+    or a shared link draws the same picture.
+30. As a reader browsing, I want the canvas to **fill the window**, with the
+    toolbar and the panel over it, so that a large neighbourhood is readable
+    without squinting into a box above a page of text.
+31. As a reviewer with no JavaScript, I want expansion to work through the
+    node panel's links, and the text to list every edge an expansion drew,
+    so that the page stays complete without the canvas.
 
 ## Implementation Decisions
 
@@ -406,9 +442,11 @@ server-rendered beside the canvas on a full request (the no-JS baseline,
 as T2's `focus=` panel is) and swapped in by HTMX on click. They are
 mutually exclusive; the later click wins and the URL carries one.
 
-**Node panel**: title (link to `/note/{id}`), chips (type, status,
-namespace, confidence — the K1 chip partial), lede, "Centre on this"
-(→ `?focus=<id>` preserving depth and filters), degree in this view, and
+**Node panel** (amended by D16, which adds Show its neighbours / Collapse
+and has Centre on this drop `expand=`): title (link to `/note/{id}`),
+chips (type, status, namespace, confidence — the K1 chip partial), lede,
+"Centre on this" (→ `?focus=<id>` preserving depth and filters), degree in
+this view, and
 the note's relations in this view grouped by type as text (the related
 panel's grouping, restricted to the drawn graph).
 
@@ -514,6 +552,164 @@ The guardrail budgets (`modules_over_800_lines`, component counts) are
 prompts for a decision, not limits (`docs/architecture.toml` says so);
 `knowledge.py` sits at 799 lines and K2 does not add to it.
 
+### D16. Expanding a note in place (amendment, 2026-10-10)
+
+**Why.** With the page in use, the gap is walking. A node click lights
+only the neighbours already drawn, and at depth 1 that is one edge back to
+the focus. "Centre on this" is a full page load that lays the graph out
+again around a new focus, so every step loses the picture built so far.
+The data makes walking cheap. The snapshot indexes edges by endpoint
+(`edges_of`), the degree median is 4 and p90 is 9, and the facts cache
+already titles most drawn notes. So an expansion is a lookup plus a few
+cached reads, not a new Lithos query.
+
+**Meaning.** `?focus=<id>&expand=<id>&expand=<id>…` (focus mode only).
+An **expanded** note has every typed edge the filters show drawn, as the
+focus does. Expanding *B* adds *B*'s typed edges and their far endpoints.
+D3's rule stands, extended by one clause: a note's edges are drawn when it
+is the focus, is within `depth`, **or is expanded**. Edges between two
+drawn notes that are neither in depth nor expanded stay undrawn. That rule
+is what gives "+N" and "expanded" a meaning. Expansion does not extend the
+wiki-link and provenance layers: they stay the focus's, one hop (D3).
+Expansion therefore costs no Lithos call except the facts reads for the
+notes it adds (cached, under the per-render fan-out cap).
+
+**Order, reach and cap.** The parser drops duplicate `expand=` values and
+the focus itself. Expansions apply in URL order, after the depth BFS.
+
+- **Unreached.** An expansion whose note is not drawn when its turn comes
+  is not applied. This happens when a filter change or a collapse has left
+  the note out of the view. It is listed under "Not shown" with a link
+  that removes it.
+- **Refused.** An expansion that would take the view over
+  `graph_focus_max_nodes` is refused **on its own**: "expanding *B* would
+  draw 41 more notes — 263, over the 250 cap". The rest of the view is
+  drawn. The refusal sits under "Not shown" with links to remove the
+  expansion or raise the minimum weight. Later expansions are still tried
+  and are refused separately if they also do not fit.
+- **Base view over the cap.** A base view (focus and depth) over the cap is
+  refused as in D3, and expansions do not change that.
+
+No new configuration knob.
+
+**Payload.** Each node gains `undrawn_nodes` and `undrawn_edges`: the
+notes and the filtered typed edges that expanding it would add. Both are 0
+for the focus and for an expanded note. Each node also gains `expanded`
+(bool) and `via`: the expansion that first drew it, or null for the base
+view. A note added by an expansion has `hop = hop(via) + 1`, so the read
+order and anything else keyed on hop keep working. The payload gains
+`expansions`, the URL's list in order, each entry
+`{id, state: applied|unreached|refused, added_nodes, added_edges}`, plus
+the would-be count when refused.
+
+**Text baseline (D12).** The scope line names the applied expansions
+("around *A*, depth 1, expanded: *B*, *D*"), each with a remove link. An
+expansion's edges join the by-relation sections as "*X* → *Y*" lines, as
+depth-2 edges already do, so the text is still every drawn edge. "Not
+shown" lists the unreached and refused expansions.
+
+**Node panel (amends D10).**
+
+- **Show its neighbours.** "Show its neighbours — adds N notes and M
+  edges" (or "adds M edges between notes already drawn" when N is 0). It is
+  a plain link to this URL with the note appended to `expand=` and
+  `selected=` kept on it, so it works without JavaScript. When the
+  expansion cannot be offered, the panel says why instead: "would draw N
+  more notes, over the 250 cap", or "all its edges are drawn".
+- **Collapse** on an expanded note. It removes that expansion and, with
+  it, every later expansion of a note that this one first drew (`via`,
+  transitively). A collapse therefore never leaves an unreached expansion
+  behind.
+- **The focus** has neither.
+- **Centre on this** still starts afresh, and it drops `expand=`.
+
+**Canvas.** This changes the rules S4 shipped (`knowledge_graph.js`
+header), for expansion only. Every other control still navigates, and the
+base layout still runs once per page load.
+
+- **Trigger.** Double-clicking a node expands it. The first click of the
+  pair selects the node, as a single click does, so the panel shows the
+  note's new state. The panel's Show its neighbours and Collapse links are
+  intercepted the same way. REQUIREMENTS §8.4's double-click → note page
+  was never built; the note is one click away through the panel's title.
+  The task graph keeps double-click → task page, because it has nothing to
+  expand. The expansion's swap supersedes a panel request still in flight
+  from the first click, so the panel shown is the expanded view's.
+- **In place, not a reload.** The script fetches the new view from the same
+  route, with the same query plus the change. It swaps in the text
+  baseline, the payload and the panel host's render id, and applies the
+  difference to the canvas: new nodes and edges added, collapsed ones
+  removed. It pushes the URL only once the swap has landed, as the panel
+  does. **Nothing already drawn moves.** Node sizes follow the new degrees
+  in view, because a hub growing is information. A failed fetch leaves the
+  canvas, the text and the URL as they were and says so inline.
+- **Before fetching.** The canvas does not request an expansion that the
+  payload's `undrawn_nodes` already shows would be refused. It says why
+  instead.
+- **Placement.**
+  - An expansion's new notes go around the note expanded, on the side
+    facing away from the drawn graph's centre, at the base layout's spacing
+    and clear of existing notes and their titles.
+  - Placement is **deterministic**. A page load runs the base layout, then
+    replays each applied expansion's placement in URL order. So a reload, a
+    Back (which reloads, as today) or a shared link draws the same picture
+    at the same canvas size.
+  - Colour slots (the namespace and note-type palette) replay the same way.
+    The base view's values take slots by frequency, as today. A value an
+    expansion introduces takes the next free slot, so no expansion
+    recolours a note already drawn.
+- **Viewport.** If an expansion's new notes are not all in view, the
+  canvas pans to show the expanded note and its new neighbours. It zooms
+  out only as far as the readable minimum, and the pan hint covers the
+  rest. The pan is animated unless `prefers-reduced-motion`.
+- **The "+N" mark.** A note with `undrawn_nodes > 0` shows that count on
+  the node itself, not only in its panel, and the key explains it. Search,
+  lit/dimmed and the colour modes treat expanded notes like any other.
+- **Events (S7).** The "graph changed — refresh" pill watches the current
+  payload's drawn set, so it follows each swap.
+
+**Not in D16:**
+
+- Expansion in scoped global mode. A node there offers Centre on this,
+  which leads to focus mode, where expansion works.
+- The induced subgraph (see Meaning).
+- Expanding the wiki-link and provenance layers.
+- Dragging notes, or keeping a hand-made layout.
+
+### D17. A full-page canvas (amendment, 2026-10-10)
+
+**Why.** The inline canvas is `clamp(20rem, 70vh, 36rem)` tall, above the
+text. That is right for a glance at a note's neighbourhood and cramped for
+walking one (D16). A rendering of the **whole** table is still out (D11).
+It would be about 3,900 notes, so about 3,900 `lithos_read` facts reads,
+drawn as a hairball. General browsing is the picker or a search hit, then
+focus, then expansion, on a canvas that fills the window.
+
+**What.** `canvas=full` presents the same view and changes nothing that
+the text or the payload depend on (like `colour=`). Every link the URL
+builder makes carries it, including the picker's links, so a session
+started full stays full. It applies to focus and scoped global views alike.
+
+- **Canvas.** It fills the window below the shell header (`100dvh` less
+  the header). The toolbar sits over its top edge. Under 768px the toolbar
+  folds behind a "Controls" disclosure. The key sits over the bottom-left
+  corner behind a disclosure. The pan hint and the S7 pill also sit over
+  the canvas.
+- **Panel.** It opens as a drawer over the canvas's right side at 768px and
+  wider (fixed width, its own scroll, a close control, Esc closes), and as
+  a bottom sheet below 768px. It uses the same partial, host and fragments
+  as D10; only its placement differs. Closing it clears `selected=` /
+  `edge=` as before.
+- **Text.** The text baseline is still the page, below the canvas. The
+  toolbar's "Text view" link jumps to it, and the page scrollbar still
+  reaches it. Wheel over the canvas zooms, as it does inline.
+- **Toggle.** "Full page" / "Exit full page" in the toolbar switches in
+  place: class, `pushState`, `cy.resize()`, fit. No server state changes,
+  and laid-out positions are kept. A load of a `canvas=full` URL lays out
+  for the full-size canvas.
+- **Without JavaScript.** `canvas=full` changes nothing visible, because
+  the canvas is hidden and the text is the page.
+
 ### Config
 
 ```toml
@@ -535,7 +731,7 @@ Env overrides follow the existing `LITHOS_LENS_KNOWLEDGE_*` prefix rule
 
 | Route | Purpose |
 |---|---|
-| `GET /knowledge/graph` | picker (no scope); focus mode (`focus=`, `depth=`); scoped global (`type=`, `namespace=`); filters `min_weight=`, `provenance=`, `colour=namespace\|type`; selection `selected=` or `edge=` |
+| `GET /knowledge/graph` | picker (no scope); focus mode (`focus=`, `depth=`, repeatable `expand=` — D16); scoped global (`type=`, `namespace=`); filters `min_weight=`, `provenance=`, `colour=namespace\|type`; presentation `canvas=full` (D17); selection `selected=` or `edge=` |
 | `GET /knowledge/graph/panel?selected=<id>&…scope` | node panel fragment (HTMX) |
 | `GET /knowledge/graph/panel?edge=<edge_id>&…scope` | edge panel fragment (HTMX) |
 | `GET /knowledge/events` | browser SSE stream, knowledge scope (D14) |
@@ -567,7 +763,9 @@ refusal reason, snapshot age; `lens.knowledge.edge_table` as a named span
 per fetch (duration, row count, bytes, outcome) with a gauge for snapshot
 age and a counter for patches by event type; `lens.knowledge.note_facts`
 counters (hits, reads, ghosts, cap reached). The page's text states the
-same snapshot age it exports.
+same snapshot age it exports. The amendment adds to the request span the
+expansions requested, applied, unreached and refused (D16) and the canvas
+presentation, `inline|full` (D17).
 
 ## Testing Decisions
 
@@ -625,10 +823,38 @@ reverted**; the architecture budgets hold; no coverage percentage.
   test constrains new classes.
 - **Guardrails**: `make check && make diagrams` with no generated drift;
   the new modules mapped in `architecture.toml`.
+- **Expansion assembly (pure, amendment)**: on a fixture graph, an expanded
+  note's filtered edges and far endpoints are added and nothing else; URL
+  order is honoured; duplicates and the focus are dropped; an unreached
+  expansion is listed, not applied; a refused one names its would-be count
+  while the rest of the view is drawn and a later one that fits still
+  applies; `undrawn_nodes`/`undrawn_edges` are right for the focus (0), a
+  depth neighbour, and an expanded note (0); `via` and `hop` are set; the
+  collapse URL removes the expansion and its transitive dependants.
+- **Expansion page (TestClient, amendment)**: an expansion's edges are in
+  both the text sections and the payload, and they agree; the scope line
+  names the applied expansions with remove links; "Not shown" lists the
+  unreached and refused ones; the node panel offers Show its neighbours
+  with its counts, says why when it cannot, offers Collapse on an expanded
+  note and neither on the focus; Centre on this drops `expand=`; every
+  link carries `canvas=full` when the page has it.
+- **Expansion canvas (JS harness, real Cytoscape headless, amendment)**: a
+  double-click and an intercepted panel link each fetch the expanded view
+  and push the URL only after the swap; every node already drawn keeps its
+  position; new notes do not overlap drawn ones; loading the URL with
+  expansions gives the same positions and colour slots as making them live
+  at the same canvas size; an expansion the payload shows over the cap
+  sends no request; a failed fetch leaves the canvas, text and URL
+  unchanged; the pill's drawn set follows the swap.
+- **Full page (amendment)**: the toggle switches in place and pushes
+  `canvas=full` without moving a node; the drawer opens, closes on Esc and
+  clears the selection; e2e screenshots of a focus graph after two
+  expansions, inline and full page, at 1440 and 768.
 
 ## Tracer-bullet vertical slices
 
-Seven slices. Each updates `docs/SPECIFICATION.md` for what it ships and
+Seven slices, and three from the 2026-10-10 amendment after them. Each
+updates `docs/SPECIFICATION.md` for what it ships and
 passes `make check && make diagrams` with no generated drift. The text
 baseline carries the acceptance criteria, as on T2 and T3, because the
 review gate is hermetic.
@@ -669,6 +895,32 @@ review gate is hermetic.
 Ready at milestone start: **S1**. S2 → S3 is the spine; S4, S5 and S6 are
 independent of each other after S3; S7 is last.
 
+**Amendment slices (2026-10-10).** Same rules: each updates the
+SPECIFICATION and passes `make check && make diagrams`.
+
+8. **S8 Expansion: server and text.** The `expand=` parameter and the URL
+   builder (append, collapse with dependants, Centre on this drops it);
+   the expansion pass in `knowledge_graph.py` after the depth BFS, with
+   unreached and per-expansion refusal; `undrawn_nodes`/`undrawn_edges`,
+   `expanded`, `via` and `hop` on nodes and `expansions` in the payload;
+   the scope line, the by-relation sections and "Not shown"; the node
+   panel's Show its neighbours / Collapse as plain links; telemetry. On the
+   canvas, an expanded view simply draws as any payload does, laid out once
+   on load. *Needs S5; independent of S7.* Acceptance: the Expansion
+   assembly and Expansion page cases.
+9. **S9 Expansion on the canvas.** Double-click and panel-link
+   interception; fetch, swap and diff in place; placement beside the
+   expanded note, replayed deterministically on load; stable colour slots;
+   the viewport pan; the "+N" mark and its key line; the pill following
+   the swap. *Needs S8 and S7* (S7's pill and S9's swap meet in
+   `knowledge_graph.js`). Acceptance: the Expansion canvas cases.
+10. **S10 Full-page canvas.** `canvas=full` carried by the URL builder; the
+    toggle; the full-window canvas, the overlaid toolbar and key, the
+    drawer and bottom-sheet panel; "Text view". *Needs S7* (the pill sits
+    over the canvas); independent of S8 and S9, but it touches the same
+    script and URL builder, so whichever lands second merges the other in.
+    Acceptance: the Full page cases.
+
 ## Out of Scope
 
 - **Conflict resolution** (`lithos_conflict_resolve`) — the first
@@ -691,6 +943,9 @@ independent of each other after S3; S7 is last.
 - **Edge editing or deletion** — no MCP delete tool for knowledge edges;
   no requirement.
 - **Multi-select and note comparison** — deferred pool (§12).
+- **Expansion in scoped global mode, the induced subgraph, expanded
+  wiki-link/provenance layers, and dragged or saved layouts** (amendment —
+  D16 says why for each).
 - **Reworking the knowledge landing or note page beyond D13** — tracked as
   separate UX tasks (the search-box and back-link bugs filed 2026-10-05
   are not K2 slices).
