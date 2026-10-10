@@ -52,12 +52,6 @@ from fastapi.templating import Jinja2Templates
 from lithos_lens import metrics
 from lithos_lens.event_streams import event_stream_response
 from lithos_lens.knowledge_edge_types import is_conflict_resolved
-from lithos_lens.knowledge_edges import (
-    EdgeFacets,
-    EdgeTable,
-    EdgeTableRefusal,
-    EdgeTableSnapshot,
-)
 from lithos_lens.knowledge_facts import NoteFactsTally
 from lithos_lens.knowledge_graph import assemble_focus_graph, assemble_global_graph
 from lithos_lens.knowledge_graph_expansion import ExpansionCollapse, requests_for
@@ -68,6 +62,7 @@ from lithos_lens.knowledge_graph_panels import (
     graph_panel,
     node_metadata,
 )
+from lithos_lens.knowledge_graph_picker import KnowledgeGraphPicker, load_picker
 from lithos_lens.knowledge_graph_view import (
     MAX_DEPTH,
     PROVENANCE_GROUPS,
@@ -85,10 +80,6 @@ from lithos_lens.telemetry import get_current_span
 KNOWLEDGE_GRAPH_PATH = "/knowledge/graph"
 KNOWLEDGE_GRAPH_PANEL_PATH = "/knowledge/graph/panel"
 KNOWLEDGE_EVENTS_PATH = "/knowledge/events"
-
-#: The picker's namespace table shows this many rows; the rest are behind a
-#: disclosure (PRD D11).
-PICKER_TOP_NAMESPACES = 20
 
 GraphMode = Literal["picker", "focus", "global"]
 
@@ -155,7 +146,10 @@ class KnowledgeGraphParams:
         weight = self.min_weight if self.min_weight is not None else default_min_weight
         groups = frozenset(self.provenance or PROVENANCE_GROUPS)
         return KnowledgeGraphFilters(
-            min_weight=weight, provenance=groups, selected_edge=self.edge or self.pin
+            min_weight=weight,
+            provenance=groups,
+            selected_edge=self.edge or self.pin,
+            selected_is_pin=bool(self.pin) and not self.edge,
         )
 
 
@@ -415,7 +409,8 @@ class RenderedViews:
         if kept is None or kept[0] != _scope(params):
             return None
         # A selection whose pin would draw otherwise reloads the page (D13).
-        if not kept[1].keeps_drawing_for(params.edge or params.pin):
+        selection = params.edge or params.pin
+        if not kept[1].keeps_drawing_for(selection, is_pin=not params.edge):
             return None
         self._views.move_to_end(render_id)
         return kept[1]
@@ -442,46 +437,6 @@ def missing_edge_notice(view: KnowledgeGraphView | None, edge: str, ttl_s: int) 
         f"Edge {edge} is not in the current edge snapshot{as_of}. The snapshot "
         f"refreshes every {ttl_s} s, so a new edge appears within that window."
     )
-
-
-# ── the picker ─────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class KnowledgeGraphPicker:
-    """What the unscoped page offers (PRD D11, story 17).
-
-    ``facets`` is ``None`` when the snapshot gave none: the table over its
-    bound (``refused``) or unreadable (``unavailable``). The page then offers
-    only a typed-in ``type=`` / ``namespace=`` scope.
-    """
-
-    facets: EdgeFacets | None = None
-    as_of: datetime | None = None
-    stale: bool = False
-    refused: EdgeTableRefusal | None = None
-    unavailable: bool = False
-
-    @property
-    def top_namespaces(self) -> tuple[tuple[str, int], ...]:
-        rows = tuple(self.facets.namespaces.items()) if self.facets else ()
-        return rows[:PICKER_TOP_NAMESPACES]
-
-    @property
-    def more_namespaces(self) -> tuple[tuple[str, int], ...]:
-        rows = tuple(self.facets.namespaces.items()) if self.facets else ()
-        return rows[PICKER_TOP_NAMESPACES:]
-
-
-async def load_picker(table: EdgeTable) -> KnowledgeGraphPicker:
-    """The picker from the snapshot: its facets, or why there are none."""
-    try:
-        state = await table.read()
-    except Exception:
-        return KnowledgeGraphPicker(unavailable=True)
-    if isinstance(state, EdgeTableSnapshot):
-        return KnowledgeGraphPicker(state.facets, state.as_of, state.stale)
-    return KnowledgeGraphPicker(refused=state, as_of=state.as_of)
 
 
 # ── telemetry ──────────────────────────────────────────────────────────

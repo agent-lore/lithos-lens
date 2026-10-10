@@ -36,7 +36,7 @@ from lithos_lens.knowledge_graph_routes import (
 )
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
-from tests.test_knowledge_graph_expansion import LAYERS, ROWS, edge
+from tests.test_knowledge_graph_expansion import A_ROWS, LAYERS, ROWS, edge
 
 ROUTE = "/knowledge/graph"
 PANEL = "/knowledge/graph/panel"
@@ -786,3 +786,61 @@ def test_an_undrawn_pin_does_not_change_the_offered_expansion(
         {"id": "A", "state": "applied", "added_nodes": 2, "added_edges": 3}
     ]
     assert "W" not in {n["id"] for n in payload["nodes"]}
+
+
+# ── round 4: edge= keeps its exemption; a discarded pin counts plainly ─
+
+A_LAYERS = RelatedNeighborhood(links=(RelatedRef(id="A", title="Linked A"),))
+
+
+def test_an_explicit_edge_refuses_the_expansion_its_exemption_overfills(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness f-006: edge=ae stays selected and exempt, so A's
+    expansion (A, C and E: 5 over 4) is refused on its own."""
+    _set_knowledge(lithos_lens_config_env, "graph_focus_max_nodes = 4")
+    graph = _Graph(rows=A_ROWS, layers=A_LAYERS)
+    with _client(lithos_lens_config_env, graph) as client:
+        page = _get(client, _url("focus=F&expand=A&edge=ae"))
+
+    payload = _payload(page)
+    assert payload["expansions"] == [
+        {
+            "id": "A",
+            "state": "refused",
+            "added_nodes": 0,
+            "added_edges": 0,
+            "would_count": 5,
+        }
+    ]
+    assert _plain(_not_shown(page, "A")).startswith(
+        # A stays layer-only (refused, not promoted): its layer title.
+        "Expanding Linked A would add 2 visible notes; "
+        "5 notes would count towards the 4 cap — remove"
+    )
+    assert '<li data-kgraph-edge="ac">' not in page
+    assert payload["hidden"]["by_weight"] == 0
+    depth_link = _first(r'(<li data-would-be="2">.*?</li>)', page)
+    assert "edge=ae" in _href(depth_link, "depth=2")
+
+
+def test_a_discarded_pin_renders_the_plain_hidden_counts(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-006: pin=ae is not drawn, so it exempts nothing; A
+    applies, and ae — met by A's expansion — is counted hidden by weight."""
+    _set_knowledge(lithos_lens_config_env, "graph_focus_max_nodes = 4")
+    graph = _Graph(rows=A_ROWS, layers=A_LAYERS)
+    with _client(lithos_lens_config_env, graph) as client:
+        page = _get(client, _url("focus=F&expand=A&selected=A&pin=ae"))
+        plain = _get(client, _url("focus=F&expand=A&selected=A"))
+
+    payload = _payload(page)
+    assert [s["state"] for s in payload["expansions"]] == ["applied"]
+    assert payload["hidden"] == _payload(plain)["hidden"]
+    assert payload["hidden"]["by_weight"] == 1
+    line = _first(r"(<li data-hidden-weight>.*?</li>)", page)
+    assert _plain(line) == "1 edge below 0.1 hidden — show all weights"
+    assert _first(r'href="([^"]*)"', line).replace("&amp;", "&") == _url(
+        "focus=F&expand=A&min_weight=0.0&selected=A"
+    )

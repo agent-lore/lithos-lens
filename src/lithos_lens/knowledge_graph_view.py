@@ -104,6 +104,9 @@ class KnowledgeGraphFilters:
     provenance: frozenset[str] = frozenset(PROVENANCE_GROUPS)
     #: The ``edge=`` selection, never hidden; ``""`` for none.
     selected_edge: str = ""
+    #: It is a ``pin=`` (beside ``selected=``), not an ``edge=``: left undrawn
+    #: by the expansions, it exempts nothing, as the page's links drop it (D16).
+    selected_is_pin: bool = False
 
     def hides_by_weight(self, edge: KnowledgeEdge) -> bool:
         return (
@@ -296,20 +299,28 @@ class KnowledgeGraphView:
     #: ``depth`` only through a hidden edge and drawn by an expansion.
     pin_redraws: frozenset[str] = frozenset()
 
-    def keeps_drawing_for(self, pin: str) -> bool:
-        """A request pinning ``pin`` (its ``edge=``, else its ``pin=``) draws
-        this very view: the pin it was drawn under (the same filters, even
-        once the edge has gone from the data), the pinned one, or — on a view
-        no exemption changed — none, or an edge it draws anyway whose pin
-        changes nothing. Anything else may draw differently (an exemption
-        lost or gained), so it is not answered from this view."""
-        if pin in (self.pinned, self.filters.selected_edge):
+    def keeps_drawing_for(self, pin: str, *, is_pin: bool = False) -> bool:
+        """A request selecting ``pin`` (its ``edge=``, or its ``pin=`` when
+        ``is_pin``) draws this very view: the selection it was drawn under
+        (the same filters, even once the edge has gone from the data — or of
+        either kind while drawn: a drawn pin is kept); or, on a view no
+        exemption changed (``pinned`` empty), none, a drawn edge whose own
+        pin changes nothing, or an undrawn ``pin=`` of its own, which is
+        discarded. Anything else may draw differently (an exemption lost or
+        gained), so it is not answered from this view."""
+        drawn = named_edge(self, pin) is not None
+        selected = self.filters.selected_edge
+        if (
+            pin
+            and pin == selected
+            and (drawn or is_pin == self.filters.selected_is_pin)
+        ):
             return True
-        return (
-            not self.pinned
-            and pin not in self.pin_redraws
-            and named_edge(self, pin) is not None
-        )
+        if self.pinned:
+            return False
+        if drawn:
+            return pin not in self.pin_redraws
+        return not pin or (is_pin and pin == selected)
 
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.

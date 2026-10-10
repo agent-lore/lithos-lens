@@ -265,7 +265,8 @@ def expanded_typed_graph(
     depth = min(max(depth, 1), MAX_DEPTH)
     layer_ids = tuple(layer_ids)
     selected = filters.selected_edge
-    plain = replace(filters, selected_edge="")
+    pin = selected if filters.selected_is_pin else ""
+    plain = replace(filters, selected_edge="", selected_is_pin=False)
     expansion = expand_typed(
         snapshot.edges_of,
         filters.shows,
@@ -275,7 +276,7 @@ def expanded_typed_graph(
         layer_ids=layer_ids,
         requests=expand,
         cap=max_nodes,
-        pin=selected,
+        pin=pin,
         plain=plain.shows,
     )
     _, unfiltered = _bfs(snapshot.edges_of, focus, depth, _SHOW_ALL)
@@ -284,8 +285,10 @@ def expanded_typed_graph(
         for row in snapshot.edges_of(root):
             unfiltered.setdefault(row.edge_id, row)
     drawn = {edge.edge_id: edge for edge in expansion.edges}
-    # An undrawn pin exempts nothing (expand_typed): count as plain filters.
-    counted = filters if selected in drawn else plain
+    # An undrawn pin= exempts nothing (expand_typed): count, and predict the
+    # depth links that drop it, as plain filters. An edge= keeps its own.
+    discarded = bool(pin) and pin not in drawn
+    counted = plain if discarded else filters
     hops, edges = _bfs(snapshot.edges_of, focus, depth, plain)
     # The pin keeps a drawing only if the plain filters draw that very view:
     # an exemption can change the base, and so every later step's reach and
@@ -305,11 +308,22 @@ def expanded_typed_graph(
         drawn.keys(),
         expansion.steps,
     )
-    pinned = "" if same or selected not in drawn else selected
+    # Pinned whenever the exemption changed the drawing — even an edge= it
+    # leaves undrawn, whose exemption refused a step.
+    pinned = "" if same else selected
     redraws = frozenset(e for e in drawn if e in in_depth and e not in edges)
+    would_be = typed.would_be_nodes
+    if discarded:
+        would_be = MappingProxyType(
+            {
+                level: len(_bfs(snapshot.edges_of, focus, level, plain)[0])
+                for level in range(1, MAX_DEPTH + 1)
+            }
+        )
     return replace(
         typed,
         hops=expansion.hops,
+        would_be_nodes=would_be,
         edges=expansion.edges,
         hidden=_hidden(drawn, unfiltered, counted),
         provenance_facets=_provenance_facets(unfiltered.values(), counted),

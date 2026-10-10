@@ -17,7 +17,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.event_streams` | XS | 0 | 1 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_graph_routes` | L | 4 | 11 |
+| `lithos_lens.knowledge_graph_routes` | L | 3 | 10 |
 | `lithos_lens.knowledge_routes` | M | 2 | 5 |
 | `lithos_lens.request_filters` | L | 0 | 26 |
 | `lithos_lens.web` | L | 0 | 1 |
@@ -67,8 +67,6 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `RenderedViews` — The views recent renders drew, each under a fresh render id (S5).
 - def `utc_minute` — ``as_of`` as the scope line states it: UTC, to the minute.
 - def `missing_edge_notice` — The panel host's line when ``edge`` is the ``edge=`` ``view`` was drawn for and its snapshot does not hold it; ``""`` otherwise.
-- class `KnowledgeGraphPicker` — What the unscoped page offers (PRD D11, story 17).
-- def `load_picker` — The picker from the snapshot: its facets, or why there are none.
 - class `KnowledgeGraphLoad` — What one request read: offline (nothing), the picker, or a view.
 - def `load_knowledge_graph` — The page's reads for ``params``, shared by the page and its panel fragment so the two draw the same view (S5 D1).
 - def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global), `GET /knowledge/graph/panel` (its node and edge panels) and `GET /knowledge/events` (the knowledge-scope event stream it listens on).

@@ -130,6 +130,7 @@ classDiagram
     +min_weight float
     +provenance frozenset[str]
     +selected_edge str
+    +selected_is_pin bool
   }
   class KnowledgeGraphNode {
     +id str
@@ -141,6 +142,11 @@ classDiagram
     +layer_only bool
     +expanded bool
     +via str | None
+  }
+  class KnowledgeGraphPicker {
+    +as_of datetime | None
+    +stale bool
+    +unavailable bool
   }
   class KnowledgeGraphRefusal {
     +reason RefusalReason
@@ -344,6 +350,8 @@ classDiagram
   KnowledgeExpansion "1" --> "0..*" NodeExpansion : nodes
   KnowledgeGraphNode "1" --> "0..1" NodeExpansion : expansion
   KnowledgeGraphNode "1" --> "0..1" NoteFacts : facts
+  KnowledgeGraphPicker "1" --> "0..1" EdgeFacets : facets
+  KnowledgeGraphPicker "1" --> "0..1" EdgeTableRefusal : refused
   KnowledgeGraphView "1" --> "0..*" ExpansionCollapse : collapses
   KnowledgeGraphView "1" --> "0..*" ExpansionStep : expansions
   KnowledgeGraphView "1" --> "1" HiddenEdgeCounts : hidden

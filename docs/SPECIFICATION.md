@@ -1695,13 +1695,16 @@ and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
 since. A held view answers only a selection that would draw it the same: the
-`edge=` / `pin=` it was drawn under (the same filters — so a pin gone from the
-data since, left in the address bar, still finds it), the edge its exemption
-alone drew (pinned: the whole drawing, expansions' reach and cap verdicts
-included, differs from the plain filters'), or, on a view no exemption
-changed, no edge or one it draws whose own pin would change nothing (not an
-edge an expansion drew that is within `depth` only through a hidden edge,
-D16). A selection that would gain or lose an exemption is treated as a view
+`edge=` / `pin=` it was drawn under (the same selection, of the same kind
+unless the view draws it — so a pin gone from the data since, left in the
+address bar, still finds it), or, on a view no exemption changed (not
+pinned: the whole drawing, expansions' reach and cap verdicts included, is
+the plain filters'), no edge, one it draws whose own pin would change
+nothing (not an edge an expansion drew that is within `depth` only through
+a hidden edge, D16), or its own undrawn `pin=`, which is discarded. An
+`edge=` whose exemption changed the drawing without drawing it (a refused
+step) is not answered for that edge as a `pin=` (a node tap on its canvas),
+which would be discarded. A selection that would gain or lose an exemption is treated as a view
 not held. A render id no longer held (evicted,
 or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the
@@ -1784,10 +1787,12 @@ reads nothing:
   later requests are still tried. It offers no weight remedy (the base
   refusal keeps its depth and weight remedies). The `edge=` / `pin=`
   exemption applies to expanded edges too, and counts towards the cap — but
-  only where the result draws that edge: a pin the expansions leave undrawn
-  (its step refused, or out of reach) exempts nothing, so the view, its
-  eligibility and its collapse previews are the plain filters' — what the
-  page's links, which drop that pin, load
+  — and an `edge=` selection keeps it whatever it does, refusing a step its
+  exempt edge would take over the cap. A `pin=` (beside `selected=`) the
+  expansions leave undrawn (its step refused, or out of reach) exempts
+  nothing: the view, its eligibility, hidden counts, depth predictions and
+  collapse previews are the plain filters' — what the page's links, which
+  drop that pin, load
 - **what the drawing shows** — the hidden counts (over each applied note's
   unfiltered edges too), the provenance facets and the pinned selection — is
   recounted over the final typed set; the would-be node count per depth stays

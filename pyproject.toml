@@ -117,6 +117,7 @@ source_modules = [
     "lithos_lens.knowledge_graph_typed",
     "lithos_lens.knowledge_graph_expansion",
     "lithos_lens.knowledge_graph_panels",
+    "lithos_lens.knowledge_graph_picker",
     "lithos_lens.config",
     "lithos_lens.config_env",
     "lithos_lens.config_fields",
