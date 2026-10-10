@@ -390,6 +390,8 @@ console.log(JSON.stringify({
     id: n.data("pid"),
     label: n.data("label"),
     size: n.data("size"),
+    width: n.pstyle("width").pfValue,
+    height: n.pstyle("height").pfValue,
     colour: style(n, "background-color"),
     borderColour: style(n, "border-color"),
     borderStyle: style(n, "border-style"),
@@ -890,8 +892,11 @@ def test_node_marks_size_by_degree_and_status(lithos_lens_config_env: Path) -> N
     ghost = next(node["id"] for node in nodes if node["ghost"])
 
     by_degree = sorted(nodes, key=lambda node: node["degree"])
-    assert drawn[by_degree[-1]["id"]]["size"] == 42
-    assert drawn[by_degree[0]["id"]]["size"] == 18
+    hub, leaf = drawn[by_degree[-1]["id"]], drawn[by_degree[0]["id"]]
+    assert hub["size"] == 42 and leaf["size"] == 18
+    # …and that is the size drawn, not only the size computed.
+    assert (hub["width"], hub["height"]) == (42, 42)
+    assert (leaf["width"], leaf["height"]) == (18, 18)
     assert drawn[ghost]["borderStyle"] == "dashed"
     assert drawn[ghost]["label"] == next(n["label"] for n in nodes if n["ghost"])
     assert drawn[LEGACY]["borderColour"] == _rgb("#bd4f2b")  # quarantined
