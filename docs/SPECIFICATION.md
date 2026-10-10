@@ -1941,9 +1941,15 @@ The two browser streams are one body (`event_streams.event_stream_response`):
 a `lens.status` connected frame, then the queue's frames, a `: keepalive`
 comment after `SSE_KEEPALIVE_S` of quiet, and the queue released when the
 peer goes. Neither replays to the browser — `Last-Event-ID` and `lens.refresh`
-are the hub's, against Lithos. Both streams' queues count against the one
-`MAX_EVENT_SUBSCRIBERS` ceiling (past it the route answers 503), and both are
-exempt from the render cap and from tracing (§8).
+are the hub's, against Lithos. A queue that fills (its peer drains slower
+than frames arrive, a burst of buffered frames included) has its backlog
+replaced by one synthetic `lens.refresh` (`{"reason": "overflow"}`), to that
+queue alone, however many frames overflow before it drains: a dropped frame
+leaves the connection healthy, so nothing else would tell the browser — the
+dashboard re-reads its board, the graph page raises its pill. Both streams'
+queues count against the one `MAX_EVENT_SUBSCRIBERS` ceiling (past it the
+route answers 503), and both are exempt from the render cap and from tracing
+(§8).
 
 Browser behavior on the dashboard:
 

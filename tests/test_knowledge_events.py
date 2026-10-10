@@ -127,6 +127,42 @@ async def test_each_stream_gets_its_own_scope_and_both_get_the_refresh() -> None
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("stream", ["knowledge", "tasks"])
+async def test_an_overflowing_queue_is_told_to_refresh_whatever_it_dropped(
+    stream: events.EventStream,
+) -> None:
+    """A dropped frame leaves the browser's connection healthy, so nothing
+    but the hub can tell it what it missed. One chunk of 100 frames naming
+    nothing drawn, then the one that does — with a consumer waiting the
+    whole time: the chunk is published without yielding to it."""
+    hub = _hub()
+    queue = hub.subscribe(stream=stream)
+    received: list[LensEvent] = []
+
+    async def consume() -> None:
+        while True:
+            received.append(await queue.get())
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0)
+    kind, key = (
+        ("note.updated", "id") if stream == "knowledge" else ("task.updated", "task_id")
+    )
+    for index in range(101):
+        await hub.publish(_frame(kind, {key: f"other-{index}"}, f"evt-{index}"))
+    for index in range(3):  # overflowing again coalesces into the one refresh
+        await hub.publish(_frame(kind, {key: f"later-{index}"}, f"late-{index}"))
+    await asyncio.sleep(0)
+    consumer.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer
+
+    assert [event.type for event in received] == [LENS_REFRESH_EVENT, kind, kind, kind]
+    assert received[0].payload == {"reason": "overflow"}
+    assert received[0].id.startswith(f"{LENS_REFRESH_EVENT}:")
+
+
+@pytest.mark.anyio
 async def test_the_knowledge_types_never_ask_the_dashboard_to_refresh() -> None:
     for event in _knowledge_frames():
         assert (event.scope, event.task_id, event.requires_refresh) == (

@@ -319,6 +319,7 @@ class EventHub:
         self._stop = asyncio.Event()
         self._gap_since_last_open = False
         self._reconnects = 0
+        self._overflows = 0
         self._stream_open = False
         self._last_refresh_at = float("-inf")
         self._pending_refresh: asyncio.Task[None] | None = None
@@ -404,19 +405,23 @@ class EventHub:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Rate-limited: a subscriber that stops draining turns every
-                # upstream event into a record, at an upstream-chosen rate
-                # times a client-chosen number of stalled tabs.
-                #
-                # The counter alongside is not redundant. Rate limiting is
-                # right for the log and it costs the RATE: `occurrences` is a
-                # running total, not something to graph or alert on. A counter
-                # is cheap per occurrence, so the log keeps the readable detail
-                # and this carries how often it is happening.
+                # Rate-limited log; the counter keeps the rate the log gives up.
                 UNDELIVERED_EVENTS.record(event_type=event.type, event_id=event.id)
                 metrics.events_dropped().add(1, {"reason": "subscriber_queue_full"})
+                self._resync(queue)
             else:
                 metrics.events_delivered().add(1)
+
+    def _resync(self, queue: asyncio.Queue[LensEvent]) -> None:
+        """Swap a full queue's backlog for one `lens.refresh`: the dropped frame
+        may be the only one naming what the page shows, and a healthy stream
+        tells the browser nothing else. The caches were patched; just this queue."""
+        while not queue.empty():
+            queue.get_nowait()
+        self._overflows += 1
+        refresh_id = f"{LENS_REFRESH_EVENT}:overflow:{self._overflows}"
+        payload = {"reason": "overflow"}
+        queue.put_nowait(LensEvent(refresh_id, LENS_REFRESH_EVENT, "", payload))
 
     def _invalidate_graph_cache(self, event: LensEvent) -> None:
         """Evict what this event invalidated, BEFORE browsers hear about it.

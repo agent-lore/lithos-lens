@@ -18,6 +18,7 @@ Node is the same runtime the ``e2e/`` suite needs; the tests skip without it.
 
 from __future__ import annotations
 
+import asyncio
 import html as html_lib
 import json
 import re
@@ -33,7 +34,8 @@ from urllib.parse import parse_qsl, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from lithos_lens.config import load_config
+from lithos_lens.config import EventsConfig, LithosConfig, load_config
+from lithos_lens.events import EventHub, LensEvent, parse_lithos_sse_frame
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_graph_routes import (
@@ -2191,6 +2193,39 @@ def test_a_missed_frame_raises_the_pill_and_a_first_open_does_not(
     """``lens.refresh`` and a stream reopened after an error both mean frames
     may have been missed; the first open means nothing yet."""
     assert _pill(_run(focus_page, actions, dom=EVENTS))[0] is (not raised)
+
+
+def test_an_overflow_dropping_the_only_frame_naming_the_graph_raises_the_pill(
+    focus_page: Page,
+) -> None:
+    """One upstream chunk outruns the page's queue: 100 updates to notes it
+    never drew, then one to its focus. The hub's fan-out drops that last
+    frame, so what reaches the page — read off the real parser and hub —
+    must still raise the pill."""
+    hub = EventHub(EventsConfig(enabled=False), LithosConfig())
+    queue = hub.subscribe(stream="knowledge")
+
+    async def flood() -> None:
+        for index in range(100):
+            await hub.publish(_upstream("note.updated", id=f"{UNDRAWN}-{index}"))
+        await hub.publish(_upstream("note.updated", id=PLAN))
+
+    asyncio.run(flood())
+    delivered = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert PLAN not in {event.payload.get("id") for event in delivered}
+    actions = [
+        f"raw-frame:{event.type}:{event.as_sse().split('data: ', 1)[1].strip()}"
+        for event in delivered
+    ]
+
+    assert _pill(_run(focus_page, actions, dom=EVENTS))[0] is False
+
+
+def _upstream(event_type: str, **payload: Any) -> LensEvent:
+    lines = [f"event: {event_type}", f"data: {json.dumps(payload)}"]
+    event = parse_lithos_sse_frame(lines)
+    assert event is not None
+    return event
 
 
 def test_the_pill_links_to_the_address_the_page_is_on_however_it_is_followed(
