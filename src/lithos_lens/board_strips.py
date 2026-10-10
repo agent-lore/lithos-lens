@@ -46,6 +46,7 @@ from lithos_lens.epic_strip import (
     load_epic_rollups,
 )
 from lithos_lens.gate_scope import waited_on_gates
+from lithos_lens.gates import GATE_TASK_TYPE
 from lithos_lens.task_filtering import (
     board_visible_ids,
     matches_filters,
@@ -200,12 +201,12 @@ def build_project_strip(
     between projects (the counts do not move, because the project filter is not
     part of the scope).
 
-    A gate that fails the scope itself but that an in-scope row waits on
-    (``gate_waiting``, the rule in ``gate_scope``) is on the board too, so it
-    counts — once under each project one of those waiters carries, whatever
-    project the gate itself names (or none). That is exactly where
-    ``?project=<slug>`` keeps it: the gate fails on its own match, so a waiter
-    of that project is what brings it back.
+    A gate is on a ``?project=<slug>`` board through its own match OR through
+    an in-scope waiter of that project (``gate_waiting``, the rule in
+    ``gate_scope``), so it counts once under each project in the union of the
+    two: its own projects when it passes the scope itself, plus every project
+    one of its in-scope waiters carries — whatever project the gate names (or
+    none). A gate that fails the scope itself has only the second route.
     """
     if "open" not in filters.statuses:
         return ()
@@ -220,19 +221,24 @@ def build_project_strip(
         if (open_row_types is None or task.task_type in open_row_types)
         and matches_filters(task, filters=scope, status="open", scope_ids=scope_ids)
     }
+    waiting = gate_waiting or {}
+
+    def waiter_projects(gate_id: str) -> set[str]:
+        return {
+            slug
+            for waiter in waiting.get(gate_id, ())
+            if waiter in scoped
+            for slug in projects_of(scoped[waiter])
+        }
+
     counts: Counter[str] = Counter()
     for task in scoped.values():
-        counts.update(projects_of(task))
-    waiting = gate_waiting or {}
+        slugs = set(projects_of(task))
+        if task.task_type == GATE_TASK_TYPE:
+            slugs |= waiter_projects(task.id)
+        counts.update(slugs)
     for gate in waited_on_gates(snapshot, scoped_ids=scoped, waiting=waiting):
-        counts.update(
-            {
-                slug
-                for waiter in waiting[gate.id]
-                if waiter in scoped
-                for slug in projects_of(scoped[waiter])
-            }
-        )
+        counts.update(waiter_projects(gate.id))
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)
         for slug, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))

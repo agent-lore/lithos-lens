@@ -569,9 +569,10 @@ The dashboard also renders:
   the section on a `?tag=` board full of gated work; Lens applies the rule
   rather than copying tags onto gates. One rule feeds every gate surface — the
   Gates section, the Needs-attention gate promotion, the gates tile and the
-  project strip (which counts such a gate once under each project an in-scope
-  waiter carries, whatever project the gate names itself — exactly the chips
-  whose board keeps it) — and a gate's waiter count stays unnarrowed. Terminal sections keep
+  project strip (which counts every gate once under each project whose board
+  keeps it: its own projects when it matches the scope itself, plus each
+  project an in-scope waiter carries, whatever project the gate names) — and a
+  gate's waiter count stays unnarrowed. Terminal sections keep
   the per-row rule. The relation costs no call on a healthy render: the blocked
   frontier already lists each blocked task's gate blockers. When that read is
   truncated (at `frontier_limit`) or failed, the open gates outside the filters

@@ -552,3 +552,34 @@ def test_a_truncated_read_feeds_the_strip_the_same_waiters_as_the_section() -> N
         ], project
         assert data.gates_incomplete is False
         assert [call["task_id"] for call in fake.edge_list_calls] == ["gate-g"]
+
+
+def test_a_gate_matching_on_its_own_also_counts_under_its_waiters_projects() -> None:
+    """Reviewer repro (round 2, correctness f-001): G carries ``roadmap-x``
+    itself, so it is on the board by its own match — but ``?project=lens`` keeps
+    it too, through its lens waiter. The lens chip must count it (story + gate
+    = 2), as well as G's own project; a gate naming no project counts under its
+    waiter's alone. Each project once, however many routes reach it."""
+    story = _task("story-1", claims=(), tags=("roadmap-x", "project:lens"))
+    waits = BlockerRecord(kind="gate", task_id="gate-g", type="waits_on_gate")
+    for metadata, expected in (
+        ({"project": "other"}, [("lens", 2), ("other", 1)]),
+        ({}, [("lens", 2)]),
+        ({"project": "lens"}, [("lens", 2)]),
+    ):
+        gate = _gate_task("gate-g", tags=("roadmap-x",), metadata=metadata)
+        fake = _FrontierFake(
+            open_tasks=[gate, story], ready=[], blocked=[_blocked(story, waits)]
+        )
+        for projects in ((), ("lens",)):
+            data = asyncio.run(
+                load_dashboard(
+                    fake,
+                    filters=replace(_ROADMAP, projects=projects),
+                    frontier_limit=500,
+                    now=_NOW,
+                )
+            )
+            assert [row.task.id for row in data.gates] == ["gate-g"]
+            counts = [(chip.slug, chip.open_count) for chip in data.project_chips]
+            assert counts == expected, (metadata, projects)
