@@ -405,7 +405,9 @@ surface has no such group it sits with that surface's other facts about the task
 Blocks / provenance line or on a gate's waiter, after the link in a breadcrumb
 trail or in the sentence a scoped-epic banner states. A row that names a SECOND
 task states that task's id too, and not only its own: a blocker chip carries the
-predecessor's id beside its title, and the `unsatisfiable`/`cycle` supporting
+predecessor's id beside its title (and a chip that names its blocker — a gate or
+a predecessor task — is a plain link to that blocker's detail page, the URL its
+own row's title uses), and the `unsatisfiable`/`cycle` supporting
 fact states it in the same element, spliced into the sentence right after the
 name — `Blocker "Design schema" 28105098 was cancelled …`. The reason carries
 the predecessor as an ID, not as prose, so that one element is the same one
@@ -558,7 +560,27 @@ The dashboard also renders:
   than failing. The vocabulary and its colours are
   one mapping in `pr_reconciliation.py`, which the templates read — the same
   badge appears in the side panel's gate context, on the detail page, and on a
-  gate the severity model promoted
+  gate the severity model promoted.
+  **Under a scope filter** (tag, project, agent, epic scope — anything that
+  narrows the open rows) an open gate is in scope when it passes the filters
+  itself **or a task in scope waits on it** (Dave, 2026-10-09). Gates do not
+  carry their stories' tags — loom's `pr` gates carry none, its `human` gates
+  only `project:<slug>` and `needs-human` — so the per-row rule alone emptied
+  the section on a `?tag=` board full of gated work; Lens applies the rule
+  rather than copying tags onto gates. One rule feeds every gate surface — the
+  Gates section, the Needs-attention gate promotion, the gates tile and the
+  project strip (which counts every gate once under each project whose board
+  keeps it: its own projects when it matches the scope itself, plus each
+  project an in-scope waiter carries, whatever project the gate names) — and a
+  gate's waiter count stays unnarrowed. Terminal sections keep
+  the per-row rule. The relation costs no call on a healthy render: the blocked
+  frontier already lists each blocked task's gate blockers. When that read is
+  truncated (at `frontier_limit`) or failed, the open gates outside the filters
+  are read through their outgoing `waits_on_gate` edges, at most
+  `GATE_WAITER_FANOUT_CAP` (25) edge reads per render shared with the waiter
+  counts' own degraded reads; a gate that bound or a failed read leaves
+  unchecked makes the board say the Gates list **may be incomplete** (banner and
+  section) instead of under-showing silently
 - an **Epic rollup strip** summarizing epics by child progress, with a scope
   link that filters the board to one epic
 - a **Project quick-switch strip** below it, enumerating the projects inside the
@@ -657,6 +679,9 @@ Filter behavior:
 
 - Filters are parsed by Lens and also applied defensively inside Lens after data
   is fetched from Lithos.
+- Open gates are the one exception to the per-row rule: an open gate an in-scope
+  task waits on is in scope whatever its own tags, project or creator (§5.3,
+  Gates section).
 - Both date filters accept ISO `YYYY-MM-DD` and UI-friendly `DD/MM/YYYY` input,
   and the visible dashboard fields render `DD/MM/YYYY`.
 - The two date windows are different questions, and each field's LABEL says

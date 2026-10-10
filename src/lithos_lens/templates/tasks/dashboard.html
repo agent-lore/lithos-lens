@@ -621,7 +621,17 @@
                   </div>
                 {% else %}
                   <div class="task-list" id="task-list-gates" data-task-list="gates"></div>
-                  <p class="empty">No open gates match these filters.</p>
+                  {% if not dashboard.gates_incomplete %}
+                    <p class="empty">No open gates match these filters.</p>
+                  {% endif %}
+                {% endif %}
+                {#- A scoped board shows the gates its tasks wait on, learned from
+                    the blocked frontier; when that read was truncated or failed
+                    and the bounded edge reads could not cover every gate, the
+                    list may be short — said here, not left to a confident empty
+                    line (the banner above names the read). -#}
+                {% if dashboard.gates_incomplete %}
+                  <p class="empty" data-gates-incomplete>This list may be incomplete: Lens could not verify every gate the tasks in this view wait on.</p>
                 {% endif %}
               </article>
             {% endif %}

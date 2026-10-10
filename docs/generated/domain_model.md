@@ -474,6 +474,7 @@ classDiagram
     +rolled_up_open int
     +nothing_to_show bool
     +frontier_unplaced bool
+    +gates_incomplete bool
     +errors tuple[str, ...]
     +epics_hidden int
     +project_chips tuple[ProjectChip, ...]
@@ -546,6 +547,11 @@ classDiagram
   class GateSection {
     +next_ready_at str
     +errors tuple[str, ...]
+  }
+  class GateWaits {
+    +waiting Mapping[str, frozenset[str]]
+    +incomplete bool
+    +reads int
   }
   class GraphEdge {
     +state str
@@ -786,6 +792,8 @@ classDiagram
   GateRow "1" --> "1" TaskRecord : task
   GateRow "1" --> "0..*" TaskRecord : waiters
   GateSection "1" --> "0..*" GateGroup : groups
+  GateWaits "1" --> "0..*" EdgeRecord : edges
+  GateWaits "1" --> "0..*" TaskRecord : included
   GraphEdge "1" --> "1" EdgeRecord : edge
   GraphNode "1" --> "1" TaskRecord : task
   GraphPageView "1" --> "0..*" Banner : banners

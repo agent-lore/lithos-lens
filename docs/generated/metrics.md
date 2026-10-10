@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **40** (211 module-level)
+- Cross-component edges: **40** (212 module-level)
 - Component cycles: none
 - Module cycles: none
 - Tier-skipping edges (Entrypoints → Foundation): 11 (Entrypoint -> Config, Entrypoint -> Errors, Entrypoint -> Logging, Entrypoint -> Telemetry, Web -> Config, Web -> Errors, Web -> Knowledge, Web -> TaskGraph, Web -> Tasks, Web -> Telemetry, Web -> Writes)
@@ -42,7 +42,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 10 | 5109 | 4143 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 112 | 79 | 1 | 5 | 0.83 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 25 | 11373 | 8722 | 4 | 1 | 0.20 | 40 (`lithos_lens.frontier.load_dashboard`) | 25 |
+| TaskGraph | 26 | 11665 | 8973 | 4 | 1 | 0.20 | 41 (`lithos_lens.frontier.load_dashboard`) | 27 |
 | Tasks | 7 | 2233 | 1624 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1222 | 901 | 5 | 2 | 0.29 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 11 | 6113 | 4947 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 7 |
@@ -50,7 +50,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **86**, lines: **35959**, SLOC: **27950**
+- Modules: **87**, lines: **36251**, SLOC: **28201**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -62,22 +62,22 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **1181**, cyclomatic > 10: **57**
+- Functions: **1189**, cyclomatic > 10: **59**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
 | 43 | `lithos_lens.config_env.apply_env_overrides` |
-| 40 | `lithos_lens.frontier.load_dashboard` |
+| 41 | `lithos_lens.frontier.load_dashboard` |
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
+| 22 | `lithos_lens.gate_scope.load_gate_waits` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
 | 21 | `lithos_lens.fake_writes.FakeWriteStore.edge_upsert` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
 | 19 | `lithos_lens.fake_writes.FakeWriteStore.create` |
 | 19 | `lithos_lens.task_filtering.matches_filters` |
-| 18 | `lithos_lens.cancel_consequences.walk_downstream` |
 
 ## Seams
 
@@ -89,5 +89,5 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain & tests
 
-- Domain models: **144** (157 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.00** (71771 test lines / 35959 source lines)
+- Domain models: **145** (159 associations, 16 without docstrings)
+- Test-to-source line ratio: **2.00** (72356 test lines / 36251 source lines)

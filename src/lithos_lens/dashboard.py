@@ -162,6 +162,12 @@ class DashboardData:
     # under Completed/Cancelled and leaves the stripe alone; the load read it
     # and placed it.
     frontier_unplaced: bool = False
+    # True when the blocked frontier was truncated or failed and the bounded
+    # per-gate edge reads could not cover every gate outside the filters, so a
+    # gate an in-scope task waits on may be missing from the Gates section
+    # (``gate_scope``). The errors banner says so too; this lets the section's
+    # own empty line stop claiming that no gate matches.
+    gates_incomplete: bool = False
     errors: tuple[str, ...] = ()
     # One rollup per open epic ON THIS BOARD, in open-snapshot (newest-first)
     # order: under narrowing filters the strip lists only the epics with a

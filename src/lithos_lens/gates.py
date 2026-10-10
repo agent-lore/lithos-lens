@@ -319,15 +319,20 @@ async def load_gates(
     blocked_truncated: bool,
     placed_ids: frozenset[str] = frozenset(),
     now: datetime,
+    prefetched: Mapping[str, Sequence[EdgeRecord] | BaseException] | None = None,
+    fanout_cap: int = GATE_WAITER_FANOUT_CAP,
 ) -> GateSection:
     """Assemble the Gates section from the reads ``load_dashboard`` already has.
 
-    ``visible_open`` is the filtered open snapshot the sections render, so the
-    board's scope decides WHICH gates appear; ``index`` is the WHOLE open
-    snapshot, so a gate's waiter count is never narrowed by that same scope.
-    ``placed_ids`` are rows some other section already rendered (Needs
+    ``visible_open`` is the scoped open set the sections render — the rows that
+    pass the filters plus the gates an in-scope task waits on (``gate_scope``)
+    — so the board's scope decides WHICH gates appear; ``index`` is the WHOLE
+    open snapshot, so a gate's waiter count is never narrowed by that same
+    scope. ``placed_ids`` are rows some other section already rendered (Needs
     attention promotes a long-waiting human gate out of here) — the
     single-placement rule, enforced at the one point that can see both.
+    ``prefetched`` / ``fanout_cap`` hand over the degraded edge reads the gate
+    scope already made and what is left of the per-render read budget.
     """
     gates = collect_gates(visible_open, placed_ids=placed_ids, now=now)
     if not gates:
@@ -339,6 +344,8 @@ async def load_gates(
         blocked=blocked,
         blocked_available=blocked_available,
         blocked_truncated=blocked_truncated,
+        fanout_cap=fanout_cap,
+        prefetched=prefetched,
     )
     return GateSection(
         groups=group_gates(gates),
@@ -466,6 +473,7 @@ async def attach_gate_waiters(
     blocked_available: bool,
     blocked_truncated: bool,
     fanout_cap: int = GATE_WAITER_FANOUT_CAP,
+    prefetched: Mapping[str, Sequence[EdgeRecord] | BaseException] | None = None,
 ) -> tuple[GateRow, ...]:
     """Fill each gate's waiter list, preferring the Lithos-computed source.
 
@@ -490,11 +498,14 @@ async def attach_gate_waiters(
     dashboard render. Gates past the cap, and gates whose read fails, degrade
     to the blocked-response fallback (``PARTIAL`` — "at least N"); when that
     source is unavailable too the row reports ``UNKNOWN`` rather than an
-    invented zero.
+    invented zero. A gate in ``prefetched`` (the gate scope already read its
+    edges this render) reuses that answer — or that failure — instead of
+    reading again, and ``fanout_cap`` is then what is left of the per-render
+    budget.
     """
     if not gates:
         return ()
-    waiting = _blocked_waiter_ids(blocked)
+    waiting = blocked_waiter_ids(blocked)
 
     def from_blocked(gate: GateRow, state: GateWaiterState) -> GateRow:
         if not blocked_available:
@@ -508,21 +519,17 @@ async def attach_gate_waiters(
     if blocked_available and not blocked_truncated:
         return tuple(from_blocked(gate, GateWaiterState.KNOWN) for gate in gates)
 
-    fanned, overflow = gates[:fanout_cap], gates[fanout_cap:]
-    limit = asyncio.Semaphore(_GATE_EDGE_CONCURRENCY)
-
-    async def read_edges(gate: GateRow) -> list[EdgeRecord]:
-        async with limit:
-            return await lithos.task_edge_list(
-                gate.task.id, direction="outgoing", types=[WAITS_ON_GATE_EDGE]
-            )
-
-    results = await asyncio.gather(
-        *(read_edges(gate) for gate in fanned), return_exceptions=True
-    )
+    reused = prefetched or {}
+    unread = [gate.task.id for gate in gates if gate.task.id not in reused]
+    read: dict[str, Sequence[EdgeRecord] | BaseException] = {
+        gate.task.id: reused[gate.task.id] for gate in gates if gate.task.id in reused
+    }
+    read.update(await read_gate_edges(lithos, unread[: max(fanout_cap, 0)]))
     attached: list[GateRow] = []
-    for gate, result in zip(fanned, results, strict=True):
-        if isinstance(result, BaseException):
+    for gate in gates:
+        result = read.get(gate.task.id)
+        if result is None or isinstance(result, BaseException):
+            # Past the cap, or the read failed.
             attached.append(from_blocked(gate, GateWaiterState.PARTIAL))
             continue
         # Order by the edge list, de-duped: a repeated edge must not
@@ -537,8 +544,31 @@ async def attach_gate_waiters(
                 waiters_state=GateWaiterState.UNVERIFIED,
             )
         )
-    attached.extend(from_blocked(gate, GateWaiterState.PARTIAL) for gate in overflow)
     return tuple(attached)
+
+
+async def read_gate_edges(
+    lithos: GateEdgeClient,
+    gate_ids: Sequence[str],
+) -> dict[str, list[EdgeRecord] | BaseException]:
+    """Each gate's outgoing ``waits_on_gate`` edges — the degraded waiter read.
+
+    The caller bounds how MANY gates are read (``GATE_WAITER_FANOUT_CAP`` per
+    render); this bounds how many are in flight. A failed read comes back as
+    its exception, for the caller to degrade that one gate.
+    """
+    limit = asyncio.Semaphore(_GATE_EDGE_CONCURRENCY)
+
+    async def read_edges(gate_id: str) -> list[EdgeRecord]:
+        async with limit:
+            return await lithos.task_edge_list(
+                gate_id, direction="outgoing", types=[WAITS_ON_GATE_EDGE]
+            )
+
+    results = await asyncio.gather(
+        *(read_edges(gate_id) for gate_id in gate_ids), return_exceptions=True
+    )
+    return dict(zip(gate_ids, results, strict=True))
 
 
 def next_gate_ready_at(gates: Sequence[GateRow], *, now: datetime) -> str:
@@ -622,7 +652,7 @@ def _resolve_asserted_waiters(
     )
 
 
-def _blocked_waiter_ids(
+def blocked_waiter_ids(
     blocked: Sequence[BlockedTaskRecord],
 ) -> dict[str, set[str]]:
     """Waiter ids per gate id, read off the blocked frontier.

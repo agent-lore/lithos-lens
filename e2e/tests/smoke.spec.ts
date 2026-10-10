@@ -29,8 +29,10 @@ test("dashboard renders the task board with fixture rows", async ({ page }) => {
   await expect(
     page.locator('[data-task-row][data-task-id="influx-ingest-cutover"]'),
   ).toBeVisible();
+  // `exact`: the title link only. A blocked row's Blocked-by chip naming this
+  // task is a link too, and its accessible name adds the short id.
   await expect(
-    page.getByRole("link", { name: "Cut over Influx ingest path" }),
+    page.getByRole("link", { name: "Cut over Influx ingest path", exact: true }),
   ).toBeVisible();
 
   // At least one task row rendered overall.
@@ -344,10 +346,12 @@ test("project strip switches between the projects in a tag scope", async ({
 
   const strip = page.locator("[data-project-strip]");
   await expect(strip).toBeVisible();
-  // Ordered by open count, then slug — the fixture's 3/2/1 split.
+  // Ordered by open count, then slug. influx counts its two open rows AND
+  // the two untagged-by-roadmap gates the scoped influx-backfill waits on
+  // (an open gate an in-scope task waits on is in scope, §5.3) — 4/3/1.
   await expect(strip.locator("[data-project-chip]")).toHaveText([
+    /influx\s*4/,
     /lithos-loom\s*3/,
-    /influx\s*2/,
     /lithos-lens\s*1/,
   ]);
 
@@ -594,7 +598,7 @@ test("clicking a task opens its panel, and Expand opens the full page", async ({
 }) => {
   await page.goto("/tasks?since=2026-08-01");
 
-  await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+  await page.getByRole("link", { name: "Cut over Influx ingest path", exact: true }).click();
 
   // §5.5 (T2-A6): a row click opens the side panel and pushes `selected` onto
   // the URL — the operator keeps their place in the list. The full page is
@@ -704,7 +708,7 @@ test("a panel fetch that fails leaves the board exactly as it was", async ({
     isPanelFragment(new URL(request.url())),
   );
 
-  await page.getByRole("link", { name: "Cut over Influx ingest path" }).click();
+  await page.getByRole("link", { name: "Cut over Influx ingest path", exact: true }).click();
   await requestFailed;
   expect(aborted).toBe(1);
   // The rejection reaches the page's own handlers in the microtask checkpoint
