@@ -202,9 +202,10 @@ def build_project_strip(
 
     A gate that fails the scope itself but that an in-scope row waits on
     (``gate_waiting``, the rule in ``gate_scope``) is on the board too, so it
-    counts — under each of its own projects that one of those waiters also
-    carries. That is exactly where ``?project=<slug>`` keeps it: the gate stays
-    out on its own match, so only a waiter of that project brings it back.
+    counts — once under each project one of those waiters carries, whatever
+    project the gate itself names (or none). That is exactly where
+    ``?project=<slug>`` keeps it: the gate fails on its own match, so a waiter
+    of that project is what brings it back.
     """
     if "open" not in filters.statuses:
         return ()
@@ -224,13 +225,14 @@ def build_project_strip(
         counts.update(projects_of(task))
     waiting = gate_waiting or {}
     for gate in waited_on_gates(snapshot, scoped_ids=scoped, waiting=waiting):
-        shared = {
-            slug
-            for waiter in waiting[gate.id]
-            if waiter in scoped
-            for slug in projects_of(scoped[waiter])
-        }
-        counts.update(slug for slug in projects_of(gate) if slug in shared)
+        counts.update(
+            {
+                slug
+                for waiter in waiting[gate.id]
+                if waiter in scoped
+                for slug in projects_of(scoped[waiter])
+            }
+        )
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)
         for slug, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))

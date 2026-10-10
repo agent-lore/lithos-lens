@@ -42,7 +42,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LithosClient | 10 | 5109 | 4143 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 112 | 79 | 1 | 5 | 0.83 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
-| TaskGraph | 26 | 11640 | 8952 | 4 | 1 | 0.20 | 41 (`lithos_lens.frontier.load_dashboard`) | 27 |
+| TaskGraph | 26 | 11659 | 8969 | 4 | 1 | 0.20 | 41 (`lithos_lens.frontier.load_dashboard`) | 27 |
 | Tasks | 7 | 2233 | 1624 | 6 | 0 | 0.00 | 23 (`lithos_lens.normalizers.normalize_task`) | 6 |
 | Telemetry | 2 | 1222 | 901 | 5 | 2 | 0.29 | 10 (`lithos_lens.telemetry.setup_telemetry`) | 0 |
 | Web | 11 | 6113 | 4947 | 1 | 10 | 0.91 | 18 (`lithos_lens.knowledge_routes.register_knowledge_routes.knowledge`) | 7 |
@@ -50,7 +50,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **87**, lines: **36226**, SLOC: **28180**
+- Modules: **87**, lines: **36245**, SLOC: **28197**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **6**
   - `lithos_lens.frontier`
@@ -72,10 +72,10 @@ Top 10 most complex functions:
 | 41 | `lithos_lens.frontier.load_dashboard` |
 | 24 | `lithos_lens.graph_cycles._signal` |
 | 23 | `lithos_lens.normalizers.normalize_task` |
+| 22 | `lithos_lens.gate_scope.load_gate_waits` |
 | 22 | `lithos_lens.graph_mini.load_mini_graph` |
 | 21 | `lithos_lens.fake_writes.FakeWriteStore.edge_upsert` |
 | 20 | `lithos_lens.fake_lithos.FakeLithosClient.list_tasks` |
-| 20 | `lithos_lens.gate_scope.load_gate_waits` |
 | 19 | `lithos_lens.fake_writes.FakeWriteStore.create` |
 | 19 | `lithos_lens.task_filtering.matches_filters` |
 
@@ -90,4 +90,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **145** (159 associations, 16 without docstrings)
-- Test-to-source line ratio: **1.99** (72241 test lines / 36226 source lines)
+- Test-to-source line ratio: **2.00** (72325 test lines / 36245 source lines)

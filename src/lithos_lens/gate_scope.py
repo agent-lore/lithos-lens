@@ -37,10 +37,14 @@ from lithos_lens.gates import (
     GATE_WAITER_FANOUT_CAP,
     GateEdgeClient,
     blocked_waiter_ids,
+    collect_gates,
     read_gate_edges,
 )
 from lithos_lens.task_graph import BlockedTaskRecord, EdgeRecord
 from lithos_lens.tasks import TaskRecord
+
+# Stands in for a gate the cap left unread: as unknown as one whose read failed.
+_UNREAD = LookupError("not read: past the per-render edge-read cap")
 
 GATES_INCOMPLETE_ERROR = (
     "The Gates list may be incomplete: the blocked frontier was truncated or "
@@ -58,14 +62,16 @@ class GateWaits:
     ``included`` are the open gates that fail the filters themselves but that a
     task in scope waits on; ``incomplete`` says a candidate gate's waiters could
     not be read, so the list may be short. ``edges`` and ``reads`` hand the
-    degraded reads already made to the Gates section, which reuses them rather
-    than reading the same gate twice.
+    degraded reads already made — answers and failures alike — to the Gates
+    section, which reuses them rather than reading the same gate twice.
     """
 
     waiting: Mapping[str, frozenset[str]] = field(default_factory=dict)
     included: tuple[TaskRecord, ...] = ()
     incomplete: bool = False
-    edges: Mapping[str, Sequence[EdgeRecord]] = field(default_factory=dict)
+    edges: Mapping[str, Sequence[EdgeRecord] | BaseException] = field(
+        default_factory=dict
+    )
     reads: int = 0
 
     @property
@@ -94,10 +100,14 @@ async def load_gate_waits(
 
     ``snapshot`` is the WHOLE open list and ``visible`` the rows passing the
     filters. A complete blocked read answers everything with no call. Otherwise
-    the open gates that fail the filters and that no surviving blocked row
-    already ties to the scope are candidates: they are read in snapshot order,
-    at most ``fanout_cap`` minus the gates already in scope (those keep first
-    claim on the budget, for their own waiter counts in the Gates section).
+    EVERY degraded edge read of the render is made here, at most ``fanout_cap``
+    of them, so the project strip and the Gates section count from one map:
+    first the gates that pass on their own (in the section's order — their
+    waiter counts), then those a surviving blocked row already ties to the
+    scope (the truncated response may have dropped some of their waiters, and
+    the strip counts by waiters' projects), then every other open gate in
+    snapshot order (the candidates the scope may include). A gate outside the
+    filters left unread or unanswered makes the result ``incomplete``.
     ``enabled`` is false when the open side is hidden: no gate surface renders,
     so nothing is learned and nothing is read.
     """
@@ -111,30 +121,36 @@ async def load_gate_waits(
         ).items()
     }
     visible_ids = {task.id for task in visible}
-    edges: dict[str, Sequence[EdgeRecord]] = {}
-    reads = 0
+    edges: Mapping[str, Sequence[EdgeRecord] | BaseException] = {}
     unresolved: list[str] = []
     if not blocked_available or blocked_truncated:
-        in_scope = waited_on_gates(snapshot, scoped_ids=visible_ids, waiting=waiting)
-        settled = visible_ids | {gate.id for gate in in_scope}
+        own = [row.task.id for row in collect_gates(visible)]
+        tied = [
+            gate.id
+            for gate in waited_on_gates(
+                snapshot, scoped_ids=visible_ids, waiting=waiting
+            )
+        ]
+        settled = visible_ids | set(tied)
         candidates = [
             task.id
             for task in snapshot
             if task.task_type == GATE_TASK_TYPE and task.id not in settled
         ]
-        own = sum(1 for task in visible if task.task_type == GATE_TASK_TYPE)
-        budget = max(fanout_cap - own - len(in_scope), 0)
-        results = await read_gate_edges(lithos, candidates[:budget])
-        reads = len(results)
-        for gate_id, result in results.items():
-            if isinstance(result, BaseException):
-                unresolved.append(gate_id)
-                continue
-            edges[gate_id] = result
-            waiting.setdefault(gate_id, set()).update(
-                edge.to_task_id for edge in result if edge.to_task_id in workable
-            )
-        unresolved.extend(candidates[budget:])
+        order = [*own, *tied, *candidates]
+        edges = await read_gate_edges(lithos, order[: max(fanout_cap, 0)])
+        for gate_id, result in edges.items():
+            if not isinstance(result, BaseException):
+                waiting.setdefault(gate_id, set()).update(
+                    edge.to_task_id for edge in result if edge.to_task_id in workable
+                )
+        own_ids = set(own)
+        unresolved = [
+            gate_id
+            for gate_id in order
+            if gate_id not in own_ids
+            and isinstance(edges.get(gate_id, _UNREAD), BaseException)
+        ]
     frozen = {gate_id: frozenset(ids) for gate_id, ids in waiting.items()}
     included = waited_on_gates(snapshot, scoped_ids=visible_ids, waiting=frozen)
     return GateWaits(
@@ -142,7 +158,7 @@ async def load_gate_waits(
         included=tuple(included),
         incomplete=bool(unresolved),
         edges=edges,
-        reads=reads,
+        reads=len(edges),
     )
 
 

@@ -13,7 +13,9 @@ scope filter, with no extra Lithos call on a healthy render.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -46,6 +48,18 @@ from tests.test_tasks_mvp import (
 )
 
 SINCE = "since=2026-04-01"
+
+# One healthy board render's Lithos reads: the master open list and the two
+# resolved windows, the two frontiers, stats and the agent list. Nothing else.
+HEALTHY_RENDER_CALLS = Counter(
+    {
+        "list_tasks": 3,
+        "task_ready": 1,
+        "task_blocked": 1,
+        "stats": 1,
+        "list_agents": 1,
+    }
+)
 
 
 def _story(
@@ -86,21 +100,35 @@ def _project_count(body: str, slug: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _calls(fake: TaskFakeLithosClient) -> tuple[int, ...]:
-    """Every read log the fake keeps, as counts — the render's read budget."""
-    return (
-        len(fake.list_calls),
-        len(fake.edge_list_calls),
-        len(fake.get_calls),
-        len(fake.status_calls),
-    )
+class _CallLoggingFake(TaskFakeLithosClient):
+    """Logs EVERY coroutine method the app awaits on the client, by name.
+
+    Not the per-tool logs the base fake happens to keep: a read nobody thought
+    to instrument (a second ``task_blocked``, say) must show up here too.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def __getattribute__(self, name: str) -> Any:
+        attr = super().__getattribute__(name)
+        if name.startswith("_") or not inspect.iscoroutinefunction(attr):
+            return attr
+        calls = super().__getattribute__("calls")
+
+        async def logged(*args: Any, **kwargs: Any) -> Any:
+            calls.append(name)
+            return await attr(*args, **kwargs)
+
+        return logged
 
 
-def _roadmap_gate_fake() -> TaskFakeLithosClient:
+def _roadmap_gate_fake() -> _CallLoggingFake:
     """An untagged ``pr`` gate (``metadata.project`` only, as loom writes it)
     holding a ``roadmap-x`` story, beside a gate that holds only an
     out-of-scope task."""
-    fake = TaskFakeLithosClient()
+    fake = _CallLoggingFake()
     _add_gate(fake, "gate-pr", gate_type="pr", metadata={"project": "lithos-lens"})
     _story(fake, "story-1", "roadmap-x", "project:lithos-lens")
     _waits_on(fake, "story-1", "gate-pr")
@@ -122,12 +150,12 @@ def test_untagged_gate_an_in_scope_task_waits_on_is_on_the_tag_scoped_board(
     fake = _roadmap_gate_fake()
 
     with _client(lithos_lens_config_env, fake) as client:
-        before = _calls(fake)
+        before = len(fake.calls)
         client.get(f"/tasks?status=open&{SINCE}")
-        unfiltered_cost = [b - a for a, b in zip(before, _calls(fake), strict=True)]
-        before = _calls(fake)
+        unfiltered_cost = Counter(fake.calls[before:])
+        before = len(fake.calls)
         response = client.get(f"/tasks?status=open&tag=roadmap-x&{SINCE}")
-        filtered_cost = [b - a for a, b in zip(before, _calls(fake), strict=True)]
+        filtered_cost = Counter(fake.calls[before:])
 
     assert response.status_code == 200
     body = response.text
@@ -137,8 +165,11 @@ def test_untagged_gate_an_in_scope_task_waits_on_is_on_the_tag_scoped_board(
     # The story and its gate: both are open rows of lithos-lens on this board.
     assert _project_count(body, "lithos-lens") == 2
     assert _project_count(body, "lithos-loom") == 1
-    # No extra Lithos call: the blocked frontier already named the gate.
-    assert filtered_cost == unfiltered_cost
+    # No extra Lithos call: the blocked frontier already named the gate. The
+    # board's whole read budget, every awaited client method counted — and the
+    # scoped render spends exactly what the unscoped one does.
+    assert filtered_cost == HEALTHY_RENDER_CALLS
+    assert unfiltered_cost == HEALTHY_RENDER_CALLS
     assert fake.edge_list_calls == []
     assert "data-gates-incomplete" not in body
 
@@ -431,10 +462,11 @@ def test_a_truncated_read_that_still_names_the_waiter_needs_no_scope_read() -> N
     assert data.gates_incomplete is False
 
 
-def test_project_strip_counts_a_waited_on_gate_only_where_its_chip_keeps_it() -> None:
-    """A chip must lead to a board with the row on it. ``?project=lithos-loom``
-    would drop a loom gate whose only in-scope waiter is lens work, so the gate
-    is not counted there; a gate of the waiter's own project is."""
+def test_project_strip_counts_a_waited_on_gate_under_its_waiters_projects() -> None:
+    """A chip's count is the open rows following it would show. Following
+    ``lithos-lens`` keeps BOTH gates — its waiter is lens work, whatever project
+    each gate names — so both count there; ``?project=lithos-loom`` would keep
+    neither (no loom waiter), so there is no loom chip at all."""
     lens_gate = _gate_task("gate-lens", metadata={"project": "lithos-lens"})
     loom_gate = _gate_task("gate-loom", metadata={"project": "lithos-loom"})
     story = _task("story-1", claims=(), tags=("roadmap-x", "project:lithos-lens"))
@@ -455,7 +487,7 @@ def test_project_strip_counts_a_waited_on_gate_only_where_its_chip_keeps_it() ->
 
     assert sorted(row.task.id for row in data.gates) == ["gate-lens", "gate-loom"]
     assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
-        ("lithos-lens", 2)
+        ("lithos-lens", 3)
     ]
     followed = asyncio.run(
         load_dashboard(
@@ -468,3 +500,55 @@ def test_project_strip_counts_a_waited_on_gate_only_where_its_chip_keeps_it() ->
     assert sorted(row.task.id for row in followed.gates) == ["gate-lens", "gate-loom"]
     assert _section_ids(followed.sections, "blocked") == ["story-1"]
     assert _gate_row(followed, "gate-lens").waiters_label == "blocks 1 task"
+    # The count the chip promised is what following it shows: story + 2 gates.
+    assert len(followed.gates) + len(followed.sections["blocked"]) == 3
+    assert [(chip.slug, chip.open_count) for chip in followed.project_chips] == [
+        ("lithos-lens", 3)
+    ]
+
+
+def test_a_truncated_read_feeds_the_strip_the_same_waiters_as_the_section() -> None:
+    """Reviewer repro (correctness f-002): the truncated blocked response names
+    only A as G's waiter; G's edge read names A and B. The strip must count G
+    under B's project too — on both ``?project=a`` and ``?project=b``, since
+    its scope excludes ``project`` — from the SAME read the Gates row uses,
+    which is made once."""
+    gate = _gate_task("gate-g", tags=("project:a", "project:b"))
+    a = _task("task-a", claims=(), tags=("roadmap-x", "project:a"))
+    b = _task("task-b", claims=(), tags=("roadmap-x", "project:b"))
+    waits = BlockerRecord(kind="gate", task_id="gate-g", type="waits_on_gate")
+    for project in ("a", "b"):
+        fake = _FrontierFake(
+            open_tasks=[gate, a, b],
+            ready=[],
+            # frontier_limit=1 cuts this to A's row: truncated.
+            blocked=[_blocked(a, waits), _blocked(b, waits)],
+            edges={
+                "gate-g": [
+                    EdgeRecord(
+                        from_task_id="gate-g", to_task_id=waiter, type="waits_on_gate"
+                    )
+                    for waiter in ("task-a", "task-b")
+                ]
+            },
+        )
+        data = asyncio.run(
+            load_dashboard(
+                fake,
+                filters=replace(_ROADMAP, projects=(project,)),
+                frontier_limit=1,
+                now=_NOW,
+            )
+        )
+
+        assert [row.task.id for row in data.gates] == ["gate-g"], project
+        assert [w.id for w in _gate_row(data, "gate-g").waiters] == [
+            "task-a",
+            "task-b",
+        ]
+        assert [(chip.slug, chip.open_count) for chip in data.project_chips] == [
+            ("a", 2),
+            ("b", 2),
+        ], project
+        assert data.gates_incomplete is False
+        assert [call["task_id"] for call in fake.edge_list_calls] == ["gate-g"]

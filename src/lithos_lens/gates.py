@@ -319,7 +319,7 @@ async def load_gates(
     blocked_truncated: bool,
     placed_ids: frozenset[str] = frozenset(),
     now: datetime,
-    prefetched: Mapping[str, Sequence[EdgeRecord]] | None = None,
+    prefetched: Mapping[str, Sequence[EdgeRecord] | BaseException] | None = None,
     fanout_cap: int = GATE_WAITER_FANOUT_CAP,
 ) -> GateSection:
     """Assemble the Gates section from the reads ``load_dashboard`` already has.
@@ -473,7 +473,7 @@ async def attach_gate_waiters(
     blocked_available: bool,
     blocked_truncated: bool,
     fanout_cap: int = GATE_WAITER_FANOUT_CAP,
-    prefetched: Mapping[str, Sequence[EdgeRecord]] | None = None,
+    prefetched: Mapping[str, Sequence[EdgeRecord] | BaseException] | None = None,
 ) -> tuple[GateRow, ...]:
     """Fill each gate's waiter list, preferring the Lithos-computed source.
 
@@ -499,8 +499,9 @@ async def attach_gate_waiters(
     to the blocked-response fallback (``PARTIAL`` — "at least N"); when that
     source is unavailable too the row reports ``UNKNOWN`` rather than an
     invented zero. A gate in ``prefetched`` (the gate scope already read its
-    edges this render) reuses that answer instead of reading again, and
-    ``fanout_cap`` is then what is left of the per-render budget.
+    edges this render) reuses that answer — or that failure — instead of
+    reading again, and ``fanout_cap`` is then what is left of the per-render
+    budget.
     """
     if not gates:
         return ()
