@@ -103,6 +103,11 @@
   // the rest is a drag away; the operator's own zoom is not bounded by this.
   const NODE_FONT = 13;
   const EDGE_FONT = 12;
+  //: Every label's face: `lens.css`'s vendored @font-face first, the
+  //: system's sans only while it cannot load. Labels are placed by their
+  //: measured boxes, so the face decides where they go.
+  const LABEL_FACE = "Lens Inter";
+  const LABEL_FONT_FAMILY = '"' + LABEL_FACE + '", ui-sans-serif, system-ui, sans-serif';
   const MIN_RENDERED_FONT = 11;
   const MIN_READABLE_ZOOM = MIN_RENDERED_FONT / Math.min(NODE_FONT, EDGE_FONT);
   //: The nearest a label at the focus sits to its edge's far end, and the
@@ -571,7 +576,7 @@
           "border-color": MUTED,
           color: INK,
           "font-size": NODE_FONT,
-          "font-family": "ui-sans-serif, system-ui, sans-serif",
+          "font-family": LABEL_FONT_FAMILY,
           "text-valign": "bottom",
           "text-margin-y": 4,
           "text-wrap": "wrap",
@@ -619,6 +624,7 @@
           "target-arrow-shape": "none",
           label: "data(label)",
           "font-size": EDGE_FONT,
+          "font-family": LABEL_FONT_FAMILY,
           color: MUTED,
           // Level, not along the curve: a rotated word across a title reads
           // as neither.
@@ -672,6 +678,8 @@
       },
       { selector: ".dimmed", style: { opacity: 0.15 } },
       { selector: "node.lit", style: { "font-weight": "bold" } },
+      // Every title as wide as a lit or matched one draws it: while laid out.
+      { selector: "node.widest", style: { "font-weight": "bold" } },
       { selector: ".picked", style: { "overlay-color": INK, "overlay-opacity": 0.12, "overlay-padding": 5 } }
     );
 
@@ -692,6 +700,10 @@
     });
 
     // ── Layout: once ────────────────────────────────────────────────────
+    // Laid out and labelled with every title at its widest — bold, as a lit
+    // or matched title is drawn — so lighting a selection or a search never
+    // grows a title onto a label placed beside it.
+    cy.nodes().addClass("widest");
     if (payload.mode === "focus") {
       const maxHop = payload.nodes.reduce(function (high, node) {
         return Math.max(high, node.hop || 0);
@@ -745,6 +757,7 @@
       }
     }
     placeEndLabels(cy);
+    // Fitted at the widest too: a title lit once the view is open stays in it.
     cy.fit(undefined, FIT_PADDING);
     if (cy.zoom() > MAX_FIT_ZOOM) {
       cy.zoom(MAX_FIT_ZOOM);
@@ -754,10 +767,13 @@
       const focus = cy.nodes(".focus");
       cy.center(focus.length ? focus : undefined);
     }
+    cy.nodes().removeClass("widest");
     // Says so while — and only while — part of the graph is outside the
-    // view: on opening, and after every pan, zoom or resize.
+    // view: on opening, after every pan, zoom or resize, and after a
+    // selection or a search re-weights titles.
     const panHint = document.querySelector("[data-kgraph-pan-hint]");
     const showPanHint = function () {
+      if (!panHint) return;
       const drawn = cy.elements().renderedBoundingBox();
       panHint.hidden = !(
         drawn.x1 < 0 || drawn.y1 < 0 || drawn.x2 > cy.width() || drawn.y2 > cy.height()
@@ -771,13 +787,15 @@
     // ── Lit and dimmed: the selection and its neighbours ────────────────
     function light(selection) {
       cy.elements().removeClass("lit dimmed picked");
-      if (!selection || !selection.length) return;
-      const lit = selection.isNode()
-        ? selection.closedNeighborhood()
-        : selection.union(selection.connectedNodes());
-      lit.addClass("lit");
-      selection.addClass("picked");
-      cy.elements().not(lit).addClass("dimmed");
+      if (selection && selection.length) {
+        const lit = selection.isNode()
+          ? selection.closedNeighborhood()
+          : selection.union(selection.connectedNodes());
+        lit.addClass("lit");
+        selection.addClass("picked");
+        cy.elements().not(lit).addClass("dimmed");
+      }
+      showPanHint();
     }
 
     function byPid(collection, pid) {
@@ -931,13 +949,14 @@
       cy.nodes().removeClass("match");
       if (!needle) {
         if (searchCount) searchCount.textContent = "";
-        return;
+      } else {
+        const hits = cy.nodes().filter(function (element) {
+          return String(element.data("label") || "").toLowerCase().indexOf(needle) !== -1;
+        });
+        hits.addClass("match");
+        if (searchCount) searchCount.textContent = plural(hits.length, "match", "matches");
       }
-      const hits = cy.nodes().filter(function (element) {
-        return String(element.data("label") || "").toLowerCase().indexOf(needle) !== -1;
-      });
-      hits.addClass("match");
-      if (searchCount) searchCount.textContent = plural(hits.length, "match", "matches");
+      showPanHint();
     }
     if (search) search.addEventListener("input", applySearch);
     // From the field as it stands: a page the browser restored (a reload
@@ -1011,10 +1030,24 @@
     };
   }
 
+  // Drawn once the label face is in: a label placed by a fallback's metrics
+  // sits wrongly once the face arrives. Both weights the canvas draws — a
+  // title, and a lit or matched one in bold. A face that cannot load still
+  // draws, in the fallback.
+  function drawOnceTheFaceIsIn() {
+    const fonts = document.fonts;
+    if (!fonts || typeof fonts.load !== "function") {
+      draw();
+      return;
+    }
+    const face = NODE_FONT + 'px "' + LABEL_FACE + '"';
+    Promise.all([fonts.load(face), fonts.load("bold " + face)]).then(draw, draw);
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", draw);
+    document.addEventListener("DOMContentLoaded", drawOnceTheFaceIsIn);
   } else {
-    draw();
+    drawOnceTheFaceIsIn();
   }
   if (!window.LithosLensKnowledgeGraphBound) {
     window.LithosLensKnowledgeGraphBound = true;

@@ -65,7 +65,7 @@ _PAYLOAD = re.compile(
     re.S,
 )
 
-HARNESS = r"""
+HARNESS_SETUP = r"""
 const fs = require("fs");
 const vm = require("vm");
 
@@ -176,6 +176,22 @@ const document = {
     (documentListeners[type] = documentListeners[type] || []).push(fn);
   },
 };
+// `document.fonts`, when a case asks for it: each `load` is recorded and held
+// until the harness settles it — resolved, or rejected (`"fail"`) as a face
+// whose file is missing is. Without it the page has no font loading at all.
+const fontLoads = [];
+const heldFonts = [];
+if (dom.fonts) {
+  document.fonts = {
+    load(font) {
+      fontLoads.push(font);
+      return new Promise((resolve, reject) => {
+        heldFonts.push(() =>
+          dom.fonts === "fail" ? reject(new Error("NetworkError")) : resolve([]));
+      });
+    },
+  };
+}
 // An htmx event, triggered on its element and bubbling to the document;
 // like htmx's own, it answers whether no listener cancelled it.
 function htmxEvent(elt, type, detail) {
@@ -287,7 +303,11 @@ vm.runInContext(`
   };
 `, sandbox);
 vm.runInContext(fs.readFileSync(scriptPath, "utf8"), sandbox);
+"""
 
+HARNESS = (
+    HARNESS_SETUP
+    + r"""
 const graph = sandbox.window.LithosLensKnowledgeGraph;
 const cy = graph.cy;
 const byPid = (collection, pid) => collection.filter((e) => e.data("pid") === pid);
@@ -377,6 +397,7 @@ console.log(JSON.stringify({
     opacity: n.pstyle("opacity").value,
     position: n.position(),
     font: n.pstyle("font-size").pfValue,
+    fontFamily: style(n, "font-family"),
     labelGround: n.pstyle("text-background-opacity").value,
   })),
   edges: cy.edges().map((e) => ({
@@ -387,6 +408,7 @@ console.log(JSON.stringify({
     width: e.pstyle("width").pfValue,
     label: style(e, "label"),
     font: e.pstyle("font-size").pfValue,
+    fontFamily: style(e, "font-family"),
     rotation: style(e, "text-rotation"),
     labelGround: e.pstyle("text-background-opacity").value,
     opacity: e.pstyle("opacity").value,
@@ -436,6 +458,26 @@ console.log(JSON.stringify({
   },
 }));
 """
+)
+
+#: A page with `document.fonts` (`dom.fonts`): whether the canvas was drawn
+#: while its font loads were still held, and once they have settled.
+FONT_HARNESS = (
+    HARNESS_SETUP
+    + r"""
+const drawnBeforeFonts = !!sandbox.window.LithosLensKnowledgeGraph;
+heldFonts.splice(0).forEach((settle) => settle());
+setImmediate(() => {
+  const graph = sandbox.window.LithosLensKnowledgeGraph;
+  console.log(JSON.stringify({
+    fontLoads,
+    drawnBeforeFonts,
+    nodes: graph ? graph.cy.nodes().length : 0,
+    canvasState: single["[data-kgraph-canvas]"].dataset.canvasState || "",
+  }));
+});
+"""
+)
 
 
 @dataclass(frozen=True)
@@ -491,13 +533,14 @@ def _run(
     actions: Sequence[str] = (),
     payload: dict | None = None,
     dom: dict | None = None,
+    harness: str = HARNESS,
 ) -> dict:
     assert NODE is not None
     result = subprocess.run(
         [
             NODE,
             "-e",
-            HARNESS,
+            harness,
             "--",
             str(KNOWLEDGE_GRAPH_JS),
             str(CYTOSCAPE_JS),
@@ -1827,3 +1870,50 @@ def test_labels_sit_on_their_own_ground_level_and_large_enough(
     for edge in labelled:
         assert edge["font"] >= 12 and edge["labelGround"] >= 0.85
         assert edge["rotation"] == "none"
+
+
+#: The canvas's own face, vendored and declared by ``lens.css``.
+CANVAS_FONT = "Lens Inter"
+
+
+def _first_family(stack: str) -> str:
+    return stack.split(",")[0].strip().strip("\"'")
+
+
+def test_every_label_is_set_in_the_vendored_canvas_face(
+    lithos_lens_config_env: Path,
+) -> None:
+    """lens#132's CI e2e: labels are placed by their measured boxes, and a
+    system stack measures differently per machine — clear in the gate's
+    sandbox, overlapping on GitHub's runner. Titles and edge labels name the
+    vendored face first; the system stack stays only as its fallback."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}&depth=2")
+    result = _run(page)
+
+    families = [node["fontFamily"] for node in result["nodes"]] + [
+        edge["fontFamily"] for edge in result["edges"]
+    ]
+    assert families
+    assert {_first_family(family) for family in families} == {CANVAS_FONT}
+    assert all("sans-serif" in family for family in families)
+
+
+@pytest.mark.parametrize("fonts", ["load", "fail"])
+def test_the_canvas_is_drawn_only_once_its_face_has_settled(
+    lithos_lens_config_env: Path, fonts: str
+) -> None:
+    """A label placed by a fallback's metrics sits wrongly once the face
+    arrives, so the canvas waits for both weights it draws — a title, and a
+    lit or matched one in bold. A face that cannot load still draws, in the
+    fallback."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}")
+    result = _run(page, dom={"fonts": fonts}, harness=FONT_HARNESS)
+
+    assert result["drawnBeforeFonts"] is False
+    assert result["canvasState"] == "ready"
+    assert result["nodes"] == len(page.payload["nodes"])
+    loads = result["fontLoads"]
+    assert loads and all(CANVAS_FONT in load for load in loads)
+    assert sorted("bold" in load for load in loads) == [False, True]

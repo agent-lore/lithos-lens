@@ -2031,6 +2031,20 @@ button,
 
 /* --- /knowledge/graph (K2 D11, D12): the text baseline ------------------ */
 
+/* The canvas's label face (knowledge_graph.js; Inter, vendored — see
+   docs/vendor-assets.md). The canvas places each label by its measured box,
+   so every machine has to measure the same letters: a system sans placed
+   labels clear in one browser and over each other in another. One variable
+   file holds every weight the canvas draws — a title, and the bold of a lit
+   or matched one. No page element uses it, so only the canvas loads it. */
+@font-face {
+  font-family: "Lens Inter";
+  src: url("vendor/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* One column of panels, bounded like `.knowledge-landing` so a long title in
    an edge entry wraps instead of widening the page. */
 .kgraph-page,

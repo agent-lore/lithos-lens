@@ -38,6 +38,7 @@ _PAYLOAD = re.compile(
     re.S,
 )
 _ASSETS = ("vendor/cytoscape.min.js", "knowledge_graph.js")
+_CANVAS_FONT_FILE = "vendor/inter-latin-wght-normal.woff2"
 
 
 class _Offline(FakeLithosClient):
@@ -121,6 +122,27 @@ def test_nothing_to_draw_loads_no_canvas(
     assert not _has_assets(page)
     assert "data-kgraph-canvas" not in page
     assert "data-kgraph-toolbar" not in page
+
+
+def test_the_canvas_face_is_vendored_served_and_declared(
+    lithos_lens_config_env: Path,
+) -> None:
+    """The canvas places labels by their measured boxes, so it draws them in
+    one vendored face rather than whatever sans the machine has (lens#132's
+    CI e2e). ``lens.css`` declares it over the whole weight range — a title,
+    and the bold of a lit or matched one — from the file Lens serves itself."""
+    with _client(lithos_lens_config_env) as client:
+        css = client.get("/static/lens.css")
+        face = client.get(f"/static/{_CANVAS_FONT_FILE}")
+
+    assert face.status_code == 200
+    assert face.headers["content-type"] == "font/woff2"
+    assert face.content[:4] == b"wOF2"
+    rule = re.search(r"@font-face\s*\{([^}]*)\}", css.text)
+    assert rule is not None
+    assert re.search(r'font-family:\s*"Lens Inter"', rule.group(1))
+    assert f'url("{_CANVAS_FONT_FILE}")' in rule.group(1)
+    assert re.search(r"font-weight:\s*100 900", rule.group(1))
 
 
 # ── D2: placement ──────────────────────────────────────────────────────

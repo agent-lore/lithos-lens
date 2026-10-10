@@ -609,6 +609,25 @@ for (const width of [320, 768, 1440]) {
   });
 }
 
+// A selection lights its notes' titles in bold AFTER the labels are placed,
+// and a search bolds the titles it matches: every title, at its widest, has
+// to clear every label (lens#132's CI e2e — placement measured the regular
+// titles, and the selection's bold ones then ran into the labels beside
+// them). Every title lit at once is the widest any selection draws.
+for (const url of [`/knowledge/graph?focus=${PLAN}&depth=2`, "/knowledge/graph?type=contradicts"]) {
+  for (const width of [320, 1440]) {
+    test(`every title, lit, clears every label on ${url} at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(url);
+      await canvasReady(page);
+      await page.evaluate(() =>
+        (window as any).LithosLensKnowledgeGraph.cy.nodes().addClass("lit"),
+      );
+      await knowledgeCanvasLabelsAreReadable(page);
+    });
+  }
+}
+
 test("the pan hint follows the view as the operator zooms", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2`);

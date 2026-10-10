@@ -13,9 +13,17 @@ import { expect, type Page } from "@playwright/test";
  * - no two labels share any of the canvas, and no label sits under another
  *   note's circle (model-space boxes: the layout and placement decide them);
  * - the pan hint is shown exactly while part of the graph is outside the
- *   view.
+ *   view;
+ * - all of it measured in the vendored canvas face, loaded — never a
+ *   machine's own sans, whose metrics differ from runner to runner.
  */
 export async function knowledgeCanvasLabelsAreReadable(page: Page) {
+  const faces = await page.evaluate(() =>
+    Array.from((document as any).fonts as Iterable<FontFace>)
+      .filter((face) => face.family.replace(/["']/g, "") === "Lens Inter")
+      .map((face) => face.status),
+  );
+  expect(faces).toEqual(["loaded"]);
   const labels = await page.evaluate(() => {
     const graph = (window as any).LithosLensKnowledgeGraph;
     const cy = graph.cy;
