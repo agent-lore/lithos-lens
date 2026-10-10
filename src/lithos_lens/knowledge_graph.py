@@ -273,6 +273,7 @@ def build_view(
         provenance_facets=typed.provenance_facets,
         refusal=typed.refusal,
         pinned=typed.pinned,
+        pin_redraws=typed.pin_redraws,
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,

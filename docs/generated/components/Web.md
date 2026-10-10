@@ -60,7 +60,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `KnowledgeGraphParams` — The page's query, parsed. ``None`` and ``""`` mean "not given".
 - def `parse_knowledge_graph_params` — The page's query grammar (S3 D3), in one place.
 - def `knowledge_graph_url` — A link into the knowledge graph: ``params`` with ``changes`` applied.
-- def `knowledge_graph_expand_url` — Show its neighbours (D16): this view with ``node_id`` appended to ``expand=`` and selected, so the page it loads keeps its panel open.
+- def `knowledge_graph_expand_url` — Show its neighbours (D16): ``node_id`` selected and last in ``expand=`` — an earlier request for it, unreached at its turn, moves there.
 - def `knowledge_graph_collapse_url` — Collapse / remove (D16): this view without ``root``'s request and every request whose note it first drew, transitively, as the displayed view knows them. A selection or pin the remaining requests no longer draw (the same pass re-run without them, nothing read) is cleared; a shared note still drawn elsewhere stays selected.
 - def `drawn_selection` — ``params`` as the links of a drawn ``view`` carry them: a ``selected=`` node or ``pin=`` edge the view does not draw (removed by a collapse, or gone from the data since) is dropped, so no link pins what is not there.
 - def `knowledge_graph_panel_url` — The same link to the panel fragment: what a click's ``hx-get`` fetches, with the scope and filters carried, and ``render`` — the id of the view the page drew (:class:`RenderedViews`) — last when there is one.

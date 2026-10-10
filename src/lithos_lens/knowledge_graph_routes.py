@@ -312,11 +312,10 @@ def knowledge_graph_url(
 
 
 def knowledge_graph_expand_url(params: KnowledgeGraphParams, node_id: str) -> str:
-    """Show its neighbours (D16): this view with ``node_id`` appended to
-    ``expand=`` and selected, so the page it loads keeps its panel open."""
-    return knowledge_graph_url(
-        params, expand=(*params.expand, node_id), selected=node_id
-    )
+    """Show its neighbours (D16): ``node_id`` selected and last in ``expand=``
+    — an earlier request for it, unreached at its turn, moves there."""
+    kept = [root for root in params.expand if root != node_id]
+    return knowledge_graph_url(params, expand=(*kept, node_id), selected=node_id)
 
 
 def knowledge_graph_collapse_url(

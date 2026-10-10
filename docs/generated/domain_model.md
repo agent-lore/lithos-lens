@@ -163,6 +163,7 @@ classDiagram
     +read_directly bool
     +selected_edge_missing bool
     +pinned str
+    +pin_redraws frozenset[str]
     +facts_capped_at int
   }
   class KnowledgeLayerRef {
@@ -176,6 +177,7 @@ classDiagram
     +hops Mapping[str, int]
     +would_be_nodes Mapping[int, int]
     +pinned str
+    +pin_redraws frozenset[str]
   }
   class KnownEdgeType {
     +name str

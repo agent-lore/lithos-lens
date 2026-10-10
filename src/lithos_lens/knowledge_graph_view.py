@@ -292,15 +292,24 @@ class KnowledgeGraphView:
     #: The selected edge only its filter exemption draws (D13): a panel
     #: link on this view keeps the drawing only while it pins that edge.
     pinned: str = ""
+    #: Drawn edges whose own pin would redraw this view (D16): reached within
+    #: ``depth`` only through a hidden edge and drawn by an expansion.
+    pin_redraws: frozenset[str] = frozenset()
 
     def keeps_drawing_for(self, pin: str) -> bool:
         """A request pinning ``pin`` (its ``edge=``, else its ``pin=``) draws
-        this very view: the same pin, or — on a view no exemption changed —
-        none, or an edge it draws anyway. Anything else may draw differently
-        (an exemption lost or gained), so it is not answered from this view."""
-        if pin == self.pinned:
+        this very view: the pin it was drawn under (the same filters, even
+        once the edge has gone from the data), the pinned one, or — on a view
+        no exemption changed — none, or an edge it draws anyway whose pin
+        changes nothing. Anything else may draw differently (an exemption
+        lost or gained), so it is not answered from this view."""
+        if pin in (self.pinned, self.filters.selected_edge):
             return True
-        return not self.pinned and named_edge(self, pin) is not None
+        return (
+            not self.pinned
+            and pin not in self.pin_redraws
+            and named_edge(self, pin) is not None
+        )
 
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.

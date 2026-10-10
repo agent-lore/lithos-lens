@@ -1695,9 +1695,14 @@ and so when it is the assembly's own probe that sees the outage.
 A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
 since. A held view answers only a selection that would draw it the same: the
-edge its `edge=` exemption alone drew (pinned) or, on a view no exemption
-changed, no edge or one it draws. A selection that would gain or lose an
-exemption is treated as a view not held. A render id no longer held (evicted,
+`edge=` / `pin=` it was drawn under (the same filters — so a pin gone from the
+data since, left in the address bar, still finds it), the edge its exemption
+alone drew (pinned: the whole drawing, expansions' reach and cap verdicts
+included, differs from the plain filters'), or, on a view no exemption
+changed, no edge or one it draws whose own pin would change nothing (not an
+edge an expansion drew that is within `depth` only through a hidden edge,
+D16). A selection that would gain or lose an exemption is treated as a view
+not held. A render id no longer held (evicted,
 or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the
 response carries `HX-Redirect` to the full page with that selection, which
@@ -1799,14 +1804,16 @@ reads nothing:
 - **text**: the scope line names the applied expansions ("· expanded: *B*,
   *D*"), each with a **remove** link; their edges join the by-relation
   sections as "*X* → *Y*" lines; **Not shown** lists each unreached request
-  ("Expanding *X* was not applied: it is not drawn in this view") and each
+  ("Expanding *X* was not applied: it was not drawn when its turn came in the
+  expansion order" — a later request may have drawn it since) and each
   refused one ("Expanding *B* would add 41 visible notes; 263 notes would
   count towards the 250 cap"), each with a remove link
 - **node panel**: on any note but the focus, from the server's eligibility
   (never the drawn node count): **Show its neighbours** — "adds N notes and M
   edges" (or "adds M edges between notes already drawn"), and the cap count it
-  would give — a plain link to the page with the note appended to `expand=`
-  and `selected=` kept; "All its edges are drawn" for a complete note; why
+  would give — a plain link to the page with the note last in `expand=` (an
+  earlier request for it, unreached at its turn, moves there) and `selected=`
+  kept; "All its edges are drawn" for a complete note; why
   not, with the visible additions and the cap count apart, when over the cap;
   **Collapse** on an expanded note. The focus has neither
 - **collapse / remove**: a link without that request and every request whose

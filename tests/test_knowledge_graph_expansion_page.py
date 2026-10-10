@@ -26,7 +26,7 @@ from starlette.datastructures import QueryParams
 from lithos_lens.config import load_config
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.graph_cache import graph_fanout_gate
-from lithos_lens.knowledge import RelatedNeighborhood
+from lithos_lens.knowledge import RelatedNeighborhood, RelatedRef
 from lithos_lens.knowledge_edges import EdgeTable, KnowledgeEdge
 from lithos_lens.knowledge_facts import NoteFactsCache
 from lithos_lens.knowledge_graph_routes import (
@@ -50,12 +50,20 @@ _HOST = re.compile(
 
 
 class _Graph(FakeLithosClient):
-    """The expansion fixture's rows and layers, every graph read recorded;
-    each note titled "Title <id>" unless ``titles`` says otherwise."""
+    """The expansion fixture's rows and layers (both changeable between
+    requests), every graph read recorded; each note titled "Title <id>"
+    unless ``titles`` says otherwise, and the ``missing`` ones not found."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        rows: tuple[KnowledgeEdge, ...] = ROWS,
+        layers: RelatedNeighborhood = LAYERS,
+        missing: tuple[str, ...] = (),
+    ) -> None:
         super().__init__()
-        self.rows: list[KnowledgeEdge] = list(ROWS)
+        self.rows: list[KnowledgeEdge] = list(rows)
+        self.layers = layers
+        self.missing = set(missing)
         self.titles: dict[str, str] = {}
         self.calls: list[str] = []
 
@@ -65,12 +73,14 @@ class _Graph(FakeLithosClient):
 
     async def related(self, knowledge_id: str) -> RelatedNeighborhood:
         self.calls.append(f"related:{knowledge_id}")
-        return LAYERS
+        return self.layers
 
     async def read_note(
         self, knowledge_id: str, *, max_length: int | None = None
     ) -> NoteRecord | None:
         self.calls.append(f"read:{knowledge_id}")
+        if knowledge_id in self.missing:
+            return None
         title = self.titles.get(knowledge_id, f"Title {knowledge_id}")
         return NoteRecord(id=knowledge_id, title=title, content="")
 
@@ -240,7 +250,7 @@ def test_not_shown_lists_unreached_and_refused_requests_each_removable(
     )
 
     unreached = _not_shown(page, "NOWHERE")
-    assert "was not applied: it is not drawn in this view" in _plain(unreached)
+    assert "was not applied: it was not drawn when its turn came" in _plain(unreached)
     assert _href(unreached, "data-kgraph-expansion-remove") == _url(
         "focus=F&expand=A&expand=B&expand=C"
     )
@@ -431,21 +441,27 @@ class _Ticks:
         return self.now
 
 
+def _on_ticks(client: TestClient, graph: _Graph, ticks: _Ticks) -> None:
+    """The app's edge table (TTL 300 s) and facts cache (TTL 600 s) on a test
+    clock, reading through ``graph``."""
+    lens = cast(Any, client.app).state.lens
+    lens.edge_table = EdgeTable(
+        lambda t, ns: graph.edge_list(type=t, namespace=ns), ttl_s=300, ticks=ticks
+    )
+    lens.note_facts = NoteFactsCache(
+        lambda note_id: graph.read_note(note_id, max_length=1),
+        graph_fanout_gate,
+        ttl_s=600,
+        ticks=ticks,
+    )
+
+
 def test_each_request_uses_the_latest_data_and_records_its_actual_calls(
     lithos_lens_config_env: Path,
 ) -> None:
     graph, ticks = _Graph(), _Ticks()
     with _client(lithos_lens_config_env, graph) as client:
-        lens = cast(Any, client.app).state.lens
-        lens.edge_table = EdgeTable(
-            lambda t, ns: graph.edge_list(type=t, namespace=ns), ttl_s=300, ticks=ticks
-        )
-        lens.note_facts = NoteFactsCache(
-            lambda note_id: graph.read_note(note_id, max_length=1),
-            graph_fanout_gate,
-            ttl_s=600,
-            ticks=ticks,
-        )
+        _on_ticks(client, graph, ticks)
         query = _url("focus=F&expand=A&selected=C")
 
         graph.calls.clear()
@@ -523,3 +539,224 @@ def test_the_request_span_counts_the_expansions(
         )
         == expected
     )
+
+
+# ── round 2: review findings ───────────────────────────────────────────
+
+
+def test_show_its_neighbours_moves_an_unreached_request_last_and_applies_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness f-001/f-004: C's request comes before A's, which draws C,
+    so it goes unreached; C is drawn and can still be expanded."""
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, _url("focus=F&expand=C&expand=A&selected=C"))
+        assert _plain(_not_shown(page, "C")).startswith(
+            "Expanding Title C was not applied: it was not drawn when its turn "
+            "came in the expansion order — remove"
+        )
+        href = _href(_action(page), "data-kgraph-expand")
+        assert href == _url("focus=F&expand=A&expand=C&selected=C")
+
+        expanded = _get(client, href)
+    assert [s["state"] for s in _payload(expanded)["expansions"]] == [
+        "applied",
+        "applied",
+    ]
+    assert '<li data-kgraph-edge="e-ce">' in expanded
+    assert 'data-kgraph-expansion-action="expanded"' in _action(expanded)
+
+
+def test_a_stale_pin_left_in_the_address_bar_does_not_redirect_panel_clicks(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness f-002: the pinned edge goes from the data; the browser
+    reloads the same URL, still pinning it, and the canvas builds its panel
+    requests from that address bar."""
+    graph, ticks = _Graph(), _Ticks()
+    query = "focus=F&expand=A&expand=C&selected=A&pin=e-ce"
+    with _client(lithos_lens_config_env, graph) as client:
+        _on_ticks(client, graph, ticks)
+        _get(client, _url(query))
+        graph.rows = [row for row in graph.rows if row.edge_id != "e-ce"]
+        ticks.now += 301
+        page = _get(client, _url(query))
+        assert not [h for h in _hrefs(page) if "pin=" in h]
+
+        render = _render_id(page)
+        clicks = [
+            client.get(
+                f"{PANEL}?{query.replace('selected=A', f'selected={n}')}"
+                f"&render={render}"
+            )
+            for n in ("B", "D", "C")
+        ]
+    for response, note in zip(clicks, ("B", "D", "C"), strict=True):
+        assert "HX-Redirect" not in response.headers
+        assert f'data-kgraph-panel-id="{note}"' in response.text
+        assert not [h for h in _hrefs(response.text) if "pin=" in h]
+
+
+# Focus F, depth 1: requests A, C, E, B make a chain A → C → E → K, and B
+# reaches C by another edge (an alternate branch to an expanded root).
+CHAIN_ROWS = (
+    edge("fa", "F", "A"),
+    edge("fb", "F", "B"),
+    edge("ac", "A", "C"),
+    edge("ce", "C", "E"),
+    edge("ek", "E", "K"),
+    edge("bc", "B", "C"),
+)
+CHAIN = "focus=F&expand=A&expand=C&expand=E&expand=B"
+
+
+def test_collapse_removes_a_transitive_chain_and_keeps_a_shared_root_drawn(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-001: removing A removes C (drawn by A) and E (drawn by
+    C), though B still reaches C; C stays drawn, E and K do not."""
+    graph = _Graph(rows=CHAIN_ROWS, layers=RelatedNeighborhood())
+    with _client(lithos_lens_config_env, graph) as client:
+        page = _get(client, _url(f"{CHAIN}&selected=C"))
+        scope = _scope_line(page)
+        remove_a = _href(scope, 'data-kgraph-expansion-remove="A"')
+        assert remove_a == _url("focus=F&expand=B&selected=C")
+        preview = _first(r'(data-kgraph-expanded="A">.*?</span>\))', scope)
+        assert "also removes 2 later expansions: Title C, Title E" in _plain(preview)
+        assert _href(scope, 'data-kgraph-expansion-remove="E"') == _url(
+            "focus=F&expand=A&expand=C&expand=B&selected=C"
+        )
+        # C's own Collapse takes E with it, and keeps C selected.
+        action = _action(page)
+        assert _href(action, "data-kgraph-collapse") == _url(
+            "focus=F&expand=A&expand=B&selected=C"
+        )
+        assert _plain(action) == "Collapse — also removes 1 later expansion: Title E"
+
+        rebuilt = _get(client, remove_a)
+    payload = _payload(rebuilt)
+    assert {n["id"] for n in payload["nodes"]} == {"F", "A", "B", "C"}
+    assert {e["id"] for e in payload["edges"]} == {"fa", "fb", "bc"}
+    assert [(s["id"], s["state"]) for s in payload["expansions"]] == [("B", "applied")]
+    c = next(n for n in payload["nodes"] if n["id"] == "C")
+    assert (c["via"], c["expanded"], c["expansion"]["state"]) == (
+        "B",
+        False,
+        "available",
+    )
+    assert 'data-kgraph-panel-id="C"' in _host(rebuilt)
+
+
+def test_each_request_reads_the_latest_layers_for_its_expansion_roots(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-004: the focus's layers change between warm requests,
+    adding and then removing a layer-only expansion root."""
+    rows = (*ROWS, edge("e-l3q", "L3", "Q"))
+    graph, ticks = _Graph(rows=rows), _Ticks()
+    url = _url("focus=F&expand=L3&selected=L3")
+    with _client(lithos_lens_config_env, graph) as client:
+        _on_ticks(client, graph, ticks)
+        before = _get(client, url)
+        assert [s["state"] for s in _payload(before)["expansions"]] == ["unreached"]
+        assert _host(before) == ""
+        assert not [h for h in _hrefs(before) if "selected=L3" in h]
+
+        graph.layers = RelatedNeighborhood(
+            links=(*LAYERS.links, RelatedRef(id="L3", title="New link")),
+            backlinks=LAYERS.backlinks,
+        )
+        graph.calls.clear()
+        added = _get(client, url)
+        # Warm snapshot and facts: the focus's layers, and the two notes the
+        # promotion and the expansion made typed.
+        assert graph.calls[0] == "related:F"
+        assert sorted(graph.calls[1:]) == ["read:L3", "read:Q"]
+        payload = _payload(added)
+        assert [s["state"] for s in payload["expansions"]] == ["applied"]
+        l3 = next(n for n in payload["nodes"] if n["id"] == "L3")
+        assert (l3["layer_only"], l3["label"]) == (False, "Title L3")
+        assert '<li data-kgraph-edge="e-l3q">' in added
+        assert 'data-kgraph-expansion-action="expanded"' in _action(added)
+
+        graph.layers = RelatedNeighborhood(backlinks=LAYERS.backlinks)
+        gone = _get(client, url)
+    assert [s["state"] for s in _payload(gone)["expansions"]] == ["unreached"]
+    assert "L3" not in {n["id"] for n in _payload(gone)["nodes"]}
+    assert '<li data-kgraph-edge="e-l3q">' not in gone
+    assert _host(gone) == ""
+    assert not [h for h in _hrefs(gone) if "selected=L3" in h]
+
+
+def test_a_rendered_panels_preview_is_its_displayed_view_until_reloaded(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-004: the data changes after an expanded render; that
+    page's panel click still previews the view it shows, reading nothing, and
+    the collapse link it offers assembles afresh."""
+    graph, ticks = _Graph(), _Ticks()
+    with _client(lithos_lens_config_env, graph) as client:
+        _on_ticks(client, graph, ticks)
+        query = "focus=F&expand=A&expand=C"
+        page = _get(client, _url(query))
+        graph.rows = [row for row in graph.rows if row.edge_id != "e-ac"]
+        graph.titles["C"] = "Renamed C"
+        ticks.now += 601
+
+        graph.calls.clear()
+        fragment = _get(client, f"{PANEL}?{query}&selected=A&render={_render_id(page)}")
+        assert graph.calls == []
+        action = _first(r"(<p data-kgraph-expansion-action=.*?</p>)", fragment)
+        assert _plain(action) == "Collapse — also removes 1 later expansion: Title C"
+        href = _href(action, "data-kgraph-collapse")
+        assert href == _url("focus=F&selected=A")
+
+        loaded = _get(client, href)
+    assert graph.calls[:2] == ["edge_list", "related:F"]
+    assert "C" not in {n["id"] for n in _payload(loaded)["nodes"]}
+
+
+def test_a_ghost_can_show_its_neighbours_and_stays_drawn(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-005: B's note is not found; its typed edges are in the
+    snapshot, so it expands like any drawn note (D6)."""
+    with _client(lithos_lens_config_env, _Graph(missing=("B",))) as client:
+        page = _get(client, _url("focus=F&selected=B"))
+        b = next(n for n in _payload(page)["nodes"] if n["id"] == "B")
+        assert b["ghost"] and b["expansion"]["state"] == "available"
+        assert (b["undrawn_nodes"], b["undrawn_edges"]) == (2, 3)
+        action = _action(page)
+        assert _plain(action).startswith(
+            "Show its neighbours — adds 2 notes and 3 edges"
+        )
+        href = _href(action, "data-kgraph-expand")
+        assert href == _url("focus=F&expand=B&selected=B")
+
+        expanded = _get(client, href)
+    nodes = {n["id"]: n for n in _payload(expanded)["nodes"]}
+    assert (nodes["B"]["ghost"], nodes["B"]["expanded"]) == (True, True)
+    assert [(nodes[n]["via"], nodes[n]["hop"]) for n in ("D", "G")] == [("B", 2)] * 2
+    assert {"e-bd", "e-bg", "e-l2b"} <= set(
+        re.findall(r'<li data-kgraph-edge="([^"]+)">', expanded)
+    )
+    assert "data-kgraph-collapse" in _action(expanded)
+
+
+def test_expanded_counts_on_the_page_keep_base_depth_predictions(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-003: the depth links state the base predictions; the
+    provenance facet counts the final drawing's rows."""
+    base = _page(lithos_lens_config_env, _url("focus=F"))
+    page = _page(lithos_lens_config_env, _url("focus=F&expand=A"))
+
+    line = _first(r'(<li data-would-be="2">.*?</li>)', page)
+    assert _plain(line).startswith("depth 2 would draw 8 notes")
+    assert _plain(_first(r'(<li data-would-be="2">.*?</li>)', base)) == _plain(line)
+    assert _href(line, "depth=2") == _url("focus=F&depth=2&expand=A")
+    assert _payload(page)["would_be_nodes"] == _payload(base)["would_be_nodes"]
+    assert _payload(page)["provenance_facets"] == [
+        {"group": "inferred", "count": 6, "shown": True}
+    ]
+    assert _payload(base)["provenance_facets"][0]["count"] == 2

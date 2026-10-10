@@ -78,6 +78,9 @@ class KnowledgeTypedGraph:
     #: The ``edge=`` / ``pin=`` selection when only its exemption draws it:
     #: the drawing differs from the plain filters'. ``""`` otherwise.
     pinned: str = ""
+    #: Drawn edges whose own pin would redraw the plain view: reached within
+    #: ``depth`` only through a hidden edge, drawn here by an expansion (D16).
+    pin_redraws: frozenset[str] = frozenset()
     #: Focus mode once the expansion pass has run (D16): its steps, ``via``,
     #: and every visible note's eligibility.
     expansion: KnowledgeExpansion | None = None
@@ -272,25 +275,34 @@ def expanded_typed_graph(
         cap=max_nodes,
     )
     _, unfiltered = _bfs(snapshot.edges_of, focus, depth, _SHOW_ALL)
+    in_depth = frozenset(unfiltered)
     for root in expansion.expanded:
         for row in snapshot.edges_of(root):
             unfiltered.setdefault(row.edge_id, row)
     drawn = {edge.edge_id: edge for edge in expansion.edges}
-    selected, pinned = filters.selected_edge, ""
-    if selected in drawn:
-        plain = replace(filters, selected_edge="")
-        hops, edges = _bfs(snapshot.edges_of, focus, depth, plain)
-        walk = walk_expansions(
-            snapshot.edges_of,
-            plain.shows,
-            focus=focus,
-            hops=hops,
-            edges=edges.values(),
-            layer_ids=layer_ids,
-            requests=expand,
-            cap=max_nodes,
-        )
-        pinned = "" if any(e.edge_id == selected for e in walk.edges) else selected
+    plain = replace(filters, selected_edge="")
+    hops, edges = _bfs(snapshot.edges_of, focus, depth, plain)
+    # The pin keeps a drawing only if the plain filters draw that very view:
+    # an exemption can change the base, and so every later step's reach and
+    # cap verdict, even where the plain walk draws the edge in the end.
+    walk = walk_expansions(
+        snapshot.edges_of,
+        plain.shows,
+        focus=focus,
+        hops=hops,
+        edges=edges.values(),
+        layer_ids=layer_ids,
+        requests=expand,
+        cap=max_nodes,
+    )
+    same = (dict(walk.hops), {e.edge_id for e in walk.edges}, walk.steps) == (
+        dict(expansion.hops),
+        drawn.keys(),
+        expansion.steps,
+    )
+    selected = filters.selected_edge
+    pinned = "" if same or selected not in drawn else selected
+    redraws = frozenset(e for e in drawn if e in in_depth and e not in edges)
     return replace(
         typed,
         hops=expansion.hops,
@@ -298,6 +310,7 @@ def expanded_typed_graph(
         hidden=_hidden(drawn, unfiltered, filters),
         provenance_facets=_provenance_facets(unfiltered.values(), filters),
         pinned=pinned,
+        pin_redraws=redraws,
         expansion=expansion,
     )
 

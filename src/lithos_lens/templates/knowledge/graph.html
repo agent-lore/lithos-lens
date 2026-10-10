@@ -167,7 +167,7 @@
             {% for step in view.expansions if step.state != "applied" %}
               <li data-kgraph-expansion="{{ step.id }}" data-kgraph-expansion-state="{{ step.state }}">
                 {%- if step.state == "unreached" -%}
-                  Expanding {{ expansion_ref(view, step.id) }} was not applied: it is not drawn in this view
+                  Expanding {{ expansion_ref(view, step.id) }} was not applied: it was not drawn when its turn came in the expansion order
                 {%- else -%}
                   Expanding {{ expansion_ref(view, step.id) }} would add {{ step.would_add_nodes }} visible note{{ "" if step.would_add_nodes == 1 else "s" }}; {{ step.would_count }} notes would count towards the {{ step.cap }} cap
                 {%- endif %} — <a href="{{ knowledge_graph_collapse_url(params, view, step.id) }}" data-kgraph-expansion-remove="{{ step.id }}">remove</a></li>

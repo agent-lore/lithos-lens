@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,6 +29,7 @@ from lithos_lens.knowledge_graph import (
     build_view,
 )
 from lithos_lens.knowledge_graph_expansion import dependants, walk_expansions
+from lithos_lens.knowledge_graph_panels import node_panel
 from lithos_lens.knowledge_graph_typed import global_typed_graph
 from lithos_lens.knowledge_graph_view import (
     KnowledgeGraphFilters,
@@ -46,7 +48,13 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def edge(edge_id: str, from_id: str, to_id: str, weight: float = 0.8) -> KnowledgeEdge:
+def edge(
+    edge_id: str,
+    from_id: str,
+    to_id: str,
+    weight: float = 0.8,
+    provenance_type: str = "inferred",
+) -> KnowledgeEdge:
     return KnowledgeEdge(
         edge_id=edge_id,
         from_id=from_id,
@@ -54,7 +62,7 @@ def edge(edge_id: str, from_id: str, to_id: str, weight: float = 0.8) -> Knowled
         type="supports",
         weight=weight,
         namespace="ns",
-        provenance_type="inferred",
+        provenance_type=provenance_type,
     )
 
 
@@ -443,3 +451,163 @@ def test_global_mode_carries_the_same_payload_shape_with_no_expansion() -> None:
             None,
         )
         assert (node["undrawn_nodes"], node["undrawn_edges"]) == (0, 0)
+
+
+# ── which pins keep a drawing (correctness f-003) ──────────────────────
+
+# Focus F at depth 2, cap 8, requests X, B, L, Y. F–X is faint, so X is in
+# depth only through a hidden edge. Pinning xy brings X and Y into the base
+# (the exemption's path rule), X then expands and B no longer fits; without
+# the pin X is unreached, B applies, and L and Y later draw xy anyway — the
+# same edge drawn in two different drawings.
+PIN_ROWS = (
+    edge("fa", "F", "A"),
+    edge("ab", "A", "B"),
+    edge("xy", "X", "Y"),
+    edge("xz", "X", "Z"),
+    edge("xt", "X", "T"),
+    edge("bw", "B", "W"),
+    edge("bv", "B", "V"),
+    edge("ly", "L", "Y"),
+    edge("fx", "F", "X", 0.05),
+)
+
+
+def pin_view(selected: str = "") -> KnowledgeGraphView:
+    return assemble_focus_view(
+        EdgeTableSnapshot(rows=PIN_ROWS, as_of=_T0),
+        "F",
+        depth=2,
+        max_nodes=8,
+        neighborhood=RelatedNeighborhood(links=(RelatedRef(id="L", title="L"),)),
+        filters=KnowledgeGraphFilters(selected_edge=selected),
+        expand=("X", "B", "L", "Y"),
+    )
+
+
+def test_a_pin_is_judged_by_the_whole_drawing_not_one_edge() -> None:
+    pinned, plain = pin_view("xy"), pin_view()
+
+    # Both draw xy, in different drawings.
+    assert "xy" in typed_ids(pinned) and "xy" in typed_ids(plain)
+    assert set(nodes(pinned)) != set(nodes(plain))
+    assert [s.state for s in pinned.expansions] != [s.state for s in plain.expansions]
+    # So the pinned view keeps its drawing only under its own pin ...
+    assert pinned.pinned == "xy"
+    assert pinned.keeps_drawing_for("xy")
+    assert not pinned.keeps_drawing_for("")
+    assert not pinned.keeps_drawing_for("fa")
+    # ... and on the plain view, pinning xy would redraw it, though it is drawn.
+    assert plain.pinned == ""
+    assert plain.keeps_drawing_for("") and plain.keeps_drawing_for("fa")
+    assert not plain.keeps_drawing_for("xy")
+
+
+def test_a_pin_the_view_was_drawn_under_keeps_it_even_when_not_drawn() -> None:
+    """The same filters draw the same view: a pin gone from the data since
+    is still the very request this view answers (correctness f-002)."""
+    view = view_of("A", filters=KnowledgeGraphFilters(selected_edge="e-gone"))
+
+    assert "e-gone" not in typed_ids(view)
+    assert view.keeps_drawing_for("e-gone")
+    assert view.keeps_drawing_for("")
+
+
+# ── round 2: transitive chains, provenance, facets ─────────────────────
+
+# A → C → E → K is a chain of requests; B reaches C by another edge.
+CHAIN_ROWS = (
+    edge("fa", "F", "A"),
+    edge("fb", "F", "B"),
+    edge("ac", "A", "C"),
+    edge("ce", "C", "E"),
+    edge("ek", "E", "K"),
+    edge("bc", "B", "C"),
+)
+
+
+def chain_view(*expand: str) -> KnowledgeGraphView:
+    snapshot = EdgeTableSnapshot(rows=CHAIN_ROWS, as_of=_T0)
+    return assemble_focus_view(snapshot, "F", expand=expand)
+
+
+def test_collapse_follows_a_chain_and_spares_a_root_another_branch_reaches() -> None:
+    view = chain_view("A", "C", "E", "B")
+    by_id = nodes(view)
+
+    assert [(by_id[n].via, by_id[n].hop) for n in "CEK"] == [
+        ("A", 2),
+        ("C", 3),
+        ("E", 4),
+    ]
+    # E is a grandchild of A: removing A removes C and E, not B.
+    assert view.collapses["A"].removed == ("A", "C", "E")
+    assert view.collapses["C"].removed == ("C", "E")
+    assert view.collapses["E"].removed == ("E",)
+    assert view.collapses["B"].removed == ("B",)
+    # C's request goes, but B still draws C; what only C and E drew goes.
+    after_a = view.collapses["A"]
+    rebuilt = chain_view("B")
+    assert after_a.nodes == set(nodes(rebuilt)) == {"F", "A", "B", "C"}
+    assert after_a.edges == typed_ids(rebuilt) == {"fa", "fb", "bc"}
+    assert nodes(rebuilt)["C"].via == "B" and not nodes(rebuilt)["C"].expanded
+
+
+NO_REINFORCED = KnowledgeGraphFilters(
+    provenance=frozenset({"inferred", "declared", "other"})
+)
+
+
+def provenance_view(*expand: str, selected: str = "") -> KnowledgeGraphView:
+    rows = (*ROWS, edge("e-ap", "A", "P", 0.9, provenance_type="consolidation"))
+    return assemble_focus_view(
+        EdgeTableSnapshot(rows=rows, as_of=_T0),
+        "F",
+        neighborhood=LAYERS,
+        filters=replace(NO_REINFORCED, selected_edge=selected),
+        expand=expand,
+    )
+
+
+def test_expansion_and_eligibility_apply_the_provenance_filter() -> None:
+    a = nodes(provenance_view())["A"].expansion
+    assert (a.undrawn_nodes, a.undrawn_edges, a.would_count) == (2, 3, 6)
+
+    view = provenance_view("A")
+    assert steps(view) == [("A", "applied", 2, 3)]
+    assert "P" not in nodes(view) and "e-ap" not in typed_ids(view)
+    assert view.hidden.by_provenance == 1
+    assert "e-ap" not in {e["id"] for e in graph_payload(view)["edges"]}
+    panel = node_panel(view, "A")
+    assert panel is not None
+    relations = {entry.edge.id for group in panel.relations for entry in group.entries}
+    assert "e-ap" not in relations
+
+
+def test_the_selected_edge_is_exempt_from_the_provenance_filter_in_an_expansion() -> (
+    None
+):
+    a = nodes(provenance_view(selected="e-ap"))["A"].expansion
+    assert (a.undrawn_nodes, a.undrawn_edges, a.would_count) == (3, 4, 7)
+
+    view = provenance_view("A", selected="e-ap")
+    plain = provenance_view("A")
+    assert steps(view) == [("A", "applied", 3, 4)]
+    assert "P" in nodes(view) and "e-ap" in typed_ids(view)
+    assert cap_count(view) == cap_count(plain) + 1
+    assert view.hidden.by_provenance == 0
+    assert view.pinned == "e-ap"
+
+
+def test_facets_count_the_final_drawing_and_depth_predictions_stay_the_base() -> None:
+    base, view = view_of(), view_of("A")
+
+    # F's two edges, then A's rows too — the faint e-aw included.
+    assert [(f.group, f.count) for f in base.provenance_facets] == [("inferred", 2)]
+    assert [(f.group, f.count) for f in view.provenance_facets] == [("inferred", 6)]
+    assert dict(view.would_be_nodes) == dict(base.would_be_nodes) == {1: 3, 2: 8}
+    payload = graph_payload(view)
+    assert payload["would_be_nodes"] == {"1": 3, "2": 8}
+    assert payload["provenance_facets"] == [
+        {"group": "inferred", "count": 6, "shown": True}
+    ]
