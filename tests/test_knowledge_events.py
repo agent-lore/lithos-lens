@@ -14,6 +14,7 @@ import contextlib
 import json
 import re
 from collections.abc import MutableMapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -335,6 +336,76 @@ async def test_a_refresh_expires_the_snapshot_and_marks_every_fact_stale() -> No
 
 
 @pytest.mark.anyio
+async def test_a_refresh_during_an_edge_fetch_still_has_the_next_read_refetch() -> None:
+    """A fetch that began before the gap carries pre-gap rows. If it lands
+    after ``lens.refresh`` it may not install them as fresh: the next draw —
+    the pill's reload — must see the edge the missed event was about."""
+    started, release = asyncio.Event(), asyncio.Event()
+    authoritative = [_row("edge_old00000001")]
+    fetches = 0
+
+    async def fetch(_type: str | None, _namespace: str | None) -> Any:
+        nonlocal fetches
+        fetches += 1
+        rows = list(authoritative)  # read now: what this fetch will answer
+        if fetches == 1:
+            started.set()
+            await release.wait()
+        return rows
+
+    table = EdgeTable(fetch)
+    hub = _hub()
+    hub.edge_table = table
+    render = asyncio.create_task(table.read())  # a page render, pre-gap
+    await asyncio.wait_for(started.wait(), timeout=2)
+    authoritative.append(_row("edge_missed00001"))  # changed during the gap
+    await hub.publish(_refresh())
+    release.set()
+    await render
+
+    redraw = await table.read()
+    again = await table.read()
+
+    assert isinstance(redraw, EdgeTableSnapshot) and not redraw.stale
+    assert [row.edge_id for row in redraw.rows] == [
+        "edge_old00000001",
+        "edge_missed00001",
+    ]
+    assert again is redraw
+    assert fetches == 2
+
+
+@pytest.mark.anyio
+async def test_a_read_after_the_refresh_does_not_wait_on_the_pre_gap_fetch() -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+    answers = [["edge_old00000001"], ["edge_old00000001", "edge_missed00001"]]
+    calls = 0
+
+    async def fetch(_type: str | None, _namespace: str | None) -> Any:
+        nonlocal calls
+        rows = [_row(edge_id) for edge_id in answers[min(calls, 1)]]
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+        return rows
+
+    table = EdgeTable(fetch)
+    hub = _hub()
+    hub.edge_table = table
+    before = asyncio.create_task(table.read())
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await hub.publish(_refresh())
+    after = asyncio.create_task(table.read())  # the pill's reload
+    release.set()
+    await before
+    state = await after
+
+    assert isinstance(state, EdgeTableSnapshot)
+    assert [row.edge_id for row in state.rows][-1] == "edge_missed00001"
+
+
+@pytest.mark.anyio
 async def test_a_refresh_keeps_a_read_in_flight_from_caching_pre_gap_facts() -> None:
     release = asyncio.Event()
     reads: list[str] = []
@@ -436,6 +507,61 @@ def test_a_live_note_updated_has_the_next_render_re_read_that_note_once(
         assert fake.fact_reads == [ROLLBACK]
         _payload(client, f"{ROUTE}?focus={PLAN}")
         assert fake.fact_reads == [ROLLBACK]
+
+
+class _BornLater(_CountingFake):
+    """The fake, with one note that does not exist until ``born`` is set."""
+
+    NOTE = "note-born-later"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.born = False
+
+    async def read_note(
+        self, knowledge_id: str, *, max_length: int | None = None
+    ) -> NoteRecord | None:
+        if knowledge_id != self.NOTE:
+            return await super().read_note(knowledge_id, max_length=max_length)
+        self.fact_reads.append(knowledge_id)
+        if not self.born:
+            return None
+        return NoteRecord(id=knowledge_id, title="Born, read", content="")
+
+
+def test_a_live_note_created_clears_a_cached_ghost_and_is_re_read_once(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A note drawn missing (an edge outlived it, or arrived first) that is
+    then created: the frame reaches the facts cache through the app's hub,
+    clears the ghost and sets the title at once, and the next draw re-reads
+    the rest — once."""
+    fake = _BornLater()
+    note = _BornLater.NOTE
+    with _client(lithos_lens_config_env, fake) as client:
+        facts = client.app.state.lens.note_facts  # type: ignore[attr-defined]
+        assert client.portal is not None
+
+        def lookup(cap: int | None = None) -> Any:
+            assert client.portal is not None
+            return client.portal.call(partial(facts.lookup, [note], cap=cap))
+
+        assert lookup().for_id(note).is_missing
+        assert fake.fact_reads == [note]
+
+        fake.born = True
+        _publish(
+            client,
+            _frame("note.created", {"id": note, "title": "Born", "path": "b.md"}),
+        )
+        patched = lookup(cap=0).for_id(note)  # no read allowed
+        assert fake.fact_reads == [note]
+        assert (patched.state, patched.label) == ("pending", "Born")
+
+        reread = lookup().for_id(note)
+        assert (reread.state, reread.label) == ("ok", "Born, read")
+        assert lookup().for_id(note).state == "ok"
+        assert fake.fact_reads == [note, note]
 
 
 def test_the_fake_publish_seam_scopes_a_knowledge_type_by_its_type(

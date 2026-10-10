@@ -339,6 +339,7 @@ const cy = graph.cy;
 const byPid = (collection, pid) => collection.filter((e) => e.data("pid") === pid);
 const pidsWith = (name) => cy.elements("." + name).map((e) => e.data("pid")).sort();
 
+const marks = [];
 for (const action of actions) {
   const [kind, ...rest] = action.split(":");
   const arg = rest.join(":");
@@ -407,8 +408,11 @@ for (const action of actions) {
     sse(type, data.join(":"));
   } else if (kind === "sse") {
     sse(arg, arg === "lens.refresh" ? { reason: "reconnect" } : {});
-  } else if (kind === "pill-click") {
-    single["[data-kgraph-refresh-pill]"].fire("click");
+  } else if (kind === "mark") {
+    // What the canvas looks like now: every node's position, and how many
+    // layouts have run.
+    marks.push({ layouts: layouts.length,
+      positions: cy.nodes().map((n) => [n.data("pid"), n.position()]) });
   } else if (kind === "rerun") {
     // A second run of the file over the same page.
     vm.runInContext(fs.readFileSync(scriptPath, "utf8"), sandbox);
@@ -475,6 +479,7 @@ console.log(JSON.stringify({
   textLinkPushUrls: textLinks.map((link) => link.getAttribute("hx-push-url")),
   href: url.href,
   eventSources: eventSources.map((source) => source.url),
+  marks,
   pill: single["[data-kgraph-refresh-pill]"]
     ? { hidden: single["[data-kgraph-refresh-pill]"].hidden,
         href: single["[data-kgraph-refresh-pill]"].getAttribute("href") }
@@ -2188,24 +2193,56 @@ def test_a_missed_frame_raises_the_pill_and_a_first_open_does_not(
     assert _pill(_run(focus_page, actions, dom=EVENTS))[0] is (not raised)
 
 
-def test_the_pill_links_to_the_address_the_page_is_on_when_followed(
+def test_the_pill_links_to_the_address_the_page_is_on_however_it_is_followed(
     focus_page: Page,
 ) -> None:
-    """A panel open pushes its URL after the pill went up: the click follows
-    the address the operator is on, which the server renders whole."""
+    """A panel open pushes its URL after the pill went up. The anchor's own
+    href follows it — no click handler in between — so a middle click or the
+    context menu open the address the operator is on, too. Never with a
+    fragment: a link differing from the page only by one scrolls, not reloads.
+    """
     drawn = next(n["id"] for n in focus_page.payload["nodes"] if n["id"] != PLAN)
-    raised = _run(focus_page, [_frame("note.updated", id=PLAN)], dom=EVENTS)
-    followed = _run(
-        focus_page,
-        [_frame("note.updated", id=PLAN), f"tap-node:{drawn}", "swap:", "pill-click"],
-        dom=EVENTS,
+    raise_pill = _frame("note.updated", id=PLAN)
+    raised = _run(focus_page, [raise_pill], dom=EVENTS)
+    pushed = _run(focus_page, [raise_pill, f"tap-node:{drawn}", "swap:"], dom=EVENTS)
+    scrolled = _run(focus_page, [raise_pill, "hash:text"], dom=EVENTS)
+    back = _run(
+        focus_page, [f"tap-node:{drawn}", "swap:", raise_pill, "back"], dom=EVENTS
     )
 
     assert _pill(raised) == (False, raised["href"])
-    assert _query(followed["href"])["selected"] == drawn
-    assert _pill(followed) == (False, followed["href"])
-    assert followed["href"] != raised["href"]
-    assert followed["layouts"] == raised["layouts"]  # never a re-layout
+    assert _query(pushed["href"])["selected"] == drawn
+    assert _pill(pushed) == (False, pushed["href"])
+    assert pushed["href"] != raised["href"]
+    assert scrolled["href"].endswith("#text")
+    assert _pill(scrolled) == (False, scrolled["href"].split("#")[0])
+    assert "selected" not in _query(back["href"])
+    assert _pill(back) == (False, back["href"])
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        [_frame("note.updated", id=PLAN)],
+        [_frame("note.deleted", id=PLAN, path="plan.md")],
+        [_frame("edge.upserted", edge_id="edge_new", from_id=PLAN, to_id=UNDRAWN)],
+        ["sse:lens.refresh"],
+        ["sse:error", "sse:open"],
+    ],
+)
+def test_raising_the_pill_never_moves_or_re_lays_out_the_canvas(
+    focus_page: Page, actions: list[str]
+) -> None:
+    baseline = _run(focus_page, dom=EVENTS)
+    result = _run(focus_page, ["mark", *actions, "mark"], dom=EVENTS)
+
+    assert _pill(result)[0] is False
+    before, after = result["marks"]
+    assert after == before
+    assert result["layouts"] == baseline["layouts"]
+    assert [n["position"] for n in result["nodes"]] == [
+        n["position"] for n in baseline["nodes"]
+    ]
 
 
 def test_a_page_with_no_event_source_still_draws_and_keeps_its_pill_down(

@@ -295,6 +295,10 @@ class EdgeTable:
         self._fetched_tick: float | None = None
         self._expires_at = 0.0
         self._inflight: asyncio.Task[EdgeTableState] | None = None
+        # Bumped by :meth:`expire`. A fetch remembers the generation it began
+        # in, and one that began before an expiry is never taken as fresh.
+        self._generation = 0
+        self._inflight_generation = 0
         #: Unfiltered fetches issued upstream (single-flight collapses the rest).
         self.fetches = 0
         metrics.register_knowledge_edge_table_age(self.age_seconds)
@@ -316,24 +320,34 @@ class EdgeTable:
         A failed fetch answers the previous snapshot marked ``stale`` when
         there is one, and raises to every waiter when there is not.
         """
-        state = self._state
-        if state is not None and self._ticks() < self._expires_at:
-            return state
-        if self._inflight is None:
-            self._inflight = asyncio.create_task(
-                self._load(), name="knowledge-edge-table"
-            )
-        # Shielded: one waiter going away (a closed tab) must not cancel the
-        # fetch the other waiters are on.
-        return await asyncio.shield(self._inflight)
+        while True:
+            state = self._state
+            if state is not None and self._ticks() < self._expires_at:
+                return state
+            if self._inflight is None:
+                self._inflight_generation = self._generation
+                self._inflight = asyncio.create_task(
+                    self._load(self._generation), name="knowledge-edge-table"
+                )
+            inflight, generation = self._inflight, self._inflight_generation
+            # Shielded: one waiter going away (a closed tab) must not cancel
+            # the fetch the other waiters are on.
+            answer = await asyncio.shield(inflight)
+            if generation == self._generation:
+                return answer
+            # Overtaken by :meth:`expire`: its rows may predate the gap the
+            # expiry answers, so read again rather than serve them.
 
     def expire(self) -> None:
         """End the held snapshot's TTL now: the next :meth:`read` refetches.
 
         The hub's ``lens.refresh`` hook — events were missed, so the patches
         that would have kept the table current are missing too. What is held
-        is still what a failed refetch serves, marked ``stale``.
+        is still what a failed refetch serves, marked ``stale``. A fetch
+        already in flight began before the gap, so its answer is installed
+        but not as fresh, and no reader takes it: each reads again.
         """
+        self._generation += 1
         self._expires_at = 0.0
 
     async def filtered(
@@ -349,7 +363,7 @@ class EdgeTable:
             raise ValueError("a filtered edge read needs type= and/or namespace=")
         return tuple(await self._fetch(type, namespace))
 
-    async def _load(self) -> EdgeTableState:
+    async def _load(self, generation: int) -> EdgeTableState:
         try:
             with get_tracer().start_as_current_span(
                 "lens.knowledge.edge_table"
@@ -378,7 +392,8 @@ class EdgeTable:
                     outcome = "ok"
                 self._state = state
                 self._fetched_tick = self._ticks()
-                self._expires_at = self._fetched_tick + self._ttl_s
+                if generation == self._generation:
+                    self._expires_at = self._fetched_tick + self._ttl_s
                 span.set_attribute("lens.edge_table.outcome", outcome)
                 span.set_attribute("lens.edge_table.rows", len(rows))
                 return state

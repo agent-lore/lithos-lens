@@ -1821,9 +1821,10 @@ draws stays drawn whatever the slider says):
   drawn node, an `edge.upserted` whose `edge_id` is a drawn edge or whose
   `from_id` / `to_id` is a drawn node — or, in a scoped-global view, on any
   knowledge frame; and on `lens.refresh`, or a stream that reopens after an
-  error, since frames may have been missed. Its link is the page's address
-  when it is raised and again when it is followed, so a panel the operator
-  opened since is kept. Nothing is redrawn and nothing re-lays out: the
+  error, since frames may have been missed. Its href is kept on the page's
+  address, without a fragment, at every history move (a panel's push, Back,
+  Forward, a fragment), so a click, a middle click or the context menu all
+  open the address the operator is on, the panel opened since included. Nothing is redrawn and nothing re-lays out: the
   click is an ordinary reload, which re-reads the facts the event marked
   stale (§5.8), so the pill never redraws a quarantined note as active
 - **the panel's history**, one policy for every panel request on a drawn
@@ -1910,8 +1911,10 @@ The knowledge caches the hub patches (§5.7):
   note missing (the ghost). `note.renamed` changes nothing: no fact the
   graph draws is the path.
 - `lens.refresh` → both expire: the snapshot's next read refetches (and
-  serves what it held, marked stale, if that fails) and every facts entry is
-  marked stale — a gap wider than the replay buffer could otherwise leave a
+  serves what it held, marked stale, if that fails) — a fetch already in
+  flight began before the gap, so it is not taken as fresh and its readers
+  read again — and every facts entry is marked stale, a read in flight kept
+  from caching — a gap wider than the replay buffer could otherwise leave a
   quarantined note drawn active for a whole TTL.
 
 On reconnect Lens sends `Last-Event-ID` so Lithos replays its ring buffer from

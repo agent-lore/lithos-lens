@@ -345,6 +345,7 @@
     if (withoutFragment(target) !== withoutFragment(window.location.href)) {
       window.history.pushState({ kgraph: true }, "", page);
     }
+    syncRefresh();
     shownHref = window.location.href;
     lightFromUrl();
   }
@@ -355,6 +356,7 @@
   }
 
   function onTravel() {
+    syncRefresh();
     if (!panelHost) return;
     if (pendingPush) {
       const xhr = pendingPush.xhr;
@@ -380,7 +382,7 @@
   // a new edge can bring in a note the page never drew — reveals the pill,
   // and so do a `lens.refresh` and a stream that reopens after an error:
   // either way frames may have been missed. The pill is an ordinary link to
-  // the page's current address (a panel's pushState included); the server
+  // the page's current address (`syncRefresh`, below); the server
   // re-renders from facts the event marked stale, so nothing is redrawn
   // here.
 
@@ -408,17 +410,19 @@
       drawn(data.from_id) || drawn(data.to_id);
   }
 
-  function showRefresh() {
+  // The anchor's own href, kept on the page's address at every history move
+  // (a panel's push, Back, Forward, a fragment), so every way of following
+  // it — a click, a middle click, the context menu — lands there. Without
+  // the fragment: a link that differs from the page only by one scrolls.
+  function syncRefresh() {
     const pill = document.querySelector("[data-kgraph-refresh-pill]");
-    if (!pill) return;
-    pill.setAttribute("href", window.location.href);
-    pill.hidden = false;
-    if (!pill.kgraphBound) {
-      pill.kgraphBound = true;
-      pill.addEventListener("click", function () {
-        pill.setAttribute("href", window.location.href);
-      });
-    }
+    if (pill) pill.setAttribute("href", withoutFragment(window.location.href));
+    return pill;
+  }
+
+  function showRefresh() {
+    const pill = syncRefresh();
+    if (pill) pill.hidden = false;
   }
 
   function onKnowledgeFrame(event) {
