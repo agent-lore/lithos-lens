@@ -760,3 +760,29 @@ def test_expanded_counts_on_the_page_keep_base_depth_predictions(
         {"group": "inferred", "count": 6, "shown": True}
     ]
     assert _payload(base)["provenance_facets"][0]["count"] == 2
+
+
+@pytest.mark.parametrize("cap", [7, 6])
+def test_an_undrawn_pin_does_not_change_the_offered_expansion(
+    lithos_lens_config_env: Path, cap: int
+) -> None:
+    """correctness f-005 (round 3): e-aw is pinned but not drawn at depth 1.
+    The panel's counts and offer are those of the link it emits, which
+    drops that pin — and the link draws exactly that."""
+    _set_knowledge(lithos_lens_config_env, f"graph_focus_max_nodes = {cap}")
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, _url("focus=F&selected=A&pin=e-aw"))
+        action = _action(page)
+        assert _plain(action) == (
+            "Show its neighbours — adds 2 notes and 3 edges; "
+            f"6 notes would count towards the {cap} cap"
+        )
+        href = _href(action, "data-kgraph-expand")
+        assert href == _url("focus=F&expand=A&selected=A")
+
+        expanded = _get(client, href)
+    payload = _payload(expanded)
+    assert payload["expansions"] == [
+        {"id": "A", "state": "applied", "added_nodes": 2, "added_edges": 3}
+    ]
+    assert "W" not in {n["id"] for n in payload["nodes"]}

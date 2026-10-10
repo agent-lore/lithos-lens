@@ -259,15 +259,31 @@ def expand_typed(
     layer_ids: Iterable[str],
     requests: Iterable[str],
     cap: int,
+    pin: str = "",
+    plain: Shows | None = None,
 ) -> KnowledgeExpansion:
     """:func:`walk_expansions`, every visible note's eligibility, and what
-    removing each request leaves drawn."""
+    removing each request leaves drawn.
+
+    ``pin`` is the edge ``shows`` exempts (``plain`` is the same filters
+    without it). Its exemption holds only where the walk draws it: a walk
+    that does not — the edge refused with its step, or out of reach — is
+    the plain walk, the drawing a link that drops the undrawn pin loads.
+    Exempt, it could still have refused a step plain filters let through.
+    """
     edges, layer_ids = tuple(edges), tuple(layer_ids)
 
-    def walk(chosen: Iterable[str]) -> ExpansionWalk:
+    def walk(chosen: Iterable[str]) -> tuple[ExpansionWalk, Shows]:
+        chosen = tuple(chosen)
+        done = run(chosen, shows)
+        if pin and plain is not None and all(e.edge_id != pin for e in done.edges):
+            return run(chosen, plain), plain
+        return done, shows
+
+    def run(chosen: Iterable[str], by: Shows) -> ExpansionWalk:
         return walk_expansions(
             edges_of,
-            shows,
+            by,
             focus=focus,
             hops=hops,
             edges=edges,
@@ -276,11 +292,11 @@ def expand_typed(
             cap=cap,
         )
 
-    final = walk(requests)
+    final, final_shows = walk(requests)
     collapses: dict[str, ExpansionCollapse] = {}
     for step in final.steps:
         removed = dependants(final, step.id)
-        rest = walk(s.id for s in final.steps if s.id not in removed)
+        rest, _ = walk(s.id for s in final.steps if s.id not in removed)
         collapses[step.id] = ExpansionCollapse(
             removed, rest.visible, frozenset(edge.edge_id for edge in rest.edges)
         )
@@ -290,6 +306,6 @@ def expand_typed(
         steps=final.steps,
         via=final.via,
         layer_only=final.layer_only,
-        nodes=MappingProxyType(_eligibility(edges_of, shows, final, focus, cap)),
+        nodes=MappingProxyType(_eligibility(edges_of, final_shows, final, focus, cap)),
         collapses=MappingProxyType(collapses),
     )

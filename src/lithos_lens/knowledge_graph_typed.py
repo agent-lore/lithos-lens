@@ -264,6 +264,8 @@ def expanded_typed_graph(
     """
     depth = min(max(depth, 1), MAX_DEPTH)
     layer_ids = tuple(layer_ids)
+    selected = filters.selected_edge
+    plain = replace(filters, selected_edge="")
     expansion = expand_typed(
         snapshot.edges_of,
         filters.shows,
@@ -273,6 +275,8 @@ def expanded_typed_graph(
         layer_ids=layer_ids,
         requests=expand,
         cap=max_nodes,
+        pin=selected,
+        plain=plain.shows,
     )
     _, unfiltered = _bfs(snapshot.edges_of, focus, depth, _SHOW_ALL)
     in_depth = frozenset(unfiltered)
@@ -280,7 +284,8 @@ def expanded_typed_graph(
         for row in snapshot.edges_of(root):
             unfiltered.setdefault(row.edge_id, row)
     drawn = {edge.edge_id: edge for edge in expansion.edges}
-    plain = replace(filters, selected_edge="")
+    # An undrawn pin exempts nothing (expand_typed): count as plain filters.
+    counted = filters if selected in drawn else plain
     hops, edges = _bfs(snapshot.edges_of, focus, depth, plain)
     # The pin keeps a drawing only if the plain filters draw that very view:
     # an exemption can change the base, and so every later step's reach and
@@ -300,15 +305,14 @@ def expanded_typed_graph(
         drawn.keys(),
         expansion.steps,
     )
-    selected = filters.selected_edge
     pinned = "" if same or selected not in drawn else selected
     redraws = frozenset(e for e in drawn if e in in_depth and e not in edges)
     return replace(
         typed,
         hops=expansion.hops,
         edges=expansion.edges,
-        hidden=_hidden(drawn, unfiltered, filters),
-        provenance_facets=_provenance_facets(unfiltered.values(), filters),
+        hidden=_hidden(drawn, unfiltered, counted),
+        provenance_facets=_provenance_facets(unfiltered.values(), counted),
         pinned=pinned,
         pin_redraws=redraws,
         expansion=expansion,

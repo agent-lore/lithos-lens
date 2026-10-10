@@ -17,7 +17,7 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 | `lithos_lens.knowledge_edges` | M | 5 | 3 |
 | `lithos_lens.knowledge_facts` | M | 5 | 2 |
 | `lithos_lens.knowledge_graph` | M | 0 | 6 |
-| `lithos_lens.knowledge_graph_expansion` | S | 5 | 4 |
+| `lithos_lens.knowledge_graph_expansion` | M | 5 | 4 |
 | `lithos_lens.knowledge_graph_panels` | S | 2 | 5 |
 | `lithos_lens.knowledge_graph_typed` | M | 1 | 4 |
 | `lithos_lens.knowledge_graph_view` | M | 10 | 8 |

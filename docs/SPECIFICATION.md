@@ -1783,7 +1783,11 @@ reads nothing:
   `graph_focus_max_nodes` adds nothing; the rest of the view is drawn and
   later requests are still tried. It offers no weight remedy (the base
   refusal keeps its depth and weight remedies). The `edge=` / `pin=`
-  exemption applies to expanded edges too, and counts towards the cap
+  exemption applies to expanded edges too, and counts towards the cap — but
+  only where the result draws that edge: a pin the expansions leave undrawn
+  (its step refused, or out of reach) exempts nothing, so the view, its
+  eligibility and its collapse previews are the plain filters' — what the
+  page's links, which drop that pin, load
 - **what the drawing shows** — the hidden counts (over each applied note's
   unfiltered edges too), the provenance facets and the pinned selection — is
   recounted over the final typed set; the would-be node count per depth stays

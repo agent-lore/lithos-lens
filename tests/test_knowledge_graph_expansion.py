@@ -587,8 +587,10 @@ def test_expansion_and_eligibility_apply_the_provenance_filter() -> None:
 def test_the_selected_edge_is_exempt_from_the_provenance_filter_in_an_expansion() -> (
     None
 ):
+    # Before A expands the pin is not drawn, so it exempts nothing: A's
+    # eligibility is what its Show its neighbours link (pin dropped) draws.
     a = nodes(provenance_view(selected="e-ap"))["A"].expansion
-    assert (a.undrawn_nodes, a.undrawn_edges, a.would_count) == (3, 4, 7)
+    assert (a.undrawn_nodes, a.undrawn_edges, a.would_count) == (2, 3, 6)
 
     view = provenance_view("A", selected="e-ap")
     plain = provenance_view("A")
@@ -611,3 +613,69 @@ def test_facets_count_the_final_drawing_and_depth_predictions_stay_the_base() ->
     assert payload["provenance_facets"] == [
         {"group": "inferred", "count": 6, "shown": True}
     ]
+
+
+# ── an undrawn pin draws nothing (round 3: correctness f-003, f-005) ───
+
+
+def test_a_pin_its_view_does_not_draw_leaves_the_plain_drawing() -> None:
+    """A wiki-link note A reaches C, and E by the faint pinned edge ae.
+    Exempting ae would make A's expansion refuse (A, C and E: 5 over 4);
+    the pin is then not drawn, so it draws nothing: A applies as it does
+    without the pin — the view every link (the pin cleared) loads."""
+    rows = (edge("fb", "F", "B"), edge("ac", "A", "C"), edge("ae", "A", "E", 0.05))
+
+    def view(selected: str) -> KnowledgeGraphView:
+        return assemble_focus_view(
+            EdgeTableSnapshot(rows=rows, as_of=_T0),
+            "F",
+            max_nodes=4,
+            neighborhood=RelatedNeighborhood(links=(RelatedRef(id="A", title="A"),)),
+            filters=KnowledgeGraphFilters(selected_edge=selected),
+            expand=("A",),
+        )
+
+    pinned, plain = view("ae"), view("")
+    assert steps(pinned) == steps(plain) == [("A", "applied", 1, 1)]
+    assert set(nodes(pinned)) == set(nodes(plain)) == {"F", "B", "A", "C"}
+    assert "ae" not in typed_ids(pinned)
+    assert pinned.pinned == ""
+    assert pinned.keeps_drawing_for("") and pinned.keeps_drawing_for("ae")
+
+
+def test_an_undrawn_pin_does_not_count_in_eligibility() -> None:
+    """e-aw is pinned but not drawn at depth 1: A's eligibility is what its
+    Show its neighbours link — which drops the pin — will draw."""
+    view = view_of(filters=KnowledgeGraphFilters(selected_edge="e-aw"))
+    a = nodes(view)["A"].expansion
+
+    assert (a.undrawn_nodes, a.undrawn_edges, a.would_count) == (2, 3, 6)
+    assert a == nodes(view_of())["A"].expansion
+
+
+def test_a_collapse_that_leaves_the_pin_undrawn_previews_the_plain_drawing() -> None:
+    """Z (drawn by R2) draws the faint pinned edge rz. Removing R2 removes
+    Z; R, left alone, would refuse under the pin (Q and Z: 5 over 4) and
+    draw nothing of it — so the link, which clears the pin, draws R's Q."""
+    rows = (
+        edge("fr", "F", "R"),
+        edge("fr2", "F", "R2"),
+        edge("r2z", "R2", "Z"),
+        edge("rz", "R", "Z", 0.05),
+        edge("rq", "R", "Q"),
+    )
+    snapshot = EdgeTableSnapshot(rows=rows, as_of=_T0)
+    view = assemble_focus_view(
+        snapshot,
+        "F",
+        max_nodes=4,
+        filters=KnowledgeGraphFilters(selected_edge="rz"),
+        expand=("R2", "Z", "R"),
+    )
+    assert "rz" in typed_ids(view) and view.pinned == "rz"
+
+    after = view.collapses["R2"]
+    assert after.removed == ("R2", "Z")
+    target = assemble_focus_view(snapshot, "F", max_nodes=4, expand=("R",))
+    assert "rz" not in after.edges
+    assert after.nodes == set(nodes(target)) == {"F", "R", "R2", "Q"}
