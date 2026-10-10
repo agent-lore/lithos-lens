@@ -26,7 +26,9 @@ title, ``note_type``, ``status``, ``namespace``, ``confidence`` and lede, as
   quarantines a note, so they patch the title and mark the rest of the entry
   stale: the next draw re-reads it (one read, under the gate and the cap).
   ``note.deleted`` marks the id missing. ``note.renamed`` changes nothing
-  here, since no fact the graph draws is the path. The live wiring is S7's.
+  here, since no fact the graph draws is the path. The hub applies each
+  live note event before its fan-out, and marks every entry stale on
+  ``lens.refresh`` (:meth:`NoteFactsCache.mark_all_stale`).
 
 Foundation: the read is injected as one callable ``(id) -> NoteRecord | None``
 (the caller binds ``read_note(id, max_length=1)``). ``LithosToolError`` lives
@@ -184,8 +186,8 @@ class NoteFactsCache:
     """Process-wide note facts: gated reads, TTL, per-render cap, patches.
 
     One per process, on ``AppState.note_facts``, built with
-    ``graph_cache.graph_fanout_gate`` and the configured knobs; S7 feeds it
-    the hub's note events.
+    ``graph_cache.graph_fanout_gate`` and the configured knobs; the hub feeds
+    it the live note events.
     """
 
     def __init__(
@@ -341,6 +343,19 @@ class NoteFactsCache:
         entry.missing = False
         entry.stale = True
         return True
+
+    def mark_all_stale(self) -> None:
+        """Mark every entry stale, and keep every read in flight from caching.
+
+        The hub's ``lens.refresh`` hook: events were missed, so any entry may
+        be one a missed ``note.updated`` (a quarantine, say) should have
+        marked. Each is re-read on its next draw, under the gate and the cap;
+        until then it keeps its last-known facts, as ``pending``.
+        """
+        for node_id in set(self._entries) | set(self._reading):
+            self._bump(node_id)
+        for entry in self._entries.values():
+            entry.stale = True
 
     def _bump(self, node_id: str) -> None:
         self._versions[node_id] = self._versions.get(node_id, 0) + 1

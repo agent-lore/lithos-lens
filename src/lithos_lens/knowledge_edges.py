@@ -272,8 +272,9 @@ EdgeTableState = EdgeTableSnapshot | EdgeTableRefusal
 class EdgeTable:
     """The process's edge-table snapshot: TTL, single-flight, bound, patches.
 
-    One per process, on ``AppState.edge_table``; the hub's ``edge.upserted``
-    feed is wired to :meth:`apply_upsert` with the knowledge events (S7).
+    One per process, on ``AppState.edge_table``; the hub feeds each
+    ``edge.upserted`` to :meth:`apply_upsert` and expires the table on
+    ``lens.refresh`` (S7).
     """
 
     def __init__(
@@ -325,6 +326,15 @@ class EdgeTable:
         # Shielded: one waiter going away (a closed tab) must not cancel the
         # fetch the other waiters are on.
         return await asyncio.shield(self._inflight)
+
+    def expire(self) -> None:
+        """End the held snapshot's TTL now: the next :meth:`read` refetches.
+
+        The hub's ``lens.refresh`` hook — events were missed, so the patches
+        that would have kept the table current are missing too. What is held
+        is still what a failed refetch serves, marked ``stale``.
+        """
+        self._expires_at = 0.0
 
     async def filtered(
         self, *, type: str | None = None, namespace: str | None = None

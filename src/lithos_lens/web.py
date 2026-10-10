@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from functools import partial
@@ -16,7 +15,6 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
     Response,
-    StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,7 +27,7 @@ from lithos_lens.blocker_chain import (
     load_blocker_level,
 )
 from lithos_lens.config import LithosLensConfig
-from lithos_lens.errors import EventSubscriberLimit
+from lithos_lens.event_streams import event_stream_response
 from lithos_lens.events import CONSUMED_EVENT_TYPES, LensEvent
 from lithos_lens.fake_lithos import (
     FakeEventHub,
@@ -137,18 +135,19 @@ MAX_CONCURRENT_RENDERS = 128
 # What admission control deliberately does NOT meter. Each of these would be
 # made WORSE by refusing it under load, not better:
 #
-# ``/tasks/events`` — an SSE connection is not a render. It does no Lithos work
-# and is held open for as long as a tab is. Metering it spends the render
-# budget on parked browsers and refuses real requests while the backend sits
-# idle, with N open tabs consuming N slots permanently. This is why the bound
-# lives here rather than in uvicorn's ``limit_concurrency``, which counts
-# connections and cannot tell the two apart.
+# ``/tasks/events`` and ``/knowledge/events`` — an SSE connection is not a
+# render. It does no Lithos work and is held open for as long as a tab is.
+# Metering it spends the render budget on parked browsers and refuses real
+# requests while the backend sits idle, with N open tabs consuming N slots
+# permanently. This is why the bound lives here rather than in uvicorn's
+# ``limit_concurrency``, which counts connections and cannot tell the two
+# apart.
 #
 # Unmetered is not unbounded: parked browsers have their OWN ceiling, one that
 # counts the thing they actually consume. ``EventHub.subscribe`` refuses past
-# ``events.MAX_EVENT_SUBSCRIBERS`` and the route below turns that into the same
-# 503, so the two bounds meter two different resources instead of one bound
-# meddling in both.
+# ``events.MAX_EVENT_SUBSCRIBERS`` and ``event_streams`` turns that into the
+# same 503, so the two bounds meter two different resources instead of one
+# bound meddling in both.
 #
 # ``/health`` — REQUIREMENTS §4 makes this the container health check. A 503
 # under load tells the orchestrator the container is unhealthy, so it restarts
@@ -159,7 +158,7 @@ MAX_CONCURRENT_RENDERS = 128
 # ``/static/*`` — served from disk, no Lithos call, and needed BY the pages
 # that were admitted. Refusing assets to a page whose HTML got through renders
 # it unstyled and inert, spending a slot to produce a broken result.
-_UNMETERED_EXACT = frozenset({"/health", "/tasks/events"})
+_UNMETERED_EXACT = frozenset({"/health", "/tasks/events", "/knowledge/events"})
 _UNMETERED_PREFIXES = ("/static/",)
 
 
@@ -173,15 +172,6 @@ def _is_metered(path: str) -> bool:
     if path in _UNMETERED_EXACT:
         return False
     return not path.startswith(_UNMETERED_PREFIXES)
-
-
-# How long the event stream waits for an event before emitting a comment frame.
-# The stream otherwise blocks on ``queue.get()`` forever and only discovers a
-# departed client when it next WRITES — which, in a quiet period, is never. A
-# slept laptop or a dropped NAT mapping would then park a subscriber and its
-# queue for the life of the process. The keepalive is what makes a dead peer
-# surface: the write fails, the generator unwinds, and ``unsubscribe`` runs.
-SSE_KEEPALIVE_S = 20.0
 
 
 def create_app(
@@ -337,50 +327,7 @@ def create_app(
 
     @app.get("/tasks/events")
     async def task_events() -> Response:
-        try:
-            queue = state.events.subscribe()
-        except EventSubscriberLimit:
-            # EventSource treats any non-200 as a failed connection: it fires
-            # `error` and does NOT retry, which is exactly the handoff wanted
-            # here — tasks.js arms its polling fallback on that event, so the
-            # refused tab gets a slower board instead of the process getting
-            # one more queue it has already said it cannot afford.
-            #
-            # No log line here: the hub already records the refusal, and it
-            # does so RATE-LIMITED. A warning per refusal would hand the same
-            # unbounded-log-write back to whoever is opening the connections.
-            return PlainTextResponse(
-                "Lens is at event-stream capacity. This page will poll instead.",
-                status_code=503,
-            )
-
-        async def stream():
-            try:
-                yield 'event: lens.status\ndata: {"status":"connected"}\n\n'
-                while True:
-                    try:
-                        event = await asyncio.wait_for(
-                            queue.get(), timeout=SSE_KEEPALIVE_S
-                        )
-                    except TimeoutError:
-                        # A comment frame: ignored by EventSource, but a WRITE,
-                        # which is the only way this end learns the peer left.
-                        yield ": keepalive\n\n"
-                        continue
-                    yield event.as_sse()
-            except CancelledError:
-                raise
-            finally:
-                state.events.unsubscribe(queue)
-
-        return StreamingResponse(
-            stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        return event_stream_response(state.events, "tasks")
 
     if fake_lithos_enabled():
         # Fake-mode-only harness seam: lets the browser suite drive the REAL

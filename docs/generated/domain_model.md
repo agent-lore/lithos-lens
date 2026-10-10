@@ -13,6 +13,8 @@ classDiagram
     +status EventStatus
     +last_event_id str
     +graph_cache GraphCache | None
+    +edge_table EdgeTable | None
+    +note_facts NoteFactsCache | None
   }
   class LensEvent {
     +id str

@@ -1,5 +1,5 @@
 """The `/knowledge/graph` page: picker, focus and scoped-global text (K2 S3),
-and its node and edge panels (S5).
+its node and edge panels (S5), and the `/knowledge/events` stream (S7).
 
 Its own module for the reason `graph_routes.py` is: the page's assembly — the
 edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives in
@@ -23,6 +23,9 @@ edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives i
   and one partial behind both. Every drawn view is kept under a render id
   (:class:`RenderedViews`) that the page's panel links carry, so a click's
   fragment is drawn from the very view its page showed.
+- **Events** (D14): ``GET /knowledge/events`` is ``/tasks/events``' body
+  (:mod:`lithos_lens.event_streams`) on the hub's knowledge stream, which the
+  canvas listens on to raise its "graph changed — refresh" pill.
 - **Telemetry**: ``lens.knowledge.graph.*`` attributes on the request span and
   one counter by mode and outcome; panel opens by kind and source; the scope
   and the selection are never labels.
@@ -43,10 +46,11 @@ from typing import Any, Literal
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from lithos_lens import metrics
+from lithos_lens.event_streams import event_stream_response
 from lithos_lens.knowledge_edge_types import is_conflict_resolved
 from lithos_lens.knowledge_edges import (
     EdgeFacets,
@@ -75,6 +79,7 @@ from lithos_lens.telemetry import get_current_span
 
 KNOWLEDGE_GRAPH_PATH = "/knowledge/graph"
 KNOWLEDGE_GRAPH_PANEL_PATH = "/knowledge/graph/panel"
+KNOWLEDGE_EVENTS_PATH = "/knowledge/events"
 
 #: The picker's namespace table shows this many rows; the rest are behind a
 #: disclosure (PRD D11).
@@ -548,8 +553,9 @@ async def load_knowledge_graph(
 def register_knowledge_graph_routes(
     app: FastAPI, state: AppState, templates: Jinja2Templates
 ) -> None:
-    """Attach `GET /knowledge/graph` (the picker, focus and scoped-global)
-    and `GET /knowledge/graph/panel` (its node and edge panels)."""
+    """Attach `GET /knowledge/graph` (the picker, focus and scoped-global),
+    `GET /knowledge/graph/panel` (its node and edge panels) and
+    `GET /knowledge/events` (the knowledge-scope event stream it listens on)."""
 
     templates.env.globals["knowledge_graph_url"] = knowledge_graph_url
     templates.env.globals["knowledge_graph_panel_url"] = knowledge_graph_panel_url
@@ -557,6 +563,12 @@ def register_knowledge_graph_routes(
     templates.env.filters["utc_minute"] = utc_minute
     templates.env.filters["is_conflict_resolved"] = is_conflict_resolved
     views = RenderedViews()
+
+    @app.get(KNOWLEDGE_EVENTS_PATH)
+    async def knowledge_events() -> Response:
+        """The hub's knowledge frames (and `lens.refresh`), for the graph
+        page's "graph changed — refresh" pill; `/tasks/events`' twin."""
+        return event_stream_response(state.events, "knowledge")
 
     @app.get(KNOWLEDGE_GRAPH_PATH, response_class=HTMLResponse)
     async def knowledge_graph(request: Request) -> HTMLResponse:

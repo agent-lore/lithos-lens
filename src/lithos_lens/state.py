@@ -58,9 +58,10 @@ class AppState:
         # graph's for the same reason: each is one process-wide instance —
         # the edge-table snapshot every graph page, panel and note banner
         # reads, and the note facts every node draws with — that the hub's
-        # knowledge events will patch (S7). The facts reads share the task
-        # graph's fan-out gate, so the two graphs together hold one share of
-        # the Lithos session.
+        # knowledge events patch before each fan-out, wired below the same
+        # way as the graph cache (S7). The facts reads share the task graph's
+        # fan-out gate, so the two graphs together hold one share of the
+        # Lithos session.
         knowledge = config.knowledge
         client = lithos_client
         self.edge_table = EdgeTable(
@@ -76,6 +77,8 @@ class AppState:
             ttl_s=knowledge.graph_note_facts_ttl_s,
             fanout_cap=knowledge.graph_title_fanout_cap,
         )
+        self.events.edge_table = self.edge_table
+        self.events.note_facts = self.note_facts
         # Fake-Lithos app mode's writes announce themselves the way the real
         # server does, so that mode exercises write -> event -> SSE -> board
         # end to end. Wired HERE, with the graph cache, for the same reason:

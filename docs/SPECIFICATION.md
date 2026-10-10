@@ -67,7 +67,8 @@ The current application exposes these routes:
   `?selected=<task_id>` the side panel is rendered open beside the board
   (§5.6.1).
 - `GET /tasks/events`
-  Browser-facing Server-Sent Events endpoint for live task updates.
+  Browser-facing Server-Sent Events endpoint for live task updates: the task
+  and system scopes (§5.8).
 - `GET /tasks/{task_id}` (and `GET /tasks/id?task_id=<id>`)
   Renders a task detail page. The alias carries the ids no path can address,
   — the ids that collide with a static page under `/tasks/`
@@ -227,6 +228,11 @@ The current application exposes these routes:
   query as the page, plus `render=<id>` naming the view that page drew: the
   fragment an htmx click swaps into the page's panel host. Always 200, "Not in this view" or "Lithos is offline" when there is
   no panel to show.
+- `GET /knowledge/events`
+  Browser-facing Server-Sent Events endpoint for the knowledge scope (§5.8):
+  the five note and edge event types, which the knowledge graph page listens
+  on for its "graph changed — refresh" pill. Same stream semantics as
+  `GET /tasks/events`, and unmetered like it.
 - `GET /note/{knowledge_id}`
   Renders a note: server-side markdown, frontmatter metadata chips, the
   related panel, and provenance.
@@ -248,7 +254,8 @@ such client can complete a human or external-task gate, under any operator name
 it chooses. The operator page states that where the operator meets it. Two
 process-level bounds exist in place of authentication: a concurrent-render cap
 that answers 503 rather than queueing, and a ceiling on concurrent SSE
-subscribers.
+subscribers — one ceiling across both streams, `/tasks/events` and
+`/knowledge/events`, which the render cap does not meter.
 
 Two request-level checks ride alongside them on the write surface, and both are
 **hygiene, not security**:
@@ -1807,6 +1814,18 @@ draws stays drawn whatever the slider says):
   key's last value, a value of nothing but Python whitespace absent), as is
   the `pin` a node click carries; a background tap clears it and leaves the
   URL
+- **"graph changed — refresh"** (K2 S7): the toolbar's pill, hidden, linking
+  to the page itself. The script opens one `GET /knowledge/events` stream per
+  page load (a second run over the same page opens none) and raises the pill
+  when a frame names what the page drew — a `note.*` frame whose `id` is a
+  drawn node, an `edge.upserted` whose `edge_id` is a drawn edge or whose
+  `from_id` / `to_id` is a drawn node — or, in a scoped-global view, on any
+  knowledge frame; and on `lens.refresh`, or a stream that reopens after an
+  error, since frames may have been missed. Its link is the page's address
+  when it is raised and again when it is followed, so a panel the operator
+  opened since is kept. Nothing is redrawn and nothing re-lays out: the
+  click is an ordinary reload, which re-reads the facts the event marked
+  stale (§5.8), so the pill never redraws a quarantined note as active
 - **the panel's history**, one policy for every panel request on a drawn
   page, the text's links and the canvas's clicks alike: htmx pushes nothing
   (each panel link's `hx-push-url` is switched off as its request leaves, so
@@ -1823,15 +1842,29 @@ draws stays drawn whatever the slider says):
 
 ### 5.8 Live Updates
 
-Lens currently implements live task updates using SSE.
+Lens implements live updates using SSE, from one shared upstream subscription
+to three scopes and two browser streams.
 
-Current architecture:
+Architecture:
 
-- Lens opens a single shared upstream subscription to Lithos `/events`.
-- Lens filters and normalizes task-relevant events.
-- Lens republishes them to browser clients via `GET /tasks/events`.
+- Lens opens a single shared upstream subscription to Lithos `/events`,
+  filtered server-side by `?types=` — every type below — and by nothing
+  else. It never sends `?tags=`: `edge.upserted` carries empty tags, so a
+  tag filter would drop every edge event.
+- Lens normalizes each consumed frame into one of three scopes, derived from
+  its type alone (`events.event_scope`), so every way an event is built —
+  normalization, the hub's own `lens.refresh`, fake mode's publish seam — is
+  scoped the same way.
+- Before the fan-out, the hub patches its process-wide caches from the event
+  (below), so a page the event sends a browser back to never draws from what
+  it just changed.
+- Lens republishes each event to the browser streams of its scope: task and
+  system frames on `GET /tasks/events` (the dashboard), knowledge frames on
+  `GET /knowledge/events` (the knowledge graph page). `lens.refresh` is the
+  one frame on both. Every frame's data carries its `scope`.
 
-The currently recognized event types are task-scoped:
+**Task scope** — a `task_id` is required (a frame without one is dropped
+with a rate-limited warning) and every one forces a dashboard refresh:
 
 - `task.created`
 - `task.claimed`
@@ -1842,14 +1875,49 @@ The currently recognized event types are task-scoped:
 - `task.reopened`
 - `finding.posted`
 
-plus one system-scoped type, `agent.registered`, which is forwarded with an
-empty `task_id` and never triggers a dashboard refresh (it invalidates the
-agent-dropdown data only). Task-scoped events arriving without a `task_id` are
-dropped with a warning.
+**System scope** — `agent.registered`, forwarded with an empty `task_id` and
+never a dashboard refresh (it invalidates the agent-dropdown data only).
+
+**Knowledge scope** (K2 D14) — `note.created`, `note.updated`,
+`note.deleted`, `note.renamed` and `edge.upserted`, forwarded with an empty
+`task_id` and `requires_refresh=false`, and never on `/tasks/events`. A
+frame without an upstream `id:` is keyed by the note `id` or `edge_id` it
+names; one naming neither is still forwarded (the caches no-op on it). What
+Lithos sends, read from its source (lithos 0.6.0 @ `d2c49bb`,
+`src/lithos/events.py` and its emitters `tools/memory_edges.py`,
+`lcma/edge_inference.py` and `edge_store.py`, 2026-10-05):
+
+| Type | Payload | Notes |
+|---|---|---|
+| `edge.upserted` | `{edge_id, from_id, to_id, type, namespace, conflict_state}` | Empty tags. Emitted by `lithos_edge_upsert`, inferred-edge assertion and `lithos_conflict_resolve` (which sends `namespace` too); **not** by `related_to` reinforcement, `derived_from` projection or weight decay (ROADMAP ledger #15), which the edge table's TTL covers. |
+| `note.created`, `note.updated` | `{id, title, path}` | `note.updated` fires for every metadata change, including the misleading-feedback path that quarantines a note. |
+| `note.deleted` | `{id, path}` | No tags. |
+| `note.renamed` | `{id, src_path, dest_path}` | From the file watcher only, which sends `id`. |
+
+The Lithos specification's own event table is stale on two of these points
+— `namespace` on the `conflict_resolve` emission and `id` from the watcher —
+so the source, not that table, is what this one follows.
+
+The knowledge caches the hub patches (§5.7):
+
+- `edge.upserted` → the edge-table snapshot: matched by `edge_id`, an
+  existing row takes the payload's endpoints, type, namespace and conflict
+  state; a new row is inserted with weight, provenance and evidence unknown.
+  Either is `partial` until the next full fetch, and so drawn faint.
+- `note.created` / `note.updated` → the note facts cache: a cached note's
+  title is patched and its other facts marked stale, so the next draw
+  re-reads it once (under the gate and the cap). `note.deleted` marks the
+  note missing (the ghost). `note.renamed` changes nothing: no fact the
+  graph draws is the path.
+- `lens.refresh` → both expire: the snapshot's next read refetches (and
+  serves what it held, marked stale, if that fails) and every facts entry is
+  marked stale — a gap wider than the replay buffer could otherwise leave a
+  quarantined note drawn active for a whole TTL.
 
 On reconnect Lens sends `Last-Event-ID` so Lithos replays its ring buffer from
 the last received event, and broadcasts one synthetic `lens.refresh` to browser
-subscribers as the correctness backstop for gaps wider than that buffer. The
+subscribers — both streams — as the correctness backstop for gaps wider than
+that buffer. The
 `lens.*` namespace is reserved for these Lens-internal synthetic events; Lens
 sanitizes the id and type it puts on the wire, so an upstream payload cannot
 forge a frame in that namespace (or any other).
@@ -1866,7 +1934,15 @@ coalesce into a single broadcast delivered on its trailing edge, so every
 disconnected interval — including one that gave up its replay cursor — still
 results in a refresh.
 
-Browser behavior currently includes:
+The two browser streams are one body (`event_streams.event_stream_response`):
+a `lens.status` connected frame, then the queue's frames, a `: keepalive`
+comment after `SSE_KEEPALIVE_S` of quiet, and the queue released when the
+peer goes. Neither replays to the browser — `Last-Event-ID` and `lens.refresh`
+are the hub's, against Lithos. Both streams' queues count against the one
+`MAX_EVENT_SUBSCRIBERS` ceiling (past it the route answers 503), and both are
+exempt from the render cap and from tracing (§8).
+
+Browser behavior on the dashboard:
 
 - live status indicator
 - optimistic task-row updates where practical
@@ -1874,8 +1950,8 @@ Browser behavior currently includes:
 - reconnect handling
 - polling/degraded fallback behavior when live updates are unavailable
 
-The event pipeline is task-focused. Lens does not yet expose a general-purpose
-knowledge-event stream.
+On the knowledge graph page, the "graph changed — refresh" pill (§5.7,
+Knowledge graph canvas); it never redraws or re-lays out the canvas itself.
 
 ### 5.9 Health and Degraded States
 
@@ -3069,11 +3145,14 @@ metric labels — bounded sets only (route template, tool name, outcome enum);
 unbounded values belong on spans, which are stored per-trace and never become
 series.
 
-Three request paths are deliberately untraced: `/health` (polled by the
+Four request paths are deliberately untraced: `/health` (polled by the
 container healthcheck and by every page render, so constant volume carrying no
-information), `/static/` (served from disk, no Lithos call), and `/tasks/events`
-(an SSE stream that lives as long as the browser tab — its span would stay open
-for hours and sit in every latency histogram, making p95 meaningless).
+information), `/static/` (served from disk, no Lithos call), and the two SSE
+streams `/tasks/events` and `/knowledge/events` (each lives as long as the
+browser tab — its span would stay open for hours and sit in every latency
+histogram, making p95 meaningless). The same two streams are the routes the
+concurrent-render cap does not meter: a parked tab is not a render, and the
+subscriber ceiling bounds them instead.
 
 Metrics are Prometheus-native (`lens_*_total`, `lens_*_seconds`), and follow
 Lens's failure modes rather than its routes:
@@ -3084,7 +3163,10 @@ Lens's failure modes rather than its routes:
 - **Event hub** — events published by type and delivered per subscriber; drops
   by reason (`no_task_id`, `oversized_frame`, `subscriber_queue_full`,
   `content_encoding_refused`, `subscriber_limit`); the current subscriber count
-  against its ceiling; and `lens_event_stream_up`.
+  against its ceiling (`lens_event_subscribers`, both streams) and the
+  knowledge stream's share of it (`lens_knowledge_event_subscribers`); and
+  `lens_event_stream_up`. The knowledge types count in
+  `lens_events_published_total` by type like every other.
 - **Admission control** — metered requests by outcome (`admitted` | `refused`).
 - **Curated writes** — `lens_writes_total` by `action` and `result` (`ok` |
   `conflict` | `rejected` | `unknown` | `refused_origin` | `no_operator`), one
@@ -3095,7 +3177,8 @@ Lens's failure modes rather than its routes:
   `refused` | `failed` | `stale`), `lens_knowledge_edge_table_age_seconds`
   (seconds since the last successful fetch), and
   `lens_knowledge_edge_table_patches_total` by `event_type` and `outcome`
-  (`inserted` | `replaced` | `refused` | `ignored`) (§5.7).
+  (`inserted` | `replaced` | `refused` | `ignored`) — one per live
+  `edge.upserted` (§5.7, §5.8).
 - **Knowledge graph page** — `lens.knowledge.graph.*` attributes on the
   `/knowledge/graph` request span: `mode` (`picker` | `focus` | `global`),
   `outcome`, `depth` (focus mode), `nodes`, `edges`, `hidden_by_weight`,
@@ -3127,7 +3210,8 @@ field. They can disagree — tool calls healthy while event delivery reconnects
 presents as a board that renders but never updates — so neither substitutes for
 the other.
 
-All three gauges (these two and `lens_event_subscribers`) are **observable**:
+All four gauges (these two, `lens_event_subscribers` and
+`lens_knowledge_event_subscribers`) are **observable**:
 the owning object registers a callback, and the SDK reads the authoritative
 state at every collection. They are not written at transitions. A synchronous
 gauge reports only a value set since the last collection, so one written at

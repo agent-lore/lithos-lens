@@ -47,6 +47,7 @@ graph TD
   Entrypoint --> Web
   Events --> Config
   Events --> Errors
+  Events --> Knowledge
   Events --> TaskGraph
   Events --> Telemetry
   Knowledge --> Tasks
@@ -91,23 +92,24 @@ graph TD
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
   linkStyle 14 stroke:#bbb
-  linkStyle 16 stroke:#bbb
+  linkStyle 15 stroke:#bbb
   linkStyle 17 stroke:#bbb
   linkStyle 18 stroke:#bbb
   linkStyle 19 stroke:#bbb
   linkStyle 20 stroke:#bbb
   linkStyle 21 stroke:#bbb
-  linkStyle 23 stroke:#bbb
-  linkStyle 25 stroke:#bbb
+  linkStyle 22 stroke:#bbb
+  linkStyle 24 stroke:#bbb
   linkStyle 26 stroke:#bbb
   linkStyle 27 stroke:#bbb
   linkStyle 28 stroke:#bbb
-  linkStyle 29 stroke:#999,stroke-dasharray:4
+  linkStyle 29 stroke:#bbb
   linkStyle 30 stroke:#999,stroke-dasharray:4
-  linkStyle 32 stroke:#999,stroke-dasharray:4
-  linkStyle 35 stroke:#999,stroke-dasharray:4
+  linkStyle 31 stroke:#999,stroke-dasharray:4
+  linkStyle 33 stroke:#999,stroke-dasharray:4
   linkStyle 36 stroke:#999,stroke-dasharray:4
   linkStyle 37 stroke:#999,stroke-dasharray:4
   linkStyle 38 stroke:#999,stroke-dasharray:4
-  linkStyle 39 stroke:#bbb
+  linkStyle 39 stroke:#999,stroke-dasharray:4
+  linkStyle 40 stroke:#bbb
 ```

@@ -59,12 +59,13 @@ INSTRUMENTATION_SCOPE = "lithos_lens"
 # * `/health` is polled by the container healthcheck AND by every page render
 #   (health.refresh_interval_s, default 30s). Tracing it is constant volume
 #   carrying no information.
-# * `/tasks/events` is an SSE stream that lives as long as the browser tab. Its
+# * `/tasks/events` (and `/knowledge/events`, its twin for the knowledge
+#   graph page) is an SSE stream that lives as long as the browser tab. Its
 #   span would stay open for hours and sit in every latency histogram, making
 #   p95 meaningless. The stream is measured with its own counters and a
 #   subscriber gauge instead.
 # * `/static/` is served from disk with no Lithos call.
-TRACE_EXCLUDED_URLS = "/health,/tasks/events,/static/"
+TRACE_EXCLUDED_URLS = "/health,/tasks/events,/knowledge/events,/static/"
 
 _initialized = False
 _tracer_provider: TracerProvider | None = None

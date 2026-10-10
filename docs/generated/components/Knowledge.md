@@ -168,6 +168,6 @@ Safe server-side markdown and the knowledge-note surface built on it: the note r
 ## Dependencies
 
 - Depends on: [Tasks](Tasks.md), [Telemetry](Telemetry.md)
-- Used by: [LithosClient](LithosClient.md), [State](State.md), [Web](Web.md)
+- Used by: [Events](Events.md), [LithosClient](LithosClient.md), [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)

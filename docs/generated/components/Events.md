@@ -3,7 +3,7 @@
 
 # Events
 
-Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub).
+Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventHub): the task, system and knowledge scopes, the two browser streams each subscriber queue is on, and the caches patched before each fan-out (the task graph's edge cache, and the knowledge graph's edge-table snapshot and note facts).
 
 **Tier:** Core
 
@@ -11,12 +11,14 @@ Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventH
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos_lens.events` | L | 3 | 5 |
+| `lithos_lens.events` | L | 3 | 7 |
 
 ## Public API
 
 ### `lithos_lens.events`
 - def `metric_event_type` — ``event_type`` if it is one Lens recognizes, else ``other``.
+- def `event_scope` — The scope of ``event_type``; ``lens.refresh`` counts as system.
+- def `reaches` — Whether a frame of ``event_type`` is delivered on ``stream``. Only `lens.refresh` is on both: Lens missed events, of a scope it cannot know.
 - def `wire_safe` — `value` reduced to something that cannot break out of its SSE frame line.
 - def `is_replay_cursor` — Whether `value` is safe to send back upstream as a `Last-Event-ID` header.
 - class `RateLimitedWarning` — WARNING emitter for one condition whose rate Lens does not choose.
@@ -27,7 +29,7 @@ Shared Lithos event subscription and browser fan-out over SSE (LensEvent, EventH
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Errors](Errors.md), [TaskGraph](TaskGraph.md), [Telemetry](Telemetry.md)
+- Depends on: [Config](Config.md), [Errors](Errors.md), [Knowledge](Knowledge.md), [TaskGraph](TaskGraph.md), [Telemetry](Telemetry.md)
 - Used by: [LithosClient](LithosClient.md), [State](State.md), [Web](Web.md)
 
 [← all generated docs](../README.md)
