@@ -518,6 +518,38 @@ test("Back onto the same address drops an abandoned request's HX-Redirect", asyn
   ]);
 });
 
+test("a text link's panel, once swapped in, is the selection the canvas lights", async ({
+  page,
+}) => {
+  // The reviewer's sequence (converge f-002): a node selected, then a text
+  // edge link — the edge panel, the URL and the picture all move to the edge.
+  await page.goto(`/knowledge/graph?focus=${PLAN}&selected=${CAPACITY}`);
+  await canvasReady(page);
+  await nodePanel(page, CAPACITY);
+
+  await textEdge(page, RESOLVED).click();
+  await expect(
+    page.locator(`#kgraph-panel [data-kgraph-panel="edge"][data-kgraph-panel-id="${RESOLVED}"]`),
+  ).toBeVisible();
+  await expect.poll(() => query(page)).toEqual({ focus: PLAN, edge: RESOLVED });
+  const lighting = () =>
+    page.evaluate(() => {
+      const cy = (window as any).LithosLensKnowledgeGraph.cy;
+      const pids = (selector: string) =>
+        cy.elements(selector).map((e: any) => e.data("pid")).sort();
+      return { picked: pids(".picked"), dimmed: pids(".dimmed") };
+    });
+  await expect.poll(async () => (await lighting()).picked).toEqual([RESOLVED]);
+  expect((await lighting()).dimmed).not.toContain(RESOLVED);
+
+  // …and back onto the canvas: a click lights and opens its own selection
+  // (pinning the edge it was opened from, as the text's node links do).
+  await clickNode(page, ROLLBACK);
+  await nodePanel(page, ROLLBACK);
+  expect(query(page)).toEqual({ focus: PLAN, selected: ROLLBACK, pin: RESOLVED });
+  expect((await lighting()).picked).toEqual([ROLLBACK]);
+});
+
 test("the canvas lights the selection the server reads from a repeated or blank key", async ({
   page,
 }) => {

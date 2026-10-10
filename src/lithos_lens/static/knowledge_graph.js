@@ -284,6 +284,8 @@
   //   or one still in flight when the page is left, pushes nothing.
   // - Re-selecting what is already shown pushes nothing: no two entries of
   //   this page carry one URL.
+  // - Once that swap lands the canvas lights the URL's selection, so the
+  //   picture follows a text link or a panel's link as it follows a click.
   // - Any Back or Forward first ABANDONS the panel request in flight,
   //   whatever entry it lands on: the request itself is aborted, and should
   //   its response land anyway htmx is stopped before it reads it
@@ -344,6 +346,7 @@
       window.history.pushState({ kgraph: true }, "", page);
     }
     shownHref = window.location.href;
+    lightFromUrl();
   }
 
   function dropAbandoned(event) {

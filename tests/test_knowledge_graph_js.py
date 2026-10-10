@@ -1294,6 +1294,99 @@ def test_the_url_selection_lights_on_load_and_a_background_tap_clears_it(
     assert cleared["pushes"] == [] and cleared["reloads"] == []
 
 
+@pytest.mark.parametrize(
+    ("start", "actions", "picked"),
+    [
+        # The reviewer's sequence: a node selected, then a text edge link.
+        (f"&selected={CAPACITY}", [f"text-click:{TEXT_RESOLVED}", "swap"], RESOLVED),
+        # Canvas, then text, then canvas again: each swap's selection lights.
+        (
+            "",
+            [
+                f"tap-node:{CAPACITY}",
+                "swap",
+                f"text-click:{TEXT_RESOLVED}",
+                "swap",
+            ],
+            RESOLVED,
+        ),
+        (
+            "",
+            [
+                f"text-click:{TEXT_RESOLVED}",
+                "swap",
+                f"tap-node:{ROLLBACK}",
+                "swap",
+            ],
+            ROLLBACK,
+        ),
+        # A later canvas click wins over a text link in flight, and the text
+        # link's late fragment relights nothing.
+        (
+            "",
+            [f"text-click:{TEXT_RESOLVED}", f"tap-node:{ROLLBACK}", "swap:1", "swap:0"],
+            ROLLBACK,
+        ),
+        # A later text link wins over a canvas click in flight.
+        (
+            "",
+            [f"tap-node:{CAPACITY}", f"text-click:{TEXT_RESOLVED}", "swap:1", "swap:0"],
+            RESOLVED,
+        ),
+        # Until its fragment lands (or if the server redirects it), a text
+        # link leaves the picture on the panel still shown.
+        (f"&selected={CAPACITY}", [f"text-click:{TEXT_RESOLVED}"], CAPACITY),
+        (
+            f"&selected={CAPACITY}",
+            [f"text-click:{TEXT_RESOLVED}", "redirect"],
+            CAPACITY,
+        ),
+    ],
+    ids=[
+        "node-then-text",
+        "canvas-text",
+        "text-canvas",
+        "text-then-canvas-race",
+        "canvas-then-text-race",
+        "text-in-flight",
+        "text-redirected",
+    ],
+)
+def test_the_canvas_lights_the_selection_whose_panel_was_swapped_in(
+    lithos_lens_config_env: Path, start: str, actions: list[str], picked: str
+) -> None:
+    """Whichever link opened the panel — a canvas click, a text link, a
+    panel's own link — the canvas lights the selection of the URL that panel
+    committed, so the picture, the panel and the address agree."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{ROUTE}?focus={PLAN}{start}")
+    result = _run(page, actions)
+    edges = page.payload["edges"]
+    every = {n["id"] for n in page.payload["nodes"]} | {e["id"] for e in edges}
+    if picked.startswith("edge_"):
+        edge = next(e for e in edges if e["id"] == picked)
+        expected = {picked, edge["from"], edge["to"]}
+        marker = f"edge={picked}"
+    else:
+        at = [e for e in edges if picked in (e["from"], e["to"])]
+        expected = (
+            {picked}
+            | {e["id"] for e in at}
+            | {x for e in at for x in (e["from"], e["to"])}
+        )
+        marker = f"selected={picked}"
+
+    assert result["picked"] == [picked]
+    assert set(result["lit"]) == expected
+    assert set(result["dimmed"]) == every - expected
+    # …the selection the address names, and the fragment it was pushed with
+    # (the harness lands a stale response a real `hx-sync` would abort).
+    assert marker in result["href"]
+    if result["pushes"]:
+        assert marker in result["pushes"][-1]["panel"]
+    assert result["reloads"] == [] and result["assigns"] == []
+
+
 def test_search_highlights_the_titles_it_matches_and_clears(
     lithos_lens_config_env: Path,
 ) -> None:
