@@ -299,6 +299,10 @@ class EdgeTable:
         # in, and one that began before an expiry is never taken as fresh.
         self._generation = 0
         self._inflight_generation = 0
+        # Every `edge.upserted` received while a fetch is out. The fetch may
+        # have read the rows before the write, so its answer is installed
+        # with these replayed over it — never in place of them.
+        self._overtaking: list[Mapping[str, Any]] = []
         #: Unfiltered fetches issued upstream (single-flight collapses the rest).
         self.fetches = 0
         metrics.register_knowledge_edge_table_age(self.age_seconds)
@@ -326,6 +330,7 @@ class EdgeTable:
                 return state
             if self._inflight is None:
                 self._inflight_generation = self._generation
+                self._overtaking = []
                 self._inflight = asyncio.create_task(
                     self._load(self._generation), name="knowledge-edge-table"
                 )
@@ -391,6 +396,10 @@ class EdgeTable:
                     state = EdgeTableSnapshot(rows=rows, as_of=self._clock())
                     outcome = "ok"
                 self._state = state
+                overtaking, self._overtaking = self._overtaking, []
+                for payload in overtaking:
+                    self._patch(payload)
+                state = self._state
                 self._fetched_tick = self._ticks()
                 if generation == self._generation:
                     self._expires_at = self._fetched_tick + self._ttl_s
@@ -412,8 +421,11 @@ class EdgeTable:
         :class:`EdgeTableRefusal` is held until the current TTL expires. A
         no-op (``False``) with no snapshot held, with the table refused, or
         for a payload missing an identity field. A patch landing while a fetch
-        is in flight may be overwritten by it; the TTL is the stated bound.
+        is in flight is kept and replayed over that fetch's rows, which may
+        predate the write — first read included, when nothing is held yet.
         """
+        if self._inflight is not None:
+            self._overtaking.append(payload)
         outcome = self._patch(payload)
         metrics.knowledge_edge_table_patches().add(
             1, {"event_type": EDGE_UPSERTED, "outcome": outcome}

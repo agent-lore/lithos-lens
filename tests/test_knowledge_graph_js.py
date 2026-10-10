@@ -2198,21 +2198,22 @@ def test_a_missed_frame_raises_the_pill_and_a_first_open_does_not(
 def test_an_overflow_dropping_the_only_frame_naming_the_graph_raises_the_pill(
     focus_page: Page,
 ) -> None:
-    """One upstream chunk outruns the page's queue: 100 updates to notes it
-    never drew, then one to its focus. The hub's fan-out drops that last
-    frame, so what reaches the page — read off the real parser and hub —
-    must still raise the pill."""
+    """One upstream chunk outruns the page's 100-entry queue twice: updates
+    to notes it never drew, with its focus's update the 201st frame — the
+    one the second overflow drops. What reaches the page — read off the real
+    parser and hub — must still raise the pill."""
     hub = EventHub(EventsConfig(enabled=False), LithosConfig())
     queue = hub.subscribe(stream="knowledge")
 
     async def flood() -> None:
-        for index in range(100):
-            await hub.publish(_upstream("note.updated", id=f"{UNDRAWN}-{index}"))
-        await hub.publish(_upstream("note.updated", id=PLAN))
+        for index in range(250):
+            note = PLAN if index == 200 else f"{UNDRAWN}-{index}"
+            await hub.publish(_upstream("note.updated", id=note))
 
     asyncio.run(flood())
     delivered = [queue.get_nowait() for _ in range(queue.qsize())]
     assert PLAN not in {event.payload.get("id") for event in delivered}
+    assert [event.type for event in delivered].count("lens.refresh") == 1
     actions = [
         f"raw-frame:{event.type}:{event.as_sse().split('data: ', 1)[1].strip()}"
         for event in delivered

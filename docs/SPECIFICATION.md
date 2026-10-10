@@ -1904,7 +1904,10 @@ The knowledge caches the hub patches (§5.7):
 - `edge.upserted` → the edge-table snapshot: matched by `edge_id`, an
   existing row takes the payload's endpoints, type, namespace and conflict
   state; a new row is inserted with weight, provenance and evidence unknown.
-  Either is `partial` until the next full fetch, and so drawn faint.
+  Either is `partial` until the next full fetch, and so drawn faint. A
+  patch landing while a fetch is out is kept and replayed over that fetch's
+  rows before they are installed: the fetch may have read the table before
+  the write, and a reload joining it must still draw the edge.
 - `note.created` / `note.updated` → the note facts cache: a cached note's
   title is patched and its other facts marked stale, so the next draw
   re-reads it once (under the gate and the cap). `note.deleted` marks the

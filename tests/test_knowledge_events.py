@@ -133,7 +133,7 @@ async def test_an_overflowing_queue_is_told_to_refresh_whatever_it_dropped(
 ) -> None:
     """A dropped frame leaves the browser's connection healthy, so nothing
     but the hub can tell it what it missed. One chunk of 100 frames naming
-    nothing drawn, then the one that does — with a consumer waiting the
+    nothing drawn, then more, overflowing twice — with a consumer waiting the
     whole time: the chunk is published without yielding to it."""
     hub = _hub()
     queue = hub.subscribe(stream=stream)
@@ -148,18 +148,21 @@ async def test_an_overflowing_queue_is_told_to_refresh_whatever_it_dropped(
     kind, key = (
         ("note.updated", "id") if stream == "knowledge" else ("task.updated", "task_id")
     )
-    for index in range(101):
+    # 250 frames into a 100-entry queue overflow it twice — at frame 100 and
+    # again at 200, when the first overflow's refresh is queued ahead of 99
+    # frames: what survives is one refresh and the 49 frames after it.
+    for index in range(250):
         await hub.publish(_frame(kind, {key: f"other-{index}"}, f"evt-{index}"))
-    for index in range(3):  # overflowing again coalesces into the one refresh
-        await hub.publish(_frame(kind, {key: f"later-{index}"}, f"late-{index}"))
     await asyncio.sleep(0)
     consumer.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await consumer
 
-    assert [event.type for event in received] == [LENS_REFRESH_EVENT, kind, kind, kind]
+    types = [event.type for event in received]
+    assert types == [LENS_REFRESH_EVENT] + [kind] * 49
     assert received[0].payload == {"reason": "overflow"}
-    assert received[0].id.startswith(f"{LENS_REFRESH_EVENT}:")
+    assert received[0].id == f"{LENS_REFRESH_EVENT}:overflow:2"
+    assert [event.id for event in received[1:]] == [f"evt-{i}" for i in range(201, 250)]
 
 
 @pytest.mark.anyio
@@ -409,6 +412,56 @@ async def test_a_refresh_during_an_edge_fetch_still_has_the_next_read_refetch() 
     ]
     assert again is redraw
     assert fetches == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("held", [True, False])
+async def test_a_live_edge_upserted_survives_a_fetch_that_began_before_it(
+    held: bool,
+) -> None:
+    """Another tab's fetch captured the rows before an agent wrote the edge;
+    the event lands while that fetch is out, and the pill's reload joins it.
+    What the fetch installs must still carry the patch — the new edge
+    inserted partial, the existing one's conflict state — whether a snapshot
+    was held before (an expired TTL) or not (the first read)."""
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def fetch(_type: str | None, _namespace: str | None) -> Any:
+        nonlocal calls
+        calls += 1
+        rows = [_row("edge_old00000001")]  # captured before the event
+        if calls == (2 if held else 1):
+            started.set()
+            await release.wait()
+        return rows
+
+    now = [0.0]
+    table = EdgeTable(fetch, ttl_s=300.0, ticks=lambda: now[0])
+    if held:
+        await table.read()
+        now[0] = 301.0  # the held snapshot's TTL has run out
+    hub = _hub()
+    hub.edge_table = table
+    render = asyncio.create_task(table.read())  # the other tab's draw
+    await asyncio.wait_for(started.wait(), timeout=2)
+    new = {**KNOWLEDGE_FRAMES["edge.upserted"], "edge_id": "edge_new00000001"}
+    old = {**new, "edge_id": "edge_old00000001", "conflict_state": "contested"}
+    await hub.publish(_frame("edge.upserted", new, "evt-new"))
+    await hub.publish(_frame("edge.upserted", old, "evt-old"))
+    reload = asyncio.create_task(table.read())  # the pill's reload joins it
+    await asyncio.sleep(0)
+    release.set()
+    await render
+
+    for snapshot in (await reload, await table.read()):
+        assert isinstance(snapshot, EdgeTableSnapshot) and not snapshot.stale
+        rows = {row.edge_id: row for row in snapshot.rows}
+        assert sorted(rows) == ["edge_new00000001", "edge_old00000001"]
+        assert rows["edge_new00000001"].partial
+        assert rows["edge_old00000001"].conflict_state == "contested"
+        assert rows["edge_old00000001"].partial
+    assert calls == (2 if held else 1)
 
 
 @pytest.mark.anyio

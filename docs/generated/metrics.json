@@ -264,10 +264,10 @@
         "functions": 209,
         "largest_module": "lithos_lens.knowledge",
         "largest_module_lines": 799,
-        "lines": 4642,
+        "lines": 4654,
         "modules": 13,
         "public_symbols": 112,
-        "sloc": 3643
+        "sloc": 3652
       },
       "LithosClient": {
         "classes": 17,
@@ -359,13 +359,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 36433,
+    "total_lines": 36445,
     "total_modules": 88,
-    "total_sloc": 28345
+    "total_sloc": 28354
   },
   "tests": {
     "ratio": 2.02,
-    "src_lines": 36433,
-    "test_lines": 73515
+    "src_lines": 36445,
+    "test_lines": 73569
   }
 }
