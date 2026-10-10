@@ -1250,7 +1250,9 @@ Interactive visualisation of the knowledge base as a typed, weighted graph, with
 
 ### 8.4 Interactions
 
-- Click a node → **node panel** (title, chips, lede, degree in view, relations in view by type, "open note", **Centre on this** → `?focus=<id>` keeping depth and filters); double-click → `/note/{id}`.
+- Click a node → **node panel** (title, chips, lede, degree in view, relations in view by type, "open note", **Centre on this** → `?focus=<id>` keeping depth and filters, dropping expansions).
+- **Expand in place** (focus mode; amended 2026-10-10, K2 D16): double-click a node, or **Show its neighbours** in its panel, adds every typed edge of that note the filters show, and their far endpoints, beside it — nothing already drawn moves. The expansions ride in the URL (`expand=`, repeatable, in order) so a reload or a shared link redraws the same picture; **Collapse** on an expanded note removes it and the expansions it led to; Back undoes the last. A note with neighbours not yet drawn shows how many ("+N"). An expansion that would pass the node cap is refused on its own with its count; the rest of the view stays. The text baseline lists every edge an expansion drew.
+- **Full-page canvas** (amended 2026-10-10, K2 D17): `canvas=full` fills the window below the header with the toolbar, key and panel (a drawer, or a bottom sheet on a narrow screen) over the canvas; the text baseline follows below it. There is still no unscoped render (§8.1): general browsing is a focus or scope, then expansion.
 - Click an edge → **edge panel**: the relation sentence with direction, type, weight, namespace, provenance actor and type, timestamps, and the stored **evidence** — for an inferred edge the `rationale` paragraph with `model` and `confidence` chips; otherwise escaped text or "no rationale recorded" — then both endpoints as cards. For `contradicts` the conflict state leads and the two cards sit **side by side**: the two-pane read §11 needs, present before its write is. Resolving is not a K2 action (§11, deferred pool); the panel reserves the place for it.
 - Search within the drawn graph; focus/dim; depth control showing each depth's would-be node count before it is requested.
 - Filters: edge type (scoped mode), namespace, minimum weight, provenance. Tag and date filters are **not** offered: edges carry neither, and filtering nodes on them would need the per-node read the cap bounds.
@@ -1262,7 +1264,7 @@ The hub consumes `note.created`, `note.updated`, `note.deleted`, `note.renamed` 
 
 ### 8.6 Caps and degradation
 
-A scope over `[knowledge].graph_focus_max_nodes` (250) or `[knowledge].graph_global_max_nodes` (500) is **refused** with its count and the filters or depth that would bring it under — never rendered degraded or truncated silently. Filters apply before the cap so that hiding faint edges is a way under it. A failed `lithos_related` costs the wiki-link and provenance layers with an inline note; a title fan-out that reaches its cap or fails leaves nodes labelled by id and says so; an unavailable snapshot renders the page's refusal and the note page's conflict banner is simply absent.
+A scope over `[knowledge].graph_focus_max_nodes` (250) or `[knowledge].graph_global_max_nodes` (500) — a focus view's expansions included, each refused on its own (§8.4) — is **refused** with its count and the filters or depth that would bring it under — never rendered degraded or truncated silently. Filters apply before the cap so that hiding faint edges is a way under it. A failed `lithos_related` costs the wiki-link and provenance layers with an inline note; a title fan-out that reaches its cap or fails leaves nodes labelled by id and says so; an unavailable snapshot renders the page's refusal and the note page's conflict banner is simply absent.
 
 ---
 
