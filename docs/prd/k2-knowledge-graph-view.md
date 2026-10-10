@@ -27,9 +27,15 @@ upstream: []   # nothing gates a slice; four asks are recorded in the ledger
 > 24–31 and slices S8–S10. It changes three earlier things, each named where
 > it happens: D10's node panel gains Show its neighbours / Collapse; the S4
 > canvas's rules that every control navigates and that the layout runs once
-> give way, for expansion only, to "nothing already drawn moves"; and
+> give way, for expansion/collapse and the full-page toggle, to "surviving
+> nodes keep their positions"; and
 > REQUIREMENTS §8.4's double-click → note page (never built) becomes
 > double-click → expand.
+
+> **Review refinement, 2026-10-10:** D16/D17 distinguish a stable live
+> layout from deterministic fresh loads, preserve the existing typed-node
+> cap, and define freshness, request ordering and presentation-only state.
+> These refinements stay within S8–S10.
 
 ## Problem Statement
 
@@ -219,8 +225,9 @@ redesign.
 
 ### Exploring in place (amendment, 2026-10-10)
 
-24. As a reader walking the graph, I want to **expand** a note — double-click
-    it, or "Show its neighbours" in its panel — so that its neighbours join
+24. As a reader walking the graph, I want to **expand** a note through
+    "Show its neighbours" in its panel, or double-click as a shortcut,
+    so that its neighbours join
     the picture beside it and I keep my place, instead of "Centre on this"
     starting a new picture around it.
 25. As a reader, I want a note with neighbours not yet drawn to say **how
@@ -234,7 +241,8 @@ redesign.
     **refused on its own**, with its count, so that one large hub does not
     cost me the view I have built.
 29. As a reader, I want the **URL to carry my expansions**, so that a reload
-    or a shared link draws the same picture.
+    or a shared link restores the exploration against the available data.
+    Positions are stable while I explore; a fresh load may arrange it anew.
 30. As a reader browsing, I want the canvas to **fill the window**, with the
     toolbar and the panel over it, so that a large neighbourhood is readable
     without squinting into a box above a page of text.
@@ -561,7 +569,9 @@ again around a new focus, so every step loses the picture built so far.
 The data makes walking cheap. The snapshot indexes edges by endpoint
 (`edges_of`), the degree median is 4 and p90 is 9, and the facts cache
 already titles most drawn notes. So an expansion is a lookup plus a few
-cached reads, not a new Lithos query.
+facts reads on warm caches. It needs no new upstream tool. A page assembly
+still reads `related(focus)`, and expired edge/facts caches can cause reads;
+this is not a promise of zero upstream calls.
 
 **Meaning.** `?focus=<id>&expand=<id>&expand=<id>…` (focus mode only).
 An **expanded** note has every typed edge the filters show drawn, as the
@@ -571,36 +581,59 @@ is the focus, is within `depth`, **or is expanded**. Edges between two
 drawn notes that are neither in depth nor expanded stay undrawn. That rule
 is what gives "+N" and "expanded" a meaning. Expansion does not extend the
 wiki-link and provenance layers: they stay the focus's, one hop (D3).
-Expansion therefore costs no Lithos call except the facts reads for the
-notes it adds (cached, under the per-render fan-out cap).
+Any visible note, including one visible only through a focus wiki-link or
+provenance pair, can expand its **typed** edges. This does not fetch that
+note's own wiki-link/provenance neighbourhood.
 
 **Order, reach and cap.** The parser drops duplicate `expand=` values and
-the focus itself. Expansions apply in URL order, after the depth BFS.
+the focus itself. First assemble and cap the typed depth BFS; a refused
+base still returns before any related or facts read. Otherwise load the
+focus's one-hop layers, then apply expansions in URL order against that
+combined visible set. Resolve typed-node facts after expansion under the
+existing per-render cap.
 
+- **Two counts.** Preserve the shipped cap: the focus plus the distinct
+  endpoints of drawn typed edges count; layer-only notes do not. Visual
+  additions count notes absent from the combined visible set. Promoting
+  an already visible layer-only note to a typed endpoint adds to the cap
+  count without adding a visible note. Both the panel and canvas use the
+  server's eligibility calculation, never `nodes.length + undrawn_nodes`.
 - **Unreached.** An expansion whose note is not drawn when its turn comes
   is not applied. This happens when a filter change or a collapse has left
   the note out of the view. It is listed under "Not shown" with a link
   that removes it.
 - **Refused.** An expansion that would take the view over
-  `graph_focus_max_nodes` is refused **on its own**: "expanding *B* would
-  draw 41 more notes — 263, over the 250 cap". The rest of the view is
-  drawn. The refusal sits under "Not shown" with links to remove the
-  expansion or raise the minimum weight. Later expansions are still tried
-  and are refused separately if they also do not fit.
+  `graph_focus_max_nodes` is refused **on its own**, adding no edges or
+  nodes: "expanding *B* would add 41 visible notes; 263 notes would count
+  towards the 250 cap". The rest of the view is drawn. The refusal sits
+  under "Not shown" with links to remove the
+  expansion or raise the minimum weight when a computed remedy fits and
+  still reaches the expansion. Otherwise say no weight remedy fits.
+  Later expansions are still tried and refused separately if they do not fit.
 - **Base view over the cap.** A base view (focus and depth) over the cap is
   refused as in D3, and expansions do not change that.
 
-No new configuration knob.
+The existing `edge=` / `pin=` filter exemptions still apply and count
+towards the cap. No new configuration knob.
 
 **Payload.** Each node gains `undrawn_nodes` and `undrawn_edges`: the
-notes and the filtered typed edges that expanding it would add. Both are 0
-for the focus and for an expanded note. Each node also gains `expanded`
+newly visible notes and the filtered typed edges that expanding it would
+add to the current final view. Both are 0 for the focus and for an expanded
+note. Each node also gains `expanded`
 (bool) and `via`: the expansion that first drew it, or null for the base
-view. A note added by an expansion has `hop = hop(via) + 1`, so the read
-order and anything else keyed on hop keep working. The payload gains
+view (including layer-only notes, even after promotion). A note added by
+an expansion has `hop = hop(via) + 1`, so the read order and anything else
+keyed on hop keep working. The payload gains
 `expansions`, the URL's list in order, each entry
-`{id, state: applied|unreached|refused, added_nodes, added_edges}`, plus
-the would-be count when refused.
+`{id, state: applied|unreached|refused, added_nodes, added_edges}`, whose
+addition counts describe that step; unapplied steps add zero. Refused
+entries also carry `would_count`, the resulting typed-node cap count.
+Each focus-mode node carries `expansion: {state, would_count, cap}`,
+where `state` is `available|focus|expanded|complete|over_cap`; `would_count`
+is the candidate typed-node count, or the current count when no expansion
+is needed. Outside focus mode `expansion` is null. An edge-only expansion
+is available when it fits. These are Lens payload fields, not new Lithos
+tool fields. The same server calculation supplies the panel's reason.
 
 **Text baseline (D12).** The scope line names the applied expansions
 ("around *A*, depth 1, expanded: *B*, *D*"), each with a remove link. An
@@ -610,22 +643,40 @@ shown" lists the unreached and refused expansions.
 
 **Node panel (amends D10).**
 
-- **Show its neighbours.** "Show its neighbours — adds N notes and M
-  edges" (or "adds M edges between notes already drawn" when N is 0). It is
+- **Show its neighbours** is the primary, keyboard- and touch-accessible
+  action; double-click is a shortcut. "Show its neighbours — adds N notes
+  and M edges" (or "adds M edges between notes already drawn" when N is 0). It is
   a plain link to this URL with the note appended to `expand=` and
   `selected=` kept on it, so it works without JavaScript. When the
-  expansion cannot be offered, the panel says why instead: "would draw N
-  more notes, over the 250 cap", or "all its edges are drawn".
+  expansion cannot be offered, the panel distinguishes the resulting cap
+  count from visible additions, or says "all its edges are drawn".
 - **Collapse** on an expanded note. It removes that expansion and, with
   it, every later expansion of a note that this one first drew (`via`,
-  transitively). A collapse therefore never leaves an unreached expansion
-  behind.
+  transitively). This undoes a branch of exploration, even if another
+  branch still reaches one of those notes. It removes expansion requests,
+  not shared notes unconditionally: rebuilding the remaining requests
+  keeps any notes and edges still supplied by the base or another branch.
+  Before activation, show the dependent expansion count and names beside
+  the link; do not add a confirmation dialog. Scope-line remove links use
+  the same rule. Previously unreached requests stay removable; freshness
+  changes may create new ones. Clear a selection/pin whose target is no
+  longer drawn. A preview is relative to the displayed view.
 - **The focus** has neither.
 - **Centre on this** still starts afresh, and it drops `expand=`.
 
 **Canvas.** This changes the rules S4 shipped (`knowledge_graph.js`
-header), for expansion only. Every other control still navigates, and the
-base layout still runs once per page load.
+header), for expansion/collapse and D17's presentation toggle. Filter,
+depth and colour controls still navigate.
+
+**Freshness.** Expansion and collapse explicitly reassemble the whole view
+from the latest available edge snapshot, focus layers and cached/re-read
+facts. They may therefore update or remove unrelated elements too. Commit
+the returned text, canvas, legends/counts and panel as one view; do not
+retain obsolete elements to make the change look expansion-only. Existing
+partial-data notices still apply. A whole-view refusal or unavailable
+response leaves the current view and URL intact with a reason and a link
+to load the requested URL normally. A per-expansion refusal is a valid
+view and can commit. No pinned historical snapshot or saved layout is added.
 
 - **Trigger.** Double-clicking a node expands it. The first click of the
   pair selects the node, as a single click does, so the panel shows the
@@ -638,35 +689,66 @@ base layout still runs once per page load.
 - **In place, not a reload.** The script fetches the new view from the same
   route, with the same query plus the change. It swaps in the text
   baseline, the payload and the panel host's render id, and applies the
-  difference to the canvas: new nodes and edges added, collapsed ones
-  removed. It pushes the URL only once the swap has landed, as the panel
-  does. **Nothing already drawn moves.** Node sizes follow the new degrees
-  in view, because a hub growing is information. A failed fetch leaves the
-  canvas, the text and the URL as they were and says so inline.
-- **Before fetching.** The canvas does not request an expansion that the
-  payload's `undrawn_nodes` already shows would be refused. It says why
-  instead.
+  difference by persistent note/edge identity, not array position: add,
+  update and remove elements, and update search, selection and controls.
+  It pushes the URL only once the swap has landed, as the panel
+  does. **Every surviving node keeps its model position.** Node sizes follow
+  the new degrees in view, because a hub growing is information. A failed fetch leaves the
+  canvas, the text and the URL as they were and says so inline. Validate
+  the response before changing the displayed view.
+- **Request ordering.** Only one expansion/collapse is in flight. While
+  busy, disable graph-changing, panel and full-page actions rather than
+  queueing stale URLs; pan, zoom and text reading remain available. Abort
+  and retire an older panel request when expansion starts. Back/Forward
+  abandons all pending requests before the existing reload behavior; a
+  late response cannot swap, redirect or push history. Re-enable actions
+  after failure. Construct the expanded selection from the clicked note,
+  without waiting for the first tap's panel request to push its URL.
+- **Before fetching.** Use the server's `expansion.state` and reason. A
+  known over-cap expansion sends no request; offer refresh to reconsider
+  stale eligibility. The server rechecks on every actual request.
 - **Placement.**
   - An expansion's new notes go around the note expanded, on the side
     facing away from the drawn graph's centre, at the base layout's spacing
     and clear of existing notes and their titles.
-  - Placement is **deterministic**. A page load runs the base layout, then
-    replays each applied expansion's placement in URL order. So a reload, a
-    Back (which reloads, as today) or a shared link draws the same picture
-    at the same canvas size.
-  - Colour slots (the namespace and note-type palette) replay the same way.
-    The base view's values take slots by frequency, as today. A value an
-    expansion introduces takes the next free slot, so no expansion
-    recolours a note already drawn.
+    Freshness-only additions use their `via` anchor, or the focus for new
+    base notes, with the same stable placement rule.
+  - **Fresh loads are deterministic** for identical graph/facts data,
+    URL, fonts and canvas size: lay out base notes (`via == null`), then
+    place expansions in URL order with stable ID ordering within a step.
+    This is not an exact replay of the live interaction history. Collapse,
+    resizing, degree changes and refreshed facts can make a fresh load
+    differ from the live picture. Back restores URL state by reloading,
+    not saved coordinates. Stable live positions take precedence.
+  - Base namespace/type values take colour slots by frequency, as today.
+    New values take unused slots in expansion order, ties by value; retain
+    their assignments through collapse for the page's lifetime. Once the
+    palette is exhausted, use the existing neutral fallback. Surviving
+    notes with unchanged colour values keep their colour; refreshed
+    namespace/type facts may correctly change it. Fresh loads assign
+    slots deterministically but need not reproduce slots retained after
+    a collapse.
+  - Collision placement reserves the maximum supported node size and the
+    measured title bounds for new notes. Degree resizing must not force
+    old nodes to move. Refreshed, longer titles may introduce collisions;
+    resolving every such collision without a new layout is not promised.
 - **Viewport.** If an expansion's new notes are not all in view, the
   canvas pans to show the expanded note and its new neighbours. It zooms
   out only as far as the readable minimum, and the pan hint covers the
-  rest. The pan is animated unless `prefers-reduced-motion`.
+  rest. Use the usable area left by any D17 overlays. The pan is animated
+  unless `prefers-reduced-motion`.
 - **The "+N" mark.** A note with `undrawn_nodes > 0` shows that count on
-  the node itself, not only in its panel, and the key explains it. Search,
+  the node itself, not only in its panel, and the key explains it counts
+  new visible notes. A separate mark identifies edge-only expansion
+  (`undrawn_nodes == 0`, `undrawn_edges > 0`); its key and panel explain
+  that it adds relations between visible notes. Search,
   lit/dimmed and the colour modes treat expanded notes like any other.
 - **Events (S7).** The "graph changed — refresh" pill watches the current
-  payload's drawn set, so it follows each swap.
+  payload's drawn set, so it follows each swap. Keep a conservative dirty
+  flag for any knowledge event or reconnect during the request; a swap
+  must not clear that flag, even if the event named a previously undrawn
+  node. A successful fresh response may clear an older pill only if no
+  such event arrived during the request; stale responses keep it visible.
 
 **Not in D16:**
 
@@ -698,15 +780,33 @@ started full stays full. It applies to focus and scoped global views alike.
 - **Panel.** It opens as a drawer over the canvas's right side at 768px and
   wider (fixed width, its own scroll, a close control, Esc closes), and as
   a bottom sheet below 768px. It uses the same partial, host and fragments
-  as D10; only its placement differs. Closing it clears `selected=` /
-  `edge=` as before.
+  as D10. Closing it clears `selected=` / `edge=`, retaining an existing
+  filter exemption as `pin=` when necessary to keep the drawing unchanged.
+  Focus enters the panel on an explicit open and returns to its invoking
+  control on close (or a canvas control if that element was replaced).
+  Esc closes the panel, not full-page mode.
 - **Text.** The text baseline is still the page, below the canvas. The
   toolbar's "Text view" link jumps to it, and the page scrollbar still
   reaches it. Wheel over the canvas zooms, as it does inline.
 - **Toggle.** "Full page" / "Exit full page" in the toolbar switches in
   place: class, `pushState`, `cy.resize()`, fit. No server state changes,
   and laid-out positions are kept. A load of a `canvas=full` URL lays out
-  for the full-size canvas.
+  for the full-size canvas and need not match pre-toggle coordinates.
+  Update existing graph navigation URLs, form state and HTMX request/push
+  URLs as well as browser history, so subsequent controls keep the mode.
+  Retire any pending panel request before toggling; panel opening during
+  an expansion follows D16's busy rule.
+- **View identity.** `canvas` is presentation-only: exclude it from the
+  rendered-view scope key (`RenderedViews` / `_scope`). A toggle keeps
+  the render ID valid; the next panel click must use that same view without
+  a reload or upstream read. `expand=` does affect graph identity. Each
+  expansion swap updates every panel link's render ID, not only the host.
+- **Usable viewport.** Fit and pan account for the toolbar, key and open
+  drawer/bottom sheet. Keep the selected/expanded note in the unobscured
+  area without moving model coordinates. Never fit below
+  `MIN_READABLE_ZOOM`; show the pan hint if everything cannot fit. Respect
+  reduced motion. Drawer scrolling must not zoom the canvas, and Text view
+  must remain keyboard accessible. Test below 768px as well as at it.
 - **Without JavaScript.** `canvas=full` changes nothing visible, because
   the canvas is hidden and the text is the page.
 
@@ -831,25 +931,62 @@ reverted**; the architecture budgets hold; no coverage percentage.
   applies; `undrawn_nodes`/`undrawn_edges` are right for the focus (0), a
   depth neighbour, and an expanded note (0); `via` and `hop` are set; the
   collapse URL removes the expansion and its transitive dependants.
+  Include overlapping branches (a shared note survives while its dependent
+  expansion is removed), edge-only additions, layer-only roots and their
+  promotion to typed endpoints. Assert visual additions separately from
+  cap counts and server eligibility at the cap boundary; a refused step
+  changes neither set. Preserve `edge=` / `pin=` exemptions. An over-cap
+  base still spends no related/facts read. Weight remedies must keep the
+  requested expansion reached and within the cap.
 - **Expansion page (TestClient, amendment)**: an expansion's edges are in
   both the text sections and the payload, and they agree; the scope line
   names the applied expansions with remove links; "Not shown" lists the
   unreached and refused ones; the node panel offers Show its neighbours
   with its counts, says why when it cannot, offers Collapse on an expanded
   note and neither on the focus; Centre on this drops `expand=`; every
-  link carries `canvas=full` when the page has it.
+  link carries `canvas=full` when the page has it (S10). Collapse previews
+  name dependent expansions, shared-note selections survive, and removed
+  targets do not leave a stale selection/pin. Assert a layer-only node's
+  typed expansion works without fetching that node's related layers.
+  A second request after changed edges/facts uses the latest available
+  data and keeps text, payload and panel consistent; record actual calls
+  on warm and expired caches rather than asserting zero upstream reads.
 - **Expansion canvas (JS harness, real Cytoscape headless, amendment)**: a
   double-click and an intercepted panel link each fetch the expanded view
-  and push the URL only after the swap; every node already drawn keeps its
-  position; new notes do not overlap drawn ones; loading the URL with
-  expansions gives the same positions and colour slots as making them live
-  at the same canvas size; an expansion the payload shows over the cap
-  sends no request; a failed fetch leaves the canvas, text and URL
-  unchanged; the pill's drawn set follows the swap.
+  and push the URL only after the swap; every surviving node keeps its
+  position through expansion and collapse; new notes avoid existing node
+  and title bounds with maximum-size clearance. Two fresh loads with the
+  same URL, data, fonts and size give the same positions/colour slots;
+  do not require a collapsed or resized live view to equal a fresh load.
+  Test retained colour slots after collapse, palette exhaustion and changed
+  namespace/type facts. Server eligibility controls the preflight even
+  when layer-only nodes make `nodes.length` exceed the cap; edge-only
+  expansion works and has a mark. Rapid expansion/collapse clicks send
+  only one request while busy; the first tap's panel cannot win a race;
+  Back/Forward retires pending responses, including redirects, without
+  a late swap or history push. A failed/invalid/whole-view-refused response
+  leaves canvas, text, panel and URL unchanged and restores controls;
+  a per-expansion refusal commits normally. An upstream change between
+  expansions updates/removes affected elements atomically and preserves
+  surviving positions. Search, counts, legends, every panel render ID and
+  the pill's drawn set follow the swap. An event/reconnect during the
+  request keeps the pill visible, including one naming a newly drawn node.
+  Browser checks cover measured title collisions and touch/keyboard panel
+  expansion; the headless harness alone is not a visual acceptance test.
 - **Full page (amendment)**: the toggle switches in place and pushes
   `canvas=full` without moving a node; the drawer opens, closes on Esc and
-  clears the selection; e2e screenshots of a focus graph after two
-  expansions, inline and full page, at 1440 and 768.
+  clears the selection without dropping a pinned edge; focus returns on
+  close. Toggle with an open panel, then open another: same render ID,
+  no reload or upstream read. Existing graph links, forms and HTMX URLs
+  preserve the newly toggled mode; Back/Forward restores the URL's mode.
+  Test pending-panel cancellation and, when S9 is present, toggling during
+  an expansion. Fit/pan keep the selected note outside overlays and respect
+  the readable zoom floor and reduced motion; scrolling a panel does not
+  zoom the graph. Text view is reachable with the keyboard; no-JS output
+  stays usable. E2e screenshots at **1440, 768 and 390px**, covering inline
+  and full page, an open drawer/bottom sheet and disclosed controls/key.
+  Use two expansions when S9 is available. Whichever of S9/S10 lands last
+  owns the combined expansion/full-page checks and screenshots.
 
 ## Tracer-bullet vertical slices
 
@@ -900,26 +1037,35 @@ SPECIFICATION and passes `make check && make diagrams`.
 
 8. **S8 Expansion: server and text.** The `expand=` parameter and the URL
    builder (append, collapse with dependants, Centre on this drops it);
-   the expansion pass in `knowledge_graph.py` after the depth BFS, with
-   unreached and per-expansion refusal; `undrawn_nodes`/`undrawn_edges`,
-   `expanded`, `via` and `hop` on nodes and `expansions` in the payload;
+   the expansion pass after the capped typed BFS and focus layers, with
+   layer-only roots, separate visual/cap counts, unreached and per-expansion
+   refusal; `undrawn_nodes`/`undrawn_edges`, `expanded`, `via`, `hop` and
+   server eligibility on nodes and `expansions` in the payload;
    the scope line, the by-relation sections and "Not shown"; the node
-   panel's Show its neighbours / Collapse as plain links; telemetry. On the
+   panel's Show its neighbours / Collapse as plain links with dependent
+   expansion previews; latest-available assembly and telemetry. On the
    canvas, an expanded view simply draws as any payload does, laid out once
    on load. *Needs S5; independent of S7.* Acceptance: the Expansion
    assembly and Expansion page cases.
 9. **S9 Expansion on the canvas.** Double-click and panel-link
-   interception; fetch, swap and diff in place; placement beside the
-   expanded note, replayed deterministically on load; stable colour slots;
-   the viewport pan; the "+N" mark and its key line; the pill following
-   the swap. *Needs S8 and S7* (S7's pill and S9's swap meet in
-   `knowledge_graph.js`). Acceptance: the Expansion canvas cases.
+   interception; one in-flight graph request, retirement on history travel,
+   atomic fetch/swap/diff by persistent identity; placement beside the
+   expanded note, stable surviving positions and deterministic fresh loads;
+   retained colour slots; server eligibility preflight; viewport pan;
+   "+N" and edge-only marks; the pill following swaps without losing
+   events. *Needs S8 and S7* (S7's pill and S9's swap meet in
+   `knowledge_graph.js`). Acceptance: the Expansion canvas cases and the
+   combined full-page cases if S10 has landed.
 10. **S10 Full-page canvas.** `canvas=full` carried by the URL builder; the
-    toggle; the full-window canvas, the overlaid toolbar and key, the
-    drawer and bottom-sheet panel; "Text view". *Needs S7* (the pill sits
+    toggle and existing-link updates; presentation excluded from rendered
+    view identity; the full-window canvas, the overlaid toolbar and key,
+    the drawer and bottom-sheet panel with focus handling; an unobscured
+    viewport and "Text view". *Needs S7* (the pill sits
     over the canvas); independent of S8 and S9, but it touches the same
     script and URL builder, so whichever lands second merges the other in.
-    Acceptance: the Full page cases.
+    Acceptance: the Full page cases, including 390px, and the combined
+    expansion cases if S9 has landed. S9/S10 integration belongs to the
+    slice landing last; it is not deferred to an untracked follow-up.
 
 ## Out of Scope
 
