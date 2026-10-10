@@ -3,7 +3,7 @@
 
 # TaskGraph
 
-Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly, the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps, and the add-dependency relation sentences: each sentence about a task mapped to the edge it means (and back), whether the relation is already among a task's edges, and what it will mean for readiness by the blocker's status.
+Task-graph transport records and normalizers (blocked-task rows + edges), plus the ready/blocked frontier join, the Needs-attention severity model, the Gates section assembly and the gate scope (which open gates a scoped board shows: its own match, or an in-scope waiter's), the dashboard assembly built on them, the graph-native task-detail page with its bounded neighbour reads and its lazily expanded blocker chain, and the dependency-graph layer: the per-task edge cache (TTL, single-flight, event-evicted), the scope assembly that turns a project or epic plus that cache into a node/edge set with its ghosts, edge states and completeness, the scoped blocked reads carrying Lithos's cycle verdict, and the graph page's view model (layers, callout, chain, hierarchy, embedded payload) with the downstream-impact count the side panel states, plus the task-detail mini-graph's own two-up-one-down scope and its capped node selection, and the cancel consequences: the bounded, cross-project downstream walk over active dependency edges that says what a cancel strands directly and behind, with the claims it releases and the open children it keeps, and the add-dependency relation sentences: each sentence about a task mapped to the edge it means (and back), whether the relation is already among a task's edges, and what it will mean for readiness by the blocker's status.
 
 **Tier:** Foundation
 
@@ -20,7 +20,8 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 | `lithos_lens.frontier` | L | 1 | 1 |
 | `lithos_lens.frontier_fallback` | XS | 0 | 2 |
 | `lithos_lens.frontier_join` | S | 0 | 3 |
-| `lithos_lens.gates` | L | 5 | 5 |
+| `lithos_lens.gate_scope` | S | 1 | 2 |
+| `lithos_lens.gates` | L | 5 | 7 |
 | `lithos_lens.graph_cache` | M | 3 | 2 |
 | `lithos_lens.graph_cycles` | M | 3 | 4 |
 | `lithos_lens.graph_fanout` | S | 1 | 4 |
@@ -87,6 +88,11 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `classify_open_tasks` — Join the master open list against the ready/blocked frontier.
 - def `reclassify_conservative` — Apply the conservative read-skew interpretation, flagged for the banner.
 
+### `lithos_lens.gate_scope`
+- class `GateWaits` — Who waits on which open gate, as far as this render could learn.
+- def `load_gate_waits` — Learn the gate waits behind this render, and the gates they bring in.
+- def `waited_on_gates` — The open gates outside ``scoped_ids`` that a row inside it waits on.
+
 ### `lithos_lens.gates`
 - class `GateEdgeClient` — The one client method the degraded waiter fan-out needs.
 - class `GateWaiterState` — How far a gate's "blocks N tasks" count can be trusted.
@@ -97,7 +103,9 @@ Task-graph transport records and normalizers (blocked-task rows + edges), plus t
 - def `collect_gates` — Collect the open gates off the master open list (§5.2.3).
 - def `group_gates` — Group gate rows by gate type — human first, by severity then age within.
 - def `attach_gate_waiters` — Fill each gate's waiter list, preferring the Lithos-computed source.
+- def `read_gate_edges` — Each gate's outgoing ``waits_on_gate`` edges — the degraded waiter read.
 - def `next_gate_ready_at` — The earliest still-FUTURE timer-gate ``ready_at``, or "" when none.
+- def `blocked_waiter_ids` — Waiter ids per gate id, read off the blocked frontier.
 
 ### `lithos_lens.graph_cache`
 - class `CacheTally` — One RENDER's reads through the process-wide cache.

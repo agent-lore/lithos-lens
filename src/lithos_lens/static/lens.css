@@ -810,6 +810,16 @@ button,
   padding: 0.35rem 0.55rem;
 }
 
+/* A chip naming its blocker links to that blocker's detail page. */
+a.blocker-chip {
+  text-decoration: none;
+}
+
+a.blocker-chip:hover,
+a.blocker-chip:focus-visible {
+  text-decoration: underline;
+}
+
 .blocker-chip-gate {
   border-color: rgba(65, 87, 111, 0.5);
   border-style: dashed;

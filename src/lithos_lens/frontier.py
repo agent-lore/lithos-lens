@@ -63,6 +63,7 @@ from lithos_lens.frontier_join import (
     classify_open_tasks,
     reclassify_conservative,
 )
+from lithos_lens.gate_scope import load_gate_waits
 from lithos_lens.gates import GATE_TASK_TYPE, GateSection, load_gates
 from lithos_lens.task_filtering import (
     filters_narrow_the_board,
@@ -456,16 +457,7 @@ async def load_dashboard(
         reconciliation_pending = frontier_ok and state.skewed_frontier
         if reconciliation_pending:
             partition = reclassify_conservative(partition, state.effective_overlap)
-        # Needs attention last: it promotes rows OUT of the sections above, so
-        # it must see their final (post-reconciliation) membership.
-        partition = flag_attention(
-            partition,
-            state.visible,
-            blocked=blocked_records,
-            policy=policy,
-            now=evaluated_at,
-            index=_blocker_names(open_index),
-        )
+        attention_blocked: list[BlockedTaskRecord] = blocked_records
     else:
         # Flat fallback — no usable frontier, because a read of it failed
         # (a server that never had the tools fails the same way, and is
@@ -508,14 +500,40 @@ async def load_dashboard(
         # claims_unknown) are all empty in the flat partition, and no blocker
         # records exist to prove rules 1-2 with, so the rules whose evidence
         # the outage DID destroy cannot fire.
-        partition = flag_attention(
-            partition,
-            visible_open,
-            blocked=(),
-            policy=policy,
-            now=evaluated_at,
-            index=_blocker_names(open_index),
-        )
+        attention_blocked = []
+
+    # An open gate is in scope when it passes the filters itself OR a task in
+    # scope waits on it (``gate_scope``) — joined here, once, so the Gates
+    # section, the gate promotion, the tile and the project strip read one set.
+    show_open = "open" in filters.statuses
+    blocked_truncated = len(blocked_records) >= frontier_limit
+    gate_waits = await load_gate_waits(
+        lithos,
+        open_snapshot,
+        visible=visible_open,
+        blocked=blocked_records,
+        blocked_available=blocked_ok,
+        blocked_truncated=blocked_truncated,
+        enabled=show_open,
+    )
+    visible_open = [*visible_open, *gate_waits.included]
+    errors.extend(gate_waits.errors)
+    strips = strips.with_gate_waits(
+        open_snapshot,
+        filters=filters,
+        open_row_types=PLACED_OPEN_TYPES if frontier_ok else None,
+        waiting=gate_waits.waiting,
+    )
+    # Needs attention last: it promotes rows OUT of the sections above, so it
+    # must see their final (post-reconciliation) membership.
+    partition = flag_attention(
+        partition,
+        visible_open,
+        blocked=attention_blocked,
+        policy=policy,
+        now=evaluated_at,
+        index=_blocker_names(open_index),
+    )
 
     if strips.epics.failed:
         errors.append("Could not load epic progress.")
@@ -526,7 +544,6 @@ async def load_dashboard(
     # gates that step already promoted (single placement), and it reads the
     # WHOLE open index rather than ``visible_open`` for waiter identities, so
     # scoping the board never shrinks a gate's "blocks N tasks".
-    show_open = "open" in filters.statuses
     gate_section = (
         await load_gates(
             lithos,
@@ -536,9 +553,11 @@ async def load_dashboard(
             blocked_available=blocked_ok,
             # The gate counts care about the BLOCKED response specifically; a
             # truncated ready read says nothing about who waits on a gate.
-            blocked_truncated=len(blocked_records) >= frontier_limit,
+            blocked_truncated=blocked_truncated,
             placed_ids=frozenset(row.task.id for row in partition.get("attention", ())),
             now=evaluated_at,
+            prefetched=gate_waits.edges,
+            fanout_cap=gate_waits.reads_left,
         )
         if show_open
         else GateSection()
@@ -691,6 +710,7 @@ async def load_dashboard(
         # Frontier-only ids the adopted generation's resolved windows do NOT
         # explain: in no section, so never examined (see the field).
         frontier_unplaced=bool(frontier_only - terminal_index.keys()),
+        gates_incomplete=gate_waits.incomplete,
         errors=tuple(errors),
         # The windows this board DISPLAYS that failed to load: the epic-scope
         # explanations are claims about the filters, and only these can make a

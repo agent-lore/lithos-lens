@@ -125,8 +125,18 @@
         {# A chip that resolved names ANOTHER task by title, so it states that
            task's short id (§5.3) — the row's own id, in the meta column above,
            is the blocked task's and says nothing about what it waits on. An
-           unresolved chip's label already IS the id (or a raw message). #}
-        <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}{% if blocker.titled %} {% with task_id = blocker.target_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</span>
+           unresolved chip's label already IS the id (or a raw message).
+
+           A chip that names its blocker (a gate or a predecessor task) links
+           to that blocker's detail page — the same URL a row's title uses —
+           so reaching a gate is one click from the task it holds. A plain
+           link: tasks.js leaves non-title links to navigate, and it works
+           with JavaScript off. A chip naming no task stays text. #}
+        {% if blocker.target_id %}
+          <a class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}" href="{{ task_detail_url(request, blocker.target_id) }}">{{ blocker.label }}{% if blocker.titled %} {% with task_id = blocker.target_id %}{% include "tasks/short_id.html" %}{% endwith %}{% endif %}</a>
+        {% else %}
+          <span class="blocker-chip blocker-chip-{{ blocker.kind }}" data-blocker-kind="{{ blocker.kind }}">{{ blocker.label }}</span>
+        {% endif %}
       {% endfor %}
     </div>
   {% endif %}

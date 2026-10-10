@@ -35,7 +35,7 @@ here.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
 from typing import NamedTuple
 
@@ -45,6 +45,7 @@ from lithos_lens.epic_strip import (
     epic_scope_ids,
     load_epic_rollups,
 )
+from lithos_lens.gate_scope import waited_on_gates
 from lithos_lens.task_filtering import (
     board_visible_ids,
     matches_filters,
@@ -82,6 +83,30 @@ class BoardStrips(NamedTuple):
     epics: EpicStrip
     scope_ids: frozenset[str] | None
     projects: tuple[ProjectChip, ...]
+
+    def with_gate_waits(
+        self,
+        snapshot: Sequence[TaskRecord],
+        *,
+        filters: TaskFilters,
+        open_row_types: Collection[str] | None,
+        waiting: Mapping[str, Collection[str]],
+    ) -> BoardStrips:
+        """The same strips, the project counts including waited-on gates.
+
+        The gate waits are learned only once the generation's scope is known
+        (``gate_scope`` needs the epic scope this strip resolved), so the
+        project strip is recounted against them rather than built with them.
+        """
+        return self._replace(
+            projects=build_project_strip(
+                snapshot,
+                filters=filters,
+                scope_ids=self.scope_ids,
+                open_row_types=open_row_types,
+                gate_waiting=waiting,
+            )
+        )
 
 
 async def load_board_strips(
@@ -133,6 +158,7 @@ def build_project_strip(
     filters: TaskFilters,
     scope_ids: frozenset[str] | None,
     open_row_types: Collection[str] | None,
+    gate_waiting: Mapping[str, Collection[str]] | None = None,
 ) -> tuple[ProjectChip, ...]:
     """The projects inside the current scope, with their open-row counts (§5.3).
 
@@ -173,19 +199,38 @@ def build_project_strip(
     where the work is, and its order is stable while the operator clicks
     between projects (the counts do not move, because the project filter is not
     part of the scope).
+
+    A gate that fails the scope itself but that an in-scope row waits on
+    (``gate_waiting``, the rule in ``gate_scope``) is on the board too, so it
+    counts — under each of its own projects that one of those waiters also
+    carries. That is exactly where ``?project=<slug>`` keeps it: the gate stays
+    out on its own match, so only a waiter of that project brings it back.
     """
     if "open" not in filters.statuses:
         return ()
     scope = replace(filters, projects=())
+
+    def projects_of(task: TaskRecord) -> tuple[str, ...]:
+        return task_projects(task, convention="both", tag_key=scope.project_tag_key)
+
+    scoped = {
+        task.id: task
+        for task in snapshot
+        if (open_row_types is None or task.task_type in open_row_types)
+        and matches_filters(task, filters=scope, status="open", scope_ids=scope_ids)
+    }
     counts: Counter[str] = Counter()
-    for task in snapshot:
-        if open_row_types is not None and task.task_type not in open_row_types:
-            continue
-        if not matches_filters(task, filters=scope, status="open", scope_ids=scope_ids):
-            continue
-        counts.update(
-            task_projects(task, convention="both", tag_key=scope.project_tag_key)
-        )
+    for task in scoped.values():
+        counts.update(projects_of(task))
+    waiting = gate_waiting or {}
+    for gate in waited_on_gates(snapshot, scoped_ids=scoped, waiting=waiting):
+        shared = {
+            slug
+            for waiter in waiting[gate.id]
+            if waiter in scoped
+            for slug in projects_of(scoped[waiter])
+        }
+        counts.update(slug for slug in projects_of(gate) if slug in shared)
     return tuple(
         ProjectChip(slug=slug, open_count=count, selected=slug in filters.projects)
         for slug, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))

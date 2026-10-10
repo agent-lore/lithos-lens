@@ -580,6 +580,8 @@ Chrome requirements (carried over):
 
 All open `task_type="gate"` tasks, grouped by gate type with **human gates first**, oldest first within each group. Within the `pr` group, rows order by **reconciliation state severity** first (see below) and then by age — the PR that wants a person leads whatever its age.
 
+**Scope (2026-10-09).** Under a filter that narrows the open rows (project / tag / agent / epic scope), an open gate is in scope when it passes the filters itself **or an in-scope task waits on it** — gates do not carry their stories' tags, so the per-row rule alone hid the gates a scoped board's work is waiting on. The same rule decides the Gates section, the Needs-attention gate promotion (rules 3 and 3b), the gates count and the project strip; the waiter count is never narrowed. It costs no extra Lithos call on a healthy render (the blocked frontier names each task's gate blockers); when that read is truncated or failed, Lens falls back to the gates' outgoing `waits_on_gate` edges under the bounded per-render fan-out, and states on the board that the Gates list may be incomplete where that cannot cover every gate. Terminal sections keep the per-row rule.
+
 | Element | Requirement |
 |---------|-------------|
 | Gate type badge | `human` / `timer` / `ci` / `pr` / `external_task` |
@@ -663,7 +665,7 @@ Every list row renders a compact, scannable line (specific layout left to the im
 | **Project chip** | The task's project per §5B.1, rendered as a dedicated leftmost chip. Background colour = stable hash of slug. Rows without a project render `(no project)`. Conflicting conventions emit a telemetry warning (§5B.1). |
 | **Type badge** | `epic` / `gate:<gate_type>` badges where applicable (workable tasks carry no badge) |
 | **Title** | Truncated to one line; full title in tooltip |
-| **Status / section decorations** | `blocked` decoration on claimed-but-blocked rows; `reopened` marker; blocker chips on Blocked rows; reason chips in Needs attention |
+| **Status / section decorations** | `blocked` decoration on claimed-but-blocked rows; `reopened` marker; blocker chips on Blocked rows (a chip naming a gate or predecessor task links to that task's detail page); reason chips in Needs attention |
 | **Latest finding line** *(open rows)* | One line: `<agent> — <summary>` plus relative timestamp, from the server-side rolling buffer (§5.8.4). Updates on `finding.posted`. |
 | **Agent chips (collapsed by role)** | Single chip per agent on the row, with role markers `created` / `claimed` / `latest`. Human agents (registry `type="human"` ∪ `[tasks].human_agents`, §5A.3) render with a person-icon prefix and distinct background; the registry `type` string renders as a role marker, and an unregistered id gets a plain chip, never a guessed role. Clicking an agent chip filters across all roles. |
 | **Active claims** | Compact `aspect → agent` list with time-to-expiry, from inline claims |

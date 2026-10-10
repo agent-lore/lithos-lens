@@ -341,12 +341,22 @@ const PAGES: ReadonlyArray<{
       const strip = page.locator("[data-project-strip]");
       await expect(strip).toBeVisible();
       // Every project in the scope, ordered by open count then slug, each
-      // stating its own count.
+      // stating its own count — influx's includes the two gates below.
       await expect(strip.locator("[data-project-chip]")).toHaveText([
+        /influx\s*4/,
         /lithos-loom\s*3/,
-        /influx\s*2/,
         /lithos-lens\s*1/,
       ]);
+      // The gates the scoped influx-backfill waits on are on the scoped
+      // board, though neither carries the roadmap tag (§5.3): the Gates
+      // section the live report found empty.
+      const gates = page.locator('[data-task-group="gates"]');
+      await expect(
+        gates.locator('[data-gate-row][data-task-id="influx-read-swap-approval"]'),
+      ).toBeVisible();
+      await expect(
+        gates.locator('[data-gate-row][data-task-id="influx-replica-cooldown"]'),
+      ).toBeVisible();
       // Nothing selected yet, so there is nothing to clear.
       await expect(page.locator("[data-project-clear]")).toHaveCount(0);
     },

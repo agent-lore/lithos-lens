@@ -344,10 +344,12 @@ test("project strip switches between the projects in a tag scope", async ({
 
   const strip = page.locator("[data-project-strip]");
   await expect(strip).toBeVisible();
-  // Ordered by open count, then slug — the fixture's 3/2/1 split.
+  // Ordered by open count, then slug. influx counts its two open rows AND
+  // the two untagged-by-roadmap gates the scoped influx-backfill waits on
+  // (an open gate an in-scope task waits on is in scope, §5.3) — 4/3/1.
   await expect(strip.locator("[data-project-chip]")).toHaveText([
+    /influx\s*4/,
     /lithos-loom\s*3/,
-    /influx\s*2/,
     /lithos-lens\s*1/,
   ]);
 
