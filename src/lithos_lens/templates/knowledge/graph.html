@@ -12,7 +12,7 @@
   in its host under them, full width.
 -#}
 
-{% from "knowledge/graph_macros.html" import node_ref, panel_attrs %}
+{% from "knowledge/graph_macros.html" import collapse_preview, expansion_ref, node_ref, panel_attrs %}
 
 {#- One typed edge: at the focus "→ title (weight)", elsewhere "A → B (weight)",
     linked to its edge panel (S5) by `edge=`. -#}
@@ -162,6 +162,16 @@
                 <li data-would-be="{{ level }}">depth {{ level }} would draw {{ count }} note{{ "" if count == 1 else "s" }} — <a href="{{ knowledge_graph_url(params, depth=level) }}">depth={{ level }}</a></li>
               {% endfor %}
             {% endif %}
+            {#- D16: requests that drew nothing — unreached, or refused on
+                their own over the cap — each removable. -#}
+            {% for step in view.expansions if step.state != "applied" %}
+              <li data-kgraph-expansion="{{ step.id }}" data-kgraph-expansion-state="{{ step.state }}">
+                {%- if step.state == "unreached" -%}
+                  Expanding {{ expansion_ref(view, step.id) }} was not applied: it is not drawn in this view
+                {%- else -%}
+                  Expanding {{ expansion_ref(view, step.id) }} would add {{ step.would_add_nodes }} visible note{{ "" if step.would_add_nodes == 1 else "s" }}; {{ step.would_count }} notes would count towards the {{ step.cap }} cap
+                {%- endif %} — <a href="{{ knowledge_graph_collapse_url(params, view, step.id) }}" data-kgraph-expansion-remove="{{ step.id }}">remove</a></li>
+            {% endfor %}
             {% if view.facts_capped_at %}
               {% set by_id = view.facts_tally.capped_unread %}
               {% set kept = view.facts_tally.capped_pending %}

@@ -21,23 +21,20 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Final, Literal
 
-from lithos_lens.knowledge_edge_evidence import (
-    EdgeEvidence,
-    parse_edge_evidence,
-    provenance_label,
-)
+from lithos_lens.knowledge_edge_evidence import parse_edge_evidence
 from lithos_lens.knowledge_edge_types import (
     EdgeDirection,
     LegendLine,
-    RelationPhrase,
-    conflict_state_label,
     edge_style,
     is_conflict_resolved,
-    relation_phrase,
 )
 from lithos_lens.knowledge_edges import KnowledgeEdge
 from lithos_lens.knowledge_facts import FactsState, NoteFacts, NoteFactsTally
-from lithos_lens.knowledge_metadata import NoteMetadata
+from lithos_lens.knowledge_graph_expansion import (
+    ExpansionCollapse,
+    ExpansionStep,
+    NodeExpansion,
+)
 
 # Mirror the ``[lithos-lens.knowledge]`` config defaults, as knowledge_edges
 # does; ``tests/test_knowledge_facts.py`` pins them to the ones Config
@@ -222,6 +219,11 @@ class KnowledgeGraphNode:
     is_focus: bool = False
     #: Reached only by a wiki-link or provenance edge (no facts read spent).
     layer_only: bool = False
+    #: D16: expanded by an applied ``expand=``; the request that first drew
+    #: it (``None`` for the base view); its eligibility (focus mode only).
+    expanded: bool = False
+    via: str | None = None
+    expansion: NodeExpansion | None = None
 
     @property
     def is_ghost(self) -> bool:
@@ -303,6 +305,12 @@ class KnowledgeGraphView:
     facts_tally: NoteFactsTally = NoteFactsTally()
     #: The facts cap, set when nodes went unread for it.
     facts_capped_at: int = 0
+    #: D16: the ``expand=`` requests in URL order, and what removing each
+    #: (with its ``via`` dependants) leaves drawn.
+    expansions: tuple[ExpansionStep, ...] = ()
+    collapses: Mapping[str, ExpansionCollapse] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def node(self, node_id: str) -> KnowledgeGraphNode | None:
         return next((node for node in self.nodes if node.id == node_id), None)
@@ -480,11 +488,12 @@ def _focus_of(view: KnowledgeGraphView) -> str:
 
 
 def edge_entry(
-    view: KnowledgeGraphView, edge: KnowledgeGraphEdge
+    view: KnowledgeGraphView, edge: KnowledgeGraphEdge, at: str = ""
 ) -> KnowledgeEdgeEntry:
     """How ``edge`` reads in ``view``'s text: arrow, ends, and — at the
-    focus — the node at the other end."""
-    return _entry(_node_index(view), _focus_of(view), edge)
+    focus, or at the node ``at`` names (a node panel) — the node at the
+    other end."""
+    return _entry(_node_index(view), at or _focus_of(view), edge)
 
 
 def edge_sections(view: KnowledgeGraphView) -> tuple[KnowledgeEdgeSection, ...]:
@@ -518,135 +527,12 @@ def named_edge(view: KnowledgeGraphView, edge_id: str) -> KnowledgeEdgeEntry | N
     return None if edge is None else edge_entry(view, edge)
 
 
-# ── the panels (D10) ───────────────────────────────────────────────────
-
-#: Which panel is open: a note's, or a typed edge's.
-PanelKind = Literal["node", "edge"]
-
-
-def node_metadata(node: KnowledgeGraphNode | None) -> NoteMetadata | None:
-    """A node's chips and lede through K1's ``NoteMetadata`` (S3 D7), so the
-    status slug the chip's class is built from has one definition. ``None``
-    for a node with no facts: a ghost, or a node not read for this view."""
-    if node is None or node.facts is None:
-        return None
-    facts = node.facts
-    return NoteMetadata(
-        note_type=facts.note_type,
-        status=facts.status,
-        namespace=facts.namespace,
-        confidence=facts.confidence,
-        lede=facts.lede,
-    )
-
-
-@dataclass(frozen=True)
-class KnowledgeNodePanel:
-    """The node panel: one drawn note, its chips, and its relations in view.
-
-    ``relations`` holds every drawn edge at the note — typed rows and the
-    wiki-link and provenance pairs alike, so they add up to its degree —
-    grouped by legend line in legend order, each read from the note.
-    """
-
-    node: KnowledgeGraphNode
-    meta: NoteMetadata | None
-    relations: tuple[KnowledgeEdgeSection, ...] = ()
-
-    @property
-    def kind(self) -> PanelKind:
-        return "node"
-
-
-@dataclass(frozen=True)
-class KnowledgeEdgePanel:
-    """The edge panel: one drawn typed edge, its row, and both endpoints."""
-
-    entry: KnowledgeEdgeEntry
-    source_meta: NoteMetadata | None = None
-    target_meta: NoteMetadata | None = None
-
-    @property
-    def kind(self) -> PanelKind:
-        return "edge"
-
-    @property
-    def edge(self) -> KnowledgeGraphEdge:
-        return self.entry.edge
-
-    @property
-    def phrase(self) -> RelationPhrase:
-        return relation_phrase(self.edge.type)
-
-    @property
-    def provenance(self) -> str:
-        """The plain-language line K1's "why?" uses: "inferred by …"."""
-        return provenance_label(self.edge.provenance, self.edge.provenance_actor)
-
-    @property
-    def evidence(self) -> EdgeEvidence | None:
-        return parse_edge_evidence(self.edge.evidence)
-
-    @property
-    def is_contradiction(self) -> bool:
-        return self.edge.type == "contradicts"
-
-    @property
-    def conflict_resolved(self) -> bool:
-        return is_conflict_resolved(self.edge.conflict_state)
-
-    @property
-    def conflict_label(self) -> str:
-        return conflict_state_label(self.edge.conflict_state)
-
-
-def node_panel(view: KnowledgeGraphView, node_id: str) -> KnowledgeNodePanel | None:
-    """The panel for ``node_id`` when the view draws it, else ``None``."""
-    node = view.node(node_id) if node_id else None
-    if node is None:
-        return None
-    nodes = _node_index(view)
-    at_node = [edge for edge in view.edges if node_id in (edge.from_id, edge.to_id)]
-    layers = tuple(LAYER_LEGEND.values())
-    groups: list[KnowledgeEdgeSection] = []
-    for line in view.legend:
-        if line in layers:
-            edges = [edge for edge in at_node if edge.kind == line.type]
-        else:
-            edges = [e for e in at_node if e.kind == "typed" and e.type == line.type]
-            if line.type == "contradicts":
-                edges = list(contradictions_queue(edges))
-        if edges:
-            entries = tuple(_entry(nodes, node_id, edge) for edge in edges)
-            groups.append(KnowledgeEdgeSection(line, entries))
-    return KnowledgeNodePanel(node, node_metadata(node), tuple(groups))
-
-
-def edge_panel(view: KnowledgeGraphView, edge_id: str) -> KnowledgeEdgePanel | None:
-    """The panel for the typed edge ``edge_id`` names when drawn, else ``None``."""
-    entry = named_edge(view, edge_id)
-    if entry is None:
-        return None
-    return KnowledgeEdgePanel(
-        entry, node_metadata(entry.source), node_metadata(entry.target)
-    )
-
-
-def graph_panel(
-    view: KnowledgeGraphView, *, selected: str, edge: str
-) -> KnowledgeNodePanel | KnowledgeEdgePanel | None:
-    """The one panel a request selects: ``edge`` when given (it wins over
-    ``selected``, S5 S1), else ``selected``; ``None`` when not drawn."""
-    if edge:
-        return edge_panel(view, edge)
-    return node_panel(view, selected)
-
-
 # ── the payload ────────────────────────────────────────────────────────
 
 
 def _node_payload(node: KnowledgeGraphNode) -> dict[str, Any]:
     facts = node.facts or NoteFacts()
+    expansion = node.expansion
     return {
         "id": node.id,
         "label": node.label,
@@ -662,7 +548,30 @@ def _node_payload(node: KnowledgeGraphNode) -> dict[str, Any]:
         "namespace": facts.namespace,
         "confidence": facts.confidence,
         "lede": facts.lede,
+        "expanded": node.expanded,
+        "via": node.via,
+        "undrawn_nodes": expansion.undrawn_nodes if expansion else 0,
+        "undrawn_edges": expansion.undrawn_edges if expansion else 0,
+        "expansion": None
+        if expansion is None
+        else {
+            "state": expansion.state,
+            "would_count": expansion.would_count,
+            "cap": expansion.cap,
+        },
     }
+
+
+def _step_payload(step: ExpansionStep) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": step.id,
+        "state": step.state,
+        "added_nodes": step.added_nodes,
+        "added_edges": step.added_edges,
+    }
+    if step.state == "refused":
+        payload["would_count"] = step.would_count
+    return payload
 
 
 def _edge_style_payload(edge: KnowledgeGraphEdge) -> dict[str, Any]:
@@ -727,6 +636,7 @@ def graph_payload(
         },
         "nodes": [_node_payload(node) for node in view.nodes],
         "edges": [_edge_payload(edge) for edge in view.edges],
+        "expansions": [_step_payload(step) for step in view.expansions],
         "legend": [
             {
                 "type": line.type,
