@@ -6,8 +6,10 @@
   /knowledge/graph (K2 D11, D12). The text IS the page: the scope line, the
   refusal, the legend, the focus note, the edges by relation, the layers, the
   hidden counts, then the payload the canvas (S4) draws from — the same view,
-  so the two cannot disagree. The picker renders when no scope is given. The
-  node or edge panel (S5) sits in its host after the scope line.
+  so the two cannot disagree. The picker renders when no scope is given. A
+  drawn view gets the canvas and its toolbar after the scope line, both
+  hidden until `knowledge_graph.js` draws; the node or edge panel (S5) sits
+  in its host under them, full width.
 -#}
 
 {% from "knowledge/graph_macros.html" import node_ref, panel_attrs %}
@@ -54,6 +56,9 @@
   {% endif %}
 {% endmacro %}
 
+{#- Something to draw: the canvas, its toolbar and its scripts (S4 D1). -#}
+{% set drawn = view is not none and view.refusal is none and view.nodes %}
+
 {% block content %}
   <section class="kgraph-page" data-knowledge-graph data-mode="{{ mode }}">
     <header>
@@ -70,10 +75,12 @@
     {% elif view is not none %}
       {% include "knowledge/graph_scope.html" %}
 
+      {% if drawn %}{% include "knowledge/graph_canvas.html" %}{% endif %}
+
       {#- The panel host: the page's panel on a full request (or why an
           `edge=` the snapshot lacks has none), the fragment an edge or node
-          link fetches on a click. Full width until the
-          canvas (S4) gives it a place beside the graph. -#}
+          link — or a canvas click — fetches. Full width under the canvas at
+          every width (S4 D2). -#}
       <div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host data-kgraph-render="{{ render_id }}">
         {%- if panel is not none or panel_notice %}{% include "knowledge/graph_panel.html" %}{% endif -%}
       </div>
@@ -174,4 +181,11 @@
       <script type="application/json" data-knowledge-graph-payload>{{ payload | tojson }}</script>
     {% endif %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+  {% if drawn %}
+    <script src="{{ url_for('static', path='vendor/cytoscape.min.js') }}" defer></script>
+    <script src="{{ url_for('static', path='knowledge_graph.js') }}" defer></script>
+  {% endif %}
 {% endblock %}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -356,6 +357,28 @@ def test_static_assets_are_served(lithos_lens_config_env: Path) -> None:
     assert "htmx" in htmx.text
     assert tasks_js.status_code == 200
     assert "EventSource" in tasks_js.text
+
+
+def test_every_vendored_asset_matches_its_recorded_checksum() -> None:
+    """``docs/vendor-assets.md`` is the record of what Lens serves in place
+    of a CDN: each row's file exists and is byte-for-byte the one recorded,
+    and every file under ``static/vendor/`` but a licence has a row."""
+    root = Path(__file__).resolve().parents[1]
+    rows = re.findall(
+        r"^\|[^|]*\|\s*`([^`]+)`\s*\|[^|]*\|[^|]*\|\s*`([0-9a-f]{64})`\s*\|$",
+        (root / "docs/vendor-assets.md").read_text(encoding="utf-8"),
+        re.M,
+    )
+
+    assert rows
+    for path, recorded in rows:
+        assert hashlib.sha256((root / path).read_bytes()).hexdigest() == recorded, path
+    vendored = {
+        str(path.relative_to(root))
+        for path in (root / "src/lithos_lens/static/vendor").iterdir()
+        if not path.name.endswith("-OFL.txt")
+    }
+    assert vendored == {path for path, _ in rows}
 
 
 def test_env_override_sets_tasks_frontier_limit(

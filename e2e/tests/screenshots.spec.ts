@@ -8,6 +8,7 @@ import {
   TRUNCATED_BASE_URL,
   TRUNCATED_FRONTIER_LIMIT,
 } from "../servers";
+import { knowledgeCanvasLabelsAreReadable } from "./knowledge-graph-checks";
 
 /**
  * Responsive screenshot capture — the artifacts-dir contract.
@@ -204,6 +205,67 @@ async function relatedPanelPlacement(page: Page) {
   } else {
     expect(placement.below).toBe(true);
   }
+}
+
+/**
+ * The knowledge graph's canvas (K2 S4) is drawn: the script marked it ready,
+ * the canvas holds exactly the payload's nodes and edges, the toolbar and
+ * the key are revealed, the key names the text legend's types in its order,
+ * and the colour toggle and the key's heading agree with `colour=`. Placement
+ * too, because this sandbox cannot read the PNG: toolbar, canvas, key, then
+ * the panel host and the text, the canvas within the viewport's width.
+ */
+async function knowledgeCanvasIsDrawn(page: Page, colour: string) {
+  const canvas = page.locator('[data-kgraph-canvas][data-canvas-state="ready"]');
+  await expect(canvas).toBeVisible();
+  await expect(page.locator("[data-kgraph-toolbar]")).toBeVisible();
+  await expect(page.locator("[data-kgraph-key]")).toBeVisible();
+  const drawn = await page.evaluate(() => {
+    const payload = JSON.parse(
+      document.querySelector("[data-knowledge-graph-payload]")!.textContent!,
+    );
+    const box = document.querySelector("[data-kgraph-canvas]") as HTMLElement;
+    const keyTypes = Array.from(
+      document.querySelectorAll("[data-kgraph-key-edges] [data-key-type]"),
+    ).map((item) => (item as HTMLElement).dataset.keyType);
+    const textTypes = Array.from(
+      document.querySelectorAll("[data-legend-type], [data-legend-layer]"),
+    ).map((row) => {
+      const el = row as HTMLElement;
+      return el.dataset.legendType ?? el.dataset.legendLayer;
+    });
+    const top = (selector: string) =>
+      document.querySelector(selector)!.getBoundingClientRect().top;
+    return {
+      nodes: box.dataset.canvasNodes,
+      edges: box.dataset.canvasEdges,
+      payloadNodes: String(payload.nodes.length),
+      payloadEdges: String(payload.edges.length),
+      keyTypes,
+      textTypes,
+      order: [
+        top("[data-kgraph-toolbar]"),
+        top("[data-kgraph-canvas]"),
+        top("[data-kgraph-key]"),
+        // The panel host follows the key, and collapses while empty: the
+        // text legend after it stands in for its place.
+        top("[data-kgraph-legend]"),
+      ],
+      right: box.getBoundingClientRect().right,
+    };
+  });
+  expect(drawn.nodes).toBe(drawn.payloadNodes);
+  expect(drawn.edges).toBe(drawn.payloadEdges);
+  expect(drawn.keyTypes).toEqual(drawn.textTypes);
+  expect(drawn.order).toEqual([...drawn.order].sort((a, b) => a - b));
+  expect(drawn.right).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await expect(
+    page.locator(`[data-kgraph-colour][value="${colour}"]`),
+  ).toBeChecked();
+  await expect(page.locator("[data-kgraph-key-nodes]")).toContainText(
+    colour === "type" ? "Colour: note type" : "Colour: namespace",
+  );
+  await knowledgeCanvasLabelsAreReadable(page);
 }
 
 const WIDTHS = [320, 768, 1024, 1440] as const;
@@ -830,6 +892,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-node",
     url: "/knowledge/graph?focus=note-influx-plan&selected=note-influx-plan",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="node"]');
       await expect(panel).toBeVisible();
       await expect(panel.locator("[data-kgraph-degree]")).toContainText(
@@ -846,6 +912,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-edge",
     url: "/knowledge/graph?focus=note-influx-plan&edge=edge_4c1e9a7b20d3",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="edge"]');
       await expect(panel).toBeVisible();
       await expect(panel.locator("[data-kgraph-sentence]")).toHaveText(
@@ -864,6 +934,10 @@ const PAGES: ReadonlyArray<{
     slug: "knowledge-graph-contradiction",
     url: "/knowledge/graph?type=contradicts&edge=edge_38c9d1f5e6a7",
     ready: async (page) => {
+      await expect(
+        page.locator('[data-kgraph-canvas][data-canvas-state="ready"]'),
+      ).toBeVisible();
+      await knowledgeCanvasLabelsAreReadable(page);
       const panel = page.locator('[data-kgraph-panel="edge"]');
       await expect(panel).toBeVisible();
       await expect(
@@ -882,6 +956,37 @@ const PAGES: ReadonlyArray<{
       } else {
         expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
       }
+    },
+  },
+  {
+    // The knowledge graph's canvas (K2 S4) over a focus graph at depth 2: the
+    // ghost, an unresolved and a resolved contradiction, a quarantined node,
+    // the toolbar and the canvas's key — nodes coloured by namespace.
+    slug: "knowledge-graph-canvas",
+    url: "/knowledge/graph?focus=note-influx-plan&depth=2",
+    ready: async (page) => {
+      await knowledgeCanvasIsDrawn(page, "namespace");
+    },
+  },
+  {
+    // The same graph with nodes coloured by note type (`colour=type`).
+    slug: "knowledge-graph-canvas-type",
+    url: "/knowledge/graph?focus=note-influx-plan&depth=2&colour=type",
+    ready: async (page) => {
+      await knowledgeCanvasIsDrawn(page, "type");
+    },
+  },
+  {
+    // The contradictions scope drawn force-directed: unresolved red dashed,
+    // resolved muted with its resolution, the toolbar's unresolved count.
+    slug: "knowledge-graph-canvas-contradicts",
+    url: "/knowledge/graph?type=contradicts",
+    ready: async (page) => {
+      await knowledgeCanvasIsDrawn(page, "namespace");
+      await expect(page.locator("[data-kgraph-unresolved-count]")).toHaveText(
+        "2 unresolved contradictions",
+      );
+      await expect(page.locator("[data-kgraph-depth-group]")).toHaveCount(0);
     },
   },
   {

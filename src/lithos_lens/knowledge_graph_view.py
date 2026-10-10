@@ -31,6 +31,7 @@ from lithos_lens.knowledge_edge_types import (
     LegendLine,
     RelationPhrase,
     conflict_state_label,
+    edge_style,
     is_conflict_resolved,
     relation_phrase,
 )
@@ -319,6 +320,17 @@ class KnowledgeGraphView:
         """The legend's wiki-link and provenance layer lines, when drawn."""
         layers = tuple(LAYER_LEGEND.values())
         return tuple(line for line in self.legend if line in layers)
+
+    @property
+    def unresolved_contradictions(self) -> int:
+        """Drawn typed ``contradicts`` edges not yet resolved (the toolbar's count)."""
+        return sum(
+            1
+            for edge in self.edges
+            if edge.kind == "typed"
+            and edge.type == "contradicts"
+            and not is_conflict_resolved(edge.conflict_state)
+        )
 
     @property
     def ghosts(self) -> tuple[KnowledgeGraphNode, ...]:
@@ -653,6 +665,26 @@ def _node_payload(node: KnowledgeGraphNode) -> dict[str, Any]:
     }
 
 
+def _edge_style_payload(edge: KnowledgeGraphEdge) -> dict[str, Any]:
+    """How the canvas draws ``edge`` (S4 D6): a typed row by ``edge_style``, a
+    layer pair by its legend class — told apart by ``kind``, never by
+    ``type``, since a stored type may be spelled like a layer."""
+    if edge.kind == "typed":
+        style = edge_style(edge)
+        return {
+            "class": style.css_class,
+            "stroke": style.stroke,
+            "arrowhead": style.arrowhead,
+            "label": style.label,
+        }
+    return {
+        "class": LAYER_LEGEND[edge.kind].css_class,
+        "stroke": "solid" if edge.kind == WIKI_LINK else "dotted",
+        "arrowhead": True,
+        "label": "",
+    }
+
+
 def _edge_payload(edge: KnowledgeGraphEdge) -> dict[str, Any]:
     return {
         "id": edge.id,
@@ -668,16 +700,22 @@ def _edge_payload(edge: KnowledgeGraphEdge) -> dict[str, Any]:
         "conflict_state": edge.conflict_state,
         "direction": edge.direction.value,
         "partial": edge.partial,
+        "style": _edge_style_payload(edge),
     }
 
 
-def graph_payload(view: KnowledgeGraphView) -> dict[str, Any]:
+def graph_payload(
+    view: KnowledgeGraphView, *, colour: str = "namespace"
+) -> dict[str, Any]:
     """The JSON-ready payload the canvas draws from: the view's nodes and
-    edges, legend, hidden counts, refusal and ``as_of``, nothing more."""
+    edges with each edge's style, legend, hidden counts, provenance facets,
+    unresolved-contradictions count, refusal and ``as_of`` — and the node
+    ``colour`` mode the request asked for, nothing more."""
     refusal = view.refusal
     tally = view.facts_tally
     return {
         "mode": view.mode,
+        "colour": colour,
         "focus": view.focus_id or None,
         "depth": view.depth,
         "scope": {"type": view.scope_type, "namespace": view.scope_namespace},
@@ -706,6 +744,11 @@ def graph_payload(view: KnowledgeGraphView) -> dict[str, Any]:
         "would_be_nodes": {
             str(level): count for level, count in view.would_be_nodes.items()
         },
+        "provenance_facets": [
+            {"group": facet.group, "count": facet.count, "shown": facet.shown}
+            for facet in view.provenance_facets
+        ],
+        "unresolved_contradictions": view.unresolved_contradictions,
         "refusal": None
         if refusal is None
         else {

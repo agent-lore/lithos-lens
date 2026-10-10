@@ -1,0 +1,64 @@
+{#-
+  The canvas over the text (K2 S4): its toolbar, the Cytoscape box and the
+  canvas's own key. Rendered only for a drawn view, and every part `hidden`
+  until `knowledge_graph.js` has drawn — a page without the script keeps its
+  text and shows no empty box. The script fills what comes from the payload
+  (the slider's value, the hidden count, each depth's would-be count, the
+  key) and sets each control from it; every control navigates (S4 D3), so
+  the server re-renders text, payload and canvas together.
+-#}
+<div class="graph-toolbar kgraph-toolbar" data-kgraph-toolbar hidden>
+  {% if view.unresolved_contradictions %}
+    <span class="kgraph-unresolved" data-kgraph-unresolved-count>{{ view.unresolved_contradictions }} unresolved contradiction{{ "" if view.unresolved_contradictions == 1 else "s" }}</span>
+  {% endif %}
+
+  <label class="kgraph-control">Min weight
+    <input type="range" min="0" max="1" step="0.05" value="{{ view.filters.min_weight }}" data-kgraph-min-weight aria-describedby="kgraph-weight-hidden">
+    <output data-kgraph-min-weight-value>{{ view.filters.min_weight }}</output>
+  </label>
+  <span id="kgraph-weight-hidden" class="kgraph-count-text" data-kgraph-weight-hidden></span>
+
+  {% if view.provenance_facets %}
+    <fieldset class="kgraph-control-group" data-kgraph-provenance-group>
+      <legend>Provenance</legend>
+      {% for facet in view.provenance_facets %}
+        <label><input type="checkbox" value="{{ facet.group }}" data-kgraph-provenance="{{ facet.group }}"{% if facet.shown %} checked{% endif %}> {{ facet.group }} <span class="kgraph-count">{{ facet.count }}</span></label>
+      {% endfor %}
+    </fieldset>
+  {% endif %}
+
+  {% if view.mode == "focus" %}
+    <fieldset class="kgraph-control-group" data-kgraph-depth-group>
+      <legend>Depth</legend>
+      {% for level in (1, 2) %}
+        <label><input type="radio" name="kgraph-depth" value="{{ level }}" data-kgraph-depth{% if level == view.depth %} checked{% endif %}> depth {{ level }}<span data-kgraph-depth-count="{{ level }}"></span></label>
+      {% endfor %}
+    </fieldset>
+  {% endif %}
+
+  <fieldset class="kgraph-control-group" data-kgraph-colour-group>
+    <legend>Colour notes by</legend>
+    <label><input type="radio" name="kgraph-colour" value="namespace" data-kgraph-colour{% if params.colour == "namespace" %} checked{% endif %}> namespace</label>
+    <label><input type="radio" name="kgraph-colour" value="type" data-kgraph-colour{% if params.colour == "type" %} checked{% endif %}> note type</label>
+  </fieldset>
+
+  <label class="kgraph-control">Find
+    <input type="search" placeholder="A title in this graph" data-kgraph-search>
+  </label>
+  <span class="kgraph-count-text" data-kgraph-search-count aria-live="polite"></span>
+
+  {#- What a canvas click opens the panel through: htmx reads this element's
+      `hx-sync` (one panel request at a time, the later click wins, as the
+      text's panel links do); the script pushes the page URL itself once that
+      request's fragment is swapped in. -#}
+  <span data-kgraph-panel-source hx-sync="#kgraph-panel:replace" hidden></span>
+</div>
+
+<div class="kgraph-canvas" data-kgraph-canvas role="img" aria-label="The graph drawn above its text; the text below lists the same notes and edges" hidden></div>
+<p class="kgraph-pan-hint" data-kgraph-pan-hint hidden>Part of the graph is outside this view: drag to pan, or zoom out.</p>
+
+<div class="kgraph-key" data-kgraph-key hidden>
+  <ul class="kgraph-key-list" data-kgraph-key-edges aria-label="Edge types"></ul>
+  <ul class="kgraph-key-list" data-kgraph-key-nodes aria-label="Node colours"></ul>
+  <ul class="kgraph-key-list" data-kgraph-key-marks aria-label="Marks"></ul>
+</div>

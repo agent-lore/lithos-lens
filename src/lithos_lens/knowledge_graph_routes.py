@@ -93,10 +93,14 @@ _URL_KEYS = (
     "namespace",
     "min_weight",
     "provenance",
+    "colour",
     "selected",
     "edge",
     "pin",
 )
+
+#: How the canvas colours its nodes (S4 D5): by namespace, or by note type.
+NodeColour = Literal["namespace", "type"]
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,9 @@ class KnowledgeGraphParams:
     #: The edge a ``selected=`` node's view keeps drawn: the ``edge=`` of the
     #: view its Node details link was on, so a reload draws that same view.
     pin: str = ""
+    #: The canvas's node colouring; nothing the text or the view depends on,
+    #: carried so every link keeps the picture the operator chose.
+    colour: NodeColour = "namespace"
 
     @property
     def mode(self) -> GraphMode:
@@ -191,7 +198,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     request carrying both is read as ``edge`` alone, whatever their order
     (no link the page writes carries both; :func:`knowledge_graph_url`
     clears one when it sets the other). ``pin`` is read beside ``selected``
-    only: an ``edge=`` is its own pin.
+    only: an ``edge=`` is its own pin. ``colour`` is ``type`` or, for
+    anything else, the default ``namespace``.
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
@@ -209,6 +217,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         edge=edge,
         selected="" if edge else _value(query, "selected"),
         pin="" if edge else _value(query, "pin"),
+        colour="type" if _value(query, "colour").strip() == "type" else "namespace",
     )
 
 
@@ -221,6 +230,8 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
         return "" if params.min_weight is None else repr(params.min_weight)
     if key == "provenance":
         return ",".join(params.provenance)
+    if key == "colour":
+        return "" if params.colour == "namespace" else params.colour
     if key in ("type", "namespace") and params.focus:
         return ""
     value = getattr(params, key)
@@ -596,7 +607,7 @@ def register_knowledge_graph_routes(
             sections=edge_sections(view),
             focus_node=focus_node,
             focus_meta=node_metadata(focus_node),
-            payload=graph_payload(view),
+            payload=graph_payload(view, colour=params.colour),
             panel=panel,
             panel_notice=missing_edge_notice(
                 view, params.edge, knowledge.graph_edge_table_ttl_s
