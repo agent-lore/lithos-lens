@@ -1907,9 +1907,12 @@ it sends nothing.
   is a 200 whose `[data-knowledge-graph-payload]` parses as a focus view with
   no `refusal` and some nodes, whose notes and edges are each a record with
   an id of its own, every edge's ends among its notes and every value the
-  canvas, key and toolbar read of the kind they read, and whose
-  `#kgraph-panel` carries a non-empty `data-kgraph-render` — all checked,
-  and the canvas's elements built, before anything on the page changes.
+  canvas, key and toolbar read present, of the kind and in the range the
+  server writes it (counts whole and never negative, states one of their
+  names), and whose `#kgraph-panel` carries a non-empty `data-kgraph-render`
+  — all checked, and the canvas's elements built, before anything on the
+  page changes. An answer whose elements cannot be built gives back the
+  colour slots its values took
   Anything else — offline (no payload), a malformed payload, a whole-view
   refusal, the render cap's 503, any other status, a network error — leaves
   the canvas, text, panel and address as they were, gives the controls back,

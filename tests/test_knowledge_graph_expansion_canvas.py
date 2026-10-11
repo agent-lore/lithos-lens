@@ -423,6 +423,18 @@ def _drop_node_ids(payload: dict[str, Any]) -> None:
         del node["id"]
 
 
+def _last(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    """The last entry of ``payload[key]``, which the answer must have."""
+    assert payload[key], key
+    return payload[key][-1]
+
+
+def _last_expansion(payload: dict[str, Any]) -> dict[str, Any]:
+    """The last note's own expansion counts, which it must have."""
+    node = next(n for n in reversed(payload["nodes"]) if n["expansion"])
+    return node["expansion"]
+
+
 def _set_edge_end(payload: dict[str, Any]) -> None:
     payload["edges"][0]["to"] = "note-nowhere"
 
@@ -438,6 +450,21 @@ MALFORMED: dict[str, Any] = {
     "an-edge-to-no-note": _set_edge_end,
     "a-label-not-text": lambda p: p["nodes"][-1].update(label={"text": "plan"}),
     "a-legend-not-a-list": lambda p: p.update(legend={}),
+    # Present and of a record's shape, but outside what the server writes.
+    "a-fractional-count": lambda p: _last(p, "nodes").update(undrawn_nodes=1.5),
+    "a-negative-degree": lambda p: _last(p, "nodes").update(degree=-1),
+    "a-null-degree": lambda p: _last(p, "nodes").update(degree=None),
+    "a-missing-count": lambda p: _last(p, "nodes").pop("undrawn_edges"),
+    "an-unknown-note-state": lambda p: _last_expansion(p).update(state="maybe"),
+    "a-hidden-count-not-a-number": lambda p: p["hidden"].update(by_weight={}),
+    "a-negative-hidden-count": lambda p: p["hidden"].update(by_weight=-1),
+    "a-legend-type-not-text": lambda p: _last(p, "legend").update(type={}),
+    "an-edge-class-not-text": lambda p: _last(p, "edges")["style"].update(
+        {"class": {"toString": None, "valueOf": None}}
+    ),
+    "an-unknown-edge-kind": lambda p: _last(p, "edges").update(kind="rumour"),
+    "an-unknown-step-state": lambda p: _last(p, "expansions").update(state="half"),
+    "a-would-be-count-not-a-number": lambda p: p["would_be_nodes"].update({"1": "4"}),
 }
 FAILURES.update(
     (name, (f"respond:0={name}", "the answer could not be read.")) for name in MALFORMED
@@ -840,6 +867,48 @@ def test_colour_slots_are_kept_through_a_collapse_and_new_values_take_unused_one
     assert ["reports", palette[1]] in once["keyNodes"]
 
 
+def test_a_view_that_could_not_be_built_gives_its_colour_slots_back(
+    lithos_lens_config_env: Path,
+) -> None:
+    """An answer whose elements fail to build after its new value took a
+    slot changes nothing: the next, whole answer's values take the slots
+    they would have taken had it never come."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        one = _response(client, ONE)
+    phantom = _with_payload(
+        one,
+        lambda p: next(n for n in p["nodes"] if n["id"] == CAPACITY).update(
+            namespace="aaa-phantom"
+        ),
+    )
+    expand = ["tap-node:" + PLAN, "dbltap-node:" + PLAN]
+
+    direct = _go(page, {ONE: one}, [*expand, "respond"])
+    retried = _go(
+        page,
+        {ONE: one, "phantom": phantom},
+        [
+            *expand,
+            "break-build",
+            "respond:0=phantom",
+            "mend-build",
+            "state",
+            *expand,
+            "respond:1",
+        ],
+    )
+
+    failed = _states(retried)[0]
+    assert failed["busy"] is False
+    assert "the answer could not be read." in failed["status"]["text"]
+    assert [push["url"] for push in retried["pushes"]] == [ONE]
+    assert _colours(retried) == _colours(direct)
+    palette = direct["palettes"]["nodes"]
+    assert _colours(retried)[CAPACITY] == _rgb(palette[1]), "the slot the phantom took"
+    assert "aaa-phantom" not in [value for value, _ in retried["keyNodes"]]
+
+
 def test_past_the_palette_new_values_share_the_neutral_and_changed_values_recolour(
     lithos_lens_config_env: Path,
 ) -> None:
@@ -932,6 +1001,53 @@ def test_base_values_take_slots_by_how_many_notes_have_them_not_by_name(
 
 
 # ── Everything the view says follows the swap ──────────────────────────
+
+
+def test_an_edge_still_drawn_takes_its_refreshed_weight_and_style_in_place(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Between the two renders the drawn typed edge was re-weighted and its
+    contradiction resolved upstream (same id, same ends): after the swap it
+    is drawn exactly as a fresh load of that answer draws it, and no note
+    moved."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        fresh = _page(client, ONE)
+        one = _response(client, ONE)
+    kept = next(e for e in page.payload["edges"] if e["kind"] == "typed")
+    refreshed = {
+        "weight": 0.95 if kept["weight"] != 0.95 else 0.75,
+        "style": {
+            "class": "kedge-contradicts kedge-resolved",
+            "stroke": "dashed",
+            "arrowhead": not kept["style"]["arrowhead"],
+            "label": "resolved upstream",
+        },
+    }
+
+    def upstream(payload: dict) -> None:
+        next(e for e in payload["edges"] if e["id"] == kept["id"]).update(refreshed)
+
+    changed = _with_payload(one, upstream)
+    result = _go(
+        page,
+        {ONE: changed},
+        ["mark", "tap-node:" + PLAN, "dbltap-node:" + PLAN, "respond", "mark"],
+    )
+    loaded = _run(fresh, [], _payload_of(changed))
+    before = _go(page, {}, [])
+
+    def drawn(run: dict) -> dict:
+        edge = next(e for e in run["edges"] if e["id"] == kept["id"])
+        return {k: edge[k] for k in ("colour", "lineStyle", "arrow", "width", "label")}
+
+    assert drawn(result) == drawn(loaded)
+    old, new = drawn(before), drawn(result)
+    for key in ("colour", "lineStyle", "arrow", "width", "label"):
+        assert new[key] != old[key], key
+    assert new["colour"] == _rgb(result["palettes"]["edges"][-1]), "resolved"
+    first, last = (_positions(m) for m in result["marks"])
+    assert {pid: last[pid] for pid in first} == first
 
 
 def test_text_counts_search_key_panel_render_ids_and_upstream_changes_follow_the_swap(

@@ -580,6 +580,12 @@ for (const action of actions) {
     const index = arg === "" ? fetches.length - 1 : Number(arg);
     if (kind === "headers") answer(index, responseFor(index, ""), true);
     else if (bodies[index]) bodies[index]();
+  } else if (kind === "break-build" || kind === "mend-build") {
+    // Building the next view's elements fails part way — a note's badge
+    // cannot be written — or works again.
+    sandbox.encodeURIComponent = kind === "break-build"
+      ? () => { throw new Error("no badge"); }
+      : encodeURIComponent;
   } else if (kind === "break-canvas") {
     // A canvas that fails part way through drawing the next view.
     cy.add = () => { throw new Error("the canvas broke"); };

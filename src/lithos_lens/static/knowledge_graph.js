@@ -219,43 +219,87 @@
       .map(function (step) { return step.id; });
   }
 
-  // Whether a fetched view is whole enough to commit (D16): its notes and
-  // edges each a record with an id of its own, every edge's ends among its
-  // notes (the server draws a note for every end, ghosts included), and
-  // each value the canvas, key and toolbar read of the kind they read.
-  // Checked before anything on the page changes.
+  // Whether a fetched view is whole enough to commit (D16): every field the
+  // canvas, key and toolbar read present, of the kind and in the range the
+  // server writes it (`graph_payload`) — counts whole and never negative,
+  // states one of their names — its notes and edges each with an id of its
+  // own, and every edge's ends among its notes (the server draws a note for
+  // every end, ghosts included). Checked before anything on the page changes.
+  const NOTE_STATES = ["available", "focus", "expanded", "complete", "over_cap"];
+  const STEP_STATES = ["applied", "unreached", "refused"];
+  const FACTS_STATES = ["ok", "pending", "unread", "missing"];
+  const EDGE_KINDS = ["typed", "wiki_link", "provenance"];
+  const STROKES = ["solid", "dotted", "dashed"];
+
   function wholeView(view) {
     const record = function (item) {
       return item !== null && typeof item === "object" && !Array.isArray(item);
     };
-    const name = function (value) { return typeof value === "string" && value !== ""; };
-    const number = function (value) {
-      return value === null || value === undefined || (typeof value === "number" && isFinite(value));
+    const text = function (value) { return typeof value === "string"; };
+    const name = function (value) { return text(value) && value !== ""; };
+    const flag = function (value) { return typeof value === "boolean"; };
+    const count = function (value) { return Number.isInteger(value) && value >= 0; };
+    const one = function (names) { return function (value) { return names.indexOf(value) !== -1; }; };
+    const nullOr = function (test) { return function (value) { return value === null || test(value); }; };
+    // `item` a record whose every named field passes its test.
+    const shaped = function (item, fields) {
+      return record(item) && Object.keys(fields).every(function (key) {
+        return Object.prototype.hasOwnProperty.call(item, key) && fields[key](item[key]);
+      });
     };
-    const optional = function (value, test) { return value === null || value === undefined || test(value); };
-    if (!Array.isArray(view.nodes) || !view.nodes.length || !Array.isArray(view.edges)) return false;
-    if (!optional(view.expansions, Array.isArray) || !optional(view.legend, Array.isArray)) return false;
+    const weight = function (value) { return typeof value === "number" && isFinite(value); };
+    const expansion = function (value) {
+      return shaped(value, { state: one(NOTE_STATES), would_count: count, cap: count });
+    };
+    const style = function (value) {
+      return shaped(value, { "class": name, stroke: one(STROKES), arrowhead: flag, label: text });
+    };
+    const step = function (value) {
+      return shaped(value, { id: name, state: one(STEP_STATES), added_nodes: count, added_edges: count }) &&
+        (value.would_count === undefined || count(value.would_count));
+    };
+    const shown = shaped(view, {
+      mode: one(["focus"]),
+      focus: name,
+      depth: count,
+      nodes: function (v) { return Array.isArray(v) && v.length > 0; },
+      edges: Array.isArray,
+      expansions: Array.isArray,
+      legend: Array.isArray,
+      hidden: function (v) { return shaped(v, { by_weight: count, by_provenance: count, total: count }); },
+      would_be_nodes: function (v) {
+        return record(v) && Object.keys(v).every(function (level) { return count(v[level]); });
+      },
+      filters: function (v) {
+        return shaped(v, {
+          min_weight: weight,
+          provenance: function (groups) { return Array.isArray(groups) && groups.every(name); }
+        });
+      }
+    });
+    if (!shown) return false;
     const notes = dict();
     const nodesWhole = view.nodes.every(function (node) {
       if (!record(node) || !name(node.id) || node.id in notes) return false;
       notes[node.id] = true;
-      return typeof node.label === "string" && optional(node.via, name) &&
-        number(node.degree) && number(node.hop) && number(node.undrawn_nodes) &&
-        number(node.undrawn_edges) && optional(node.expansion, record);
+      return shaped(node, {
+        label: text, facts_state: one(FACTS_STATES), ghost: flag, focus: flag, layer_only: flag,
+        hop: count, degree: count, note_type: text, status: text, namespace: text,
+        expanded: flag, via: nullOr(name), undrawn_nodes: count, undrawn_edges: count,
+        expansion: nullOr(expansion)
+      });
     });
     if (!nodesWhole) return false;
     const edges = dict();
     const edgesWhole = view.edges.every(function (edge) {
       if (!record(edge) || !name(edge.id) || edge.id in edges) return false;
       edges[edge.id] = true;
-      return name(edge.from) && name(edge.to) && edge.from in notes && edge.to in notes &&
-        number(edge.weight) && optional(edge.style, record);
+      return shaped(edge, {
+        from: name, to: name, kind: one(EDGE_KINDS), weight: nullOr(weight), partial: flag, style: style
+      }) && edge.from in notes && edge.to in notes;
     });
-    return edgesWhole &&
-      (view.expansions || []).every(function (step) { return record(step) && name(step.id); }) &&
-      (view.legend || []).every(record) &&
-      optional(view.hidden, record) && optional(view.would_be_nodes, record) &&
-      optional(view.filters, record);
+    return edgesWhole && view.expansions.every(step) &&
+      view.legend.every(function (line) { return shaped(line, { type: text, "class": name }); });
   }
 
   // The values `slotOf` has not seen, in the order they take slots (D16):
@@ -1255,17 +1299,29 @@
     // degree, its colour from its value); what is new added, unplaced.
     // Answers the nodes added.
     // `view`'s element definitions, built before anything is drawn from
-    // them: a swap that cannot build them changes nothing on the page.
+    // them: a swap that cannot build them changes nothing on the page —
+    // the colour slots its values took given back too, so a later view's
+    // values take them as if it had never come.
     function elementsOf(view) {
-      takeSlots(view);
-      const sizes = nodeSizes(view.nodes);
-      const drawn = dict();
-      view.nodes.forEach(function (node) { drawn[node.id] = true; });
-      const nodes = view.nodes.map(function (node) { return nodeDefinition(node, sizes); });
-      const edges = (view.edges || []).map(function (edge) {
-        return edgeDefinition(edge, view, drawn);
-      }).filter(Boolean);
-      return { nodes: nodes, edges: edges };
+      const slotted = Object.keys(slotOf);
+      const taken = slotsTaken;
+      try {
+        takeSlots(view);
+        const sizes = nodeSizes(view.nodes);
+        const drawn = dict();
+        view.nodes.forEach(function (node) { drawn[node.id] = true; });
+        const nodes = view.nodes.map(function (node) { return nodeDefinition(node, sizes); });
+        const edges = (view.edges || []).map(function (edge) {
+          return edgeDefinition(edge, view, drawn);
+        }).filter(Boolean);
+        return { nodes: nodes, edges: edges };
+      } catch (error) {
+        Object.keys(slotOf).forEach(function (value) {
+          if (slotted.indexOf(value) === -1) delete slotOf[value];
+        });
+        slotsTaken = taken;
+        throw error;
+      }
     }
 
     function applyElements(view, built) {
