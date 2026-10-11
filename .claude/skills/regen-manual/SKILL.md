@@ -93,7 +93,15 @@ Then, in order: **Getting around**, **The Tasks dashboard** (summary cards, epic
 
 Tone: instructional second-person ("Click a task row to open its detail page..."). Audience: **operators watching Lithos**, not contributors. Do NOT document FastAPI internals, the SSE re-broadcast mechanism, config fields, or other developer concerns — point such readers to `README.md` and `docs/`.
 
-## Step 5 — Clean up orphans
+## Step 5 — Compress the screenshots
+
+Playwright's 24-bit PNGs are 0.5–1.2 MB each; quantize them to palette PNGs (visually identical, about a third of the size) so the repo does not grow by several MB per regeneration and GitHub's PR image preview can render them:
+
+```bash
+uv run --no-project --with pillow python .claude/skills/regen-manual/compress_screenshots.py
+```
+
+## Step 6 — Clean up orphans
 
 Delete any file in `docs/user-manual/screenshots/` that is not referenced from the regenerated `manual.md`:
 
@@ -103,7 +111,7 @@ git status docs/user-manual/screenshots/
 
 Confirm only intended additions/deletions are present.
 
-## Step 6 — Report
+## Step 7 — Report
 
 Print one summary line in this format:
 
