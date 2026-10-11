@@ -319,42 +319,70 @@
     "provenance", "colour", "selected", "edge", "pin"
   ];
 
+  // A value as the server's URL builder writes it — Python's `urlencode`,
+  // that is `quote_plus` with nothing kept safe: letters, digits and `_.-~`
+  // as they are, a space as `+`, anything else `%XX` of its UTF-8 (so `*`
+  // is `%2A`, where `URLSearchParams` would keep it and write `~` `%7E`).
+  function quotePlus(value) {
+    return encodeURIComponent(value)
+      .replace(/[!'()*]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); })
+      .replace(/%20/g, "+");
+  }
+
+  // One pair's value as the parser reads it: `+` a space, percent-decoded.
+  function pairValue(pair) {
+    const at = pair.indexOf("=");
+    const raw = (at === -1 ? "" : pair.slice(at + 1)).replace(/\+/g, " ");
+    try {
+      return decodeURIComponent(raw);
+    } catch (error) {
+      return raw;
+    }
+  }
+
   // Show its neighbours for `pid` (D16), as `knowledge_graph_expand_url`
   // writes it for the view on screen: every earlier request for the note
   // dropped and the note appended last, the note selected, `edge` cleared
-  // and the edge it was drawn for kept as `pin`; every other pair as the
-  // server spells it, in its key order (`expand` in request order), and
-  // `canvas` last as `queryWith` spells it — one address, one spelling.
-  // The view's pairs are the server's own (`data-kgraph-address`, the
-  // address it rendered, each swap's), not the address bar's, which may
-  // spell the same view otherwise (`min_weight=.70`, `colour=namespace`);
-  // the selection is the address bar's, which panel clicks move.
+  // and the edge it was drawn for kept as `pin`; every other pair exactly
+  // as the server wrote it, in its key order (`expand` in request order),
+  // the pairs added encoded as it encodes them, and `canvas` last as
+  // `queryWith` spells it — one address, one spelling. The view's pairs are
+  // the server's own (`data-kgraph-address`, the address it rendered, each
+  // swap's), not the address bar's, which may spell the same view otherwise
+  // (`min_weight=.70`, `colour=namespace`); the selection is the address
+  // bar's, which panel clicks move.
   function expandQuery(pid, drawnEdge) {
     const now = new URLSearchParams(window.location.search);
     const page = document.querySelector("[data-knowledge-graph]");
     const address = page && typeof page.getAttribute === "function"
       ? page.getAttribute("data-kgraph-address")
       : null;
-    const view = address ? new URL(address, window.location.href).searchParams : now;
-    const focus = queryValue(view, "focus");
+    const search = address
+      ? (withoutFragment(address).split("?")[1] || "")
+      : window.location.search.replace(/^\?/, "");
+    const raw = search.split("&").filter(Boolean);
+    const focus = raw.filter(function (pair) { return pairKey(pair) === "focus"; })
+      .map(pairValue).pop() || "";
     // A pin the view does not draw is no pin (`drawn_selection`); an
     // `edge=` is its own pin.
     const pinned = queryValue(now, "pin");
     const pin = queryValue(now, "edge") || (pinned && drawnEdge(pinned) ? pinned : "");
     const requested = dict();
     const pairs = [];
-    view.forEach(function (value, key) {
+    raw.forEach(function (pair) {
+      const key = pairKey(pair);
       if (key === CANVAS_KEY || key === "selected" || key === "edge" || key === "pin") return;
       if (key === "expand") {
         // As the parser reads them: first occurrences, blanks and the focus
         // dropped.
+        const value = pairValue(pair);
         if (blank(value) || value === focus || value === pid || requested[value]) return;
         requested[value] = true;
       }
-      pairs.push([key, value]);
+      pairs.push([key, pair]);
     });
-    pairs.push(["expand", pid], ["selected", pid]);
-    if (pin) pairs.push(["pin", pin]);
+    pairs.push(["expand", "expand=" + quotePlus(pid)], ["selected", "selected=" + quotePlus(pid)]);
+    if (pin) pairs.push(["pin", "pin=" + quotePlus(pin)]);
     const rank = function (pair) {
       const at = URL_KEYS.indexOf(pair[0]);
       return at === -1 ? URL_KEYS.length : at;
@@ -362,9 +390,9 @@
     // A stable sort: repeated keys keep their order.
     const ordered = pairs.map(function (pair, index) { return [pair, index]; })
       .sort(function (a, b) { return rank(a[0]) - rank(b[0]) || a[1] - b[1]; })
-      .map(function (entry) { return entry[0]; });
-    if (fullPage) ordered.push([CANVAS_KEY, "full"]);
-    return new URLSearchParams(ordered).toString();
+      .map(function (entry) { return entry[0][1]; });
+    if (fullPage) ordered.push(CANVAS_KEY + "=full");
+    return ordered.join("&");
   }
 
   //: Python's whitespace (`str.isspace`, what the parser's `.strip()`

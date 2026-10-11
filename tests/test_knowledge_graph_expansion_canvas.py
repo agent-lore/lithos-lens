@@ -1381,3 +1381,42 @@ def test_the_double_click_url_is_the_servers_spelling_of_the_view_not_the_addres
     )
 
     assert result["fetches"] == [href, then]
+
+
+@pytest.mark.parametrize("canvas", ["", "&canvas=full"], ids=["inline", "full-page"])
+def test_the_double_click_url_encodes_every_value_as_the_server_does(
+    lithos_lens_config_env: Path, canvas: str
+) -> None:
+    """Two requests no note answers — unreached, kept and listed under Not
+    shown — spelled with `~` (which `urlencode` keeps) and `*` (which it
+    writes `%2A`): the double click's address is still the panel link's,
+    before a swap and after it."""
+    odd = (
+        f"{ROUTE}?focus={ROLLBACK}&expand=not-drawn~&expand=not-drawn*"
+        f"&min_weight=.70&selected={PLAN}&colour=namespace"
+    )
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, odd + canvas)
+        href = _expand(page.html)
+        answer = _response(client, href)
+        capacity = href.replace(f"&selected={PLAN}", f"&selected={CAPACITY}")
+        then = _expand(client.get(capacity).text)
+    assert "expand=not-drawn~&expand=not-drawn%2A&expand=" + PLAN in href
+    assert "expand=not-drawn~&expand=not-drawn%2A" in then
+    full = {"presentation": "full"} if canvas else {}
+
+    result = _go(
+        page,
+        {href: answer},
+        [
+            "tap-node:" + PLAN,
+            "dbltap-node:" + PLAN,
+            "respond",
+            "tap-node:" + CAPACITY,
+            "dbltap-node:" + CAPACITY,
+        ],
+        **full,
+    )
+
+    assert result["fetches"] == [href, then]
+    assert [push["url"] for push in result["pushes"]] == [href]
