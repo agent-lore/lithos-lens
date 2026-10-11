@@ -299,23 +299,24 @@ class KnowledgeGraphView:
     #: Drawn edges whose own pin would redraw this view (D16): reached within
     #: ``depth`` only through a hidden edge and drawn by an expansion.
     pin_redraws: frozenset[str] = frozenset()
+    #: Its selection draws and offers this same view as an ``edge=`` or a
+    #: ``pin=``: drawn here and in every collapse re-walk, so no pin fallback.
+    either_kind: bool = True
 
     def keeps_drawing_for(self, pin: str, *, is_pin: bool = False) -> bool:
         """A request selecting ``pin`` (its ``edge=``, or its ``pin=`` when
         ``is_pin``) draws this very view: the selection it was drawn under
         (the same filters, even once the edge has gone from the data — or of
-        either kind while drawn: a drawn pin is kept); or, on a view no
+        either kind where no walk leaves it undrawn, ``either_kind``); or, on
+        a view no
         exemption changed (``pinned`` empty), none, a drawn edge whose own
         pin changes nothing, or an undrawn ``pin=`` of its own, which is
         discarded. Anything else may draw differently (an exemption lost or
         gained), so it is not answered from this view."""
         drawn = named_edge(self, pin) is not None
         selected = self.filters.selected_edge
-        if (
-            pin
-            and pin == selected
-            and (drawn or is_pin == self.filters.selected_is_pin)
-        ):
+        same_kind = is_pin == self.filters.selected_is_pin
+        if pin and pin == selected and (same_kind or self.either_kind):
             return True
         if self.pinned:
             return False

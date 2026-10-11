@@ -871,3 +871,62 @@ def test_an_exemption_that_changes_only_a_collapse_preview_keeps_the_view_its_ow
     assert "C" not in pinned.collapses["X"].nodes
     assert pinned.pinned == "bz"
     assert pinned.keeps_drawing_for("bz") and not pinned.keeps_drawing_for("")
+
+
+# ── a selection's kind changes the view only through a fallback (round 6) ─
+
+KIND_ROWS = (
+    edge("fd", "F", "D"),
+    edge("de", "D", "E"),
+    edge("db", "D", "B"),
+    edge("ag", "A", "G"),
+    edge("bg", "B", "G", 0.05),
+)
+KIND_REQUESTS = ("E", "G", "D", "B")
+
+
+def kind_view(*, is_pin: bool) -> KnowledgeGraphView:
+    """Focus F, cap 5, wiki-links E and G: E applies, G refuses at 6, D
+    draws B, and B draws the faint bg (exempt) and promotes G."""
+    return assemble_focus_view(
+        EdgeTableSnapshot(rows=KIND_ROWS, as_of=_T0),
+        "F",
+        max_nodes=5,
+        neighborhood=RelatedNeighborhood(
+            links=(RelatedRef(id="E", title="E"), RelatedRef(id="G", title="G"))
+        ),
+        filters=KnowledgeGraphFilters(selected_edge="bg", selected_is_pin=is_pin),
+        expand=KIND_REQUESTS,
+    )
+
+
+def test_a_drawn_selection_answers_the_other_kind_only_when_no_fallback_differs() -> (
+    None
+):
+    """correctness f-008 (round 6): edge=bg and pin=bg draw the same view,
+    but removing B differs — the pin, then undrawn, is discarded, G applies
+    and D no longer fits, losing B; the edge keeps its exemption and B. So
+    neither view answers the other kind."""
+    as_edge, as_pin = kind_view(is_pin=False), kind_view(is_pin=True)
+
+    assert set(nodes(as_edge)) == set(nodes(as_pin))
+    assert "bg" in typed_ids(as_edge) and "bg" in typed_ids(as_pin)
+    assert "B" in as_edge.collapses["B"].nodes
+    assert "B" not in as_pin.collapses["B"].nodes
+    assert as_edge.keeps_drawing_for("bg")
+    assert not as_edge.keeps_drawing_for("bg", is_pin=True)
+    assert as_pin.keeps_drawing_for("bg", is_pin=True)
+    assert not as_pin.keeps_drawing_for("bg")
+
+
+def test_an_edge_its_exemption_draws_everywhere_answers_either_kind() -> None:
+    """The S5 flow: an edge panel's Node details carries the edge as a pin.
+    At depth 2 the faint e-aw is drawn by the exemption in the base, so no
+    collapse can leave it undrawn: either kind assembles this same view."""
+    selected = KnowledgeGraphFilters(selected_edge="e-aw")
+    view = view_of(depth=2, filters=selected)
+
+    assert "e-aw" in typed_ids(view) and view.pinned == "e-aw"
+    assert view.keeps_drawing_for("e-aw")
+    assert view.keeps_drawing_for("e-aw", is_pin=True)
+    assert not view.keeps_drawing_for("")

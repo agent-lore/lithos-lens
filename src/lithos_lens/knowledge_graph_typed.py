@@ -81,6 +81,9 @@ class KnowledgeTypedGraph:
     #: Drawn edges whose own pin would redraw the plain view: reached within
     #: ``depth`` only through a hidden edge, drawn here by an expansion (D16).
     pin_redraws: frozenset[str] = frozenset()
+    #: The selection assembles this same view as an ``edge=`` or a ``pin=``:
+    #: they differ only where a walk leaves it undrawn (a pin is discarded).
+    either_kind: bool = True
     #: Focus mode once the expansion pass has run (D16): its steps, ``via``,
     #: and every visible note's eligibility.
     expansion: KnowledgeExpansion | None = None
@@ -338,6 +341,11 @@ def expanded_typed_graph(
         provenance_facets=_provenance_facets(unfiltered.values(), counted),
         pinned=pinned,
         pin_redraws=redraws,
+        either_kind=not selected
+        or (
+            selected in drawn
+            and all(selected in c.edges for c in expansion.collapses.values())
+        ),
         expansion=expansion,
     )
 

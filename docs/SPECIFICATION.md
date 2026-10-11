@@ -1696,8 +1696,10 @@ A fragment naming a held view is drawn from it with nothing read, so it is
 that page's panel byte for byte whatever other tabs or the facts TTL did
 since. A held view answers only a selection that would draw it the same: the
 `edge=` / `pin=` it was drawn under (the same selection, of the same kind
-unless the view draws it — so a pin gone from the data since, left in the
-address bar, still finds it), or, on a view no exemption changed (not
+— so a pin gone from the data since, left in the address bar, still finds
+it — or of either kind when no walk leaves that edge undrawn: the view draws
+it and so does every collapse re-walk, so a `pin=` is nowhere discarded and
+assembles what the `edge=` does; an edge panel's Node details relies on it), or, on a view no exemption changed (not
 pinned: what it draws — expansions' reach and cap verdicts included — and
 what it offers — every note's expansion eligibility and every collapse
 preview — are the plain filters'), no edge, one it draws whose own pin would change

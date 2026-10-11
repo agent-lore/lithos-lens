@@ -274,6 +274,7 @@ def build_view(
         refusal=typed.refusal,
         pinned=typed.pinned,
         pin_redraws=typed.pin_redraws,
+        either_kind=typed.either_kind,
         as_of=as_of,
         stale=stale,
         layers_unavailable=layers_unavailable,

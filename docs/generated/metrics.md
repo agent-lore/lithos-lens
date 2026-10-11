@@ -38,7 +38,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoint | 2 | 115 | 86 | 0 | 5 | 1.00 | 4 (`lithos_lens.main.resolve_port`) | 0 |
 | Errors | 1 | 33 | 21 | 4 | 0 | 0.00 | - | 0 |
 | Events | 1 | 800 | 587 | 3 | 5 | 0.62 | 14 (`lithos_lens.events._iter_sse_lines`) | 3 |
-| Knowledge | 17 | 5357 | 4246 | 4 | 2 | 0.33 | 18 (`lithos_lens.knowledge_facts.NoteFactsCache.lookup`) | 9 |
+| Knowledge | 17 | 5367 | 4252 | 4 | 2 | 0.33 | 18 (`lithos_lens.knowledge_facts.NoteFactsCache.lookup`) | 9 |
 | LithosClient | 10 | 5109 | 4143 | 2 | 6 | 0.75 | 21 (`lithos_lens.fake_writes.FakeWriteStore.edge_upsert`) | 9 |
 | Logging | 1 | 169 | 122 | 2 | 1 | 0.33 | 7 (`lithos_lens.logging._json_safe`) | 0 |
 | State | 1 | 115 | 81 | 1 | 5 | 0.83 | 4 (`lithos_lens.state.AppState.__init__`) | 0 |
@@ -50,7 +50,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **92**, lines: **37191**, SLOC: **28995**
+- Modules: **92**, lines: **37201**, SLOC: **29001**
 - Largest module: `lithos_lens.write_funnel` (880 lines)
 - Modules over 800 lines: **5**
   - `lithos_lens.frontier`
@@ -89,4 +89,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 ## Domain & tests
 
 - Domain models: **151** (169 associations, 16 without docstrings)
-- Test-to-source line ratio: **2.03** (75322 test lines / 37191 source lines)
+- Test-to-source line ratio: **2.03** (75409 test lines / 37201 source lines)

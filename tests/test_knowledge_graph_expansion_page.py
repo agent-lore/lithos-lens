@@ -36,7 +36,7 @@ from lithos_lens.knowledge_graph_routes import (
 )
 from lithos_lens.tasks import NoteRecord
 from lithos_lens.web import create_app
-from tests.test_knowledge_graph_expansion import A_ROWS, LAYERS, ROWS, edge
+from tests.test_knowledge_graph_expansion import A_ROWS, KIND_ROWS, LAYERS, ROWS, edge
 
 ROUTE = "/knowledge/graph"
 PANEL = "/knowledge/graph/panel"
@@ -866,3 +866,31 @@ def test_a_held_view_whose_edge_exemption_changes_actions_redirects_a_pin_tap(
         "Show its neighbours — adds 2 notes and 3 edges; "
         "6 notes would count towards the 6 cap"
     )
+
+
+def test_a_held_panel_does_not_answer_a_kind_change_whose_collapse_differs(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness f-008 (round 6): on the edge=bg page, a tap on B asks for
+    selected=B&pin=bg. That page's Collapse of B would lose B (the pin,
+    undrawn there, is discarded), so the tap reloads rather than offer the
+    edge view's Collapse link, which would keep a selection it cannot draw."""
+    _set_knowledge(lithos_lens_config_env, "graph_focus_max_nodes = 5")
+    layers = RelatedNeighborhood(
+        links=(RelatedRef(id="E", title="E"), RelatedRef(id="G", title="G"))
+    )
+    scope = "focus=F&expand=E&expand=G&expand=D&expand=B"
+    with _client(
+        lithos_lens_config_env, _Graph(rows=KIND_ROWS, layers=layers)
+    ) as client:
+        page = _get(client, _url(f"{scope}&edge=bg"))
+        response = client.get(
+            f"{PANEL}?{scope}&selected=B&pin=bg&render={_render_id(page)}"
+        )
+        assert response.headers["HX-Redirect"] == _url(f"{scope}&selected=B&pin=bg")
+
+        loaded = _get(client, response.headers["HX-Redirect"])
+        collapse = _href(_action(loaded), "data-kgraph-collapse")
+        assert collapse == _url("focus=F&expand=E&expand=G&expand=D")
+        after = _get(client, collapse)
+    assert "B" not in {n["id"] for n in _payload(after)["nodes"]}
