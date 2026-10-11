@@ -6,6 +6,12 @@
   extends no layout. `panel` is a KnowledgeNodePanel, a KnowledgeEdgePanel,
   or none — the one-line answer, `panel_notice`. The page renders that only
   for an `edge=` the snapshot does not hold; otherwise it shows no panel.
+
+  Every answer leads with a close control (D17): a plain link to this view
+  with no selection, keeping as `pin=` the edge whose exemption the drawing
+  needs (`view.pinned`; the payload does not carry it). `knowledge_graph.js`
+  closes in place instead, and on Esc. Its heading is where an explicit open
+  puts the keyboard focus.
 -#}
 {% from "knowledge/graph_macros.html" import collapse_preview, node_ref, panel_attrs %}
 {% from "knowledge/edge_evidence.html" import edge_evidence %}
@@ -35,15 +41,25 @@
   </article>
 {% endmacro %}
 
+{% macro close_control() -%}
+  {#- Offline, no view is drawn: the route names the pin (`close_pin`). -#}
+  {%- if close_pin is defined -%}{%- set pinned = close_pin -%}
+  {%- else -%}{%- set pinned = view.pinned if view is defined and view is not none else "" -%}
+  {%- endif -%}
+  <a class="kgraph-panel-close" href="{{ knowledge_graph_url(params, selected='', edge='', pin=pinned) }}" data-kgraph-panel-close aria-label="Close panel">Close</a>
+{%- endmacro %}
+
 {% if panel is none %}
   <section class="panel kgraph-panel" data-kgraph-panel="none" role="status">
+    {{ close_control() }}
     <p class="kgraph-note">{{ panel_notice }}{% if panel_reload %} <a href="{{ panel_reload }}" data-kgraph-reload>Reload the page with this panel</a>{% endif %}</p>
   </section>
 {% elif panel.kind == "node" %}
   {% set node = panel.node %}
   <section class="panel kgraph-panel" data-kgraph-panel="node" data-kgraph-panel-id="{{ node.id }}" aria-label="Node details">
+    {{ close_control() }}
     <p class="eyebrow">Node</p>
-    <h2>{{ node_ref(node) }}</h2>
+    <h2 tabindex="-1" data-kgraph-panel-heading>{{ node_ref(node) }}</h2>
     {{ node_facts(node, panel.meta) }}
     <p data-kgraph-degree>Degree in this view: {{ node.degree }}</p>
     {#- D16, focus mode only, from the server's eligibility: the focus has
@@ -92,6 +108,7 @@
   {% set edge = panel.edge %}
   {% set entry = panel.entry %}
   <section class="panel kgraph-panel" data-kgraph-panel="edge" data-kgraph-panel-id="{{ edge.id }}" aria-label="Edge details">
+    {{ close_control() }}
     <p class="eyebrow">Edge</p>
     {% if panel.is_contradiction %}
       {% if panel.conflict_resolved %}
@@ -100,7 +117,7 @@
         <p class="kgraph-conflict-state kgraph-unresolved" data-kgraph-conflict-state="unresolved">{{ panel.conflict_label }}{% if edge.conflict_state %} <code>{{ edge.conflict_state }}</code>{% endif %}</p>
       {% endif %}
     {% endif %}
-    <h2 data-kgraph-sentence>{{ node_ref(entry.source) }} {{ panel.phrase.joiner }} {{ node_ref(entry.target) }}{{ panel.phrase.tail }}</h2>
+    <h2 tabindex="-1" data-kgraph-panel-heading data-kgraph-sentence>{{ node_ref(entry.source) }} {{ panel.phrase.joiner }} {{ node_ref(entry.target) }}{{ panel.phrase.tail }}</h2>
     <dl class="kgraph-fields">
       <div><dt>Type</dt><dd><code>{{ edge.type }}</code></dd></div>
       <div><dt>Weight</dt><dd>{{ entry.weight_label }}</dd></div>

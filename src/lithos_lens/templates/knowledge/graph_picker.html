@@ -2,7 +2,8 @@
   The scope picker (K2 D11, story 17): edge types and namespaces with their
   counts from the snapshot's facets, and the unresolved contradictions as a
   link to their queue. With no facets — the table over its bound, or not
-  readable — it says so and offers only a typed-in scope.
+  readable — it says so and offers only a typed-in scope. Every link keeps
+  the page's own query (a full-page session stays full, D17), no selection.
 -#}
 <section class="kgraph-picker" data-kgraph-picker>
   {% if picker.unavailable %}
@@ -21,7 +22,7 @@
       </p>
     {% endif %}
     <p class="kgraph-contradictions" data-picker-contradictions>
-      <a href="{{ knowledge_graph_url(type='contradicts') }}">{{ picker.facets.unresolved_contradictions }} unresolved contradiction{{ "" if picker.facets.unresolved_contradictions == 1 else "s" }}</a>
+      <a href="{{ knowledge_graph_url(params, type='contradicts', selected='', edge='') }}">{{ picker.facets.unresolved_contradictions }} unresolved contradiction{{ "" if picker.facets.unresolved_contradictions == 1 else "s" }}</a>
     </p>
     <div class="kgraph-facets">
       <section class="panel" data-picker-types>
@@ -31,7 +32,7 @@
             <thead><tr><th scope="col">Type</th><th scope="col">Edges</th></tr></thead>
             <tbody>
               {% for name, count in picker.facets.types.items() %}
-                <tr><td><a href="{{ knowledge_graph_url(type=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+                <tr><td><a href="{{ knowledge_graph_url(params, type=name, selected='', edge='') }}">{{ name }}</a></td><td>{{ count }}</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -46,7 +47,7 @@
             <thead><tr><th scope="col">Namespace</th><th scope="col">Edges</th></tr></thead>
             <tbody>
               {% for name, count in picker.top_namespaces %}
-                <tr><td><a href="{{ knowledge_graph_url(namespace=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+                <tr><td><a href="{{ knowledge_graph_url(params, namespace=name, selected='', edge='') }}">{{ name }}</a></td><td>{{ count }}</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -56,7 +57,7 @@
               <table class="kgraph-facet-table">
                 <tbody>
                   {% for name, count in picker.more_namespaces %}
-                    <tr><td><a href="{{ knowledge_graph_url(namespace=name) }}">{{ name }}</a></td><td>{{ count }}</td></tr>
+                    <tr><td><a href="{{ knowledge_graph_url(params, namespace=name, selected='', edge='') }}">{{ name }}</a></td><td>{{ count }}</td></tr>
                   {% endfor %}
                 </tbody>
               </table>

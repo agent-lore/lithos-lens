@@ -1,10 +1,11 @@
 {#-
   The scope line (K2 D12, story 19): what is drawn — the focus or the
   filters, the depth, the applied expansions each with its remove link (D16)
-  — and when the edge table behind it was fetched.
+  — and when the edge table behind it was fetched. In full page (D17) it is
+  the first of the text under the canvas: the toolbar's "Text view" target.
 -#}
 {% from "knowledge/graph_macros.html" import collapse_preview, expansion_ref %}
-<section class="kgraph-scope" data-kgraph-scope>
+<section class="kgraph-scope" id="kgraph-text" data-kgraph-scope>
   <p>
     {% if view.mode == "focus" %}
       Focus: {% if focus_node is not none %}{{ node_ref(focus_node) }}{% else %}<span class="kgraph-id">{{ view.focus_id }}</span>{% endif %}

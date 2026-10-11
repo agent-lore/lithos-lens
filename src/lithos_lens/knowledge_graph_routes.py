@@ -23,6 +23,9 @@ edge-table snapshot, one ``lithos_related``, the gated facts fan-out — lives i
   and one partial behind both. Every drawn view is kept under a render id
   (:class:`RenderedViews`) that the page's panel links carry, so a click's
   fragment is drawn from the very view its page showed.
+- **Full page** (D17): ``canvas=full`` is presentation only — carried by every
+  link, left out of a drawn view's identity (:func:`_scope`), applied by the
+  script.
 - **Events** (D14): ``GET /knowledge/events`` is ``/tasks/events``' body
   (:mod:`lithos_lens.event_streams`) on the hub's knowledge stream, which the
   canvas listens on to raise its "graph changed — refresh" pill.
@@ -99,10 +102,16 @@ _URL_KEYS = (
     "selected",
     "edge",
     "pin",
+    # Last: the script appends it to an address with `URLSearchParams.set`,
+    # and the two spellings of one address must agree (S10).
+    "canvas",
 )
 
 #: How the canvas colours its nodes (S4 D5): by namespace, or by note type.
 NodeColour = Literal["namespace", "type"]
+
+#: How the canvas is presented (D17): over the text, or filling the window.
+CanvasMode = Literal["inline", "full"]
 
 
 @dataclass(frozen=True)
@@ -130,6 +139,9 @@ class KnowledgeGraphParams:
     colour: NodeColour = "namespace"
     #: D16: the notes expanded in place, in URL order (focus mode only).
     expand: tuple[str, ...] = ()
+    #: D17: presentation only, like ``colour`` — carried by every link and
+    #: left out of the drawn view's identity (:func:`_scope`).
+    canvas: CanvasMode = "inline"
 
     @property
     def mode(self) -> GraphMode:
@@ -216,7 +228,8 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     only: an ``edge=`` is its own pin. ``colour`` is ``type`` or, for
     anything else, the default ``namespace``. ``expand`` repeats (D16): its
     ids in order, duplicates and the focus dropped, and none outside focus
-    mode.
+    mode. ``canvas`` is ``full`` or, for anything else, ``inline`` (D17), in
+    every mode.
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
@@ -236,6 +249,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         pin="" if edge else _value(query, "pin"),
         colour="type" if _value(query, "colour").strip() == "type" else "namespace",
         expand=requests_for(focus, _values(query, "expand")) if focus else (),
+        canvas="full" if _value(query, "canvas").strip() == "full" else "inline",
     )
 
 
@@ -250,6 +264,8 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
         return ",".join(params.provenance)
     if key == "colour":
         return "" if params.colour == "namespace" else params.colour
+    if key == "canvas":
+        return "" if params.canvas == "inline" else params.canvas
     if key in ("type", "namespace") and params.focus:
         return ""
     value = getattr(params, key)
@@ -301,6 +317,7 @@ def knowledge_graph_url(
     ``edge``, so a link carries one selection — the later click's; a
     ``selected`` set on a view drawn for an edge carries it as ``pin``.
     ``expand`` is one pair per note, in order; a new focus or scope drops it.
+    ``canvas`` is kept across every change, scope and selection included.
     """
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
 
@@ -372,8 +389,10 @@ RENDERED_VIEWS_KEPT = 32
 def _scope(params: KnowledgeGraphParams) -> str:
     """The scope and filters a view is drawn for, as the URL builder writes
     them: one canonical spelling, so what the page's own links leave out (a
-    ``depth`` outside focus mode) cannot make its view unfindable."""
-    return knowledge_graph_url(params, selected="", edge="", pin="")
+    ``depth`` outside focus mode) cannot make its view unfindable. Not the
+    ``canvas`` presentation (D17): a page toggled to full page keeps its
+    view for the next click."""
+    return knowledge_graph_url(params, selected="", edge="", pin="", canvas="inline")
 
 
 class RenderedViews:
@@ -462,6 +481,7 @@ def _record(
     mode: GraphMode,
     outcome: RenderOutcome,
     *,
+    canvas: CanvasMode,
     snapshot_age_s: float,
     refusal: str = "",
     view: KnowledgeGraphView | None = None,
@@ -479,11 +499,13 @@ def _record(
     focus id, type and namespace are on neither: ``http.target`` already
     carries the query on the span, bounded (``telemetry.py``). The ``expand=``
     requests (D16) and what became of them are span counts too, 0 where none.
+    ``canvas`` (D17, ``inline`` | ``full``) is set in every mode.
     """
     span = get_current_span()
     prefix = "lens.knowledge.graph"
     span.set_attribute(f"{prefix}.mode", mode)
     span.set_attribute(f"{prefix}.outcome", outcome)
+    span.set_attribute(f"{prefix}.canvas", canvas)
     if refusal:
         span.set_attribute(f"{prefix}.refusal", refusal)
     span.set_attribute(f"{prefix}.snapshot_age_s", snapshot_age_s)
@@ -639,6 +661,7 @@ def register_knowledge_graph_routes(
             _record(
                 mode,
                 "offline",
+                canvas=params.canvas,
                 snapshot_age_s=table.age_seconds(),
                 depth=params.depth_or(knowledge.graph_default_depth),
             )
@@ -647,7 +670,13 @@ def register_knowledge_graph_routes(
         if view is None:  # the picker
             context["picker"] = load.picker
             outcome, reason = _outcome(None, load.picker)
-            _record(mode, outcome, refusal=reason, snapshot_age_s=table.age_seconds())
+            _record(
+                mode,
+                outcome,
+                canvas=params.canvas,
+                refusal=reason,
+                snapshot_age_s=table.age_seconds(),
+            )
             return templates.TemplateResponse(request, "knowledge/graph.html", context)
         focus_node = view.node(view.focus_id) if view.mode == "focus" else None
         params = drawn_selection(params, view)
@@ -670,6 +699,7 @@ def register_knowledge_graph_routes(
         _record(
             mode,
             outcome,
+            canvas=params.canvas,
             refusal=reason,
             view=view,
             snapshot_age_s=table.age_seconds(),
@@ -710,6 +740,10 @@ def register_knowledge_graph_routes(
         }
         health = await state.refresh_health()
         if health.lithos != "ok":
+            # Its Close keeps the exemption the page's drawing needs (D17):
+            # the held view's, nothing read; else the selection's own edge.
+            held = views.get(render_id, params) if render_id else None
+            context["close_pin"] = held.pinned if held else params.edge or params.pin
             context["panel_notice"] = "Lithos is offline."
             return templates.TemplateResponse(
                 request, "knowledge/graph_panel.html", context
@@ -732,6 +766,7 @@ def register_knowledge_graph_routes(
             load = await load_knowledge_graph(state, params, picker=False)
             if load.offline:
                 # The assembly's own probe may be the one that saw the outage.
+                context["close_pin"] = params.edge or params.pin
                 context["panel_notice"] = "Lithos is offline."
                 return templates.TemplateResponse(
                     request, "knowledge/graph_panel.html", context

@@ -1,6 +1,6 @@
 """K2 slice 8 — the expansion page (D16) through the app (TestClient).
 
-The PRD's "Expansion page" cases, except full-page URL carrying (S10): an
+The PRD's "Expansion page" cases — full-page URL carrying (S10) included: an
 expansion's edges are in both the text and the payload and agree; the scope
 line names applied expansions with remove links and dependant previews; "Not
 shown" lists unreached and refused requests; the node panel's Show its
@@ -44,7 +44,8 @@ PANEL = "/knowledge/graph/panel"
 _HOST = re.compile(
     r'<div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host'
     r' data-kgraph-render="([^"]*)">'
-    r"(.*?)</div>\s*<section class=\"panel kgraph-legend\"",
+    # Closed, on a drawn page, by the canvas stage around it (D17) too.
+    r"(.*?)</div>\s*(?:</div>\s*)?<section class=\"panel kgraph-legend\"",
     re.S,
 )
 
@@ -410,6 +411,34 @@ def test_panel_links_carry_the_expansions_and_a_render_is_found_only_with_them(
 
         other = client.get(f"{PANEL}?focus=F&selected=A&render={render}")
     assert other.headers["HX-Redirect"] == _url("focus=F&selected=A")
+
+
+def test_every_expansion_link_keeps_a_full_page_session_full(
+    lithos_lens_config_env: Path,
+) -> None:
+    """D17 over D16: Show its neighbours, Collapse, the scope line's and "Not
+    shown"'s remove links and Centre on this each write the link they write
+    inline, with ``canvas=full`` last."""
+
+    def links(client: TestClient, presentation: str) -> list[str]:
+        page = _get(
+            client, _url(f"focus=F&expand=A&expand=NOWHERE&selected=B{presentation}")
+        )
+        expanded = _get(client, _url(f"focus=F&expand=A&selected=A{presentation}"))
+        return [
+            _href(_host(page), "data-kgraph-expand"),
+            _href(_host(page), "data-kgraph-centre"),
+            _href(_scope_line(page), 'data-kgraph-expansion-remove="A"'),
+            _href(_not_shown(page, "NOWHERE"), "data-kgraph-expansion-remove"),
+            _href(_host(expanded), "data-kgraph-collapse"),
+        ]
+
+    with _client(lithos_lens_config_env) as client:
+        inline = links(client, "")
+        full = links(client, "&canvas=full")
+
+    assert not [link for link in inline if "canvas" in link]
+    assert full == [f"{link}&canvas=full" for link in inline]
 
 
 # ── reads and freshness ────────────────────────────────────────────────

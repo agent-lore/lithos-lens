@@ -2378,11 +2378,14 @@ a.blocker-chip:focus-visible {
 
 .kgraph-key {
   color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0 0 1rem;
+}
+
+.kgraph-key-body {
   display: flex;
   flex-wrap: wrap;
-  font-size: 0.8rem;
   gap: 0.5rem 1.5rem;
-  margin: 0 0 1rem;
 }
 
 .kgraph-key-list {
@@ -2422,6 +2425,240 @@ a.blocker-chip:focus-visible {
   border-top-width: 3px;
   height: 0;
   width: 1.4rem;
+}
+
+/* --- /knowledge/graph full page (K2 D17) --------------------------------
+
+   The toolbar, canvas, pan hint, key and panel host are one stage. Inline it
+   is a column with the page's own spacing, and the toolbar's two parts (its
+   head: the pill, the unresolved count and the full-page actions; its
+   controls) are one row, as before. Full page is `knowledge_graph.js`'s
+   `kgraph-full` class on the body, never the server's `canvas=full`, so
+   without the script nothing here applies: the stage fills the window below
+   the shell header (its measured height, `--kgraph-header-height`), the
+   canvas fills the stage and everything else lies over it — siblings of the
+   Cytoscape box, so a wheel over the panel scrolls the panel. The text keeps
+   its column below. */
+.kgraph-stage {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.kgraph-toolbar-head,
+.kgraph-controls {
+  display: contents;
+}
+
+.kgraph-toolbar button,
+.kgraph-key .kgraph-disclosure {
+  background: var(--panel-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.7rem;
+  width: auto;
+}
+
+.kgraph-toolbar .kgraph-full-toggle[aria-pressed="true"],
+.kgraph-disclosure[aria-expanded="true"] {
+  background: var(--ink);
+  color: var(--panel);
+}
+
+/* Offered in full page only: inline, the key and the controls are open. */
+.kgraph-disclosure {
+  display: none;
+}
+
+.kgraph-text-link {
+  color: var(--ink);
+}
+
+.kgraph-panel-close {
+  color: var(--muted);
+  float: right;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem 1rem;
+}
+
+.kgraph-full .shell-main {
+  max-width: none;
+  padding: 0 0 3rem;
+}
+
+/* The text under the stage keeps the shell's column: 72rem less its
+   padding, centred. */
+.kgraph-full .kgraph-page > :not(.kgraph-stage) {
+  margin-inline: auto;
+  max-width: 68rem;
+  width: calc(100% - 4rem);
+}
+
+.kgraph-full .kgraph-stage {
+  display: block;
+  height: calc(100vh - var(--kgraph-header-height, 0px));
+  height: calc(100dvh - var(--kgraph-header-height, 0px));
+  overflow: hidden;
+  position: relative;
+}
+
+.kgraph-full .kgraph-canvas {
+  border-radius: 0;
+  border-width: 0 0 1px;
+  height: auto;
+  inset: 0;
+  margin: 0;
+  position: absolute;
+  width: auto;
+}
+
+.kgraph-full .kgraph-toolbar {
+  background: rgba(255, 250, 240, 0.94);
+  border-bottom: 1px solid var(--line);
+  left: 0;
+  margin: 0;
+  /* `--kgraph-*-cap`: what the script leaves each overlay when the selected
+     note needs the room (knowledge_graph.js, makeRoom); it scrolls. */
+  max-height: min(70%, var(--kgraph-toolbar-cap, 100%));
+  overflow-y: auto;
+  padding: 0.5rem 1rem;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 2;
+}
+
+.kgraph-full .kgraph-pan-hint {
+  background: rgba(255, 250, 240, 0.94);
+  border-radius: 0.5rem;
+  left: 0.75rem;
+  margin: 0;
+  padding: 0.2rem 0.5rem;
+  position: absolute;
+  top: calc(var(--kgraph-toolbar-height, 0px) + 0.5rem);
+  z-index: 2;
+}
+
+/* Hidden, it keeps its place over the canvas: the room it takes from the
+   selected note's band (knowledge_graph.js) does not come and go as the
+   operator pans. */
+.kgraph-full .kgraph-pan-hint[hidden] {
+  display: block !important;
+  visibility: hidden;
+}
+
+.kgraph-full .kgraph-key {
+  background: rgba(255, 250, 240, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  margin: 0;
+  /* Never up under the toolbar: what does not fit scrolls. */
+  max-height: max(
+    2.5rem,
+    min(calc(100% - var(--kgraph-toolbar-height, 0px) - 1.5rem), var(--kgraph-key-cap, 100%))
+  );
+  max-width: min(36rem, calc(100% - 1.5rem));
+  overflow-y: auto;
+  padding: 0.35rem;
+  position: absolute;
+  z-index: 2;
+}
+
+.kgraph-full .kgraph-key .kgraph-disclosure {
+  display: inline-flex;
+}
+
+.kgraph-full .kgraph-key:not(.kgraph-disclosed) .kgraph-key-body {
+  display: none;
+}
+
+.kgraph-full .kgraph-key-body {
+  padding: 0.5rem 0.35rem 0.15rem;
+}
+
+/* The drawer: over the canvas's right side, below the toolbar, a fixed
+   width and its own scroll that never chains to the page. */
+.kgraph-full .kgraph-panel-host {
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  bottom: 0;
+  box-shadow: -0.5rem 0 1.5rem rgba(30, 39, 35, 0.08);
+  max-width: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  position: absolute;
+  right: 0;
+  top: var(--kgraph-toolbar-height, 0px);
+  width: min(26rem, 45%, var(--kgraph-drawer-cap, 100%));
+  z-index: 3;
+}
+
+.kgraph-full .kgraph-panel-host .kgraph-panel {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 100%;
+}
+
+/* At 768px and wider the key reflows in the room beside an open drawer,
+   never under it. */
+@media (min-width: 768px) {
+  .kgraph-full .kgraph-panel-open .kgraph-key {
+    max-width: min(36rem, calc(100% - var(--kgraph-panel-width, 0px) - 1.5rem));
+  }
+}
+
+/* Below 768px (full page only; the page's own breakpoint stays 700px): the
+   controls fold behind "Controls" — the head with the pill stays — and the
+   panel is a bottom sheet the key sits above. */
+@media (max-width: 767px) {
+  .kgraph-full .kgraph-toolbar-head {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .kgraph-full .kgraph-controls {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .kgraph-full .kgraph-toolbar:not(.kgraph-disclosed) .kgraph-controls {
+    display: none;
+  }
+
+  .kgraph-full .kgraph-toolbar .kgraph-disclosure {
+    display: inline-flex;
+  }
+
+  .kgraph-full .kgraph-panel-host {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -0.5rem 1.5rem rgba(30, 39, 35, 0.08);
+    left: 0;
+    max-height: min(50%, var(--kgraph-panel-cap, 100%));
+    top: auto;
+    width: auto;
+  }
+
+  .kgraph-full .kgraph-panel-open .kgraph-key {
+    bottom: calc(var(--kgraph-panel-height, 0px) + 0.75rem);
+    max-height: max(
+      2.5rem,
+      min(
+        calc(100% - var(--kgraph-toolbar-height, 0px) - var(--kgraph-panel-height, 0px) - 2.25rem),
+        var(--kgraph-key-cap, 100%)
+      )
+    );
+  }
 }
 
 .resolve-panel {

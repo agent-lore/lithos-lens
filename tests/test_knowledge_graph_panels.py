@@ -69,7 +69,8 @@ UNKNOWN_TYPE = "edge_f29d84a6130c"  # capacity assesses plan
 _HOST = re.compile(
     r'<div id="kgraph-panel" class="kgraph-panel-host" data-kgraph-panel-host'
     r' data-kgraph-render="([^"]*)">'
-    r"(.*?)</div>\s*<section class=\"panel kgraph-legend\"",
+    # Closed, on a drawn page, by the canvas stage around it (D17) too.
+    r"(.*?)</div>\s*(?:</div>\s*)?<section class=\"panel kgraph-legend\"",
     re.S,
 )
 
@@ -137,8 +138,12 @@ def _payload(html: str) -> dict[str, Any]:
     return json.loads(raw)
 
 
+_CLOSE = re.compile(r'<a class="kgraph-panel-close"[^>]*>.*?</a>', re.S)
+
+
 def _plain(fragment: str) -> str:
-    return " ".join(re.sub(r"<[^>]+>", " ", fragment).split())
+    """A panel's words, its close control (D17) aside."""
+    return " ".join(re.sub(r"<[^>]+>", " ", _CLOSE.sub("", fragment)).split())
 
 
 def _first(pattern: str, html: str) -> str:
@@ -296,7 +301,10 @@ def test_selected_renders_the_node_panel_with_its_relations_in_view(
     host = _host(html)
 
     assert 'data-kgraph-panel="node"' in host
-    assert f'<h2><a href="/note/{PLAN}" data-kgraph-node="{PLAN}">' in host
+    assert (
+        f'<h2 tabindex="-1" data-kgraph-panel-heading><a href="/note/{PLAN}"'
+        f' data-kgraph-node="{PLAN}">'
+    ) in host
     assert 'class="chip note-status note-status-active"' in host
     assert _facts(_node_head(host)) == PLAN_FACTS
     # Centre on this is offered on the focus too (D6: no exception).
@@ -368,7 +376,7 @@ def test_a_ghosts_panel_says_note_not_found_and_shows_its_id(
     )
 
     assert 'data-kgraph-panel="node"' in host
-    heading = _first(r"<h2>(.*?)</h2>", host)
+    heading = _first(r"<h2[^>]*>(.*?)</h2>", host)
     assert _plain(heading) == f"{short_id(DANGLING_NOTE_ID)} note not found"
     assert f"data-kgraph-full-id>{DANGLING_NOTE_ID}</p>" in host
     assert "note-chips" not in host
@@ -407,7 +415,7 @@ def test_a_pending_nodes_panel_shows_last_known_facts_marked_pending(
     assert "Facts pending a re-read." in host
     # Its last-known facts: the title the event set, marked, and the chips and
     # lede read before the event — not its id.
-    assert _plain(_first(r"<h2>(.*?)</h2>", host)) == "v2 facts pending"
+    assert _plain(_first(r"<h2[^>]*>(.*?)</h2>", host)) == "v2 facts pending"
     assert _facts(_node_head(host)) == PLAN_FACTS
     assert "data-kgraph-full-id" not in host
     assert "Facts not read for this view." not in host
@@ -428,7 +436,7 @@ def test_edge_renders_the_edge_panel_with_the_rationale_from_evidence_json(
 ) -> None:
     host = _host(_page(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge={REFINES}"))
 
-    assert _plain(_first(r"<h2 data-kgraph-sentence>(.*?)</h2>", host)) == (
+    assert _plain(_first(r"<h2 [^>]*data-kgraph-sentence>(.*?)</h2>", host)) == (
         "Influx migration plan refines Legacy ingest approach"
     )
     fields = _plain(_first(r'<dl class="kgraph-fields">(.*?)</dl>', host))
@@ -484,7 +492,7 @@ def test_the_relation_sentence_follows_the_type_table(
 ) -> None:
     host = _host(_page(lithos_lens_config_env, f"{ROUTE}?focus={PLAN}&edge={edge_id}"))
 
-    assert _plain(_first(r"<h2 data-kgraph-sentence>(.*?)</h2>", host)) == sentence
+    assert _plain(_first(r"<h2 [^>]*data-kgraph-sentence>(.*?)</h2>", host)) == sentence
 
 
 def test_null_evidence_reads_no_rationale_recorded(
