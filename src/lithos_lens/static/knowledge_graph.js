@@ -363,10 +363,12 @@
     const raw = search.split("&").filter(Boolean);
     const focus = raw.filter(function (pair) { return pairKey(pair) === "focus"; })
       .map(pairValue).pop() || "";
-    // A pin the view does not draw is no pin (`drawn_selection`); an
-    // `edge=` is its own pin.
-    const pinned = queryValue(now, "pin");
-    const pin = queryValue(now, "edge") || (pinned && drawnEdge(pinned) ? pinned : "");
+    // The edge the view was drawn for — an `edge=` is its own pin — kept
+    // only when the view draws it, as the panel route's `drawn_selection`
+    // keeps it: a shared address naming an edge since gone pins nothing,
+    // whether or not the first tap's panel has landed yet.
+    const chosen = queryValue(now, "edge") || queryValue(now, "pin");
+    const pin = chosen && drawnEdge(chosen) ? chosen : "";
     const requested = dict();
     const pairs = [];
     raw.forEach(function (pair) {

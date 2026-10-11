@@ -1883,7 +1883,7 @@ taken from each swap's answer too — so `min_weight=.70` or an explicit
 `colour=namespace` in the address bar does not change the spelling), earlier
 requests for the note dropped and the note appended last in `expand=`,
 `selected=` the note, `edge` cleared and kept as `pin` (the address bar's
-`edge`, else its `pin` when the view draws that edge), all in the server's key
+`edge`, else its `pin`, and only when the view draws that typed edge), all in the server's key
 order (`expand` in request order) and `canvas=full` last in full page. The
 view's pairs are kept exactly as the server encoded them, and the added ones
 are encoded as its `urlencode` does (`quote_plus`: `~` kept, `*` as `%2A`, a

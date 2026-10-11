@@ -29,6 +29,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from lithos_lens.knowledge import RelatedNeighborhood
+from tests.test_knowledge_graph_expansion import edge
+from tests.test_knowledge_graph_expansion_page import _Graph
 from tests.test_knowledge_graph_js import (
     CAPACITY,
     EVENTS,
@@ -1420,3 +1423,71 @@ def test_the_double_click_url_encodes_every_value_as_the_server_does(
 
     assert result["fetches"] == [href, then]
     assert [push["url"] for push in result["pushes"]] == [href]
+
+
+@pytest.mark.parametrize("canvas", ["", "&canvas=full"], ids=["inline", "full-page"])
+@pytest.mark.parametrize("panel", ["held", "landed"])
+def test_an_edge_the_view_no_longer_draws_is_no_pin_for_the_double_click(
+    lithos_lens_config_env: Path, canvas: str, panel: str
+) -> None:
+    """A shared address naming an edge since gone: the panel route drops it
+    (`drawn_selection`), and so does the double click — whether the first
+    tap's panel is still out or has landed and pushed its address."""
+    start = f"{BASE}&edge=edge-not-drawn{canvas}"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+        fragment = client.get(
+            f"{ROUTE}/panel?focus={ROLLBACK}&min_weight=0.7&selected={PLAN}"
+            f"&pin=edge-not-drawn{canvas}&render={page.dom['render']}"
+        ).text
+        href = _expand(fragment)
+        answer = _response(client, href)
+    assert href == ONE + canvas
+    full = {"presentation": "full"} if canvas else {}
+    landed = ["swap"] if panel == "landed" else []
+
+    result = _go(
+        page,
+        {href: answer},
+        ["tap-node:" + PLAN, *landed, "dbltap-node:" + PLAN, "respond"],
+        **full,
+    )
+
+    assert result["fetches"] == [href]
+    assert result["pushes"][-1]["url"] == href
+
+
+def _starred() -> _Graph:
+    """A graph whose expandable note's id needs escaping: `*` and a space."""
+    return _Graph(
+        rows=(edge("e-fb", "F", "B* x"), edge("e-bc", "B* x", "C")),
+        layers=RelatedNeighborhood(),
+    )
+
+
+@pytest.mark.parametrize("canvas", ["", "&canvas=full"], ids=["inline", "full-page"])
+def test_a_double_click_on_a_note_whose_id_needs_escaping_asks_for_the_servers_link(
+    lithos_lens_config_env: Path, canvas: str
+) -> None:
+    """Note ids are free-form: the values the double click adds — `expand`
+    and `selected` — are encoded as `urlencode` encodes them (`*` as `%2A`,
+    a space as `+`), so its address is the panel link's."""
+    starred = "B* x"
+    with _lens(lithos_lens_config_env, _starred()) as client:
+        page = _page(client, f"{ROUTE}?focus=F{canvas}")
+        node = next(n for n in page.payload["nodes"] if n["id"] == starred)
+        assert node["expansion"]["state"] == "available"
+        href = _expand(client.get(f"{ROUTE}?focus=F&selected=B%2A+x{canvas}").text)
+        answer = _response(client, href)
+    assert href == f"{ROUTE}?focus=F&expand=B%2A+x&selected=B%2A+x{canvas}"
+    full = {"presentation": "full"} if canvas else {}
+
+    result = _go(
+        page,
+        {href: answer},
+        ["tap-node:" + starred, "dbltap-node:" + starred, "respond"],
+        **full,
+    )
+
+    assert result["fetches"] == [href]
+    assert result["pushes"][-1]["url"] == href
