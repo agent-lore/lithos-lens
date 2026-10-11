@@ -1331,26 +1331,6 @@ def test_new_notes_with_long_titles_stay_on_the_side_facing_away(
     assert _outward(after, PLAN, centre) == []
 
 
-def test_a_taps_panel_lets_the_pointer_through_until_the_pair_is_over(
-    lithos_lens_config_env: Path,
-) -> None:
-    """In full page a drawer or sheet opens over the canvas on the first
-    tap: until the double-click window ends it takes no pointer, so the
-    second press reaches the note beneath it."""
-    with _lens(lithos_lens_config_env) as client:
-        page = _page(client, BASE)
-
-    tapped = _run(page, ["tap-node:" + PLAN, "swap"], dom={"presentation": "full"})
-    paired = _run(
-        page,
-        ["tap-node:" + PLAN, "swap", "dbltap-node:" + PLAN],
-        dom={"presentation": "full"},
-    )
-
-    assert tapped["panelPointer"] == "none"
-    assert paired["panelPointer"] == ""
-
-
 @pytest.mark.parametrize("canvas", ["", "&canvas=full"], ids=["inline", "full-page"])
 def test_the_double_click_url_is_the_servers_spelling_of_the_view_not_the_address_bars(
     lithos_lens_config_env: Path, canvas: str

@@ -122,7 +122,7 @@
   const MOTION_MS = 250;
   //: Cytoscape's double-click window (`multiClickDebounceTime`): two taps
   //: this close are a `dbltap`. Until it ends a tap's panel moves nothing,
-  //: and lets the pointer through to the canvas.
+  //: and does not show over the note tapped.
   const DOUBLE_TAP_MS = 250;
   // Labels are the canvas's content: the fit that opens it may not shrink
   // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
@@ -2172,21 +2172,49 @@
     }
 
     // …and the panel itself, opened over the canvas as a drawer or sheet,
-    // would take the second press where it lands: for the same window the
-    // host lets pointers through to the canvas beneath it.
-    let passTimer = null;
-    function passThroughPanel(on) {
-      if (passTimer !== null) {
-        clearTimeout(passTimer);
-        passTimer = null;
+    // would take the second press if it opened over the very note the first
+    // tap hit: then, and only then, it is kept out of sight — and so out of
+    // the pointer's way — until the window ends. Opened anywhere else it is
+    // live at once, its links clickable the moment they show.
+    let tappedBox = null;
+    let concealTimer = null;
+    function revealPanel() {
+      if (concealTimer !== null) {
+        clearTimeout(concealTimer);
+        concealTimer = null;
       }
-      if (host && host.style) host.style.pointerEvents = on ? "none" : "";
-      if (on) {
-        passTimer = setTimeout(function () {
-          passTimer = null;
-          passThroughPanel(false);
-        }, DOUBLE_TAP_MS);
+      if (!host || !host.style || host.style.visibility !== "hidden") return;
+      host.style.visibility = "";
+      // The heading the open could not focus while hidden.
+      const heading = within(host, "[data-kgraph-panel-heading]");
+      const active = document.activeElement;
+      if (heading && typeof heading.focus === "function" && (!active || active === document.body)) {
+        heading.focus({ preventScroll: true });
       }
+    }
+    function concealOverTap() {
+      const wait = tapWindowEnds - Date.now();
+      if (!(wait > 0) || !tappedBox || !host || !host.style ||
+          typeof host.getBoundingClientRect !== "function") return;
+      const box = host.getBoundingClientRect();
+      const over = { x1: box.left, x2: box.right, y1: box.top, y2: box.bottom };
+      if (apart(over, tappedBox)) return;
+      host.style.visibility = "hidden";
+      if (concealTimer === null) concealTimer = setTimeout(revealPanel, wait);
+    }
+    // Where the tapped note is drawn, in the window: what the panel must not
+    // open over while the second press may still come.
+    function noteOnScreen(node) {
+      if (typeof container.getBoundingClientRect !== "function") return null;
+      const frame = container.getBoundingClientRect();
+      const box = node.renderedBoundingBox({ includeLabels: false, includeOverlays: false });
+      if (!Number.isFinite(box.x1) || !Number.isFinite(box.y1)) return null;
+      return {
+        x1: frame.left + box.x1,
+        x2: frame.left + box.x2,
+        y1: frame.top + box.y1,
+        y2: frame.top + box.y2
+      };
     }
 
     function geometryChanged(animate) {
@@ -2249,7 +2277,7 @@
       // A panel action: inert while an expansion or collapse is out (D16).
       if (graphRequest) return;
       tapWindowEnds = Date.now() + DOUBLE_TAP_MS;
-      passThroughPanel(true);
+      tappedBox = noteOnScreen(event.target);
       const pid = event.target.data("pid");
       const now = new URLSearchParams(window.location.search);
       // A node opened from a view drawn for an edge pins that edge, as the
@@ -2277,10 +2305,10 @@
     // nothing more than its taps did. Collapse is the panel's link.
     cy.on("dbltap", "node", function (event) {
       const node = event.target;
-      // The pair is over: what it held may move now, and the panel is the
-      // pointer's again.
+      // The pair is over: what it held may move now, and a panel kept out
+      // of sight shows.
       tapWindowEnds = 0;
-      passThroughPanel(false);
+      revealPanel();
       if (previousTapId !== node.id()) return;
       const pid = node.data("pid");
       const shown = current.nodes.filter(function (each) { return each.id === pid; })[0];
@@ -2330,6 +2358,7 @@
       });
 
     panelMoved = function (opened) {
+      if (opened) concealOverTap();
       if (opened && holdForTap(function () { panelMoved(true); })) return;
       if (!opened) light(null);
       // Opened, the selection is kept clear by a pan alone (D12); closed,

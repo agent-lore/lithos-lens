@@ -793,7 +793,6 @@ console.log(JSON.stringify({
   keyMarkText: single["[data-kgraph-key-marks]"].children.map(textOf),
   controls: controls(),
   zoom: cy.zoom(),
-  panelPointer: host.style.pointerEvents || "",
 }));
 })().catch((error) => {
   console.error(error && error.stack || error);

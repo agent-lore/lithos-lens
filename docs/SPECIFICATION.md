@@ -1874,9 +1874,10 @@ modified or context click stays a link — and a double click on a note whose
 `expansion.state` is `available` expands it (only when both taps hit that
 note; a pair over two targets is the second's single click; the first tap
 selects, as a single click does; until Cytoscape's 250ms double-click window
-has closed any pan its panel or drawer causes waits, and the panel host lets
-the pointer through to the canvas, so neither moves the note from under the
-second press nor takes it). The double click's address is the server's
+has closed any pan its panel or drawer causes waits, and a panel that opens
+over the very note tapped stays out of sight until then, so neither moves the
+note from under the second press nor takes it — a panel opened anywhere else
+is live at once, its links clickable as soon as they show). The double click's address is the server's
 Show its neighbours link for the view on screen: built from the view's own
 address as the server spells it (`data-kgraph-address` on the page section,
 taken from each swap's answer too — so `min_weight=.70` or an explicit

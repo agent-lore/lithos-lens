@@ -1190,6 +1190,32 @@ async function viewOf(page: Page, nodes: number, edges: number) {
   await settledLayout(page);
 }
 
+/**
+ * The window still shows the stage as full page frames it: the document
+ * not scrolled, the toolbar's top and the selected note on screen — an
+ * expansion committed in place moves the canvas's view, never the page.
+ */
+async function inWindow(page: Page) {
+  const shown = await page.evaluate(() => {
+    const cy = (window as any).LithosLensKnowledgeGraph.cy;
+    const canvas = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+    const toolbar = document.querySelector("[data-kgraph-toolbar]")!.getBoundingClientRect();
+    const picked = cy.elements(".picked");
+    const at = picked.length ? picked.renderedBoundingBox() : null;
+    return {
+      scrollY: window.scrollY,
+      toolbarTop: toolbar.top,
+      note: at && { top: canvas.top + at.y1, bottom: canvas.top + at.y2 },
+      height: window.innerHeight,
+    };
+  });
+  expect(shown.scrollY).toBe(0);
+  expect(shown.toolbarTop).toBeGreaterThanOrEqual(0);
+  expect(shown.note).not.toBeNull();
+  expect(shown.note!.top).toBeGreaterThanOrEqual(0);
+  expect(shown.note!.bottom).toBeLessThanOrEqual(shown.height);
+}
+
 async function expansionOf(page: Page, id: string) {
   return page.evaluate(
     (pid) => {
@@ -1302,6 +1328,7 @@ for (const [width, height] of [
     held.release();
     await held.handled();
     await viewOf(page, 4, 7);
+    await inWindow(page);
     await expect(page.locator("[data-kgraph-full-toggle]")).toBeEnabled();
     expect(query(page)).toEqual({
       focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
@@ -1356,6 +1383,7 @@ for (const [width, height] of [
     const expanded = await positions(page);
     await page.locator("#kgraph-panel [data-kgraph-expand]").click();
     await viewOf(page, 4, 8);
+    await inWindow(page);
     now = await positions(page);
     expect(now).toEqual(expanded);
     await nodePanel(page, CAPACITY);
