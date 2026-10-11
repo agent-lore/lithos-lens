@@ -2519,7 +2519,9 @@ a.blocker-chip:focus-visible {
   border-bottom: 1px solid var(--line);
   left: 0;
   margin: 0;
-  max-height: 70%;
+  /* `--kgraph-*-cap`: what the script leaves each overlay when the selected
+     note needs the room (knowledge_graph.js, makeRoom); it scrolls. */
+  max-height: min(70%, var(--kgraph-toolbar-cap, 100%));
   overflow-y: auto;
   padding: 0.5rem 1rem;
   position: absolute;
@@ -2546,9 +2548,11 @@ a.blocker-chip:focus-visible {
   bottom: 0.75rem;
   left: 0.75rem;
   margin: 0;
-  /* Never up under the toolbar, and a band left free for the selected
-     note at the readable zoom: what does not fit scrolls. */
-  max-height: max(2.5rem, calc(100% - var(--kgraph-toolbar-height, 0px) - 7.5rem));
+  /* Never up under the toolbar: what does not fit scrolls. */
+  max-height: max(
+    2.5rem,
+    min(calc(100% - var(--kgraph-toolbar-height, 0px) - 1.5rem), var(--kgraph-key-cap, 100%))
+  );
   max-width: min(36rem, calc(100% - 1.5rem));
   overflow-y: auto;
   padding: 0.35rem;
@@ -2594,14 +2598,8 @@ a.blocker-chip:focus-visible {
 
 /* Below 768px (full page only; the page's own breakpoint stays 700px): the
    controls fold behind "Controls" — the head with the pill stays — and the
-   panel is a bottom sheet the key sits above. The disclosed controls, the
-   sheet and the key each give way (and scroll) before the band between
-   them is too short for the selected note at the readable zoom. */
+   panel is a bottom sheet the key sits above. */
 @media (max-width: 767px) {
-  .kgraph-full .kgraph-toolbar {
-    max-height: max(5rem, calc(100% - 12rem));
-  }
-
   .kgraph-full .kgraph-toolbar-head {
     align-items: baseline;
     display: flex;
@@ -2630,7 +2628,7 @@ a.blocker-chip:focus-visible {
     border-top: 1px solid var(--line);
     box-shadow: 0 -0.5rem 1.5rem rgba(30, 39, 35, 0.08);
     left: 0;
-    max-height: max(3rem, min(50%, calc(100% - var(--kgraph-toolbar-height, 0px) - 9rem)));
+    max-height: min(50%, var(--kgraph-panel-cap, 100%));
     top: auto;
     width: auto;
   }
@@ -2639,7 +2637,10 @@ a.blocker-chip:focus-visible {
     bottom: calc(var(--kgraph-panel-height, 0px) + 0.75rem);
     max-height: max(
       2.5rem,
-      calc(100% - var(--kgraph-toolbar-height, 0px) - var(--kgraph-panel-height, 0px) - 8.25rem)
+      min(
+        calc(100% - var(--kgraph-toolbar-height, 0px) - var(--kgraph-panel-height, 0px) - 2.25rem),
+        var(--kgraph-key-cap, 100%)
+      )
     );
   }
 }

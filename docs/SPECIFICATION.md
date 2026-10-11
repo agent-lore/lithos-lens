@@ -1982,9 +1982,7 @@ keys to its `kgraph-full` class, never to the server's mark:
   disclosure; the pan hint under the toolbar; the panel as a drawer over the
   right side below the toolbar at 768px and wider (`min(26rem, 45%)`), a
   bottom sheet below 768px, with its own scroll that does not chain to the
-  page. Below 768px the disclosed controls, the sheet and the key each give
-  way (and scroll) before the band left between them is too short for a note
-  at the readable zoom. The wheel over the canvas zooms; over the panel it scrolls the
+  page. The wheel over the canvas zooms; over the panel it scrolls the
   panel. The toolbar's **Text view** (`#kgraph-text`, the scope line) and
   the page's own scrollbar reach the text
 - **the toggle**: "Full page" / "Exit full page" (`aria-pressed`) switches
@@ -2000,10 +1998,18 @@ keys to its `kgraph-full` class, never to the server's mark:
   canvas less the toolbar, the key and an open drawer or sheet, each taken
   off the side that loses the least area. A fit is clamped to
   `MIN_READABLE_ZOOM`; a graph that then does not fit is centred on the
-  selection, else the focus. Whenever the usable area moves — a panel
-  opening, a disclosure, the pill appearing, the window resized (the
-  header re-measured) — the selection is panned back into it at the same
-  zoom. Refits and pans the operator
+  selection, else the focus. Each overlay is taken only off a side it is
+  anchored to (the toolbar the top, the key the bottom or left, the panel
+  the right or bottom). Whenever an overlay or the stage changes size — a
+  panel opening or closing, a disclosure, the pill appearing, the window
+  resized (the header re-measured) — room is made for the selected note at
+  the zoom it is drawn at: the key, then the sheet, then the toolbar give
+  way, each capped (and scrolled) to no less than its own toggle row, and
+  only what is short is taken; then the note is panned into the band at the
+  same zoom. Only when the overlays cannot give way enough is the zoom
+  lowered about the note, never below `MIN_READABLE_ZOOM`. The caps are
+  re-made from the overlays' own sizes every time, so room no longer needed
+  is given back. Refits and pans the operator
   caused animate unless `prefers-reduced-motion`; a load does not
 - **the panel**: an explicit open (a text or panel link, a canvas click)
   puts the focus on the panel's heading; Esc (except in a search field it

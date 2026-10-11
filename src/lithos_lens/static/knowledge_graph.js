@@ -1097,8 +1097,10 @@
     const stage = document.querySelector("[data-kgraph-stage]");
     const panHint = document.querySelector("[data-kgraph-pan-hint]");
     let usable = { x1: 0, y1: 0, x2: cy.width(), y2: cy.height() };
-    //: The area as last measured: a change is what moves the selection.
-    let measured = null;
+    //: The side of the canvas each overlay was taken off, as last measured.
+    let sideOf = new Map();
+    //: The height the overlays leave, below zero where they overlap.
+    let band = 0;
 
     function heightOf(elt) {
       return elt && typeof elt.getBoundingClientRect === "function"
@@ -1106,7 +1108,7 @@
         : 0;
     }
 
-    // Measures what lies over the canvas; whether the usable area moved.
+    // Measures what lies over the canvas and the area it leaves.
     function measureOverlays() {
       const width = cy.width();
       const height = cy.height();
@@ -1118,6 +1120,7 @@
         stage.style.setProperty("--kgraph-panel-height", (open ? heightOf(host) : 0) + "px");
       }
       const inset = { top: 0, right: 0, bottom: 0, left: 0 };
+      sideOf = new Map();
       if (fullPage && typeof container.getBoundingClientRect === "function") {
         const box = container.getBoundingClientRect();
         [toolbar, key, open ? host : null].forEach(function (elt) {
@@ -1128,24 +1131,26 @@
           const y1 = Math.max(over.top - box.top, 0);
           const y2 = Math.min(over.bottom - box.top, height);
           if (x2 <= x1 || y2 <= y1) return;
+          // Only a side it is anchored to: the toolbar the top, the key the
+          // bottom or (narrow) the left, the panel the right or the bottom.
+          const anchored = elt === toolbar ? ["top"] : elt === key ? ["bottom", "left"] : ["right", "bottom"];
           const sides = [
             ["top", y2, y2 * width],
             ["bottom", height - y1, (height - y1) * width],
             ["left", x2, x2 * height],
             ["right", width - x1, (width - x1) * height]
-          ].sort(function (a, b) { return a[2] - b[2]; });
+          ].filter(function (side) { return anchored.indexOf(side[0]) !== -1; })
+            .sort(function (a, b) { return a[2] - b[2]; });
           inset[sides[0][0]] = Math.max(inset[sides[0][0]], sides[0][1]);
+          sideOf.set(elt, sides[0][0]);
         });
       }
       usable = { x1: inset.left, y1: inset.top, x2: width - inset.right, y2: height - inset.bottom };
-      if (usable.x2 - usable.x1 < 1 || usable.y2 - usable.y1 < 1) {
-        usable = { x1: 0, y1: 0, x2: width, y2: height };
-      }
-      const before = measured;
-      measured = usable;
-      return !before || ["x1", "y1", "x2", "y2"].some(function (side) {
-        return Math.abs(before[side] - usable[side]) > 0.5;
-      });
+      band = usable.y2 - usable.y1;
+      // Overlays that meet leave no area: an empty one where they meet, so
+      // what is short is measured, not hidden.
+      if (usable.x2 < usable.x1) usable.x1 = usable.x2 = (usable.x1 + usable.x2) / 2;
+      if (usable.y2 < usable.y1) usable.y1 = usable.y2 = (usable.y1 + usable.y2) / 2;
     }
 
     // Says so while — and only while — part of the graph is outside the
@@ -1158,6 +1163,64 @@
         drawn.x1 < usable.x1 || drawn.y1 < usable.y1 ||
         drawn.x2 > usable.x2 || drawn.y2 > usable.y2
       );
+    }
+
+    // ── Room for the selected note (D17) ─────────────────────────────────
+    // The band the overlays leave is made tall enough for the selected
+    // note at the zoom it is drawn at: the key, then the sheet, then the
+    // toolbar give way — each capped (and scrolled) down to no less than
+    // its own controls row — taking only what is short. Each measure starts
+    // uncapped, so room given is room returned once it is not needed.
+    const CAPS = [
+      [key, "--kgraph-key-cap"],
+      [host, "--kgraph-panel-cap"],
+      [toolbar, "--kgraph-toolbar-cap"]
+    ];
+    //: The least an open sheet keeps: its first lines.
+    const SHEET_FLOOR = 40;
+    //: Kept clear around the selected note, where there is room for it.
+    const ROOM_PADDING = 4;
+
+    //: The key's own least height (`lens.css`): its disclosure row.
+    const KEY_FLOOR = 40;
+
+    // An overlay's floor: its own disclosure and toggle rows, padded.
+    function floorOf(elt) {
+      if (elt === host) return SHEET_FLOOR;
+      const top = elt.getBoundingClientRect().top;
+      const rows = elt === key
+        ? ["[data-kgraph-key-toggle]"]
+        : ["[data-kgraph-full-toggle]", "[data-kgraph-controls-toggle]"];
+      let bottom = top;
+      rows.forEach(function (selector) {
+        const row = within(elt, selector);
+        if (!row || typeof row.getBoundingClientRect !== "function") return;
+        const box = row.getBoundingClientRect();
+        if (box.height > 0) bottom = Math.max(bottom, box.bottom);
+      });
+      return Math.max(bottom - top + 9, elt === key ? KEY_FLOOR : 0);
+    }
+
+    function makeRoom(zoom) {
+      const capped = stage && stage.style && typeof stage.style.removeProperty === "function";
+      if (capped) CAPS.forEach(function (cap) { stage.style.removeProperty(cap[1]); });
+      measureOverlays();
+      const selection = urlSelection();
+      if (!capped || !fullPage || !selection.length) return;
+      let short = selection.boundingBox().h * zoom + 2 * ROOM_PADDING - band;
+      if (short <= 0) return;
+      // Every overlay across the band is held at its height (or cut), so
+      // none grows into the room another gives.
+      CAPS.forEach(function (cap) {
+        const elt = cap[0];
+        const side = sideOf.get(elt);
+        if (!elt || (side !== "top" && side !== "bottom")) return;
+        const height = heightOf(elt);
+        const cut = Math.max(0, Math.min(short, height - floorOf(elt)));
+        stage.style.setProperty(cap[1], height - cut + "px");
+        short -= cut;
+      });
+      measureOverlays();
     }
 
     // ── Lit and dimmed: the selection and its neighbours ────────────────
@@ -1365,7 +1428,9 @@
     }
 
     function fitView(animate) {
-      measureOverlays();
+      // Room for the selection at least at the readable zoom: a fit that
+      // needs it opens there, centred on the selection.
+      makeRoom(MIN_READABLE_ZOOM);
       const box = cy.elements().boundingBox();
       const roomW = usable.x2 - usable.x1 - 2 * FIT_PADDING;
       const roomH = usable.y2 - usable.y1 - 2 * FIT_PADDING;
@@ -1387,12 +1452,26 @@
 
     // The selection kept in the usable area whenever that area moves — a
     // drawer or sheet opening over it, a disclosure, the pill, the window:
-    // a pan, at the zoom it is, with as much of FIT_PADDING as there is
-    // room for.
+    // room made for it at the zoom it is, then a pan, with as much of
+    // FIT_PADDING as there is room for. Only when the overlays cannot give
+    // way enough is the zoom lowered — about the selection, never below
+    // MIN_READABLE_ZOOM.
     function revealSelection(animate) {
       const selection = urlSelection();
+      makeRoom(cy.zoom());
       if (!fullPage || !selection.length) return;
-      const box = selection.renderedBoundingBox();
+      const model = selection.boundingBox();
+      const was = cy.zoom();
+      const fits = Math.min(
+        (usable.y2 - usable.y1 - 2 * ROOM_PADDING) / model.h,
+        (usable.x2 - usable.x1 - 2 * ROOM_PADDING) / model.w
+      );
+      const zoom = was > fits ? Math.max(MIN_READABLE_ZOOM, Math.min(was, fits)) : was;
+      // The selection's centre stays where it is drawn while the zoom changes.
+      const pan = cy.pan();
+      const centre = centreOf(model);
+      const at = { x: was * centre.x + pan.x, y: was * centre.y + pan.y };
+      const next = { x: at.x - zoom * centre.x, y: at.y - zoom * centre.y };
       const shift = function (low, high, from, to) {
         if (high - low > to - from) return (from + to) / 2 - (low + high) / 2;
         const pad = Math.min(FIT_PADDING, (to - from - (high - low)) / 2);
@@ -1400,18 +1479,18 @@
         if (high > to - pad) return to - pad - high;
         return 0;
       };
-      const dx = shift(box.x1, box.x2, usable.x1, usable.x2);
-      const dy = shift(box.y1, box.y2, usable.y1, usable.y2);
-      if (!dx && !dy) return;
-      const pan = cy.pan();
-      moveTo({ zoom: cy.zoom(), pan: { x: pan.x + dx, y: pan.y + dy } }, animate);
+      const dx = shift(zoom * model.x1 + next.x, zoom * model.x2 + next.x, usable.x1, usable.x2);
+      const dy = shift(zoom * model.y1 + next.y, zoom * model.y2 + next.y, usable.y1, usable.y2);
+      if (zoom === was && Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+      moveTo({ zoom: zoom, pan: { x: next.x + dx, y: next.y + dy } }, animate);
     }
 
     // Anything over the canvas, or the canvas itself, changed size: the
-    // area re-measured and, when it moved, the selection kept in it.
+    // room re-made from the overlays' own sizes (a held one would hide a
+    // disclosure or the pill) and the selection kept in what is left.
     function geometryChanged(animate) {
       cy.resize();
-      if (measureOverlays()) revealSelection(animate);
+      revealSelection(animate);
       showPanHint();
     }
 
@@ -1423,6 +1502,8 @@
       cy.on("viewport resize", showPanHint);
     }
     lightFromUrl();
+    // Lit, the selection is drawn larger than it was fitted: kept clear.
+    revealSelection(false);
 
     // ── Clicks open the S5 panel ────────────────────────────────────────
     const panelSource = document.querySelector("[data-kgraph-panel-source]");
@@ -1503,8 +1584,8 @@
 
     panelMoved = function (opened) {
       if (!opened) light(null);
-      measureOverlays();
-      if (opened) revealSelection(true);
+      // Opened, the selection is kept clear; closed, room given back.
+      revealSelection(true);
       showPanHint();
     };
 

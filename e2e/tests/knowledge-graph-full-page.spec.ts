@@ -952,3 +952,66 @@ test("a text link used before a toggle fetches and pushes the toggled mode, both
     `?focus=${PLAN}&edge=${SUPPORTS}`,
   ]);
 });
+
+// ── Room for the selection when the overlays would meet (round 3) ─────
+
+for (const scenario of [
+  {
+    name: "a short landscape window with the sheet, Controls and Key open",
+    load: [667, 375] as const,
+    resize: null,
+    selected: LEGACY,
+  },
+  {
+    name: "a desktop page resized to 390px, then Controls and Key opened, at its own zoom",
+    load: [1440, 900] as const,
+    resize: [390, 844] as const,
+    selected: PLAN,
+  },
+]) {
+  test(`the overlays give way for the selected note: ${scenario.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: scenario.load[0], height: scenario.load[1] });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(
+      `/knowledge/graph?focus=${PLAN}&depth=2&selected=${scenario.selected}&canvas=full`,
+    );
+    await canvasReady(page);
+    await nodePanel(page, scenario.selected);
+    if (scenario.resize) {
+      await page.setViewportSize({ width: scenario.resize[0], height: scenario.resize[1] });
+      await settledLayout(page);
+    }
+    const zoom = (await geometry(page)).zoom;
+    const model = await positions(page);
+
+    await page.locator("[data-kgraph-controls-toggle]").click();
+    await settledLayout(page);
+    unobscured(await geometry(page));
+    await page.locator("[data-kgraph-key-toggle]").click();
+    await settledLayout(page);
+
+    const g = await geometry(page);
+    unobscured(g);
+    // Room was made by the overlays, not by zooming out or moving notes.
+    expect(g.zoom).toBe(zoom);
+    expect(await positions(page)).toEqual(model);
+    // Each kept its own controls: the toggles and the disclosures still shown.
+    for (const control of [
+      "[data-kgraph-full-toggle]",
+      "[data-kgraph-controls-toggle]",
+      "[data-kgraph-key-toggle]",
+      "#kgraph-panel [data-kgraph-panel-close]",
+    ]) {
+      await expect(page.locator(control)).toBeInViewport();
+    }
+
+    // Closed, the room is given back: the toolbar's controls show again.
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#kgraph-panel")).toBeEmpty();
+    await settledLayout(page);
+    const restored = await page.evaluate(
+      () => getComputedStyle(document.querySelector("[data-kgraph-stage]")!).getPropertyValue("--kgraph-toolbar-cap"),
+    );
+    expect(restored).toBe("");
+  });
+}
