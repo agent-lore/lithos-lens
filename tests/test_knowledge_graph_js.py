@@ -34,6 +34,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import QueryParams
 
 from lithos_lens.config import EventsConfig, LithosConfig, load_config
 from lithos_lens.events import EventHub, LensEvent, parse_lithos_sse_frame
@@ -82,6 +83,7 @@ const assigns = [];
 const ajax = [];
 const layouts = [];
 const pushes = [];
+const replaces = [];
 const reloads = [];
 // The tab's history: one entry per page URL, each with its state, so Back
 // and Forward can be driven the way the browser does — a `popstate` carrying
@@ -285,6 +287,13 @@ sandbox.window = {
       entries.push({ href: url.href, state });
       cursor = entries.length - 1;
       pushes.push({ url: target, panel: host.innerHTML });
+    },
+    // The entry the page is on, respelled in place: no new entry.
+    get state() { return entries[cursor].state; },
+    replaceState(state, title, target) {
+      url = new URL(target, url.href);
+      entries[cursor] = { href: url.href, state };
+      replaces.push(target);
     },
   },
   addEventListener(type, fn) {
@@ -534,6 +543,7 @@ console.log(JSON.stringify({
   assigns,
   ajax,
   pushes,
+  replaces,
   reloads,
   triggered,
   aborted,
@@ -2663,3 +2673,54 @@ def test_a_canvas_click_spells_its_address_as_the_server_does(
     # A toolbar control navigates to the same spelling too.
     controls = _run(page, ("colour:type",), dom=dom)
     assert controls["assigns"] == [f"{ROUTE}?focus={PLAN}&colour=type&canvas=full"]
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "%20full%20",
+        "full",
+        "FULL",
+        "inline",
+        "",
+        "full&canvas=full",
+        "inline&canvas=full",
+        "full&canvas=inline",
+    ],
+)
+def test_any_spelling_of_the_presentation_is_one_address_with_the_servers(
+    lithos_lens_config_env: Path, spelled: str
+) -> None:
+    """However the address spells ``canvas`` (D1: ``full`` after strip, the
+    last of a repeat, anything else inline), the page takes the server's
+    spelling — one ``canvas=full`` last, or none — in place on load, and on
+    every address it builds, so a canvas click and the text's link to the
+    same edge push one entry."""
+    start = f"{ROUTE}?focus={PLAN}&canvas={spelled}"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+        params = parse_knowledge_graph_params(
+            QueryParams(urlsplit(start).query)  # repeated keys as the server reads
+        )
+        shown = knowledge_graph_url(params)
+        selected = knowledge_graph_url(params, edge=SUPPORTS)
+    presentation = re.search(r'data-kgraph-presentation="([a-z]+)"', page.html)
+    assert presentation is not None and presentation.group(1) == params.canvas
+    dom = {**_full_page_dom(page), "presentation": params.canvas}
+    result = _run(
+        page,
+        (f"tap-edge:{SUPPORTS}", "swap", f"text-click:{selected}", "swap", "back"),
+        dom=dom,
+    )
+
+    respelled = (
+        []
+        if f"http://lens.test{shown}" == f"http://lens.test{start}"
+        else [f"http://lens.test{shown}"]
+    )
+    assert result["replaces"] == respelled
+    assert [push["url"] for push in result["pushes"]] == [selected]
+    # One entry for the selection: Back leaves it for the page it was
+    # opened from — respelled, so reloaded as the server spells it.
+    assert result["href"] == f"http://lens.test{shown}"
+    assert result["reloads"] == [f"http://lens.test{shown}"]

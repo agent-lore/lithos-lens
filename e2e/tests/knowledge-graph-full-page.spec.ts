@@ -1081,44 +1081,50 @@ test("a toggle's animated fit is not cut short by the resize it causes", async (
 
 // ── One address, one spelling (round 5) ───────────────────────────────
 
-test("on a full page, a canvas click and the text's link to the same edge are one address", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto(`/knowledge/graph?focus=${PLAN}&canvas=full`);
-  await canvasReady(page);
-  await markDocument(page);
-  const edgePanel = page.locator(
-    `#kgraph-panel [data-kgraph-panel="edge"][data-kgraph-panel-id="${SUPPORTS}"]`,
-  );
+// However the address spells the full page (D1: `full` after strip, the
+// last of a repeat), the page takes the server's spelling in place.
+for (const spelled of ["full", "%20full%20", "inline&canvas=full", "full&canvas=full"]) {
+  test(`on a full page (canvas=${spelled}), a canvas click and the text's link to the same edge are one address`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/knowledge/graph?focus=${PLAN}&canvas=${spelled}`);
+    await canvasReady(page);
+    expect(await isFull(page)).toBe(true);
+    expect(new URL(page.url()).search).toBe(`?focus=${PLAN}&canvas=full`);
+    await markDocument(page);
+    const edgePanel = page.locator(
+      `#kgraph-panel [data-kgraph-panel="edge"][data-kgraph-panel-id="${SUPPORTS}"]`,
+    );
 
-  await page.evaluate((pid) => {
-    const cy = (window as any).LithosLensKnowledgeGraph.cy;
-    cy.edges().filter((e: any) => e.data("pid") === pid).emit("tap");
-  }, SUPPORTS);
-  await expect(edgePanel).toBeVisible();
-  await expect.poll(() => new URL(page.url()).search).toBe(
-    `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
-  );
-  // The text, below the stage: its link to the same edge, as the server wrote it.
-  const link = page.locator(`[data-kgraph-edge="${SUPPORTS}"] .kgraph-edge-link`);
-  await expect(link).toHaveAttribute(
-    "href",
-    `/knowledge/graph?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
-  );
-  await link.click();
-  // Both panel requests over — each loaded, swapped and (maybe) pushed.
-  await page.waitForFunction(
-    () =>
-      ((window as any).__panelXhrEnded as string[]).filter((u) => u.includes("/knowledge/graph/panel"))
-        .length === 2,
-  );
-  await expect(edgePanel).toBeVisible();
+    await page.evaluate((pid) => {
+      const cy = (window as any).LithosLensKnowledgeGraph.cy;
+      cy.edges().filter((e: any) => e.data("pid") === pid).emit("tap");
+    }, SUPPORTS);
+    await expect(edgePanel).toBeVisible();
+    await expect.poll(() => new URL(page.url()).search).toBe(
+      `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+    );
+    // The text, below the stage: its link to the same edge, as the server wrote it.
+    const link = page.locator(`[data-kgraph-edge="${SUPPORTS}"] .kgraph-edge-link`);
+    await expect(link).toHaveAttribute(
+      "href",
+      `/knowledge/graph?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+    );
+    await link.click();
+    // Both panel requests over — each loaded, swapped and (maybe) pushed.
+    await page.waitForFunction(
+      () =>
+        ((window as any).__panelXhrEnded as string[]).filter((u) => u.includes("/knowledge/graph/panel"))
+          .length === 2,
+    );
+    await expect(edgePanel).toBeVisible();
 
-  // The canvas wrote the server's spelling: the text link re-selected it,
-  // and pushed no second entry for the address already shown.
-  expect((await pushes(page)).map((u) => new URL(u, page.url()).search)).toEqual([
-    `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
-  ]);
-  expect(await sameDocument(page)).toBe(true);
-});
+    // The canvas wrote the server's spelling: the text link re-selected it,
+    // and pushed no second entry for the address already shown.
+    expect((await pushes(page)).map((u) => new URL(u, page.url()).search)).toEqual([
+      `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+    ]);
+    expect(await sameDocument(page)).toBe(true);
+  });
+}

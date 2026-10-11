@@ -1993,8 +1993,11 @@ keys to its `kgraph-full` class, never to the server's mark:
   the panel on screen included — and has htmx re-process each changed
   `hx-*`, keeps the pill and the shown address current, then resizes and
   refits without moving a node. The addresses the script builds itself (a
-  canvas click, a toolbar control) put `canvas` last too, so a selection
-  reached from the canvas and from the text is one address. Back or Forward over a toggle reloads that
+  canvas click, a toolbar control) spell the presentation as the server
+  does — one `canvas=full`, last, in full page and none inline — and a load
+  whose address spells it otherwise (` full `, a repeat, `inline`) is
+  respelled in place (`replaceState`), so a selection reached from the
+  canvas and from the text is one address. Back or Forward over a toggle reloads that
   address, as any other history move does
 - **the usable area**: in full page, fits, pans and the pan hint use the
   canvas less the toolbar, the key and an open drawer or sheet, each taken

@@ -208,11 +208,11 @@
       if (value === null || value === undefined || value === "") params.delete(key);
       else params.set(key, value);
     });
-    // `canvas` last, where the server writes it (D17): one address, one
-    // spelling, so the history's string compares see a reselection as one.
-    const canvas = params.getAll(CANVAS_KEY);
+    // `canvas` as the server writes it (D17): one `canvas=full`, last, for
+    // the presentation applied, and none inline — whatever the address
+    // spelled — so the history's string compares see one address as one.
     params.delete(CANVAS_KEY);
-    canvas.forEach(function (value) { params.append(CANVAS_KEY, value); });
+    if (fullPage) params.append(CANVAS_KEY, "full");
     return params.toString();
   }
 
@@ -1655,6 +1655,13 @@
       [stage, toolbar, key, host].forEach(function (elt) { if (elt) observer.observe(elt); });
     }
 
+    // An address spelling the presentation otherwise (` full `, a repeat,
+    // `inline`) takes the server's spelling, so it and every link to it are
+    // one address.
+    const spelled = withCanvas(window.location.href, fullPage);
+    if (spelled !== window.location.href && typeof window.history.replaceState === "function") {
+      window.history.replaceState(window.history.state, "", spelled);
+    }
     shownHref = window.location.href;
     container.dataset.canvasState = "ready";
     container.dataset.canvasNodes = String(cy.nodes().length);
