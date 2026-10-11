@@ -740,6 +740,10 @@ def register_knowledge_graph_routes(
         }
         health = await state.refresh_health()
         if health.lithos != "ok":
+            # Its Close keeps the exemption the page's drawing needs (D17):
+            # the held view's, nothing read; else the selection's own edge.
+            held = views.get(render_id, params) if render_id else None
+            context["close_pin"] = held.pinned if held else params.edge or params.pin
             context["panel_notice"] = "Lithos is offline."
             return templates.TemplateResponse(
                 request, "knowledge/graph_panel.html", context
@@ -762,6 +766,7 @@ def register_knowledge_graph_routes(
             load = await load_knowledge_graph(state, params, picker=False)
             if load.offline:
                 # The assembly's own probe may be the one that saw the outage.
+                context["close_pin"] = params.edge or params.pin
                 context["panel_notice"] = "Lithos is offline."
                 return templates.TemplateResponse(
                     request, "knowledge/graph_panel.html", context

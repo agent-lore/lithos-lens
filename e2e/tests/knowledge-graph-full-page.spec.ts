@@ -43,6 +43,16 @@ test.beforeEach(async ({ page }) => {
       pushes.push(String(url));
       return push(state, title, url);
     };
+    // Every EventSource the page opens, so a test can deliver a frame.
+    const sources: EventSource[] = [];
+    (window as any).__sources = sources;
+    const Native = window.EventSource;
+    (window as any).EventSource = class extends Native {
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        sources.push(this);
+      }
+    };
     const ended: string[] = [];
     (window as any).__panelXhrEnded = ended;
     const open = XMLHttpRequest.prototype.open;
@@ -69,6 +79,17 @@ async function settled(page: Page) {
     const canvas = document.querySelector("[data-kgraph-canvas]") as HTMLElement;
     return graph && !graph.cy.animated() && canvas.dataset.canvasMotion !== "moving";
   });
+}
+
+/**
+ * The layout settled: two frames for the overlays' resize observation to
+ * run its re-measure, then no refit or pan still moving.
+ */
+async function settledLayout(page: Page) {
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
+  await settled(page);
 }
 
 async function isFull(page: Page): Promise<boolean> {
@@ -679,35 +700,49 @@ for (const [width, height] of [
     expect(g.scrollWidth).toBeLessThanOrEqual(g.innerWidth);
     await capture(page, `knowledge-graph-full-panel-${width}`, false);
 
-    // The controls fold behind "Controls" below 768px; the pill stays out.
+
+    // With the panel still open: the controls fold behind "Controls" below
+    // 768px (the pill stays out), and disclosing them — or the key — keeps
+    // the selected note clear of every overlay by a pan alone.
     const controls = page.locator("[data-kgraph-controls]");
     const controlsToggle = page.locator("[data-kgraph-controls-toggle]");
     await page.evaluate(() => {
       (document.querySelector("[data-kgraph-refresh-pill]") as HTMLElement).hidden = false;
     });
     await expect(page.locator("[data-kgraph-refresh-pill]")).toBeVisible();
+    await settledLayout(page);
+    unobscured(await geometry(page));
+    const model = await positions(page);
+    const zoom = (await geometry(page)).zoom;
     if (width < 768) {
       await expect(controls).toBeHidden();
       await expect(controlsToggle).toBeVisible();
       await controlsToggle.click();
       await expect(controlsToggle).toHaveAttribute("aria-expanded", "true");
+      await settledLayout(page);
+      g = await geometry(page);
+      unobscured(g);
+      expect(g.zoom).toBe(zoom);
     } else {
       await expect(controlsToggle).toBeHidden();
     }
     await expect(page.locator("[data-kgraph-min-weight]")).toBeVisible();
     await expect(page.locator("[data-kgraph-refresh-pill]")).toBeVisible();
 
-    // The key, bottom-left, behind its own disclosure.
+    // The key, bottom-left (above a sheet), behind its own disclosure.
     const keyBody = page.locator("#kgraph-key-body");
     await expect(keyBody).toBeHidden();
-    await page.keyboard.press("Escape"); // closes the panel first
-    await expect(page.locator("#kgraph-panel")).toBeEmpty();
     await page.locator("[data-kgraph-key-toggle]").click();
     await expect(keyBody).toBeVisible();
+    await settledLayout(page);
     const key = (await page.locator("[data-kgraph-key]").boundingBox())!;
+    const above = width < 768 ? (await page.locator("#kgraph-panel").boundingBox())!.y : stage.y + stage.height;
     expect(key.x - stage.x).toBeLessThan(20);
-    expect(stage.y + stage.height - (key.y + key.height)).toBeLessThan(20);
+    expect(above - (key.y + key.height)).toBeLessThan(20);
     g = await geometry(page);
+    unobscured(g);
+    expect(g.zoom).toBe(zoom);
+    expect(await positions(page)).toEqual(model);
     expect(g.scrollWidth).toBeLessThanOrEqual(g.innerWidth);
     expect(g.hinted).toBe(g.clipped);
     // The usable area is clear of every overlay.
@@ -719,7 +754,10 @@ for (const [width, height] of [
     };
     expect(overlaps(usable, g.toolbar)).toBe(false);
     expect(overlaps(usable, g.key)).toBe(false);
+    expect(overlaps(usable, g.panel)).toBe(false);
     await capture(page, `knowledge-graph-full-controls-${width}`, false);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#kgraph-panel")).toBeEmpty();
 
     // Refit to what is left: everything, or the focus at the readable zoom.
     await toggle(page);
@@ -729,3 +767,188 @@ for (const [width, height] of [
     expect(g.hinted).toBe(g.clipped);
   });
 }
+
+// ── Keeping the selection clear as things change (round 2) ────────────
+
+for (const [width, height] of [
+  [1440, 900],
+  [768, 1024],
+  [390, 844],
+] as const) {
+  for (const near of ["toolbar", "key"] as const) {
+    test(`at ${width}px a note selected by the ${near} stays clear as Controls and Key open`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height });
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&canvas=full`);
+      await canvasReady(page);
+      // The note nearest that overlay: the topmost, or the bottom-left one.
+      const id = await page.evaluate((side) => {
+        const cy = (window as any).LithosLensKnowledgeGraph.cy;
+        const score = (n: any) => {
+          const at = n.renderedPosition();
+          return side === "toolbar" ? at.y : at.x - at.y;
+        };
+        return cy.nodes().min(score).ele.data("pid");
+      }, near);
+      await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&selected=${encodeURIComponent(id)}&canvas=full`);
+      await canvasReady(page);
+      await expect(page.locator("#kgraph-panel [data-kgraph-panel]")).toBeVisible();
+      await settledLayout(page);
+      unobscured(await geometry(page));
+      const model = await positions(page);
+      const zoom = (await geometry(page)).zoom;
+
+      if (width < 768) {
+        await page.locator("[data-kgraph-controls-toggle]").click();
+        await settledLayout(page);
+        unobscured(await geometry(page));
+      }
+      await page.locator("[data-kgraph-key-toggle]").click();
+      await settledLayout(page);
+      const g = await geometry(page);
+      unobscured(g);
+      expect(g.zoom).toBe(zoom);
+      expect(await positions(page)).toEqual(model);
+      expect(g.zoom).toBeGreaterThanOrEqual(g.minReadable);
+    });
+  }
+}
+
+test("resizing the window keeps the selected note clear, by a pan alone", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&selected=${CAPACITY}&canvas=full`);
+  await canvasReady(page);
+  await settledLayout(page);
+  unobscured(await geometry(page));
+  const model = await positions(page);
+  const zoom = (await geometry(page)).zoom;
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settledLayout(page);
+
+  const g = await geometry(page);
+  unobscured(g);
+  expect(g.zoom).toBe(zoom);
+  expect(await positions(page)).toEqual(model);
+  expect(g.hinted).toBe(g.clipped);
+  // The stage follows the taller, stacked header.
+  const frame = await page.evaluate(() => ({
+    header: document.querySelector("header.shell-header")!.getBoundingClientRect().bottom,
+    stage: document.querySelector("[data-kgraph-stage]")!.getBoundingClientRect(),
+    innerHeight: window.innerHeight,
+  }));
+  expect(Math.abs(frame.stage.top - frame.header)).toBeLessThan(1);
+  expect(Math.abs(frame.stage.bottom - frame.innerHeight)).toBeLessThan(1);
+});
+
+test("the refresh pill appearing moves the drawer and the usable area below the toolbar", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&selected=${PLAN}&canvas=full`);
+  await canvasReady(page);
+  await settledLayout(page);
+  const before = (await page.locator("[data-kgraph-toolbar]").boundingBox())!;
+
+  // A missed-frames refresh on the knowledge stream raises the pill.
+  await page.evaluate(() =>
+    ((window as any).__sources as EventSource[]).forEach((source) =>
+      source.dispatchEvent(new MessageEvent("lens.refresh", { data: "{}" })),
+    ),
+  );
+  await expect(page.locator("[data-kgraph-refresh-pill]")).toBeVisible();
+  await settledLayout(page);
+
+  const toolbar = (await page.locator("[data-kgraph-toolbar]").boundingBox())!;
+  expect(toolbar.height).toBeGreaterThan(before.height); // the pill wrapped it
+  const drawer = (await page.locator("#kgraph-panel").boundingBox())!;
+  expect(Math.abs(drawer.y - (toolbar.y + toolbar.height))).toBeLessThan(1);
+  const g = await geometry(page);
+  expect(Math.abs(g.canvas.top + g.usable.y1 - (toolbar.y + toolbar.height))).toBeLessThan(1);
+  unobscured(g);
+  expect(g.hinted).toBe(g.clipped);
+  // The hint, under the toolbar, moved down with it.
+  const hint = await page.locator("[data-kgraph-pan-hint]").boundingBox();
+  if (hint) expect(hint.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+});
+
+test("a short landscape window: the stage and its sheet end at the window's bottom", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 667, height: 375 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}&selected=${PLAN}&canvas=full`);
+  await canvasReady(page);
+
+  const frame = await page.evaluate(() => ({
+    header: document.querySelector("header.shell-header")!.getBoundingClientRect().bottom,
+    stage: document.querySelector("[data-kgraph-stage]")!.getBoundingClientRect(),
+    sheet: document.querySelector("#kgraph-panel")!.getBoundingClientRect(),
+    innerHeight: window.innerHeight,
+  }));
+  expect(Math.abs(frame.stage.top - frame.header)).toBeLessThan(1);
+  expect(Math.abs(frame.stage.bottom - frame.innerHeight)).toBeLessThan(1);
+  expect(frame.sheet.bottom).toBeLessThanOrEqual(frame.innerHeight + 1);
+  const g = await geometry(page);
+  expect(g.canvas.bottom).toBeLessThanOrEqual(frame.innerHeight + 1);
+});
+
+test("a text link used before a toggle fetches and pushes the toggled mode, both ways", async ({
+  page,
+}) => {
+  const traffic = panelTraffic(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/knowledge/graph?focus=${PLAN}`);
+  await canvasReady(page);
+  await markDocument(page);
+  const render = await page.locator("#kgraph-panel").getAttribute("data-kgraph-render");
+  const link = page.locator(`[data-kgraph-edge="${SUPPORTS}"] .kgraph-edge-link`);
+  const edgePanel = page.locator('#kgraph-panel [data-kgraph-panel="edge"]');
+  const use = async (expected: Record<string, string>) => {
+    await link.click();
+    await expect(edgePanel).toBeVisible();
+    await expect.poll(() => query(page)).toEqual(expected);
+  };
+
+  await use({ focus: PLAN, edge: SUPPORTS });
+  await expect(link).toHaveAttribute("hx-push-url", "false");
+  await toggle(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#kgraph-panel")).toBeEmpty();
+  await expect(link).toHaveAttribute(
+    "data-kgraph-push-url",
+    `/knowledge/graph?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+  );
+  await use({ focus: PLAN, edge: SUPPORTS, canvas: "full" });
+  expect(await isFull(page)).toBe(true);
+
+  await toggle(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#kgraph-panel")).toBeEmpty();
+  await expect(link).toHaveAttribute(
+    "data-kgraph-push-url",
+    `/knowledge/graph?focus=${PLAN}&edge=${SUPPORTS}`,
+  );
+  await use({ focus: PLAN, edge: SUPPORTS });
+  expect(await isFull(page)).toBe(false);
+
+  expect(await sameDocument(page)).toBe(true);
+  expect(traffic.redirects).toEqual([]);
+  expect(traffic.requests.map((url) => Object.fromEntries(new URL(url).searchParams))).toEqual([
+    { focus: PLAN, edge: SUPPORTS, render },
+    { focus: PLAN, edge: SUPPORTS, canvas: "full", render },
+    { focus: PLAN, edge: SUPPORTS, render },
+  ]);
+  expect((await pushes(page)).map((u) => new URL(u, page.url()).search)).toEqual([
+    `?focus=${PLAN}&edge=${SUPPORTS}`,
+    `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+    `?focus=${PLAN}&canvas=full`,
+    `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
+    `?focus=${PLAN}&edge=${SUPPORTS}`,
+    `?focus=${PLAN}`,
+    `?focus=${PLAN}&edge=${SUPPORTS}`,
+  ]);
+});

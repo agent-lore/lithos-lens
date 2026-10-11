@@ -282,6 +282,43 @@ def test_an_offline_panel_answer_closes_too(lithos_lens_config_env: Path) -> Non
     assert _close_href(fragment) == f"{ROUTE}?focus={PLAN}&canvas=full"
 
 
+def test_an_offline_answer_from_a_held_view_closes_keeping_its_pin(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Lithos goes away between the page and a click on its exempted view:
+    the offline answer's Close still keeps the edge the drawing needs — the
+    held view's, nothing read — so after recovery the next click is answered
+    from the same render id."""
+    fake = _ReadRecorder()
+    with _client(lithos_lens_config_env, fake) as client:
+        health = client.app.state.lens.health  # type: ignore[attr-defined]
+        page = _get(client, f"{ROUTE}?focus={PLAN}&edge={FAINT_EDGE}&canvas=full")
+        render = _render_id(page)
+        health.lithos = "unreachable"
+        fake.data_reads.clear()
+        offline = _get(
+            client,
+            f"{PANEL}?focus={PLAN}&selected={LEGACY}&pin={FAINT_EDGE}&canvas=full"
+            f"&render={render}",
+        )
+        offline_reads = list(fake.data_reads)
+        cold = _get(client, f"{PANEL}?focus={PLAN}&edge={FAINT_EDGE}")
+        health.lithos = "ok"
+        after = client.get(
+            f"{PANEL}?focus={PLAN}&selected={CAPACITY}&pin={FAINT_EDGE}&canvas=full"
+            f"&render={render}"
+        )
+
+    assert "Lithos is offline." in offline
+    assert offline_reads == []
+    closed = _close_href(offline)
+    assert closed == f"{ROUTE}?focus={PLAN}&pin={FAINT_EDGE}&canvas=full"
+    # No view held: the selection's own edge is kept rather than dropped.
+    assert _close_href(cold) == f"{ROUTE}?focus={PLAN}&pin={FAINT_EDGE}"
+    assert "HX-Redirect" not in after.headers
+    assert f'data-kgraph-panel-id="{CAPACITY}"' in after.text
+
+
 def test_closing_keeps_the_exemption_the_drawing_needs_as_its_pin(
     lithos_lens_config_env: Path,
 ) -> None:

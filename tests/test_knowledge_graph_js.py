@@ -187,7 +187,15 @@ single["[data-knowledge-graph]"] = el({
   querySelector() { return null; },
 });
 // The panel on screen: its close link (the server's href) and its heading.
-const closeLink = el({ name: "close", attributes: { href: dom.closeHref || "" } });
+// One of the page's links, so a toggle rewrites it: the server-rendered
+// panel's own, or — for a panel a swap brings — one added beside them.
+let closeLink = pageLinks.find((l) =>
+  dom.closeHref && l.attributes.href === dom.closeHref && !l.attributes["hx-get"]);
+if (!closeLink) {
+  closeLink = el({ attributes: { href: dom.closeHref || "" } });
+  if (dom.closeHref) pageLinks.push(closeLink);
+}
+closeLink.name = "close";
 closeLink.closest = (selector) =>
   selector === "[data-kgraph-panel-close]" ? closeLink : null;
 const heading = el({ name: "heading" });
@@ -454,6 +462,13 @@ for (const action of actions) {
   } else if (kind === "rerun") {
     // A second run of the file over the same page.
     vm.runInContext(fs.readFileSync(scriptPath, "utf8"), sandbox);
+  } else if (kind === "link-click") {
+    // A panel link the server rendered on the page, by its href: the very
+    // element a toggle rewrites, fetching its own (current) `hx-get`.
+    const link = pageLinks.find((l) => l.attributes["hx-get"] &&
+      (l.attributes.href || "").replace("&canvas=full", "") === arg);
+    link.href = arg;
+    issue(link, request(link.attributes["hx-get"]));
   } else if (kind === "toggle") {
     single["[data-kgraph-full-toggle]"].fire("click");
   } else if (kind === "escape" || kind === "close-click") {
@@ -538,6 +553,7 @@ console.log(JSON.stringify({
     : null,
   panel: host.innerHTML,
   links: pageLinks.map((link) => link.attributes),
+  requests: xhrs.map((xhr) => xhr.path),
   processed,
   focused,
   bodyClasses: document.body.classList.values(),
@@ -2441,6 +2457,49 @@ def test_the_toggle_switches_in_place_and_writes_every_link_as_the_server_would(
     assert twice["bodyClasses"] == []
     assert twice["toggle"] == {"text": "Full page", "pressed": "false"}
     assert twice["marks"][0] == twice["marks"][1]
+
+
+def test_a_used_text_link_keeps_the_toggled_mode_both_ways(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A text panel link used inline has moved its push URL into
+    ``data-kgraph-push-url``; toggling rewrites that too, so reusing the same
+    link fetches and pushes the new mode — and back again."""
+    start = f"{ROUTE}?focus={PLAN}"
+    link = f"{start}&edge={SUPPORTS}"
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, start)
+    # The swapped-in edge panel's Close: this view, no selection.
+    dom = {**_full_page_dom(page), "closeHref": start}
+    use = f"link-click:{link}"
+    result = _run(
+        page,
+        (use, "swap", "toggle", "escape", use, "swap", "toggle", "escape", use, "swap"),
+        dom=dom,
+    )
+
+    used = next(each for each in result["links"] if each.get("href") == link)
+    # Used: htmx's push switched off, the page URL cached — and rewritten.
+    assert used["hx-push-url"] == "false"
+    assert used["data-kgraph-push-url"] == link
+    # Each use fetched the link's own hx-get in the mode of the moment, from
+    # the same rendered view, and pushed its cached URL in that mode.
+    render = page.dom["render"]
+    assert [_query(path) for path in result["requests"]] == [
+        {"focus": PLAN, "edge": SUPPORTS, "render": render},
+        {"focus": PLAN, "edge": SUPPORTS, "canvas": "full", "render": render},
+        {"focus": PLAN, "edge": SUPPORTS, "render": render},
+    ]
+    assert [push["url"] for push in result["pushes"]] == [
+        link,
+        f"http://lens.test{link}&canvas=full",  # toggle
+        f"{start}&canvas=full",  # Esc: the panel's Close
+        f"{link}&canvas=full",
+        f"http://lens.test{link}",  # toggle back
+        start,
+        link,
+    ]
+    assert result["reloads"] == []
 
 
 def test_a_full_page_load_applies_the_frame_and_toggles_back_to_inline(

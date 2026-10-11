@@ -57,7 +57,7 @@
         "max_function": "lithos_lens.telemetry.setup_telemetry"
       },
       "Web": {
-        "functions_over_10": 8,
+        "functions_over_10": 9,
         "max_complexity": 18,
         "max_function": "lithos_lens.knowledge_routes.register_knowledge_routes.knowledge"
       },
@@ -67,7 +67,7 @@
         "max_function": "lithos_lens.create_form.validate"
       }
     },
-    "functions_over_10": 64,
+    "functions_over_10": 65,
     "top_functions": [
       {
         "complexity": 43,
@@ -334,10 +334,10 @@
         "functions": 197,
         "largest_module": "lithos_lens.write_funnel",
         "largest_module_lines": 880,
-        "lines": 6221,
+        "lines": 6226,
         "modules": 12,
         "public_symbols": 82,
-        "sloc": 5045
+        "sloc": 5048
       },
       "Writes": {
         "classes": 25,
@@ -359,13 +359,13 @@
       "lithos_lens.write_errors",
       "lithos_lens.write_funnel"
     ],
-    "total_lines": 37231,
+    "total_lines": 37236,
     "total_modules": 92,
-    "total_sloc": 29025
+    "total_sloc": 29028
   },
   "tests": {
-    "ratio": 2.04,
-    "src_lines": 37231,
-    "test_lines": 76117
+    "ratio": 2.05,
+    "src_lines": 37236,
+    "test_lines": 76213
   }
 }

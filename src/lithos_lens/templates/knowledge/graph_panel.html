@@ -42,7 +42,10 @@
 {% endmacro %}
 
 {% macro close_control() -%}
-  {%- set pinned = view.pinned if view is defined and view is not none else "" -%}
+  {#- Offline, no view is drawn: the route names the pin (`close_pin`). -#}
+  {%- if close_pin is defined -%}{%- set pinned = close_pin -%}
+  {%- else -%}{%- set pinned = view.pinned if view is defined and view is not none else "" -%}
+  {%- endif -%}
   <a class="kgraph-panel-close" href="{{ knowledge_graph_url(params, selected='', edge='', pin=pinned) }}" data-kgraph-panel-close aria-label="Close panel">Close</a>
 {%- endmacro %}
 

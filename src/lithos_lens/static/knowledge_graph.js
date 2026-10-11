@@ -326,6 +326,9 @@
   //: The canvas's side of a panel opening or closing (set by `draw`): the
   //: usable area re-measured, the selection kept in it.
   let panelMoved = function () {};
+  //: The canvas's side of anything else over it changing size — the pill
+  //: shown, a disclosure, the window (set by `draw`).
+  let overlaysMoved = function () {};
   //: The control that opened the panel on screen: where Esc or Close
   //: returns the focus. None for a canvas click or a panel the page loaded.
   let panelInvoker = null;
@@ -651,7 +654,11 @@
 
   function showRefresh() {
     const pill = syncRefresh();
-    if (pill) pill.hidden = false;
+    if (pill && pill.hidden) {
+      pill.hidden = false;
+      // It can make the toolbar taller: the drawer and the area below move.
+      overlaysMoved(true);
+    }
   }
 
   function onKnowledgeFrame(event) {
@@ -1090,6 +1097,8 @@
     const stage = document.querySelector("[data-kgraph-stage]");
     const panHint = document.querySelector("[data-kgraph-pan-hint]");
     let usable = { x1: 0, y1: 0, x2: cy.width(), y2: cy.height() };
+    //: The area as last measured: a change is what moves the selection.
+    let measured = null;
 
     function heightOf(elt) {
       return elt && typeof elt.getBoundingClientRect === "function"
@@ -1097,6 +1106,7 @@
         : 0;
     }
 
+    // Measures what lies over the canvas; whether the usable area moved.
     function measureOverlays() {
       const width = cy.width();
       const height = cy.height();
@@ -1131,6 +1141,11 @@
       if (usable.x2 - usable.x1 < 1 || usable.y2 - usable.y1 < 1) {
         usable = { x1: 0, y1: 0, x2: width, y2: height };
       }
+      const before = measured;
+      measured = usable;
+      return !before || ["x1", "y1", "x2", "y2"].some(function (side) {
+        return Math.abs(before[side] - usable[side]) > 0.5;
+      });
     }
 
     // Says so while — and only while — part of the graph is outside the
@@ -1370,16 +1385,19 @@
       }, animate);
     }
 
-    // The selection kept in the usable area when a drawer or a sheet opens
-    // over it: a pan, at the zoom it is.
+    // The selection kept in the usable area whenever that area moves — a
+    // drawer or sheet opening over it, a disclosure, the pill, the window:
+    // a pan, at the zoom it is, with as much of FIT_PADDING as there is
+    // room for.
     function revealSelection(animate) {
       const selection = urlSelection();
       if (!fullPage || !selection.length) return;
       const box = selection.renderedBoundingBox();
       const shift = function (low, high, from, to) {
-        if (high - low + 2 * FIT_PADDING > to - from) return (from + to) / 2 - (low + high) / 2;
-        if (low < from + FIT_PADDING) return from + FIT_PADDING - low;
-        if (high > to - FIT_PADDING) return to - FIT_PADDING - high;
+        if (high - low > to - from) return (from + to) / 2 - (low + high) / 2;
+        const pad = Math.min(FIT_PADDING, (to - from - (high - low)) / 2);
+        if (low < from + pad) return from + pad - low;
+        if (high > to - pad) return to - pad - high;
         return 0;
       };
       const dx = shift(box.x1, box.x2, usable.x1, usable.x2);
@@ -1389,10 +1407,17 @@
       moveTo({ zoom: cy.zoom(), pan: { x: pan.x + dx, y: pan.y + dy } }, animate);
     }
 
+    // Anything over the canvas, or the canvas itself, changed size: the
+    // area re-measured and, when it moved, the selection kept in it.
+    function geometryChanged(animate) {
+      cy.resize();
+      if (measureOverlays()) revealSelection(animate);
+      showPanHint();
+    }
+
     // Fitted at the widest too: a title lit once the view is open stays in it.
     fitView(false);
     cy.nodes().removeClass("widest");
-    cy.on("resize", measureOverlays);
     if (panHint) {
       showPanHint();
       cy.on("viewport resize", showPanHint);
@@ -1472,8 +1497,7 @@
           const open = button.getAttribute("aria-expanded") !== "true";
           button.setAttribute("aria-expanded", open ? "true" : "false");
           if (box.classList) box.classList.toggle("kgraph-disclosed", open);
-          measureOverlays();
-          showPanHint();
+          geometryChanged(true);
         });
       });
 
@@ -1484,11 +1508,28 @@
       showPanHint();
     };
 
+    overlaysMoved = geometryChanged;
     // The shell header's height changes with the window's width.
     window.addEventListener("resize", function () {
       if (fullPage) measureHeader();
-      cy.resize();
+      geometryChanged(false);
     });
+    // And whatever else resizes them — a panel's content, a wrapped
+    // toolbar — once laid out: a frame later, so the variables measuring
+    // sets are not a resize inside the observer's own callback.
+    if (typeof window.ResizeObserver === "function" &&
+        typeof window.requestAnimationFrame === "function") {
+      let queued = false;
+      const observer = new window.ResizeObserver(function () {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(function () {
+          queued = false;
+          geometryChanged(true);
+        });
+      });
+      [stage, toolbar, key, host].forEach(function (elt) { if (elt) observer.observe(elt); });
+    }
 
     shownHref = window.location.href;
     container.dataset.canvasState = "ready";

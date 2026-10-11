@@ -1734,7 +1734,9 @@ panel on the page; the fragment answers them 200 with "Not in this view", or
 included, leads with **Close** (K2 S10): a plain link to the page with no
 `selected=` / `edge=`, keeping as `pin=` the edge whose exemption the drawn
 view needs (the view's own `pinned`, which the payload does not carry), so
-the page it loads draws the same picture. Its heading (the node's title, the
+the page it loads draws the same picture. An offline answer takes it from
+the held view its `render=` names, nothing read, or else keeps the
+selection's own edge. Its heading (the node's title, the
 edge's sentence) takes the keyboard focus on an explicit open (§5.7,
 Knowledge graph full page).
 
@@ -1980,7 +1982,9 @@ keys to its `kgraph-full` class, never to the server's mark:
   disclosure; the pan hint under the toolbar; the panel as a drawer over the
   right side below the toolbar at 768px and wider (`min(26rem, 45%)`), a
   bottom sheet below 768px, with its own scroll that does not chain to the
-  page. The wheel over the canvas zooms; over the panel it scrolls the
+  page. Below 768px the disclosed controls, the sheet and the key each give
+  way (and scroll) before the band left between them is too short for a note
+  at the readable zoom. The wheel over the canvas zooms; over the panel it scrolls the
   panel. The toolbar's **Text view** (`#kgraph-text`, the scope line) and
   the page's own scrollbar reach the text
 - **the toggle**: "Full page" / "Exit full page" (`aria-pressed`) switches
@@ -1996,8 +2000,10 @@ keys to its `kgraph-full` class, never to the server's mark:
   canvas less the toolbar, the key and an open drawer or sheet, each taken
   off the side that loses the least area. A fit is clamped to
   `MIN_READABLE_ZOOM`; a graph that then does not fit is centred on the
-  selection, else the focus. A panel opening over the selection pans it
-  into the usable area at the same zoom. Refits and pans the operator
+  selection, else the focus. Whenever the usable area moves — a panel
+  opening, a disclosure, the pill appearing, the window resized (the
+  header re-measured) — the selection is panned back into it at the same
+  zoom. Refits and pans the operator
   caused animate unless `prefers-reduced-motion`; a load does not
 - **the panel**: an explicit open (a text or panel link, a canvas click)
   puts the focus on the panel's heading; Esc (except in a search field it
