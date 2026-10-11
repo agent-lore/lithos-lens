@@ -32,7 +32,6 @@ from lithos_lens.knowledge_edges import EdgeTableSnapshot, KnowledgeEdge
 from lithos_lens.knowledge_graph_expansion import (
     KnowledgeExpansion,
     expand_typed,
-    walk_expansions,
 )
 from lithos_lens.knowledge_graph_view import (
     DEFAULT_DEPTH,
@@ -75,8 +74,9 @@ class KnowledgeTypedGraph:
     )
     provenance_facets: tuple[ProvenanceFacet, ...] = ()
     refusal: KnowledgeGraphRefusal | None = None
-    #: The ``edge=`` / ``pin=`` selection when only its exemption draws it:
-    #: the drawing differs from the plain filters'. ``""`` otherwise.
+    #: The ``edge=`` / ``pin=`` selection when its exemption changes the view:
+    #: what it draws, or (D16) what it offers — eligibility, collapse
+    #: previews — differs from the plain filters'. ``""`` otherwise.
     pinned: str = ""
     #: Drawn edges whose own pin would redraw the plain view: reached within
     #: ``depth`` only through a hidden edge, drawn here by an expansion (D16).
@@ -243,6 +243,17 @@ def ego_typed_graph(
     )
 
 
+def _actions(expansion: KnowledgeExpansion) -> tuple[object, ...]:
+    """What a view draws and offers, for comparing two assemblies."""
+    return (
+        dict(expansion.hops),
+        {edge.edge_id for edge in expansion.edges},
+        expansion.steps,
+        dict(expansion.nodes),
+        dict(expansion.collapses),
+    )
+
+
 def expanded_typed_graph(
     snapshot: EdgeTableSnapshot,
     typed: KnowledgeTypedGraph,
@@ -290,27 +301,25 @@ def expanded_typed_graph(
     discarded = bool(pin) and pin not in drawn
     counted = plain if discarded else filters
     hops, edges = _bfs(snapshot.edges_of, focus, depth, plain)
-    # The pin keeps a drawing only if the plain filters draw that very view:
-    # an exemption can change the base, and so every later step's reach and
-    # cap verdict, even where the plain walk draws the edge in the end.
-    walk = walk_expansions(
-        snapshot.edges_of,
-        plain.shows,
-        focus=focus,
-        hops=hops,
-        edges=edges.values(),
-        layer_ids=layer_ids,
-        requests=expand,
-        cap=max_nodes,
-    )
-    same = (dict(walk.hops), {e.edge_id for e in walk.edges}, walk.steps) == (
-        dict(expansion.hops),
-        drawn.keys(),
-        expansion.steps,
-    )
-    # Pinned whenever the exemption changed the drawing — even an edge= it
-    # leaves undrawn, whose exemption refused a step.
-    pinned = "" if same else selected
+    # The selection keeps this view only if the plain filters assemble that
+    # very view: its drawing, and the actions it offers (eligibility and
+    # collapse previews). An exemption can change any of them — the base,
+    # every later step's reach and cap verdict, a note's would-be count —
+    # even where the edge ends up drawn by the plain walk, or not at all.
+    pinned = ""
+    if selected:
+        unpinned = expand_typed(
+            snapshot.edges_of,
+            plain.shows,
+            focus=focus,
+            hops=hops,
+            edges=edges.values(),
+            layer_ids=layer_ids,
+            requests=expand,
+            cap=max_nodes,
+        )
+        if _actions(unpinned) != _actions(expansion):
+            pinned = selected
     redraws = frozenset(e for e in drawn if e in in_depth and e not in edges)
     would_be = typed.would_be_nodes
     if discarded:

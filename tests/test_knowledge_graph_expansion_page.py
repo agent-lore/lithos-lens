@@ -844,3 +844,25 @@ def test_a_discarded_pin_renders_the_plain_hidden_counts(
     assert _first(r'href="([^"]*)"', line).replace("&amp;", "&") == _url(
         "focus=F&expand=A&min_weight=0.0&selected=A"
     )
+
+
+def test_a_held_view_whose_edge_exemption_changes_actions_redirects_a_pin_tap(
+    lithos_lens_config_env: Path,
+) -> None:
+    """correctness f-008: on ?focus=F&edge=e-aw (undrawn) at cap 6, A's
+    eligibility counts e-aw. A tap on A asks for selected=A&pin=e-aw, which
+    discards the pin: it is not answered from that view, but reloads, and
+    the page it loads offers A at its real count."""
+    _set_knowledge(lithos_lens_config_env, "graph_focus_max_nodes = 6")
+    with _client(lithos_lens_config_env) as client:
+        page = _get(client, _url("focus=F&edge=e-aw"))
+        response = client.get(
+            f"{PANEL}?focus=F&selected=A&pin=e-aw&render={_render_id(page)}"
+        )
+        assert response.headers["HX-Redirect"] == _url("focus=F&selected=A&pin=e-aw")
+
+        loaded = _get(client, response.headers["HX-Redirect"])
+    assert _plain(_action(loaded)) == (
+        "Show its neighbours — adds 2 notes and 3 edges; "
+        "6 notes would count towards the 6 cap"
+    )

@@ -270,6 +270,8 @@ def expand_typed(
     that does not — the edge refused with its step, or out of reach — is
     the plain walk, the drawing a link that drops the undrawn pin loads.
     Exempt, it could still have refused a step plain filters let through.
+    A discarded pin is gone from every link the view emits, so its collapse
+    previews are plain too.
     """
     edges, layer_ids = tuple(edges), tuple(layer_ids)
 
@@ -293,10 +295,12 @@ def expand_typed(
         )
 
     final, final_shows = walk(requests)
+    discarded = final_shows is not shows
     collapses: dict[str, ExpansionCollapse] = {}
     for step in final.steps:
         removed = dependants(final, step.id)
-        rest, _ = walk(s.id for s in final.steps if s.id not in removed)
+        kept = tuple(s.id for s in final.steps if s.id not in removed)
+        rest = run(kept, final_shows) if discarded else walk(kept)[0]
         collapses[step.id] = ExpansionCollapse(
             removed, rest.visible, frozenset(edge.edge_id for edge in rest.edges)
         )

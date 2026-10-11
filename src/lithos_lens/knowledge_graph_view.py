@@ -292,8 +292,9 @@ class KnowledgeGraphView:
     #: ``edge=`` names an edge the snapshot does not hold (created after
     #: ``as_of``, or since deleted): the panel host says so.
     selected_edge_missing: bool = False
-    #: The selected edge only its filter exemption draws (D13): a panel
-    #: link on this view keeps the drawing only while it pins that edge.
+    #: The selected edge whose exemption changes this view (D13, D16): its
+    #: drawing or its offers. A panel link keeps the view only while it
+    #: selects that edge.
     pinned: str = ""
     #: Drawn edges whose own pin would redraw this view (D16): reached within
     #: ``depth`` only through a hidden edge and drawn by an expansion.

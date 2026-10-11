@@ -1698,13 +1698,15 @@ since. A held view answers only a selection that would draw it the same: the
 `edge=` / `pin=` it was drawn under (the same selection, of the same kind
 unless the view draws it — so a pin gone from the data since, left in the
 address bar, still finds it), or, on a view no exemption changed (not
-pinned: the whole drawing, expansions' reach and cap verdicts included, is
-the plain filters'), no edge, one it draws whose own pin would change
+pinned: what it draws — expansions' reach and cap verdicts included — and
+what it offers — every note's expansion eligibility and every collapse
+preview — are the plain filters'), no edge, one it draws whose own pin would change
 nothing (not an edge an expansion drew that is within `depth` only through
 a hidden edge, D16), or its own undrawn `pin=`, which is discarded. An
-`edge=` whose exemption changed the drawing without drawing it (a refused
-step) is not answered for that edge as a `pin=` (a node tap on its canvas),
-which would be discarded. A selection that would gain or lose an exemption is treated as a view
+`edge=` whose exemption changed the view without drawing the edge (a
+refused step, a note's would-be count, a collapse preview) is not answered
+for that edge as a `pin=` (a node tap on its canvas), which would be
+discarded: the tap reloads the page. A selection that would gain or lose an exemption is treated as a view
 not held. A render id no longer held (evicted,
 or lost to a restart) is never
 answered with a panel from a different view beside the page's old graph: the

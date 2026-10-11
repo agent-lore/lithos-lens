@@ -357,7 +357,11 @@ def test_an_expansion_draws_the_exempt_selection_and_pins_it() -> None:
 
     # Two hops out, the selection is not in depth 1's view; A's expansion
     # draws it whatever its weight, and only the exemption does.
-    assert "e-aw" not in typed_ids(base) and base.pinned == ""
+    assert "e-aw" not in typed_ids(base)
+    # Undrawn, it still counts in A's offer (W too), so the base view is
+    # its edge='s own (correctness f-008).
+    assert base.pinned == "e-aw"
+    assert nodes(base)["A"].expansion.undrawn_nodes == 3
     assert "e-aw" in typed_ids(view) and "W" in nodes(view)
     assert view.pinned == "e-aw"
     assert view.hidden.by_weight == 0  # an exempt edge is never hidden
@@ -753,3 +757,117 @@ def test_a_collapse_that_leaves_the_pin_undrawn_previews_the_plain_drawing() -> 
     target = assemble_focus_view(snapshot, "F", max_nodes=4, expand=("R",))
     assert "rz" not in after.edges
     assert after.nodes == set(nodes(target)) == {"F", "R", "R2", "Q"}
+
+
+# ── a view answers only selections that keep its actions (round 5) ─────
+
+
+def test_an_undrawn_edge_whose_exemption_changes_eligibility_answers_only_itself() -> (
+    None
+):
+    """correctness f-008: edge=e-aw is undrawn at depth 1 and changes no
+    drawing, but A's eligibility counts it (W too): 7 over the cap of 6,
+    where a request without it — a node tap carries it as a discarded pin —
+    offers A at 6. The view answers its own edge= only."""
+    view = view_of(filters=KnowledgeGraphFilters(selected_edge="e-aw"), max_nodes=6)
+    plain = view_of(max_nodes=6)
+
+    assert "e-aw" not in typed_ids(view)
+    assert set(nodes(view)) == set(nodes(plain))
+    a = nodes(view)["A"].expansion
+    assert (a.undrawn_nodes, a.would_count, a.state) == (3, 7, "over_cap")
+    assert nodes(plain)["A"].expansion.state == "available"
+    assert view.pinned == "e-aw"
+    assert view.keeps_drawing_for("e-aw")
+    assert not view.keeps_drawing_for("e-aw", is_pin=True)
+    assert not view.keeps_drawing_for("")
+    assert plain.pinned == ""
+
+
+def test_a_discarded_pin_previews_collapses_as_the_plain_view() -> None:
+    """With the pin ae, A would add E and refuse; the pin is discarded, so A
+    applies plainly. Removing X would let A apply with ae — but the remove
+    link drops the pin, so its preview is the plain one."""
+    rows = (
+        edge("fb", "F", "B"),
+        edge("xy", "X", "Y"),
+        edge("ac", "A", "C"),
+        edge("ae", "A", "E", 0.05),
+    )
+    layers = RelatedNeighborhood(
+        links=(RelatedRef(id="X", title="X"), RelatedRef(id="A", title="A"))
+    )
+
+    def view(selected: str) -> KnowledgeGraphView:
+        return assemble_focus_view(
+            EdgeTableSnapshot(rows=rows, as_of=_T0),
+            "F",
+            max_nodes=6,
+            neighborhood=layers,
+            filters=KnowledgeGraphFilters(
+                selected_edge=selected, selected_is_pin=bool(selected)
+            ),
+            expand=("X", "A"),
+        )
+
+    pinned, plain = view("ae"), view("")
+    assert (
+        steps(pinned)
+        == steps(plain)
+        == [
+            ("X", "applied", 1, 1),
+            ("A", "applied", 1, 1),
+        ]
+    )
+    assert pinned.collapses == plain.collapses
+    assert "E" not in pinned.collapses["X"].nodes
+    assert pinned.pinned == ""
+
+
+def test_an_exemption_that_changes_only_a_collapse_preview_keeps_the_view_its_own() -> (
+    None
+):
+    """Requests X, A, B at cap 5: X fills the view, A is refused and B (only
+    A draws it) unreached — with or without edge=bz, which touches B alone,
+    so the drawing and every visible note's offer agree. Removing X differs:
+    A then applies, and B — exempt bz adding Z — would refuse (6 over 5)
+    where it applies without. So only edge=bz itself is answered."""
+    rows = (
+        edge("fp", "F", "P"),
+        edge("x1", "X", "X1"),
+        edge("x2", "X", "X2"),
+        edge("ab", "A", "B"),
+        edge("bc", "B", "C"),
+        edge("bz", "B", "Z", 0.05),
+    )
+    layers = RelatedNeighborhood(
+        links=(RelatedRef(id="X", title="X"), RelatedRef(id="A", title="A"))
+    )
+
+    def view(selected: str) -> KnowledgeGraphView:
+        return assemble_focus_view(
+            EdgeTableSnapshot(rows=rows, as_of=_T0),
+            "F",
+            max_nodes=5,
+            neighborhood=layers,
+            filters=KnowledgeGraphFilters(selected_edge=selected),
+            expand=("X", "A", "B"),
+        )
+
+    pinned, plain = view("bz"), view("")
+    assert (
+        steps(pinned)
+        == steps(plain)
+        == [
+            ("X", "applied", 2, 2),
+            ("A", "refused", 0, 0),
+            ("B", "unreached", 0, 0),
+        ]
+    )
+    assert {n.id: n.expansion for n in pinned.nodes} == {
+        n.id: n.expansion for n in plain.nodes
+    }
+    assert "C" in plain.collapses["X"].nodes
+    assert "C" not in pinned.collapses["X"].nodes
+    assert pinned.pinned == "bz"
+    assert pinned.keeps_drawing_for("bz") and not pinned.keeps_drawing_for("")
