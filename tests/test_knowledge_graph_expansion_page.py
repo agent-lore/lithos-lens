@@ -894,3 +894,23 @@ def test_a_held_panel_does_not_answer_a_kind_change_whose_collapse_differs(
         assert collapse == _url("focus=F&expand=E&expand=G&expand=D")
         after = _get(client, collapse)
     assert "B" not in {n["id"] for n in _payload(after)["nodes"]}
+
+
+def test_a_held_expanded_view_answers_node_details_for_its_drawn_edge(
+    lithos_lens_config_env: Path,
+) -> None:
+    """test-quality f-007: on ?focus=F&depth=2&expand=C&edge=e-aw the faint
+    e-aw is drawn by its exemption in the base, and so in C's collapse too.
+    Node details (selected=A&pin=e-aw) is answered from the held view: no
+    redirect, nothing read."""
+    graph = _Graph()
+    with _client(lithos_lens_config_env, graph) as client:
+        scope = "focus=F&depth=2&expand=C"
+        page = _get(client, _url(f"{scope}&edge=e-aw"))
+        graph.calls.clear()
+        response = client.get(
+            f"{PANEL}?{scope}&selected=A&pin=e-aw&render={_render_id(page)}"
+        )
+    assert "HX-Redirect" not in response.headers
+    assert 'data-kgraph-panel-id="A"' in response.text
+    assert graph.calls == []

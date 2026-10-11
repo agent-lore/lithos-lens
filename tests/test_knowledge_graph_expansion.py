@@ -930,3 +930,10 @@ def test_an_edge_its_exemption_draws_everywhere_answers_either_kind() -> None:
     assert view.keeps_drawing_for("e-aw")
     assert view.keeps_drawing_for("e-aw", is_pin=True)
     assert not view.keeps_drawing_for("")
+
+    # With an expansion applied, its collapse re-walk draws e-aw too: the
+    # switch to a pin is still this view (test-quality f-007).
+    expanded = view_of("C", depth=2, filters=selected)
+    assert steps(expanded) == [("C", "applied", 1, 1)]
+    assert "e-aw" in expanded.collapses["C"].edges
+    assert expanded.keeps_drawing_for("e-aw", is_pin=True)
