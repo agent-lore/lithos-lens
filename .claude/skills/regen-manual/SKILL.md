@@ -8,7 +8,7 @@ disabledModelInvocation: true
 
 You are regenerating the end-user manual for **Lithos Lens** from scratch. Output: `docs/user-manual/manual.md` plus screenshots under `docs/user-manual/screenshots/`.
 
-Lithos Lens is a **read-only** local web UI (FastAPI) for observing Lithos coordination state — a Tasks dashboard, task detail pages, finding timelines, and a knowledge-note renderer. It never creates, claims, mutates, completes, or cancels anything. So the manual documents *viewing and navigating*, not CRUD: there is no "create/edit/delete" path to capture.
+Lithos Lens is a local web UI (FastAPI) for observing Lithos coordination state — a Tasks dashboard, the task dependency graph, task detail pages with finding timelines, knowledge search, note pages and the knowledge graph — plus a small set of **curated write actions** (new task/epic/gate, cancel, reopen, add a dependency, proceed past a gate) that are offered only once an operator identity is chosen. The manual documents viewing and navigating first, then the write actions **as affordances and confirmation pages only**: never submit a write while regenerating.
 
 This is a full rewrite. Do **not** read the previous `manual.md` and do **not** diff against it — the bundled template is the single source of truth for structure, so just produce the new manual. The only thing you reuse from the existing folder is the `screenshots/` directory, which you overwrite as you recapture.
 
@@ -38,13 +38,16 @@ Read the bundled template `.claude/skills/regen-manual/manual-template.md`. It d
 
 ## Step 2 — Discover the live route inventory
 
-Enumerate the user-facing pages from the source rather than hardcoding them. Read `src/lithos_lens/web.py` and list every route decorated with `response_class=HTMLResponse`. As of writing the **standalone pages** are:
+Enumerate the user-facing pages from the source rather than hardcoding them: grep `src/lithos_lens/*_routes.py` and `web.py` for `@router.get(`/`@app.get(` routes returning HTML. As of writing the **standalone pages** are:
 
-- `/` and `/tasks` — the Tasks dashboard (same view; `/` is an alias)
-- `/tasks/{task_id}` — a single task's detail page. This page also renders the task's **finding timeline** inline (the `tasks/findings.html` fragment is `{% include %}`-ed into `tasks/detail.html`).
-- `/note/{knowledge_id}` — the knowledge-note renderer
+- `/` and `/tasks` — the Tasks dashboard (same view; `/` is an alias); `/tasks/new` — the create form (operator only)
+- `/tasks/graph` — the dependency graph (scope picker; `?project=` or `?epic=`)
+- `/tasks/{task_id}` — a task's detail page, which renders the **finding timeline** inline, the nearby mini-graph, and the write affordances
+- `/operator` — the operator identity page
+- `/knowledge`, `/knowledge/tags`, `/note/{knowledge_id}` — knowledge search, tags, and the note page
+- `/knowledge/graph` — the knowledge graph (`?namespace=`/`?type=` scope, `&selected=` node panel, `&edge=` edge panel, `&canvas=full` full page)
 
-Exclude non-page routes: `/health` (JSON), `/tasks/events` (an SSE stream), and `/tasks/{task_id}/findings` — the last one returns the **bare findings fragment** (unstyled, no page chrome) for live refresh, *not* a standalone page. Document the finding timeline from the detail page, not from that route. Cross-check against the Jinja templates under `src/lithos_lens/templates/` (note which are fragments vs. full pages) so you miss no rendered view. The nav also shows **Knowledge** and **Settings** links, but they are `aria-disabled` placeholders (`href="#"`) — only **Tasks** is live; say so rather than documenting them as working.
+Exclude non-page routes: `/health` (JSON), the SSE streams, and the HTMX fragments (`/tasks/{id}/findings`, `/tasks/{id}/blockers`, `/tasks/{id}/minigraph`, `/knowledge/graph/panel`, the write POST endpoints). Cross-check against the Jinja templates under `src/lithos_lens/templates/` (fragments vs. full pages). **Settings** in the nav is still a disabled placeholder — say so.
 
 Pick a concrete `task_id` to document by reading it off the live dashboard (the task rows link to `/tasks/<id>`). Prefer a task that has findings, so the detail page's finding timeline is non-empty. For the note renderer, follow a finding's note link if one exists; otherwise pick any knowledge document id and open `/note/<id>` directly.
 
@@ -56,16 +59,25 @@ Drive the running UI with a browser-automation MCP (e.g. `claude-in-chrome` or `
 - Set the viewport to **1280×800** before capturing.
 - Take a **full-page PNG** screenshot.
 
+Scope every task view to **one project with few open tasks and `status=open`** (an unfiltered board on a busy Lithos is tens of thousands of pixels tall) and clip long pages to their first ~1,800 px. **Choose screenshots that show project/engineering content only** — never personal notes, private agent facts or planning notes; the manual is published in a public repo. Set an operator identity for the write-affordance captures by adding a `lens_operator` cookie (the `/operator` form POST is rejected without a browser `Origin` header); this does not write to Lithos.
+
 Capture, at minimum:
 
-- `dashboard.png` — the Tasks dashboard with its default filters.
-- `dashboard-filters.png` — the dashboard after applying a filter (e.g. a status group, a tag chip, or an agent), to show filtering works via the URL query string.
-- `task-detail.png` — a single task's detail page (title, description, metadata, claims).
-- `findings.png` — the finding timeline section *of the detail page* (pick a task that has findings). The page can be long; capture or crop the timeline so it reads cleanly on its own.
-- `note.png` — the knowledge-note renderer for a real note id (skip only if no finding links to a note; say so in the report).
-- `degraded.png` — *optional* — a view rendered while Lithos is offline/degraded, for the "When Lithos is unavailable" section.
+- `dashboard.png` — the Tasks dashboard scoped to a project, open only.
+- `dashboard-filters.png` — the same board with a different filter applied (status/resolved-since), clipped to cards + filter bar + strips.
+- `task-graph.png` — `/tasks/graph` for a project whose graph is readable (a ghost node and one blocking edge is ideal).
+- `task-detail.png` — a completed task with a dependency and findings, operator set (shows **Reopen**).
+- `findings.png` — the `section#findings` element of that detail page.
+- `task-new.png` — `/tasks/new` with an operator set (do **not** submit).
+- `operator.png` — `/operator`.
+- `knowledge.png` — `/knowledge?q=<project query>` (search results, not the recent-notes list), clipped.
+- `knowledge-tags.png` — `/knowledge/tags?prefix=project`, clipped.
+- `note.png` — a project note page.
+- `knowledge-graph.png` — `/knowledge/graph?namespace=<project namespace>&selected=<note id>` (canvas + node panel), clipped.
+- `knowledge-graph-full.png` — the same graph after clicking **Full page**, viewport only.
+- `degraded.png` — the dashboard of a second Lens instance started with a Lithos URL that does not answer (`LENS_PORT=8011 LITHOS_LENS_CONFIG=<copy with url pointing at a dead port>`).
 
-Save each to `docs/user-manual/screenshots/<name>.png` (lowercase, hyphenated, descriptive). Aim for 5–7 screenshots total. Lens is read-only, so crawling never changes any Lithos state.
+Save each to `docs/user-manual/screenshots/<name>.png` (lowercase, hyphenated, descriptive). A Playwright script over `e2e/node_modules/playwright` (viewport 1280×800, `fullPage: true`, `clip` for long pages) is the reliable way to get full-page captures; a browser-automation MCP only captures the viewport. Reading never changes Lithos state; the write affordances are documented from their forms and confirmation pages only.
 
 ## Step 4 — Write `manual.md`
 
@@ -77,11 +89,19 @@ Top of `manual.md` must contain:
 2. A one-paragraph intro: what Lens is for (a read-only window onto Lithos coordination state) plus the "do not edit by hand — regenerated by `/regen-manual`" line.
 3. A Contents list linking to each `##` section.
 
-Then, in order: **Getting around** (the page chrome — header, the health/status indicator, the nav between Tasks and a note), the **Tasks dashboard** (what the columns/status groups mean, how to filter by status group, claimed state, tag, agent and time range — all reflected in the URL — and that rows update live as Lithos emits events), **Task detail**, **Finding timeline**, **Knowledge notes**, and a short **When Lithos is unavailable** section describing degraded mode.
+Then, in order: **Getting around**, **The Tasks dashboard** (summary cards, epics/projects strips, the sections and their promotion rules, filters held in the URL, live updates), **The dependency graph**, **Task detail**, **Finding timeline**, **Acting as an operator** (identity, what it is and is not, each write affordance and its confirmation), **Knowledge** (search, facets, tags), **Knowledge notes**, **The knowledge graph** (scope picker, toolbar, node and edge panels, expansion, text view, full page), and **When Lithos is unavailable**.
 
 Tone: instructional second-person ("Click a task row to open its detail page..."). Audience: **operators watching Lithos**, not contributors. Do NOT document FastAPI internals, the SSE re-broadcast mechanism, config fields, or other developer concerns — point such readers to `README.md` and `docs/`.
 
-## Step 5 — Clean up orphans
+## Step 5 — Compress the screenshots
+
+Playwright's 24-bit PNGs are 0.5–1.2 MB each; quantize them to palette PNGs (visually identical, about a third of the size) so the repo does not grow by several MB per regeneration and GitHub's PR image preview can render them:
+
+```bash
+uv run --no-project --with pillow python .claude/skills/regen-manual/compress_screenshots.py
+```
+
+## Step 6 — Clean up orphans
 
 Delete any file in `docs/user-manual/screenshots/` that is not referenced from the regenerated `manual.md`:
 
@@ -91,7 +111,7 @@ git status docs/user-manual/screenshots/
 
 Confirm only intended additions/deletions are present.
 
-## Step 6 — Report
+## Step 7 — Report
 
 Print one summary line in this format:
 
