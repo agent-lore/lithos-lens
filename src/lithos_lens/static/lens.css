@@ -2541,6 +2541,14 @@ a.blocker-chip:focus-visible {
   z-index: 2;
 }
 
+/* Hidden, it keeps its place over the canvas: the room it takes from the
+   selected note's band (knowledge_graph.js) does not come and go as the
+   operator pans. */
+.kgraph-full .kgraph-pan-hint[hidden] {
+  display: block !important;
+  visibility: hidden;
+}
+
 .kgraph-full .kgraph-key {
   background: rgba(255, 250, 240, 0.94);
   border: 1px solid var(--line);
@@ -2594,6 +2602,14 @@ a.blocker-chip:focus-visible {
   border-radius: 0;
   box-shadow: none;
   min-height: 100%;
+}
+
+/* At 768px and wider the key reflows in the room beside an open drawer,
+   never under it. */
+@media (min-width: 768px) {
+  .kgraph-full .kgraph-panel-open .kgraph-key {
+    max-width: min(36rem, calc(100% - var(--kgraph-panel-width, 0px) - 1.5rem));
+  }
 }
 
 /* Below 768px (full page only; the page's own breakpoint stays 700px): the

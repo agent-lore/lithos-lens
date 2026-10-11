@@ -228,6 +228,8 @@ async function geometry(page: Page) {
       toolbar: rect("[data-kgraph-toolbar]"),
       key: rect("[data-kgraph-key]"),
       panel: rect("#kgraph-panel"),
+      // The pan hint lies over the canvas too, while it is shown (full page).
+      hint: document.body.classList.contains("kgraph-full") ? rect("[data-kgraph-pan-hint]") : null,
       selection,
       usable,
       clipped:
@@ -258,6 +260,7 @@ function unobscured(g: Awaited<ReturnType<typeof geometry>>) {
   expect(overlaps(s, g.toolbar)).toBe(false);
   expect(overlaps(s, g.key)).toBe(false);
   expect(overlaps(s, g.panel)).toBe(false);
+  expect(overlaps(s, g.hint)).toBe(false);
 }
 
 async function capture(page: Page, name: string, fullPage: boolean) {
@@ -867,12 +870,13 @@ test("the refresh pill appearing moves the drawer and the usable area below the 
   const drawer = (await page.locator("#kgraph-panel").boundingBox())!;
   expect(Math.abs(drawer.y - (toolbar.y + toolbar.height))).toBeLessThan(1);
   const g = await geometry(page);
-  expect(Math.abs(g.canvas.top + g.usable.y1 - (toolbar.y + toolbar.height))).toBeLessThan(1);
   unobscured(g);
   expect(g.hinted).toBe(g.clipped);
-  // The hint, under the toolbar, moved down with it.
-  const hint = await page.locator("[data-kgraph-pan-hint]").boundingBox();
-  if (hint) expect(hint.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+  // The hint, under the toolbar, moved down with it — and the usable area,
+  // which keeps the hint's place (shown or not), starts below them both.
+  const hint = (await page.locator("[data-kgraph-pan-hint]").boundingBox())!;
+  expect(hint.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+  expect(Math.abs(g.canvas.top + g.usable.y1 - (hint.y + hint.height))).toBeLessThan(1);
 });
 
 test("a short landscape window: the stage and its sheet end at the window's bottom", async ({
@@ -1126,5 +1130,37 @@ for (const spelled of ["full", "%20full%20", "inline&canvas=full", "full&canvas=
       `?focus=${PLAN}&edge=${SUPPORTS}&canvas=full`,
     ]);
     expect(await sameDocument(page)).toBe(true);
+  });
+}
+
+// ── Overlays clear of one another and of the note (round 7) ──────────
+
+for (const [width, height] of [
+  [1440, 900],
+  [768, 1024],
+] as const) {
+  test(`at ${width}px the disclosed key reflows beside the open drawer, every entry readable`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/knowledge/graph?focus=${PLAN}&depth=2&selected=${LEGACY}&canvas=full`);
+    await canvasReady(page);
+    await nodePanel(page, LEGACY);
+    await page.locator("[data-kgraph-key-toggle]").click();
+    await expect(page.locator("#kgraph-key-body")).toBeVisible();
+    await settledLayout(page);
+
+    const drawer = (await page.locator("#kgraph-panel").boundingBox())!;
+    const key = (await page.locator("[data-kgraph-key]").boundingBox())!;
+    expect(key.x + key.width).toBeLessThanOrEqual(drawer.x);
+    // Every entry of the legend lies left of the drawer: none cut or covered.
+    const cut = await page.evaluate((edge) =>
+      Array.from(document.querySelectorAll("[data-kgraph-key] li"))
+        .map((li) => li.getBoundingClientRect())
+        .filter((box) => box.width > 0 && box.right > edge).length,
+    drawer.x);
+    expect(cut).toBe(0);
+    unobscured(await geometry(page));
   });
 }

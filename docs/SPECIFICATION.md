@@ -2005,7 +2005,11 @@ keys to its `kgraph-full` class, never to the server's mark:
   `MIN_READABLE_ZOOM`; a graph that then does not fit is centred on the
   selection, else the focus. Each overlay is taken only off a side it is
   anchored to (the toolbar the top, the key the bottom or left, the panel
-  the right or bottom). Whenever an overlay or the stage changes size — a
+  the right or bottom, the pan hint the top — or the left when the note
+  needs the height). The pan hint keeps its place while hidden, so the
+  room it takes does not come and go as the operator pans; at 768px and
+  wider an open drawer narrows the disclosed key, which reflows beside it
+  rather than under it. Whenever an overlay or the stage changes size — a
   panel opening or closing, a disclosure, the pill appearing, the window
   resized (the header re-measured) — room is made for the selected note at
   the zoom it is drawn at: the key, then the sheet, then the toolbar give

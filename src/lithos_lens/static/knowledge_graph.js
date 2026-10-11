@@ -1111,6 +1111,15 @@
     //: The key's side when the selection needs the width beside a drawer:
     //: the bottom, giving back the left (else the cheaper of the two).
     let keyAnchor = null;
+    //: The pan hint's, when the selection needs the height below the
+    //: toolbar: the left, giving back the top.
+    let hintAnchor = null;
+
+    function widthOf(elt) {
+      return elt && typeof elt.getBoundingClientRect === "function"
+        ? elt.getBoundingClientRect().width
+        : 0;
+    }
 
     function heightOf(elt) {
       return elt && typeof elt.getBoundingClientRect === "function"
@@ -1128,24 +1137,31 @@
       if (stage && stage.style) {
         stage.style.setProperty("--kgraph-toolbar-height", heightOf(toolbar) + "px");
         stage.style.setProperty("--kgraph-panel-height", (open ? heightOf(host) : 0) + "px");
+        // The key reflows beside a drawer rather than under it.
+        stage.style.setProperty("--kgraph-panel-width", (open ? widthOf(host) : 0) + "px");
       }
       const inset = { top: 0, right: 0, bottom: 0, left: 0 };
       sideOf = new Map();
       if (fullPage && typeof container.getBoundingClientRect === "function") {
         const box = container.getBoundingClientRect();
-        [toolbar, key, open ? host : null].forEach(function (elt) {
-          if (!elt || elt.hidden || typeof elt.getBoundingClientRect !== "function") return;
+        // The pan hint keeps its place while hidden in full page (lens.css),
+        // so the room it takes does not come and go as the operator pans.
+        [toolbar, panHint, key, open ? host : null].forEach(function (elt) {
+          if (!elt || typeof elt.getBoundingClientRect !== "function") return;
+          if (elt.hidden && elt !== panHint) return;
           const over = elt.getBoundingClientRect();
           const x1 = Math.max(over.left - box.left, 0);
           const x2 = Math.min(over.right - box.left, width);
           const y1 = Math.max(over.top - box.top, 0);
           const y2 = Math.min(over.bottom - box.top, height);
           if (x2 <= x1 || y2 <= y1) return;
-          // Only a side it is anchored to: the toolbar the top, the key the
-          // bottom or (narrow) the left, the panel the right or the bottom.
+          // Only a side it is anchored to: the toolbar the top, the pan hint
+          // (under it) the top or the left, the key the bottom or (narrow)
+          // the left, the panel the right or the bottom.
           const anchored = elt === toolbar
             ? ["top"]
-            : elt === key ? (keyAnchor ? [keyAnchor] : ["bottom", "left"]) : ["right", "bottom"];
+            : elt === panHint ? (hintAnchor ? [hintAnchor] : ["top"])
+              : elt === key ? (keyAnchor ? [keyAnchor] : ["bottom", "left"]) : ["right", "bottom"];
           const sides = [
             ["top", y2, y2 * width],
             ["bottom", height - y1, (height - y1) * width],
@@ -1223,6 +1239,7 @@
         stage.style.removeProperty("--kgraph-drawer-cap");
       }
       keyAnchor = null;
+      hintAnchor = null;
       measureOverlays();
       const selection = urlSelection();
       if (!capped || !fullPage || !selection.length) return;
@@ -1240,6 +1257,16 @@
         stage.style.setProperty(
           "--kgraph-drawer-cap", Math.max(DRAWER_FLOOR, drawer - (wide - span)) + "px");
         measureOverlays();
+      }
+      // Short of height below the toolbar: the pan hint is counted off the
+      // left, where it also lies, when the note still fits beside it.
+      if (sideOf.get(panHint) === "top" && model.h * zoom + 2 * ROOM_PADDING > band) {
+        hintAnchor = "left";
+        measureOverlays();
+        if (wide > span) {
+          hintAnchor = null;
+          measureOverlays();
+        }
       }
       let short = model.h * zoom + 2 * ROOM_PADDING - band;
       if (short <= 0) return;
