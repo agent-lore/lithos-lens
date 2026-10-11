@@ -219,6 +219,45 @@
       .map(function (step) { return step.id; });
   }
 
+  // Whether a fetched view is whole enough to commit (D16): its notes and
+  // edges each a record with an id of its own, every edge's ends among its
+  // notes (the server draws a note for every end, ghosts included), and
+  // each value the canvas, key and toolbar read of the kind they read.
+  // Checked before anything on the page changes.
+  function wholeView(view) {
+    const record = function (item) {
+      return item !== null && typeof item === "object" && !Array.isArray(item);
+    };
+    const name = function (value) { return typeof value === "string" && value !== ""; };
+    const number = function (value) {
+      return value === null || value === undefined || (typeof value === "number" && isFinite(value));
+    };
+    const optional = function (value, test) { return value === null || value === undefined || test(value); };
+    if (!Array.isArray(view.nodes) || !view.nodes.length || !Array.isArray(view.edges)) return false;
+    if (!optional(view.expansions, Array.isArray) || !optional(view.legend, Array.isArray)) return false;
+    const notes = dict();
+    const nodesWhole = view.nodes.every(function (node) {
+      if (!record(node) || !name(node.id) || node.id in notes) return false;
+      notes[node.id] = true;
+      return typeof node.label === "string" && optional(node.via, name) &&
+        number(node.degree) && number(node.hop) && number(node.undrawn_nodes) &&
+        number(node.undrawn_edges) && optional(node.expansion, record);
+    });
+    if (!nodesWhole) return false;
+    const edges = dict();
+    const edgesWhole = view.edges.every(function (edge) {
+      if (!record(edge) || !name(edge.id) || edge.id in edges) return false;
+      edges[edge.id] = true;
+      return name(edge.from) && name(edge.to) && edge.from in notes && edge.to in notes &&
+        number(edge.weight) && optional(edge.style, record);
+    });
+    return edgesWhole &&
+      (view.expansions || []).every(function (step) { return record(step) && name(step.id); }) &&
+      (view.legend || []).every(record) &&
+      optional(view.hidden, record) && optional(view.would_be_nodes, record) &&
+      optional(view.filters, record);
+  }
+
   // The values `slotOf` has not seen, in the order they take slots (D16):
   // the base notes' (`via` none) by node count, ties by name (S4 D7); then
   // each applied expansion's, in URL order, ties by name; then any other's.
@@ -1215,7 +1254,9 @@
     // what it still draws updated where it stands (its size from its new
     // degree, its colour from its value); what is new added, unplaced.
     // Answers the nodes added.
-    function applyElements(view) {
+    // `view`'s element definitions, built before anything is drawn from
+    // them: a swap that cannot build them changes nothing on the page.
+    function elementsOf(view) {
       takeSlots(view);
       const sizes = nodeSizes(view.nodes);
       const drawn = dict();
@@ -1224,6 +1265,13 @@
       const edges = (view.edges || []).map(function (edge) {
         return edgeDefinition(edge, view, drawn);
       }).filter(Boolean);
+      return { nodes: nodes, edges: edges };
+    }
+
+    function applyElements(view, built) {
+      const definitions = built || elementsOf(view);
+      const nodes = definitions.nodes;
+      const edges = definitions.edges;
       const keep = dict();
       nodes.concat(edges).forEach(function (definition) { keep[definition.data.id] = true; });
       cy.remove(cy.elements().filter(function (element) { return !keep[element.id()]; }));
@@ -2474,6 +2522,7 @@
       if (next.mode !== "focus" || !Array.isArray(next.nodes) || !next.nodes.length) {
         throw failure("the answer drew no graph.");
       }
+      if (!wholeView(next)) throw failure("the answer could not be read.");
       const nextHost = doc.querySelector("#kgraph-panel");
       const render = nextHost ? nextHost.getAttribute("data-kgraph-render") || "" : "";
       if (!render) throw failure("the answer could not be read.");
@@ -2592,29 +2641,31 @@
 
     // The answer committed, in one synchronous step: text and panel, the
     // picture diffed by identity (survivors where they stand, the new
-    // placed beside their anchors, the labels placed again), the address
-    // pushed, then the controls, key, search, selection and view.
-    function commit(view, request) {
+    // placed beside their anchors, the labels placed again), the controls,
+    // key, search and counts — and only then the address pushed, the
+    // selection lit from it and the view moved.
+    function commit(view, request, built) {
       swapText(view);
       current = view.payload;
       panelInvoker = null;
-      const added = applyElements(current);
+      const added = applyElements(current, built);
       cy.nodes().addClass("widest");
       placeNew(current, added, cy.nodes().not(added));
       relabel();
       cy.nodes().removeClass("widest");
-      const target = new URL(request.href, window.location.href).href;
-      if (withoutFragment(target) !== withoutFragment(window.location.href)) {
-        window.history.pushState({ kgraph: true }, "", request.href);
-      }
-      syncRefresh();
-      shownHref = window.location.href;
       bindProvenance();
       busyChanged();
       renderKey();
       applySearch();
       container.dataset.canvasNodes = String(cy.nodes().length);
       container.dataset.canvasEdges = String(cy.edges().length);
+      // The whole view is in: only now is its address pushed.
+      const target = new URL(request.href, window.location.href).href;
+      if (withoutFragment(target) !== withoutFragment(window.location.href)) {
+        window.history.pushState({ kgraph: true }, "", request.href);
+      }
+      syncRefresh();
+      shownHref = window.location.href;
       lightFromUrl();
       const anchor = request.anchor ? byPid(cy.nodes(), request.anchor) : cy.collection();
       const brought = anchor.length
@@ -2649,10 +2700,25 @@
       fetchView(request).then(function (view) {
         if (graphRequest !== request) return;
         graphRequest = null;
+        let built = null;
         try {
-          commit(view, request);
-        } finally {
+          built = elementsOf(view.payload);
+        } catch (error) {
+          built = null;
+        }
+        if (!built) {
+          // Nothing on the page has changed: the view stays, with why.
           busyChanged();
+          showStatus("the answer could not be read.", request.href);
+          return;
+        }
+        try {
+          commit(view, request, built);
+        } catch (error) {
+          // A commit that broke part way would leave a view no address
+          // names: the address, not yet pushed, is drawn again whole.
+          retired = true;
+          window.location.reload();
         }
       }, function (error) {
         if (graphRequest !== request) return;

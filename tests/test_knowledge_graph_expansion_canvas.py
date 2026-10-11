@@ -418,6 +418,32 @@ FAILURES = {
 }
 
 
+def _drop_node_ids(payload: dict[str, Any]) -> None:
+    for node in payload["nodes"]:
+        del node["id"]
+
+
+def _set_edge_end(payload: dict[str, Any]) -> None:
+    payload["edges"][0]["to"] = "note-nowhere"
+
+
+#: Answers whose payload parses but is not a whole view: each rejected
+#: before anything on the page changes.
+MALFORMED: dict[str, Any] = {
+    "edges-not-a-list": lambda p: p.update(edges={}),
+    "nodes-without-ids": _drop_node_ids,
+    "a-null-node": lambda p: p["nodes"].append(None),
+    "a-repeated-node": lambda p: p["nodes"].append(copy.deepcopy(p["nodes"][-1])),
+    "a-repeated-edge": lambda p: p["edges"].append(copy.deepcopy(p["edges"][-1])),
+    "an-edge-to-no-note": _set_edge_end,
+    "a-label-not-text": lambda p: p["nodes"][-1].update(label={"text": "plan"}),
+    "a-legend-not-a-list": lambda p: p.update(legend={}),
+}
+FAILURES.update(
+    (name, (f"respond:0={name}", "the answer could not be read.")) for name in MALFORMED
+)
+
+
 @pytest.mark.parametrize("case", FAILURES.values(), ids=FAILURES.keys())
 def test_a_failed_invalid_or_refused_answer_leaves_the_view_and_says_why(
     lithos_lens_config_env: Path, case: tuple[str, str]
@@ -444,6 +470,8 @@ def test_a_failed_invalid_or_refused_answer_leaves_the_view_and_says_why(
         "empty": _with_payload(answer, lambda p: p.update(nodes=[])),
         href: answer,
     }
+    for name, change in MALFORMED.items():
+        responses[name] = _with_payload(answer, change)
 
     result = _go(
         page,
@@ -458,6 +486,8 @@ def test_a_failed_invalid_or_refused_answer_leaves_the_view_and_says_why(
         n["id"] for n in page.payload["nodes"]
     )
     assert result["render"] == page.dom["render"]
+    assert json.loads(result["payloadText"]) == page.payload
+    assert result["exported"] == [n["id"] for n in page.payload["nodes"]]
     for selector in TEXT_SELECTORS:
         part = page.dom["parts"].get(selector)
         assert result["text"][selector] == (part["outer"] if part else None), selector
@@ -466,6 +496,28 @@ def test_a_failed_invalid_or_refused_answer_leaves_the_view_and_says_why(
     assert controls["status"]["hidden"] is False
     assert reason in controls["status"]["text"]
     assert controls["status"]["href"] == href
+
+
+def test_a_commit_that_breaks_part_way_draws_the_unchanged_address_again(
+    lithos_lens_config_env: Path,
+) -> None:
+    """A whole answer whose drawing fails after the text is in would leave a
+    view no address names: nothing is pushed, and the page's own address —
+    still the one before the request — is loaded again, whole."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        answer = _response(client, href)
+
+    result = _go(
+        page,
+        {href: answer},
+        ["break-canvas", f"graph-link:data-kgraph-expand|{href}", "respond:0"],
+    )
+
+    assert result["pushes"] == []
+    assert result["reloads"] == [f"http://lens.test{BASE}&selected={PLAN}"]
+    assert result["href"].endswith(f"{BASE}&selected={PLAN}")
 
 
 def test_the_next_request_after_a_failure_clears_the_reason(
@@ -654,6 +706,35 @@ def test_every_surviving_note_keeps_its_place_through_expansion_and_collapse(
         collapse,
     ]
     assert result["picked"] == [] and result["lit"] == []
+    # Each address is pushed only once its view is in whole — the picture
+    # diffed and placed, the payload, render id, counts and key its own —
+    # on an expansion and on a collapse alike.
+    answers = [one, two, unshared, two, collapsed]
+    for pushed, answer, after in zip(
+        result["pushedViews"], answers, marks[1:], strict=True
+    ):
+        payload = _payload_of(answer)
+        ids = [n["id"] for n in payload["nodes"]]
+        assert sorted(pid for pid, *_ in pushed["nodes"]) == sorted(ids), pushed["url"]
+        assert sorted(pushed["edges"]) == sorted(e["id"] for e in payload["edges"])
+        assert dict((pid, at) for pid, at, *_ in pushed["nodes"]) == after
+        assert pushed["payload"] == ids
+        assert json.loads(pushed["payloadText"]) == payload
+        assert pushed["render"] == _render_of(answer)
+        assert pushed["canvasNodes"] == str(len(ids))
+        assert pushed["canvasEdges"] == str(len(payload["edges"]))
+        # Every namespace present; "" the line for notes with none.
+        namespaces = {n["namespace"] or "" for n in payload["nodes"]}
+        assert set(pushed["keyNodes"]) == namespaces
+        assert pushed["busy"] is False
+    final = dict((n["id"], (n["size"], n["colour"])) for n in result["nodes"])
+    assert (
+        dict(
+            (pid, (size, _rgb(colour)))
+            for pid, _, size, colour in result["pushedViews"][-1]["nodes"]
+        )
+        == final
+    )
 
 
 def _beside(positions: dict[str, dict[str, float]], anchor: str, centre: dict) -> None:
@@ -795,6 +876,59 @@ def test_past_the_palette_new_values_share_the_neutral_and_changed_values_recolo
     assert colours[CAPACITY] == neutral, "reports came after the palette ran out"
     assert colours[PLAN] == palette[1], "its value changed: its colour follows"
     assert colours[ROLLBACK] == neutral
+
+
+#: Base values by node count, against their names: ranked, the two most
+#: frequent are the last two by name, and the palette (eight slots) runs
+#: out before the last two singletons.
+RANKED_BASE = {"zulu": 3, "yankee": 3, "xray": 2, "whiskey": 2} | {
+    name: 1 for name in ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+}
+RANKED_SLOTS = [
+    *("yankee", "zulu", "whiskey", "xray"),
+    *("alpha", "bravo", "charlie", "delta"),
+]
+
+
+@pytest.mark.parametrize("field", ["namespace", "note_type"])
+def test_base_values_take_slots_by_how_many_notes_have_them_not_by_name(
+    lithos_lens_config_env: Path, field: str
+) -> None:
+    """Base notes only (``via`` none): most notes first, ties by name — so
+    the most frequent values, though last by name, take the first slots,
+    and the palette's last slot goes before the rarest values get one."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+    payload = copy.deepcopy(page.payload)
+    payload["colour"] = "type" if field == "note_type" else "namespace"
+    values = [value for value, count in RANKED_BASE.items() for _ in range(count)]
+    payload["nodes"][0][field], payload["nodes"][1][field] = values[0], values[1]
+    for index, value in enumerate(values[2:]):
+        payload["nodes"].append(
+            _note(
+                payload,
+                PLAN,
+                id=f"note-base-{index:02d}",
+                label=f"Base {index}",
+                via=None,
+                hop=1,
+                **{field: value},
+            )
+        )
+    assert all(node["via"] is None for node in payload["nodes"])
+
+    result = _run(page, ["mark"], payload)
+
+    palette = [_rgb(c) for c in result["palettes"]["nodes"][:-1]]
+    neutral = _rgb(result["palettes"]["nodes"][-1])
+    assert len(palette) == len(RANKED_SLOTS)
+    by_value: dict[str, set[str]] = {}
+    for node in payload["nodes"]:
+        by_value.setdefault(node[field], set()).add(_colours(result)[node["id"]])
+    for slot, value in enumerate(RANKED_SLOTS):
+        assert by_value[value] == {palette[slot]}, value
+    for value in ("echo", "foxtrot"):
+        assert by_value[value] == {neutral}, value
 
 
 # ── Everything the view says follows the swap ──────────────────────────
@@ -1135,6 +1269,53 @@ def test_a_fresh_load_places_and_colours_each_expansion_in_url_order(
     assert colours[PLAN] == palette[0], "the base's value"
     assert colours[CAPACITY] == palette[1], "the first step's, though named after"
     assert colours["note-x"] == palette[2], "the second step's"
+
+
+def test_the_notes_one_step_brings_are_placed_by_id_not_by_payload_order(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Three notes from one expansion, listed against their ids and then
+    with their ids: each id gets the same place, on a fresh load and on a
+    live swap."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        fresh = _page(client, ONE)
+        one = _response(client, ONE)
+
+    def third(payload: dict) -> None:
+        payload["nodes"].append(
+            _note(payload, CAPACITY, id="note-influx-middle", label="Middle note")
+        )
+
+    def ordered(payload: dict, descending: bool) -> dict:
+        changed = copy.deepcopy(payload)
+        third(changed)
+        places = [i for i, n in enumerate(changed["nodes"]) if n["via"] == PLAN]
+        notes = sorted(
+            (changed["nodes"][i] for i in places),
+            key=lambda n: n["id"],
+            reverse=descending,
+        )
+        for place, note in zip(places, notes, strict=True):
+            changed["nodes"][place] = note
+        return changed
+
+    loads = [_run(fresh, ["mark"], ordered(fresh.payload, d)) for d in (False, True)]
+    swaps = [
+        _go(
+            page,
+            {ONE: _with_payload(one, lambda p, d=d: p.update(ordered(p, d)))},
+            ["tap-node:" + PLAN, "dbltap-node:" + PLAN, "respond", "mark"],
+        )
+        for d in (False, True)
+    ]
+
+    for runs in (loads, swaps):
+        ascending, descending = (_positions(run["marks"][-1]) for run in runs)
+        assert set(ascending) >= {CAPACITY, LEGACY, "note-influx-middle"}
+        assert ascending == descending
+        brought = [ascending[pid] for pid in (CAPACITY, LEGACY, "note-influx-middle")]
+        assert len({(at["x"], at["y"]) for at in brought}) == 3, "three places"
 
 
 def test_a_slot_given_before_a_collapse_is_not_given_again_after_it(

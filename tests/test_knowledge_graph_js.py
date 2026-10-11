@@ -85,6 +85,7 @@ const assigns = [];
 const ajax = [];
 const layouts = [];
 const pushes = [];
+const pushedViews = [];
 const replaces = [];
 const reloads = [];
 // The tab's history: one entry per page URL, each with its state, so Back
@@ -378,6 +379,24 @@ sandbox.window = {
       entries.push({ href: url.href, state });
       cursor = entries.length - 1;
       pushes.push({ url: target, panel: host.innerHTML });
+      // What the page shows as the address is pushed: a view swapped in
+      // place (D16) must be in whole by then.
+      const live = sandbox.window.LithosLensKnowledgeGraph;
+      pushedViews.push(live && live.cy ? {
+        url: target,
+        nodes: live.cy.nodes().map((n) => [n.data("pid"),
+          Object.assign({}, n.position()), n.data("size"), n.data("colour")]),
+        edges: live.cy.edges().map((e) => e.data("pid")),
+        payload: live.payload.nodes.map((n) => n.id),
+        payloadText: single["[data-knowledge-graph-payload]"].textContent,
+        render: host.dataset.kgraphRender,
+        canvasNodes: single["[data-kgraph-canvas]"].dataset.canvasNodes,
+        canvasEdges: single["[data-kgraph-canvas]"].dataset.canvasEdges,
+        keyNodes: single["[data-kgraph-key-nodes]"].children
+          .filter((li) => li.dataset.keyValue !== undefined)
+          .map((li) => li.dataset.keyValue),
+        busy: live.busy(),
+      } : null);
     },
     // The entry the page is on, respelled in place: no new entry.
     get state() { return entries[cursor].state; },
@@ -561,6 +580,9 @@ for (const action of actions) {
     const index = arg === "" ? fetches.length - 1 : Number(arg);
     if (kind === "headers") answer(index, responseFor(index, ""), true);
     else if (bodies[index]) bodies[index]();
+  } else if (kind === "break-canvas") {
+    // A canvas that fails part way through drawing the next view.
+    cy.add = () => { throw new Error("the canvas broke"); };
   } else if (kind === "zoom") {
     // The operator's own zoom, around the canvas's middle.
     cy.zoom(Number(arg));
@@ -735,6 +757,7 @@ console.log(JSON.stringify({
   assigns,
   ajax,
   pushes,
+  pushedViews,
   replaces,
   reloads,
   triggered,

@@ -29,17 +29,32 @@ test.use({ viewport: { width: 1440, height: 1000 } });
 const DOUBLE_CLICK_MS = 400;
 
 // Every history push, with whether the panel host held a fragment at that
-// moment — the order D10 requires is swap first, then push.
+// moment — the order D10 requires is swap first, then push — and, for a
+// view swapped in place (D16), what the canvas and payload held then.
+type Push = {
+  url: string;
+  panel: string;
+  render: string | null;
+  canvas: Array<[string, { x: number; y: number }]>;
+  payload: string[];
+};
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    const pushes: Array<{ url: string; panel: string }> = [];
+    const pushes: Push[] = [];
     (window as any).__pushes = pushes;
     const push = history.pushState.bind(history);
     history.pushState = function (state: any, title: string, url?: string | URL | null) {
       const host = document.querySelector("#kgraph-panel");
+      const graph = (window as any).LithosLensKnowledgeGraph;
       pushes.push({
         url: String(url),
         panel: host ? host.innerHTML.trim() : "",
+        render: host ? host.getAttribute("data-kgraph-render") : null,
+        canvas: graph && graph.cy
+          ? graph.cy.nodes().map((n: any) => [n.data("pid"), { ...n.position() }])
+          : [],
+        payload: graph ? graph.payload.nodes.map((n: any) => n.id) : [],
       });
       return push(state, title, url);
     };
@@ -137,7 +152,7 @@ function query(page: Page): Record<string, string> {
   return Object.fromEntries(new URL(page.url()).searchParams);
 }
 
-async function pushes(page: Page): Promise<Array<{ url: string; panel: string }>> {
+async function pushes(page: Page): Promise<Push[]> {
   return page.evaluate(() => (window as any).__pushes);
 }
 
@@ -787,6 +802,11 @@ test("a double click expands a note in place: one fetch, pushed after the swap, 
   const last = (await pushes(page)).at(-1)!;
   expect(last.url).toBe(fetched[0]);
   expect(last.panel).toContain("data-kgraph-collapse");
+  // Pushed once the whole view was in: its notes drawn where they now
+  // stand, its payload and render id.
+  expect(Object.fromEntries(last.canvas)).toEqual(after.positions);
+  expect([...last.payload].sort()).toEqual(after.nodes);
+  expect(last.render).toBe(await page.locator("#kgraph-panel").getAttribute("data-kgraph-render"));
   expect(after.nodes).toEqual([CAPACITY, LEGACY, PLAN, ROLLBACK].sort());
   expect(after.drawn).toBe(4);
   expect(after.expansions).toEqual([[PLAN, "applied"]]);
@@ -867,6 +887,11 @@ test("the keyboard expands, expands edge-only and collapses through the panel's 
   expect(back.positions).toEqual(base.positions);
   expect(query(page)).toEqual({ focus: ROLLBACK, min_weight: "0.7" });
   expect(fetched.length).toBe(3);
+  // The collapse's address was pushed only once its view was in whole.
+  const collapsed = (await pushes(page)).at(-1)!;
+  expect(Object.fromEntries(collapsed.canvas)).toEqual(back.positions);
+  expect([...collapsed.payload].sort()).toEqual(back.nodes);
+  expect(collapsed.render).toBe(back.render);
 });
 
 test.describe("on a touch screen", () => {

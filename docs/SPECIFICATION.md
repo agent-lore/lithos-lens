@@ -1905,8 +1905,12 @@ it sends nothing.
   too: the request goes on and its answer commits
 - **the fetch**: `GET /knowledge/graph?<new query>` itself. Valid only when it
   is a 200 whose `[data-knowledge-graph-payload]` parses as a focus view with
-  no `refusal` and some nodes, and whose `#kgraph-panel` carries a non-empty
-  `data-kgraph-render`. Anything else — offline (no payload), a whole-view
+  no `refusal` and some nodes, whose notes and edges are each a record with
+  an id of its own, every edge's ends among its notes and every value the
+  canvas, key and toolbar read of the kind they read, and whose
+  `#kgraph-panel` carries a non-empty `data-kgraph-render` — all checked,
+  and the canvas's elements built, before anything on the page changes.
+  Anything else — offline (no payload), a malformed payload, a whole-view
   refusal, the render cap's 503, any other status, a network error — leaves
   the canvas, text, panel and address as they were, gives the controls back,
   and says why under the toolbar's buttons ("The graph was not changed: …")
@@ -1919,9 +1923,11 @@ it sends nothing.
   each); the full-page arrangement is kept; then the canvas is diffed by
   persistent note and edge id (element ids minted once per page, never payload
   positions): removed, updated (labels, sizes from the new degrees, colours,
-  marks) or added, unrelated refreshed changes included; then the address is
-  pushed, and the controls, key, search, depth counts, hidden count and
-  selection follow. The focus goes to the new panel's heading
+  marks) or added, unrelated refreshed changes included; the controls, key,
+  search, depth counts and hidden count follow; only then is the address
+  pushed and the selection lit from it. The focus goes to the new panel's
+  heading. Should the commit nonetheless fail part way, the page's own
+  address — not yet pushed — is reloaded, so no half-swapped view stays
 - **positions**: every surviving note keeps its model position. New notes are
   placed beside their anchor (the expanded note, a freshness addition's `via`,
   the focus for a new base note), only on the side away from the drawn centre
