@@ -2,16 +2,34 @@
 
 Visual browser for Lithos.
 
-Lithos Lens is a local FastAPI web UI for observing Lithos coordination state
-and, in later milestones, browsing Lithos knowledge. The current implementation
-contains the common-core web scaffold plus the Tasks MVP: TOML configuration,
-structured logging, Lithos health probing, startup agent registration,
-degraded-mode rendering, vendored static assets, operational task dashboard,
-claim enrichment, direct task detail pages, findings timelines, and a minimal
-knowledge-note renderer for task finding links. The Tasks view also subscribes
-to Lithos task/finding SSE events, re-broadcasts them to browser tabs, applies
-optimistic row updates, and reconciles visible fragments without a full-page
-reload.
+Lithos Lens is a local FastAPI web UI over Lithos: the tasks agents are
+working on, the dependency graph between them, the findings they post, and the
+knowledge notes and typed edges Lithos holds. It updates live from Lithos's
+event stream. The current implementation has:
+
+- **Tasks** (`/tasks`): an operational dashboard grouped into needs-attention,
+  gates, in progress, ready, blocked and recently resolved sections, with epic
+  and project strips, filters held in the URL, claim enrichment, and live
+  updates re-broadcast to browser tabs without a full-page reload.
+- **Graph** (`/tasks/graph`): one project's or epic's blocking structure as a
+  canvas and as text (layers, cycles, ghosts, longest blocking chain), plus a
+  nearby mini-graph on every task detail page.
+- **Task detail** (`/tasks/{id}`): description, dependencies, provenance,
+  metadata, claims and the finding timeline.
+- **Knowledge** (`/knowledge`, `/knowledge/tags`, `/note/{id}`): search with
+  namespace facets, the tag index, and rendered note pages.
+- **Knowledge graph** (`/knowledge/graph`): typed edges between notes by
+  namespace or edge type, with node and edge panels, expansion, and a
+  full-page canvas.
+- **Curated write actions**, offered only once an operator identity is chosen
+  on `/operator`: create a task/epic/gate, cancel, reopen, add a dependency
+  edge, and complete a gate by hand. Each shows its consequences on a
+  confirmation page before anything is written and ends with a receipt. Lens
+  has no authentication; it is built for one operator on a trusted network.
+
+Everything else is read-only, and reading never changes Lithos state. The
+user-facing walkthrough with screenshots is
+[docs/user-manual/manual.md](docs/user-manual/manual.md).
 
 ## Getting Started
 
@@ -41,8 +59,10 @@ It reads from Lithos using `lithos_task_list`, `lithos_task_ready`,
 `lithos_finding_list`, `lithos_read`, `lithos_stats`, and
 `lithos_agent_list`. Open epics roll up into a progress strip above the
 sections; clicking a chip (`?epic=<id>`) scopes the whole board to that epic's
-descendants. Lens does not create, claim, mutate, complete, or cancel tasks. Browser tabs receive normalized live events from `/tasks/events`; Lens
-itself holds the single server-side subscription to Lithos `/events`.
+descendants. Writes go through the curated actions only (see above); Lens never
+claims tasks and never writes on its own initiative. Browser tabs receive
+normalized live events from `/tasks/events`; Lens itself holds the single
+server-side subscription to Lithos `/events`.
 
 ## Configuration
 
