@@ -121,7 +121,8 @@
   //: operator prefers reduced motion.
   const MOTION_MS = 250;
   //: Cytoscape's double-click window (`multiClickDebounceTime`): two taps
-  //: this close are a `dbltap`. A tap's panel moves nothing until it ends.
+  //: this close are a `dbltap`. Until it ends a tap's panel moves nothing,
+  //: and lets the pointer through to the canvas.
   const DOUBLE_TAP_MS = 250;
   // Labels are the canvas's content: the fit that opens it may not shrink
   // them past MIN_RENDERED_FONT pixels. A graph that cannot then fit is
@@ -675,7 +676,16 @@
   // a `#` jump such as Text view, stay live.
   function graphAddress(link) {
     const href = link.getAttribute("href") || "";
-    return href.split(/[?#]/)[0] === GRAPH_PATH;
+    // A `#` jump stays on this page; anything else is resolved as the
+    // browser would follow it — the pill's href is the full address.
+    if (href === "" || href.charAt(0) === "#") return false;
+    let target = null;
+    try {
+      target = new URL(href, window.location.href);
+    } catch (error) {
+      return false;
+    }
+    return target.origin === new URL(window.location.href).origin && target.pathname === GRAPH_PATH;
   }
 
   function onGraphLinkClick(event) {
@@ -1430,9 +1440,12 @@
           y: (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2
         };
       }
-      const away = Math.hypot(at.x - centre.x, at.y - centre.y) < 1
-        ? 0
-        : Math.atan2(at.y - centre.y, at.x - centre.x);
+      // Only the side facing away: within a quarter turn either way of the
+      // line out from the centre through the anchor. An anchor at the
+      // centre has no such side, and any direction is away.
+      const centred = Math.hypot(at.x - centre.x, at.y - centre.y) < 1;
+      const away = centred ? 0 : Math.atan2(at.y - centre.y, at.x - centre.x);
+      const sweep = centred ? Math.PI : Math.PI / 2;
       let firstRing = 1;
       nodes.sort(function (a, b) { return byName(a.data("pid"), b.data("pid")); })
         .forEach(function (node) {
@@ -1469,10 +1482,13 @@
             // spacing and a note at its largest), then a note's width more.
             const radius = NODE_SPACING + SIZE_MAX * ring;
             const steps = Math.max(8, Math.ceil((2 * Math.PI * radius) / PLACE_STEP));
-            for (let turn = 0; turn <= steps / 2 && !spot; turn += 1) {
+            // A side with no clear place on this ring: the next ring out.
+            for (let turn = 0; !spot; turn += 1) {
+              const offset = (turn * 2 * Math.PI) / steps;
+              if (centred ? offset > sweep : offset >= sweep) break;
               [1, -1].forEach(function (side) {
                 if (spot || (turn === 0 && side === -1)) return;
-                const angle = away + (side * turn * 2 * Math.PI) / steps;
+                const angle = away + side * offset;
                 const point = { x: at.x + radius * Math.cos(angle), y: at.y + radius * Math.sin(angle) };
                 if (clear(point, labelled)) spot = point;
               });
@@ -2113,6 +2129,24 @@
       return true;
     }
 
+    // …and the panel itself, opened over the canvas as a drawer or sheet,
+    // would take the second press where it lands: for the same window the
+    // host lets pointers through to the canvas beneath it.
+    let passTimer = null;
+    function passThroughPanel(on) {
+      if (passTimer !== null) {
+        clearTimeout(passTimer);
+        passTimer = null;
+      }
+      if (host && host.style) host.style.pointerEvents = on ? "none" : "";
+      if (on) {
+        passTimer = setTimeout(function () {
+          passTimer = null;
+          passThroughPanel(false);
+        }, DOUBLE_TAP_MS);
+      }
+    }
+
     function geometryChanged(animate) {
       if (holdForTap(function () { geometryChanged(true); })) return;
       cy.resize();
@@ -2173,6 +2207,7 @@
       // A panel action: inert while an expansion or collapse is out (D16).
       if (graphRequest) return;
       tapWindowEnds = Date.now() + DOUBLE_TAP_MS;
+      passThroughPanel(true);
       const pid = event.target.data("pid");
       const now = new URLSearchParams(window.location.search);
       // A node opened from a view drawn for an edge pins that edge, as the
@@ -2200,8 +2235,10 @@
     // nothing more than its taps did. Collapse is the panel's link.
     cy.on("dbltap", "node", function (event) {
       const node = event.target;
-      // The pair is over: what it held may move now.
+      // The pair is over: what it held may move now, and the panel is the
+      // pointer's again.
       tapWindowEnds = 0;
+      passThroughPanel(false);
       if (previousTapId !== node.id()) return;
       const pid = node.data("pid");
       const shown = current.nodes.filter(function (each) { return each.id === pid; })[0];

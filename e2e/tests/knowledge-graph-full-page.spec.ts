@@ -1396,45 +1396,91 @@ test("Back over an expansion reloads that entry's exploration", async ({ page })
   await viewOf(page, 4, 7);
 });
 
-test("at 768px a physical double click on a note expands it in full page, its first tap's panel notwithstanding", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 768, height: 1024 });
-  // An instant pan: the move a held one would otherwise be mid-way through.
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const pointOf = () =>
-    page.evaluate((pid) => {
-      const cy = (window as any).LithosLensKnowledgeGraph.cy;
-      const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
-      const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
-      const at = node.renderedPosition();
-      return { x: box.left + at.x, y: box.top + at.y };
-    }, PLAN);
+// A physical double click, with the first tap's panel swapped in BETWEEN the
+// two presses — its answer served at once from a copy fetched beforehand,
+// and the swap awaited before the second press, which the page records — so
+// the race does not depend on the server's speed. At 768px that panel's
+// drawer would pan the note away; at 1440px, with the note dragged under
+// where the drawer opens, the drawer itself would take the second press.
+for (const race of [
+  { name: "the drawer's pan", width: 768, height: 1024, at: null },
+  { name: "the drawer over the note", width: 1440, height: 900, at: { x: 1300, y: 400 } },
+] as const) {
+  test(`a physical double click in full page expands the note despite ${race.name}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: race.width, height: race.height });
+    // An instant move: what a held pan would otherwise be part-way through.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`${EXPANSION_BASE}&canvas=full`);
+    await canvasReady(page);
+    await settledLayout(page);
+    const pointOf = () =>
+      page.evaluate((pid) => {
+        const cy = (window as any).LithosLensKnowledgeGraph.cy;
+        const node = cy.nodes().filter((n: any) => n.data("pid") === pid)[0];
+        const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+        const at = node.renderedPosition();
+        return { x: box.left + at.x, y: box.top + at.y };
+      }, PLAN);
+    if (race.at) {
+      // The operator's own drag: the note where the drawer will open.
+      const target = race.at;
+      await page.evaluate(
+        ([pid, to]) => {
+          const cy = (window as any).LithosLensKnowledgeGraph.cy;
+          const box = document.querySelector("[data-kgraph-canvas]")!.getBoundingClientRect();
+          const at = cy.nodes().filter((n: any) => n.data("pid") === pid)[0].renderedPosition();
+          const t = to as { x: number; y: number };
+          cy.panBy({ x: t.x - box.left - at.x, y: t.y - box.top - at.y });
+        },
+        [PLAN, target] as const,
+      );
+    }
+    const point = await pointOf();
+    const render = await page.locator("#kgraph-panel").getAttribute("data-kgraph-render");
+    const panelUrl =
+      `/knowledge/graph/panel?focus=${ROLLBACK}&min_weight=0.7&selected=${PLAN}` +
+      `&canvas=full&render=${render}`;
+    const copy = await page.request.get(panelUrl);
+    expect(copy.ok()).toBe(true);
+    const body = await copy.text();
+    await page.route(
+      (url) => url.pathname === "/knowledge/graph/panel",
+      (route) => route.fulfill({ status: 200, contentType: "text/html", body }),
+      { times: 1 },
+    );
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__presses = [];
+      w.__swapped = 0;
+      document.addEventListener("pointerdown", () => w.__presses.push(performance.now()), true);
+      document.addEventListener("htmx:afterSwap", () => {
+        if (!w.__swapped) w.__swapped = performance.now();
+      });
+    });
 
-  // The premise: a single click's drawer pans this note to keep it clear.
-  await page.goto(`${EXPANSION_BASE}&canvas=full`);
-  await canvasReady(page);
-  await settledLayout(page);
-  const start = await pointOf();
-  await page.mouse.click(start.x, start.y);
-  await nodePanel(page, PLAN);
-  await page.waitForTimeout(DOUBLE_CLICK_MS);
-  await settledLayout(page);
-  const panned = await pointOf();
-  expect(Math.hypot(panned.x - start.x, panned.y - start.y)).toBeGreaterThan(20);
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForFunction(() => (window as any).__swapped > 0);
+    await page.mouse.down();
+    await page.mouse.up();
 
-  await page.goto(`${EXPANSION_BASE}&canvas=full`);
-  await canvasReady(page);
-  await settledLayout(page);
-  const point = await pointOf();
-
-  // A human's pace: the first tap's panel lands before the second press.
-  await page.mouse.dblclick(point.x, point.y, { delay: 100 });
-  await viewOf(page, 4, 7);
-
-  expect(query(page)).toEqual({
-    focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+    const timing = await page.evaluate(() => {
+      const w = window as any;
+      return { presses: w.__presses as number[], swapped: w.__swapped as number };
+    });
+    // The barrier held: the panel was in before the second press, and the
+    // pair stayed inside Cytoscape's 250ms double-click window.
+    expect(timing.presses).toHaveLength(2);
+    expect(timing.swapped).toBeGreaterThan(timing.presses[0]);
+    expect(timing.swapped).toBeLessThan(timing.presses[1]);
+    expect(timing.presses[1] - timing.presses[0]).toBeLessThan(250);
+    await viewOf(page, 4, 7);
+    expect(query(page)).toEqual({
+      focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+    });
+    await nodePanel(page, PLAN);
   });
-  await nodePanel(page, PLAN);
-  unobscured(await geometry(page));
-});
+}

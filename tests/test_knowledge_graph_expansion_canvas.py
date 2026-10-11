@@ -878,15 +878,24 @@ def test_while_a_request_is_out_every_other_graph_link_is_inert_but_note_links_a
             f"graph-link:data-kgraph-expand|{href}",
             f"graph-link:data-kgraph-centre|{centre}",
             f"graph-link:data-kgraph-refresh-pill|{BASE}&selected={PLAN}",
+            # The pill as an event during the request shows it: its href is
+            # the page's full address (`syncRefresh`).
+            _frame("note.updated", id=UNDRAWN),
+            f"graph-link:data-kgraph-refresh-pill|http://lens.test{BASE}&selected={PLAN}",
             f"graph-link:data-kgraph-node|{note}",
             "graph-link:data-kgraph-text-link|#kgraph-text",
             f"graph-link-ctrl:data-kgraph-centre|{centre}",
             "respond",
             f"graph-link:data-kgraph-centre|{centre}",
         ],
+        **EVENTS,
     )
 
+    assert result["pill"]["hidden"] is False
+    # …and once the view commits, it follows the expanded address.
+    assert result["pill"]["href"] == f"http://lens.test{href}"
     assert [m["prevented"] for m in result["marks"]] == [
+        True,
         True,
         True,
         True,
@@ -1260,3 +1269,80 @@ def test_many_new_notes_with_long_titles_each_get_clear_ground(
         )
     ]
     assert overlaps == []
+
+
+def _outward(positions: dict[str, dict[str, float]], anchor: str, centre: dict) -> list:
+    """The new notes NOT on the side of ``anchor`` facing away from ``centre``."""
+    at = positions[anchor]
+    out = (at["x"] - centre["x"], at["y"] - centre["y"])
+    return [
+        pid
+        for pid, p in positions.items()
+        if pid not in (ROLLBACK, PLAN)
+        and out[0] * (p["x"] - at["x"]) + out[1] * (p["y"] - at["y"]) <= 0
+    ]
+
+
+@pytest.mark.parametrize("count", [3, 62])
+def test_new_notes_with_long_titles_stay_on_the_side_facing_away(
+    lithos_lens_config_env: Path, count: int
+) -> None:
+    """Too wide for one ring's outward side, they go further out on it —
+    never round towards the focus."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+        one = _response(client, ONE)
+    long = "Detailed design considerations and operational requirements " * 3
+
+    def crowd(payload: dict) -> None:
+        payload["nodes"] = [n for n in payload["nodes"] if n["via"] is None]
+        payload["nodes"] += [
+            _note(
+                payload,
+                PLAN,
+                id=f"note-n{index:03}",
+                via=PLAN,
+                hop=2,
+                label=f"Expansion note {index} {long}",
+            )
+            for index in range(count)
+        ]
+        drawn = {n["id"] for n in payload["nodes"]}
+        payload["edges"] = [
+            e for e in payload["edges"] if e["from"] in drawn and e["to"] in drawn
+        ]
+
+    result = _go(
+        page,
+        {ONE: _with_payload(one, crowd)},
+        ["mark", "tap-node:" + PLAN, "dbltap-node:" + PLAN, "respond", "mark"],
+    )
+
+    before = _positions(result["marks"][0])
+    after = _positions(result["marks"][-1])
+    centre = {
+        "x": (before[ROLLBACK]["x"] + before[PLAN]["x"]) / 2,
+        "y": (before[ROLLBACK]["y"] + before[PLAN]["y"]) / 2,
+    }
+    assert len(after) == count + 2
+    assert _outward(after, PLAN, centre) == []
+
+
+def test_a_taps_panel_lets_the_pointer_through_until_the_pair_is_over(
+    lithos_lens_config_env: Path,
+) -> None:
+    """In full page a drawer or sheet opens over the canvas on the first
+    tap: until the double-click window ends it takes no pointer, so the
+    second press reaches the note beneath it."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, BASE)
+
+    tapped = _run(page, ["tap-node:" + PLAN, "swap"], dom={"presentation": "full"})
+    paired = _run(
+        page,
+        ["tap-node:" + PLAN, "swap", "dbltap-node:" + PLAN],
+        dom={"presentation": "full"},
+    )
+
+    assert tapped["panelPointer"] == "none"
+    assert paired["panelPointer"] == ""
