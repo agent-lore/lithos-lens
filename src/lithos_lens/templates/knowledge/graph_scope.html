@@ -1,12 +1,20 @@
 {#-
   The scope line (K2 D12, story 19): what is drawn — the focus or the
-  filters, the depth — and when the edge table behind it was fetched.
+  filters, the depth, the applied expansions each with its remove link (D16)
+  — and when the edge table behind it was fetched.
 -#}
+{% from "knowledge/graph_macros.html" import collapse_preview, expansion_ref %}
 <section class="kgraph-scope" data-kgraph-scope>
   <p>
     {% if view.mode == "focus" %}
       Focus: {% if focus_node is not none %}{{ node_ref(focus_node) }}{% else %}<span class="kgraph-id">{{ view.focus_id }}</span>{% endif %}
       · depth {{ view.depth }}
+      {%- set applied = view.expansions | selectattr("state", "equalto", "applied") | list %}
+      {%- if applied %} · expanded:
+        {% for step in applied -%}
+          <span data-kgraph-expanded="{{ step.id }}">{{ expansion_ref(view, step.id) }} (<a href="{{ knowledge_graph_collapse_url(params, view, step.id) }}" data-kgraph-expansion-remove="{{ step.id }}">remove</a>{{ collapse_preview(view, step.id) }})</span>{{ "," if not loop.last }}
+        {% endfor -%}
+      {%- endif %}
     {% else %}
       Edges
       {%- if view.scope_type is not none %} of type <code>{{ view.scope_type }}</code>{% endif %}

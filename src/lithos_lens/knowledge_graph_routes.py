@@ -39,7 +39,7 @@ from __future__ import annotations
 import math
 import secrets
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -52,27 +52,27 @@ from fastapi.templating import Jinja2Templates
 from lithos_lens import metrics
 from lithos_lens.event_streams import event_stream_response
 from lithos_lens.knowledge_edge_types import is_conflict_resolved
-from lithos_lens.knowledge_edges import (
-    EdgeFacets,
-    EdgeTable,
-    EdgeTableRefusal,
-    EdgeTableSnapshot,
-)
 from lithos_lens.knowledge_facts import NoteFactsTally
 from lithos_lens.knowledge_graph import assemble_focus_graph, assemble_global_graph
+from lithos_lens.knowledge_graph_expansion import ExpansionCollapse, requests_for
+from lithos_lens.knowledge_graph_panels import (
+    KnowledgeEdgePanel,
+    KnowledgeNodePanel,
+    expansion_dependants,
+    graph_panel,
+    node_metadata,
+)
+from lithos_lens.knowledge_graph_picker import KnowledgeGraphPicker, load_picker
 from lithos_lens.knowledge_graph_view import (
     MAX_DEPTH,
     PROVENANCE_GROUPS,
     HiddenEdgeCounts,
-    KnowledgeEdgePanel,
     KnowledgeGraphFilters,
     KnowledgeGraphView,
-    KnowledgeNodePanel,
     edge_entry,
     edge_sections,
-    graph_panel,
     graph_payload,
-    node_metadata,
+    named_edge,
 )
 from lithos_lens.state import AppState, HealthSnapshot
 from lithos_lens.telemetry import get_current_span
@@ -80,10 +80,6 @@ from lithos_lens.telemetry import get_current_span
 KNOWLEDGE_GRAPH_PATH = "/knowledge/graph"
 KNOWLEDGE_GRAPH_PANEL_PATH = "/knowledge/graph/panel"
 KNOWLEDGE_EVENTS_PATH = "/knowledge/events"
-
-#: The picker's namespace table shows this many rows; the rest are behind a
-#: disclosure (PRD D11).
-PICKER_TOP_NAMESPACES = 20
 
 GraphMode = Literal["picker", "focus", "global"]
 
@@ -94,6 +90,7 @@ RenderOutcome = Literal["rendered", "refused", "unavailable", "offline"]
 _URL_KEYS = (
     "focus",
     "depth",
+    "expand",
     "type",
     "namespace",
     "min_weight",
@@ -131,6 +128,8 @@ class KnowledgeGraphParams:
     #: The canvas's node colouring; nothing the text or the view depends on,
     #: carried so every link keeps the picture the operator chose.
     colour: NodeColour = "namespace"
+    #: D16: the notes expanded in place, in URL order (focus mode only).
+    expand: tuple[str, ...] = ()
 
     @property
     def mode(self) -> GraphMode:
@@ -147,7 +146,10 @@ class KnowledgeGraphParams:
         weight = self.min_weight if self.min_weight is not None else default_min_weight
         groups = frozenset(self.provenance or PROVENANCE_GROUPS)
         return KnowledgeGraphFilters(
-            min_weight=weight, provenance=groups, selected_edge=self.edge or self.pin
+            min_weight=weight,
+            provenance=groups,
+            selected_edge=self.edge or self.pin,
+            selected_is_pin=bool(self.pin) and not self.edge,
         )
 
 
@@ -162,6 +164,14 @@ def _value(query: Mapping[str, str], key: str) -> str:
     """
     value = query.get(key) or ""
     return value if value.strip() else ""
+
+
+def _values(query: Mapping[str, str], key: str) -> list[str]:
+    """Every value of a repeated key, by :func:`_value`'s rule; a plain
+    mapping (one value per key) gives its one."""
+    getlist: Callable[[str], list[str]] | None = getattr(query, "getlist", None)
+    raw = getlist(key) if getlist is not None else [query.get(key) or ""]
+    return [value for value in raw if value and value.strip()]
 
 
 _DEPTHS = {str(level): level for level in range(1, MAX_DEPTH + 1)}
@@ -204,7 +214,9 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
     (no link the page writes carries both; :func:`knowledge_graph_url`
     clears one when it sets the other). ``pin`` is read beside ``selected``
     only: an ``edge=`` is its own pin. ``colour`` is ``type`` or, for
-    anything else, the default ``namespace``.
+    anything else, the default ``namespace``. ``expand`` repeats (D16): its
+    ids in order, duplicates and the focus dropped, and none outside focus
+    mode.
     """
     focus = _value(query, "focus")
     edge_type = _value(query, "type") or None
@@ -223,6 +235,7 @@ def parse_knowledge_graph_params(query: Mapping[str, str]) -> KnowledgeGraphPara
         selected="" if edge else _value(query, "selected"),
         pin="" if edge else _value(query, "pin"),
         colour="type" if _value(query, "colour").strip() == "type" else "namespace",
+        expand=requests_for(focus, _values(query, "expand")) if focus else (),
     )
 
 
@@ -246,7 +259,10 @@ def _url_value(key: str, params: KnowledgeGraphParams) -> str:
 def _graph_url(
     path: str, params: KnowledgeGraphParams | None, changes: dict[str, Any]
 ) -> str:
-    # A new scope keeps no pin; an edge selection is its own.
+    # A new scope keeps no pin and no expansion (Centre on this starts
+    # afresh, D16); an edge selection is its own pin.
+    if changes.keys() & {"focus", "type", "namespace"}:
+        changes.setdefault("expand", ())
     if changes.keys() & {"focus", "type", "namespace"} or changes.get("edge"):
         changes.setdefault("pin", "")
     # One selection per link (D10): setting one clears the other. A node
@@ -258,9 +274,16 @@ def _graph_url(
         changes["edge"] = ""
         if params is not None:
             changes.setdefault("pin", params.edge or params.pin)
+    if "expand" in changes:
+        changes["expand"] = tuple(changes["expand"])
     merged = replace(params or KnowledgeGraphParams(), **changes)
-    pairs = [(key, _url_value(key, merged)) for key in _URL_KEYS]
-    query = urlencode([(key, value) for key, value in pairs if value])
+    pairs: list[tuple[str, str]] = []
+    for key in _URL_KEYS:
+        if key == "expand":
+            pairs.extend((key, root) for root in merged.expand if merged.focus)
+        elif value := _url_value(key, merged):
+            pairs.append((key, value))
+    query = urlencode(pairs)
     return f"{path}?{query}" if query else path
 
 
@@ -277,8 +300,50 @@ def knowledge_graph_url(
     sets ``edge`` clears ``selected`` and one that sets ``selected`` clears
     ``edge``, so a link carries one selection — the later click's; a
     ``selected`` set on a view drawn for an edge carries it as ``pin``.
+    ``expand`` is one pair per note, in order; a new focus or scope drops it.
     """
     return _graph_url(KNOWLEDGE_GRAPH_PATH, params, changes)
+
+
+def knowledge_graph_expand_url(params: KnowledgeGraphParams, node_id: str) -> str:
+    """Show its neighbours (D16): ``node_id`` selected and last in ``expand=``
+    — an earlier request for it, unreached at its turn, moves there."""
+    kept = [root for root in params.expand if root != node_id]
+    return knowledge_graph_url(params, expand=(*kept, node_id), selected=node_id)
+
+
+def knowledge_graph_collapse_url(
+    params: KnowledgeGraphParams, view: KnowledgeGraphView, root: str
+) -> str:
+    """Collapse / remove (D16): this view without ``root``'s request and every
+    request whose note it first drew, transitively, as the displayed view
+    knows them. A selection or pin the remaining requests no longer draw (the
+    same pass re-run without them, nothing read) is cleared; a shared note
+    still drawn elsewhere stays selected."""
+    collapse = view.collapses.get(root) or ExpansionCollapse((root,))
+    kept = [r for r in params.expand if r not in collapse.removed]
+    changes: dict[str, Any] = {"expand": kept}
+    if params.selected not in collapse.nodes:
+        changes["selected"] = ""
+    for key in ("edge", "pin"):
+        if getattr(params, key) not in collapse.edges:
+            changes[key] = ""
+    return knowledge_graph_url(params, **changes)
+
+
+def drawn_selection(
+    params: KnowledgeGraphParams, view: KnowledgeGraphView | None
+) -> KnowledgeGraphParams:
+    """``params`` as the links of a drawn ``view`` carry them: a ``selected=``
+    node or ``pin=`` edge the view does not draw (removed by a collapse, or
+    gone from the data since) is dropped, so no link pins what is not there."""
+    if view is None or view.refusal is not None:
+        return params
+    return replace(
+        params,
+        selected=params.selected if view.node(params.selected) else "",
+        pin=params.pin if named_edge(view, params.pin) else "",
+    )
 
 
 def knowledge_graph_panel_url(
@@ -344,7 +409,8 @@ class RenderedViews:
         if kept is None or kept[0] != _scope(params):
             return None
         # A selection whose pin would draw otherwise reloads the page (D13).
-        if not kept[1].keeps_drawing_for(params.edge or params.pin):
+        selection = params.edge or params.pin
+        if not kept[1].keeps_drawing_for(selection, is_pin=not params.edge):
             return None
         self._views.move_to_end(render_id)
         return kept[1]
@@ -371,46 +437,6 @@ def missing_edge_notice(view: KnowledgeGraphView | None, edge: str, ttl_s: int) 
         f"Edge {edge} is not in the current edge snapshot{as_of}. The snapshot "
         f"refreshes every {ttl_s} s, so a new edge appears within that window."
     )
-
-
-# ── the picker ─────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class KnowledgeGraphPicker:
-    """What the unscoped page offers (PRD D11, story 17).
-
-    ``facets`` is ``None`` when the snapshot gave none: the table over its
-    bound (``refused``) or unreadable (``unavailable``). The page then offers
-    only a typed-in ``type=`` / ``namespace=`` scope.
-    """
-
-    facets: EdgeFacets | None = None
-    as_of: datetime | None = None
-    stale: bool = False
-    refused: EdgeTableRefusal | None = None
-    unavailable: bool = False
-
-    @property
-    def top_namespaces(self) -> tuple[tuple[str, int], ...]:
-        rows = tuple(self.facets.namespaces.items()) if self.facets else ()
-        return rows[:PICKER_TOP_NAMESPACES]
-
-    @property
-    def more_namespaces(self) -> tuple[tuple[str, int], ...]:
-        rows = tuple(self.facets.namespaces.items()) if self.facets else ()
-        return rows[PICKER_TOP_NAMESPACES:]
-
-
-async def load_picker(table: EdgeTable) -> KnowledgeGraphPicker:
-    """The picker from the snapshot: its facets, or why there are none."""
-    try:
-        state = await table.read()
-    except Exception:
-        return KnowledgeGraphPicker(unavailable=True)
-    if isinstance(state, EdgeTableSnapshot):
-        return KnowledgeGraphPicker(state.facets, state.as_of, state.stale)
-    return KnowledgeGraphPicker(refused=state, as_of=state.as_of)
 
 
 # ── telemetry ──────────────────────────────────────────────────────────
@@ -440,6 +466,7 @@ def _record(
     refusal: str = "",
     view: KnowledgeGraphView | None = None,
     depth: int | None = None,
+    expansions_requested: int = 0,
 ) -> None:
     """``lens.knowledge.graph``: attributes on the request span, one counter.
 
@@ -450,7 +477,8 @@ def _record(
     ``depth`` is set in focus mode only (the drawn one, else the requested
     or configured one), ``refusal`` only on a refusal. The
     focus id, type and namespace are on neither: ``http.target`` already
-    carries the query on the span, bounded (``telemetry.py``).
+    carries the query on the span, bounded (``telemetry.py``). The ``expand=``
+    requests (D16) and what became of them are span counts too, 0 where none.
     """
     span = get_current_span()
     prefix = "lens.knowledge.graph"
@@ -475,6 +503,11 @@ def _record(
     span.set_attribute(f"{prefix}.facts.missing", tally.missing)
     span.set_attribute(f"{prefix}.facts.capped", tally.capped)
     span.set_attribute(f"{prefix}.facts.failed", tally.failed)
+    steps = view.expansions if view is not None else ()
+    span.set_attribute(f"{prefix}.expansions.requested", expansions_requested)
+    for state in ("applied", "unreached", "refused"):
+        count = sum(1 for step in steps if step.state == state)
+        span.set_attribute(f"{prefix}.expansions.{state}", count)
     metrics.knowledge_graph_renders().add(1, {"mode": mode, "outcome": outcome})
 
 
@@ -533,6 +566,7 @@ async def load_knowledge_graph(
             filters=filters,
             max_nodes=knowledge.graph_focus_max_nodes,
             fanout_cap=knowledge.graph_title_fanout_cap,
+            expand=params.expand,
         )
     else:
         view = await assemble_global_graph(
@@ -559,6 +593,9 @@ def register_knowledge_graph_routes(
 
     templates.env.globals["knowledge_graph_url"] = knowledge_graph_url
     templates.env.globals["knowledge_graph_panel_url"] = knowledge_graph_panel_url
+    templates.env.globals["knowledge_graph_expand_url"] = knowledge_graph_expand_url
+    templates.env.globals["knowledge_graph_collapse_url"] = knowledge_graph_collapse_url
+    templates.env.globals["expansion_dependants"] = expansion_dependants
     templates.env.globals["edge_entry"] = edge_entry
     templates.env.filters["utc_minute"] = utc_minute
     templates.env.filters["is_conflict_resolved"] = is_conflict_resolved
@@ -613,8 +650,10 @@ def register_knowledge_graph_routes(
             _record(mode, outcome, refusal=reason, snapshot_age_s=table.age_seconds())
             return templates.TemplateResponse(request, "knowledge/graph.html", context)
         focus_node = view.node(view.focus_id) if view.mode == "focus" else None
+        params = drawn_selection(params, view)
         panel = graph_panel(view, selected=params.selected, edge=params.edge)
         context.update(
+            params=params,
             view=view,
             sections=edge_sections(view),
             focus_node=focus_node,
@@ -634,6 +673,7 @@ def register_knowledge_graph_routes(
             refusal=reason,
             view=view,
             snapshot_age_s=table.age_seconds(),
+            expansions_requested=len(params.expand),
         )
         return templates.TemplateResponse(request, "knowledge/graph.html", context)
 
@@ -700,6 +740,8 @@ def register_knowledge_graph_routes(
             if view is not None and view.refusal is None:
                 context["render_id"] = views.keep(params, view)
         if view is not None:
+            params = drawn_selection(params, view)
+            context.update(params=params, view=view)
             context["panel"] = graph_panel(
                 view, selected=params.selected, edge=params.edge
             )

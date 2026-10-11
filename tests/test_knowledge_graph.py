@@ -35,10 +35,9 @@ from lithos_lens.knowledge_graph import (
     assemble_focus_graph,
     assemble_focus_view,
     assemble_global_graph,
-    ego_typed_graph,
-    global_typed_graph,
     read_order,
 )
+from lithos_lens.knowledge_graph_typed import ego_typed_graph, global_typed_graph
 from lithos_lens.knowledge_graph_view import (
     DEFAULT_MIN_WEIGHT,
     KnowledgeGraphFilters,
@@ -583,6 +582,11 @@ def test_the_payload_serialises_every_fact_direction_and_conflict_state() -> Non
         "namespace": "reports",
         "confidence": "85%",
         "lede": "What the focus says, in a line.",
+        "expanded": False,
+        "via": None,
+        "undrawn_nodes": 0,
+        "undrawn_edges": 0,
+        "expansion": {"state": "focus", "would_count": 4, "cap": 250},
     }
     assert (nodes["A"]["facts_state"], nodes["A"]["title"]) == ("pending", "Alpha")
     assert (nodes["B"]["ghost"], nodes["B"]["label"]) == (True, "B")

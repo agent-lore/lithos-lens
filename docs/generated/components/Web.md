@@ -17,7 +17,7 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 | `lithos_lens.event_streams` | XS | 0 | 1 |
 | `lithos_lens.gate_override` | S | 1 | 1 |
 | `lithos_lens.graph_routes` | M | 0 | 3 |
-| `lithos_lens.knowledge_graph_routes` | L | 4 | 8 |
+| `lithos_lens.knowledge_graph_routes` | L | 3 | 10 |
 | `lithos_lens.knowledge_routes` | M | 2 | 5 |
 | `lithos_lens.request_filters` | L | 0 | 26 |
 | `lithos_lens.web` | L | 0 | 1 |
@@ -60,12 +60,13 @@ FastAPI application factory serving the server-rendered dashboard UI (Jinja2 tem
 - class `KnowledgeGraphParams` — The page's query, parsed. ``None`` and ``""`` mean "not given".
 - def `parse_knowledge_graph_params` — The page's query grammar (S3 D3), in one place.
 - def `knowledge_graph_url` — A link into the knowledge graph: ``params`` with ``changes`` applied.
+- def `knowledge_graph_expand_url` — Show its neighbours (D16): ``node_id`` selected and last in ``expand=`` — an earlier request for it, unreached at its turn, moves there.
+- def `knowledge_graph_collapse_url` — Collapse / remove (D16): this view without ``root``'s request and every request whose note it first drew, transitively, as the displayed view knows them. A selection or pin the remaining requests no longer draw (the same pass re-run without them, nothing read) is cleared; a shared note still drawn elsewhere stays selected.
+- def `drawn_selection` — ``params`` as the links of a drawn ``view`` carry them: a ``selected=`` node or ``pin=`` edge the view does not draw (removed by a collapse, or gone from the data since) is dropped, so no link pins what is not there.
 - def `knowledge_graph_panel_url` — The same link to the panel fragment: what a click's ``hx-get`` fetches, with the scope and filters carried, and ``render`` — the id of the view the page drew (:class:`RenderedViews`) — last when there is one.
 - class `RenderedViews` — The views recent renders drew, each under a fresh render id (S5).
 - def `utc_minute` — ``as_of`` as the scope line states it: UTC, to the minute.
 - def `missing_edge_notice` — The panel host's line when ``edge`` is the ``edge=`` ``view`` was drawn for and its snapshot does not hold it; ``""`` otherwise.
-- class `KnowledgeGraphPicker` — What the unscoped page offers (PRD D11, story 17).
-- def `load_picker` — The picker from the snapshot: its facets, or why there are none.
 - class `KnowledgeGraphLoad` — What one request read: offline (nothing), the picker, or a view.
 - def `load_knowledge_graph` — The page's reads for ``params``, shared by the page and its panel fragment so the two draw the same view (S5 D1).
 - def `register_knowledge_graph_routes` — Attach `GET /knowledge/graph` (the picker, focus and scoped-global), `GET /knowledge/graph/panel` (its node and edge panels) and `GET /knowledge/events` (the knowledge-scope event stream it listens on).

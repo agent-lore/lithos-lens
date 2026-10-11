@@ -38,7 +38,7 @@ from lithos_lens.knowledge_facts import (
     NoteFacts,
     NoteFactsCache,
 )
-from lithos_lens.knowledge_graph import (
+from lithos_lens.knowledge_graph_typed import (
     DEFAULT_FOCUS_MAX_NODES,
     DEFAULT_GLOBAL_MAX_NODES,
 )

@@ -64,6 +64,25 @@ classDiagram
   class EdgeWhy {
     +provenance str
   }
+  class ExpansionCollapse {
+    +removed tuple[str, ...]
+    +nodes frozenset[str]
+    +edges frozenset[str]
+  }
+  class ExpansionStep {
+    +id str
+    +state ExpansionState
+    +added_nodes int
+    +added_edges int
+    +would_count int
+    +would_add_nodes int
+    +cap int
+  }
+  class ExpansionWalk {
+    +hops Mapping[str, int]
+    +via Mapping[str, str]
+    +layer_only frozenset[str]
+  }
   class HiddenEdgeCounts {
     +by_weight int
     +by_provenance int
@@ -89,6 +108,7 @@ classDiagram
   }
   class KnowledgeEdgePanel
   class KnowledgeEdgeSection
+  class KnowledgeExpansion
   class KnowledgeGraphEdge {
     +id str
     +from_id str
@@ -110,6 +130,7 @@ classDiagram
     +min_weight float
     +provenance frozenset[str]
     +selected_edge str
+    +selected_is_pin bool
   }
   class KnowledgeGraphNode {
     +id str
@@ -119,6 +140,13 @@ classDiagram
     +hop int
     +is_focus bool
     +layer_only bool
+    +expanded bool
+    +via str | None
+  }
+  class KnowledgeGraphPicker {
+    +as_of datetime | None
+    +stale bool
+    +unavailable bool
   }
   class KnowledgeGraphRefusal {
     +reason RefusalReason
@@ -141,6 +169,8 @@ classDiagram
     +read_directly bool
     +selected_edge_missing bool
     +pinned str
+    +pin_redraws frozenset[str]
+    +either_kind bool
     +facts_capped_at int
   }
   class KnowledgeLayerRef {
@@ -154,6 +184,8 @@ classDiagram
     +hops Mapping[str, int]
     +would_be_nodes Mapping[int, int]
     +pinned str
+    +pin_redraws frozenset[str]
+    +either_kind bool
   }
   class KnownEdgeType {
     +name str
@@ -174,6 +206,13 @@ classDiagram
   class NamespaceFacet {
     +namespace str
     +count int
+  }
+  class NodeExpansion {
+    +state NodeExpansionState
+    +would_count int
+    +cap int
+    +undrawn_nodes int
+    +undrawn_edges int
   }
   class NoteFacts {
     +title str
@@ -298,6 +337,8 @@ classDiagram
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : by_type
   EdgeTableSnapshot "1" --> "0..*" KnowledgeEdge : rows
   EdgeWhy "1" --> "0..1" EdgeEvidence : evidence
+  ExpansionWalk "1" --> "0..*" ExpansionStep : steps
+  ExpansionWalk "1" --> "0..*" KnowledgeEdge : edges
   KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphEdge : edge
   KnowledgeEdgeEntry "1" --> "0..1" KnowledgeGraphNode : other
   KnowledgeEdgeEntry "1" --> "1" KnowledgeGraphNode : source
@@ -307,7 +348,14 @@ classDiagram
   KnowledgeEdgePanel "1" --> "0..1" NoteMetadata : target_meta
   KnowledgeEdgeSection "1" --> "0..*" KnowledgeEdgeEntry : entries
   KnowledgeEdgeSection "1" --> "1" LegendLine : line
+  KnowledgeExpansion "1" --> "0..*" ExpansionCollapse : collapses
+  KnowledgeExpansion "1" --> "0..*" NodeExpansion : nodes
+  KnowledgeGraphNode "1" --> "0..1" NodeExpansion : expansion
   KnowledgeGraphNode "1" --> "0..1" NoteFacts : facts
+  KnowledgeGraphPicker "1" --> "0..1" EdgeFacets : facets
+  KnowledgeGraphPicker "1" --> "0..1" EdgeTableRefusal : refused
+  KnowledgeGraphView "1" --> "0..*" ExpansionCollapse : collapses
+  KnowledgeGraphView "1" --> "0..*" ExpansionStep : expansions
   KnowledgeGraphView "1" --> "1" HiddenEdgeCounts : hidden
   KnowledgeGraphView "1" --> "0..*" KnowledgeGraphEdge : edges
   KnowledgeGraphView "1" --> "1" KnowledgeGraphFilters : filters
@@ -325,6 +373,7 @@ classDiagram
   KnowledgeNodePanel "1" --> "0..1" NoteMetadata : meta
   KnowledgeTypedGraph "1" --> "1" HiddenEdgeCounts : hidden
   KnowledgeTypedGraph "1" --> "0..*" KnowledgeEdge : edges
+  KnowledgeTypedGraph "1" --> "0..1" KnowledgeExpansion : expansion
   KnowledgeTypedGraph "1" --> "0..1" KnowledgeGraphRefusal : refusal
   KnowledgeTypedGraph "1" --> "0..*" ProvenanceFacet : provenance_facets
   ListChips "1" --> "0..*" NoteMetadata : by_id

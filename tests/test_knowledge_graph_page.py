@@ -31,10 +31,12 @@ from lithos_lens.fake_knowledge_dataset import DANGLING_NOTE_ID, knowledge_edge_
 from lithos_lens.fake_lithos import FakeLithosClient
 from lithos_lens.knowledge import RelatedNeighborhood
 from lithos_lens.knowledge_edges import EdgeFacets, KnowledgeEdge
-from lithos_lens.knowledge_graph_routes import (
+from lithos_lens.knowledge_graph_picker import (
     PICKER_TOP_NAMESPACES,
-    KnowledgeGraphParams,
     KnowledgeGraphPicker,
+)
+from lithos_lens.knowledge_graph_routes import (
+    KnowledgeGraphParams,
     knowledge_graph_url,
     parse_knowledge_graph_params,
 )

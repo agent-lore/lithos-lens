@@ -30,7 +30,8 @@ from lithos_lens.knowledge_edges import (
     EdgeTableSnapshot,
     is_unresolved_contradiction,
 )
-from lithos_lens.knowledge_graph_routes import knowledge_graph_url, load_picker
+from lithos_lens.knowledge_graph_picker import load_picker
+from lithos_lens.knowledge_graph_routes import knowledge_graph_url
 from lithos_lens.knowledge_landing import (
     SECTIONS,
     NamespaceFacet,
