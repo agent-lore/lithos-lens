@@ -465,6 +465,19 @@ MALFORMED: dict[str, Any] = {
     "an-unknown-edge-kind": lambda p: _last(p, "edges").update(kind="rumour"),
     "an-unknown-step-state": lambda p: _last(p, "expansions").update(state="half"),
     "a-would-be-count-not-a-number": lambda p: p["would_be_nodes"].update({"1": "4"}),
+    # In range for its kind, but outside what the route ever writes.
+    "a-depth-of-zero": lambda p: p.update(depth=0),
+    "a-depth-past-the-deepest": lambda p: p.update(depth=3),
+    "a-threshold-below-zero": lambda p: p["filters"].update(min_weight=-0.5),
+    "a-threshold-above-one": lambda p: p["filters"].update(min_weight=1.5),
+    "an-unknown-provenance-group": lambda p: p["filters"].update(provenance=["bogus"]),
+    "no-provenance-group": lambda p: p["filters"].update(provenance=[]),
+    "a-provenance-group-twice": lambda p: p["filters"].update(
+        provenance=["declared", "declared"]
+    ),
+    "a-depth-count-missing": lambda p: p["would_be_nodes"].pop("2"),
+    "no-depth-counts": lambda p: p.update(would_be_nodes={}),
+    "a-depth-count-for-no-depth": lambda p: p["would_be_nodes"].update({"3": 9}),
 }
 FAILURES.update(
     (name, (f"respond:0={name}", "the answer could not be read.")) for name in MALFORMED

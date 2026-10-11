@@ -1909,7 +1909,9 @@ it sends nothing.
   an id of its own, every edge's ends among its notes and every value the
   canvas, key and toolbar read present, of the kind and in the range the
   server writes it (counts whole and never negative, states one of their
-  names), and whose `#kgraph-panel` carries a non-empty `data-kgraph-render`
+  names, the depth 1 or 2 with a would-be count for each depth, the
+  threshold within [0, 1], the provenance groups a non-empty list of known
+  groups, each once), and whose `#kgraph-panel` carries a non-empty `data-kgraph-render`
   — all checked, and the canvas's elements built, before anything on the
   page changes. An answer whose elements cannot be built gives back the
   colour slots its values took

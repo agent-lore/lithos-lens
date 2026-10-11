@@ -230,6 +230,9 @@
   const FACTS_STATES = ["ok", "pending", "unread", "missing"];
   const EDGE_KINDS = ["typed", "wiki_link", "provenance"];
   const STROKES = ["solid", "dotted", "dashed"];
+  //: The depths a focus view is drawn at (`MAX_DEPTH`): its own, and each
+  //: one's would-be count, which the server writes for every depth.
+  const DEPTHS = [1, 2];
 
   function wholeView(view) {
     const record = function (item) {
@@ -258,22 +261,30 @@
       return shaped(value, { id: name, state: one(STEP_STATES), added_nodes: count, added_edges: count }) &&
         (value.would_count === undefined || count(value.would_count));
     };
+    // The route's own ranges: a threshold clamped to [0, 1], known groups
+    // only, each once, and an empty list read as all of them.
+    const groups = function (value) {
+      return Array.isArray(value) && value.length > 0 && value.every(function (group, index) {
+        return PROVENANCE_GROUPS.indexOf(group) !== -1 && value.indexOf(group) === index;
+      });
+    };
     const shown = shaped(view, {
       mode: one(["focus"]),
       focus: name,
-      depth: count,
+      depth: one(DEPTHS),
       nodes: function (v) { return Array.isArray(v) && v.length > 0; },
       edges: Array.isArray,
       expansions: Array.isArray,
       legend: Array.isArray,
       hidden: function (v) { return shaped(v, { by_weight: count, by_provenance: count, total: count }); },
       would_be_nodes: function (v) {
-        return record(v) && Object.keys(v).every(function (level) { return count(v[level]); });
+        return record(v) && Object.keys(v).length === DEPTHS.length &&
+          DEPTHS.every(function (level) { return count(v[String(level)]); });
       },
       filters: function (v) {
         return shaped(v, {
-          min_weight: weight,
-          provenance: function (groups) { return Array.isArray(groups) && groups.every(name); }
+          min_weight: function (w) { return weight(w) && w >= 0 && w <= 1; },
+          provenance: groups
         });
       }
     });
