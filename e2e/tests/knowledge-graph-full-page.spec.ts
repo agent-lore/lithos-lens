@@ -1405,6 +1405,30 @@ for (const [width, height] of [
   });
 }
 
+test("following Text view while an expansion is out lets it commit", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${EXPANSION_BASE}&selected=${PLAN}&canvas=full`);
+  await canvasReady(page);
+  const held = await holdView(page);
+  await page.locator("#kgraph-panel [data-kgraph-expand]").click();
+  await held.seen;
+  const busy = () => page.evaluate(() => (window as any).LithosLensKnowledgeGraph.busy());
+  expect(await busy()).toBe(true);
+
+  // A `#` jump within the page — its `popstate` is not a Back or Forward.
+  await page.locator("[data-kgraph-text-link]").click();
+  await expect.poll(() => new URL(page.url()).hash).toBe("#kgraph-text");
+  expect(await busy()).toBe(true);
+
+  held.release();
+  await held.handled();
+  await viewOf(page, 4, 7);
+  expect(query(page)).toEqual({
+    focus: ROLLBACK, expand: PLAN, min_weight: "0.7", selected: PLAN, canvas: "full",
+  });
+  await expect(page.locator("[data-kgraph-graph-status]")).toBeHidden();
+});
+
 test("Back over an expansion reloads that entry's exploration", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(`${EXPANSION_BASE}&selected=${PLAN}&canvas=full`);

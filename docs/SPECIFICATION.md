@@ -1900,7 +1900,9 @@ it sends nothing.
   htmx request into the panel host is cancelled at `htmx:beforeRequest`. Search, pan, zoom, the disclosures and
   links to note pages stay live. Back, Forward or a toggle aborts and retires
   it before their own behaviour; a retired answer never commits, pushes or
-  re-enables anything
+  re-enables anything. Following a `#` jump such as Text view is not a Back
+  or Forward, though the browser announces its new entry with a `popstate`
+  too: the request goes on and its answer commits
 - **the fetch**: `GET /knowledge/graph?<new query>` itself. Valid only when it
   is a 200 whose `[data-knowledge-graph-payload]` parses as a focus view with
   no `refusal` and some nodes, and whose `#kgraph-panel` carries a non-empty

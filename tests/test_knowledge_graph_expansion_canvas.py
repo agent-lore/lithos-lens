@@ -314,6 +314,55 @@ def test_back_retires_the_request_and_its_late_answer_and_any_panel_redirect(
     assert result["controls"]["busy"] is False
 
 
+def test_following_text_view_during_a_request_does_not_retire_it(
+    lithos_lens_config_env: Path,
+) -> None:
+    """Text view is a ``#`` link the busy page leaves live, and the browser
+    announces its new entry with a ``popstate``: a jump within the page, not
+    a Back, so the request goes on and its answer commits. A Back after the
+    jump still retires the next one."""
+    with _lens(lithos_lens_config_env) as client:
+        page = _page(client, f"{BASE}&selected={PLAN}")
+        href = _expand(page.html)
+        answer = _response(client, href)
+
+    result = _go(
+        page,
+        {href: answer},
+        [
+            f"graph-link:data-kgraph-expand|{href}",
+            "hash-click:kgraph-text",
+            "state",
+            "respond:0",
+        ],
+    )
+
+    assert _states(result)[0]["busy"] is True, "still out after the jump"
+    assert result["fetchAborted"] == []
+    assert result["reloads"] == []
+    assert [push["url"] for push in result["pushes"]] == [href]
+    assert result["render"] == _render_of(answer)
+    assert len(result["nodes"]) == len(_payload_of(answer)["nodes"])
+    assert result["controls"]["busy"] is False
+
+    travelled = _go(
+        page,
+        {href: answer},
+        [
+            "hash-click:kgraph-text",
+            f"graph-link:data-kgraph-expand|{href}",
+            "back",
+            "respond:0",
+            "state",
+        ],
+    )
+
+    assert travelled["fetchAborted"] == [0]
+    assert travelled["pushes"] == []
+    assert travelled["render"] == page.dom["render"]
+    assert _states(travelled)[0]["busy"] is False
+
+
 def test_a_toggle_during_a_request_retires_it(lithos_lens_config_env: Path) -> None:
     with _lens(lithos_lens_config_env) as client:
         page = _page(client, f"{BASE}&selected={PLAN}")

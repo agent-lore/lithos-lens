@@ -626,9 +626,19 @@ for (const action of actions) {
     const link = el({ href: arg, attributes: { "hx-push-url": arg } });
     textLinks.push(link);
     issue(link, request("text:" + arg));
-  } else if (kind === "hash") {
+  } else if (kind === "hash" || kind === "hash-click") {
     // A same-document `#` navigation: a new entry with the same address
-    // and a fragment, announced by `popstate` as the browser does.
+    // and a fragment, announced by `popstate` as the browser does —
+    // `hash-click` by a plain click on a `#` link (Text view), which the
+    // page's click listeners see first.
+    if (kind === "hash-click") {
+      const link = el({ attributes: { href: "#" + arg } });
+      link.closest = (selector) => selector === "a[href]" ? link : null;
+      const event = { target: link, button: 0, defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; } };
+      (documentListeners.click || []).forEach((fn) => fn(event));
+      if (event.defaultPrevented) continue;
+    }
     url = new URL("#" + arg, url.href);
     entries.splice(cursor + 1);
     entries.push({ href: url.href, state: null });

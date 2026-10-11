@@ -512,6 +512,10 @@
   //: The expansion or collapse in flight (D16) — `{ href, controller }` —
   //: one at a time; none once it commits, fails or is retired.
   let graphRequest = null;
+  //: The address a `#` link followed while that request is out — Text
+  //: view — is about to announce with a `popstate`: a jump within the page,
+  //: not a Back or Forward, so it does not retire the request.
+  let jumpingTo = null;
   //: Starts one (set by `draw`): `href` a page address, `anchor` the note
   //: an expansion expands. Answers whether it took the click.
   let changeGraph = function () { return false; };
@@ -600,8 +604,10 @@
   }
 
   function onTravel() {
+    const jumped = jumpingTo !== null && window.location.href === jumpingTo;
+    jumpingTo = null;
     syncRefresh();
-    if (!panelHost) return;
+    if (!panelHost || jumped) return;
     retireGraphRequest();
     abandonPending();
     if (withoutFragment(window.location.href) === withoutFragment(shownHref)) {
@@ -730,6 +736,17 @@
     return target.origin === new URL(window.location.href).origin && target.pathname === GRAPH_PATH;
   }
 
+  // The address a `#` link leads to, on this page; none for any other link.
+  function fragmentJump(link) {
+    const href = link.getAttribute("href") || "";
+    if (href.charAt(0) !== "#") return null;
+    try {
+      return new URL(href, window.location.href).href;
+    } catch (error) {
+      return null;
+    }
+  }
+
   function onGraphLinkClick(event) {
     const target = event.target;
     if (!target || typeof target.closest !== "function" || modified(event)) return;
@@ -737,6 +754,7 @@
     if (graphRequest) {
       const any = link || target.closest("a[href]");
       if (any && graphAddress(any)) event.preventDefault();
+      else if (any && !event.defaultPrevented) jumpingTo = fragmentJump(any);
       return;
     }
     if (!link || event.defaultPrevented) return;
